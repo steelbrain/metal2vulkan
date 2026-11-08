@@ -15,16 +15,18 @@
 //! - **Reached through an indirect command alone.** A buffer an indirect command binds, which
 //!   no encoder makes resident, is the submission's from the commit on; detached behind a wait,
 //!   that submission fails.
-//! - **A GPU signal in flight**. A submission whose `SharedEvent` wait another command buffer's
-//!   GPU signal meets is checked only once that signal landed (the check reads a companion
-//!   `SharedEvent` the signaller signals first); detached while the signaller runs, it fails,
-//!   whether committed before the signaller or with `commit_and_submit` while its signal is in
-//!   flight (the committing thread leaves that check to the scheduler's). One whose `Event` wait
-//!   such a signal meets is checked at once and submitted with its wait on the `VkQueue`, while the
-//!   signal still runs (the companion reads 0 in its check), as Metal submits it
-//!   (`event-wait-behind-a-running-signal`), no head counted as awaiting its checks' signals. A
-//!   `SharedEvent` the host signals while a GPU signal of it is in flight is checked without
-//!   waiting for the GPU.
+//! - **A GPU signal in flight**, held on the GPU at the signaller's gate: a wait for a plain
+//!   event's signal the test reserved (`Event::reserve_vk_signal`) and gives from the host once it
+//!   looked, so the window does not hang on the GPU's speed or the host's load. A submission whose
+//!   `SharedEvent` wait another command buffer's GPU signal meets is checked only once that signal
+//!   landed (the check reads a companion `SharedEvent` the signaller signals first); detached while
+//!   the signaller runs, it fails, whether committed before the signaller or with
+//!   `commit_and_submit` while its signal is in flight (the committing thread leaves that check to
+//!   the scheduler's). One whose `Event` wait such a signal meets is checked at once and submitted
+//!   with its wait on the `VkQueue`, while the signal still runs (the companion reads 0 in its
+//!   check), as Metal submits it (`event-wait-behind-a-running-signal`), no head counted as
+//!   awaiting its checks' signals. A `SharedEvent` the host signals while a GPU signal of it is in
+//!   flight is checked without waiting for the GPU.
 
 use super::degrade_notices::on_device;
 use super::failed_commits::{Shape, HELD, KERNEL, SHAPES};
@@ -34,18 +36,21 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::ComputeOutput;
+use ash::vk;
 use metal2vulkan::bind::Dispatch;
 use metal2vulkan::metal::IndirectCommandType;
 use metal2vulkan::pipeline::LinkedFunctions;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, ComputePipelineState, Device,
     EncoderKind, Event, EventRef, IndirectCommandBufferDescriptor, ObjectId, PipelineOptions,
-    ResourceOptions, SharedEvent, Size, Submission, SubmissionCheck,
+    ResourceOptions, SharedEvent, Size, Submission, SubmissionCheck, VkEventSignal,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::num::NonZeroU64;
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The code a submission that uses a detached resource fails with: `OutOfMemory`, as Metal's.
 const DETACHED: u64 = 8;
@@ -181,7 +186,6 @@ fn a_check_is_refused_once_committed() {
 #[test]
 fn a_commit_made_while_a_check_runs_returns_at_once_and_runs_after_the_check() {
     use std::sync::mpsc;
-    use std::time::Duration;
     on_device(|device, _| {
         let fill = |queue: &metal2vulkan_runtime::CommandQueue, buffer: &Buffer| {
             let command_buffer = queue.command_buffer().unwrap();
@@ -372,16 +376,6 @@ fn a_buffer_reached_only_through_an_indirect_command_fails_its_submission() {
     });
 }
 
-/// The bytes each of a signaller's fills writes.
-const FILL: u64 = 64 << 20;
-
-/// How many times a GPU-signal test tries, the signaller's fills doubling each time, for the
-/// signaller still to run when the host acts. The last try's 1024 fills of [`FILL`] bytes outlast
-/// a host acting 145 ms after a commit, as an RTX 5080 laptop's did beside a lane run at `-j 6`,
-/// where 7 tries (256 fills) all finished first. A try past the first that catches it costs only
-/// where the earlier ones did not.
-const ATTEMPTS: u32 = 9;
-
 /// The event a waiting command buffer waits for, by its kind.
 enum Waited {
     Event(Event),
@@ -405,34 +399,69 @@ impl Waited {
     }
 }
 
-/// One try of a GPU-signal test: a command buffer that waits for `waited`'s value 1 and fills
-/// `target`'s first word, committed with a check, then a signaller on another queue that fills a
-/// 64-MiB buffer `fills` times, signals `landed` to 1, fills a word, and signals `waited` to 1,
-/// committed and scheduled. `landed` reaches 1 no later than `waited` does (one queue's signals
-/// land in order), so it reads 0 only while `waited`'s signal has not landed. Where
-/// `at_commit`, the waiter is committed after the signaller is scheduled instead, with
-/// `commit_and_submit`, its wait then met only by the GPU signal in flight: a committing thread
-/// leaves such a check to the scheduler's thread, which waits for the signal to land.
+/// A GPU-signal test's run: a command buffer that waits for `waited`'s value 1 and fills
+/// `target`'s first word, committed with a check, then a signaller on another queue that waits for
+/// a plain event's value 1 (its gate), signals `landed` to 1, fills a word, and signals `waited`
+/// to 1, committed and scheduled. The gate's one signal is the test's own, reserved before the
+/// signaller waits for it (`Event::reserve_vk_signal`) and given from the host
+/// ([`open`](InFlight::open)): a plain event's wait for a reserved signal goes to its `VkQueue` at
+/// once, so the signaller is submitted and its signals are in flight, held on the GPU until the
+/// test opens the gate, however fast the GPU and however loaded the host. `landed` reaches 1 no
+/// later than `waited` does (one queue's signals land in order), so it reads 0 only while
+/// `waited`'s signal has not landed. Where `at_commit`, the waiter is committed after the
+/// signaller is scheduled instead, with `commit_and_submit`, its wait then met only by the GPU
+/// signal in flight: a committing thread leaves such a check to the scheduler's thread, which
+/// waits for the signal to land.
 struct InFlight {
+    device: Device,
     waiter: CommandBuffer,
     signaller: CommandBuffer,
     target: Buffer,
     landed: SharedEvent,
     detach: Arc<Detach>,
+    /// The signaller's gate, the counter value of its reserved signal, and whether the test gave
+    /// it: a run dropped with it closed (a failed assertion) gives it then, so no command buffer
+    /// waits for good.
+    gate: Event,
+    counter: u64,
+    opened: AtomicBool,
     /// Kept until the work completes.
-    _big: Buffer,
     _words: Buffer,
     /// The threads the waiter's checks ran on.
     checked_on: Arc<Mutex<Vec<std::thread::ThreadId>>>,
+    /// When the waiter and the signaller were scheduled, by their scheduled handlers.
+    scheduled: [Arc<Mutex<Option<Instant>>>; 2],
+}
+
+/// A scheduled handler that notes when it ran in `at`.
+fn noting_scheduled(command_buffer: &CommandBuffer) -> Arc<Mutex<Option<Instant>>> {
+    let at = Arc::new(Mutex::new(None));
+    let noted = Arc::clone(&at);
+    command_buffer
+        .add_scheduled_handler(Box::new(move |_| {
+            *noted.lock().unwrap() = Some(Instant::now());
+        }))
+        .unwrap();
+    at
 }
 
 impl InFlight {
-    fn start(device: &Device, waited: &Waited, fills: u64, at_commit: bool) -> InFlight {
+    fn start(device: &Device, waited: &Waited, at_commit: bool) -> InFlight {
         let target = buffer_with(device, &[0; 16]).unwrap();
         let words = buffer_with(device, &[0; 4]).unwrap();
-        let big = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
         let landed = device.new_shared_event().unwrap();
         let detach = Arc::new(Detach::default());
+        let gate = device.new_event().unwrap();
+        // SAFETY: the one signal of the reservation is given once, from the host, by `open`
+        // (or the run's drop): a fresh event's first, so after nothing.
+        let reserved = unsafe { gate.reserve_vk_signal(1) }.unwrap();
+        let VkEventSignal::Counter {
+            counter,
+            after: None,
+        } = reserved
+        else {
+            panic!("a fresh event's first signal reserved as {reserved:?}");
+        };
 
         let waiter = device
             .new_command_queue()
@@ -451,6 +480,7 @@ impl InFlight {
                 check(submission)
             }))
             .unwrap();
+        let waiter_scheduled = noting_scheduled(&waiter);
         if !at_commit {
             waiter.commit().unwrap();
         }
@@ -460,11 +490,9 @@ impl InFlight {
             .unwrap()
             .command_buffer()
             .unwrap();
-        let mut blit = signaller.blit_command_encoder().unwrap();
-        for fill in 0..fills {
-            blit.fill_buffer(&big, 0..FILL, fill as u8).unwrap();
-        }
-        blit.end_encoding().unwrap();
+        signaller
+            .encode_wait_for_event(EventRef::from(&gate), 1)
+            .unwrap();
         signaller
             .encode_signal_event(EventRef::from(&landed), 1)
             .unwrap();
@@ -472,25 +500,66 @@ impl InFlight {
         blit.fill_buffer(&words, 0..4, 0x11).unwrap();
         blit.end_encoding().unwrap();
         signaller.encode_signal_event(waited.event(), 1).unwrap();
-        signaller.commit().unwrap();
-        signaller.wait_until_scheduled().unwrap();
-        if at_commit {
-            waiter.commit_and_submit().unwrap();
-        }
-        InFlight {
+        let signaller_scheduled = noting_scheduled(&signaller);
+        let run = InFlight {
+            device: device.clone(),
             waiter,
             signaller,
             target,
             landed,
             detach,
-            _big: big,
+            gate,
+            counter,
+            opened: AtomicBool::new(false),
             _words: words,
             checked_on,
+            scheduled: [waiter_scheduled, signaller_scheduled],
+        };
+        run.signaller.commit().unwrap();
+        run.signaller.wait_until_scheduled().unwrap();
+        if at_commit {
+            run.waiter.commit_and_submit().unwrap();
         }
+        run
     }
 
-    /// Wait for both command buffers; the companion event's value as the waiter's one check ran.
+    /// Give the gate's reserved signal from the host, once: the signaller's work runs on.
+    fn open(&self) {
+        if self.opened.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let info = vk::SemaphoreSignalInfo::default()
+            // SAFETY: the semaphore the gate holds while it lives, signalled only as reserved.
+            .semaphore(unsafe { self.gate.vk_semaphore() })
+            .value(self.counter);
+        // SAFETY: the reservation's one signal operation, from the host, of a semaphore of the
+        // live device; none of the device's objects is destroyed.
+        unsafe { self.device.raw().device.signal_semaphore(&info) }.unwrap();
+    }
+
+    /// Wait, at most [`WAIT`], while the waiter is `Committed`: whether it left that status.
+    fn waiter_scheduled(&self) -> bool {
+        let deadline = Instant::now() + WAIT;
+        while self.waiter.status() == CommandBufferStatus::Committed {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        true
+    }
+
+    /// How long after the signaller the waiter was scheduled, by their scheduled handlers.
+    fn scheduled_apart(&self) -> Option<Duration> {
+        let [waiter, signaller] = &self.scheduled;
+        let (waiter, signaller) = (*waiter.lock().unwrap(), *signaller.lock().unwrap());
+        Some(waiter?.saturating_duration_since(signaller?))
+    }
+
+    /// Open the gate, then wait for both command buffers; the companion event's value as the
+    /// waiter's one check ran.
     fn finish(&self) -> u64 {
+        self.open();
         self.signaller.wait_until_completed_for(WAIT).unwrap();
         self.waiter.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(self.signaller.status(), CommandBufferStatus::Completed);
@@ -500,74 +569,64 @@ impl InFlight {
     }
 }
 
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.open();
+    }
+}
+
 /// A submission whose `SharedEvent` wait another command buffer's GPU signal meets is checked
 /// only once that signal landed, as Metal holds such a command buffer until then
 /// (`event-wait-behind-a-running-signal`): the companion event the signaller signals first reads 1
-/// in the check, every try, and a head is counted as awaiting its checks' signals. Its buffer
-/// detached once the signaller is scheduled, while its signal is in flight (the companion still
-/// reads 0 after the detach), the submission fails with code 8 and its fill does not run. A try
-/// whose signaller finished before the detach proves nothing of the detach, and the next doubles
-/// the signaller's work; one try at least must catch it in flight. So too for a waiter committed
-/// with `commit_and_submit` while the signal is in flight: its check is left to the scheduler's
-/// thread, never run on the committing thread before the signal landed.
+/// in the check, and a head is counted as awaiting its checks' signals. Its buffer detached once
+/// the signaller is scheduled, while its signal is held in flight at the signaller's gate (the
+/// companion still reads 0 after the detach), the submission fails with code 8 and its fill does
+/// not run. So too for a waiter committed with `commit_and_submit` while the signal is in flight:
+/// its check is left to the scheduler's thread, never run on the committing thread before the
+/// signal landed.
 #[test]
 fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
     on_device(|device, _| {
         let caller = std::thread::current().id();
         let shared = true;
         for at_commit in [false, true] {
-            let mut caught = None;
-            for attempt in 0..ATTEMPTS {
-                let fills = 4u64 << attempt;
-                let waited = Waited::new(device, shared);
-                let awaiting = device.work_counts().heads_awaiting_check_signals;
-                let run = InFlight::start(device, &waited, fills, at_commit);
-                run.detach.detach(&run.target);
-                let in_flight = run.landed.signaled_value() == 0;
-                let at_check = run.finish();
-                let awaited = device.work_counts().heads_awaiting_check_signals - awaiting;
-                assert_eq!(
-                    at_check, 1,
-                    "shared {shared}, at commit {at_commit}: checked before the GPU signal landed"
-                );
-                if !in_flight {
-                    continue;
-                }
-                assert!(
-                    !run.checked_on.lock().unwrap().contains(&caller),
-                    "shared {shared}, at commit {at_commit}: checked on the committing thread"
-                );
-                assert!(
-                    awaited > 0,
-                    "at commit {at_commit}: no head counted as awaiting its checks' signals"
-                );
-                assert_eq!(
-                    run.waiter.status(),
-                    CommandBufferStatus::Error,
-                    "shared {shared}"
-                );
-                assert_eq!(
-                    run.waiter.error(),
-                    Some(CommandBufferError::Injected(DETACHED)),
-                    "shared {shared}"
-                );
-                assert_eq!(
-                    read_buffer(&run.target, 0, 4).unwrap(),
-                    [0; 4],
-                    "shared {shared}"
-                );
-                caught = Some(fills);
-                break;
-            }
-            let fills = caught.unwrap_or_else(|| {
-                panic!(
-                    "shared {shared}, at commit {at_commit}: the signaller never ran at the detach \
-                     in {ATTEMPTS} tries"
-                )
-            });
-            println!(
-                "IN-FLIGHT shared={shared} at_commit={at_commit} caught with {fills} fills of \
-                 {FILL} bytes"
+            let waited = Waited::new(device, shared);
+            let awaiting = device.work_counts().heads_awaiting_check_signals;
+            let run = InFlight::start(device, &waited, at_commit);
+            run.detach.detach(&run.target);
+            assert_eq!(
+                run.landed.signaled_value(),
+                0,
+                "shared {shared}, at commit {at_commit}: the signal landed before its gate opened"
+            );
+            let at_check = run.finish();
+            let awaited = device.work_counts().heads_awaiting_check_signals - awaiting;
+            assert_eq!(
+                at_check, 1,
+                "shared {shared}, at commit {at_commit}: checked before the GPU signal landed"
+            );
+            assert!(
+                !run.checked_on.lock().unwrap().contains(&caller),
+                "shared {shared}, at commit {at_commit}: checked on the committing thread"
+            );
+            assert!(
+                awaited > 0,
+                "at commit {at_commit}: no head counted as awaiting its checks' signals"
+            );
+            assert_eq!(
+                run.waiter.status(),
+                CommandBufferStatus::Error,
+                "shared {shared}"
+            );
+            assert_eq!(
+                run.waiter.error(),
+                Some(CommandBufferError::Injected(DETACHED)),
+                "shared {shared}"
+            );
+            assert_eq!(
+                read_buffer(&run.target, 0, 4).unwrap(),
+                [0; 4],
+                "shared {shared}"
             );
         }
     });
@@ -577,91 +636,70 @@ fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
 /// checked at once and submitted with its wait on the `VkQueue`, as Metal submits (and so checks)
 /// such a command buffer at once (an M3 Max under macOS 27.0.1: the conformance case
 /// `event-wait-behind-a-running-signal`, the waiter `Scheduled` and its scheduled handler run while
-/// the signaller still ran). In one try at least the waiter reads `Scheduled` while the companion
-/// event the signaller signals first still reads 0, and the companion read 0 in its check; in
-/// every try no head is counted as awaiting its checks' signals
-/// (`WorkCounts::heads_awaiting_check_signals`), its check runs once, and its fill runs, after
-/// the signal. So too for a waiter committed with `commit_and_submit` while the signal is in
-/// flight. A try whose signaller finished first proves nothing of the order, and the next doubles
-/// its work.
+/// the signaller still ran). The waiter reads `Scheduled` while the signaller's signals are held in
+/// flight at its gate (the companion event the signaller signals first still reads 0), and the
+/// companion read 0 in its check; no head is counted as awaiting its checks' signals
+/// (`WorkCounts::heads_awaiting_check_signals`), its check runs once, and its fill runs, after the
+/// signal. So too for a waiter committed with `commit_and_submit` while the signal is in flight.
+/// Each run prints how long after the signaller the waiter was scheduled.
 #[test]
 fn an_event_wait_a_gpu_signal_in_flight_meets_is_checked_at_once() {
     on_device(|device, _| {
         for at_commit in [false, true] {
-            let mut caught = None;
-            for attempt in 0..ATTEMPTS {
-                let fills = 4u64 << attempt;
-                let waited = Waited::new(device, false);
-                let awaiting = device.work_counts().heads_awaiting_check_signals;
-                let run = InFlight::start(device, &waited, fills, at_commit);
-                let deadline = std::time::Instant::now() + WAIT;
-                while run.waiter.status() == CommandBufferStatus::Committed {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "at commit {at_commit}: the waiter was never scheduled"
-                    );
-                    std::thread::sleep(std::time::Duration::from_micros(200));
-                }
-                // Read after the waiter's status: 0 says the signal had not landed when it was.
-                let in_flight = run.landed.signaled_value() == 0;
-                let at_check = run.finish();
-                let awaited = device.work_counts().heads_awaiting_check_signals - awaiting;
-                assert_eq!(
-                    awaited, 0,
-                    "at commit {at_commit}: a head awaited its checks' signals"
-                );
-                assert_eq!(run.waiter.status(), CommandBufferStatus::Completed);
-                assert_eq!(read_buffer(&run.target, 0, 4).unwrap(), [0x5a; 4]);
-                if !in_flight {
-                    continue;
-                }
-                assert_eq!(
-                    at_check, 0,
-                    "at commit {at_commit}: checked only once the GPU signal landed"
-                );
-                caught = Some(fills);
-                break;
-            }
-            let fills = caught.unwrap_or_else(|| {
-                panic!(
-                    "at commit {at_commit}: the signaller never ran at the waiter's scheduling \
-                     in {ATTEMPTS} tries"
-                )
-            });
+            let waited = Waited::new(device, false);
+            let awaiting = device.work_counts().heads_awaiting_check_signals;
+            let run = InFlight::start(device, &waited, at_commit);
+            assert!(
+                run.waiter_scheduled(),
+                "at commit {at_commit}: the waiter was never scheduled while its signal was in \
+                 flight"
+            );
+            // Read after the waiter's status, with the gate still closed.
+            assert_eq!(
+                run.landed.signaled_value(),
+                0,
+                "at commit {at_commit}: the signal landed before its gate opened"
+            );
+            let at_check = run.finish();
+            let awaited = device.work_counts().heads_awaiting_check_signals - awaiting;
+            assert_eq!(
+                awaited, 0,
+                "at commit {at_commit}: a head awaited its checks' signals"
+            );
+            assert_eq!(run.waiter.status(), CommandBufferStatus::Completed);
+            assert_eq!(read_buffer(&run.target, 0, 4).unwrap(), [0x5a; 4]);
+            assert_eq!(
+                at_check, 0,
+                "at commit {at_commit}: checked only once the GPU signal landed"
+            );
             println!(
-                "EVENT-IN-FLIGHT at_commit={at_commit} caught with {fills} fills of {FILL} bytes"
+                "EVENT-IN-FLIGHT at_commit={at_commit}: the waiter was scheduled {:?} after the \
+                 signaller",
+                run.scheduled_apart()
             );
         }
     });
 }
 
 /// A `SharedEvent` wait that a GPU signal in flight would meet, met by the host first: the check
-/// runs at the host's signal, without waiting for the GPU (the companion event reads 0 in it, in
-/// one try at least), and the submission runs. A try whose signaller finished first proves
-/// nothing, and the next doubles its work.
+/// runs at the host's signal, without waiting for the GPU (the companion event reads 0 in it, the
+/// signaller's signals held at its gate), and the submission runs.
 #[test]
 fn a_wait_the_host_meets_is_checked_without_waiting_for_the_gpu() {
     on_device(|device, _| {
-        let mut caught = None;
-        for attempt in 0..ATTEMPTS {
-            let fills = 4u64 << attempt;
-            let waited = Waited::new(device, true);
-            let run = InFlight::start(device, &waited, fills, false);
-            let Waited::Shared(event) = &waited else {
-                unreachable!()
-            };
-            event.set_signaled_value(1);
-            let at_check = run.finish();
-            assert_eq!(run.waiter.status(), CommandBufferStatus::Completed);
-            assert_eq!(read_buffer(&run.target, 0, 4).unwrap(), [0x5a; 4]);
-            if at_check == 0 {
-                caught = Some(fills);
-                break;
-            }
-        }
-        let fills = caught.unwrap_or_else(|| {
-            panic!("the check never ran before the signaller finished in {ATTEMPTS} tries")
-        });
-        println!("HOST-MET caught with {fills} fills of {FILL} bytes");
+        let waited = Waited::new(device, true);
+        let run = InFlight::start(device, &waited, false);
+        let Waited::Shared(event) = &waited else {
+            unreachable!()
+        };
+        event.set_signaled_value(1);
+        assert!(
+            run.waiter_scheduled(),
+            "the waiter was never scheduled once the host met its wait"
+        );
+        let at_check = run.finish();
+        assert_eq!(run.waiter.status(), CommandBufferStatus::Completed);
+        assert_eq!(read_buffer(&run.target, 0, 4).unwrap(), [0x5a; 4]);
+        assert_eq!(at_check, 0, "checked only once the GPU signal landed");
     });
 }
