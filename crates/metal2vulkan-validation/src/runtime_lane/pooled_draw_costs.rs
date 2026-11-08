@@ -16,7 +16,10 @@
 //! place at their pitch and as shadows, the median and fastest GPU time of a frame, and the shadow
 //! copies a frame.
 //!
-//! Ignored by default: a measurement, not a check. Run it by name with `--run-ignored all`.
+//! [`pooled_surface_costs`] weighs a guest window server's desktop device cache, past the bound,
+//! against a private texture: frames of many passes into it, each its own encoder.
+//!
+//! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
 use super::first_use_writes::CHECK_WAIT;
@@ -28,8 +31,9 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use metal2vulkan_runtime::{
-    BufferContents, BufferDescriptor, ClearColor, LoadAction, PipelineOptions,
-    RenderPassDescriptor, ResourceOptions, ScissorRect, StoreAction, TextureDescriptor,
+    Buffer, BufferContents, BufferDescriptor, ClearColor, Device, LoadAction, PipelineOptions,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, StoreAction, Texture,
+    TextureDescriptor,
 };
 
 /// The caches' shapes, (width, rows, row bytes): the consumer's three most common device caches
@@ -53,12 +57,9 @@ const DRAWS: [usize; 4] = [0, 1, 4, 16];
 const WARM: usize = 5;
 const TIMED: usize = 40;
 
-#[test]
-#[ignore = "a release-mode measurement: run by name"]
-fn pooled_draw_costs() {
-    let cache = ScratchCache::new().unwrap();
-    let messages = Messages::default();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+/// A device of the in-place policy, without the validation layer, its in-place check settled.
+fn settled_device(cache: &ScratchCache, messages: &Messages) -> Device {
+    let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
         options.layers.clear();
         in_place(options);
     })
@@ -67,21 +68,56 @@ fn pooled_draw_costs() {
         device.settle_in_place_checks(CHECK_WAIT),
         "the check settles"
     );
-    let queue = device.new_command_queue().unwrap();
-    let bgra = PixelFormat::BGRA8Unorm;
-    let reads = reading(&device, bgra, "tob_read");
-    let mut d = RenderPipelineDescriptor::new(function(&device, "tob_rect", "tob_renders.ll"));
-    d.fragment = Some(function(&device, "tob_solid", "tob_renders.ll"));
-    let mut color = ColorAttachmentDescriptor::new(bgra);
+    device
+}
+
+/// The `tob_rect` and `tob_solid` state into a `BGRA8Unorm` color, blended premultiplied.
+fn blending(device: &Device) -> RenderPipelineState {
+    let mut d = RenderPipelineDescriptor::new(function(device, "tob_rect", "tob_renders.ll"));
+    d.fragment = Some(function(device, "tob_solid", "tob_renders.ll"));
+    let mut color = ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm);
     color.blending_enabled = true;
     color.source_rgb_blend_factor = BlendFactor::One;
     color.source_alpha_blend_factor = BlendFactor::One;
     color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
     color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
     d.color_attachments[0] = Some(color);
-    let blends = device
+    device
         .new_render_pipeline_state(&d, &PipelineOptions::default())
-        .unwrap();
+        .unwrap()
+}
+
+/// A `BGRA8Unorm` texture of render target and shader read usage, `w` by `h`, over a new `Private`
+/// buffer of rows `bpr` apart, which declares the bytes between them unobserved where `declared`.
+fn cache_texture(
+    device: &Device,
+    (w, h, bpr): (u64, u64, u64),
+    declared: bool,
+) -> (Buffer, Texture) {
+    let descriptor =
+        BufferDescriptor::new(bpr * h, ResourceOptions::private(), BufferContents::Zero);
+    let descriptor = match declared {
+        true => descriptor.with_padding_unobserved(),
+        false => descriptor,
+    };
+    let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
+    d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    d.resource_options = buffer.resource_options();
+    let texture = buffer.new_texture(&d, 0, bpr).unwrap();
+    (buffer, texture)
+}
+
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn pooled_draw_costs() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = settled_device(&cache, &messages);
+    let queue = device.new_command_queue().unwrap();
+    let bgra = PixelFormat::BGRA8Unorm;
+    let reads = reading(&device, bgra, "tob_read");
+    let blends = blending(&device);
     let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
     let half = floats([0.25, 0.125, 0.0625, 0.5]);
     let mut d = TextureDescriptor::texture_2d(bgra, 1640, 820, false);
@@ -92,23 +128,7 @@ fn pooled_draw_costs() {
         for declared in [false, true] {
             let before = device.work_counts();
             let caches: Vec<_> = (0..TEXTURES)
-                .map(|_| {
-                    let descriptor = BufferDescriptor::new(
-                        bpr * h,
-                        ResourceOptions::private(),
-                        BufferContents::Zero,
-                    );
-                    let descriptor = match declared {
-                        true => descriptor.with_padding_unobserved(),
-                        false => descriptor,
-                    };
-                    let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
-                    let mut d = TextureDescriptor::texture_2d(bgra, w, h, false);
-                    d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-                    d.resource_options = buffer.resource_options();
-                    let texture = buffer.new_texture(&d, 0, bpr).unwrap();
-                    (buffer, texture)
-                })
+                .map(|_| cache_texture(&device, (w, h, bpr), declared))
                 .collect();
             let after = device.work_counts();
             let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
@@ -181,5 +201,148 @@ fn pooled_draw_costs() {
             }
         }
     }
+    messages.take_notices();
+}
+
+/// The `pooled_surface_costs` caches, (width, rows, row bytes, declared): the guest window server's
+/// desktop device cache at its 3662-texel width and 14848-byte rows, over a buffer that declares
+/// its padding unobserved (past the pooled bound: `LinearCost`) and over one that does not; and the
+/// 3648x2038 one of a guest whose modes are a multiple of 16 texels wide, at its 14592-byte rows.
+const SURFACES: [(u64, u64, u64, bool); 3] = [
+    (3662, 2038, 14848, true),
+    (3662, 2038, 14848, false),
+    (3648, 2038, 14592, true),
+];
+/// The passes of a `pooled_surface_costs` frame, and the draws of each.
+const SURFACE_PASSES: [usize; 3] = [1, 8, 30];
+const SURFACE_DRAWS: usize = 3;
+
+/// What a guest's desktop device cache costs a frame of render passes: over a private texture and
+/// over each of [`SURFACES`], one command buffer a frame of each count of [`SURFACE_PASSES`]
+/// passes, each an encoder of its own that loads and stores the cache and draws [`SURFACE_DRAWS`]
+/// blended 600x400 rectangles at places of their own, through no scissor or through a scissor of
+/// each rectangle; then a draw that reads the whole cache into a private target, as the
+/// consumer's present samples it. Printed per case (`POOLED-SURFACE-COST`): the cache's form, the
+/// median GPU time of a frame of [`TIMED`] after [`WARM`], and per frame the shadow copies and the
+/// texels they copy in and back.
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn pooled_surface_costs() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = settled_device(&cache, &messages);
+    let queue = device.new_command_queue().unwrap();
+    let bgra = PixelFormat::BGRA8Unorm;
+    let reads = reading(&device, bgra, "tob_read");
+    let blends = blending(&device);
+    let whole = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
+    let half = floats([0.25, 0.125, 0.0625, 0.5]);
+    let mut d = TextureDescriptor::texture_2d(bgra, 3662, 2038, false);
+    d.usage = TextureUsage::RENDER_TARGET;
+    d.resource_options = ResourceOptions::private();
+    let presented = device.new_texture(&d).unwrap();
+    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    let private = device.new_texture(&d).unwrap();
+    let mut caches = vec![(private, "private".to_owned(), None)];
+    for (w, h, bpr, declared) in SURFACES {
+        let before = device.work_counts();
+        let (buffer, texture) = cache_texture(&device, (w, h, bpr), declared);
+        let after = device.work_counts();
+        let form = match after.shadowed_textures - before.shadowed_textures {
+            0 => "in place",
+            _ => "a shadow",
+        };
+        caches.push((
+            texture,
+            format!("{w}x{h} at {bpr}, declared {declared}, {form}"),
+            Some(buffer),
+        ));
+    }
+    for (texture, kind, _) in &caches {
+        let (w, h) = (texture.width(), texture.height());
+        let rect = |n: usize| {
+            let n = n as u64;
+            let (x, y) = (n * 1373 % (w - 600), (n * 3 + 1) * 787 % (h - 400));
+            [x, y, x + 600, y + 400]
+        };
+        let corners = |[x0, y0, x1, y1]: [u64; 4]| {
+            let x = |p: u64| p as f32 / w as f32 * 2.0 - 1.0;
+            let y = |p: u64| 1.0 - p as f32 / h as f32 * 2.0;
+            floats([x(x0), y(y1), x(x1), y(y0)])
+        };
+        for passes in SURFACE_PASSES {
+            for scissored in [false, true] {
+                let frame = |n: usize| {
+                    let command_buffer = queue.command_buffer().unwrap();
+                    for pass in 0..passes {
+                        let mut d = RenderPassDescriptor::new();
+                        let color = &mut d.color_attachments[0];
+                        color.texture = Some(texture.clone());
+                        color.load_action = LoadAction::Load;
+                        color.store_action = StoreAction::Store;
+                        let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+                        encoder.set_render_pipeline_state(&blends).unwrap();
+                        encoder.set_fragment_bytes(&half, 0).unwrap();
+                        for draw in 0..SURFACE_DRAWS {
+                            let r @ [x0, y0, x1, y1] = rect(n + pass * SURFACE_DRAWS + draw);
+                            if scissored {
+                                encoder
+                                    .set_scissor_rect(ScissorRect::new(x0, y0, x1 - x0, y1 - y0))
+                                    .unwrap();
+                            }
+                            encoder.set_vertex_bytes(&corners(r), 0).unwrap();
+                            encoder
+                                .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                                .unwrap();
+                        }
+                        encoder.end_encoding().unwrap();
+                    }
+                    let mut d = RenderPassDescriptor::new();
+                    let color = &mut d.color_attachments[0];
+                    color.texture = Some(presented.clone());
+                    color.load_action = LoadAction::DontCare;
+                    color.store_action = StoreAction::Store;
+                    let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+                    encoder.set_render_pipeline_state(&reads).unwrap();
+                    encoder.set_vertex_buffer(Some(&whole), 0, 0).unwrap();
+                    encoder.set_fragment_texture(Some(texture), 0).unwrap();
+                    encoder
+                        .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                        .unwrap();
+                    encoder.end_encoding().unwrap();
+                    command_buffer.commit().unwrap();
+                    command_buffer.wait_until_completed_for(WAIT).unwrap();
+                    assert_eq!(command_buffer.error(), None);
+                    command_buffer.gpu_end_time().unwrap()
+                        - command_buffer.gpu_start_time().unwrap()
+                };
+                for n in 0..WARM {
+                    frame(n);
+                }
+                let before = device.work_counts();
+                let mut times: Vec<f64> = (WARM..WARM + TIMED).map(&frame).collect();
+                let after = device.work_counts();
+                times.sort_by(f64::total_cmp);
+                let per = |a: u64, b: u64| (b - a) as f64 / TIMED as f64;
+                println!(
+                    "POOLED-SURFACE-COST {} {kind}: {passes} passes of {SURFACE_DRAWS} draws, \
+                     scissored {scissored}: GPU {:.3} ms/frame (median); per frame: shadow copies \
+                     {:.1}, texels copied in {:.0}, back {:.0}",
+                    device.name(),
+                    times[TIMED / 2] * 1e3,
+                    per(before.shadow_copies, after.shadow_copies),
+                    per(
+                        before.shadow_texels_copied_in,
+                        after.shadow_texels_copied_in
+                    ),
+                    per(
+                        before.shadow_texels_copied_back,
+                        after.shadow_texels_copied_back
+                    ),
+                );
+            }
+        }
+    }
+    drop(caches);
     messages.take_notices();
 }
