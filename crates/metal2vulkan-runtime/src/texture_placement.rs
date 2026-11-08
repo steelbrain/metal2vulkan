@@ -27,9 +27,10 @@ pub enum TexturePlacement {
     /// texture's accesses: once it does, at the commit of the device's only uncommitted command
     /// buffer, the texture moves in place with no copy where the verdicts pass and the device
     /// makes its image in place (`WorkCounts::host_textures_moved_in_place`), and stays a shadow
-    /// where they do not or the device refuses the image, as one made then would be. [`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks)
-    /// starts the check and says when its verdicts are known; the same query then answers what a
-    /// texture made after takes.
+    /// where they do not or the device refuses the image, as one made then would be.
+    /// [`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) starts the check
+    /// and says when its verdicts are known; the same query then answers what a texture made after
+    /// takes.
     Pending,
     /// A shadow: an image of the runtime's own memory, which the encoders copy the texels into
     /// from the buffer before a command buffer's uses and back after its writes, announced

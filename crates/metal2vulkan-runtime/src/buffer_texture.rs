@@ -669,11 +669,12 @@ impl Buffer {
     /// where it is refused; nothing is bound or submitted. What only the bind shows is not known
     /// here: over pages imported as dma-bufs, the caller's source's dma-buf and the driver's
     /// import of it ([`TexturePlacement::InPlace`]); and a making that runs out of memory or meets
-    /// a lost device fails, as this may making those images. The answer is the buffer's and the
-    /// device's state as the call reads them: a detach, a rebind, or the check's verdicts after it
-    /// may change what a texture made later takes. A pending verdict starts the device's check, as
-    /// the making's does ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks)
-    /// says when its verdicts are known). It counts and announces nothing.
+    /// a lost device fails, as this query may in making those images. The answer is the buffer's
+    /// and the device's state as the call reads them: a detach, a rebind, or the check's verdicts
+    /// after it may change what a texture made later takes. A pending verdict starts the device's
+    /// check, as the making's does
+    /// ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) says when its
+    /// verdicts are known). It counts and announces nothing.
     pub fn texture_placement(
         &self,
         descriptor: &TextureDescriptor,
