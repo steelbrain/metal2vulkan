@@ -380,6 +380,19 @@ before a use and back (merged back: only the bytes the commands changed) after a
 is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and
 is written beyond its declared usage, as plain Metal allows, through its usage shadow and an
 attachment stand-in, whose copies touch its texels alone.
+`Buffer::texture_placement` and `Buffer::texture_placement_with_iosurface_plane` answer, for the
+arguments of `new_texture` and `new_texture_with_iosurface_plane`, where the texture lies if made
+then (`TexturePlacement`): in place; `Pending`, a shadow made before its verdict that moves in place
+where the verdict passes; a shadow and why (`TextureShadowReason`: the policy, the texel width, the
+check's failed or unchecked verdict with its access and row ends, a refusal, texels past the
+buffer's length, a device copy); no host pages; or a shape no image in place takes. The making's
+own route answers it (`texture/route.rs`), after every check the making runs before it makes
+anything, so the same arguments are refused with the same errors; what only making the texture
+shows (the device refusing the image in place, memory, a lost device) it does not know. A pending
+verdict starts the check, as a texture's making does. `Device::settle_in_place_checks` starts the
+check and says when the verdicts are known (a zero timeout waits for nothing). They become known
+once per `VkDevice`: a GPU recovery's new one reads them from the record as it is made, or checks
+again where the lost one's check left none.
 On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface plane's)
 that only samples or reads, whose policy takes the image in place, over memory that carries a log
 of its writes (`HostMemory::with_dirty_pages`), tracked, one slice laid out as one copy, is instead

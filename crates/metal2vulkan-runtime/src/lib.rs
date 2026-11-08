@@ -232,6 +232,7 @@ mod submit_check;
 mod tessellation;
 mod texture;
 mod texture_descriptor;
+mod texture_placement;
 mod tile_pass;
 mod tracker;
 mod trails;
@@ -374,6 +375,9 @@ pub use sparse::encoder::ResourceStateCommandEncoder;
 pub use sparse::{SparsePageSize, SparseProblem, SparseTextureRegionAlignmentMode};
 pub use texture::{SharedTextureHandle, Texture, VkImageLayouts, WrappedImageProblem};
 pub use texture_descriptor::{TextureDescriptor, TextureProblem, TextureSwizzleChannels};
+pub use texture_placement::{
+    InPlaceAccess, InPlaceRefusal, InPlaceRowEnds, TexturePlacement, TextureShadowReason,
+};
 pub use used_resources::{EncoderKind, EndedEncoder, UsedResources};
 pub use values::{
     CommandBufferStatus, Coordinate2D, CpuCacheMode, HazardTrackingMode, Origin, Region,

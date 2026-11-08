@@ -273,7 +273,7 @@ Columns:
 | `ProtectedContent` | Protection options whose answer on Metal is not measured (`command_buffer/protection.rs`) | every device (Apple-private, Metal's answer not measured) | `-` | 3: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (commit_now)`, `crates/metal2vulkan-runtime/src/command_buffer/protection.rs (refuse_protected_state_encoder)` (+1) | `none`: Apple-private (no public header) |
 | `ViewportTransformDisabled` | The viewport transform turned off (`setViewportTransformEnabled:NO`) | every device (Apple-private, Metal's answer not measured) | `-` | 1: `crates/metal2vulkan-runtime/src/apple_only.rs (check)` | `none`: Apple-private (no public header) |
 | `VertexAmplificationMode` | `setVertexAmplificationMode:value:` of a count (the value's set bits in mode 1, else the value) of 0, whose copies change from run to run on... | every device (Apple-private, Metal's answer not measured) | `-` | 2: `crates/metal2vulkan-runtime/src/apple_only.rs (check)`, `crates/metal2vulkan-runtime/src/apple_only.rs (set_vertex_amplification_mode)` | `none`: Apple-private (no public header) |
-| `SurfaceClientDirection` | A texture over an IOSurface made with `kIOSurfaceClientDirection` (`newTextureWithDescriptor:iosurface:plane:` of such a surface) | every device (Apple-private, Metal's answer not measured) | `-` | 1: `crates/metal2vulkan-runtime/src/buffer_texture.rs (new_texture_with_iosurface_plane)` | `none`: an IOSurface key in no public header |
+| `SurfaceClientDirection` | A texture over an IOSurface made with `kIOSurfaceClientDirection` (`newTextureWithDescriptor:iosurface:plane:` of such a surface) | every device (Apple-private, Metal's answer not measured) | `-` | 1: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refuse_client_direction)` | `none`: an IOSurface key in no public header |
 
 ## 4. Binder refusals at a device limit (`BindError`)
 
@@ -780,7 +780,7 @@ Each refusal's sites, with the function that builds it.
 - `apple::ProtectedContent`: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (commit_now)`; `crates/metal2vulkan-runtime/src/command_buffer/protection.rs (refuse_protected_state_encoder)`; `crates/metal2vulkan-runtime/src/command_buffer/protection.rs (set)`
 - `apple::ViewportTransformDisabled`: `crates/metal2vulkan-runtime/src/apple_only.rs (check)`
 - `apple::VertexAmplificationMode`: `crates/metal2vulkan-runtime/src/apple_only.rs (check)`; `crates/metal2vulkan-runtime/src/apple_only.rs (set_vertex_amplification_mode)`
-- `apple::SurfaceClientDirection`: `crates/metal2vulkan-runtime/src/buffer_texture.rs (new_texture_with_iosurface_plane)`
+- `apple::SurfaceClientDirection`: `crates/metal2vulkan-runtime/src/buffer_texture.rs (refuse_client_direction)`
 - `bind::DescriptorRangeExceeded`: `crates/metal2vulkan/src/bind/graphics.rs (rebind_with)`; `crates/metal2vulkan/src/bind/instantiate.rs (bind_buffers)`
 - `bind::TexelBufferTooLarge`: `crates/metal2vulkan/src/bind/instantiate.rs (texel_ranges)`
 - `bind::HeapTooLarge`: `crates/metal2vulkan/src/bind/heap.rs (directory_bytes)`; `crates/metal2vulkan/src/bind/heap.rs (heap_elements)`; `crates/metal2vulkan/src/bind/heap.rs (listed_sampler_tables)`; `crates/metal2vulkan/src/bind/heap.rs (new, 3 sites)`; `crates/metal2vulkan/src/bind/heap.rs (placed)`

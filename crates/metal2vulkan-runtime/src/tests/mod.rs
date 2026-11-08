@@ -436,6 +436,9 @@ mod texture_aggregates;
 mod texture_descriptor;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_facts;
+mod texture_placement;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod texture_placement_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod texture_resource_options;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

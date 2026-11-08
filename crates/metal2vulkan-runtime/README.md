@@ -500,6 +500,14 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   or a no-copy heap's buffer's: the caller's pages, imported by their pointer, as dma-bufs or in a
   guest RAM's chunk, or a copy of them (`copied-host-pages`), which Metal never makes; a rebind
   may change it ([HOWTO](../../docs/HOWTO.md#copied-host-buffers)).
+- `Buffer::texture_placement` and `texture_placement_with_iosurface_plane` (with
+  `TexturePlacement` and `TextureShadowReason`): where a texture `new_texture` or
+  `new_texture_with_iosurface_plane` makes of the same arguments lies if made now: in place over
+  host pages, a shadow pending the device's in-place check, a shadow and why, no host pages, or
+  another shape. The making's own route answers it, after every check the making runs before it
+  makes anything, so the same arguments are refused with the same errors.
+  `Device::settle_in_place_checks` starts the check and says when its verdicts are known (a zero
+  timeout waits for nothing).
 - `HostRam`, `Device::use_host_ram` (with `HostRamUse`) and `HostMemory::with_runs` (with
   `RunResolver`): a guest's RAM imported whole, in 64 MiB chunks, for a device that refuses views
   of guest pages made through dma-bufs; a no-copy object whose pages the consumer resolves to one

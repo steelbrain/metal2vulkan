@@ -799,13 +799,30 @@ impl Device {
         verdict
     }
 
-    /// Start the device's check where its verdicts are pending and no check started, and wait
-    /// until every verdict is known or `timeout` passed: whether they are. Under
-    /// `HostPageTexturePolicy::Shadow` no check runs and no verdict is known: false at once. A
-    /// runtime extension for the lanes that hold a texture over host pages to the path it takes,
-    /// and for a program that starts the check before it makes such textures (a zero `timeout`
-    /// waits for nothing), as a texture made before its verdict is a shadow (the module docs).
-    #[doc(hidden)]
+    /// Start the device's check of textures over host pages in place where its verdicts are
+    /// pending and no check started, and wait until every verdict is known or `timeout` passed:
+    /// whether they are. A runtime extension: Metal has no such check, as a Mac's GPU works on a
+    /// texture over the caller's pages in place, where the runtime takes an image in place only
+    /// where the device's own check passed (docs/API.md, textures over host pages).
+    ///
+    /// A texture over host pages made while its verdict is pending is a shadow that moves in
+    /// place at a later commit where the verdict passes
+    /// ([`TexturePlacement::Pending`](crate::TexturePlacement::Pending)); once this answers
+    /// `true`, no verdict is pending, and
+    /// [`Buffer::texture_placement`](crate::Buffer::texture_placement) answers in place or a
+    /// shadow for good, for as long as the device serves. A zero `timeout` waits for nothing: it
+    /// starts the check and answers whether the verdicts are known, so a program may start the
+    /// check before it makes such textures and ask again later. Under
+    /// `HostPageTexturePolicy::Shadow` no check runs and no verdict is known: `false` at once.
+    ///
+    /// The verdicts go from pending to known once for each `VkDevice` behind the device. A GPU
+    /// recovery's new one (`Degradation::DeviceRecovered`) reads them again from the record the
+    /// check kept in the shader cache's directory as it is made, known at once, where the check
+    /// ended and wrote it; where the lost one's check had not ended, or the device keeps no record
+    /// (no shader cache directory, or `DeviceOptions::fail_in_place_check`), they are pending
+    /// again, and this answers `false` until the new one's check ends. Buffers made before a
+    /// recovery are refused on the new device (`RuntimeGap::MadeBeforeRecovery`), so a program
+    /// makes its textures over host pages again after one, and asks again.
     pub fn settle_in_place_checks(&self, timeout: Duration) -> bool {
         self.current().settle_in_place_checks_now(timeout)
     }

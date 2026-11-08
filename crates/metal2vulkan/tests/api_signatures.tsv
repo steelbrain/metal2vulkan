@@ -1271,6 +1271,9 @@ enum	metal2vulkan-runtime::HeapProblem	#[derive(Clone, Copy, Debug, PartialEq, E
 enum	metal2vulkan-runtime::HeapType	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapType
 enum	metal2vulkan-runtime::HostBacking	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostBacking
 enum	metal2vulkan-runtime::IdPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IdPlacement
+enum	metal2vulkan-runtime::InPlaceAccess	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum InPlaceAccess
+enum	metal2vulkan-runtime::InPlaceRefusal	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum InPlaceRefusal
+enum	metal2vulkan-runtime::InPlaceRowEnds	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum InPlaceRowEnds
 enum	metal2vulkan-runtime::IndirectCommand	#[derive(Clone, Debug)] #[non_exhaustive] pub enum IndirectCommand
 enum	metal2vulkan-runtime::IndirectCommandBufferProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectCommandBufferProblem
 enum	metal2vulkan-runtime::IndirectDispatch	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IndirectDispatch
@@ -1314,7 +1317,9 @@ enum	metal2vulkan-runtime::SparseTextureRegionAlignmentMode	#[derive(Clone, Copy
 enum	metal2vulkan-runtime::StorageMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StorageMode
 enum	metal2vulkan-runtime::StoreAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StoreAction
 enum	metal2vulkan-runtime::SurfaceYCbCrMatrix	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SurfaceYCbCrMatrix
+enum	metal2vulkan-runtime::TexturePlacement	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TexturePlacement
 enum	metal2vulkan-runtime::TextureProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureProblem
+enum	metal2vulkan-runtime::TextureShadowReason	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureShadowReason
 enum	metal2vulkan-runtime::ViewProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ViewProblem
 enum	metal2vulkan-runtime::VisibilityProblem	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VisibilityProblem
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
@@ -7806,6 +7811,8 @@ method	metal2vulkan-runtime::Buffer::resource_options	pub fn resource_options(&s
 method	metal2vulkan-runtime::Buffer::set_label	pub fn set_label(&self, label: &str)
 method	metal2vulkan-runtime::Buffer::set_purgeable_state	pub fn set_purgeable_state(&self, state: PurgeableState) -> Result<PurgeableState, Error>
 method	metal2vulkan-runtime::Buffer::storage_mode	pub fn storage_mode(&self) -> StorageMode
+method	metal2vulkan-runtime::Buffer::texture_placement	pub fn texture_placement(&self, descriptor: &TextureDescriptor, offset: u64, bytes_per_row: u64) -> Result<TexturePlacement, Error>
+method	metal2vulkan-runtime::Buffer::texture_placement_with_iosurface_plane	pub fn texture_placement_with_iosurface_plane(&self, descriptor: &TextureDescriptor, plane: IoSurfacePlane) -> Result<TexturePlacement, Error>
 method	metal2vulkan-runtime::Buffer::vk_buffer	pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64)
 method	metal2vulkan-runtime::Buffer::vk_host_memory	pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory>
 method	metal2vulkan-runtime::BufferDescriptor::new	pub fn new(length: u64, resource_options: ResourceOptions, contents: BufferContents<'a>) -> BufferDescriptor<'a>
@@ -11898,6 +11905,18 @@ variant	metal2vulkan-runtime::HostBacking::InHostRam	InHostRam
 variant	metal2vulkan-runtime::IdPlacement::Any	Any
 variant	metal2vulkan-runtime::IdPlacement::At	At(ResourceId)
 variant	metal2vulkan-runtime::IdPlacement::Outside	Outside
+variant	metal2vulkan-runtime::InPlaceAccess::Reads	Reads
+variant	metal2vulkan-runtime::InPlaceAccess::Renders	Renders
+variant	metal2vulkan-runtime::InPlaceAccess::Writes	Writes
+variant	metal2vulkan-runtime::InPlaceRefusal::Detached	Detached
+variant	metal2vulkan-runtime::InPlaceRefusal::DmaBuf	DmaBuf
+variant	metal2vulkan-runtime::InPlaceRefusal::Image	Image
+variant	metal2vulkan-runtime::InPlaceRefusal::Pitch	Pitch
+variant	metal2vulkan-runtime::InPlaceRefusal::Placement	Placement
+variant	metal2vulkan-runtime::InPlaceRefusal::Rows	Rows
+variant	metal2vulkan-runtime::InPlaceRefusal::Source	Source
+variant	metal2vulkan-runtime::InPlaceRowEnds::InLines	InLines
+variant	metal2vulkan-runtime::InPlaceRowEnds::OnLines	OnLines
 variant	metal2vulkan-runtime::IndirectCommand::Compute	Compute(EncodedComputeCommand)
 variant	metal2vulkan-runtime::IndirectCommand::Render	Render(EncodedRenderCommand)
 variant	metal2vulkan-runtime::IndirectCommandBufferProblem::CommandKind	CommandKind
@@ -12329,6 +12348,11 @@ variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::Itu709	Itu709
 variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::Other	Other
 variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::P3D65	P3D65
 variant	metal2vulkan-runtime::SurfaceYCbCrMatrix::Smpte240M	Smpte240M
+variant	metal2vulkan-runtime::TexturePlacement::InPlace	InPlace
+variant	metal2vulkan-runtime::TexturePlacement::NotHostPages	NotHostPages
+variant	metal2vulkan-runtime::TexturePlacement::OtherShape	OtherShape
+variant	metal2vulkan-runtime::TexturePlacement::Pending	Pending
+variant	metal2vulkan-runtime::TexturePlacement::Shadow	Shadow(TextureShadowReason)
 variant	metal2vulkan-runtime::TextureProblem::ArrayLength	ArrayLength
 variant	metal2vulkan-runtime::TextureProblem::CubeNotSquare	CubeNotSquare
 variant	metal2vulkan-runtime::TextureProblem::ExtentForFormat	ExtentForFormat
@@ -12348,6 +12372,13 @@ variant	metal2vulkan-runtime::TextureProblem::Unspecialized	Unspecialized
 variant	metal2vulkan-runtime::TextureProblem::UsageForFormat	UsageForFormat
 variant	metal2vulkan-runtime::TextureProblem::ViewOnlyFormat	ViewOnlyFormat
 variant	metal2vulkan-runtime::TextureProblem::ZeroExtent	ZeroExtent
+variant	metal2vulkan-runtime::TextureShadowReason::CheckFailed	CheckFailed { access: InPlaceAccess, row_ends: InPlaceRowEnds }
+variant	metal2vulkan-runtime::TextureShadowReason::DeviceCopy	DeviceCopy
+variant	metal2vulkan-runtime::TextureShadowReason::PastLength	PastLength
+variant	metal2vulkan-runtime::TextureShadowReason::Policy	Policy
+variant	metal2vulkan-runtime::TextureShadowReason::Refused	Refused(InPlaceRefusal)
+variant	metal2vulkan-runtime::TextureShadowReason::StoreWidth	StoreWidth { texel_bytes: u64 }
+variant	metal2vulkan-runtime::TextureShadowReason::Unchecked	Unchecked { access: InPlaceAccess, row_ends: InPlaceRowEnds }
 variant	metal2vulkan-runtime::ViewProblem::BufferSlices	BufferSlices
 variant	metal2vulkan-runtime::ViewProblem::FormatIncompatible	FormatIncompatible
 variant	metal2vulkan-runtime::ViewProblem::LevelRange	LevelRange

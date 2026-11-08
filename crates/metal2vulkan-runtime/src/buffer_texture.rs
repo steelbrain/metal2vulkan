@@ -78,6 +78,7 @@ use super::texture::{IdUse, Texture};
 use super::texture_descriptor::{
     Creator, Refused, TextureDescriptor, TextureLayout, TextureProblem,
 };
+use super::texture_placement::TexturePlacement;
 use super::tracker::{Access, Use, UseRange};
 use super::two_planes;
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
@@ -269,6 +270,15 @@ pub struct IoSurfacePlane {
 }
 
 impl IoSurfacePlane {
+    /// Refused: a surface made with `kIOSurfaceClientDirection`, whatever the value
+    /// ([`AppleOnly::SurfaceClientDirection`]).
+    fn refuse_client_direction(&self) -> Result<(), Error> {
+        match self.client_direction {
+            Some(_) => Err(Error::AppleOnly(AppleOnly::SurfaceClientDirection)),
+            None => Ok(()),
+        }
+    }
+
     /// A plane at `offset` of the buffer standing for the surface, rows `bytes_per_row` apart,
     /// of a surface with planes or not (`planar`), made without `kIOSurfaceClientDirection`,
     /// with no YCbCr facts.
@@ -340,6 +350,20 @@ enum Whose {
     Program,
     /// The runtime's own (`Buffer::new_runtime_texture`): no ID.
     Runtime,
+}
+
+/// What a texture over a buffer's making does (`Buffer::make_texture_over`): make the texture, or
+/// answer where it would lie ([`Buffer::texture_placement`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Goal {
+    Make,
+    Ask,
+}
+
+/// What a texture over a buffer's making gives for its [`Goal`].
+enum Over {
+    Made(Texture),
+    Asked(TexturePlacement),
 }
 
 impl Whose {
@@ -605,9 +629,7 @@ impl Buffer {
         descriptor: &TextureDescriptor,
         plane: IoSurfacePlane,
     ) -> Result<Texture, Error> {
-        if plane.client_direction.is_some() {
-            return Err(Error::AppleOnly(AppleOnly::SurfaceClientDirection));
-        }
+        plane.refuse_client_direction()?;
         let texture = self.texture_over(
             "new_texture_with_iosurface_plane",
             descriptor,
@@ -627,6 +649,72 @@ impl Buffer {
         Ok(texture)
     }
 
+    /// Where a texture [`new_texture`](Self::new_texture) makes of the same arguments lies if
+    /// made now: in place over the buffer's host pages, a shadow pending the device's check, a
+    /// shadow and why, or a texture the device's check does not decide ([`TexturePlacement`]). A
+    /// runtime extension: Metal has no such query, as a Mac's GPU works on a texture over the
+    /// caller's pages in place.
+    ///
+    /// The answer is the making's own decision, the same function's (the device's policy, the
+    /// texture's usage and texel size, the buffer's bytes detached, copied or past their length,
+    /// a discrete GPU's device copy, and the device's check's verdicts for the pages' kind, the
+    /// texture's accesses and how its texels lie in the device's lines of memory), taken after
+    /// every check the making runs before it makes anything: an argument `new_texture` refuses
+    /// is refused here alike, with the same error. Only what making the texture shows is not
+    /// known here: a `TexturePlacement::InPlace` texture whose image the device then refuses is
+    /// a shadow, and a making that runs out of memory or meets a lost device fails. The answer
+    /// is the buffer's and the device's state as the call reads them: a detach, a rebind, or the
+    /// check's verdicts after it may change what a texture made later takes. A pending verdict
+    /// starts the device's check, as the making's does
+    /// ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) says when its
+    /// verdicts are known). It makes and counts nothing, and announces nothing.
+    pub fn texture_placement(
+        &self,
+        descriptor: &TextureDescriptor,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<TexturePlacement, Error> {
+        let over = (offset, bytes_per_row);
+        let asked = (BufferTextureCall::Texture, Whose::Program, Goal::Ask);
+        self.placement_over("new_texture", descriptor, over, asked, None)
+    }
+
+    /// Where a texture [`new_texture_with_iosurface_plane`](Self::new_texture_with_iosurface_plane)
+    /// makes of the same arguments lies if made now, as
+    /// [`texture_placement`](Self::texture_placement) answers it for
+    /// [`new_texture`](Self::new_texture), and refused as that call refuses its arguments. A
+    /// runtime extension: Metal has no such query.
+    pub fn texture_placement_with_iosurface_plane(
+        &self,
+        descriptor: &TextureDescriptor,
+        plane: IoSurfacePlane,
+    ) -> Result<TexturePlacement, Error> {
+        plane.refuse_client_direction()?;
+        let over = (plane.offset, plane.bytes_per_row);
+        let form = BufferTextureCall::IoSurfacePlane {
+            planar: plane.planar,
+        };
+        let asked = (form, Whose::Program, Goal::Ask);
+        let call = "new_texture_with_iosurface_plane";
+        self.placement_over(call, descriptor, over, asked, plane.ycbcr)
+    }
+
+    /// The placement [`make_texture_over`](Self::make_texture_over) answers for `asked`, for
+    /// Metal's `call`.
+    fn placement_over(
+        &self,
+        call: &'static str,
+        descriptor: &TextureDescriptor,
+        over: (u64, u64),
+        asked: (BufferTextureCall, Whose, Goal),
+        ycbcr_surface: Option<IoSurfaceYCbCr>,
+    ) -> Result<TexturePlacement, Error> {
+        match self.make_texture_over(call, descriptor, over, asked, ycbcr_surface)? {
+            Over::Asked(placement) => Ok(placement),
+            Over::Made(_) => Err(internal("a texture's placement made the texture")),
+        }
+    }
+
     /// The texture of `descriptor` over the buffer that `call` (made through `form`) makes, over
     /// a surface of `surface`'s YCbCr facts where given, `whose` it is. Over a heap's buffer it is
     /// among the heap's textures while it lives: `useHeap:` makes every resource the heap holds
@@ -642,26 +730,35 @@ impl Buffer {
         ycbcr_surface: Option<IoSurfaceYCbCr>,
     ) -> Result<Texture, Error> {
         let over = (offset, bytes_per_row);
-        let texture =
-            self.make_texture_over(call, descriptor, over, (form, whose), ycbcr_surface)?;
+        let made = (form, whose, Goal::Make);
+        let texture = match self.make_texture_over(call, descriptor, over, made, ycbcr_surface)? {
+            Over::Made(texture) => texture,
+            Over::Asked(_) => return Err(internal("a texture's making answered a placement")),
+        };
         if let Some(heap) = self.heap() {
             heap.hold_texture(&texture);
         }
         Ok(texture)
     }
 
-    /// [`texture_over`](Self::texture_over)'s texture, at `offset` with `bytes_per_row` (`over`).
+    /// [`texture_over`](Self::texture_over)'s texture, at `offset` with `bytes_per_row` (`over`),
+    /// made where `goal` makes it; else where it would lie, answered after every check its making
+    /// runs before it makes anything ([`texture_placement`](Self::texture_placement)).
     fn make_texture_over(
         &self,
         call: &'static str,
         descriptor: &TextureDescriptor,
         (offset, bytes_per_row): (u64, u64),
-        (form, whose): (BufferTextureCall, Whose),
+        (form, whose, goal): (BufferTextureCall, Whose, Goal),
         ycbcr_surface: Option<IoSurfaceYCbCr>,
-    ) -> Result<Texture, Error> {
+    ) -> Result<Over, Error> {
         // A detach waits for none being made over the bytes (`detach.rs`), nor does a rebind of
-        // them while they are detached, so whether they are holds while it is made.
-        let _making = self.making_texture();
+        // them while they are detached, so whether they are holds while it is made. A question
+        // holds nothing: its answer is the bytes' state as it reads them.
+        let _making = match goal {
+            Goal::Make => self.making_texture(),
+            Goal::Ask => None,
+        };
         let detached = self.detached();
         // A YCbCr format is made over a surface's planes with their facts (`ycbcr.rs`).
         let asked_format = descriptor.pixel_format;
@@ -839,6 +936,9 @@ impl Buffer {
             if self.device().is_lost() {
                 return Err(self.device().lost_refusal());
             }
+            if goal == Goal::Ask {
+                return Ok(Over::Asked(TexturePlacement::OtherShape));
+            }
             let rows = Texels::new(
                 self.clone(),
                 rotated_rows(&texture),
@@ -846,13 +946,16 @@ impl Buffer {
                 descriptor,
             );
             let stored = Texels::placed(self.clone(), stored, texel_bytes, descriptor);
-            return self.device().new_rotated_texture(
-                call,
-                [rows, stored].map(|texels| texels.with_options(options).over_surface(surface)),
-                descriptor,
-                (&layout, rotation),
-                id_use,
-            );
+            return self
+                .device()
+                .new_rotated_texture(
+                    call,
+                    [rows, stored].map(|texels| texels.with_options(options).over_surface(surface)),
+                    descriptor,
+                    (&layout, rotation),
+                    id_use,
+                )
+                .map(Over::Made);
         }
         // A texture over a plane whose texels Metal lays out in no one place, its first level's
         // and slice's among them, lies in memory of its own (`linear_plan.rs`'s **Beyond the
@@ -861,16 +964,27 @@ impl Buffer {
             if storage == StorageMode::Memoryless {
                 return Err(Error::NotImplemented(RuntimeGap::MemorylessSurfacePlane));
             }
+            if goal == Goal::Ask {
+                return Ok(Over::Asked(TexturePlacement::OtherShape));
+            }
             let made = self
                 .device()
                 .surface_texture_apart(call, descriptor, id_use)?;
             self.degrade_apart(&layout, offset, bytes_per_row);
-            return Ok(made);
+            return Ok(Over::Made(made));
         }
         let placed = plan_buffer_texture(&texture, &buffer)
             .map_err(|refusal| refusal_error(call, refusal))?;
         if self.device().is_lost() {
             return Err(self.device().lost_refusal());
+        }
+        // A texture of a surface's two planes, a texture buffer and a converted texture take no
+        // image in place.
+        let other = alpha_plane.is_some()
+            || converted.is_some()
+            || layout.texture_type == TextureType::TextureBuffer;
+        if goal == Goal::Ask && other {
+            return Ok(Over::Asked(TexturePlacement::OtherShape));
         }
         if let Some(alpha) = alpha_plane {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
@@ -878,20 +992,17 @@ impl Buffer {
                 .over_surface(surface);
             return self
                 .device()
-                .new_surface_planes_texture(call, texels, descriptor, &layout, id_use, alpha);
+                .new_surface_planes_texture(call, texels, descriptor, &layout, id_use, alpha)
+                .map(Over::Made);
         }
         if let Some((planes, span)) = converted {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
                 .with_options(options)
                 .over_surface(surface);
-            return self.device().new_converted_texture(
-                call,
-                texels,
-                descriptor,
-                &layout,
-                id_use,
-                (&planes, span),
-            );
+            return self
+                .device()
+                .new_converted_texture(call, texels, descriptor, &layout, id_use, (&planes, span))
+                .map(Over::Made);
         }
         if layout.texture_type == TextureType::TextureBuffer {
             // Over a surface's plane, of the descriptor's options (`Buffer::new_texture_with_iosurface_plane`):
@@ -906,13 +1017,23 @@ impl Buffer {
             if tail {
                 self.degrade_surface_tail(&layout, &placed);
             }
-            Ok(texture)
+            Ok(Over::Made(texture))
         } else {
-            // Texels past the buffer's length lie in a tail of their own (`linear_plan.rs`).
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)
                 .with_options(options)
-                .over_surface(surface)
-                .with_tail()?;
+                .over_surface(surface);
+            // Where it would lie: the route its making takes (`texture/route.rs`), with no tail
+            // made for texels past the buffer's length, which the route asks alone.
+            if goal == Goal::Ask {
+                let past = texels.runs_past();
+                let asked = (descriptor, &layout);
+                let placement = self
+                    .device()
+                    .placement_over_buffer(call, &texels, asked, past)?;
+                return Ok(Over::Asked(placement));
+            }
+            // Texels past the buffer's length lie in a tail of their own (`linear_plan.rs`).
+            let texels = texels.with_tail()?;
             let tail = surface && texels.tail.is_some();
             let texture = self
                 .device()
@@ -926,7 +1047,7 @@ impl Buffer {
             if placed.gpu.shared_bytes() != 0 {
                 self.degrade_colliding_rows(&layout, &placed);
             }
-            Ok(texture)
+            Ok(Over::Made(texture))
         }
     }
 }
@@ -1515,10 +1636,10 @@ impl Texels {
     /// buffer's length, or a 2D array's second slice, [`Texels::kept`]), made as
     /// [`Device::own_buffer`] makes a buffer: all zero.
     fn with_tail(self) -> Result<Texels, Error> {
-        let end = self.layout.end().max(self.cpu.end()).max(self.shader.end());
-        if end <= self.kept {
+        if !self.runs_past() {
             return Ok(self);
         }
+        let end = self.layout.end().max(self.cpu.end()).max(self.shader.end());
         let hazard = self.options.hazard_tracking_mode()?;
         let options = ResourceOptions::new(StorageMode::Shared, CpuCacheMode::DefaultCache, hazard);
         let span = end - self.tail_base();
@@ -1527,6 +1648,13 @@ impl Texels {
             tail: Some(tail),
             ..self
         })
+    }
+
+    /// Whether the texels run past the bytes they keep in place (the buffer's length, or a 2D
+    /// array's second slice, [`Texels::kept`]): where [`with_tail`](Self::with_tail) gives them a
+    /// tail.
+    pub(super) fn runs_past(&self) -> bool {
+        self.layout.end().max(self.cpu.end()).max(self.shader.end()) > self.kept
     }
 
     /// Where the texels' bytes past the buffer's length lie, where they run past it: from the
