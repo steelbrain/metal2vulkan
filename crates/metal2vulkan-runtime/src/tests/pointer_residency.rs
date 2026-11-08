@@ -27,7 +27,9 @@
 //! kinds of pages each test says so and passes without running.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects.
+//! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects. Its remap of a file's pages under
+//! a kept import ([`a_file_s_pages_mapped_under_a_kept_pointer_import`]) is a GPU hazard: on a GPU
+//! it compiles only with `m2v_gpu_hazards` too (docs/VALIDATION.md).
 
 use super::host_residency::{
     counting, device, gpu_fill, gpu_read, host_page, read, release, residency, Ram, Scratch,
@@ -387,6 +389,7 @@ fn a_released_pointer_import_reads_after_a_remap_what_the_kept_one_would() {
 
 /// What a command buffer did, read once it completed or [`FILE_REMAP_WAIT`] passed: `None` where
 /// it completed with no error.
+#[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
 fn outcome(command_buffer: &crate::CommandBuffer) -> Option<String> {
     let waited = command_buffer.wait_until_completed_for(FILE_REMAP_WAIT);
     match (waited, command_buffer.error()) {
@@ -397,16 +400,22 @@ fn outcome(command_buffer: &crate::CommandBuffer) -> Option<String> {
 }
 
 /// How long [`a_file_s_pages_mapped_under_a_kept_pointer_import`] waits for each command buffer.
+#[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
 const FILE_REMAP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A file's pages (a `memfd`'s, mapped shared) mapped over a no-copy buffer's private anonymous
 /// pages while its pointer import is kept, the device told (`Device::host_range_remapped`): a
 /// remap `HostMemory::new`'s contract forbids under a live buffer (`docs/FAST-PATHS.md`, known
 /// gaps). Then a command buffer that fills another buffer alone, and one that copies the no-copy
-/// buffer. On RADV both fail and the device is lost: amdgpu's userptr takes only pages with no file
-/// behind them and gets each live import's pages again at every submission, whose list holds every
-/// memory the device imported (Mesa 26.2.4). On lavapipe both complete and the copy reads the
-/// file's pages. On any other driver the test prints what each did.
+/// buffer. On RADV both fail and the `VkDevice` is lost: amdgpu's userptr takes only pages with no
+/// file behind them and gets each live import's pages again at every submission, whose list holds
+/// every memory the device imported (Mesa 26.2.4). The device then recovers, a new `VkDevice` behind
+/// it (`Degradation::DeviceRecovered`, its command buffers in flight failed as the hang and its
+/// victims), or answers as lost where that new one could not be made: either passes. On lavapipe
+/// both complete and the copy reads the file's pages. On any other driver the test prints what each
+/// did. A GPU hazard (`m2v_gpu_hazards`): it loses a GPU's device on purpose, and on the RX 7900 XTX
+/// (RADV) the loss put the GPU through a recovery.
+#[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
 #[test]
 fn a_file_s_pages_mapped_under_a_kept_pointer_import() {
     const TEST: &str = "pointer import file remap";
@@ -487,9 +496,10 @@ fn a_file_s_pages_mapped_under_a_kept_pointer_import() {
             Err(failed) => failed.clone(),
         };
         let lost = device.is_lost();
+        let recoveries = device.work_counts().device_recoveries;
         eprintln!(
             "FILE-REMAP {TEST}: on {} (the fact {}): another buffer's fill {}; the copy {read_of}; \
-             the device lost: {lost}",
+             the device lost: {lost}; its recoveries: {recoveries}",
             device.name(),
             follows(device),
             filled.as_deref().unwrap_or("completed"),
@@ -498,7 +508,10 @@ fn a_file_s_pages_mapped_under_a_kept_pointer_import() {
             Some(metal2vulkan::vk::DriverId::MESA_RADV) => {
                 assert!(filled.is_some(), "{TEST}: another buffer's fill completed");
                 assert!(read_back.is_err(), "{TEST}: the copy {read_of}");
-                assert!(lost, "{TEST}: the device is not lost");
+                assert!(
+                    lost || recoveries > 0,
+                    "{TEST}: the device is neither lost nor recovered"
+                );
             }
             Some(metal2vulkan::vk::DriverId::MESA_LLVMPIPE) => {
                 assert_eq!(filled, None, "{TEST}: another buffer's fill");
