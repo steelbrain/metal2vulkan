@@ -434,13 +434,31 @@ fn pipeline_work(from: &crate::WorkCounts, to: &crate::WorkCounts) -> String {
     let ms = |field: fn(&crate::WorkCounts) -> u64| (field(to) - field(from)) as f64 / 1e6;
     format!(
         "pipeline creations {:.2} ms (render {:.2}, compute {:.2}), the shader cache's reads \
-         {:.2} ms, writes {:.2} ms, off the creating thread {:.2} ms",
+         {:.2} ms, writes {:.2} ms, off the creating thread {:.2} ms, the submission checks' \
+         submissions {}",
         ms(|counts| counts.render_pipeline_create_nanos + counts.compute_pipeline_create_nanos),
         ms(|counts| counts.render_pipeline_create_nanos),
         ms(|counts| counts.compute_pipeline_create_nanos),
         ms(|counts| counts.shader_cache_read_nanos),
         ms(|counts| counts.shader_cache_write_nanos),
         ms(|counts| counts.shader_cache_off_thread_nanos),
+        to.submit_check_calls - from.submit_check_calls,
+    )
+}
+
+/// Which of `device`'s checks ran in this process and which it read from a record, from its
+/// counts `to` (`WorkCounts`), and its submission checks' report.
+fn checks_line(device: &Device, to: &crate::WorkCounts) -> String {
+    format!(
+        "submission checks run {} recalled {}, queue-switch checks run {} recalled {}, in-place \
+         checks run {} recalled {}; {}",
+        to.submit_checks_run,
+        to.submit_checks_recalled,
+        to.queue_switch_checks_run,
+        to.queue_switch_checks_recalled,
+        to.in_place_checks_run,
+        to.in_place_checks_recalled,
+        device.submit_check_report(),
     )
 }
 
@@ -515,7 +533,9 @@ fn host_ram_window_bench_with_a_consumer_s_options() {
 /// compiled in: which option the takes that wait at a chunk's first import follow. The shader
 /// cache directory of the device's own is a fresh one, as a new build's is, then the same one
 /// again (holding what the first device wrote), then a fresh one with [`SETTLE`] between the
-/// device's making and its first order.
+/// device's making and its first order, then a fresh one whose device's submission checks settled
+/// before its first order (`Device::settle_submit_checks`). Each variant prints which of the
+/// device's checks ran and which it read from a record once its orders ran.
 #[test]
 #[ignore = "a benchmark"]
 fn host_ram_window_bench_by_consumer_option() {
@@ -535,6 +555,12 @@ fn host_ram_window_bench_by_consumer_option() {
             Duration::ZERO,
         ),
         ("own cache directory, settled", own, Cache::Fresh, SETTLE),
+        (
+            "own cache directory, checks settled",
+            own,
+            Cache::Fresh,
+            Duration::ZERO,
+        ),
         (
             "sink",
             alone(|parts| parts.sink = true),
@@ -572,6 +598,10 @@ fn host_ram_window_bench_by_consumer_option() {
             return;
         };
         std::thread::sleep(settle);
+        if name.ends_with("checks settled") {
+            let settled = device.settle_submit_checks(Duration::from_secs(30));
+            eprintln!("HOST-RAM-WINDOW-OPTION {name}: the submission checks settled {settled}");
+        }
         eprintln!(
             "HOST-RAM-WINDOW-OPTION {name}: {parts:?} on {}, debug assertions {}; its making's \
              {}",
@@ -589,6 +619,10 @@ fn host_ram_window_bench_by_consumer_option() {
                 run(&device, &order, RamPages::Huge, Some(&heard));
             }
         }
+        eprintln!(
+            "HOST-RAM-WINDOW-OPTION {name}: checks: {}",
+            checks_line(&device, &device.work_counts())
+        );
         drop(device);
         kept = Some(scratch);
     }
