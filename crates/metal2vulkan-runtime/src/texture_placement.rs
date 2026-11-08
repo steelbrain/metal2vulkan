@@ -203,7 +203,9 @@ impl InPlaceAccess {
     fn of(access: in_place::Access) -> InPlaceAccess {
         match access {
             in_place::Access::Reads => InPlaceAccess::Reads,
-            in_place::Access::Renders => InPlaceAccess::Renders,
+            in_place::Access::Renders | in_place::Access::UnobservedRenders => {
+                InPlaceAccess::Renders
+            }
             in_place::Access::Writes
             | in_place::Access::BufferWrites
             | in_place::Access::NarrowWrites

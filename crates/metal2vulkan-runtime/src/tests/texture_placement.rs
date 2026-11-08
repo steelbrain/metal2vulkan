@@ -48,6 +48,7 @@ fn each_route_answers_its_own_placement() {
     let accesses = [
         (Access::Reads, InPlaceAccess::Reads),
         (Access::Renders, InPlaceAccess::Renders),
+        (Access::UnobservedRenders, InPlaceAccess::Renders),
         (Access::Writes, InPlaceAccess::Writes),
         (Access::BufferWrites, InPlaceAccess::Writes),
         (Access::NarrowWrites, InPlaceAccess::Writes),

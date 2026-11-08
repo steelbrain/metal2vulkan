@@ -546,7 +546,7 @@ fn the_answer_is_the_route_the_texture_takes() {
         let (verdict, rows) = verdict_of(&failing, &failing_buffer, access, (side * 4, side));
         let public_access = match access {
             Access::Reads => InPlaceAccess::Reads,
-            Access::Renders => InPlaceAccess::Renders,
+            Access::Renders | Access::UnobservedRenders => InPlaceAccess::Renders,
             Access::Writes
             | Access::BufferWrites
             | Access::NarrowWrites

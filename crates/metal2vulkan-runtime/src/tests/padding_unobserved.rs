@@ -13,9 +13,10 @@
 //! - **Rendered at a pitch the linear image misses.** A texture that renders, over such a buffer
 //!   at a 64-aligned pitch whose rows end inside a 64-byte line (the guests' device caches), is an
 //!   aliasing image exactly where the device makes `DRM_FORMAT_MOD_LINEAR` images and its check
-//!   of its pooled memory passed for renders, else a shadow; through the image, the texels the CPU
-//!   wrote read back, a pass's clear reaches the buffer's rows, and the bytes after the last row
-//!   keep the CPU's.
+//!   of its pooled memory passed for renders over padding declared unobserved
+//!   (`in_place::Access::UnobservedRenders`: its rows, each to its pitch, share no line with bytes
+//!   past them), else a shadow; through the image, the texels the CPU wrote read back, a pass's
+//!   clear reaches the buffer's rows, and the bytes after the last row keep the CPU's.
 //! - **Undeclared.** The same texture over a buffer made without the declaration answers
 //!   `Shadow(BytesBetweenRows)` and is a shadow (`shadowed_textures`), at every pitch.
 //! - **Over the caller's memory**, the declaration is refused: `Invalid`
@@ -222,7 +223,7 @@ const CACHES: [(u64, u64, u64); 3] = [(61, 37, 256), (250, 25, 1024), (3662, 9, 
 #[test]
 fn a_rendered_texture_at_a_pitch_the_linear_image_misses_takes_a_pitched_image_where_the_pooled_check_passed(
 ) {
-    use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+    use crate::in_place::{Access, Padding, PagesClass, RowEnds, Verdict};
     let scratch = Scratch::new("padding-unobserved-pitched");
     let device = device(&scratch.0);
     assert!(
@@ -259,14 +260,24 @@ fn a_rendered_texture_at_a_pitch_the_linear_image_misses_takes_a_pitched_image_w
             rows: height,
             slices: 1,
         };
-        let rows = RowEnds::of(0, &layout, device.shared().in_place.line());
-        let verdicts = [Access::Reads, Access::Renders].map(|access| {
+        // The check the texture asks: of renders over padding declared unobserved, where its rows
+        // to their pitch share no line with bytes past them, as the buffer's last row's do here.
+        let line = device.shared().in_place.line();
+        let start = buffer.contents().unwrap().as_ptr().addr() as u64;
+        let rows = RowEnds::of(start, &layout, line);
+        let padding = Padding::of(start, &layout, line, true).declared(true);
+        assert_eq!(
+            (rows, padding),
+            (RowEnds::InLines, Padding::Unobserved),
+            "{width}x{height} at {pitch}"
+        );
+        let verdicts = [Access::Renders, Access::UnobservedRenders].map(|access| {
             device
                 .shared()
                 .in_place
                 .verdict(PagesClass::Pooled, access, rows)
         });
-        let passed = verdicts == [Verdict::Passed; 2];
+        let passed = verdicts[1] == Verdict::Passed;
         assert_eq!(
             answer == TexturePlacement::NotHostPages,
             aliases,

@@ -28,7 +28,8 @@
 //!   device that writes back bytes it read beside the texels puts back an older value over a
 //!   write the CPU made between its read and its write, wherever in the step those lie
 //!   (`Bytes::write_until`). Each class runs every shape of [`SHAPES`] (texels of 1, 2, 4, 8 and 16
-//!   bytes, rows apart or one after another, and 3840x2160 at 4 bytes) [`ROUNDS`] times.
+//!   bytes, rows apart or one after another, 172x67 at a 704-byte pitch, and 3840x2160 at 4
+//!   bytes) [`ROUNDS`] times.
 //! - **An image that renders** ([`Access::Renders`]) is checked apart, in rounds of their own: the
 //!   texture is made with `RenderTarget` usage as well, as the program's render targets are, so
 //!   its image takes the feedback loop usage where the product's does; the writer writes the bytes
@@ -43,7 +44,15 @@
 //!   writes reach its fragments' texels alone (the Memory Model), but a device may write back the
 //!   line of a cache that holds a row's last texels whole, as the Iris Xe's clear and store does:
 //!   the draw over the last column, whose fragments end each row, has a device whose draws do so
-//!   fail too. The program's resolves into such a texture are not among the rounds.
+//!   fail too. The program's resolves into such a texture are not among the rounds. The same
+//!   rounds give the verdicts of renders of a texture whose rows' padding is free and its buffer
+//!   declares unobserved ([`Access::UnobservedRenders`], `BufferDescriptor::padding_unobserved`):
+//!   where the shape's padding is free ([`Shape::padding`]), a round whose texels all read zero,
+//!   and every byte but of its rows' padding (after a row's last texel, before its pitch, the last
+//!   row's included) the CPU's or the pattern, fails [`Access::Renders`] and keeps the other
+//!   ([`Round::Padded`]); a byte past the last row's pitch, or a texel, fails both. The 172x67
+//!   shape's last row's pitch ends off a multiple of 128 bytes, so a device that writes back more
+//!   than a line there fails both.
 //! - **An image a shader writes** ([`Access::Writes`]) is checked apart too: a texture of
 //!   `ShaderWrite` usage over the pattern, whose every texel a kernel stores (the crate-owned
 //!   copy-in kernel, through an unsigned-integer view of the image, `Texture::store_in_place`)
@@ -96,7 +105,7 @@
 //!   On the Iris Xe, whose clear and store, and draws, write back the line that holds a row's last
 //!   texels whole, the first fail and the second pass. Of [`SHAPES`] at 64-byte lines, the five
 //!   whose rows lie one after another, the 20x9 one at a 512-byte pitch and the 3840x2160 surface
-//!   share none, and the other six share one. A failure under the GPU's stores (renders,
+//!   share none, and the other nine share one. A failure under the GPU's stores (renders,
 //!   storage writes, buffer writes) whose class's reads of those row ends passed fails that
 //!   access and row ends in every class whose rounds passed them ([`carried_store_failures`]):
 //!   the line write-back belongs to the store path every class shares, and a class whose pages
@@ -198,12 +207,16 @@ pub(crate) struct Shape {
 /// makes no other image with bytes between rows, and its line, `nonCoherentAtomSize`, is 16
 /// bytes: without them no shape of its whose texels share a line would be made, [`RowEnds`]), the
 /// same two at the 64-byte pitch of a driver that lays rows at the next multiple of 64 (llvmpipe,
-/// whose line is 64 bytes: likewise), and one 3840x2160 surface of 4-byte texels, last. Those four
+/// whose line is 64 bytes: likewise), a 172x67 one of 4-byte texels at a 704-byte pitch, whose
+/// rows end inside a 64-byte line and whose last row's pitch ends 64 bytes past a multiple of 128
+/// and of 256 (so a device that writes back more than a line around a row's last texels changes
+/// a byte past the image there, where the others end on such multiples), and one 3840x2160
+/// surface of 4-byte texels, last. Those four
 /// at a driver's own pitch run only where no shape of their texel size whose texels share a line
 /// was made before them ([`Shape::runs`]): a device that makes images at an explicit pitch makes
 /// the 512-byte ones first. A shape the device makes no image of in place is skipped: the product
 /// makes none of it either.
-pub(crate) const SHAPES: [Shape; 15] = [
+pub(crate) const SHAPES: [Shape; 16] = [
     shape(PixelFormat::R8Unorm, 1, 256, 16, 256),
     shape(PixelFormat::RG8Unorm, 2, 128, 16, 256),
     shape(PixelFormat::BGRA8Unorm, 4, 64, 16, 256),
@@ -218,6 +231,7 @@ pub(crate) const SHAPES: [Shape; 15] = [
     tight(PixelFormat::RGBA16Float, 8, 33, 17, 272),
     tight(PixelFormat::BGRA8Unorm, 4, 101, 51, 448),
     tight(PixelFormat::RGBA16Float, 8, 33, 17, 320),
+    shape(PixelFormat::BGRA8Unorm, 4, 172, 67, 704),
     shape(PixelFormat::BGRA8Unorm, 4, 3840, 2160, 15360),
 ];
 
@@ -589,12 +603,13 @@ fn word_overwritten(device: &Device) -> bool {
 /// shape's rounds, those of shapes whose texels share no line with bytes beside them first
 /// ([`Shape::rows`]), until one changes a byte, or until the device's loader word is found
 /// overwritten (unchecked then where no round ran); [`Tally::verdicts`] gives them. A round of
-/// storage writes that changed no byte but of its shape's rows' padding, where that padding is
-/// free ([`Shape::padding`]), fails [`Access::Writes`] (or [`Access::NarrowWrites`]) for its row
-/// ends and counts for [`Access::BufferWrites`] (or [`Access::NarrowBufferWrites`]) as a round
-/// that kept every byte, and the rounds go on. With them, whether every byte its rounds found
-/// changed lay beside the texels (none was a texel). `None` where the process is exiting, or the
-/// program's last drop stopped the device's holds before a round (`device/holds.rs`).
+/// storage writes or renders that changed no byte but of its shape's rows' padding, where that
+/// padding is free ([`Shape::padding`]), fails [`Access::Writes`] (or [`Access::NarrowWrites`],
+/// or [`Access::Renders`]) for its row ends and counts for [`Access::BufferWrites`] (or
+/// [`Access::NarrowBufferWrites`], or [`Access::UnobservedRenders`]) as a round that kept every
+/// byte, and the rounds go on. With them, whether every byte its rounds found changed lay beside
+/// the texels (none was a texel). `None` where the process is exiting, or the program's last drop
+/// stopped the device's holds before a round (`device/holds.rs`).
 fn check_class(
     device: &Device,
     class: PagesClass,
@@ -611,6 +626,7 @@ fn check_class(
     // draw it takes after them.
     let mut renders = match access {
         Access::Reads
+        | Access::UnobservedRenders
         | Access::Writes
         | Access::BufferWrites
         | Access::NarrowWrites
@@ -635,7 +651,9 @@ fn check_class(
     let mut shapes: Vec<(Shape, Option<ShadowTexelView>)> = match access {
         Access::Writes | Access::BufferWrites => stored(&STORE_SHAPES),
         Access::NarrowWrites | Access::NarrowBufferWrites => stored(&NARROW_STORE_SHAPES),
-        Access::Reads | Access::Renders => SHAPES.map(|shape| (shape, None)).to_vec(),
+        Access::Reads | Access::Renders | Access::UnobservedRenders => {
+            SHAPES.map(|shape| (shape, None)).to_vec()
+        }
     };
     shapes.sort_by_key(|(shape, _)| shape.rows(line) != RowEnds::OnLines);
     let forced = device.shared().in_place.forced_failure();
@@ -647,9 +665,9 @@ fn check_class(
             continue;
         }
         let rows = shape.rows(line);
-        // A round of storage writes over a shape whose rows' padding is free tells a change
-        // there apart.
-        let free = texel.is_some() && shape.padding(line) == Padding::Free;
+        // A round of an access that answers the form that lets the padding change too (storage
+        // writes, renders), over a shape whose rows' padding is free, tells a change there apart.
+        let free = access.answered().len() > 1 && shape.padding(line) == Padding::Free;
         for round in 0..ROUNDS {
             if !device.holds_go_on(Holder::InPlaceCheck) {
                 return None;
@@ -662,7 +680,7 @@ fn check_class(
                 let _busy = exit_guard::enter()?;
                 match texel {
                     Some(texel) => store_round(device, &pages, (shape, texel, free), round, page),
-                    None => check_round(&pages, shape, round, page, renders.as_mut()),
+                    None => check_round(&pages, (shape, free), round, page, renders.as_mut()),
                 }
             };
             let made = |made_sharing: &mut Vec<u64>| {
@@ -697,7 +715,7 @@ fn check_class(
             };
             let operations = match access {
                 Access::Reads => "the first move",
-                Access::Renders => {
+                Access::Renders | Access::UnobservedRenders => {
                     "the first move, feedback loop moves, a pass's clear and store or a draw"
                 }
                 Access::Writes | Access::BufferWrites => {
@@ -759,8 +777,9 @@ impl Found {
 }
 
 /// The passes of `found` a store failure fails, each with the class whose failure it is: a
-/// class's pass of an access whose rounds store (renders: a pass's clear and store, and a draw;
-/// storage writes and buffer writes, of narrow texels too: a kernel's stores) for texels whose
+/// class's pass of an access whose rounds store (renders, over padding declared unobserved too:
+/// a pass's clear and store, and a draw; storage writes and buffer writes, of narrow texels too:
+/// a kernel's stores) for texels whose
 /// rows end as another
 /// class's failure of that access did, where every byte that class's rounds found changed lay
 /// beside the texels and its reads of those row ends passed, so that its failure was the
@@ -786,6 +805,7 @@ pub(crate) fn carried_store_failures(
         matches!(
             access,
             Access::Renders
+                | Access::UnobservedRenders
                 | Access::Writes
                 | Access::BufferWrites
                 | Access::NarrowWrites
@@ -841,10 +861,10 @@ impl Tally {
     /// a device made to fail its check where `forced`, where `changed` names the row ends of the
     /// round that changed a byte but of its shape's free padding, where one did (which ends the
     /// class's rounds): the access's own ([`verdicts`]), of its rounds that kept every byte, the
-    /// row ends of the first that changed any byte failed; then, of [`Access::Writes`] and
-    /// [`Access::NarrowWrites`], those of [`Access::BufferWrites`] and
-    /// [`Access::NarrowBufferWrites`], of its rounds that changed no byte but of that padding,
-    /// those of `changed` failed.
+    /// row ends of the first that changed any byte failed; then, of [`Access::Renders`],
+    /// [`Access::Writes`] and [`Access::NarrowWrites`], those of [`Access::UnobservedRenders`],
+    /// [`Access::BufferWrites`] and [`Access::NarrowBufferWrites`], of its rounds that changed no
+    /// byte but of that padding, those of `changed` failed.
     pub(crate) fn verdicts(
         &self,
         access: Access,
@@ -882,8 +902,9 @@ pub(crate) enum Round {
     /// The texture took no image in place (the device makes none of the shape there).
     NotMade,
     /// A byte of its shape's rows' padding read other than the CPU left it, where a round of
-    /// storage writes tells that padding apart ([`Shape::padding`]), and every other byte read
-    /// right: where the first was, what was due, what was read.
+    /// storage writes or renders tells that padding apart ([`Shape::padding`]), and every other
+    /// byte read right (each past the last row's pitch among them): where the first was, what was
+    /// due, what was read.
     Padded((u64, u8, u8)),
     /// A byte read other than the CPU left it: where, what was due, what was read.
     Changed((u64, u8, u8)),
@@ -892,10 +913,11 @@ pub(crate) enum Round {
 /// One round of `shape` over `pages`, inside the caller's section: the pattern, the texture, the
 /// writes beside its image's first move (and, for an image that renders, `renders` its queue and
 /// draw, beside its feedback loop moves, a pass that clears and stores it and a draw of its last
-/// column), and the bytes compared.
+/// column), and the bytes compared: a change of a byte of the rows' padding of an image that
+/// renders told apart where `free` ([`Round::Padded`]).
 fn check_round(
     pages: &ClassPages,
-    shape: Shape,
+    (shape, free): (Shape, bool),
     round: usize,
     page: u64,
     renders: Option<&mut (CommandQueue, CheckDraw)>,
@@ -928,7 +950,7 @@ fn check_round(
     let outcome = std::thread::scope(|scope| {
         let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
         let Ok(writer) = exit_guard::spawn_scoped(scope, builder, || {
-            bytes.write_until(&pattern, (texels, false), (&stop, &started))
+            bytes.write_until(&pattern, (texels, free), (&stop, &started))
         }) else {
             return None;
         };
@@ -949,7 +971,7 @@ fn check_round(
     };
     drop(texture);
     let texels = texels.map(|shape| (shape, Due::Zero));
-    bytes.compare(&pattern, (texels, false), written)
+    bytes.compare(&pattern, (texels, free), written)
 }
 
 /// Stops the round's writer as it goes: once the round's step returned, or where it unwinds.

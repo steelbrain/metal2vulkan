@@ -78,20 +78,22 @@ fn unchecked_width(usage: TextureUsage, texel: u64) -> Option<ShadowCause> {
 
 /// The check of a shader's writes of texels of `texel` bytes, a width the check's kernel stores,
 /// of a texture whose rows' padding is as `padding` says: those of 1 or 2 bytes apart from the
-/// rest, each in the form that lets the padding change where it is free.
+/// rest, each in the form that lets the padding change where it is free (declared unobserved or
+/// not).
 fn writes_of(texel: u64, padding: Padding) -> Access {
     match (NARROW_TEXEL_BYTES.contains(&texel), padding) {
         (false, Padding::Kept) => Access::Writes,
-        (false, Padding::Free) => Access::BufferWrites,
+        (false, Padding::Free | Padding::Unobserved) => Access::BufferWrites,
         (true, Padding::Kept) => Access::NarrowWrites,
-        (true, Padding::Free) => Access::NarrowBufferWrites,
+        (true, Padding::Free | Padding::Unobserved) => Access::NarrowBufferWrites,
     }
 }
 
 /// The accesses whose checks `usage` asks of a texture of texels of `texel` bytes whose rows'
-/// padding is as `padding` says, in their order: renders where it holds `RenderTarget`, writes
-/// where it holds `ShaderWrite` or `ShaderAtomic` (of its texels' width, [`writes_of`]), reads
-/// where it holds neither.
+/// padding is as `padding` says, in their order: renders where it holds `RenderTarget` (in the
+/// form that lets the padding change where its buffer declares it unobserved and it is free),
+/// writes where it holds `ShaderWrite` or `ShaderAtomic` (of its texels' width, [`writes_of`]),
+/// reads where it holds neither.
 fn accesses_of(usage: TextureUsage, padding: Padding, texel: u64) -> Vec<Access> {
     let renders = usage.contains(TextureUsage::RENDER_TARGET);
     let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
@@ -100,7 +102,10 @@ fn accesses_of(usage: TextureUsage, padding: Padding, texel: u64) -> Vec<Access>
         accesses.push(Access::Reads);
     }
     if renders {
-        accesses.push(Access::Renders);
+        accesses.push(match padding {
+            Padding::Unobserved => Access::UnobservedRenders,
+            Padding::Kept | Padding::Free => Access::Renders,
+        });
     }
     if writes {
         accesses.push(writes_of(texel, padding));
@@ -134,21 +139,32 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
     );
     usages.push(TextureUsage::empty());
     // Each access's verdict, every one of them with every other; the narrow checks' each the
-    // answer after its wider twin's, so that each takes every answer and differs from the twin's.
+    // answer after its wider twin's, and the renders that let the padding change the answer
+    // after the renders that keep it, so that each takes every answer and differs from the twin's.
     let mut answers = Vec::new();
     for reads in ANSWERS {
         for renders in ANSWERS {
             for writes in ANSWERS {
                 for buffer_writes in ANSWERS {
                     let narrow = [next(writes), next(buffer_writes)];
-                    answers.push([reads, renders, writes, buffer_writes, narrow[0], narrow[1]]);
+                    let unobserved = next(renders);
+                    answers.push([
+                        reads,
+                        renders,
+                        unobserved,
+                        writes,
+                        buffer_writes,
+                        narrow[0],
+                        narrow[1],
+                    ]);
                 }
             }
         }
     }
     let each = PagesClass::ALL.into_iter().flat_map(|class| {
         RowEnds::ALL.into_iter().flat_map(move |rows| {
-            [Padding::Kept, Padding::Free].map(|padding| (class, rows, padding))
+            [Padding::Kept, Padding::Free, Padding::Unobserved]
+                .map(|padding| (class, rows, padding))
         })
     });
     for (class, rows, padding) in each {
@@ -256,6 +272,7 @@ fn every_shadow_cause_names_itself() {
         ShadowCause::StoreWidth(3),
         ShadowCause::Unchecked(PagesClass::Pooled, Access::Renders, inside),
         ShadowCause::LinearCost(1 << 20),
+        ShadowCause::CheckFailed(PagesClass::Pooled, Access::UnobservedRenders, inside),
     ];
     let words: Vec<String> = causes.iter().map(ShadowCause::words).collect();
     for (at, word) in words.iter().enumerate() {
@@ -279,6 +296,7 @@ fn every_shadow_cause_names_itself() {
     assert!(words[15].contains("not answered") && words[15].contains("over a buffer's rows"));
     assert!(words[19].contains("pooled memory"));
     assert!(words[20].contains("1048576 bytes") && words[20].contains("slower"));
+    assert!(words[21].contains("render pass") && words[21].contains("declares unobserved"));
 }
 
 /// A driver identity, every field set.
@@ -715,6 +733,24 @@ fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
             (DmaBuf, NarrowWrites, InLines, Fresh)
         ]
     );
+    // Renders over padding declared unobserved store as renders do: a byte past their padding
+    // one class's rounds changed fails the others' passes.
+    set(&mut found, Fresh, NarrowWrites, InLines, Passed);
+    set(&mut found, DmaBuf, NarrowBufferWrites, OnLines, Passed);
+    set(
+        &mut found,
+        Pointer,
+        Access::UnobservedRenders,
+        InLines,
+        Failed,
+    );
+    assert_eq!(
+        carried_store_failures(&found),
+        [
+            (Fresh, Access::UnobservedRenders, InLines, Pointer),
+            (DmaBuf, Access::UnobservedRenders, InLines, Pointer)
+        ]
+    );
 }
 
 #[test]
@@ -759,6 +795,18 @@ fn rows_padding_is_free_over_a_buffer_s_own_rows_that_end_on_lines() {
     assert_eq!(Padding::of(0, &slices(1152), 64, true), free);
     assert_eq!(Padding::of(0, &slices(1216), 64, true), free);
     assert_eq!(Padding::of(0, &slices(1184), 64, true), kept);
+    // A buffer that declares its padding unobserved lets a render pass change it only where it
+    // is free: the rows, each to its pitch, share no line with bytes past them.
+    assert_eq!(free.declared(true), Padding::Unobserved);
+    assert_eq!(free.declared(false), free);
+    assert_eq!(kept.declared(true), kept);
+    let cache = rows_of(0, 688, 704, 67);
+    assert_eq!(
+        Padding::of(0, &cache, 64, true).declared(true),
+        Padding::Unobserved
+    );
+    assert_eq!(Padding::of(32, &cache, 64, true).declared(true), kept);
+    assert_eq!(Padding::of(0, &cache, 64, false).declared(true), kept);
     // The check's storage shapes: free at 16-byte lines, and at 64-byte ones but for the pair at
     // the 16-byte pitch of a driver that lays rows tight, whose rows end inside such a line.
     for (shape, _) in STORE_SHAPES.into_iter().chain(NARROW_STORE_SHAPES) {
@@ -853,6 +901,68 @@ fn a_round_of_storage_writes_tells_a_change_of_free_padding_apart() {
 }
 
 #[test]
+fn a_round_of_renders_keeps_its_unobserved_form_only_for_bytes_inside_its_rows_padding() {
+    // The 172x67 shape of 4-byte texels at a 704-byte pitch: 688 bytes of texels a row, then 16
+    // of padding inside the 64-byte line that holds the row's last texels; the last row's pitch
+    // ends at 47168 bytes, 64 past a multiple of 128 and of 256, and the window's bytes after it.
+    let shape = (SHAPES.iter())
+        .find(|shape| (shape.width, shape.height) == (172, 67))
+        .copied()
+        .unwrap();
+    assert_eq!((shape.texel, shape.bytes_per_row), (4, 704));
+    assert_eq!(
+        (shape.rows(64), shape.padding(64)),
+        (RowEnds::InLines, Padding::Free)
+    );
+    let (pitch, row) = (shape.bytes_per_row, shape.width * shape.texel);
+    let image = pitch * shape.height;
+    assert_eq!((image % 128, image % 256), (64, 64));
+    let length = image + 4096;
+    let pattern = Pattern::new(3);
+    // A round's compare of the window as a pass left it: the pattern, every texel zero (its
+    // clear), and each byte of `changed` flipped.
+    let compare = |changed: &[u64], free: bool| {
+        let mut window: Vec<u8> = (0..length).map(|offset| pattern.at(offset)).collect();
+        for y in 0..shape.height {
+            window[(y * pitch) as usize..(y * pitch + row) as usize].fill(0);
+        }
+        for &at in changed {
+            window[at as usize] ^= 0x01;
+        }
+        let bytes = Bytes {
+            start: NonNull::new(window.as_mut_ptr()).unwrap(),
+            length,
+        };
+        let idle = Written {
+            sweep: 1,
+            reached: 0,
+            changed: None,
+            padding: None,
+        };
+        bytes.compare(&pattern, (Some((shape, Due::Zero)), free), idle)
+    };
+    let flipped = |at: u64| (at, pattern.at(at), pattern.at(at) ^ 0x01);
+    let last = (shape.height - 1) * pitch;
+    // The Iris Xe's write-back of the 64-byte line that holds each row's last texels: the rows'
+    // padding alone, the last row's to its pitch: the unobserved form keeps it, the other not.
+    let lines: Vec<u64> = (0..shape.height)
+        .flat_map(|y| y * pitch + row..(y + 1) * pitch)
+        .collect();
+    assert_eq!(compare(&lines, true), Round::Padded(flipped(row)));
+    assert_eq!(compare(&lines, false), Round::Changed(flipped(row)));
+    // A write-back of 128 bytes around the last row's last texels: its padding, then 64 bytes
+    // past its pitch, which are no texture's padding: a change, whatever the padding.
+    let wide: Vec<u64> = (last + row..image + 64).collect();
+    assert_eq!(compare(&wide, true), Round::Changed(flipped(image)));
+    // The first byte past the last row's pitch alone, and a texel: a change either way.
+    assert_eq!(compare(&[image], true), Round::Changed(flipped(image)));
+    assert_eq!(
+        compare(&[last + 4], true),
+        Round::Changed((last + 4, 0, 0x01))
+    );
+}
+
+#[test]
 fn a_round_that_changed_padding_alone_fails_only_the_check_of_writes_that_keeps_it() {
     use Verdict::{Failed, Passed, Unchecked};
     let (inside, on) = (RowEnds::InLines, RowEnds::OnLines);
@@ -873,9 +983,14 @@ fn a_round_that_changed_padding_alone_fails_only_the_check_of_writes_that_keeps_
         tally.verdicts(Access::NarrowWrites, None, false),
         vec![[Failed, Passed], [Passed, Passed]]
     );
-    // The other accesses' rounds answer their own verdicts alone.
+    // The renders' rounds answer theirs and those of renders over padding declared unobserved
+    // alike; the reads' rounds their own alone.
     assert_eq!(
         tally.verdicts(Access::Renders, None, false),
+        vec![[Failed, Passed], [Passed, Passed]]
+    );
+    assert_eq!(
+        tally.verdicts(Access::Reads, None, false),
         vec![[Failed, Passed]]
     );
     // A byte past the padding changed too: both fail for its row ends.

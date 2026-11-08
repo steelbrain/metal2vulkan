@@ -138,9 +138,11 @@ pub struct BufferDescriptor<'a> {
     /// contents); refused (`Invalid`, `PaddingUnobservedNoCopy`) with `NoCopy` contents. A buffer
     /// the runtime lays in fresh pages it imports (a long one on a device whose pointer imports
     /// cost submissions nothing, `WorkCounts::fresh_page_buffers_made`) takes its textures in place
-    /// where the device's check of such pages passed, which keeps every byte, so there the
-    /// declaration lets nothing more. A runtime extension with no Metal counterpart, for a consumer
-    /// that owns every read of the buffer's bytes; `false` by default, as Metal keeps every byte.
+    /// where the device's check of such pages passed: there the declaration lets a render pass's
+    /// load and store change those bytes of a texture whose rows, each to its pitch, share no line
+    /// of the device's memory with bytes past them, and nothing more. A runtime extension with no
+    /// Metal counterpart, for a consumer that owns every read of the buffer's bytes; `false` by
+    /// default, as Metal keeps every byte.
     pub padding_unobserved: bool,
 }
 

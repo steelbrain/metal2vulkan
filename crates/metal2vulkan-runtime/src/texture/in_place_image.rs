@@ -421,7 +421,8 @@ impl Device {
     /// that does not: the usages its descriptor lacks, each where the device's check passed for
     /// what it lets reach the pages (the storage usage where a shader's writes may reach the
     /// texels in place, [`writes_reach`](Self::writes_reach), the attachment
-    /// usage where the check passed for renders over the class and the texels' row ends, and the
+    /// usage where the check passed for renders over the class, the texels' row ends and their
+    /// padding (`in_place::Access::rendered`), and the
     /// sampled usage, whose reads touch the texels alone, wherever), every set of them, the most
     /// first: a write or a pass beyond the declared usage then reaches the texels in place, with
     /// no usage shadow or attachment stand-in. Each plan's image lies at the texels' pitch in
@@ -447,10 +448,8 @@ impl Device {
         };
         let writable = !Access::Writes.takes(usage) && self.writes_reach(texels, class);
         let line = self.shared().in_place.line();
-        let renders = self
-            .shared()
-            .in_place
-            .verdict(class, Access::Renders, texels.rows(line));
+        let rendered = Access::rendered(texels.padding(line));
+        let renders = (self.shared().in_place).verdict(class, rendered, texels.rows(line));
         let own = texture_usage(usage, descriptor.swizzle);
         let lacking = [
             (TextureUsage::SHADER_WRITE, writable),

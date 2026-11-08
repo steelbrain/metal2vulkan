@@ -1630,12 +1630,15 @@ impl Texels {
     /// Whether a shader's writes may change the texels' rows' padding, in the device's lines of
     /// memory of `line` bytes (`in_place::Padding::of`): rows over a buffer's bytes the CPU
     /// addresses, no IOSurface plane's ([`Texels::padding_owned`]), whose rows, each to its
-    /// pitch, share no line with bytes past them.
+    /// pitch, share no line with bytes past them; and a render pass's too, where the buffer
+    /// declares that padding unobserved (`in_place::Padding::Unobserved`,
+    /// `BufferDescriptor::padding_unobserved`).
     pub(super) fn padding(&self, line: u64) -> Padding {
         match self.buffer.contents() {
             Some(at) => {
                 let start = at.as_ptr().addr() as u64;
-                Padding::of(start, &self.layout, line, self.padding_owned())
+                let padding = Padding::of(start, &self.layout, line, self.padding_owned());
+                padding.declared(self.buffer.padding_unobserved())
             }
             None => Padding::Kept,
         }

@@ -344,7 +344,9 @@ rows of texels, say) may make it with `BufferDescriptor::with_padding_unobserved
 extension, no Metal counterpart, refused over the caller's memory (`NoCopy` contents). A texture
 over it is then a linear image at its pitch wherever the device lays one out so, or else, where
 the device makes `DRM_FORMAT_MOD_LINEAR` images (`VK_EXT_image_drm_format_modifier`), one at the
-pitch where its in-place check passed for its pooled memory and its rows take no more bytes than a
+pitch where its in-place check passed for its pooled memory (for a texture that renders, the
+check of renders that lets a pass change those bytes, as the declaration does, and no byte past the
+last row's pitch) and its rows take no more bytes than a
 bound past which such an image renders and samples slower than the shadow
 (`WorkCounts::pooled_pitched_images`; `TextureShadowReason::LinearCost` past it;
 `HostPageTexturePolicy::Shadow` turns it off), its subresources holding each row's bytes after its
