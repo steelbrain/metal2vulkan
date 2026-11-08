@@ -543,10 +543,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   every submission (RADV), or that refuses the RAM's pointer, imports each chunk as one dma-buf.
 - `BlitCommandEncoder::copy_from_host_ram` and `copy_to_host_ram`: runs of a used guest RAM
   (host addresses from a 4-byte word to any byte) gathered into consecutive bytes of a buffer,
-  or scattered back, from the device's chunk imports: whole 4 KiB pages by one compute dispatch
-  per chunk the runs touch, other runs by a copy region per run in a chunk, which touches no
-  other byte of their pages; with no view of the pages and no import of their own; ordered and
-  seen as a copy between the buffer and a no-copy buffer over the pages
+  or scattered back, from the device's chunk imports: runs that start and end on a word (whole
+  pages, or rows of 4-byte texels) by one compute dispatch per chunk the runs touch, other runs by
+  a copy region per run in a chunk; neither touches another byte of their pages; with no view
+  of the pages and no import of their own; ordered and seen as a copy between the buffer and a
+  no-copy buffer over the pages
   ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)).
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through

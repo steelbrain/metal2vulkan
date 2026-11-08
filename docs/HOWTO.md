@@ -645,16 +645,18 @@ submission, can give the device the guest's RAM once instead:
   address range inside the RAM's ranges that starts on a 4-byte word and ends at any byte past
   it: a surface's whole pages, or each of its rows' texels alone, whose padding and edge pages the
   guest's CPU may own; a run that starts where the one before ended joins it, a descending
-  neighbour stays apart, and each is cut where a chunk ends. Where every run is whole 4 KiB pages
-  from a multiple of 4 KiB, the pages become a table of 4 KiB pages in the command buffer's upload
-  arena and one compute dispatch for each chunk they touch, over the chunk's own `VkBuffer` (more
-  only past the device's storage range or workgroup count): never a copy region per run
-  (`WorkCounts::host_ram_copies`, `host_ram_copy_bytes`, `host_ram_copy_dispatches`). Otherwise
-  each run's bytes in a chunk are one region of a `vkCmdCopyBuffer` between the import that holds
-  them (whole pages, imported as for any copy) and the buffer, the regions of one import one
-  command of at most 1024: no other byte of their pages is read or written
-  (`WorkCounts::host_ram_copy_regions`). A copy takes
-  each chunk it touches as an object over it does, and the thread's window moves past it; but where
+  neighbour stays apart, and each is cut where a chunk ends. Where every run also ends on a 4-byte
+  word (whole pages, or the rows of a surface of 4-byte texels), the runs become a table of runs
+  of words, at most 4 KiB each, in the command buffer's upload arena and one compute dispatch for
+  each chunk they touch, over the chunk's own `VkBuffer` (more only past the device's storage
+  range or workgroup count): never a copy region per run, and no other word of their pages read or
+  written (`WorkCounts::host_ram_copies`, `host_ram_copy_bytes`, `host_ram_copy_dispatches`).
+  Otherwise (a run that ends off a word, such as a row of 2-byte texels, or a scatter whose runs
+  write a byte twice) each run's bytes in a chunk are one region of a `vkCmdCopyBuffer` between the
+  import that holds them (whole pages, imported as for any copy) and the buffer, the regions of one
+  import one command of at most 1024: no other byte of their pages is read or written, and of runs
+  that write a byte twice the later's bytes stay (`WorkCounts::host_ram_copy_regions`). A copy
+  takes each chunk it touches as an object over it does, and the thread's window moves past it; but where
   an object over a chunk not imported yet is bound in an import of its own run, a copy makes none:
   the chunk is imported first, or the thread's import of it waited for. Each copy is ordered
   and seen as a copy between the buffer and a no-copy buffer over the pages: the chunk's bytes have
@@ -667,8 +669,8 @@ submission, can give the device the guest's RAM once instead:
   in place, so copied buffers and shadows over those pages copy them in at their next commit.
   Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`); a RAM the device does
   not use, a run empty, starting off a 4-byte word or outside the RAM, bytes of the buffer that
-  start off a 4-byte word of its memory, or, of runs not all whole pages, a buffer over host
-  pages the runs' bytes overlap (`Invalid`, `Problem::HostRam`); bytes past the buffer (`Invalid`,
+  start off a 4-byte word of its memory, or, of a copy by regions, a buffer over host pages the
+  runs' bytes overlap (`Invalid`, `Problem::HostRam`); bytes past the buffer (`Invalid`,
   `Problem::RangeOutOfBounds`); a chunk the device cannot import (the import's error). A caller
   falls back to its own copy on any of them.
 

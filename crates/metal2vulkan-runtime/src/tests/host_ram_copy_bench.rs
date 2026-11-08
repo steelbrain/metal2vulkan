@@ -5,11 +5,12 @@
 //! buffer made with `HostMemory::with_runs`, so imported by its pointer) and a blit between it and
 //! the buffer.
 //!
-//! Then the same surface's pages as rows of [`ROW_BYTES`] bytes of texels at a [`PITCH`]-byte
-//! pitch, downloaded as a consumer downloads a laid-out device cache: each row's texels alone,
-//! by `copy_to_host_ram` of the surface's runs cut to the row, one call a row (and once as one
-//! call of every row's runs), each run ending inside a page, so copied by regions; and by the
-//! view, a blit a row from the buffer into it (`LAID-OUT` lines).
+//! Then the same surface's pages as rows of texels at a pitch ([`LAID_OUT`]), downloaded as a
+//! consumer downloads a laid-out device cache: each row's texels alone, by `copy_to_host_ram` of
+//! the surface's runs cut to the row, one call a row (and once as one call of every row's runs):
+//! rows of 4-byte texels end on a word, so copied by dispatches, and rows of 2-byte texels that
+//! end 2 bytes past one by regions; and by the view, a blit a row from the buffer into it
+//! (`LAID-OUT` lines).
 //!
 //! The surface: a 3840x2054 `BGRA8Unorm` one, 31,549,440 bytes, as whole runs of `UNIT` bytes
 //! (7,703 of 4 KiB) scattered over a 1 GiB RAM: about 75% of them the page below the one before
@@ -37,10 +38,15 @@ const WAIT: Duration = Duration::from_secs(60);
 const SURFACE: u64 = 3840 * 2054 * 4;
 const RAM_BYTES: u64 = 1 << 30;
 const ITERATIONS: usize = 40;
-/// The laid-out surface's pitch and its rows' bytes of texels: 2054 rows of a 7677-texel-wide
-/// surface of 2-byte texels, each row ending 2 bytes past a word, 6 bytes short of the pitch.
-const PITCH: u64 = 3840 * 4;
-const ROW_BYTES: u64 = PITCH - 6;
+/// The laid-out surfaces' pitches and their rows' bytes of texels: 2054 rows of a 3838-texel-wide
+/// surface of 4-byte texels, each row ending on a word 8 bytes short of the pitch; the same of a
+/// 7677-texel-wide one of 2-byte texels, 6 bytes short; and 15405 rows of 2046 bytes at a pitch
+/// of 2048, two rows a page.
+const LAID_OUT: [(u64, u64); 3] = [
+    (3840 * 4, 3840 * 4 - 8),
+    (3840 * 4, 3840 * 4 - 6),
+    (2048, 2046),
+];
 
 /// A small deterministic generator (xorshift).
 struct Rng(u64);
@@ -359,16 +365,16 @@ fn laid_out_copies(
     queue: &CommandQueue,
     (ram, fd, start): (&HostRam, i32, u64),
     runs: &[Range<u64>],
-    cache: &Buffer,
+    (cache, (pitch, row_bytes)): (&Buffer, (u64, u64)),
 ) {
-    let rows = SURFACE / PITCH;
+    let rows = SURFACE / pitch;
     let spans: Vec<Range<u64>> = (0..rows)
-        .map(|row| row * PITCH..row * PITCH + ROW_BYTES)
+        .map(|row| row * pitch..row * pitch + row_bytes)
         .collect();
     let row_runs: Vec<Vec<Range<u64>>> = spans.iter().map(|span| runs_of(runs, span)).collect();
     let every: Vec<Range<u64>> = row_runs.iter().flatten().cloned().collect();
     let what = format!(
-        "LAID-OUT {rows} rows of {ROW_BYTES} at {PITCH} ({} runs)",
+        "LAID-OUT {rows} rows of {row_bytes} at {pitch} ({} runs)",
         every.len()
     );
     // Warm: every chunk imported, the paths' first use made.
@@ -404,8 +410,9 @@ fn laid_out_copies(
     );
     // The rows' runs in one call, from a buffer of the rows' texels alone.
     let texels = device
-        .new_buffer(rows * ROW_BYTES, ResourceOptions::private())
+        .new_buffer(rows * row_bytes, ResourceOptions::private())
         .unwrap();
+    let before = device.work_counts();
     for _ in 0..ITERATIONS {
         timed(queue, &mut at_once, |encoder| {
             let started = thread_cpu();
@@ -413,7 +420,13 @@ fn laid_out_copies(
             thread_cpu() - started
         });
     }
+    let after = device.work_counts();
     at_once.print(&format!("{what} copy_to_host_ram in one call"));
+    eprintln!(
+        "HOST-RAM-COPY-BENCH {what} in one call: {} regions and {} dispatches a download",
+        (after.host_ram_copy_regions - before.host_ram_copy_regions) / ITERATIONS as u64,
+        (after.host_ram_copy_dispatches - before.host_ram_copy_dispatches) / ITERATIONS as u64,
+    );
     // The view: per download, a view of the surface's pages, a no-copy buffer over it, a blit a
     // row from the cache into it, both let go of.
     let length: u64 = runs.iter().map(|run| run.end - run.start).sum();
@@ -523,7 +536,9 @@ fn host_ram_copy_bench() {
             view_copies(&device, &queue, (fd, start), &runs, &cache, &what);
         }
         if unit == 4096 {
-            laid_out_copies(&device, &queue, (&ram, fd, start), &runs, &cache);
+            for shape in LAID_OUT {
+                laid_out_copies(&device, &queue, (&ram, fd, start), &runs, (&cache, shape));
+            }
         }
     }
     // An empty command buffer's commit to completion, for scale.

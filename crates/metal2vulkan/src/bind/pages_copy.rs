@@ -1,10 +1,11 @@
-//! Whole 4 KiB pages copied by a compute dispatch between places a table scatters over one buffer
-//! and consecutive places of another: a gather into the consecutive buffer, or a scatter out of it.
+//! Runs of 4-byte words, up to a 4 KiB page each, copied by a compute dispatch between places a
+//! table scatters over one buffer and consecutive places of another: a gather into the consecutive
+//! buffer, or a scatter out of it.
 //!
-//! A copy of many pages that lie apart in one buffer (a guest's pages in an import of its RAM)
-//! into one run of another is a `vkCmdCopyBuffer` of one region per page, or per run of adjacent
-//! pages. A driver may record each region as a separate operation, at a CPU cost that grows with
-//! them; one dispatch of [`pages_copy_module`] copies every page of a table at once.
+//! A copy of many runs that lie apart in one buffer (a guest's pages in an import of its RAM, or
+//! its rows' texels in them) into one run of another is a `vkCmdCopyBuffer` of one region per run.
+//! A driver may record each region as a separate operation, at a CPU and GPU cost that grows with
+//! them; one dispatch of [`pages_copy_module`] copies every run of a table at once.
 //!
 //! **The module** (two per device, one per [`PagesCopy`]). One `GLCompute` entry `main` with
 //! local size ([`PagesCopyModule::LOCAL_SIZE`], 1, 1), [`PagesCopyModule::PUSH_BYTES`] of
@@ -13,22 +14,23 @@
 //!
 //! | Binding | Buffer |
 //! |---|---|
-//! | [`PagesCopyModule::SCATTERED_BINDING`] | the buffer whose pages the table names one by one |
-//! | [`PagesCopyModule::CONSECUTIVE_BINDING`] | the buffer whose pages lie one after another |
-//! | [`PagesCopyModule::TABLE_BINDING`] | the table: two words an entry, read only |
+//! | [`PagesCopyModule::SCATTERED_BINDING`] | the buffer whose runs the table names one by one |
+//! | [`PagesCopyModule::CONSECUTIVE_BINDING`] | the buffer whose runs lie one after another |
+//! | [`PagesCopyModule::TABLE_BINDING`] | the table: three words an entry, read only |
 //!
-//! Entry `e` of the table is the words `2e` and `2e + 1`: the scattered binding's page `s` (its
-//! words `1024 s` to `1024 s + 1023`) and the consecutive binding's page `c` (its words from
-//! `first_word + 1024 c`). The shape's words, in order: `first_entry`, the entry of the
-//! dispatch's first workgroup, and `first_word`, the consecutive binding's word of its page 0;
-//! two words of 0. Workgroup `g` takes entry `first_entry + g`, and its invocation `l` the
-//! page's words `N k + l` for `k` from 0 to 7 ([`PagesCopyModule::WORDS`], `N`
-//! [`PagesCopyModule::LOCAL_SIZE`]), one after the other: a [`PagesCopy::Gather`] stores each
-//! word of the scattered page over the consecutive page's, and a [`PagesCopy::Scatter`] the
-//! consecutive page's over the scattered one's. No other word of either binding is read or
-//! written, and nothing writes the table. Where two entries' destination pages are one, or a
-//! destination page is a source page of the dispatch, the result is unordered, as a copy's
-//! regions that overlap are. A dispatch takes [`PagesCopyModule::groups`] workgroups.
+//! Entry `e` of the table is the words `3e` to `3e + 2` ([`PagesCopyModule::entry`]): the
+//! scattered binding's word `s`, the consecutive binding's word `c` counted from `first_word`, and
+//! `n`, the run's words, at most 1024 (a page, [`PagesCopyModule::PAGE_BYTES`]). The shape's
+//! words, in order: `first_entry`, the entry of the dispatch's first workgroup, and
+//! `first_word`; two words of 0. Workgroup `g` takes entry `first_entry + g`, and its
+//! invocation `l` the run's words `i = N k + l` below `n` for `k` from 0 to 7
+//! ([`PagesCopyModule::WORDS`], `N` [`PagesCopyModule::LOCAL_SIZE`]), one after the other: a
+//! [`PagesCopy::Gather`] stores the scattered binding's word `s + i` over the consecutive
+//! binding's `first_word + c + i`, and a [`PagesCopy::Scatter`] the other way. No other word of
+//! either binding is read or written, and nothing writes the table. Where two entries'
+//! destination words meet, or a destination word is a source word of the dispatch, the result is
+//! unordered, as a copy's regions that overlap are. A dispatch takes
+//! [`PagesCopyModule::groups`] workgroups.
 //!
 //! The words a workgroup apart, not eight in a row: each of the eight stores of consecutive
 //! invocations falls on consecutive words, so the stores leave no gap between a warp's lanes
@@ -47,6 +49,7 @@ use crate::device::requirements::Requirements;
 use crate::device::Device;
 use crate::error::{Error, InternalError, InternalKind};
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, Symbol};
+use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::builder::ModuleBuilder;
 use crate::spirv::error::BResult;
@@ -72,9 +75,12 @@ impl PagesCopyModule {
     pub const SCATTERED_BINDING: u32 = 0;
     /// The buffer whose pages lie one after another, a storage buffer.
     pub const CONSECUTIVE_BINDING: u32 = 1;
-    /// The table, two words an entry, a storage buffer the dispatch only reads.
+    /// The table, [`ENTRY_WORDS`](Self::ENTRY_WORDS) words an entry, a storage buffer the
+    /// dispatch only reads.
     pub const TABLE_BINDING: u32 = 2;
-    /// The bytes of a page, which a workgroup copies.
+    /// The words of one entry of the table ([`entry`](Self::entry)).
+    pub const ENTRY_WORDS: u32 = 3;
+    /// The bytes of a page: the most one entry's run holds, which a workgroup copies.
     pub const PAGE_BYTES: u32 = 4096;
     /// Invocations of one workgroup, along x: [`WORDS`](Self::WORDS) 4-byte words each.
     pub const LOCAL_SIZE: u32 = 128;
@@ -84,7 +90,8 @@ impl PagesCopyModule {
     pub const PUSH_BYTES: u32 = 16;
 
     /// The push bytes of a dispatch whose first workgroup takes entry `first_entry` of the
-    /// table, the consecutive binding's page 0 at its word `first_word` (the module docs).
+    /// table, its entries' consecutive words counted from the binding's word `first_word` (the
+    /// module docs).
     pub fn shape(first_entry: u32, first_word: u32) -> [u8; 16] {
         let words = [first_entry, first_word, 0, 0];
         let mut bytes = [0; 16];
@@ -99,11 +106,15 @@ impl PagesCopyModule {
         [entries, 1, 1]
     }
 
-    /// The table's words of entry `(scattered, consecutive)`, the two pages' indices.
-    pub fn entry(scattered: u32, consecutive: u32) -> [u8; 8] {
-        let mut bytes = [0; 8];
-        bytes[..4].copy_from_slice(&scattered.to_le_bytes());
-        bytes[4..].copy_from_slice(&consecutive.to_le_bytes());
+    /// The table's words of the entry of a run of `words` 4-byte words (at most a page's 1024)
+    /// from the scattered binding's word `scattered` and the consecutive binding's word
+    /// `consecutive` (counted from the shape's `first_word`): a page is `(1024 s, 1024 c, 1024)`.
+    pub fn entry(scattered: u32, consecutive: u32, words: u32) -> [u8; 12] {
+        let mut bytes = [0; 12];
+        let parts = bytes.as_chunks_mut::<4>().0.iter_mut();
+        for (chunk, word) in parts.zip([scattered, consecutive, words]) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
         bytes
     }
 }
@@ -145,7 +156,7 @@ const TABLE: ResourceSlot = ResourceSlot {
 /// selection places.
 const SHAPE: PushField = PushField::DispatchRegion;
 
-/// The word `base + step` of a page, `step` a constant (`base` itself at 0).
+/// The word `base + step` of a run, `step` a constant (`base` itself at 0).
 fn word_at(f: &mut FunctionBuilder<'_>, base: Value, step: u32) -> BResult<Value> {
     match step {
         0 => Ok(base),
@@ -194,21 +205,22 @@ fn typed_module(copy: PagesCopy) -> BResult<TypedModule> {
     let shape = f.load(shape, MemAccess::default())?;
     let first_entry = f.composite_extract(shape, &[0])?;
     let first_word = f.composite_extract(shape, &[1])?;
-    // The workgroup's entry, and its two pages.
+    // The workgroup's entry: its run's first words in the two bindings, and its words.
     let entry = f.binary(BinOp::IAdd, first_entry, g)?;
-    let at = f.binary(BinOp::IAdd, entry, entry)?;
+    let entry_words = u32_value(&mut f, PagesCopyModule::ENTRY_WORDS)?;
+    let at = f.binary(BinOp::IMul, entry, entry_words)?;
     let p = f.access_chain(table, &[zero, at])?;
-    let scattered_page = f.load(p, MemAccess::default())?;
+    let scattered_word = f.load(p, MemAccess::default())?;
     let at = f.binary(BinOp::IAdd, at, one)?;
     let p = f.access_chain(table, &[zero, at])?;
-    let consecutive_page = f.load(p, MemAccess::default())?;
-    let page_words = u32_value(&mut f, PagesCopyModule::PAGE_BYTES / 4)?;
-    // Each page's first word, plus the invocation's place in it: its words lie `LOCAL_SIZE`
+    let consecutive_word = f.load(p, MemAccess::default())?;
+    let at = f.binary(BinOp::IAdd, at, one)?;
+    let p = f.access_chain(table, &[zero, at])?;
+    let words = f.load(p, MemAccess::default())?;
+    // Each run's first word, plus the invocation's place in it: its words lie `LOCAL_SIZE`
     // apart from there (the module docs).
-    let s = f.binary(BinOp::IMul, scattered_page, page_words)?;
-    let s = f.binary(BinOp::IAdd, s, l)?;
-    let c = f.binary(BinOp::IMul, consecutive_page, page_words)?;
-    let c = f.binary(BinOp::IAdd, c, first_word)?;
+    let s = f.binary(BinOp::IAdd, scattered_word, l)?;
+    let c = f.binary(BinOp::IAdd, consecutive_word, first_word)?;
     let c = f.binary(BinOp::IAdd, c, l)?;
     let (from, from_base, to, to_base) = match copy {
         PagesCopy::Gather => (scattered, s, consecutive, c),
@@ -216,12 +228,19 @@ fn typed_module(copy: PagesCopy) -> BResult<TypedModule> {
     };
     for k in 0..PagesCopyModule::WORDS {
         let step = k * PagesCopyModule::LOCAL_SIZE;
-        let read = word_at(&mut f, from_base, step)?;
-        let write = word_at(&mut f, to_base, step)?;
-        let p = f.access_chain(from, &[zero, read])?;
-        let word = f.load(p, MemAccess::default())?;
-        let p = f.access_chain(to, &[zero, write])?;
-        f.store(p, word, MemAccess::default())?;
+        // The invocation's word of the run, which it copies where the run holds it.
+        let i = word_at(&mut f, l, step)?;
+        let inside = f.binary(BinOp::ULessThan, i, words)?;
+        let copy: ArmFn<'_, ()> = Box::new(move |f, _| {
+            let read = word_at(f, from_base, step)?;
+            let write = word_at(f, to_base, step)?;
+            let p = f.access_chain(from, &[zero, read])?;
+            let word = f.load(p, MemAccess::default())?;
+            let p = f.access_chain(to, &[zero, write])?;
+            f.store(p, word, MemAccess::default())?;
+            Ok(ArmEnd::FallThrough(Vec::new()))
+        });
+        f.if_(&mut (), inside, copy, None)?;
     }
     f.ret(None)?;
     let id = f.finish()?;
@@ -277,6 +296,7 @@ mod tests {
     use crate::spirv::testing::{assert_valid, committed_profiles};
 
     const PAGE: usize = PagesCopyModule::PAGE_BYTES as usize;
+    const PAGE_WORDS: u32 = PagesCopyModule::PAGE_BYTES / 4;
 
     #[test]
     fn the_pages_copy_kernels_are_valid_on_every_committed_profile() {
@@ -297,18 +317,25 @@ mod tests {
             .collect()
     }
 
+    /// The table entries of whole pages `(scattered, consecutive)`, by their indices.
+    fn of_pages(pages: &[(u32, u32)]) -> Vec<(u32, u32, u32)> {
+        (pages.iter())
+            .map(|&(s, c)| (s * PAGE_WORDS, c * PAGE_WORDS, PAGE_WORDS))
+            .collect()
+    }
+
     /// The scattered and consecutive buffers after one dispatch of `copy` over `entries` from
-    /// entry `first_entry` of `table`, the consecutive pages from word `first_word`, in both
-    /// invocation orders; the table unchanged.
+    /// entry `first_entry` of `table` (each a run's first words and its words), the consecutive
+    /// words from word `first_word`, in both invocation orders; the table unchanged.
     fn copied(
         copy: PagesCopy,
         (scattered, consecutive): (&[u8], &[u8]),
-        table: &[(u32, u32)],
+        table: &[(u32, u32, u32)],
         (first_entry, entries, first_word): (u32, u32, u32),
     ) -> (Vec<u8>, Vec<u8>) {
         let m = typed_module(copy).expect("module");
         let table: Vec<u8> = (table.iter())
-            .flat_map(|&(s, c)| PagesCopyModule::entry(s, c))
+            .flat_map(|&(s, c, n)| PagesCopyModule::entry(s, c, n))
             .collect();
         let mut out = Vec::new();
         for order in [Order::Forward, Order::Reverse] {
@@ -352,7 +379,7 @@ mod tests {
         let (s, c) = copied(
             PagesCopy::Gather,
             (&scattered, &consecutive),
-            &table,
+            &of_pages(&table),
             (1, 4, 1),
         );
         assert_eq!(s, scattered, "a gather writes nothing scattered");
@@ -374,7 +401,7 @@ mod tests {
         let (s, c) = copied(
             PagesCopy::Scatter,
             (&scattered, &consecutive),
-            &table,
+            &of_pages(&table),
             (0, 3, 0),
         );
         assert_eq!(c, consecutive, "a scatter writes nothing consecutive");
@@ -384,5 +411,62 @@ mod tests {
             want[to..to + PAGE].copy_from_slice(&consecutive[from..from + PAGE]);
         }
         assert_eq!(s, want);
+    }
+
+    /// Runs shorter than a page copy their words alone, in both directions: a word, the
+    /// invocations' first stride and one past it, a run across a page of the scattered buffer,
+    /// and a page less a word. No word around them changes.
+    #[test]
+    fn runs_of_words_copy_their_words_and_no_word_around_them() {
+        // (the scattered word, the consecutive word from `first_word`, the words).
+        let table = [
+            (200, 0, 1),
+            (1500, 1, 128),
+            (3, 129, 129),
+            (1000, 258, 300),
+            (2049, 558, PAGE_WORDS - 1),
+        ];
+        let consecutive_words: u32 = table.iter().map(|&(_, _, n)| n).sum();
+        let first_word = 3;
+        let scattered = pages(4, 5);
+        let consecutive = pages(2, 6);
+        assert!(4 * (first_word + consecutive_words) as usize <= consecutive.len());
+        let word = |bytes: &[u8], at: u32| bytes[4 * at as usize..4 * at as usize + 4].to_vec();
+        let (s, c) = copied(
+            PagesCopy::Gather,
+            (&scattered, &consecutive),
+            &table,
+            (0, table.len() as u32, first_word),
+        );
+        assert_eq!(s, scattered, "a gather writes nothing scattered");
+        let mut want = consecutive.clone();
+        for &(from, to, n) in &table {
+            for i in 0..n {
+                let at = 4 * (first_word + to + i) as usize;
+                want[at..at + 4].copy_from_slice(&word(&scattered, from + i));
+            }
+        }
+        assert_eq!(
+            c, want,
+            "each run's words gathered, and no word around them"
+        );
+        let (s, c) = copied(
+            PagesCopy::Scatter,
+            (&scattered, &consecutive),
+            &table,
+            (0, table.len() as u32, first_word),
+        );
+        assert_eq!(c, consecutive, "a scatter writes nothing consecutive");
+        let mut want = scattered.clone();
+        for &(to, from, n) in &table {
+            for i in 0..n {
+                let at = 4 * (to + i) as usize;
+                want[at..at + 4].copy_from_slice(&word(&consecutive, first_word + from + i));
+            }
+        }
+        assert_eq!(
+            s, want,
+            "each run's words scattered, and no word around them"
+        );
     }
 }

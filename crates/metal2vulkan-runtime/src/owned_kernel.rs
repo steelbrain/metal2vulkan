@@ -90,8 +90,9 @@ pub(super) enum OwnedModule {
     /// `bind::rows_copy_module`: many equal rows of words copied from one buffer into another by
     /// a dispatch, in place of a copy's region per row (`row_copies.rs`).
     RowsCopy,
-    /// `bind::pages_copy_module` of one direction: whole 4 KiB pages copied between a chunk of a
-    /// guest RAM and a buffer by a table of them, a gather or a scatter (`host_ram/copy.rs`).
+    /// `bind::pages_copy_module` of one direction: runs of words, up to a 4 KiB page each, copied
+    /// between a chunk of a guest RAM and a buffer by a table of them, a gather or a scatter
+    /// (`host_ram/copy.rs`).
     PagesCopy(metal2vulkan::bind::PagesCopy),
     /// `bind::extended_canonical_module`: Metal's canonical encoding of `BGRA10_XR` texels
     /// written in place over a buffer's words, after a blit through a texture Metal keeps

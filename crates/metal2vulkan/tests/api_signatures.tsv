@@ -217,6 +217,7 @@ assoc-const	metal2vulkan::bind::MipmapFilterModule::SOURCE_BINDING	pub const SOU
 assoc-const	metal2vulkan::bind::NeutralResource::SINK_BYTES	pub const SINK_BYTES: u32
 assoc-const	metal2vulkan::bind::PagesCopy::ALL	pub const ALL: [PagesCopy; 2]
 assoc-const	metal2vulkan::bind::PagesCopyModule::CONSECUTIVE_BINDING	pub const CONSECUTIVE_BINDING: u32
+assoc-const	metal2vulkan::bind::PagesCopyModule::ENTRY_WORDS	pub const ENTRY_WORDS: u32
 assoc-const	metal2vulkan::bind::PagesCopyModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::PagesCopyModule::PAGE_BYTES	pub const PAGE_BYTES: u32
 assoc-const	metal2vulkan::bind::PagesCopyModule::PUSH_BYTES	pub const PUSH_BYTES: u32
@@ -692,6 +693,7 @@ assoc-const-value	metal2vulkan::bind::MipmapFilterModule::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::NeutralResource::SINK_BYTES	64
 assoc-const-value	metal2vulkan::bind::PagesCopy::ALL	[PagesCopy::Gather, PagesCopy::Scatter]
 assoc-const-value	metal2vulkan::bind::PagesCopyModule::CONSECUTIVE_BINDING	1
+assoc-const-value	metal2vulkan::bind::PagesCopyModule::ENTRY_WORDS	3
 assoc-const-value	metal2vulkan::bind::PagesCopyModule::LOCAL_SIZE	128
 assoc-const-value	metal2vulkan::bind::PagesCopyModule::PAGE_BYTES	4096
 assoc-const-value	metal2vulkan::bind::PagesCopyModule::PUSH_BYTES	16
@@ -8828,7 +8830,7 @@ method	metal2vulkan::bind::MipmapFilterKernel::fetches	pub fn fetches(&self) -> 
 method	metal2vulkan::bind::NeutralResource::for_image	pub fn for_image(class: &ImageHandleClass) -> Option<NeutralResource>
 method	metal2vulkan::bind::NeutralResource::format	pub fn format(&self) -> Option<vk::Format>
 method	metal2vulkan::bind::ObjectFold::bytes	pub fn bytes(&self) -> Vec<u8>
-method	metal2vulkan::bind::PagesCopyModule::entry	pub fn entry(scattered: u32, consecutive: u32) -> [u8; 8]
+method	metal2vulkan::bind::PagesCopyModule::entry	pub fn entry(scattered: u32, consecutive: u32, words: u32) -> [u8; 12]
 method	metal2vulkan::bind::PagesCopyModule::groups	pub fn groups(entries: u32) -> [u32; 3]
 method	metal2vulkan::bind::PagesCopyModule::shape	pub fn shape(first_entry: u32, first_word: u32) -> [u8; 16]
 method	metal2vulkan::bind::PlaneBytes::new	pub fn new(color: u32, alpha: u32, blit: u32, end: u32) -> PlaneBytes
