@@ -124,6 +124,8 @@ mod dirty_runs;
 mod dirty_runs_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dispatch_pending;
+#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
+mod dma_buf_export;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod draw_again;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

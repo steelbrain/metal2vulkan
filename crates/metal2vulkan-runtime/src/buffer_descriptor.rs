@@ -448,8 +448,12 @@ impl Device {
         self.keep_room();
         let options = self.own_memory_options(CALL, options)?;
         let bytes = HostBytes::from_slice(bytes);
-        let buffer =
-            self.buffer_with_bytes(CALL, bytes, options, (AddressPlacement::Any.into(), None))?;
+        let made = Made {
+            place: AddressPlacement::Any.into(),
+            aligned: None,
+            export: None,
+        };
+        let buffer = self.buffer_with_bytes(CALL, bytes, options, made)?;
         Ok(self.visible(buffer))
     }
 

@@ -2081,7 +2081,7 @@ impl Device {
                     .restored(|| ash::khr::external_memory_fd::Device::new(&instance.raw, &raw))
             });
             let usage = super::buffer::usage(device_address);
-            let handle = crate::exported_memory::MemoryExport::OpaqueFd;
+            let handle = crate::buffer_descriptor::MemoryExport::OpaqueFd;
             // SAFETY: `physical` belongs to `instance`, created at Vulkan 1.2 or later.
             let opaque = unsafe {
                 crate::exported_memory::FdExport::new(
@@ -2094,7 +2094,7 @@ impl Device {
             // As a dma-buf where it enables the route's extensions, which name
             // `VK_KHR_external_memory_fd`, and the foreign family its acquire names.
             let dma_buf_functions = functions.filter(|_| dma_buf && foreign_family);
-            let handle = crate::exported_memory::MemoryExport::DmaBuf;
+            let handle = crate::buffer_descriptor::MemoryExport::DmaBuf;
             // SAFETY: as above.
             let dma_buf_export = unsafe {
                 crate::exported_memory::FdExport::new(
