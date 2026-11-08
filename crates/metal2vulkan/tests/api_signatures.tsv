@@ -2692,6 +2692,9 @@ field	metal2vulkan-runtime::WorkCounts.draws_unkept	pub draws_unkept: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_barrier	pub draws_unkept_barrier: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_index_copied	pub draws_unkept_index_copied: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_instance	pub draws_unkept_instance: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unkept_instance_begun	pub draws_unkept_instance_begun: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unkept_instance_later	pub draws_unkept_instance_later: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unkept_instance_steps	pub draws_unkept_instance_steps: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_making	pub draws_unkept_making: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_other	pub draws_unkept_other: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_shadowed	pub draws_unkept_shadowed: u64

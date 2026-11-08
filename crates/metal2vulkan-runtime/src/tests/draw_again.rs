@@ -798,6 +798,12 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
     assert_eq!(rebound.counted(|counts| counts.draws_unkept), 1);
     assert_eq!(rebound.counted(|counts| counts.draws_unkept_instance), 1);
+    let split = [
+        rebound.counted(|counts| counts.draws_unkept_instance_begun),
+        rebound.counted(|counts| counts.draws_unkept_instance_later),
+        rebound.counted(|counts| counts.draws_unkept_instance_steps),
+    ];
+    assert_eq!(split, [1, 0, 0], "the pass's first draw began its instance");
     let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
     assert_eq!(rebound.counted(missed), 0);
     // Between the adding state's draws, draws that count their fragments in a buffer.
