@@ -541,6 +541,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)). `HostRam::with_dma_buf` gives the RAM a
   source of dma-bufs of its pages: a device whose own check finds held pointer imports taxing
   every submission (RADV), or that refuses the RAM's pointer, imports each chunk as one dma-buf.
+  `HostRam::with_dma_buf_of_runs` gives it a source of one dma-buf of a list of runs (udmabuf's
+  `UDMABUF_CREATE_LIST`): there a copy by runs over a chunk not imported imports lists of its own
+  pages, held until its command buffer completed, in place of the chunk, which pins every page of
+  it.
 - `BlitCommandEncoder::copy_from_host_ram` and `copy_to_host_ram`: runs of a used guest RAM
   (host addresses from a 4-byte word to any byte) gathered into consecutive bytes of a buffer,
   or scattered back, from the device's chunk imports: runs that start and end on a word (whole

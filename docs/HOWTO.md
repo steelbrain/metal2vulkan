@@ -633,6 +633,35 @@ submission, can give the device the guest's RAM once instead:
   buffer that used it holds for its idle window (2 s, doubled at each release of the chunk up to
   64 s) is released by the same thread (`host_ram_chunks_released`), and the next object over it
   asks for it again.
+- `HostRam::with_dma_buf_of_runs(source, most_runs)` gives the RAM a `DmaBufRunsSource`: one
+  dma-buf of a list of runs of its pages, the runs' pages one after another (on Linux,
+  `udmabuf`'s `UDMABUF_CREATE_LIST`, whose list holds at most its `list_limit` parameter, 1024 by
+  default: pass that as `most_runs`). Only the copies by runs below ask it, and only on a device
+  whose held imports add to the cost of every submission and whose chunks of the RAM are its
+  dma-bufs (RADV with `with_dma_buf`) and whose barriers order blits through two imports of the
+  same pages. There a copy takes its runs of the chunks not imported by address across them,
+  those that share a host page as one, and imports each list of at most `most_runs` of them (and
+  at most a chunk's and `with_largest_dma_buf`'s bytes) as one dma-buf of the source, held until
+  its command buffer completed, then freed (`WorkCounts::host_ram_run_list_imports`, their time
+  in `host_ram_run_list_import_nanos`): a tile of 1,800 pages anywhere in the RAM is one list or
+  two. It neither imports those chunks nor asks for them, so copies pin the pages they copy while
+  they run and none of the RAM the guest never touched; a chunk already imported serves its pages
+  as before. Without the source a copy of more than 16 ranges of a chunk imports the chunk (or
+  waits for its import under way) and keeps it: that pins every page of the chunk, up to 512 MiB,
+  `udmabuf` allocating those the guest never touched, for good, and later copies over it import
+  nothing. With it every copy over a chunk not imported pays its lists' imports. On the Radeon
+  780M (RADV, `tests/host_ram_listed_bench.rs`, a guest that wrote half its RAM in 2 MiB extents
+  and scrolls tiles of 1,800 of those pages, filled and downloaded): the RAM's file held 4028 MiB
+  of an 8 GiB guest at the end, where whole-chunk imports would have made all 8192 MiB resident,
+  and 8300 MiB of a 16 GiB guest, where they would have made 16384 MiB. A tile laid as a
+  surface's pages (455 to 620 sorted runs, one list) took 4.1 to 4.5 ms from the commit to the
+  completion and 0.6 to 1.0 ms to encode, first copy or repeated; a tile of 1,800 pages each
+  anywhere (two lists) 0.9 to 1.25 ms and 0.7 to 1.3 ms; over an imported chunk 0.39 to 0.48 ms
+  and 0.09 to 0.11 ms. The GPU's own time was about 0.23 ms in each. Each request of a list is
+  whole host pages inside one chunk, by the RAM's own addresses, by start and sharing no page,
+  with a `granule` of its `length`: answer one dma-buf of exactly those pages in that order, its
+  `length` their total. A source that fails, or answers a dma-buf of another length, leaves the
+  copy to the chunk.
 - Any other answer (several runs, one run crossing a chunk's end, `None`) takes the paths above:
   the gate, then the import or the copy. The runs are kept with the object.
 - Elsewhere the chunks are never released while idle. Once the use is dropped, each is freed when
@@ -675,13 +704,15 @@ submission, can give the device the guest's RAM once instead:
   (`host_ram_staged_fills_gated`), and where that is so at the encoding the copy takes the imports'
   path. Any other copy imports the chunk on its encoding thread, or waits for the import under way
   (`host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`; every chunk import's time in
-  `host_ram_chunk_import_nanos`). Each copy is ordered
-  and seen as a copy between the buffer and a no-copy buffer over the pages: the chunk's bytes have
-  a hazard-tracking key placed over its host bytes, as a no-copy buffer's are, so the copy is
-  ordered against every other copy of those bytes and every no-copy buffer or heap over the RAM's
-  own addresses, in the encoder and across encoders, command buffers and queues (an object over
-  another mapping of the same pages is not, as two no-copy buffers over two mappings of one page
-  are not). The CPU's writes made before the commit are seen, the GPU's are in the pages at the
+  `host_ram_chunk_import_nanos`). Of a RAM with a source of run lists, on a device whose held
+  imports add to every submission's cost, a copy over chunks not imported imports lists of its own
+  pages instead (`HostRam::with_dma_buf_of_runs`, above), and those chunks not at all. Each copy is
+  ordered and seen as a copy between the buffer and a no-copy buffer over the pages: the chunk's
+  bytes have a hazard-tracking key placed over its host bytes, as a no-copy buffer's are, so the
+  copy is ordered against every other copy of those bytes and every no-copy buffer or heap over the
+  RAM's own addresses, in the encoder and across encoders, command buffers and queues (an object
+  over another mapping of the same pages is not, as two no-copy buffers over two mappings of one
+  page are not). The CPU's writes made before the commit are seen, the GPU's are in the pages at the
   completion, and where the RAM came with a log its scatters are reported to it as the GPU's writes
   in place, so copied buffers and shadows over those pages copy them in at their next commit.
   Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`); a RAM the device does
