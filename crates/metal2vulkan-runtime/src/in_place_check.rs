@@ -219,9 +219,10 @@ pub(crate) const SHAPES: [Shape; 15] = [
 /// `R8Unorm` and `A8Unorm` among them), of widths whose rows end inside a 4-byte word and odd
 /// heights, so that a driver's store of a word or a block past a row's or the image's end shows,
 /// at the 16-byte pitch a driver that lays rows tight lays them at and at the 64-byte pitch of one
-/// that lays them at the next multiple of 64 (run as there: [`Shape::runs`]), and one 1024x1024
-/// surface of 1-byte texels, last, the size of the largest such guest texture. A shape the device
-/// makes no image of in place, or no dispatch over (a device without
+/// that lays them at the next multiple of 64 (run as there: [`Shape::runs`]), and one 1024x64
+/// surface of 1-byte texels, last: rows as wide as the largest such guest texture's (1024x1024),
+/// a sixteenth as many, which keeps its rounds' fill and compare short. A shape the device makes
+/// no image of in place, or no dispatch over (a device without
 /// `shaderStorageImageExtendedFormats`, whose kernels of those views it refuses), is skipped.
 pub(crate) const NARROW_STORE_SHAPES: [(Shape, ShadowTexelView); 9] = [
     (
@@ -257,7 +258,7 @@ pub(crate) const NARROW_STORE_SHAPES: [(Shape, ShadowTexelView); 9] = [
         ShadowTexelView::R16Uint,
     ),
     (
-        shape(PixelFormat::R8Uint, 1, 1024, 1024, 1024),
+        shape(PixelFormat::R8Uint, 1, 1024, 64, 1024),
         ShadowTexelView::R8Uint,
     ),
 ];
