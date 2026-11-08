@@ -661,9 +661,21 @@ submission, can give the device the guest's RAM once instead:
   import that holds them (whole pages, imported as for any copy) and the buffer, the regions of one
   import one command of at most 1024: no other byte of their pages is read or written, and of runs
   that write a byte twice the later's bytes stay (`WorkCounts::host_ram_copy_regions`). A copy
-  takes each chunk it touches as an object over it does, and the thread's window moves past it; but where
-  an object over a chunk not imported yet is bound in an import of its own run, a copy makes none:
-  the chunk is imported first, or the thread's import of it waited for. Each copy is ordered
+  takes each chunk it touches as an object over it does, and the thread's window moves past it.
+  Over a chunk not imported yet, a copy of at most 16 ranges of it imports those ranges alone, as
+  an object's run is imported (not on MoltenVK or ANV). A gather of more, on a device whose thread
+  imports ahead (every device but one whose listed imports cost each submission: RADV with a
+  dma-buf source), is staged through the CPU instead. The CPU copies its runs from the pages into
+  memory of the command buffer's own once its batch is otherwise ready to submit (its event waits
+  met), and the GPU copies them from there into the buffer. No import is made or waited for, no
+  page is pinned for it, and the thread imports each such chunk next, so the copies after it read
+  the imports (`WorkCounts::host_ram_copies_staged`, `host_ram_staged_fill_nanos`). Where a buffer
+  or heap over host pages lies over the runs' bytes, or a scatter into those chunks was recorded,
+  the CPU's copy first waits until every queue completed the work submitted before it
+  (`host_ram_staged_fills_gated`), and where that is so at the encoding the copy takes the imports'
+  path. Any other copy imports the chunk on its encoding thread, or waits for the import under way
+  (`host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`; every chunk import's time in
+  `host_ram_chunk_import_nanos`). Each copy is ordered
   and seen as a copy between the buffer and a no-copy buffer over the pages: the chunk's bytes have
   a hazard-tracking key placed over its host bytes, as a no-copy buffer's are, so the copy is
   ordered against every other copy of those bytes and every no-copy buffer or heap over the RAM's

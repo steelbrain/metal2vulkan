@@ -2796,6 +2796,7 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_imported_ahead	pub host_r
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_live	pub host_ram_chunks_live: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_released	pub host_ram_chunks_released: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copies	pub host_ram_copies: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_copies_staged	pub host_ram_copies_staged: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_bytes	pub host_ram_copy_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_dispatches	pub host_ram_copy_dispatches: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_import_wait_nanos	pub host_ram_copy_import_wait_nanos: u64
@@ -2803,6 +2804,8 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_copy_import_waits	pub host_ram_c
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_regions	pub host_ram_copy_regions: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_dma_buf_imports	pub host_ram_dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_pointer_imports_failed	pub host_ram_pointer_imports_failed: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_staged_fill_nanos	pub host_ram_staged_fill_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_staged_fills_gated	pub host_ram_staged_fills_gated: u64
 field	metal2vulkan-runtime::WorkCounts.host_range_lookups	pub host_range_lookups: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_covered	pub host_rebind_imports_covered: u64
 field	metal2vulkan-runtime::WorkCounts.host_rebind_imports_made	pub host_rebind_imports_made: u64
