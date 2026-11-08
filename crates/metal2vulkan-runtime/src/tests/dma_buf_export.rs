@@ -223,16 +223,15 @@ fn write_through_import(device: &Device, exported: crate::ExportedMemory) {
         0,
         "the dma-buf imports as the memory type it was exported from"
     );
-    // The buffer the import binds, made as the runtime made the exported one (a dedicated
-    // import names a buffer of the same parameters): from the frame's `VkBuffer`'s first byte,
-    // `LEAD` before the frame's.
+    // The buffer the import binds, of the exported one's size and usage, from the frame's
+    // `VkBuffer`'s first byte, `LEAD` before the frame's: exclusive to the second device's one
+    // family, whose release to the foreign family Vulkan takes without synchronization2.
     let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
-    let buffer_info = device.shared().sharing().buffer(
-        vk::BufferCreateInfo::default()
-            .size((LENGTH + LEAD).next_multiple_of(16))
-            .usage(crate::buffer::usage(device_address))
-            .push_next(&mut external),
-    );
+    let buffer_info = vk::BufferCreateInfo::default()
+        .size((LENGTH + LEAD).next_multiple_of(16))
+        .usage(crate::buffer::usage(device_address))
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .push_next(&mut external);
     // SAFETY: the second device is live and `buffer_info` valid for it.
     let imported = unsafe { second.create_buffer(&buffer_info, None) }.unwrap();
     let mut import = vk::ImportMemoryFdInfoKHR::default()
