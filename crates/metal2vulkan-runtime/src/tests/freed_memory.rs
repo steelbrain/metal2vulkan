@@ -803,12 +803,31 @@ fn the_in_place_check_s_buffers_delay_no_deallocator_behind_batches_in_flight() 
             && now.host_imports_live == before.host_imports_live
             && now.host_import_releases_pending == before.host_import_releases_pending
     };
+    // The check's steps the test sees: its verdicts as they come, its rounds' images
+    // (`ObjectChurn::vk_images_made`; the program's fills make none), and its imports' releases
+    // and frees. Each of its submissions waits behind a batch of fills on the device's queue, so
+    // the whole check is as long as its submissions times a batch, which a loaded host stretches
+    // past any bound; the bound holds for each step.
+    let steps = || {
+        let now = device.work_counts();
+        let imports = (now.host_import_releases_posted, now.host_imports_live);
+        let images = now.object_churn.vk_images_made;
+        (device.in_place_check_report(), images, imports)
+    };
+    let (mut seen, mut stepped, mut longest) = (steps(), Instant::now(), Duration::ZERO);
     // The first batch is in flight as the check starts, and a next one is submitted before each
     // completes, until it is done.
     let mut in_flight = filling(&queue, &target);
-    let deadline = Instant::now() + WAIT;
     while !done() {
-        assert!(Instant::now() < deadline, "the check's buffers never went");
+        let now = steps();
+        if now != seen {
+            (seen, longest) = (now, longest.max(stepped.elapsed()));
+            stepped = Instant::now();
+        }
+        assert!(
+            stepped.elapsed() < WAIT,
+            "the check's buffers never went: no step of the check in {WAIT:?}"
+        );
         let next = filling(&queue, &target);
         in_flight.wait_until_completed_for(WAIT).unwrap();
         in_flight = next;
@@ -820,7 +839,8 @@ fn the_in_place_check_s_buffers_delay_no_deallocator_behind_batches_in_flight() 
     let posted = after.host_import_releases_posted - before.host_import_releases_posted;
     let parked = after.freed_memory_parked - before.freed_memory_parked;
     eprintln!(
-        "IN-PLACE-CHECK-RELEASES: {report:?}: posted {posted}, parked {parked}, delayed {delayed}"
+        "IN-PLACE-CHECK-RELEASES: {report:?}: posted {posted}, parked {parked}, delayed {delayed}, \
+         longest step {longest:?}"
     );
     let checked = |class: &str| {
         (report.iter()).any(|line| line.starts_with(class) && !line.ends_with("Unchecked"))
