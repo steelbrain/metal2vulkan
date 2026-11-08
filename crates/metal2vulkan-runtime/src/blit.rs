@@ -10,9 +10,8 @@
 //! - **Fills.** `vkCmdFillBuffer` writes only whole 32-bit words at offsets that are multiples of
 //!   4, while Metal fills any byte range with one byte value: [`fill_pieces`] splits a fill into
 //!   the words and the at most 3 bytes before and after them, which are copied from 4 bytes of the
-//!   value ([`fill_word`]) in a small pattern buffer of the encoder. The words go as
-//!   `word_fill.rs` records them: `vkCmdFillBuffer`, or transfers on a driver measured to compile
-//!   its fill per command pool.
+//!   value ([`fill_word`]) in a small pattern buffer of the encoder. The words go as one
+//!   `vkCmdFillBuffer` (`word_fill.rs`).
 //! - **Heap shadows** (`shadow.rs`). A heap's texture held as a shadow of the heap's bytes (a
 //!   depth or stencil texture, or one of a heap over host pages, `texture/heap.rs`) is an image to
 //!   a blit: a command that uses its image copies it in from the bytes first where the encoder has
@@ -486,9 +485,9 @@ impl BlitCommandEncoder {
     /// `fillBuffer:range:value:`: every byte of `range` becomes `value`, for any range, as on
     /// Metal.
     ///
-    /// The range's whole words are filled as `word_fill.rs` records them (`vkCmdFillBuffer`, or
-    /// transfers on a driver that compiles its fill per command pool); the at most 3 bytes at each
-    /// end are copied from the encoder's pattern buffer (1 KiB, made at its first unaligned fill).
+    /// The range's whole words are filled as one `vkCmdFillBuffer` (`word_fill.rs`); the at most
+    /// 3 bytes at each end are copied from the encoder's pattern buffer (1 KiB, made at its first
+    /// unaligned fill).
     ///
     /// An empty range fills nothing, wherever it lies, and the encoder's other commands run, as
     /// plain Metal does (Metal's validation stops it).

@@ -1072,18 +1072,6 @@ pub enum DriverFact {
     /// pipeline does. On a driver with it the runtime withholds exactly those messages inside that
     /// pipeline's creation, and counts them, as [`DriverFact::DynamicRestartWarns`]'s.
     BlendlessColorAttachmentsWarn,
-    /// A cost fact (the module docs): the driver runs `vkCmdFillBuffer` as a compute dispatch of
-    /// a pipeline it compiles at the first fill each `VkCommandPool`'s command buffers encode,
-    /// inside `vkQueueSubmit`, through the OS's shader compiler, which serves the process's
-    /// compiles in order, so a submission waits behind every pipeline compile ahead of it. MoltenVK
-    /// keeps the pipeline per pool (`MVKCommandEncodingPool::getCmdFillBufferMTLComputePipelineState`
-    /// at 1.4.1). Measured on the Apple M4: behind a storm of pipeline creations, a commit holding
-    /// a pool's first fill waited 250 to 330 ms in that submit (sampled). On
-    /// a driver with it the runtime records each fill as transfers the driver compiles nothing
-    /// for: `vkCmdUpdateBuffer` of the first words, then copies of the filled words onto the rest
-    /// (`word_fill.rs`); elsewhere `vkCmdFillBuffer`. MoltenVK's own code on every GPU, so the row
-    /// names no vendor.
-    FillCompiledPerCommandPool,
     /// A render pass's attachment stored `DONT_CARE` is stored as Metal's own `DontCare` on the
     /// same GPU, `MultisampleResolve` where it resolves in the subpass: MoltenVK hands the
     /// operation to Metal (`MVKAttachmentDescription::getMTLStoreAction` at 1.4.1) wherever it
@@ -2016,12 +2004,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 ///   `MVKPixelFormats.mm` hands every BC format to Metal as Metal's own, line for line 1.4.1's.
 ///
 /// Not re-measured at 1.4.2, and taken there as at 1.4.1: `InterlockedPassSplitNoSlower`, a cost
-/// fact whose 1.4.1 timing needed a scratch build that keeps such a pass whole; and
-/// `FillCompiledPerCommandPool`, whose wait our probe did not find at 1.4.2: a command buffer of
-/// one `vkCmdFillBuffer`, the first in a fresh command pool, took 0.022 to 0.038 ms (median) in
-/// `vkQueueSubmit` beside one to eight threads making compute pipelines (91 and 496 made), as a
-/// `vkCmdUpdateBuffer` did, though `MVKCommandEncodingPool::getCmdFillBufferMTLComputePipelineState`
-/// is 1.4.1's. Its fills take the transfers either way, the same bytes.
+/// fact whose 1.4.1 timing needed a scratch build that keeps such a pass whole.
 pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     Measured {
         fact: DriverFact::RobustIndexFetchReadsZero,
@@ -2180,12 +2163,6 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     ),
     Measured {
         fact: DriverFact::DynamicRestartWarns,
-        driver: DriverId::MOLTENVK,
-        vendor: None,
-        device: None,
-    },
-    Measured {
-        fact: DriverFact::FillCompiledPerCommandPool,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,

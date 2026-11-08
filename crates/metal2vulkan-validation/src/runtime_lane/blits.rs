@@ -135,18 +135,12 @@ fn blits_copy_and_fill_any_range() {
     });
 }
 
-/// Fills of every size land exactly in the form the device's driver takes (`word_fill.rs`): on a
-/// driver measured to compile its fill per command pool (MoltenVK 1.4.1) as transfers, the first
-/// 64 KiB updated and doubled by copies, so fills past 64 KiB, 128 KiB and 256 KiB take each
-/// step; elsewhere `vkCmdFillBuffer`. Overlapping fills of one encoder land in encoded order, and
-/// the work counts show which form ran: every fill's words in that form, none in the other.
+/// Fills of every size, past 64 KiB, 128 KiB and 256 KiB among them, land exactly, each its words
+/// as one `vkCmdFillBuffer` (`word_fill.rs`): overlapping fills of one encoder land in encoded
+/// order, and the work counts show every fill's words recorded once.
 #[test]
-fn fills_of_every_size_land_in_the_drivers_form() {
+fn fills_of_every_size_land_as_one_fill_each() {
     on_device(|device| {
-        let by_transfers = device
-            .properties()
-            .driver_facts
-            .contains(&metal2vulkan::device::DriverFact::FillCompiledPerCommandPool);
         let queue = device.new_command_queue().unwrap();
         let len = 600 * 1024;
         let private = device.new_buffer(len, ResourceOptions::private()).unwrap();
@@ -171,13 +165,10 @@ fn fills_of_every_size_land_in_the_drivers_form() {
             expected[range.start as usize..range.end as usize].fill(*value);
         }
         assert_eq!(read_back(&queue, &private), expected);
-        let ran = (
-            after.fills_recorded - before.fills_recorded,
-            after.fills_by_transfers - before.fills_by_transfers,
-        );
+        let ran = after.fills_recorded - before.fills_recorded;
         let every = fills.len() as u64;
-        eprintln!("PATH fills: by transfers {by_transfers}, (native, transfers) {ran:?}");
-        assert_eq!(ran, if by_transfers { (0, every) } else { (every, 0) });
+        eprintln!("PATH fills: {ran} recorded of {every}");
+        assert_eq!(ran, every);
     });
 }
 

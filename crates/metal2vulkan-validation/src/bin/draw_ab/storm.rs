@@ -812,13 +812,9 @@ pub(crate) fn storm(args: &[String]) -> Result<(), String> {
     let ticks = ticks?;
     let messages = received.lock().map_err(|_| "the sink's lock")?.clone();
     let qos_line = format!("{qos_at_start} at start; {}", qos.unwrap_or("not set"));
-    // How the device recorded its fills, the ticker's among them: `vkCmdFillBuffer`, or
-    // transfers on a driver that compiles its fill per command pool.
+    // The fills the device recorded, the ticker's among them, each one `vkCmdFillBuffer`.
     let counts = device.work_counts();
-    let fills = format!(
-        "recorded={} by_transfers={}",
-        counts.fills_recorded, counts.fills_by_transfers
-    );
+    let fills = format!("recorded={}", counts.fills_recorded);
     // What the makings' pipeline caches did by the storm's end: those seeded from their records
     // and the records written, the makings their caches held and those they compiled, and why
     // a save kept nothing (on every driver, MoltenVK's included).

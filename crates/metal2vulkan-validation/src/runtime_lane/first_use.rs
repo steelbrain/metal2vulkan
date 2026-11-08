@@ -1059,10 +1059,7 @@ fn a_new_private_buffer_reads_zero_through_its_first_fill() {
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None, "on {name}");
         let filled = device.work_counts().new_buffer_zero_fills - before;
-        let properties = device.properties();
-        let by_transfers =
-            (properties.driver_facts).contains(&DriverFact::FillCompiledPerCommandPool);
-        let fills = !properties.has_unified_memory && !by_transfers;
+        let fills = !device.properties().has_unified_memory;
         println!(
             "FIRST-USE on {name}: a new {len}-byte Private buffer {} the released one's memory, \
              its zeros {}",

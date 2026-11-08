@@ -1557,7 +1557,6 @@ impl Gpu for Runtime {
                 c.heap_texture_untiled_layouts,
             ),
             ("fills_recorded", c.fills_recorded),
-            ("fills_by_transfers", c.fills_by_transfers),
             ("ycbcr_refreshes", c.ycbcr_refreshes),
             ("ycbcr_whole_conversions", c.ycbcr_whole_conversions),
             ("attachment_clears_recorded", c.attachment_clears_recorded),

@@ -655,14 +655,12 @@ impl FirstFill {
     }
 
     /// The zeros of `range` of `buffer` on `device`: one `vkCmdFillBuffer` of its words on a
-    /// device without unified memory whose fills are `vkCmdFillBuffer`'s (`word_fill.rs`), where
-    /// the range's ends are multiples of 4; else copies of the device's zeros, made now if they
-    /// are not yet. A discrete GPU reads those host-visible zeros over the bus: on the RX 7900 XTX
-    /// (RADV) 512 KiB of them took 66 us to copy and 11 us more in the barrier after it, where a
-    /// fill of the same bytes took 0.7 us and 2.5 us. The copy stays where the device shares the
-    /// host's memory, whose zeros lie in the memory the GPU reads anyway (not measured there),
-    /// and where fills go as transfers (`DriverFact::FillCompiledPerCommandPool`), whose copies
-    /// within the buffer need `TRANSFER_SRC` usage that a neutral buffer lacks.
+    /// device without unified memory (`word_fill.rs`), where the range's ends are multiples of 4;
+    /// else copies of the device's zeros, made now if they are not yet. A discrete GPU reads those
+    /// host-visible zeros over the bus: on the RX 7900 XTX (RADV) 512 KiB of them took 66 us to
+    /// copy and 11 us more in the barrier after it, where a fill of the same bytes took 0.7 us and
+    /// 2.5 us. The copy stays where the device shares the host's memory, whose zeros lie in the
+    /// memory the GPU reads anyway (not measured there).
     fn zeros(
         device: &Device,
         moves: &FirstMoves,
@@ -671,7 +669,7 @@ impl FirstFill {
     ) -> Result<FirstFill, Error> {
         let words = range.start.is_multiple_of(4) && range.end.is_multiple_of(4);
         let discrete = !device.properties().has_unified_memory;
-        if words && discrete && !crate::word_fill::by_transfers(device) {
+        if words && discrete {
             return Ok(FirstFill {
                 buffer,
                 source: vk::Buffer::null(),

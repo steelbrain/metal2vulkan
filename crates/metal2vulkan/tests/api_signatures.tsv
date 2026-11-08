@@ -2664,7 +2664,6 @@ field	metal2vulkan-runtime::WorkCounts.feedback_loop_alias_images	pub feedback_l
 field	metal2vulkan-runtime::WorkCounts.feedback_loop_shadow_images	pub feedback_loop_shadow_images: u64
 field	metal2vulkan-runtime::WorkCounts.fence_waits	pub fence_waits: u64
 field	metal2vulkan-runtime::WorkCounts.fences_made	pub fences_made: u64
-field	metal2vulkan-runtime::WorkCounts.fills_by_transfers	pub fills_by_transfers: u64
 field	metal2vulkan-runtime::WorkCounts.fills_recorded	pub fills_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.finales_apart	pub finales_apart: u64
 field	metal2vulkan-runtime::WorkCounts.finales_folded	pub finales_folded: u64
@@ -2796,13 +2795,13 @@ field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_store_width	pub host
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_unchecked	pub host_texture_shadows_unchecked: u64
 field	metal2vulkan-runtime::WorkCounts.host_textures_in_place	pub host_textures_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.host_textures_in_place_written	pub host_textures_in_place_written: u64
+field	metal2vulkan-runtime::WorkCounts.host_textures_moved_in_place	pub host_textures_moved_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.idle_submits	pub idle_submits: u64
 field	metal2vulkan-runtime::WorkCounts.image_blits_recorded	pub image_blits_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.images_started_on_the_host	pub images_started_on_the_host: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_failed	pub in_place_checks_failed: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_passed	pub in_place_checks_passed: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_recalled	pub in_place_checks_recalled: u64
-field	metal2vulkan-runtime::WorkCounts.host_textures_moved_in_place	pub host_textures_moved_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_run	pub in_place_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_unchecked	pub in_place_checks_unchecked: u64
 field	metal2vulkan-runtime::WorkCounts.indirect_chunks_kept	pub indirect_chunks_kept: u64
@@ -11504,7 +11503,6 @@ variant	metal2vulkan-runtime::DriverFact::DepthTestKeepsDenormals	DepthTestKeeps
 variant	metal2vulkan-runtime::DriverFact::DontCareStoreIsMetals	DontCareStoreIsMetals
 variant	metal2vulkan-runtime::DriverFact::DontCareStoreIsOneOfMetals	DontCareStoreIsOneOfMetals
 variant	metal2vulkan-runtime::DriverFact::DynamicRestartWarns	DynamicRestartWarns
-variant	metal2vulkan-runtime::DriverFact::FillCompiledPerCommandPool	FillCompiledPerCommandPool
 variant	metal2vulkan-runtime::DriverFact::FirstSparseResourceWaitsForQueues	FirstSparseResourceWaitsForQueues
 variant	metal2vulkan-runtime::DriverFact::FragmentDepthKeepsDepth16Codes	FragmentDepthKeepsDepth16Codes
 variant	metal2vulkan-runtime::DriverFact::FragmentDepthStoresUnchanged	FragmentDepthStoresUnchanged
@@ -12764,7 +12762,6 @@ variant	metal2vulkan::device::DriverFact::DepthTestKeepsDenormals	DepthTestKeeps
 variant	metal2vulkan::device::DriverFact::DontCareStoreIsMetals	DontCareStoreIsMetals
 variant	metal2vulkan::device::DriverFact::DontCareStoreIsOneOfMetals	DontCareStoreIsOneOfMetals
 variant	metal2vulkan::device::DriverFact::DynamicRestartWarns	DynamicRestartWarns
-variant	metal2vulkan::device::DriverFact::FillCompiledPerCommandPool	FillCompiledPerCommandPool
 variant	metal2vulkan::device::DriverFact::FirstSparseResourceWaitsForQueues	FirstSparseResourceWaitsForQueues
 variant	metal2vulkan::device::DriverFact::FragmentDepthKeepsDepth16Codes	FragmentDepthKeepsDepth16Codes
 variant	metal2vulkan::device::DriverFact::FragmentDepthStoresUnchanged	FragmentDepthStoresUnchanged

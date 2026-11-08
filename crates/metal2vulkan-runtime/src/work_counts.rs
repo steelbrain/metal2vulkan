@@ -144,7 +144,6 @@ pub(crate) struct Counters {
     heap_texture_block_compressed_layouts: AtomicU64,
     heap_texture_untiled_layouts: AtomicU64,
     fills_recorded: AtomicU64,
-    fills_by_transfers: AtomicU64,
     ycbcr_refreshes: AtomicU64,
     ycbcr_whole_conversions: AtomicU64,
     ycbcr_textures_in_place: AtomicU64,
@@ -1231,14 +1230,9 @@ impl Counters {
         counter.fetch_add(count, Ordering::Relaxed);
     }
 
-    /// A fill was recorded (`word_fill.rs`): as transfers where `by_transfers`, else as
-    /// `vkCmdFillBuffer`.
-    pub(crate) fn fill_recorded(&self, by_transfers: bool) {
-        let counter = match by_transfers {
-            true => &self.fills_by_transfers,
-            false => &self.fills_recorded,
-        };
-        counter.fetch_add(1, Ordering::Relaxed);
+    /// A fill was recorded as `vkCmdFillBuffer` (`word_fill.rs`).
+    pub(crate) fn fill_recorded(&self) {
+        self.fills_recorded.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A YCbCr texture's conversion was recorded through its refresh, converting only where its
@@ -4337,13 +4331,9 @@ pub struct WorkCounts {
     /// (`Degradation::HeapTextureUntiledLayout`): over host pages, and over the device's memory
     /// in the driver's layout, in rows or as a multisample image (`texture/heap.rs`).
     pub heap_texture_untiled_layouts: u64,
-    /// Fills recorded as `vkCmdFillBuffer` (`word_fill.rs`): every fill but on a driver measured
-    /// to compile its fill per command pool.
+    /// Fills recorded as `vkCmdFillBuffer` (`word_fill.rs`): every fill the encoders and the
+    /// runtime's own work record, but a new buffer's first zeros (`new_buffer_zero_fills`).
     pub fills_recorded: u64,
-    /// Fills recorded as transfers, `vkCmdUpdateBuffer` and copies of what it wrote, on a driver
-    /// measured to compile its fill per command pool (`DriverFact::FillCompiledPerCommandPool`,
-    /// MoltenVK 1.4.1), which records no `vkCmdFillBuffer`.
-    pub fills_by_transfers: u64,
     /// Two-plane YCbCr textures' conversions recorded through their refresh (`ycbcr.rs`): a
     /// comparison of the planes' words with the copy the last conversion read, and the conversion
     /// dispatched through indirect arguments that run no workgroup where no word changed.
@@ -5995,8 +5985,7 @@ pub struct WorkCounts {
     pub new_buffer_bytes_cleared: u64,
     /// New buffers' bytes the host cannot write (`Private` storage, a `Managed` buffer's device
     /// copy, the device's neutral buffers) that a submission's first work set to zero with one
-    /// `vkCmdFillBuffer`, on a device without unified memory whose fills are not transfers, in
-    /// place of copies of the device's host-visible zeros, which such a device reads over the bus
+    /// `vkCmdFillBuffer`, on a device without unified memory, in place of copies of the device's host-visible zeros, which such a device reads over the bus
     /// (`texture/first_move.rs`); fills apart from `fills_recorded`.
     pub new_buffer_zero_fills: u64,
     /// Copies between a shadowed texture's truth and its shadow that encoders planned
@@ -6710,7 +6699,6 @@ impl Device {
                 .heap_texture_untiled_layouts
                 .load(Ordering::Relaxed),
             fills_recorded: counters.fills_recorded.load(Ordering::Relaxed),
-            fills_by_transfers: counters.fills_by_transfers.load(Ordering::Relaxed),
             ycbcr_refreshes: counters.ycbcr_refreshes.load(Ordering::Relaxed),
             ycbcr_whole_conversions: counters.ycbcr_whole_conversions.load(Ordering::Relaxed),
             ycbcr_textures_in_place: counters.ycbcr_textures_in_place.load(Ordering::Relaxed),

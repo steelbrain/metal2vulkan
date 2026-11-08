@@ -301,10 +301,9 @@ fn fills_across_rounds_reuse_a_bounded_set_of_command_pools() {
         }
         let after = device.work_counts();
         let made = (after.command_pools_made - before.command_pools_made) as usize;
-        let by_transfers = after.fills_by_transfers - before.fills_by_transfers;
         eprintln!(
             "FILL-POOL-REUSE {}: {made} command pools made for {} command buffers over {ROUNDS} \
-             rounds, {by_transfers} fills by transfers",
+             rounds",
             device.name(),
             ROUNDS * IN_FLIGHT
         );

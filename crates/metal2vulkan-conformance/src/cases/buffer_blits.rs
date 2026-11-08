@@ -24,9 +24,7 @@
 //!   encoder's other commands, so the row's answer is that nothing changed and the command buffer
 //!   completed.
 //! - [`every_fill_size`]: five fills of one 600 KiB private buffer, sized to cross 64 KiB, 128 KiB
-//!   and 256 KiB, and overlapping each other. This is the row that exercises the form a driver
-//!   measured to compile its fill per command pool takes (MoltenVK: the first 64 KiB updated and
-//!   doubled by copies), against the bytes Metal writes.
+//!   and 256 KiB, and overlapping each other, against the bytes Metal writes.
 //!
 //! **A case states what its buffers start from.** Metal does not promise what a fresh buffer holds,
 //! so no row here reads a byte it did not write: a private destination is filled with a known byte

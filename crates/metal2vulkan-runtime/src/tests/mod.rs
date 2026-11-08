@@ -454,7 +454,6 @@ mod waiter_submits;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod warm;
 mod warm_record;
-mod word_fill;
 mod word_samples;
 mod wrapped;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

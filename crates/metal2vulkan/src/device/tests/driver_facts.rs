@@ -387,7 +387,6 @@ const DEPTH16: DriverFact = DriverFact::FragmentDepthKeepsDepth16Codes;
 const FETCH: DriverFact = DriverFact::SampledFetchRecoversCodes;
 const SPLIT: DriverFact = DriverFact::InterlockedPassSplitNoSlower;
 const RESTART: DriverFact = DriverFact::DynamicRestartWarns;
-const FILL: DriverFact = DriverFact::FillCompiledPerCommandPool;
 const DONT_CARE: DriverFact = DriverFact::DontCareStoreIsMetals;
 const STAMPS: DriverFact = DriverFact::TimestampsWaitForEveryQueue;
 const COLOR_BLOCKS: DriverFact = DriverFact::ColorBlockDecodeIsMetals;
@@ -512,7 +511,6 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 SPLIT,
                 RESTART,
                 BLENDLESS,
-                FILL,
                 DONT_CARE,
                 STAMPS,
                 COLOR_BLOCKS,

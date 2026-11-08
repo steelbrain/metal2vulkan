@@ -1,8 +1,7 @@
 //! Device tests of the commands recorded, by kind (the runtime's `recorder`,
 //! `WorkCounts::commands_recorded`), on the device the cfg selects, under the validation layer: a
 //! command buffer of one blit encoder of fills and copies records each as one call of its own
-//! kind, counted exactly: a fill of one word as `vkCmdFillBuffer`, or as `vkCmdUpdateBuffer` where
-//! the runtime records fills as transfers (`WorkCounts::fills_by_transfers`, MoltenVK 1.4.1).
+//! kind, counted exactly: a fill of one word as `vkCmdFillBuffer`.
 
 use super::host_memory::on_device;
 use super::{read_buffer, WAIT};
@@ -26,9 +25,9 @@ fn added(before: &CommandsRecorded, after: &CommandsRecorded) -> [u64; 4] {
 }
 
 /// One blit encoder of [`FILLS`] fills of a buffer's words, then [`COPIES`] copies of its first
-/// words into another's, committed and completed: it recorded `vkCmdFillBuffer` once a fill
-/// recorded so and `vkCmdUpdateBuffer` once a fill recorded as transfers (one word: no copy),
-/// `vkCmdCopyBuffer` once a copy, and ended at least its encoder's command buffer. The bytes are
+/// words into another's, committed and completed: it recorded `vkCmdFillBuffer` once a fill and
+/// no `vkCmdUpdateBuffer`, `vkCmdCopyBuffer` once a copy, and ended at least its encoder's
+/// command buffer. The bytes are
 /// what the fills and copies wrote. A device past the runtime's slots counts nothing, printed.
 #[test]
 fn each_command_recorded_counts_once_by_kind() {
@@ -67,16 +66,15 @@ fn each_command_recorded_counts_once_by_kind() {
         let [fills, updates, copies, ends] =
             added(&before.commands_recorded, &after.commands_recorded);
         let recorded = after.fills_recorded - before.fills_recorded;
-        let by_transfers = after.fills_by_transfers - before.fills_by_transfers;
         eprintln!(
             "COMMANDS-RECORDED {name}: {fills} vkCmdFillBuffer, {updates} vkCmdUpdateBuffer, \
              {copies} vkCmdCopyBuffer, {ends} vkEndCommandBuffer recorded; {recorded} fills \
-             recorded so, {by_transfers} as transfers"
+             recorded"
         );
-        assert_eq!(recorded + by_transfers, FILLS, "the fills on {name}");
+        assert_eq!(recorded, FILLS, "the fills on {name}");
         assert_eq!(
             [fills, updates, copies],
-            [recorded, by_transfers, COPIES],
+            [FILLS, 0, COPIES],
             "the fills' and copies' calls recorded on {name}"
         );
         assert!(ends >= 1, "no command buffer ended on {name}");

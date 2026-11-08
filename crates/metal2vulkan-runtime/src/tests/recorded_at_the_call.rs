@@ -10,10 +10,9 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use crate::{CommandBufferStatus, CommandsRecorded, ResourceOptions};
 
-/// The fills recorded so far, as `vkCmdFillBuffer` or, where the runtime records fills as
-/// transfers, `vkCmdUpdateBuffer` (`WorkCounts::fills_by_transfers`).
+/// The fills recorded so far, each one `vkCmdFillBuffer` (`word_fill.rs`).
 fn fills(counts: &CommandsRecorded) -> u64 {
-    counts.cmd_fill_buffer + counts.cmd_update_buffer
+    counts.cmd_fill_buffer
 }
 
 /// A blit encoder's fill of a buffer's word is in the driver's command buffer as the call

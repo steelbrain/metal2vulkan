@@ -1976,7 +1976,7 @@ fn work_counts(setup: &Setup) {
     let counts = setup.device.work_counts();
     eprintln!(
         "work counts: variant_pipelines_made={} creation_pipelines_made={} \
-         creation_pipelines_drawn={} fills_recorded={} fills_by_transfers={} \
+         creation_pipelines_drawn={} fills_recorded={} \
          command_pools_made={} attachment_clears_recorded={} image_blits_recorded={} \
          query_result_copies_recorded={} visibility_queries_begun={} indirect_draws_recorded={} \
          pipelines_pooled={} pipelines_linked={} pipeline_libraries_made={} \
@@ -1985,7 +1985,6 @@ fn work_counts(setup: &Setup) {
         counts.creation_pipelines_made,
         counts.creation_pipelines_drawn,
         counts.fills_recorded,
-        counts.fills_by_transfers,
         counts.command_pools_made,
         counts.attachment_clears_recorded,
         counts.image_blits_recorded,
