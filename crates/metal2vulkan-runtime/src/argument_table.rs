@@ -51,6 +51,7 @@ use super::sampler::SamplerState;
 use super::texture::Texture;
 use super::tracker::{Access, Use};
 use super::upload::Upload;
+use super::work_counts::Counting;
 use ash::vk;
 use metal2vulkan::bind::{BindState, BoundBuffer, BoundSampler, BoundTexture, StageTable};
 use metal2vulkan::pipeline::{
@@ -1423,13 +1424,15 @@ impl ArgumentTable {
     /// through the same interface and maps: only the slots the table's calls changed since, where
     /// it keeps them ([`Changes`]) and its slots that tell the view base alignment apart are as
     /// `kept` holds them, so every other slot's binding and shape are as read then. Whether it
-    /// brought them in; else nothing is changed, and the table is to be read whole.
+    /// brought them in; else nothing is changed, and the table is to be read whole. What it
+    /// counts goes to `counts`, the caller's.
     pub(super) fn refresh_changed(
         &self,
         (kept, read): (&mut StageTable, Stamp),
         (stage, interface): (Stage, &PipelineInterface),
         (maps, views): (&SamplerMaps, &AtBindViews),
         reshape: &mut Reshape,
+        counts: Counting<'_>,
     ) -> bool {
         let Some(changed) = self.changes.since(read) else {
             return false;
@@ -1455,7 +1458,7 @@ impl ArgumentTable {
             match class {
                 SlotClass::Buffer if offset && bit(index) != 0 && whole & bit(index) == 0 => {
                     let read = (stage, interface);
-                    self.refresh_offset((kept, index), read, alignment, reshape)
+                    self.refresh_offset((kept, index), read, (alignment, counts), reshape)
                 }
                 SlotClass::Buffer => {
                     self.refresh_buffer((kept, index), (stage, interface), alignment, reshape)
@@ -1516,7 +1519,7 @@ impl ArgumentTable {
         &self,
         (kept, index): (&mut StageTable, u32),
         read: (Stage, &PipelineInterface),
-        alignment: u32,
+        (alignment, counts): (u32, Counting<'_>),
         reshape: &mut Reshape,
     ) {
         let a = kept.class_alignment(index, alignment);
@@ -1553,12 +1556,7 @@ impl ArgumentTable {
             bound_buffer(buffer, *offset, stride),
             "a buffer slot whose offset alone moved brought in otherwise than read whole"
         );
-        buffer
-            .device()
-            .shared()
-            .counts
-            .thread()
-            .bound_offset_moved();
+        counts.bound_offset_moved();
         reshape.replace(slot, bound, |b| b.shape(a));
     }
 

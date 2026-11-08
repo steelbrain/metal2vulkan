@@ -398,6 +398,7 @@ impl RenderLowering {
         // takes them no more (`Reshape`), as the draw's every step reads that one again.
         let mut reshape = Reshape::default();
         let mut read = 0;
+        let counts = self.core.counts();
         for (at, (stage, table)) in stages.into_iter().zip(tables).enumerate() {
             let under = kept.stamps[at];
             if stamps[at] == under {
@@ -410,7 +411,8 @@ impl RenderLowering {
             };
             let maps = live.read_from.maps();
             let from = (state, under);
-            if !table.refresh_changed(from, (stage, interface), (maps, views), &mut reshape) {
+            let reading = (stage, interface);
+            if !table.refresh_changed(from, reading, (maps, views), &mut reshape, counts) {
                 live.reshaped(reshape);
                 return None;
             }
@@ -420,7 +422,7 @@ impl RenderLowering {
             .read_again(stamps, (interface, || pipeline.held()), moved);
         // Read now, whatever the draw does next: a draw that takes every step from here finds
         // them read, as the draw rebound does.
-        self.core.counts().tables_read_in_part(read);
+        counts.tables_read_in_part(read);
         let reshaped = reshape.may_reshape();
         live.reshaped(reshape);
         (!reshaped).then_some(changed)

@@ -173,7 +173,8 @@ impl LiveDispatch {
         } else {
             // Only the slots calls changed since it was read, where the table keeps them.
             let in_part = read_under.is_some_and(|stamp| {
-                table.refresh_changed((&mut *kept, stamp), read, (maps, views), &mut reshape)
+                let kept = (&mut *kept, stamp);
+                table.refresh_changed(kept, read, (maps, views), &mut reshape, counts)
             });
             if !in_part {
                 table.refresh_reading(kept, read, (maps, views), &mut reshape);
