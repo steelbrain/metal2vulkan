@@ -255,6 +255,7 @@ pub(crate) struct Counters {
     passes_not_inline_actions_by: [AtomicU64; ActionsRefused::COUNT],
     commits_handed_off: AtomicU64,
     images_started_on_the_host: AtomicU64,
+    images_started_zeroed: AtomicU64,
     private_textures_unfilled: AtomicU64,
     private_textures_zero_filled: AtomicU64,
     host_texel_copies: AtomicU64,
@@ -3487,6 +3488,12 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Of those, one started in memory the driver zeroed, moved out of
+    /// `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` with no write of the host's (`texture/host_copy.rs`).
+    pub(crate) fn image_started_zeroed(&self) {
+        self.images_started_zeroed.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A new `Private` texture of the program's was made holding what its memory held, written by
     /// no command (`Device::metal_compresses_textures`).
     pub(crate) fn private_texture_unfilled(&self) {
@@ -5166,6 +5173,10 @@ pub struct WorkCounts {
     /// New `Shared` and `Managed` textures' images moved to `GENERAL` and zeroed on the host, with
     /// no submission (`texture/host_copy.rs`).
     pub images_started_on_the_host: u64,
+    /// Of those, the images that started in memory the driver zeroed, moved to `GENERAL` out of
+    /// `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` with no write of the host's, on a device that
+    /// enabled `zeroInitializeDeviceMemory` (`texture/host_copy.rs`).
+    pub images_started_zeroed: u64,
     /// New `Private` textures the program made on a device that presents a Mac keeping no texture
     /// compressed (`DeviceProperties::lossless_compression` false, `MacClass::IntelOrAmd`) on a GPU
     /// that is not Apple's, each holding what its memory held, written by no command: no zeros and
@@ -7065,6 +7076,7 @@ impl Device {
             commits_handed_off: counters.commits_handed_off.load(Ordering::Relaxed),
             commits_taken_in: self.shared().scheduler.commits_taken_in(),
             images_started_on_the_host: counters.images_started_on_the_host.load(Ordering::Relaxed),
+            images_started_zeroed: counters.images_started_zeroed.load(Ordering::Relaxed),
             private_textures_unfilled: counters.private_textures_unfilled.load(Ordering::Relaxed),
             private_textures_zero_filled: (counters.private_textures_zero_filled)
                 .load(Ordering::Relaxed),

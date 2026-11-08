@@ -82,6 +82,40 @@ unsafe impl vk::TaggedStructure for ShaderFmaFeatures {
 // SAFETY: the registry lists `VkDeviceCreateInfo` in the structure's `structextends`.
 unsafe impl vk::ExtendsDeviceCreateInfo for ShaderFmaFeatures {}
 
+/// `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT`, which `ash 0.38` predates, laid out
+/// as the registry defines it (extension number 621).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct ZeroInitializeDeviceMemoryFeatures {
+    s_type: vk::StructureType,
+    p_next: *mut std::ffi::c_void,
+    pub(crate) zero_initialize_device_memory: vk::Bool32,
+}
+
+impl Default for ZeroInitializeDeviceMemoryFeatures {
+    fn default() -> Self {
+        ZeroInitializeDeviceMemoryFeatures {
+            s_type: <Self as vk::TaggedStructure>::STRUCTURE_TYPE,
+            p_next: std::ptr::null_mut(),
+            zero_initialize_device_memory: vk::FALSE,
+        }
+    }
+}
+
+// SAFETY: the layout is the registry's `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT`,
+// which begins with `sType` and `pNext` as every chained structure must, and this is its structure
+// type.
+unsafe impl vk::TaggedStructure for ZeroInitializeDeviceMemoryFeatures {
+    const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(1_000_620_000);
+}
+// SAFETY: the registry lists `VkDeviceCreateInfo` in the structure's `structextends`.
+unsafe impl vk::ExtendsDeviceCreateInfo for ZeroInitializeDeviceMemoryFeatures {}
+// SAFETY: the registry lists `VkPhysicalDeviceFeatures2` in the structure's `structextends`.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for ZeroInitializeDeviceMemoryFeatures {}
+
+/// `VK_EXT_zero_initialize_device_memory`'s name.
+pub(crate) const ZERO_INITIALIZE_DEVICE_MEMORY: &CStr = c"VK_EXT_zero_initialize_device_memory";
+
 /// `VkPhysicalDeviceDepthClampControlFeaturesEXT`, which `ash 0.38` predates, laid out as the
 /// registry defines it (extension number 583).
 #[repr(C)]
@@ -477,6 +511,9 @@ pub(super) enum Structure {
     /// `VkPhysicalDeviceLinearColorAttachmentFeaturesNV`, outside the vocabulary: linked only by
     /// [`Enables::enable_linear_color_attachment`].
     LinearColorAttachment,
+    /// `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT`, outside the vocabulary: linked
+    /// only by [`Enables::enable_zero_initialize_device_memory`].
+    ZeroInitializeDeviceMemory,
     /// `VkPhysicalDevicePipelineBinaryFeaturesKHR`, outside the vocabulary: linked only by
     /// [`Enables::turn_driver_pipeline_cache_off`].
     PipelineBinary,
@@ -568,6 +605,7 @@ impl Structure {
             | Structure::VideoMaintenance2
             | Structure::UnifiedImageLayouts
             | Structure::LinearColorAttachment
+            | Structure::ZeroInitializeDeviceMemory
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
             | Structure::GraphicsPipelineLibrary
@@ -630,6 +668,7 @@ impl Structure {
             | Structure::VideoMaintenance2
             | Structure::UnifiedImageLayouts
             | Structure::LinearColorAttachment
+            | Structure::ZeroInitializeDeviceMemory
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
             | Structure::GraphicsPipelineLibrary
@@ -697,6 +736,7 @@ struct FeatureChain {
     video_maintenance2: VideoMaintenance2Features,
     unified_image_layouts: UnifiedImageLayoutsFeatures,
     linear_color_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>,
+    zero_initialize_device_memory: ZeroInitializeDeviceMemoryFeatures,
     pipeline_binary: PipelineBinaryFeatures,
     internal_cache_control: InternalCacheControl,
     graphics_pipeline_library: vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT<'static>,
@@ -1268,6 +1308,7 @@ macro_rules! link_extensions {
             VideoMaintenance2 => video_maintenance2,
             UnifiedImageLayouts => unified_image_layouts,
             LinearColorAttachment => linear_color_attachment,
+            ZeroInitializeDeviceMemory => zero_initialize_device_memory,
             PipelineBinary => pipeline_binary,
             InternalCacheControl => internal_cache_control,
             GraphicsPipelineLibrary => graphics_pipeline_library,
@@ -1453,6 +1494,17 @@ impl Enables {
         for &name in names {
             self.push_name(name.to_owned());
         }
+    }
+
+    /// Enables `VK_EXT_zero_initialize_device_memory` and its `zeroInitializeDeviceMemory`, the
+    /// runtime's own need outside the vocabulary: a `Shared` or `Managed` texture's image that
+    /// copies on the host starts in memory the driver zeroed, with no write of the host's
+    /// (`texture/host_copy.rs`).
+    pub(super) fn enable_zero_initialize_device_memory(&mut self) {
+        let features = &mut self.chain.zero_initialize_device_memory;
+        features.zero_initialize_device_memory = vk::TRUE;
+        self.linked.insert(Structure::ZeroInitializeDeviceMemory);
+        self.push_name(ZERO_INITIALIZE_DEVICE_MEMORY.to_owned());
     }
 
     /// Enables `VK_KHR_pipeline_binary`, with its `pipelineBinaries` where `binaries` (the device

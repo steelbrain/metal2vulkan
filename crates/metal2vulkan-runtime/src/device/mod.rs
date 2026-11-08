@@ -585,6 +585,10 @@ pub(super) struct DeviceShared {
     /// host to and from images in `GENERAL`: a new `Shared` or `Managed` texture's image is
     /// moved and zeroed on the host, and its CPU copies run there (`texture/host_copy.rs`).
     pub(super) host_copies: Option<ash::ext::host_image_copy::DeviceFn>,
+    /// The device enabled `zeroInitializeDeviceMemory` (`create.rs`): memory it allocates with
+    /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` reads zero, and an image made in such memory
+    /// starts in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` (`texture/host_copy.rs`).
+    pub(super) zero_initialize_device_memory: bool,
     /// What it has of sparse binding and residency (`sparse/device.rs`).
     pub(super) sparse: SparseDevice,
     /// The command pools and descriptor pools command buffers that completed gave back, for the
@@ -1462,6 +1466,10 @@ pub(super) struct Parts {
     /// It enables `hostImageCopy` where a heap's colour texture takes host-transfer usage
     /// (`create.rs`; `adopt.rs`), outside `enabled`'s vocabulary.
     pub(super) host_image_copy: bool,
+    /// It enables `VK_EXT_zero_initialize_device_memory` and its `zeroInitializeDeviceMemory`
+    /// (`create.rs`; never on a device the consumer made, `adopt.rs`), outside `enabled`'s
+    /// vocabulary.
+    pub(super) zero_initialize_device_memory: bool,
     /// It enables `VK_NV_linear_color_attachment` and its `linearColorAttachment` (`create.rs`;
     /// `adopt.rs`, where the consumer lists it), outside `enabled`'s vocabulary: a linear image
     /// renders in place where the instance's color attachments are all linear
@@ -1548,6 +1556,7 @@ impl Device {
             view_reinterpretation,
             generated_commands,
             host_image_copy,
+            zero_initialize_device_memory,
             linear_color_attachment,
             graphics_pipeline_library,
             ycbcr_conversion,
@@ -2326,6 +2335,7 @@ impl Device {
             generated_commands,
             host_image_copy,
             host_copies,
+            zero_initialize_device_memory,
             sparse,
             spares: Spares::default(),
             live_binds: Default::default(),

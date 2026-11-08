@@ -351,6 +351,9 @@ impl Device {
             view_reinterpretation,
             generated_commands: false,
             host_image_copy,
+            // Nor whether `zeroInitializeDeviceMemory` was: none of its images start in memory the
+            // driver zeroed.
+            zero_initialize_device_memory: false,
             linear_color_attachment,
             graphics_pipeline_library,
             // Nor whether `samplerYcbcrConversion` was: its YCbCr textures convert through

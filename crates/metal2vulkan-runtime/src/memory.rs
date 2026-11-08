@@ -131,6 +131,10 @@ pub(super) enum Holds {
     Images,
 }
 
+/// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` (`VK_EXT_zero_initialize_device_memory`), which
+/// `ash 0.38` predates.
+pub(super) const ZERO_INITIALIZE: vk::MemoryAllocateFlags = vk::MemoryAllocateFlags::from_raw(0x8);
+
 /// Whether a placement may share a pooled block (`Pool::place`), or takes a block of its own
 /// whatever its size: memory no submission has used, so its bind waits for none. On an RTX 5080
 /// a neutral image bound into a block of images, 1024 bytes past another neutral image that a
@@ -147,10 +151,15 @@ pub(super) enum Holds {
 /// in every round, as with a fresh block. There ([`binds_wait`]) such an image shares a pooled
 /// block ([`allocate_image_while_queued`]), and every submission names one buffer object fewer
 /// to the kernel for each.
+///
+/// `Zeroed` is `Apart` in memory allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
+/// (`zeroInitializeDeviceMemory`), which reads zero until written: no range of a block of its own
+/// held anything before ([`allocate_image_zeroed`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fit {
     Pooled,
     Apart,
+    Zeroed,
 }
 
 /// Why [`import_host`] imported nothing.
@@ -2029,11 +2038,24 @@ impl BlockMaker {
         size: u64,
         addressed: Option<&Counters>,
     ) -> Result<Block, Error> {
-        self.make_as(device, type_index, size, addressed, None)
+        self.make_as(device, type_index, size, addressed, None, false)
+    }
+
+    /// [`make`](Self::make) of a block of images alone, its memory allocated with
+    /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until written: for a device
+    /// that enabled `zeroInitializeDeviceMemory` ([`allocate_image_zeroed`]).
+    fn make_zeroed(
+        &self,
+        device: &ash::Device,
+        type_index: u32,
+        size: u64,
+    ) -> Result<Block, Error> {
+        self.make_as(device, type_index, size, None, None, true)
     }
 
     /// [`make`](Self::make), its memory allocated exportable as `export` says where given, for its
-    /// buffer, the dedicated allocation of that buffer where it says so ([`allocate_exported`]).
+    /// buffer, the dedicated allocation of that buffer where it says so ([`allocate_exported`]),
+    /// and zero-initialized where `zeroed` ([`make_zeroed`](Self::make_zeroed)).
     fn make_as(
         &self,
         device: &ash::Device,
@@ -2041,6 +2063,7 @@ impl BlockMaker {
         size: u64,
         addressed: Option<&Counters>,
         export: Option<(vk::Buffer, Exported)>,
+        zeroed: bool,
     ) -> Result<Block, Error> {
         let addresses = if addressed.is_some() && self.device_address {
             Some(address_buffer(device, size, Sharing::new(&self.families))?)
@@ -2053,12 +2076,18 @@ impl BlockMaker {
                 unsafe { release::object(device, raw) };
             }
         };
-        let mut flags =
-            vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+        let mut allocate = vk::MemoryAllocateFlags::empty();
+        if self.device_address {
+            allocate |= vk::MemoryAllocateFlags::DEVICE_ADDRESS;
+        }
+        if zeroed {
+            allocate |= ZERO_INITIALIZE;
+        }
+        let mut flags = vk::MemoryAllocateFlagsInfo::default().flags(allocate);
         let mut info = vk::MemoryAllocateInfo::default()
             .allocation_size(addresses.map_or(size, |(_, required)| size.max(required)))
             .memory_type_index(type_index);
-        if self.device_address {
+        if !allocate.is_empty() {
             info = info.push_next(&mut flags);
         }
         let handle = export.map_or(
@@ -2345,6 +2374,27 @@ pub(super) fn allocate_image(
     )
 }
 
+/// [`allocate_image`] in a block of its own whose memory reads zero until written (`Fit::Zeroed`),
+/// for an image that starts in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` on a device that enabled
+/// `zeroInitializeDeviceMemory` (`texture/host_copy.rs`): nothing touches its memory before its
+/// first use, as a write of the host's zeros would.
+pub(super) fn allocate_image_zeroed(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    requirements: &vk::MemoryRequirements,
+    class: MemoryClass,
+) -> Result<Placement, Error> {
+    place(
+        memory,
+        device,
+        requirements,
+        class,
+        None,
+        Holds::Images,
+        Fit::Zeroed,
+    )
+}
+
 /// [`allocate_image`] for an image the runtime binds while work that uses others of its kind may
 /// be queued (a neutral image, `neutral.rs`; a storage placeholder, `storage_placeholder.rs`): in
 /// a block of its own (`Fit::Apart`) where such a bind waits for that work ([`binds_wait`]),
@@ -2445,7 +2495,7 @@ pub(super) fn allocate_exported(
             frees.wait();
         }
         let export = Some((buffer, exported));
-        match maker.make_as(device, type_index, size, None, export) {
+        match maker.make_as(device, type_index, size, None, export, false) {
             Ok(block) => {
                 let pool = (Holds::Buffers, type_index);
                 let mut memory = lock(memory);
@@ -2497,7 +2547,7 @@ fn place(
     if candidates.is_empty() && overflow.is_empty() {
         return Err(Error::OutOfMemory(MemoryKind::Device));
     }
-    let dedicated = fit == Fit::Apart || size > maker.block_bytes / 2;
+    let dedicated = fit != Fit::Pooled || size > maker.block_bytes / 2;
     let block_size = if dedicated { size } else { maker.block_bytes };
     let mut failure = Error::OutOfMemory(MemoryKind::Device);
     // The class's own types first, then those it overflows into where none of them has room.
@@ -2521,10 +2571,12 @@ fn place(
         }
         // The type's kept empty blocks go, and the frees posted complete, before a block of it
         // fails to be made.
-        let made = match maker.make(device, type_index, block_size, addressed) {
-            Err(Error::OutOfMemory(_)) if make_room(memory, device, type_index) => {
-                maker.make(device, type_index, block_size, addressed)
-            }
+        let make = || match fit {
+            Fit::Zeroed => maker.make_zeroed(device, type_index, block_size),
+            Fit::Pooled | Fit::Apart => maker.make(device, type_index, block_size, addressed),
+        };
+        let made = match make() {
+            Err(Error::OutOfMemory(_)) if make_room(memory, device, type_index) => make(),
             made => made,
         };
         match made {

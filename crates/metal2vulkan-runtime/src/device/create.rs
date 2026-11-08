@@ -1309,6 +1309,27 @@ unsafe fn host_image_copy_supported(
     host.host_image_copy == vk::TRUE
 }
 
+/// Whether `physical` has `zeroInitializeDeviceMemory`.
+///
+/// # Safety
+///
+/// `physical` was enumerated from `instance`, made at Vulkan 1.1 or later, and lists
+/// `VK_EXT_zero_initialize_device_memory`.
+unsafe fn zero_initialize_device_memory_supported(
+    instance: &InstanceShared,
+    physical: vk::PhysicalDevice,
+) -> bool {
+    let mut zero = crate::enables::ZeroInitializeDeviceMemoryFeatures::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut zero);
+    // SAFETY: the caller's contract; the chain lives for the call.
+    unsafe {
+        instance
+            .raw
+            .get_physical_device_features2(physical, &mut features)
+    };
+    zero.zero_initialize_device_memory == vk::TRUE
+}
+
 /// Whether a device that lists `listed` links its render pipelines from graphics pipeline
 /// libraries: it lists `VK_EXT_graphics_pipeline_library` and `VK_KHR_pipeline_library`, which it
 /// requires, and `supported` (asked only then) says it has the feature, links fast and takes each
@@ -1707,6 +1728,17 @@ pub(super) fn create_on(
     if host_image_copy {
         enables.enable_host_image_copy(host_names);
     }
+    // The runtime's own need, outside the vocabulary, where listed with its feature: a `Shared`
+    // or `Managed` texture's image that copies on the host starts in memory the driver zeroed
+    // (`texture/host_copy.rs`).
+    let zero_initialize_device_memory = host_image_copy
+        && listed.contains(crate::enables::ZERO_INITIALIZE_DEVICE_MEMORY)
+        // SAFETY: `physical` was enumerated from the instance, made at Vulkan 1.2, and lists the
+        // extension.
+        && unsafe { zero_initialize_device_memory_supported(instance, physical) };
+    if zero_initialize_device_memory {
+        enables.enable_zero_initialize_device_memory();
+    }
     // The runtime's own need, outside the vocabulary, where listed with its feature and what it
     // requires: textures over buffers' memory render into their linear images in place
     // (`linear_attachment.rs`).
@@ -1858,6 +1890,7 @@ pub(super) fn create_on(
         view_reinterpretation,
         generated_commands,
         host_image_copy,
+        zero_initialize_device_memory,
         linear_color_attachment,
         graphics_pipeline_library,
         ycbcr_conversion,

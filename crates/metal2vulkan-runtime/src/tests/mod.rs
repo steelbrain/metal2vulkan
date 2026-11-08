@@ -470,6 +470,8 @@ mod ycbcr_device;
 mod ycbcr_in_place_loop;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod ycbcr_refresh;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod zeroed_start;
 
 /// How long a device test waits for the device's submission checks to answer
 /// (`Device::settle_submit_checks`): their run takes milliseconds alone, longer beside the

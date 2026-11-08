@@ -3096,11 +3096,29 @@ impl Device {
         class: MemoryClass,
         sharing: Sharing<'_>,
     ) -> Result<(vk::Image, Placement), Error> {
+        self.placed_image_starting(plan, texture_type, class, sharing, false)
+    }
+
+    /// [`placed_image`](Self::placed_image), made in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` in a
+    /// block of its own whose memory reads zero until written where `zeroed`
+    /// (`memory::allocate_image_zeroed`; a device that enabled `zeroInitializeDeviceMemory`).
+    fn placed_image_starting(
+        &self,
+        plan: &ImagePlan,
+        texture_type: TextureType,
+        class: MemoryClass,
+        sharing: Sharing<'_>,
+        zeroed: bool,
+    ) -> Result<(vk::Image, Placement), Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
         let view_formats = plan.ash_view_formats();
         let mut list = vk::ImageFormatListCreateInfo::default();
         let info = plan.create_info(sharing, &view_formats, &mut list);
+        let info = match zeroed {
+            true => info.initial_layout(host_copy::ZERO_INITIALIZED),
+            false => info,
+        };
         let limits = self.image_limits(&info, &view_formats)?;
         check_image_limits(plan, texture_type, &limits).map_err(Error::Unsupported)?;
         // SAFETY: the device is live and `info` (with its format list) valid and within the
@@ -3132,15 +3150,18 @@ impl Device {
             }
             None => class,
         };
-        let placement =
-            match crate::memory::allocate_image(&shared.memory, raw_device, &requirements, class) {
-                Ok(placement) => placement,
-                Err(error) => {
-                    // SAFETY: the image is unused.
-                    unsafe { release::object(raw_device, raw) };
-                    return Err(error);
-                }
-            };
+        let allocate = match zeroed {
+            true => crate::memory::allocate_image_zeroed,
+            false => crate::memory::allocate_image,
+        };
+        let placement = match allocate(&shared.memory, raw_device, &requirements, class) {
+            Ok(placement) => placement,
+            Err(error) => {
+                // SAFETY: the image is unused.
+                unsafe { release::object(raw_device, raw) };
+                return Err(error);
+            }
+        };
         // SAFETY: the placement meets the image's requirements and is not bound elsewhere.
         if let Err(error) = unsafe {
             crate::creation::bind_image(raw_device, raw, placement.memory, placement.offset)
@@ -3205,6 +3226,7 @@ impl Device {
         texture_type: TextureType,
         class: MemoryClass,
         staged: bool,
+        zeroed: bool,
     ) -> Option<(ImagePlan, vk::Image, Placement)> {
         let shared = self.shared();
         shared.host_copies.as_ref()?;
@@ -3225,8 +3247,9 @@ impl Device {
         }
         let mut hosted = plan.clone();
         hosted.usage |= ImageUsageFlags::HOST_TRANSFER;
+        let sharing = shared.sharing();
         let (raw, placement) =
-            (self.placed_image(&hosted, texture_type, class, shared.sharing())).ok()?;
+            (self.placed_image_starting(&hosted, texture_type, class, sharing, zeroed)).ok()?;
         Some((hosted, raw, placement))
     }
 
@@ -3299,10 +3322,16 @@ impl Device {
         // multisample texture: such an image takes neither path, and a clear writes its zeros.
         let one_sample = layout.samples == 1;
         let staged = !held && !private && one_sample && self.stages(&plan, layout.pixel_format);
+        // Its zeros, where the device enabled `zeroInitializeDeviceMemory`, are the driver's: the
+        // image starts in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` in memory of its own that reads
+        // zero, and no write of the host's touches that memory as it is made
+        // (`texture/host_copy.rs`).
+        let zeroed = !moved && self.shared().zero_initialize_device_memory;
         let hosted = match held || private || !one_sample || is_pvrtc(descriptor.pixel_format) {
             true => None,
-            false => self.host_placed_image(&plan, layout.texture_type, class, staged),
+            false => self.host_placed_image(&plan, layout.texture_type, class, staged, zeroed),
         };
+        let zeroed = zeroed && hosted.is_some();
         let (plan, raw, placement, host_copies) = match hosted {
             Some((plan, raw, placement)) => (plan, raw, placement, true),
             None => {
@@ -3370,6 +3399,23 @@ impl Device {
             return Err(Error::NotImplemented(RuntimeGap::Textures));
         }
         // Dropping `image` on failure releases everything above.
+        if let (true, Some(functions)) = (zeroed, self.shared().host_copies.as_ref()) {
+            // SAFETY: the image is live, made with host-transfer usage in
+            // `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` and bound to memory of its own allocated
+            // zero-initialized, which nothing used yet.
+            unsafe {
+                host_copy::transition_from(
+                    functions,
+                    self.shared().vk().handle(),
+                    raw,
+                    aspects,
+                    host_copy::ZERO_INITIALIZED,
+                )
+            }?;
+            self.shared().counts.image_started_on_the_host();
+            self.shared().counts.image_started_zeroed();
+            return Ok(image);
+        }
         if let (true, Some((length, copies)), Some(functions)) =
             (host_copies, &zero, self.shared().host_copies.as_ref())
         {

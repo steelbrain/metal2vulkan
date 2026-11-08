@@ -42,7 +42,16 @@
 //!   from host-cached memory, and else on that queue (`texture/staging_copy.rs`).
 //! - **Made.** The making moves the image to `GENERAL` and writes zeros over every texel on the
 //!   host ([`start`]), as Metal's new `Shared` and `Managed` textures read zero: no first move
-//!   waits for a submission (`first_move.rs`), and nothing waits for the GPU.
+//!   waits for a submission (`first_move.rs`), and nothing waits for the GPU. Where the device
+//!   enabled `VK_EXT_zero_initialize_device_memory`'s `zeroInitializeDeviceMemory`, the image is
+//!   made in `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` in a block of its own allocated
+//!   zero-initialized (`memory::allocate_image_zeroed`) and moved to `GENERAL` out of it on the
+//!   host ([`transition_from`]): its zeros are the driver's, and no write of the host's touches
+//!   its memory as it is made. That write was the CPU's first touch of new memory, which waits
+//!   where the kernel's zeroing of it waits: on an RX 7900 XTX (RADV, Mesa 26.2.6) whose GPU had
+//!   idled into runtime suspend, 2.08 s behind 2 s of the program's queued GPU work, and 1.2 ms
+//!   with the GPU awake (`tests/zeroed_start.rs`). Counted: `WorkCounts::images_started_zeroed`.
+//!   Each such texture takes a `vkAllocateMemory` of its own, freed with it.
 //! - **Copied.** `replace_region` copies the caller's bytes into the image on the host, straight
 //!   from them where they are laid out packed
 //!   (`HostLayout::is_packed`), else from packed bytes, and `get_bytes` copies the image's texels
@@ -154,9 +163,41 @@ pub(super) unsafe fn transition(
     image: vk::Image,
     aspects: vk::ImageAspectFlags,
 ) -> Result<(), Error> {
+    // SAFETY: the caller's contract.
+    unsafe {
+        transition_from(
+            functions,
+            device,
+            image,
+            aspects,
+            vk::ImageLayout::UNDEFINED,
+        )
+    }
+}
+
+/// `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` (`VK_EXT_zero_initialize_device_memory`), which
+/// `ash 0.38` predates: the layout of a new image whose memory reads zero, which a move out of it
+/// keeps.
+pub(super) const ZERO_INITIALIZED: vk::ImageLayout = vk::ImageLayout::from_raw(1_000_620_000);
+
+/// [`transition`] of an image made in `from` (`UNDEFINED`, or [`ZERO_INITIALIZED`] for an image
+/// in memory of its own allocated zero-initialized, whose texels the move keeps zero).
+///
+/// # Safety
+///
+/// As [`start`]'s; the image was made in `from`, and where that is [`ZERO_INITIALIZED`], the
+/// device enabled `zeroInitializeDeviceMemory` and the image is bound to memory allocated with
+/// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` that nothing wrote.
+pub(super) unsafe fn transition_from(
+    functions: &DeviceFn,
+    device: vk::Device,
+    image: vk::Image,
+    aspects: vk::ImageAspectFlags,
+    from: vk::ImageLayout,
+) -> Result<(), Error> {
     let transition = vk::HostImageLayoutTransitionInfoEXT::default()
         .image(image)
-        .old_layout(vk::ImageLayout::UNDEFINED)
+        .old_layout(from)
         .new_layout(vk::ImageLayout::GENERAL)
         .subresource_range(vk::ImageSubresourceRange {
             aspect_mask: aspects,
@@ -165,7 +206,8 @@ pub(super) unsafe fn transition(
             base_array_layer: 0,
             layer_count: vk::REMAINING_ARRAY_LAYERS,
         });
-    // SAFETY: the caller's contract; the image is in `UNDEFINED`, which the move leaves.
+    // SAFETY: the caller's contract; the image is in `from`, which the move leaves, every
+    // subresource of it.
     unsafe { (functions.transition_image_layout_ext)(device, 1, &transition) }
         .result()
         .map_err(vulkan)
