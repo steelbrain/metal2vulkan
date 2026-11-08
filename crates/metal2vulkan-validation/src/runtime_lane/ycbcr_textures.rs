@@ -1734,8 +1734,8 @@ fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
         // conversion of the codes exactly, in the slot's in-place variant, whatever the image
         // holds.
         let exact = super::ycbcr_in_place::reads_in_place(device);
-        let metal = || modelled(&bytes, YCbCrRange::Video, YCbCrMatrix::Bt601);
-        let samples = Texels::sampled(&texels, metal, (by_device, exact));
+        let codes = || modelled(&bytes, YCbCrRange::Video, YCbCrMatrix::Bt601);
+        let samples = Texels::sampled(&texels, codes, (by_device, exact));
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let library = device
             .new_library_with_air(&llvm_assemble_text(&fragments()).unwrap())
