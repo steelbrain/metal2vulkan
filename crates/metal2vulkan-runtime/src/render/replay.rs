@@ -647,18 +647,31 @@ pub(crate) struct DrawIndexedPatchesIndirect {
 
 impl RenderLowering {
     /// Log the call `call` makes of the log, before it runs, where the encoder logs (the module
-    /// docs). Every call but a direct draw and a vertex or fragment buffer or bytes bind logs
-    /// itself so, which forgets the encoder's kept draw, whatever the call changes
-    /// (`render/draw_again.rs`).
+    /// docs). Every call but a direct draw, a bind, a pipeline state set and a set of the
+    /// encoder's render state logs itself so, which forgets the encoder's kept draws, whatever
+    /// the call changes (`render/draw_again.rs`).
     pub(crate) fn log(&mut self, call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall) {
         self.forget_again();
+        self.log_keeping(call);
+    }
+
+    /// [`log`](Self::log) a call that sets the encoder's render state alone (its viewports,
+    /// scissor rectangles, cull mode, winding, depth/stencil state, stencil references, depth
+    /// bias, depth clip mode, fill mode or blend color): its kept draws are kept, restated, and
+    /// the next draw of each derives again what the state decides of it
+    /// (`render/draw_again/restated.rs`).
+    pub(crate) fn log_restating(
+        &mut self,
+        call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,
+    ) {
+        self.restate_again();
         self.log_keeping(call);
     }
 
     /// [`log`](Self::log) a call that keeps the encoder's kept draw: a `draw_primitives` call,
     /// drawn again as it was kept or keeping itself, and a vertex or fragment buffer, bytes,
     /// texture or sampler state bind, which changes its table's slots alone, whose stamp the next
-    /// draw compares (`render/draw_again.rs`).
+    /// draw compares, and a pipeline state set (`render/draw_again.rs`).
     pub(crate) fn log_keeping(
         &mut self,
         call: impl FnOnce(&mut CallLog<RenderCall>) -> RenderCall,

@@ -16,9 +16,10 @@
 //!   meets or are work of the draw's own. Its uses are noted as the next draw would note them
 //!   (`NotedApart`). A draw that met a notice its device announces or refuses at every occurrence
 //!   (`EachWatch`) keeps nothing: its next draw must meet it again.
-//! - **Forgotten at every call but a bind or a pipeline state set.** Every call of the encoder
-//!   but the two direct draws, the vertex and fragment buffer, bytes, texture and sampler state
-//!   binds and `set_render_pipeline_state` forgets it as it logs itself (`RenderLowering::log`,
+//! - **Forgotten at every call but a bind, a pipeline state set or a render state set.** Every
+//!   call of the encoder but the two direct draws, the vertex and fragment buffer, bytes, texture
+//!   and sampler state binds, `set_render_pipeline_state` and the sets of its render state (below)
+//!   forgets it as it logs itself (`RenderLowering::log`,
 //!   which every call does: at the call, on the device's lowering thread, and encoded again),
 //!   refused or not, whatever it changes, with every kept draw set aside (below); so does a draw
 //!   that keeps nothing (a draw again, a draw rebound and a draw kept are the only draws that
@@ -48,6 +49,14 @@
 //!   record does not hold recorded; it takes no shortcut of a draw moved, which reads what the
 //!   encoder's last draw left. Each state's bind state is its own, though states of one function
 //!   pair share an interface, so the draw kept of one is never the other's.
+//! - **Restated by a render state set.** A call that sets the encoder's render state alone (its
+//!   viewports, scissor rectangles, cull mode, winding, depth/stencil state, stencil references,
+//!   depth bias, depth clip mode, fill mode or blend color: `RenderLowering::log_restating`)
+//!   keeps every kept draw, restated: the encoder's state stamp is drawn afresh (`DrawAgain`), and
+//!   a kept draw whose stamp is not the encoder's derives again, at its next draw, everything the
+//!   state decides of it (`restated.rs`). It is then rebound (`rebound.rs`), recording its new
+//!   draw state's dynamic states against what its record holds, where what it derived leaves
+//!   its pipeline, plan, shape and push bytes the kept draw's; else it takes every step.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -72,6 +81,7 @@
 //!   encoder's drawn area, coverage, reads, gathered uses, noted uses and instance as they were.
 
 mod rebound;
+mod restated;
 
 use ash::vk;
 use metal2vulkan::bind::{BindShape, DrawCall};
@@ -81,7 +91,7 @@ use std::time::Duration;
 pub(super) use rebound::KeptRecording;
 pub(crate) use rebound::KeptStorage;
 
-use super::{Assembly, DrawBuffers, RenderLowering};
+use super::{Assembly, DrawBuffers, DrawSettings, RenderLowering};
 use crate::argument_table::Stamp;
 use crate::degradation::EachWatch;
 use crate::draw_source::DrawSource;
@@ -99,10 +109,14 @@ use metal2vulkan::metal::RenderStages;
 pub(super) struct DrawAgain {
     kept: Option<Kept>,
     /// What the encoder's kept draws were kept under (a fresh stamp, its default): drawn afresh
-    /// as every kept draw is forgotten, the one of the last direct draw and those its bind state set aside with the
-    /// states of other pipeline states (`LiveBind::select`), so a draw set aside is kept still
-    /// where it holds this.
+    /// as every kept draw is forgotten, the one of the last direct draw and those its bind state
+    /// set aside with the states of other pipeline states (`LiveBind::select`), so a draw set
+    /// aside is kept still where it holds this.
     epoch: Stamp,
+    /// The encoder's render state's stamp (a fresh stamp, its default): drawn afresh at each call
+    /// that sets it ([`restate_again`](RenderLowering::restate_again)), so a kept draw that holds
+    /// another is restated (the module docs).
+    stated: Stamp,
     /// Draws again since the draw was kept: in builds with debug assertions, the first and every
     /// second one after it take every step instead (the module docs).
     #[cfg(debug_assertions)]
@@ -115,6 +129,11 @@ pub(crate) struct Kept {
     /// The pipeline state it drew, and the encoder's epoch it was kept under ([`DrawAgain`]).
     pub(super) pipeline: WeakRenderPipelineState,
     pub(super) epoch: Stamp,
+    /// The encoder's render state's stamp as it was kept or last rebound ([`DrawAgain`]), and the
+    /// settings it drew under then: a draw of it under another stamp derives them again
+    /// (`restated.rs`).
+    pub(super) stated: Stamp,
+    pub(super) settings: Arc<DrawSettings>,
     /// Whether another draw recorded since it, or since the last draw again of it: it was set
     /// aside with its pipeline state's bind state while draws of other states recorded
     /// (`LiveBind::select`). Its next draw is then rebound whatever its tables' stamps
@@ -280,6 +299,16 @@ impl RenderLowering {
         self.again.epoch
     }
 
+    /// A call set the encoder's render state: every kept draw is restated (the module docs).
+    pub(super) fn restate_again(&mut self) {
+        self.again.stated = Stamp::fresh();
+    }
+
+    /// The encoder's render state's stamp, which a draw kept now holds ([`DrawAgain`]).
+    pub(super) fn again_stated(&self) -> Stamp {
+        self.again.stated
+    }
+
     /// The last direct draw's kept draw, where it is kept.
     pub(super) fn again_kept(&self) -> Option<&Kept> {
         self.again.kept.as_ref()
@@ -362,7 +391,7 @@ impl RenderLowering {
             return Again::No;
         }
         let stamps = self.table_stamps();
-        if kept.stamps != stamps || kept.between {
+        if kept.stamps != stamps || kept.between || kept.stated != self.again.stated {
             return match kept.rebinds {
                 true => self.draw_rebound(live, call, (assembly, draw), buffers, stamps, checked),
                 false => self.rebind_stopped(),
@@ -482,9 +511,10 @@ fn digest(part: impl std::fmt::Debug) -> u64 {
 
 /// What a draw rebound worked out (`rebound.rs`), which its every step must work out alike: its
 /// commands, set-0 writes, dynamic offsets, push bytes, vertex buffers, uses and resident keys,
-/// by digest ([`digest`]).
+/// by digest ([`digest`]), and the draw state its recording records with (a draw restated's
+/// derived again, `restated.rs`).
 #[cfg(debug_assertions)]
-pub(super) struct Rebound([u64; 7]);
+pub(super) struct Rebound([u64; 7], Option<super::DrawState>);
 
 #[cfg(debug_assertions)]
 impl Rebound {
@@ -520,15 +550,18 @@ impl Rebound {
                 f.debug_list().entries(each).finish()
             }
         }
-        Rebound([
-            digest(&live.commands),
-            digest(Writes(live.kept.writes())),
-            digest(&live.offsets),
-            digest(Pushes(&live.pushes)),
-            digest(&live.vertex_buffers),
-            digest(&*live.uses),
-            digest(live.uses.resident()),
-        ])
+        Rebound(
+            [
+                digest(&live.commands),
+                digest(Writes(live.kept.writes())),
+                digest(&live.offsets),
+                digest(Pushes(&live.pushes)),
+                digest(&live.vertex_buffers),
+                digest(&*live.uses),
+                digest(live.uses.resident()),
+            ],
+            (live.kept.recording()).map(|recording| recording.state.clone()),
+        )
     }
 
     /// Assert that every step of the draw worked out what it did, in `live`.
@@ -540,6 +573,10 @@ impl Rebound {
                 "a draw rebound worked out other {part} than its every step"
             );
         }
+        assert!(
+            now.1 == self.1,
+            "a draw rebound records with another draw state than its every step"
+        );
     }
 }
 
@@ -662,12 +699,13 @@ impl Checked {
         }
         let again = encoder.again.kept.as_mut();
         let again = again.unwrap_or_else(|| panic!("a draw again kept no draw"));
-        let (draw_alone, stamps, under, settled, between) = (
+        let (draw_alone, stamps, under, settled, between, stated) = (
             again.draw_alone,
             again.stamps,
             again.under,
             again.settled,
             again.between,
+            again.stated,
         );
         assert!(
             draw_alone || rebound,
@@ -679,12 +717,13 @@ impl Checked {
         );
         // A draw rebound reads its tables under their stamps now, its uses noted into the state
         // now; and every step recorded through its instance's record since (`Kept::settled`),
-        // the encoder's last draw (`Kept::between`).
+        // the encoder's last draw (`Kept::between`), under the encoder's render state now
+        // (`Kept::stated`).
         (again.draw_alone, again.stamps, again.under) = (kept.draw_alone, kept.stamps, kept.under);
-        (again.settled, again.between) = (kept.settled, kept.between);
+        (again.settled, again.between, again.stated) = (kept.settled, kept.between, kept.stated);
         assert!(*again == kept, "a draw again kept another draw");
         (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
-        (again.settled, again.between) = (settled, between);
+        (again.settled, again.between, again.stated) = (settled, between, stated);
         encoder.again.hits = hits;
     }
 }

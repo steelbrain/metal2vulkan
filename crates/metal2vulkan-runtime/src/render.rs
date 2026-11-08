@@ -3317,7 +3317,7 @@ impl RenderLowering {
 
     /// The lowering of [`RenderCommandEncoder::set_viewport`].
     pub(crate) fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Error> {
-        self.log(|_| RenderCall::Viewport(Box::new(viewport)));
+        self.log_restating(|_| RenderCall::Viewport(Box::new(viewport)));
         let refused = render_state::depth_ranges_refused(self.core.device());
         self.state
             .set_viewports("set_viewport", &[viewport], refused)
@@ -3325,7 +3325,7 @@ impl RenderLowering {
 
     /// The lowering of [`RenderCommandEncoder::set_viewports`].
     pub(crate) fn set_viewports(&mut self, viewports: &[Viewport]) -> Result<(), Error> {
-        self.log(|_| RenderCall::Viewports(viewports.into()));
+        self.log_restating(|_| RenderCall::Viewports(viewports.into()));
         let refused = render_state::depth_ranges_refused(self.core.device());
         self.state
             .set_viewports("set_viewports", viewports, refused)
@@ -3333,27 +3333,27 @@ impl RenderLowering {
 
     /// The lowering of [`RenderCommandEncoder::set_scissor_rect`].
     pub(crate) fn set_scissor_rect(&mut self, rect: ScissorRect) -> Result<(), Error> {
-        self.log(|_| RenderCall::ScissorRect(rect));
+        self.log_restating(|_| RenderCall::ScissorRect(rect));
         self.scissors = self.state.scissor_rects("set_scissor_rect", &[rect])?;
         Ok(())
     }
 
     /// The lowering of [`RenderCommandEncoder::set_scissor_rects`].
     pub(crate) fn set_scissor_rects(&mut self, rects: &[ScissorRect]) -> Result<(), Error> {
-        self.log(|_| RenderCall::ScissorRects(rects.into()));
+        self.log_restating(|_| RenderCall::ScissorRects(rects.into()));
         self.scissors = self.state.scissor_rects("set_scissor_rects", rects)?;
         Ok(())
     }
 
     /// The lowering of [`RenderCommandEncoder::set_cull_mode`].
     pub(crate) fn set_cull_mode(&mut self, mode: CullMode) {
-        self.log(|_| RenderCall::CullMode(mode));
+        self.log_restating(|_| RenderCall::CullMode(mode));
         self.state.set_cull_mode(mode);
     }
 
     /// The lowering of [`RenderCommandEncoder::set_front_facing_winding`].
     pub(crate) fn set_front_facing_winding(&mut self, winding: Winding) {
-        self.log(|_| RenderCall::FrontFacingWinding(winding));
+        self.log_restating(|_| RenderCall::FrontFacingWinding(winding));
         self.state.set_winding(winding);
     }
 
@@ -3363,7 +3363,7 @@ impl RenderLowering {
         state: impl Into<Option<&'a DepthStencilState>>,
     ) -> Result<(), Error> {
         let state = state.into();
-        self.log(|log| {
+        self.log_restating(|log| {
             RenderCall::DepthStencilState(state.map(|state| log.hold_depth_stencil(state)))
         });
         if let Some(state) = state {
@@ -3378,13 +3378,13 @@ impl RenderLowering {
 
     /// The lowering of [`RenderCommandEncoder::set_stencil_reference_value`].
     pub(crate) fn set_stencil_reference_value(&mut self, value: u32) {
-        self.log(|_| RenderCall::StencilReferenceValue(value));
+        self.log_restating(|_| RenderCall::StencilReferenceValue(value));
         self.state.set_stencil_references(value, value);
     }
 
     /// The lowering of [`RenderCommandEncoder::set_stencil_reference_values`].
     pub(crate) fn set_stencil_reference_values(&mut self, front: u32, back: u32) {
-        self.log(|_| RenderCall::StencilReferenceValues(front, back));
+        self.log_restating(|_| RenderCall::StencilReferenceValues(front, back));
         self.state.set_stencil_references(front, back);
     }
 
@@ -3395,27 +3395,27 @@ impl RenderLowering {
         slope_scale: f32,
         clamp: f32,
     ) -> Result<(), Error> {
-        self.log(|_| RenderCall::DepthBias(depth_bias, slope_scale, clamp));
+        self.log_restating(|_| RenderCall::DepthBias(depth_bias, slope_scale, clamp));
         self.state.set_depth_bias(depth_bias, slope_scale, clamp)
     }
 
     /// The lowering of [`RenderCommandEncoder::set_depth_clip_mode`].
     pub(crate) fn set_depth_clip_mode(&mut self, mode: DepthClipMode) -> Result<(), Error> {
-        self.log(|_| RenderCall::DepthClipMode(mode));
+        self.log_restating(|_| RenderCall::DepthClipMode(mode));
         let profile = self.core.device().compile_device().profile();
         self.state.set_clip_mode(mode, profile)
     }
 
     /// The lowering of [`RenderCommandEncoder::set_triangle_fill_mode`].
     pub(crate) fn set_triangle_fill_mode(&mut self, mode: TriangleFillMode) -> Result<(), Error> {
-        self.log(|_| RenderCall::TriangleFillMode(mode));
+        self.log_restating(|_| RenderCall::TriangleFillMode(mode));
         let profile = self.core.device().compile_device().profile();
         self.state.set_fill_mode(mode, profile)
     }
 
     /// The lowering of [`RenderCommandEncoder::set_blend_color`].
     pub(crate) fn set_blend_color(&mut self, red: f32, green: f32, blue: f32, alpha: f32) {
-        self.log(|_| RenderCall::BlendColor([red, green, blue, alpha]));
+        self.log_restating(|_| RenderCall::BlendColor([red, green, blue, alpha]));
         self.state.set_blend_color([red, green, blue, alpha]);
     }
 
@@ -7927,47 +7927,8 @@ impl RenderLowering {
         // A draw that records a command hands the device's pass its depth/stencil state.
         let depth_writes = !empty && self.state.depth_writes();
         self.drew_depth_writes |= depth_writes;
-        // The pixels it may write: its viewports' within its scissors, every viewport where it
-        // chooses one or an amplification offsets it, and anywhere through a rate map.
         if !empty && rasterizes {
-            match self.rate_map.is_some() {
-                true => {
-                    self.drawn.everywhere();
-                    self.coverage.everywhere();
-                }
-                false => {
-                    let selects = selects || self.amplification.offsets_viewports();
-                    let mut scissors = [vk::Rect2D::default(); MAX_VIEWPORTS];
-                    let rects = self
-                        .state
-                        .vk_scissors_in(&self.scissors, selects, &mut scissors);
-                    self.drawn.add(rects);
-                    // And its instance's, the one it recorded into.
-                    self.current.drawn.add(rects);
-                    // What it writes of each color, and blends, inside its Vulkan scissors
-                    // (`linear_attachment::Coverage`).
-                    // Of each pass color its draws store into: a state color where its routing
-                    // places it, and the pass colors its variant zeroes.
-                    match self.pipeline.as_ref().map(RenderPipelineState::kind) {
-                        Some(RenderStateKind::Graphics(state)) => {
-                            let colors = &state.base().graphics.color_attachments;
-                            let Ok(routing) = self.shape_inputs().routing(state) else {
-                                self.again = Default::default();
-                                return Err(internal("a draw of a state its pass refuses"));
-                            };
-                            let zeroed = !self
-                                .shape_inputs()
-                                .routed_colors(state, &routing)
-                                .zeroed
-                                .is_empty();
-                            let writes = linear_attachment::writes(colors);
-                            let writes = linear_attachment::pass_writes(&writes, &routing, zeroed);
-                            self.coverage.add(&writes, rects)
-                        }
-                        _ => self.coverage.everywhere(),
-                    }
-                }
-            }
+            self.add_drawn(selects)?;
         }
         // A replayed draw that met a notice announced at every occurrence must meet it again.
         self.replay_plain &= !watch.met();
@@ -7977,6 +7938,48 @@ impl RenderLowering {
             (reads, !empty && rasterizes, depth_writes),
             checked,
         );
+        Ok(())
+    }
+
+    /// Add the pixels a draw that rasterizes may write to the encoder's drawn area, its
+    /// instance's and its coverage: its viewports' within its scissors, every viewport where it
+    /// chooses one (`selects`) or an amplification offsets it, and anywhere through a rate map.
+    fn add_drawn(&mut self, selects: bool) -> Result<(), Error> {
+        if self.rate_map.is_some() {
+            self.drawn.everywhere();
+            self.coverage.everywhere();
+            return Ok(());
+        }
+        let selects = selects || self.amplification.offsets_viewports();
+        let mut scissors = [vk::Rect2D::default(); MAX_VIEWPORTS];
+        let rects = self
+            .state
+            .vk_scissors_in(&self.scissors, selects, &mut scissors);
+        self.drawn.add(rects);
+        // And its instance's, the one it recorded into.
+        self.current.drawn.add(rects);
+        // What it writes of each color, and blends, inside its Vulkan scissors
+        // (`linear_attachment::Coverage`).
+        // Of each pass color its draws store into: a state color where its routing places it,
+        // and the pass colors its variant zeroes.
+        match self.pipeline.as_ref().map(RenderPipelineState::kind) {
+            Some(RenderStateKind::Graphics(state)) => {
+                let colors = &state.base().graphics.color_attachments;
+                let Ok(routing) = self.shape_inputs().routing(state) else {
+                    self.again = Default::default();
+                    return Err(internal("a draw of a state its pass refuses"));
+                };
+                let zeroed = !self
+                    .shape_inputs()
+                    .routed_colors(state, &routing)
+                    .zeroed
+                    .is_empty();
+                let writes = linear_attachment::writes(colors);
+                let writes = linear_attachment::pass_writes(&writes, &routing, zeroed);
+                self.coverage.add(&writes, rects)
+            }
+            _ => self.coverage.everywhere(),
+        }
         Ok(())
     }
 
@@ -10857,6 +10860,8 @@ impl RenderLowering {
             let kept = draw_again::Kept {
                 pipeline: drawn_by,
                 epoch: self.again_epoch(),
+                stated: self.again_stated(),
+                settings: Arc::clone(&settings),
                 between: false,
                 call,
                 assembly,

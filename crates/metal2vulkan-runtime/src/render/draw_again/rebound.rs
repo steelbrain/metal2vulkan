@@ -4,8 +4,10 @@
 //!
 //! - **Which draw.** The kept draw again ([`RenderLowering::draw_again`]: the same call and
 //!   arguments, through the same pipeline state, under the same `Under`, into the same command
-//!   buffer) after calls that changed only buffer, texture and sampler slots of its tables, or
-//!   after draws of other pipeline states (`Kept::between`, `render/draw_again.rs`), each table's changes since the kept draw read
+//!   buffer) after calls that changed only buffer, texture and sampler slots of its tables, after
+//!   draws of other pipeline states (`Kept::between`, `render/draw_again.rs`), or after calls that
+//!   set the encoder's render state, what it decides derived again as the kept draw's
+//!   (`Kept::stated`, `restated.rs`), each table's changes since the kept draw read
 //!   it still listed (`argument_table::Changes`, at most [`SLOTS`] slots), where the kept draw kept
 //!   what this takes ([`KeptStorage`]: a draw whose set-0 writes hold no keeper, of no use beyond
 //!   its plan's and its draw's own, and of a state that made no visible-function table). The kept
@@ -161,6 +163,18 @@ impl KeptStorage {
     pub(in crate::render) fn writes(&self) -> &[Write] {
         &self.writes
     }
+
+    /// The kept draw's recording, where it is kept.
+    #[cfg(debug_assertions)]
+    pub(in crate::render) fn recording(&self) -> Option<&KeptRecording> {
+        self.recording.as_ref()
+    }
+
+    /// The kept draw's recording, which a draw restated records with its new draw state
+    /// (`restated.rs`).
+    pub(super) fn recording_mut(&mut self) -> Option<&mut KeptRecording> {
+        self.recording.as_mut()
+    }
 }
 
 /// Whether `live`'s kept settle holds the variant and plan the kept draw ran: where the draw's
@@ -282,6 +296,13 @@ impl RenderLowering {
     ) -> Again {
         // A notice met at each occurrence forgets the draw once recorded, as its every step does.
         let watch = crate::degradation::EachWatch::start();
+        // After a call set the encoder's render state, what it decides derived again
+        // (`restated.rs`).
+        let restated =
+            (self.again.kept.as_ref()).is_some_and(|kept| kept.stated != self.again.stated);
+        if restated && !self.restate_kept(live, call, assembly, draw) {
+            return Again::No;
+        }
         let Some(changed) = self.bring_in(live, stamps) else {
             return self.rebind_stopped();
         };
@@ -709,6 +730,10 @@ impl RenderLowering {
             false => self.current.bound.records(),
         };
         let settled = (self.again.kept.as_ref()).and_then(|kept| kept.settled) == Some(records);
+        // A draw restated (`restated.rs`) compares every dynamic state it sets with the record:
+        // its values may be others.
+        let stated = self.again.stated;
+        let restated = (self.again.kept.as_ref()).is_some_and(|kept| kept.stated != stated);
         let (set, written) = match (objects.pushes_set_zero(), rebinding.writes_kept) {
             // Its set-0 writes the kept draw's (`rebind`): it pushes what the kept draw pushed.
             (true, true) => {
@@ -908,7 +933,7 @@ impl RenderLowering {
             index: owned.index,
             indirect: None,
             dynamic: &live.kept.dynamic,
-            settled: settled.then_some(&live.kept.unheld[..]),
+            settled: (settled && !restated).then_some(&live.kept.unheld[..]),
             topology: owned.topology,
             primitive_restart: owned.primitive_restart,
             state: &owned.state,
@@ -931,6 +956,7 @@ impl RenderLowering {
         kept.stamps = stamps;
         kept.settled = Some(settled);
         kept.between = false;
+        kept.stated = stated;
         // Whether its uses read an image: what its drawing again notes (`Kept::reads_images`).
         if images {
             kept.reads_images = live.uses.iter().any(super::reads_image);
@@ -969,6 +995,17 @@ impl RenderLowering {
         self.called = true;
         self.drew |= rasterizes;
         self.drew_depth_writes |= depth_writes;
+        // The pixels a draw restated may write, through its scissors and viewports now: those of
+        // a draw rebound alone are its kept draw's, added already.
+        if restated && rasterizes {
+            let selects = match self.pipeline.as_ref().map(|pipeline| pipeline.kind()) {
+                Some(RenderStateKind::Graphics(state)) => {
+                    state.base().graphics.writes_viewport_index
+                }
+                _ => true,
+            };
+            self.add_drawn(selects)?;
+        }
         Ok(())
     }
 }

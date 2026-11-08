@@ -313,16 +313,16 @@ fn rectangles(
 /// Draws of the same rectangle one after another record their Vulkan draws alone, but the first:
 /// the same commands of every kind, the same barriers, state commands and noted uses, and the
 /// same pixels, as the same draws with a call between each that changes nothing for them
-/// (`set_blend_color` of the color the encoder holds), each of which takes every step.
+/// (`set_tessellation_factor_scale`, which no draw of their state reads), each of which takes
+/// every step.
 #[test]
 fn draws_again_record_what_draws_after_calls_record() {
     let scratch = Scratch::new("draw-again");
     let heard = Heard::default();
     let device = device(&scratch.0, &[], &heard);
     let state = adding_state(&device);
-    let same_color =
-        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
-    warm(&device, |encoder| rectangles(encoder, &state, same_color));
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    warm(&device, |encoder| rectangles(encoder, &state, forgets));
     let heard_in = |ran: &dyn Fn() -> Ran| {
         heard.lock().unwrap().clear();
         let ran = ran();
@@ -334,7 +334,7 @@ fn draws_again_record_what_draws_after_calls_record() {
     let (again, again_heard) =
         heard_in(&|| run(&device, |encoder| rectangles(encoder, &state, |_| {})));
     let (after_calls, after_calls_heard) =
-        heard_in(&|| run(&device, |encoder| rectangles(encoder, &state, same_color)));
+        heard_in(&|| run(&device, |encoder| rectangles(encoder, &state, forgets)));
     assert_eq!(again_heard, after_calls_heard, "the notices of the draws");
     let as_before = |counts: &WorkCounts| counts.draws_as_before;
     assert_eq!(again.counted(as_before), drawn_alone(HITS));
@@ -661,8 +661,8 @@ fn draws_again_and_rebound_count_as_they_record() {
 /// Draws after calls that bound other offsets and bytes at buffer slots their functions read
 /// rebind those slots alone (`WorkCounts::draws_rebound`), with the same commands of every kind,
 /// state commands and noted uses, and the same pixels, as the same draws with a call between each
-/// that changes nothing for them (`set_blend_color` of the color the encoder holds), each of
-/// which takes every step; at another offset each and in another color each, as each column's
+/// that changes nothing for them (`set_tessellation_factor_scale`, which no draw of their state
+/// reads), each of which takes every step; at another offset each and in another color each, as each column's
 /// count of draws and each draw's color show. Calls that changed more slots than a draw rebound
 /// takes between them (samplers 0 to 8, which the functions do not read) take every step.
 #[test]
@@ -673,8 +673,7 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
     let state = adding_state(&device);
     let rectangles = rectangles_from_columns(&device);
     let sampler = device.new_sampler_state(&SamplerDescriptor::new()).unwrap();
-    let same_color =
-        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
     let samplers = |encoder: &mut RenderCommandEncoder| {
         for index in 0..9 {
             encoder
@@ -695,7 +694,7 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
             offset_rectangles(encoder, drawn, color, |_| {});
         });
         let every = run(&device, |encoder| {
-            offset_rectangles(encoder, drawn, color, same_color);
+            offset_rectangles(encoder, drawn, color, forgets);
         });
         let sampled = run(&device, |encoder| {
             offset_rectangles(encoder, drawn, color, samplers);
@@ -758,11 +757,12 @@ fn switching_rectangles(
 /// (`render/draw_again.rs`): every draw after each state's first is rebound
 /// (`WorkCounts::draws_rebound`), with the same commands of every kind, state commands and pixels
 /// as the same draws each taking every step, after a call between each that changes nothing for
-/// them (`set_blend_color` of the color the encoder holds), which forgets the kept draws of both
-/// states. Only the pass's first draw keeps nothing (`WorkCounts::draws_unkept`, as it begins
-/// the pass's instance), and no draw finds its kept draw unlike it or stops its rebind. And a draw
-/// that keeps nothing (one that writes memory, `cfb_dn_count`, counted so) forgets the other
-/// state's kept draw: draws switching with it take every step.
+/// them (`set_tessellation_factor_scale`, which no draw of their states reads), which forgets
+/// the kept draws of both states. Only the pass's first draw keeps nothing
+/// (`WorkCounts::draws_unkept`, as it begins the pass's instance), and no draw finds its kept draw
+/// unlike it or stops its rebind. And a draw that keeps nothing (one that writes memory,
+/// `cfb_dn_count`, counted so) forgets the other state's kept draw: draws switching with it take
+/// every step.
 #[test]
 fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     let scratch = Scratch::new("draw-again-states");
@@ -772,8 +772,7 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     let columns = rectangles_from_columns(&device);
     let pair = [&first, &second];
     let states = (&pair[..], &columns);
-    let same_color =
-        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
     let drawn = |encoder: &mut RenderCommandEncoder, _| rectangle(encoder);
     warm(&device, |encoder| {
         switching_rectangles(encoder, states, |_| {}, drawn)
@@ -784,7 +783,7 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
         switching_rectangles(encoder, states, |_| {}, drawn)
     });
     let every = run(&device, |encoder| {
-        switching_rectangles(encoder, states, same_color, drawn)
+        switching_rectangles(encoder, states, forgets, drawn)
     });
     assert_eq!(rebound.counted(rebound_count), drawn_alone(DRAWS - 2));
     assert_eq!(every.counted(rebound_count), 0);
@@ -897,13 +896,10 @@ fn draws_after_offsets_alone_moved_bind_what_every_step_binds() {
     let colors = bytes_of(&colors, f32::to_le_bytes);
     let colors = (device.new_buffer_with_bytes(&colors, ResourceOptions::shared())).unwrap();
     let drawn = (&state, &rectangles, &colors);
-    let same_color =
-        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
     warm(&device, |encoder| moved_rectangles(encoder, drawn, |_| {}));
     let rebound = run(&device, |encoder| moved_rectangles(encoder, drawn, |_| {}));
-    let every = run(&device, |encoder| {
-        moved_rectangles(encoder, drawn, same_color)
-    });
+    let every = run(&device, |encoder| moved_rectangles(encoder, drawn, forgets));
     let moved_count = |counts: &WorkCounts| counts.draws_moved;
     assert_eq!(rebound.counted(moved_count), drawn_alone(HITS));
     assert_eq!(
@@ -970,11 +966,10 @@ fn draws_moved_along_their_buffer_note_nothing_again() {
         }
     };
     let nothing = |_: &mut RenderCommandEncoder| {};
-    let same_color =
-        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
     warm(&device, |encoder| along(encoder, &nothing));
     let rebound = run(&device, |encoder| along(encoder, &nothing));
-    let every = run(&device, |encoder| along(encoder, &same_color));
+    let every = run(&device, |encoder| along(encoder, &forgets));
     let inside = rebound.counted(|counts| counts.draws_moved_inside);
     assert_eq!(
         rebound.counted(|counts| counts.draws_moved),
@@ -1168,8 +1163,7 @@ fn draws_after_texture_and_sampler_changes_rebind_what_every_step_binds() {
         sampler_addressing(&device, SamplerAddressMode::ClampToEdge, 1000.0),
         sampler_addressing(&device, SamplerAddressMode::Repeat, f32::MAX),
     ];
-    let same_color =
-        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
     let drawn = (&state, &rectangles);
     let bound = (&textures[..], &samplers[..]);
     let first = |_| 0;
@@ -1201,7 +1195,7 @@ fn draws_after_texture_and_sampler_changes_rebind_what_every_step_binds() {
             sampled_rectangles(encoder, drawn, bound, chosen, |_| {});
         });
         let every = run(&device, |encoder| {
-            sampled_rectangles(encoder, drawn, bound, chosen, same_color);
+            sampled_rectangles(encoder, drawn, bound, chosen, forgets);
         });
         let expected = match rebinds {
             true => drawn_alone(HITS),
@@ -1329,11 +1323,10 @@ fn draws_after_a_state_set_or_a_barrier_set_what_every_step_sets() {
         11 => encoder.memory_barrier_with_scope(BarrierScope::BUFFERS, fragment, vertex),
         _ => {}
     };
-    // And the blend color the encoder holds set again before each draw: every step at each.
+    // And a call no draw of the state reads before each draw: every step at each.
     let every_step = |encoder: &mut RenderCommandEncoder, at: u64| {
         came(encoder, at);
-        let color = if at >= 3 { 0.25 } else { 0.0 };
-        encoder.set_blend_color(color, color, color, color);
+        encoder.set_tessellation_factor_scale(1.0);
     };
     let states = |counts: &WorkCounts| counts.draw_states_recorded;
     warm(&device, |encoder| {
