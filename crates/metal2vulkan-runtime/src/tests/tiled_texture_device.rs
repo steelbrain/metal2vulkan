@@ -141,7 +141,7 @@ fn packed((width, height): (u64, u64), of: impl Fn(u64, u64) -> [u8; 4]) -> Vec<
 /// checkerboard of 0 and 255 a texel, which a 2x2 box averages to 127 or 128; green one value a 2x2
 /// block, which it keeps; red 0x40 and alpha 255.
 fn checker(x: u64, y: u64) -> [u8; 4] {
-    let blue = if (x + y) % 2 == 0 { 0 } else { 0xff };
+    let blue = if (x + y).is_multiple_of(2) { 0 } else { 0xff };
     let green = ((x / 2) * 9 + (y / 2) * 5) as u8;
     [blue, green, 0x40, 0xff]
 }
@@ -208,7 +208,7 @@ impl Rig {
         let bytes = read(out);
         std::array::from_fn(|point| {
             std::array::from_fn(|channel| {
-                let at = (point * 16 + channel * 4) as usize;
+                let at = point * 16 + channel * 4;
                 f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
             })
         })
