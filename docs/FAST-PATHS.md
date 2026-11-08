@@ -926,6 +926,32 @@ driver's. Each is open work.
   ahead of its lease on a thread of the device's own would hold the frames it meets as long, so
   none is. A smaller block would shorten the wait in proportion and hold fewer indices and records
   for each command buffer. Metal's command buffers wait for no such making. Not announced.
+- **On NVIDIA, a command buffer submitted while the runtime makes or frees a memory block completes
+  as that call ends; emptied blocks are kept so that a returning working set makes none again.**
+  The runtime's memory blocks (`memory.rs`: pooled blocks of 64 MiB, blocks of their own for
+  placements past half a block, and the blocks exportable buffers share) are made with
+  `vkAllocateMemory` and freed with `vkFreeMemory`, which hold every submission on NVIDIA's driver
+  (the row above has their times). A block that empties is kept for the next placements: past its
+  pool's two pooled ones, while the empty blocks kept in its heap stay within an eighth of the
+  heap, at most 2 GiB (`KEPT_EMPTY_BYTES`); a kept block of its own takes the next placement of its
+  pool at most a quarter shorter. Each goes once it stayed empty for 10 s (`KEPT_EMPTY_FOR`), but
+  one pooled block per pool, at a release in its pool or within a second at the device's next
+  creation call, and every kept block of a memory type goes before a block of that type fails to be
+  made. The cost is that memory, held from a working set's dip until 10 s after it, which other
+  processes cannot use meanwhile: up to 2 GiB in each of the RTX 5080 Laptop GPU's heaps (its 16
+  GiB of VRAM and its system heap), 512 MiB on a card of 4 GiB, about 1.4 GiB and 700 MiB in a
+  Radeon 780M's heaps of 11 and 5.5 GiB (RADV), and 2 GiB, wired, in the M3 Max's one heap. No
+  switch: no answer of Metal's changes. On the RTX 5080 Laptop GPU (NVIDIA 615.71.09), a clip
+  start's burst (`tests::clip_bursts`: 3062 buffers, 1175 textures and 34 `Private` exportable 4K
+  NV12 pictures made at once while another thread commits a fill every 2 ms, three clips 3 s apart,
+  two runs each) took 41 and 40 allocations again for the second and third clips where a pool freed
+  every emptied block past its two and each picture had an allocation of its own, freed with it, in
+  89 to 102 ms, and 2 to 5 of the 37 to 41 commits meanwhile waited 1 ms or more to be scheduled
+  (longest 8.8 to 9.4 ms); with the blocks kept they took none, in 64 to 71 ms, and no commit
+  waited 1 ms (longest 0.39 to 0.67 ms), 16 empty blocks (1 GiB) kept between the clips. A first
+  clip still makes its blocks: 16 allocations, against 44 when each picture had an allocation of
+  its own, with 3 to 5 commits waiting 1 ms or more (longest 10.9 to 19.6 ms). Metal's command
+  buffers wait for no allocation. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
   `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both

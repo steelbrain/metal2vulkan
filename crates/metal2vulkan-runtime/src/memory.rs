@@ -113,6 +113,11 @@ const KEPT_EMPTY_SHARE: u64 = 8;
 /// started 1 s after the last one ended.
 pub(super) const KEPT_EMPTY_FOR: Duration = Duration::from_secs(10);
 
+/// How often the device's creation calls look for kept empty blocks past [`KEPT_EMPTY_FOR`] in
+/// every pool ([`Memory::sweep_stale`]), beside each release's look in its own pool: a kept block
+/// goes within this long of its quiet period's end wherever the program still makes resources.
+const KEPT_SWEEP_EVERY: Duration = Duration::from_secs(1);
+
 /// How much longer than a dedicated placement a kept dedicated block may be and still take it
 /// ([`Pool::place_dedicated`]): a quarter of the placement.
 const DEDICATED_SLACK: u64 = 4;
@@ -1384,6 +1389,9 @@ pub(super) struct Memory {
     /// Its blocks made ready ahead and added to it, and the blocks a placement in it made itself,
     /// finding none ready (`WorkCounts`).
     host_copy_blocks: HostCopyBlocks,
+    /// When the creation calls next look for stale kept blocks in every pool
+    /// ([`Memory::sweep_stale`]).
+    next_sweep: Instant,
 }
 
 /// The counts of the blocks of the pool host copies place in ([`Memory::host_copy_pool`]).
@@ -1441,6 +1449,7 @@ impl Memory {
             host_copy_pool: None,
             readying: None,
             host_copy_blocks: HostCopyBlocks::default(),
+            next_sweep: Instant::now() + KEPT_SWEEP_EVERY,
             #[cfg(test)]
             import_hold: None,
             #[cfg(test)]
@@ -2011,6 +2020,22 @@ impl Memory {
                 unsafe { self.let_go(device, block, cause, after) }
             }
             None => after,
+        }
+    }
+
+    /// Free the kept empty blocks of every pool that stayed empty for [`KEPT_EMPTY_FOR`]
+    /// ([`Pool::stale`]), at most once every [`KEPT_SWEEP_EVERY`] (at `now`): a pool whose
+    /// resources no longer come and go keeps none past its quiet period but its last pooled one.
+    fn sweep_stale(&mut self, device: &ash::Device, now: Instant) {
+        if now < self.next_sweep {
+            return;
+        }
+        self.next_sweep = now + KEPT_SWEEP_EVERY;
+        for at in 0..self.pools.len() {
+            while let Some(stale) = self.pools[at].stale(now) {
+                // SAFETY: nothing is placed in a kept empty block, and no command reads it.
+                drop(unsafe { self.let_go(device, stale, FreeCause::KeptStale, None) });
+            }
         }
     }
 
@@ -3003,7 +3028,8 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 /// device copies color textures on the host, keeps its room in a block made ready off this thread
 /// through `functions` (`memory/ready.rs`), started where the pool lacks room and none is held:
 /// the first placement there that finds no room once its making ended adds it, so that the pool's
-/// blocks change only at its placements, never as a making off the thread ends.
+/// blocks change only at its placements, never as a making off the thread ends. The kept empty
+/// blocks past their quiet period go here too, once a second at most ([`Memory::sweep_stale`]).
 pub(super) fn keep_room(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -3014,6 +3040,7 @@ pub(super) fn keep_room(
     ready_ahead(memory, device, functions, copies);
     let (lacking, maker) = {
         let mut memory = lock(memory);
+        memory.sweep_stale(device, Instant::now());
         let Ok(kept) = memory.kept(device) else {
             return;
         };
