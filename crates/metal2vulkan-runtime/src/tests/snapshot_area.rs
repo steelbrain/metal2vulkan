@@ -1,5 +1,7 @@
 //! `render/snapshot.rs`'s area rule: a draw that reads its pass's texture through a snapshot or
-//! takes the split by its form's cost at the share of its scissors least favourable to it.
+//! takes the split by its form's cost at the share of its scissors least favourable to it, the
+//! split's by the bytes its copy moves: a one-level, one-slice color's texels around the draw's
+//! scissors, a pixel wider each way, or every texel of the color where it reads through none.
 
 use crate::render::snapshot_within;
 
@@ -18,9 +20,9 @@ fn a_reader_through_no_scissor_over_a_large_color_takes_the_snapshot() {
     assert!(snapshot_within(1280 * 720, 1280 * 720 * 4));
 }
 
-/// A 4-byte color's reader through its whole level takes the snapshot from 786,432 pixels
-/// (1024x768) and an 8-byte one's from 65,536 (256x256), not one pixel fewer; a 16-byte one's at
-/// any size.
+/// A 4-byte color's reader through its whole level, the split copying every texel, takes the
+/// snapshot from 786,432 pixels (1024x768) and an 8-byte one's from 65,536 (256x256), not one
+/// pixel fewer; a 16-byte one's at any size.
 #[test]
 fn a_reader_through_its_whole_level_takes_the_snapshot_from_a_size_by_its_texel_bytes() {
     assert!(snapshot_within(786_432, 786_432 * 4));
@@ -32,16 +34,16 @@ fn a_reader_through_its_whole_level_takes_the_snapshot_from_a_size_by_its_texel_
     }
 }
 
-/// A 4-byte color's reader takes the snapshot through scissors of up to two fifths of its level
-/// at any size: over a 32x32 `RGBA8Unorm` target, through a quarter of it (256 pixels) but not
-/// through the whole (1024).
+/// A reader through small scissors splits where its color's texels are narrow, the split
+/// copying only the texels around them: through an 8x8 scissor (the copy's 10x10 texels) a 4-byte
+/// color's reader splits and an 8-byte one's takes the snapshot; over a 1920x1080 4-byte color,
+/// a reader through a 960x540 scissor splits and one through 1280x720 takes the snapshot.
 #[test]
-fn a_reader_through_two_fifths_of_a_small_level_takes_the_snapshot() {
-    assert!(snapshot_within(256, 1024 * 4));
-    assert!(!snapshot_within(1024, 1024 * 4));
-    for level in [1024, 65_536, 1 << 20] {
-        assert!(snapshot_within(level * 2 / 5, level * 4), "{level}");
-    }
+fn a_reader_through_small_scissors_weighs_the_copy_around_them() {
+    assert!(!snapshot_within(64, 10 * 10 * 4));
+    assert!(snapshot_within(64, 10 * 10 * 8));
+    assert!(!snapshot_within(960 * 540, 962 * 542 * 4));
+    assert!(snapshot_within(1280 * 720, 1282 * 722 * 4));
 }
 
 /// Every reader whose snapshot over its whole scissors weighs no more than the split's copy takes

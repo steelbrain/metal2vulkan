@@ -9,9 +9,9 @@
 //! window's rectangle through its scissor, a memory barrier over the render targets and a draw
 //! that reads the target at its own pixels over that rectangle (`tob_read`); then, in every other
 //! pass, a barrier and a draw over a window that samples the target at other pixels
-//! (`a4_fragment_select_sample`). Each own-pixel read takes a snapshot where the device takes the
-//! path, as the area rule does through a window's scissor over this target (`render/snapshot.rs`),
-//! else a split. The frame waits for its last command buffer.
+//! (`a4_fragment_select_sample`). Each own-pixel read splits: through a window's scissor the area
+//! rule (`render/snapshot.rs`) weighs the snapshot dearer than the split's copy of the texels
+//! around it. The frame waits for its last command buffer.
 //!
 //! [`WARM`] frames run untimed, then [`TIMED`] frames are printed as one `ATTACHMENT-READ-COST`
 //! line: the GPU time per frame (each command buffer's GPU end less its start, summed), the wall

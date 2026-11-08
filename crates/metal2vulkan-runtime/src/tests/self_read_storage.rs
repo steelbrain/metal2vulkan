@@ -8,9 +8,9 @@
 //! every reader splits, and the target swaps only where a pass fetches it through the pixel
 //! interlock into a scratch for want of `STORAGE` (MoltenVK's fetch). Each pass, a command buffer of its own over the
 //! `BGRA8Unorm` target, fills the block [`BLOCK`] with a red of its own, then after a barrier draws
-//! the block through its scissor with `tob_read`, each fragment writing the texel it read: the
-//! pass's own red at every pixel of the block, as Metal orders the barrier, where a read of the
-//! copy from before the pass would write the red before it.
+//! the block through the whole target's scissor with `tob_read`, each fragment writing the texel
+//! it read: the pass's own red at every pixel of the block, as Metal orders the barrier, where a
+//! read of the copy from before the pass would write the red before it.
 //!
 //! A pass whose reader pinned the target and that then fetches the target (`fetch_ordered` over
 //! [`FETCHED`], halving its red) renders it through a stand-in from the fetch on: the stand-in
@@ -43,15 +43,14 @@ use metal2vulkan::vk::ImageUsageFlags;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-/// The target's side, in pixels.
-const SIDE: u64 = 32;
+/// The target's side, in pixels: large enough that a reader through the whole target's scissor
+/// takes the snapshot by the area rule (`render/snapshot.rs`).
+const SIDE: u64 = 1024;
 
 /// The target's format, a guest framebuffer's.
 const FORMAT: PixelFormat = PixelFormat::BGRA8Unorm;
 
-/// The block each pass fills and reads, `[x0, y0, x1, y1]`: its 64 pixels of the snapshot draw's
-/// 20 bytes cost less than the split's copy of the target's 1024 texels of 4 bytes
-/// (`RenderCommandEncoder::snapshot_cheaper`).
+/// The block each pass fills and reads, `[x0, y0, x1, y1]`.
 const BLOCK: [u64; 4] = [8, 8, 16, 16];
 
 /// The block a fetching draw halves the red of, `[x0, y0, x1, y1]`: over a quarter of
@@ -161,7 +160,6 @@ fn pass_over(
     (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
     let fragment = RenderStages::FRAGMENT;
     encoder.memory_barrier_with_scope(BarrierScope::RENDER_TARGETS, fragment, fragment);
-    encoder.set_scissor_rect(scissor(BLOCK)).unwrap();
     encoder.set_render_pipeline_state(read).unwrap();
     encoder.set_fragment_texture(Some(target), 0).unwrap();
     (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();

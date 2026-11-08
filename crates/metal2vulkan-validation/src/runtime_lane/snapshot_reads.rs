@@ -15,10 +15,12 @@
 //! format, that an earlier pass clears to red [`CLEARED`]. In the pass, which loads it, draw F
 //! fills the block `[8, 16)²` with red [`FILL`]. The reader is `tob_read`
 //! (`t.read(uint2(in.position.xy))`) over the block, blended `One + One`, so each fragment adds
-//! what it read to the pixel, through a scissor of the block: the snapshot draw's 20 bytes at
-//! each of its 64 pixels cost less than the split's copy of the target's 1024 texels of 4 bytes
-//! (`RenderCommandEncoder::snapshot_cheaper`), and the snapshot of an `RGBA8Unorm` texture holds
-//! its codes, 4 bytes a pixel. The tests
+//! what it read to the pixel, through the whole target's scissor but where a test names another:
+//! the area rule (`render/snapshot.rs`) takes the snapshot through scissors of a 4-byte color
+//! this large whatever the reader covers, the split's copy of the target's 1,048,576 texels
+//! weighing more than the snapshot draw's 20 bytes at each pixel would at most, each beside a
+//! reader's fixed cost; and the snapshot of an `RGBA8Unorm` texture holds its codes, 4 bytes a
+//! pixel. The tests
 //! run under the default policy, the consumer's, and the first under the lane's exact policy too,
 //! whose exact texel conversion the translator follows into its call
 //! (`StageModule::snapshot_textures`).
@@ -27,12 +29,13 @@
 //!   reader in two instances (every pixel covered by two primitives of the one draw), a barrier,
 //!   the reader once more: `3 * FILL`, then `6 * FILL`. A read of the attachment itself would
 //!   race with the draw's own color writes, the second primitive reading the first's (`4 * FILL`).
-//! - [`readers_take_the_snapshot_by_the_area_rule`]: the same draws through wider scissors,
+//! - [`readers_take_the_snapshot_by_the_area_rule`]: the same draws through each scissor,
 //!   whatever the snapshot's form (`render/snapshot.rs`'s area rule, each form beside a reader's
-//!   fixed cost of a mebibyte): over `RGBA8Unorm` through the whole target's scissor (1024 pixels
-//!   of 20 bytes against a copy of 1024 texels of 4), a split for each; through [`QUARTER`]'s (256
-//!   pixels, within two fifths of the target), and over `RGBA16Float` through [`QUARTER`]'s, a
-//!   snapshot for each where the device takes the path.
+//!   fixed cost of a mebibyte): over `RGBA8Unorm` through the whole target's, a snapshot for each
+//!   where the device takes the path; through [`QUARTER`]'s (256 pixels of 20 bytes against the
+//!   split's copy of the 18x18 texels around them, 4 bytes each), a split for each; over
+//!   `RGBA16Float` through [`QUARTER`]'s (the copy's texels of 8 bytes), a snapshot for each where
+//!   the device takes the path.
 //! - [`a_surfaces_readers_take_the_snapshot_at_any_area`]: the same draws over a surface over
 //!   host pages, an `RGBA8Unorm` texture of an IOSurface plane over a no-copy buffer, through the
 //!   whole target's scissor: a snapshot for each where the device takes the path and the image
@@ -46,9 +49,10 @@
 //! - [`each_form_reads_what_the_split_reads`]: the first test's draws over a target of each of
 //!   `RGBA8Unorm`, `BGRA8Unorm`, `R8Unorm`, `RG8Unorm` (8-bit codes), `RGBA16Float` (half-float
 //!   codes) and `RGB10A2Unorm` (bits): the bytes the split leaves, byte for byte, with a snapshot
-//!   for each reader where the device takes the path, the rule does (for each of them, `R8Unorm`'s
-//!   copy of 1024 bytes too) and the device keeps the color in place (an `RGBA8Unorm` one's on
-//!   every such device; the counts printed say which others did).
+//!   for each reader where the device takes the path, the rule does (not `R8Unorm`'s or
+//!   `RG8Unorm`'s, whose copies of 1 and 2 bytes a texel weigh less) and the device keeps the
+//!   color in place (an `RGBA8Unorm` one's on every such device; the counts printed say which
+//!   others did).
 //! - [`without_a_barrier_the_readers_read_the_texels_from_before_the_pass`]: the same draws with
 //!   no barrier: every reader reads [`CLEARED`], the texel from before the pass at its own pixel,
 //!   through the copy taken before the pass: `FILL + 3 * CLEARED`, no snapshot. The M3 Max's
@@ -66,7 +70,7 @@
 //!   depth or stencil first and leave the drawing draw nothing (`FILL`). Under a `Less` depth
 //!   without writes both instances draw (`3 * FILL`).
 
-use super::attachment_reads::{corners, floats, function, red, SIDE};
+use super::attachment_reads::{floats, function, red};
 use super::degrade_notices::on_device_with;
 use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::in_place_rows;
@@ -92,11 +96,22 @@ const CLEARED: u8 = 64;
 /// The red draw F writes over the block.
 const FILL: u8 = 40;
 
+/// The target's side, in pixels: large enough that a reader of a 4-byte color through the whole
+/// target's scissor takes the snapshot by the area rule (`render/snapshot.rs`).
+const SIDE: u64 = 1024;
+
 /// The block F and the readers draw over.
 const BLOCK: [u64; 4] = [8, 8, 16, 16];
 
 /// A scissor of a quarter of the target, over the block.
 const QUARTER: [u64; 4] = [8, 8, 24, 24];
+
+/// The corners, in normalized device coordinates, of the target's pixels `[x0, x1) x [y0, y1)`.
+fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
+    let x = |p: u64| p as f32 / SIDE as f32 * 2.0 - 1.0;
+    let y = |p: u64| 1.0 - p as f32 / SIDE as f32 * 2.0;
+    floats([x(x0), y(y1), x(x1), y(y0)])
+}
 
 /// The features the snapshot path takes.
 const FEATURES: [VkFeature; 4] = [
@@ -324,8 +339,8 @@ fn readers_over(
     (bytes, moved, made)
 }
 
-/// [`readers`]' first test's pass over a private `RGBA8Unorm` target, through the block's
-/// scissor, beside a `Depth32Float_Stencil8` attachment that an earlier pass clears to depth 1 and
+/// [`readers`]' first test's pass over a private `RGBA8Unorm` target, through the whole
+/// target's scissor, beside a `Depth32Float_Stencil8` attachment that an earlier pass clears to depth 1 and
 /// stencil 0: F, under Metal's default depth/stencil state, then a barrier and the reader in two
 /// instances under a state of `reader` (stencil reference 0). The target's bytes, tight rows, and
 /// what the pass moved of the counts.
@@ -392,14 +407,6 @@ fn depth_stencil_readers(
     encoder.set_fragment_texture(Some(&target), 0).unwrap();
     encoder.set_depth_stencil_state(&reader).unwrap();
     encoder.set_stencil_reference_value(0);
-    let [x0, y0, x1, y1] = BLOCK;
-    let rect = ScissorRect {
-        x: x0,
-        y: y0,
-        width: x1 - x0,
-        height: y1 - y0,
-    };
-    encoder.set_scissor_rect(rect).unwrap();
     encoder.memory_barrier_with_scope(
         BarrierScope::RENDER_TARGETS,
         RenderStages::FRAGMENT,
@@ -481,8 +488,7 @@ fn overlapping_primitives_read_what_the_draws_before_the_barrier_wrote() {
             },
             |device, _messages| {
                 let queue = device.new_command_queue().unwrap();
-                let (bytes, moved) =
-                    readers(device, &queue, PixelFormat::RGBA8Unorm, true, Some(BLOCK));
+                let (bytes, moved) = readers(device, &queue, PixelFormat::RGBA8Unorm, true, None);
                 let takes = snapshots(device);
                 eprintln!("snapshot reads, features {takes}, exact {exact}: {moved:?}");
                 holds("after barriers", &bytes, 6 * FILL);
@@ -514,21 +520,21 @@ fn readers_take_the_snapshot_by_the_area_rule() {
         |device| {
             let queue = device.new_command_queue().unwrap();
             let narrow = PixelFormat::RGBA8Unorm;
+            let (snapshotted, splits) = if snapshots(device) { (2, 0) } else { (0, 2) };
             let (bytes, moved) = readers(device, &queue, narrow, true, None);
             eprintln!("snapshot reads, whole scissor, RGBA8Unorm: {moved:?}");
             holds("whole scissor", &bytes, 6 * FILL);
             assert_eq!(
                 (moved.snapshotted, moved.splits),
-                (0, 2),
+                (snapshotted, splits),
                 "RGBA8Unorm over the target: snapshots, splits"
             );
-            let (snapshotted, splits) = if snapshots(device) { (2, 0) } else { (0, 2) };
             let (bytes, moved) = readers(device, &queue, narrow, true, Some(QUARTER));
             eprintln!("snapshot reads, quarter scissor, RGBA8Unorm: {moved:?}");
             holds("quarter scissor", &bytes, 6 * FILL);
             assert_eq!(
                 (moved.snapshotted, moved.splits),
-                (snapshotted, splits),
+                (0, 2),
                 "RGBA8Unorm over a quarter: snapshots, splits"
             );
             let wide = PixelFormat::RGBA16Float;
@@ -587,7 +593,7 @@ fn each_form_reads_what_the_split_reads() {
             },
             |device| {
                 let queue = device.new_command_queue().unwrap();
-                let (bytes, moved) = readers(device, &queue, format, true, Some(BLOCK));
+                let (bytes, moved) = readers(device, &queue, format, true, None);
                 assert_eq!(moved.splits, 2, "{format:?}: a split for each reader");
                 split = Some(bytes);
             },
@@ -596,7 +602,7 @@ fn each_form_reads_what_the_split_reads() {
             |_| {},
             |device| {
                 let queue = device.new_command_queue().unwrap();
-                let (bytes, moved) = readers(device, &queue, format, true, Some(BLOCK));
+                let (bytes, moved) = readers(device, &queue, format, true, None);
                 eprintln!("snapshot reads, {format:?}: {moved:?}");
                 // Each reader through a snapshot where the device keeps the color in place (its
                 // image has storage usage), as `RGBA8Unorm`'s on every device that takes the path.
@@ -649,8 +655,7 @@ fn with_a_feature_withheld_the_readers_take_the_split() {
             },
             |device| {
                 let queue = device.new_command_queue().unwrap();
-                let (bytes, moved) =
-                    readers(device, &queue, PixelFormat::RGBA8Unorm, true, Some(BLOCK));
+                let (bytes, moved) = readers(device, &queue, PixelFormat::RGBA8Unorm, true, None);
                 eprintln!("snapshot reads, {withheld:?} withheld: {moved:?}");
                 holds(&format!("{withheld:?} withheld"), &bytes, 6 * FILL);
                 assert_eq!(

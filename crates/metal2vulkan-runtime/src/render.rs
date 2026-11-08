@@ -7185,25 +7185,8 @@ impl RenderLowering {
         let rects = self
             .state
             .vk_scissors_in(&self.scissors, selects, &mut scissors);
-        let mut drawn: Option<[u32; 4]> = None;
-        for r in rects
-            .iter()
-            .filter(|r| r.extent.width > 0 && r.extent.height > 0)
-        {
-            let (x, y) = (r.offset.x.max(0) as u32, r.offset.y.max(0) as u32);
-            let rect = [x, y, x + r.extent.width, y + r.extent.height];
-            drawn = Some(match drawn {
-                Some([a, b, c, d]) => [
-                    a.min(rect[0]),
-                    b.min(rect[1]),
-                    c.max(rect[2]),
-                    d.max(rect[3]),
-                ],
-                None => rect,
-            });
-        }
         // A draw of no pixel reads nothing: its copy is left as it was.
-        let Some([x0, y0, x1, y1]) = drawn else {
+        let Some(drawn) = scissors_bound(rects) else {
             return false;
         };
         let mut bounded = false;
@@ -7245,13 +7228,10 @@ impl RenderLowering {
             let Some(texture) = texture.filter(|t| own && t.attached_in(&self.layout)) else {
                 continue;
             };
-            let (w, h) = (texture.width() as u32, texture.height() as u32);
-            if w == 0 || h == 0 {
+            let Some(loads) = own_pixel_loads(drawn, texture) else {
                 continue;
-            }
-            let lo = |p: u32, side: u32| p.saturating_sub(1).min(side - 1);
-            let hi = |p: u32, side: u32| (p + 1).min(side);
-            used.loads = Some([lo(x0, w), lo(y0, h), hi(x1, w), hi(y1, h)]);
+            };
+            used.loads = Some(loads);
             bounded = true;
         }
         bounded
@@ -13099,6 +13079,44 @@ fn late_store(
         ));
     }
     Ok(action)
+}
+
+/// The rectangle `[x0, y0, x1, y1)` bounding the pixels of `rects` (a draw's Vulkan scissors),
+/// those of no pixel left out: `None` where none has one.
+fn scissors_bound(rects: &[vk::Rect2D]) -> Option<[u32; 4]> {
+    let mut drawn: Option<[u32; 4]> = None;
+    for r in rects
+        .iter()
+        .filter(|r| r.extent.width > 0 && r.extent.height > 0)
+    {
+        let (x, y) = (r.offset.x.max(0) as u32, r.offset.y.max(0) as u32);
+        let rect = [x, y, x + r.extent.width, y + r.extent.height];
+        drawn = Some(match drawn {
+            Some([a, b, c, d]) => [
+                a.min(rect[0]),
+                b.min(rect[1]),
+                c.max(rect[2]),
+                d.max(rect[3]),
+            ],
+            None => rect,
+        });
+    }
+    drawn
+}
+
+/// The texels of `texture` a draw whose scissors `drawn` bounds ([`scissors_bound`]) reads at its
+/// fragments' own pixels, `[x0, y0, x1, y1)`: `drawn` widened by a pixel each way, for its helper
+/// invocations, and clamped as the read's coordinate is, on each axis
+/// `[min(max(x0 - 1, 0), w - 1), min(x1 + 1, w))`, `w` the texture's (`texture/attached_reads.rs`).
+/// `None` for a texture of no texel.
+fn own_pixel_loads([x0, y0, x1, y1]: [u32; 4], texture: &Texture) -> Option<[u32; 4]> {
+    let (w, h) = (texture.width() as u32, texture.height() as u32);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let lo = |p: u32, side: u32| p.saturating_sub(1).min(side - 1);
+    let hi = |p: u32, side: u32| (p + 1).min(side);
+    Some([lo(x0, w), lo(y0, h), hi(x1, w), hi(y1, h)])
 }
 
 #[cfg(test)]

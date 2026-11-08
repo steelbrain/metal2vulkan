@@ -101,21 +101,23 @@
 //!   split copies the color whatever the draw covers. The rule weighs each form at the share least
 //!   favourable to it, in bytes of the split's copy: the snapshot at [`READER_COST`] and
 //!   [`SNAPSHOT_PIXEL_COST`] at each pixel its scissors bound, for each color (the draw covering
-//!   them whole), the split at [`READER_COST`] and its copy of each color's level, its texel bytes
-//!   each, whatever the snapshot's form (the draw covering nothing). It takes the form whose cost
-//!   there is the smaller multiple of the other form's: the snapshot where `READER_COST *
-//!   (READER_COST + pixels * SNAPSHOT_PIXEL_COST) <= (READER_COST + bytes)^2`. A reader whose
-//!   snapshot costs no more than the split's copy where it covers its scissors whole takes it, as
-//!   does a reader through scissors of a large color whatever it covers: a 4-byte color's reader,
-//!   `RGBA8Unorm`'s or `BGRA8Unorm`'s, takes the snapshot through scissors of up to two fifths of
-//!   its level at any size, and through the whole level from 786,432 pixels (1024x768), an
-//!   `RGBA16Float` one's through four fifths, and its whole level from 65,536 pixels (256x256),
-//!   and an `RGBA32Float` one's at any area. On the Iris Xe, the Radeon 780M and the RX 7900 XTX
+//!   them whole), the split at [`READER_COST`] and its copy (the draw covering nothing): each
+//!   color's texels its own-pixel reads take, inside the rectangle bounding its scissors a pixel
+//!   wider each way, where the color is a texture of one level and one slice, whose copy is cut
+//!   to them (`render.rs`'s `bound_own_pixel_reads`), else every texel of its level, its texel
+//!   bytes each, whatever the snapshot's form. It takes the form whose cost there is the smaller
+//!   multiple of the other form's: the snapshot where `READER_COST * (READER_COST + pixels *
+//!   SNAPSHOT_PIXEL_COST) <= (READER_COST + bytes)^2`. A reader whose snapshot costs no more than
+//!   the split's copy where it covers its scissors whole takes it, as does a reader through large
+//!   scissors whatever it covers: a reader of a one-level, one-slice 4-byte color,
+//!   `RGBA8Unorm`'s or `BGRA8Unorm`'s, takes the snapshot through scissors whose rectangle holds
+//!   about 786,432 pixels (1024x768) or more, an `RGBA16Float` one's from about 65,536 (256x256),
+//!   and an `RGBA32Float` one's at any size. On the Radeon 780M and the RX 7900 XTX
 //!   (`runtime_lane::attachment_read_costs::snapshot_area_costs`, 30 readers a frame over private
-//!   `BGRA8Unorm` targets of 1280x720 to 3662x2039, no scissor) a reader over 1.5% of the target
-//!   took 0.09 to 0.43 times the split's GPU time, and one over the whole target 1.04 to 1.28
-//!   times on the Iris Xe, 2.4 to 2.8 times on the Radeon 780M and 1.3 to 2.1 times on the RX 7900
-//!   XTX.
+//!   `BGRA8Unorm` targets of 1280x720 to 3662x2039, no scissor, the split on a device that
+//!   withholds `fragmentShaderPixelInterlock`) a reader over 1.5% of the target took 0.08 to 0.43
+//!   times the split's GPU time, and one over the whole target 1.8 to 2.3 times on the Radeon 780M
+//!   and 1.3 to 2.1 times on the RX 7900 XTX.
 //! - **Pins.** A fetch of a color in the pixel interlock reads and writes its image as a storage
 //!   image, so a later fetch of a color whose image lacks `STORAGE` renders it through a stand-in
 //!   (`attachment_stand_in.rs`), which the pass's end puts in place for the whole pass, copied in
@@ -153,6 +155,7 @@ use crate::render_values::StoreAction;
 use crate::texture::Texture;
 use ash::vk;
 use metal2vulkan::bind::{BindingPlan, ImageSource, PushHole, WriteSource};
+use metal2vulkan::metal::TextureType;
 use metal2vulkan::pipeline::{SlotClass, SlotRef, SnapshotForm, Stage};
 use std::collections::BTreeSet;
 
@@ -197,7 +200,8 @@ const SNAPSHOT_PIXEL_COST: u64 = 20;
 const READER_COST: u64 = 1 << 20;
 
 /// Whether a draw takes the snapshot by the module docs' area rule: its scissors bound `pixels`
-/// pixels over all the colors it reads so, of `bytes` bytes in all in the colors' levels.
+/// pixels over all the colors it reads so, and the split's copy of those colors moves `bytes`
+/// bytes.
 pub(crate) fn snapshot_within(pixels: u64, bytes: u64) -> bool {
     let (fixed, pixels, bytes) = (
         u128::from(READER_COST),
@@ -461,8 +465,8 @@ impl RenderLowering {
     /// [`snapshot_weights`](Self::snapshot_weights); counted by its size where
     /// `METAL2VULKAN_LOG_PIPELINES` is set (`reader_sizes.rs`).
     fn snapshot_cheaper(&self, pipeline: &DrawingState, colors: &[usize]) -> bool {
-        let (covered, pixels, bytes) = self.snapshot_weights(pipeline, colors);
-        let within = self.over_bytes(colors) || snapshot_within(covered, bytes);
+        let (covered, pixels, bytes, copied) = self.snapshot_weights(pipeline, colors);
+        let within = self.over_bytes(colors) || snapshot_within(covered, copied);
         if crate::pipeline::creation_log_enabled() {
             let device = self.core.device();
             let line = crate::device::lock(&device.shared().reader_sizes)
@@ -497,33 +501,46 @@ impl RenderLowering {
     /// the area rule (the module docs). The snapshot draw costs [`SNAPSHOT_PIXEL_COST`] for each
     /// color at each pixel the draw covers, at most those its Vulkan scissors bound
     /// (`EncoderState::vk_scissors`: each viewport's pixels within its scissor rectangle, inside
-    /// the render area); the split's copy is weighed as reading and writing each color's every
-    /// texel of the rendered level, its format's bytes each, an upper bound: a copy of a
-    /// one-level, one-slice texture's image moves only the texels around the draw's scissors, or
-    /// those the instances before changed (`ShadowCopies::cuts`), which errs toward the snapshot.
-    /// The draw's pixels for every color (the scissors' pixels times the colors), the colors'
-    /// pixels, and their bytes.
-    fn snapshot_weights(&self, pipeline: &DrawingState, colors: &[usize]) -> (u64, u64, u64) {
+    /// the render area); the split's copy is weighed as reading and writing each color's texels
+    /// its own-pixel reads take (`render.rs`'s `own_pixel_loads`) where the color is a texture of
+    /// one level and one slice ([`copy_cut`]), else every texel of the rendered level, its
+    /// format's bytes each: an upper bound, as a later copy moves only those of them the instances
+    /// before changed, which errs toward the snapshot. The draw's pixels for every color (the
+    /// scissors' pixels times the colors), the colors' pixels, their bytes, and the bytes the
+    /// split's copy moves.
+    fn snapshot_weights(&self, pipeline: &DrawingState, colors: &[usize]) -> (u64, u64, u64, u64) {
         let selects = pipeline.base().graphics.writes_viewport_index
             || self.amplification.offsets_viewports();
         let mut rects = [vk::Rect2D::default(); MAX_VIEWPORTS];
-        let bound: u64 = self
+        let rects = self
             .state
-            .vk_scissors_in(&self.scissors, selects, &mut rects)
+            .vk_scissors_in(&self.scissors, selects, &mut rects);
+        let bound: u64 = rects
             .iter()
             .map(|r| u64::from(r.extent.width) * u64::from(r.extent.height))
             .sum();
-        let (pixels, copied) = colors
+        let drawn = super::scissors_bound(rects);
+        let (pixels, bytes, copied) = colors
             .iter()
             .filter_map(|&index| self.layout.colors.get(index)?.as_ref())
             .map(|color| {
+                let texture = &color.target.texture;
                 let [width, height] = color.target.extent;
-                let bytes = block_bytes(color.target.texture.pixel_format()).unwrap_or(0);
+                let texel = u64::from(block_bytes(texture.pixel_format()).unwrap_or(0));
                 let pixels = u64::from(width) * u64::from(height);
-                (pixels, pixels * u64::from(bytes))
+                let copied = match drawn.filter(|_| copy_cut(texture)) {
+                    Some(drawn) => super::own_pixel_loads(drawn, texture).map_or(0, |r| {
+                        u64::from(r[2] - r[0]) * u64::from(r[3] - r[1]) * texel
+                    }),
+                    None if drawn.is_none() => 0,
+                    None => pixels * texel,
+                };
+                (pixels, pixels * texel, copied)
             })
-            .fold((0, 0), |(p, c), (pixels, bytes)| (p + pixels, c + bytes));
-        (bound * colors.len() as u64, pixels, copied)
+            .fold((0, 0, 0), |(p, b, c), (pixels, bytes, copied)| {
+                (p + pixels, b + bytes, c + copied)
+            });
+        (bound * colors.len() as u64, pixels, bytes, copied)
     }
 
     /// Whether the plan `settled` for `wanted` reads through them (the module docs' checks that
@@ -639,6 +656,20 @@ impl RenderLowering {
         snapshot_fallback(self.core.device(), reason);
         None
     }
+}
+
+/// Whether the split's copy of `texture` for a draw that reads it at its own pixels is cut to the
+/// texels around the draw's scissors (`render.rs`'s `bound_own_pixel_reads`): its shadow is cut to
+/// a rectangle (`ShadowCopies::cuts`) where it copies one region, one level and one slice of a 2D
+/// image (`texture/view_shadow.rs`).
+fn copy_cut(texture: &Texture) -> bool {
+    texture.mipmap_level_count() == 1
+        && texture.array_length() == 1
+        && texture.depth() == 1
+        && !matches!(
+            texture.texture_type(),
+            TextureType::Cube | TextureType::CubeArray
+        )
 }
 
 /// Whether `slot` is a fragment texture slot among `slots`.
