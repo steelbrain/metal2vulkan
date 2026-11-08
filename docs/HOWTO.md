@@ -651,24 +651,38 @@ submission, can give the device the guest's RAM once instead:
   dma-bufs (RADV with `with_dma_buf`) and whose barriers order blits through two imports of the
   same pages. There a copy takes its runs of the chunks not imported by address across them,
   those that share a host page as one, and imports each list of at most `most_runs` of them (and
-  at most a chunk's and `with_largest_dma_buf`'s bytes) as one dma-buf of the source, held until
-  its command buffer completed, then freed (`WorkCounts::host_ram_run_list_imports`, their time
-  in `host_ram_run_list_import_nanos`): a tile of 1,800 pages anywhere in the RAM is one list or
-  two. It neither imports those chunks nor asks for them, so copies pin the pages they copy while
-  they run and none of the RAM the guest never touched; a chunk already imported serves its pages
-  as before. Without the source a copy of more than 16 ranges of a chunk imports the chunk (or
-  waits for its import under way) and keeps it: that pins every page of the chunk, up to 512 MiB,
-  `udmabuf` allocating those the guest never touched, for good, and later copies over it import
-  nothing. With it every copy over a chunk not imported pays its lists' imports. On the Radeon
-  780M (RADV, `tests/host_ram_listed_bench.rs`, a guest that wrote half its RAM in 2 MiB extents
-  and scrolls tiles of 1,800 of those pages, filled and downloaded): the RAM's file held 4028 MiB
-  of an 8 GiB guest at the end, where whole-chunk imports would have made all 8192 MiB resident,
-  and 8300 MiB of a 16 GiB guest, where they would have made 16384 MiB. A tile laid as a
-  surface's pages (455 to 620 sorted runs, one list) took 4.1 to 4.5 ms from the commit to the
-  completion and 0.6 to 1.0 ms to encode, first copy or repeated; a tile of 1,800 pages each
-  anywhere (two lists) 0.9 to 1.25 ms and 0.7 to 1.3 ms; over an imported chunk 0.39 to 0.48 ms
-  and 0.09 to 0.11 ms. The GPU's own time was about 0.23 ms in each. Each request of a list is
-  whole host pages inside one chunk, by the RAM's own addresses, by start and sharing no page,
+  at most a chunk's and `with_largest_dma_buf`'s bytes) as one dma-buf of the source
+  (`WorkCounts::host_ram_run_list_imports`, their time in `host_ram_run_list_import_nanos`): a
+  tile of 1,800 pages anywhere in the RAM is one list or two. Each list is kept past its command
+  buffer for the copies after it: a copy takes a kept list for each of its runs that one of the
+  list's runs holds whole (a device cache filled and downloaded again, a tile copied both ways) and
+  imports nothing for those, lists of its own for the rest. The lists kept hold at most 64 MiB and
+  are at most 16, the least recently taken let go of first; each goes once no copy took it for 2 s
+  and no command buffer holds it, and all go as the device's use of the RAM ends
+  (`run_imports_live` counts them). It neither imports those chunks nor asks for them, so copies
+  pin the pages they copy while they run or their lists are kept, and none of the RAM the guest
+  never touched; a chunk already imported serves its pages as before. Without the source a copy of
+  more than 16 ranges of a chunk imports the chunk (or waits for its import under way) and keeps
+  it: that pins every page of the chunk, up to 512 MiB, `udmabuf` allocating those the guest never
+  touched, for good, and later copies over it import nothing. With it a copy over a chunk not
+  imported pays its lists' imports where no kept list holds its pages. On the Radeon 780M (RADV,
+  `tests/host_ram_listed_bench.rs`, a guest that wrote half its RAM in 2 MiB extents and scrolls
+  tiles of 1,800 of those pages, each filled and downloaded, then one of the last 24 filled and
+  downloaded again; then a 5 MiB device cache filled and downloaded 40 times each): the RAM's file
+  held 4028 MiB of an 8 GiB guest at the end, where whole-chunk imports would have made all 8192
+  MiB resident, and 8300 MiB of a 16 GiB guest, where they would have made 16384 MiB, the same with
+  the lists kept as without. A tile laid as a surface's pages (454 to 620 sorted runs, one list)
+  took 3.9 to 4.3 ms from the commit to the completion and 0.7 to 0.9 ms to encode where it
+  imported its list, and 0.53 to 0.60 ms and 0.6 to 1.0 ms where it took the list kept from its
+  fill; a tile of 1,800 pages each anywhere (two lists) 0.83 to 1.15 ms and 1.3 to 1.8 ms
+  importing, 0.46 to 0.50 ms and 0.42 to 0.54 ms taking them. The 5 MiB cache filled again took
+  0.37 to 0.43 ms and 0.2 to 0.4 ms (3.0 to 3.2 ms and 0.7 to 1.0 ms with no list kept); over an
+  imported chunk 0.37 to 0.40 ms and 0.12 to 0.14 ms. The 24 tiles of the scroll that are filled
+  again pass the 64 MiB the lists kept hold (about nine such tiles), so a third to a half of their
+  fills took a kept list. A copy with a run no kept list holds looks through all of them: 48 to
+  63 µs for a surface's tile against nine lists, 250 to 290 µs for 1,800 runs anywhere against 16.
+  The GPU's own time was about 0.23 ms for a tile and 0.17 ms for the cache. Each request of a list
+  is whole host pages inside one chunk, by the RAM's own addresses, by start and sharing no page,
   with a `granule` of its `length`: answer one dma-buf of exactly those pages in that order, its
   `length` their total. A source that fails, or answers a dma-buf of another length, leaves the
   copy to the chunk.

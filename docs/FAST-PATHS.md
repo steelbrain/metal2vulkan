@@ -214,12 +214,14 @@ recorded here.
   released after its idle window and the buffer bound in the chunk at its next blit, but a heap's,
   or a buffer's whose address was handed out, stays while it lives. A copy by runs over a chunk not
   imported, of a RAM with a source of run lists (`HostRam::with_dma_buf_of_runs`, the consumer's
-  choice), imports lists of its own pages instead, freed with its command buffer, and not the chunk:
-  so the copies make none of the guest's untouched RAM resident, and each copy pays its lists'
-  imports (on the Radeon 780M a tile of 1,800 pages laid as a surface's took 4.1 to 4.5 ms from the
-  commit to the completion, 0.39 to 0.48 ms over an imported chunk; a guest's scroll of such tiles
-  over half its RAM left 4028 MiB of an 8 GiB guest resident, where whole chunks would have made
-  8192 MiB, and 8300 MiB of 16384 for a 16 GiB guest).
+  choice), imports lists of its own pages instead, kept past its command buffer for the copies of
+  the same pages after it (at most 64 MiB and 16 lists, each released once no copy took it for
+  2 s), and not the chunk: so the copies make none of the guest's untouched RAM resident, and a
+  copy whose pages no kept list holds pays its lists' imports (on the Radeon 780M a tile of 1,800
+  pages laid as a surface's took 3.9 to 4.3 ms from the commit to the completion where it imported
+  its list, 0.53 to 0.60 ms where it took a kept one, 0.37 to 0.40 ms over an imported chunk; a
+  guest's scroll of such tiles over half its RAM left 4028 MiB of an 8 GiB guest resident, where
+  whole chunks would have made 8192 MiB, and 8300 MiB of 16384 for a 16 GiB guest).
 - **A pass in color groups runs once per group** (the `ColorAttachmentGroups` row above), the later
   groups' draws again over a twin of the depth and stencil, made for the pass and loaded by a copy
   or a clear (`render/color_groups.rs`). On lavapipe restricted to four colors
