@@ -41,6 +41,8 @@ mod buffer_texture;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod caller_queue_writes;
 mod capabilities;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod clip_bursts;
 mod color_reformat;
 mod command_buffer;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
