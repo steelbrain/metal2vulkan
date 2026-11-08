@@ -9,8 +9,9 @@
 //! A compositor's thread commits a small fill every [`FRAME_GAP`] throughout, on a queue of its
 //! own, and times each command buffer from its commit until it is scheduled (its `vkQueueSubmit`
 //! returned). Per clip the test prints (`CLIP-BURSTS` lines) the makings' times by kind, the
-//! `VkDeviceMemory` allocated and freed, the pooled blocks made and freed, the frees by cause,
-//! and the compositor's command buffers that took [`HELD`] or longer to be scheduled.
+//! `VkDeviceMemory` allocated and freed, the recycler's parked and evicted buffers and images,
+//! the pooled blocks made and freed, the frees by cause, and the compositor's command buffers
+//! that took [`HELD`] or longer to be scheduled.
 //!
 //! The mix is the counts' (3062 buffers, 1175 textures) at sizes of a guest's small resources,
 //! and 34 decoded 4K NV12 pictures in `Private` exportable buffers (`exported_memory.rs`), as many
@@ -179,14 +180,22 @@ fn held(frames: &Frames, phase: (Duration, Duration)) -> String {
     )
 }
 
-/// What a clip's phase changed of the counts that tell memory's churn.
+/// What a clip's phase changed of the counts that tell memory's churn: its allocations and
+/// frees, by cause, and the recycler's parked and evicted buffers and images, whose evictions
+/// free their placements (`recycle.rs`).
 fn churn(before: &WorkCounts, after: &WorkCounts) -> String {
     let (b, a) = (&before.memory_frees, &after.memory_frees);
+    let (bc, ac) = (&before.object_churn, &after.object_churn);
     format!(
-        "vkAllocateMemory {} vkFreeMemory {}; pooled blocks made {} freed {}; frees dedicated {} \
-         emptied {} stale {}; live: pooled {} empty {} dedicated {}",
-        after.object_churn.vk_memory_allocations - before.object_churn.vk_memory_allocations,
-        after.object_churn.vk_memory_freed - before.object_churn.vk_memory_freed,
+        "vkAllocateMemory {} vkFreeMemory {}; recycler: buffers parked {} evicted {}, images \
+         parked {} evicted {}; pooled blocks made {} freed {}; frees dedicated {} emptied {} \
+         stale {}; live: pooled {} empty {} dedicated {}",
+        ac.vk_memory_allocations - bc.vk_memory_allocations,
+        ac.vk_memory_freed - bc.vk_memory_freed,
+        ac.buffers_parked - bc.buffers_parked,
+        ac.buffers_evicted - bc.buffers_evicted,
+        ac.images_parked - bc.images_parked,
+        ac.images_evicted - bc.images_evicted,
         after.pooled_memory_blocks_made - before.pooled_memory_blocks_made,
         after.pooled_memory_blocks_freed - before.pooled_memory_blocks_freed,
         a.dedicated - b.dedicated,
