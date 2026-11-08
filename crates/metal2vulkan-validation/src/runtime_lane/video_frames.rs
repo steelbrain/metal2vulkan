@@ -31,6 +31,7 @@ use super::dma_buf_imports::{udmabuf_openable, Calls, Memfd, View};
 use super::host_memory::{Mapping, GUEST_PAGE};
 use super::no_copy_textures::{floats, staged};
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
+use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, SamplerMinMagFilter, TextureUsage};
