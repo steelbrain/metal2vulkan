@@ -20,7 +20,6 @@ use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
     ResourceId, ResourceIdKind, ResourceOptions, Texture, TextureDescriptor,
 };
-use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -408,7 +407,7 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
     // end inside lines has such a height); the other accesses may need a feature of the linear
     // modifier the device lacks, which leaves them unchecked.
     let past_height = (device.properties().driver_defects)
-        .contains(&RuntimeDriverDefect::ExplicitPlaneRowsPastHeight);
+        .contains(&metal2vulkan::error::RuntimeDriverDefect::ExplicitPlaneRowsPastHeight);
     for rows in RowEnds::ALL {
         if rows == RowEnds::InLines && past_height {
             continue;
