@@ -1,7 +1,7 @@
-//! A new heap set's layout and pool are made with no lock held (`heap_sets.rs`, `Unplaced`): a
-//! driver may clear every element of the pool as it makes it (lavapipe takes milliseconds over
-//! arrays of 65536 elements), and a texture made on another thread meanwhile takes the `heaps` lock
-//! to place itself. The test pauses the making thread once it made the set's layout and pool
+//! A new heap set's layout and pool are made with no lock held (`heap_sets.rs`,
+//! `SetEntry::unplaced`): a driver may clear every element of the pool as it makes it (lavapipe
+//! takes milliseconds over arrays of 65536 elements), and a texture made on another thread
+//! meanwhile takes the `heaps` lock to place itself. The test pauses the making thread once it made the set's layout and pool
 //! (`DeviceHeaps::pause_making`), makes a texture meanwhile, which is made at once where it waited
 //! for the pause to end, then lets the making go: the set, placed after, holds the texture, which
 //! the dispatch that made the set reads through its resource ID.

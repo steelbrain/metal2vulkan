@@ -180,7 +180,10 @@
 //!   bytes of the Metal address space (`Device::address_space_for`), a resource of an automatic
 //!   heap its range of the heap (`Heap::allocate`) -- waits for every passing hold of the device
 //!   to end first: what a released resource held is back by then, whichever thread let go of it
-//!   last. Only the program's code in such a going waits for the thread's outermost hold to end:
+//!   last. A new heap set's walk of the live textures takes one for each part of them, and
+//!   between two lets every making waiting go on first (`heap_sets::Walk`,
+//!   [`Device::let_makings_pass`]), so a making waits for one part of it at most. Only the
+//!   program's code in such a going waits for the thread's outermost hold to end:
 //!   a release of the program's (a deallocator, a keep-alive, a range token, a dma-buf source,
 //!   `exit_guard::program_release`, [`released_past_passing_hold`]) and a message for the
 //!   device's message sink ([`held_past_passing_hold`]) run then, in order, on a handler thread
@@ -1127,11 +1130,15 @@ impl Drop for IdHold {
 }
 
 /// The device's passing holds of a program's textures and sampler states (the module docs): how
-/// many are under way, read with one load by a making where none is, and the signal that the
-/// last ended.
+/// many are under way, read with one load by a making where none is, how many makings wait for
+/// them, read with one load by a walk in parts between two, and the signal that the last ended,
+/// or that the last waiting making went on.
 #[derive(Default)]
 pub(super) struct PassingHolds {
     under_way: AtomicUsize,
+    /// The makings waiting in [`wait`](Self::wait), which a walk in parts lets pass
+    /// ([`Device::let_makings_pass`]).
+    makings: AtomicUsize,
     /// Held to wait for [`ended`](Self::ended), and to signal it.
     waiting: Mutex<()>,
     ended: Condvar,
@@ -1185,8 +1192,13 @@ impl PassingHolds {
             return;
         }
         let mut waiting = lock(&self.waiting);
+        self.makings.fetch_add(1, Ordering::SeqCst);
         while self.under_way.load(Ordering::SeqCst) > 0 {
             waiting = (self.ended.wait(waiting)).unwrap_or_else(PoisonError::into_inner);
+        }
+        // Under the lock: a walk that read a making waiting is waiting for this signal by now.
+        if self.makings.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.ended.notify_all();
         }
     }
 }
@@ -1199,6 +1211,20 @@ impl Device {
         (self.shared().passing_holds.under_way).fetch_add(1, Ordering::SeqCst);
         INSIDE.with(|inside| inside.set(inside.get() + 1));
         PassingHold(self)
+    }
+
+    /// Let the makings waiting for the passing holds go on, between two parts of a walk that
+    /// takes a passing hold for each (the module docs): one load where none waits. The caller is
+    /// inside no passing hold and holds no lock.
+    pub(super) fn let_makings_pass(&self) {
+        let holds = &self.shared().passing_holds;
+        if holds.makings.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        let mut waiting = lock(&holds.waiting);
+        while holds.makings.load(Ordering::SeqCst) > 0 {
+            waiting = (holds.ended.wait(waiting)).unwrap_or_else(PoisonError::into_inner);
+        }
     }
 }
 

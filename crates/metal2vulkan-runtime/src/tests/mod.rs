@@ -181,6 +181,8 @@ mod heap_refused_notice;
 mod heap_set_copies;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_set_unlocked;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_set_walk;
 mod heap_sets;
 mod heap_tiled;
 mod heap_tiled_blocks;
