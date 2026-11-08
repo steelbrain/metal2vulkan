@@ -1300,9 +1300,11 @@ impl Device {
         Arc::ptr_eq(self.line(), other.line())
     }
 
-    /// Whether the device was lost.
+    /// Whether the device was lost: not to a public call that took its arguments on it before
+    /// its loss, which the loss follows (`Device::at_serving_taking`, `line.rs`).
     pub(super) fn is_lost(&self) -> bool {
-        self.shared().lost()
+        let shared = self.shared();
+        shared.lost() && !line::runs_on(shared)
     }
 
     /// Record that the device was lost: its line recovers at the next call that needs the device,

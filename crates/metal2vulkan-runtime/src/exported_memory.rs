@@ -139,7 +139,7 @@ impl Device {
         length: u64,
         options: ResourceOptions,
     ) -> Result<Buffer, Error> {
-        self.current().new_exportable_buffer_now(length, options)
+        self.at_serving(|device| device.new_exportable_buffer_now(length, options))
     }
 
     /// [`Device::new_exportable_buffer`] on the generation that serves (`device/line.rs`).

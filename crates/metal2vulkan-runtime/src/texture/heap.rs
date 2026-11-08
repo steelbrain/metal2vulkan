@@ -1647,7 +1647,7 @@ impl Device {
         &self,
         descriptor: &TextureDescriptor,
     ) -> Result<SizeAndAlign, Error> {
-        self.current().heap_texture_size_and_align_now(descriptor)
+        self.at_serving(|device| device.heap_texture_size_and_align_now(descriptor))
     }
 
     /// [`Device::heap_texture_size_and_align`] on the generation that serves (`device/line.rs`).
@@ -1726,8 +1726,7 @@ impl Device {
         &self,
         descriptor: &TextureDescriptor,
     ) -> Result<Option<SizeAndAlign>, Error> {
-        self.current()
-            .metal_heap_texture_size_and_align_now(descriptor)
+        self.at_serving(|device| device.metal_heap_texture_size_and_align_now(descriptor))
     }
 
     /// [`Device::metal_heap_texture_size_and_align`] on the generation that serves

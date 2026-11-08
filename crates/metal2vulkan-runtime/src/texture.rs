@@ -1695,7 +1695,7 @@ impl Device {
     /// holds no slot, and counts in no plain allocation or reservation, otherwise made as here (a
     /// runtime extension, for a caller's helper texture).
     pub fn new_texture(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error> {
-        self.current().new_texture_now(descriptor)
+        self.at_serving(|device| device.new_texture_now(descriptor))
     }
 
     /// [`Device::new_texture`] on the generation that serves (`device/line.rs`).
@@ -1728,17 +1728,7 @@ impl Device {
         descriptor: &TextureDescriptor,
         token: RangeToken,
     ) -> Result<Texture, Error> {
-        self.current()
-            .new_texture_with_range_token_now(descriptor, token)
-    }
-
-    /// [`Device::new_texture_with_range_token`] on the generation that serves (`device/line.rs`).
-    pub(crate) fn new_texture_with_range_token_now(
-        &self,
-        descriptor: &TextureDescriptor,
-        token: RangeToken,
-    ) -> Result<Texture, Error> {
-        let texture = self.new_texture_now(descriptor)?;
+        let texture = self.at_serving(|device| device.new_texture_now(descriptor))?;
         texture.keep_range_token(token)?;
         Ok(texture)
     }

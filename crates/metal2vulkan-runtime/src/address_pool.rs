@@ -70,7 +70,7 @@ impl Device {
         placement: AddressPlacement,
         length: u64,
     ) -> Result<AddressPool, Error> {
-        self.current().reserve_address_pool_now(placement, length)
+        self.at_serving(|device| device.reserve_address_pool_now(placement, length))
     }
 
     /// [`Device::reserve_address_pool`] on the generation that serves (`device/line.rs`).

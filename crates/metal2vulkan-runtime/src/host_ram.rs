@@ -1561,7 +1561,7 @@ impl Device {
     /// whose ranges meet those of a RAM the device uses already, itself among them (`Invalid`,
     /// `Problem::HostRam`); a lost device.
     pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error> {
-        self.current().use_host_ram_now(ram)
+        self.at_serving(|device| device.use_host_ram_now(ram))
     }
 
     /// [`Device::use_host_ram`] on the generation that serves (`device/line.rs`).

@@ -306,7 +306,7 @@ impl Drop for Slot {
 impl Device {
     /// `newCommandQueue`: a queue of at most 64 uncompleted command buffers, as Metal's.
     pub fn new_command_queue(&self) -> Result<CommandQueue, Error> {
-        self.current().new_command_queue_now()
+        self.at_serving(|device| device.new_command_queue_now())
     }
 
     /// [`Device::new_command_queue`] on the generation that serves (`device/line.rs`).
@@ -321,8 +321,7 @@ impl Device {
         &self,
         count: usize,
     ) -> Result<CommandQueue, Error> {
-        self.current()
-            .new_command_queue_with_max_command_buffer_count_now(count)
+        self.at_serving(|device| device.new_command_queue_with_max_command_buffer_count_now(count))
     }
 
     /// [`Device::new_command_queue_with_max_command_buffer_count`] on the generation that serves
@@ -374,7 +373,7 @@ impl Device {
     /// Refused as that call is: a count of 0 (`Invalid`, `MaxCommandBufferCount`), and a lost
     /// device (`DeviceLost`).
     pub fn new_command_queue_unshared(&self, count: usize) -> Result<CommandQueue, Error> {
-        self.current().new_command_queue_unshared_now(count)
+        self.at_serving(|device| device.new_command_queue_unshared_now(count))
     }
 
     /// [`Device::new_command_queue_unshared`] on the generation that serves (`device/line.rs`).
@@ -412,7 +411,7 @@ impl Device {
     /// `Device::from_raw`) gives the queue its `VkQueue` round robin, as `new_command_queue`
     /// does, and announces `Degradation::SharedPresentQueue` (`shared-present-queue`) once.
     pub fn new_command_queue_for_presenting(&self) -> Result<CommandQueue, Error> {
-        self.current().new_command_queue_for_presenting_now()
+        self.at_serving(|device| device.new_command_queue_for_presenting_now())
     }
 
     /// [`Device::new_command_queue_for_presenting`] on the generation that serves

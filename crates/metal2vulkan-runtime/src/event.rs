@@ -596,7 +596,7 @@ fn due(state: &mut EventState) -> Vec<Notification> {
 impl Device {
     /// `newEvent`.
     pub fn new_event(&self) -> Result<Event, Error> {
-        self.current().new_event_now()
+        self.at_serving(|device| device.new_event_now())
     }
 
     /// [`Device::new_event`] on the generation that serves (`device/line.rs`).
@@ -606,7 +606,7 @@ impl Device {
 
     /// `newSharedEvent`.
     pub fn new_shared_event(&self) -> Result<SharedEvent, Error> {
-        self.current().new_shared_event_now()
+        self.at_serving(|device| device.new_shared_event_now())
     }
 
     /// [`Device::new_shared_event`] on the generation that serves (`device/line.rs`).
@@ -632,7 +632,7 @@ impl Device {
         &self,
         handle: &SharedEventHandle,
     ) -> Result<SharedEvent, Error> {
-        self.current().new_shared_event_with_handle_now(handle)
+        self.at_serving(|device| device.new_shared_event_with_handle_now(handle))
     }
 
     /// [`Device::new_shared_event_with_handle`] on the generation that serves (`device/line.rs`).

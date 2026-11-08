@@ -56,7 +56,7 @@ impl Device {
         &self,
         descriptor: &DepthStencilDescriptor,
     ) -> Result<DepthStencilState, Error> {
-        self.current().new_depth_stencil_state_now(descriptor)
+        self.at_serving(|device| device.new_depth_stencil_state_now(descriptor))
     }
 
     /// [`Device::new_depth_stencil_state`] on the generation that serves (`device/line.rs`).

@@ -631,7 +631,11 @@ meanwhile wait for it.
   Metal's does: a command buffer committed on it from then on, before the recovery too, fails
   with `AccessRevoked`.
 - The `Device` and its `CommandQueue`s go on: what they make from then on is made on the new
-  `VkDevice`.
+  `VkDevice`. A `Device` call that the loss meets while it runs is not refused for it: it runs
+  again on the new `VkDevice`. One that takes host memory, a deallocator or a range token, which a
+  second run could not have, runs on the new `VkDevice` where the loss came before it took them,
+  and completes on the lost one where the loss came after, its object then one made before the
+  recovery.
 - An object made before the recovery is refused where it meets the new `VkDevice` (an encoder's
   bind, a pipeline made from its functions) and in its own calls that need its lost one:
   `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. Make it again. Metal's objects go on.

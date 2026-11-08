@@ -559,8 +559,9 @@ impl Device {
         function: &Function,
         options: &PipelineOptions,
     ) -> Result<ComputePipelineState, Error> {
-        self.current()
-            .new_compute_pipeline_state_with_function_now(function, options)
+        self.at_serving(|device| {
+            device.new_compute_pipeline_state_with_function_now(function, options)
+        })
     }
 
     /// [`Device::new_compute_pipeline_state_with_function`] on the generation that serves
@@ -622,8 +623,7 @@ impl Device {
         descriptor: &ComputePipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<ComputePipelineState, Error> {
-        self.current()
-            .new_compute_pipeline_state_now(descriptor, options)
+        self.at_serving(|device| device.new_compute_pipeline_state_now(descriptor, options))
     }
 
     /// [`Device::new_compute_pipeline_state`] on the generation that serves (`device/line.rs`).
@@ -646,8 +646,9 @@ impl Device {
         descriptor: &ComputePipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<(ComputePipelineState, Option<ComputePipelineReflection>), Error> {
-        self.current()
-            .new_compute_pipeline_state_with_reflection_now(descriptor, options)
+        self.at_serving(|device| {
+            device.new_compute_pipeline_state_with_reflection_now(descriptor, options)
+        })
     }
 
     /// [`Device::new_compute_pipeline_state_with_reflection`] on the generation that serves
@@ -680,8 +681,9 @@ impl Device {
         function: &Function,
         options: &PipelineOptions,
     ) -> Result<(ComputePipelineState, Option<ComputePipelineReflection>), Error> {
-        self.current()
-            .new_compute_pipeline_state_with_function_and_reflection_now(function, options)
+        self.at_serving(|device| {
+            device.new_compute_pipeline_state_with_function_and_reflection_now(function, options)
+        })
     }
 
     /// [`Device::new_compute_pipeline_state_with_function_and_reflection`] on the generation

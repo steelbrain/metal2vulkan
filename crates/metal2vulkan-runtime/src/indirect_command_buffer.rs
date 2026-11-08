@@ -536,8 +536,9 @@ impl Device {
         max_count: u64,
         options: ResourceOptions,
     ) -> Result<IndirectCommandBuffer, Error> {
-        self.current()
-            .new_indirect_command_buffer_now(descriptor, max_count, options)
+        self.at_serving(|device| {
+            device.new_indirect_command_buffer_now(descriptor, max_count, options)
+        })
     }
 
     /// [`Device::new_indirect_command_buffer`] on the generation that serves (`device/line.rs`).

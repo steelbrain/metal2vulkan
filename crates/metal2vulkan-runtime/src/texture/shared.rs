@@ -68,7 +68,7 @@ impl Device {
     /// multisample sample count's rule; a swizzle with writes under `write_swizzle_enabled` too
     /// (`Invalid`, `SwizzleWithWrites`), which Metal's validation stops here alone.
     pub fn new_shared_texture(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error> {
-        self.current().new_shared_texture_now(descriptor)
+        self.at_serving(|device| device.new_shared_texture_now(descriptor))
     }
 
     /// [`Device::new_shared_texture`] on the generation that serves (`device/line.rs`).
@@ -148,18 +148,7 @@ impl Device {
         descriptor: &TextureDescriptor,
         token: RangeToken,
     ) -> Result<Texture, Error> {
-        self.current()
-            .new_shared_texture_with_range_token_now(descriptor, token)
-    }
-
-    /// [`Device::new_shared_texture_with_range_token`] on the generation that serves
-    /// (`device/line.rs`).
-    pub(crate) fn new_shared_texture_with_range_token_now(
-        &self,
-        descriptor: &TextureDescriptor,
-        token: RangeToken,
-    ) -> Result<Texture, Error> {
-        let texture = self.new_shared_texture_now(descriptor)?;
+        let texture = self.at_serving(|device| device.new_shared_texture_now(descriptor))?;
         texture.keep_range_token(token)?;
         Ok(texture)
     }
@@ -178,8 +167,7 @@ impl Device {
         handle: &SharedTextureHandle,
         placement: IdPlacement,
     ) -> Result<Texture, Error> {
-        self.current()
-            .new_shared_texture_with_handle_now(handle, placement)
+        self.at_serving(|device| device.new_shared_texture_with_handle_now(handle, placement))
     }
 
     /// [`Device::new_shared_texture_with_handle`] on the generation that serves (`device/line.rs`).

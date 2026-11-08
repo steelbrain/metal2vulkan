@@ -95,7 +95,7 @@ impl Device {
     /// `VK_KHR_external_semaphore_fd` or that exports no timeline semaphore as an opaque file
     /// descriptor.
     pub fn new_exportable_shared_event(&self) -> Result<SharedEvent, Error> {
-        self.current().new_exportable_shared_event_now()
+        self.at_serving(|device| device.new_exportable_shared_event_now())
     }
 
     /// [`Device::new_exportable_shared_event`] on the generation that serves (`device/line.rs`).

@@ -110,7 +110,7 @@ impl Device {
         &self,
         descriptor: &BinaryArchiveDescriptor,
     ) -> Result<BinaryArchive, Error> {
-        self.current().new_binary_archive_now(descriptor)
+        self.at_serving(|device| device.new_binary_archive_now(descriptor))
     }
 
     /// [`Device::new_binary_archive`] on the generation that serves (`device/line.rs`).

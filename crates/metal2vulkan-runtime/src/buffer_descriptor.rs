@@ -201,7 +201,9 @@ impl Device {
         &self,
         descriptor: BufferDescriptor<'_>,
     ) -> Result<Buffer, Error> {
-        self.current().new_buffer_with_descriptor_now(descriptor)
+        self.at_serving_taking(descriptor, |device, descriptor| {
+            device.new_buffer_with_descriptor_now(descriptor)
+        })
     }
 
     /// [`Device::new_buffer_with_descriptor`] on the generation that serves (`device/line.rs`).
@@ -289,7 +291,7 @@ impl Device {
         bytes: &[u8],
         options: ResourceOptions,
     ) -> Result<Buffer, Error> {
-        self.current().new_buffer_with_bytes_now(bytes, options)
+        self.at_serving(|device| device.new_buffer_with_bytes_now(bytes, options))
     }
 
     /// [`Device::new_buffer_with_bytes`] on the generation that serves (`device/line.rs`).
@@ -359,11 +361,12 @@ impl Device {
         options: ResourceOptions,
         deallocator: Option<Deallocator>,
     ) -> Result<Buffer, Error> {
-        // SAFETY: the caller's contract.
-        unsafe {
-            self.current()
-                .new_buffer_with_bytes_no_copy_now(memory, length, options, deallocator)
-        }
+        self.at_serving_taking((memory, deallocator), |device, (memory, deallocator)| {
+            // SAFETY: the caller's contract.
+            unsafe {
+                device.new_buffer_with_bytes_no_copy_now(memory, length, options, deallocator)
+            }
+        })
     }
 
     /// [`Device::new_buffer_with_bytes_no_copy`] on the generation that serves (`device/line.rs`).

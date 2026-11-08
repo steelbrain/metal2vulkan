@@ -45,7 +45,7 @@ impl Device {
     /// code reads a function constant is refused (`Compile(InvalidDescriptor(DynamicLibrary))`),
     /// as Metal refuses each. A library of another device is refused (`Invalid(ForeignObject)`).
     pub fn new_dynamic_library(&self, library: &Library) -> Result<DynamicLibrary, Error> {
-        self.current().new_dynamic_library_now(library)
+        self.at_serving(|device| device.new_dynamic_library_now(library))
     }
 
     /// [`Device::new_dynamic_library`] on the generation that serves (`device/line.rs`).
@@ -69,7 +69,7 @@ impl Device {
     /// `new_dynamic_library` takes is refused as it refuses it, where Metal's answer for a file is
     /// not measured.
     pub fn new_dynamic_library_with_url(&self, url: &Path) -> Result<DynamicLibrary, Error> {
-        self.current().new_dynamic_library_with_url_now(url)
+        self.at_serving(|device| device.new_dynamic_library_with_url_now(url))
     }
 
     /// [`Device::new_dynamic_library_with_url`] on the generation that serves (`device/line.rs`).

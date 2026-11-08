@@ -368,7 +368,7 @@ impl Device {
         &self,
         descriptor: &RateMapDescriptor,
     ) -> Result<RasterizationRateMap, Error> {
-        self.current().new_rasterization_rate_map_now(descriptor)
+        self.at_serving(|device| device.new_rasterization_rate_map_now(descriptor))
     }
 
     /// [`Device::new_rasterization_rate_map`] on the generation that serves (`device/line.rs`).

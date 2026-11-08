@@ -182,8 +182,7 @@ impl Device {
         &self,
         arguments: &[ArgumentDescriptor],
     ) -> Result<ArgumentEncoder, Error> {
-        self.current()
-            .new_argument_encoder_with_arguments_now(arguments)
+        self.at_serving(|device| device.new_argument_encoder_with_arguments_now(arguments))
     }
 
     /// [`Device::new_argument_encoder_with_arguments`] on the generation that serves
@@ -214,8 +213,7 @@ impl Device {
         &self,
         binding: &BufferBinding,
     ) -> Result<ArgumentEncoder, Error> {
-        self.current()
-            .new_argument_encoder_with_buffer_binding_now(binding)
+        self.at_serving(|device| device.new_argument_encoder_with_buffer_binding_now(binding))
     }
 
     /// [`Device::new_argument_encoder_with_buffer_binding`] on the generation that serves

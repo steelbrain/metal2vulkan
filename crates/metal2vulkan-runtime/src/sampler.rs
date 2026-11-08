@@ -600,7 +600,7 @@ impl Device {
     /// pixel-coordinate one's included). A minimum or maximum reduction reads the weighted
     /// average.
     pub fn new_sampler_state(&self, descriptor: &SamplerDescriptor) -> Result<SamplerState, Error> {
-        self.current().new_sampler_state_now(descriptor)
+        self.at_serving(|device| device.new_sampler_state_now(descriptor))
     }
 
     /// [`Device::new_sampler_state`] on the generation that serves (`device/line.rs`).
@@ -629,8 +629,7 @@ impl Device {
         descriptor: &SamplerDescriptor,
         options: SamplerStateOptions,
     ) -> Result<SamplerState, Error> {
-        self.current()
-            .new_sampler_state_with_options_now(descriptor, options)
+        self.at_serving(|device| device.new_sampler_state_with_options_now(descriptor, options))
     }
 
     /// [`Device::new_sampler_state_with_options`] on the generation that serves (`device/line.rs`).

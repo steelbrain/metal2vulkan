@@ -10,11 +10,14 @@
 //! - **Two kinds of handle.** A *root* handle (the device the program made, `Device::system_default`
 //!   and the rest, and every clone of it) holds the line and no generation: every call made
 //!   through it goes to the generation serving when it is made (the public calls'
-//!   [`Device::current`]). A *generation* handle holds one generation: the device of every object
-//!   made on it (a buffer's, a pipeline state's), through which the object's Vulkan calls reach
-//!   its own `VkDevice` alone, its drop included. So no object's Vulkan handle ever reaches
-//!   another generation's `VkDevice`, and an object made before a recovery is refused where it
-//!   meets the new generation (`RuntimeGap::MadeBeforeRecovery`, `error.rs`).
+//!   [`Device::current`]), and again to the one serving next where that one was lost under the
+//!   call and refused it for that ([`Device::at_serving`]; a call that takes host memory or a
+//!   range token, which it cannot take twice, is not refused for a loss once it took them,
+//!   [`Device::at_serving_taking`]). A *generation* handle holds one generation: the device of
+//!   every object made on it (a buffer's, a pipeline state's), through which the object's Vulkan
+//!   calls reach its own `VkDevice` alone, its drop included. So no object's Vulkan handle ever
+//!   reaches another generation's `VkDevice`, and an object made before a recovery is refused
+//!   where it meets the new generation (`RuntimeGap::MadeBeforeRecovery`, `error.rs`).
 //! - **The states.** [`State`]: the line serves one generation (`Live`); once it is lost, the
 //!   first call that needs the device recovers it (`Lost`, then claimed), while every other call
 //!   waits for that recovery, the first to wait past [`RECOVERY_NOTICE`] announcing it and waiting
@@ -58,6 +61,7 @@ use crate::unique_identifier::UniqueIdentifiers;
 use crate::work_counts::Counters;
 use ash::vk;
 use metal2vulkan::device::EnableSet;
+use std::cell::Cell;
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -539,6 +543,37 @@ impl Line {
     }
 }
 
+thread_local! {
+    /// The generation the thread's public call runs on past its check of the generation's loss,
+    /// its arguments taken ([`Device::at_serving_taking`]): the address of its `DeviceShared`.
+    static RUNS_ON: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The thread's public call running on a generation past its check of the generation's loss
+/// ([`Device::at_serving_taking`]): while it lives, the generation is not lost to the call's own
+/// checks ([`runs_on`]). What it replaced comes back as it drops.
+struct RunsOn(usize);
+
+impl RunsOn {
+    fn enter(shared: &DeviceShared) -> RunsOn {
+        let address = std::ptr::from_ref(shared).addr();
+        RunsOn(RUNS_ON.with(|runs| runs.replace(address)))
+    }
+}
+
+impl Drop for RunsOn {
+    fn drop(&mut self) {
+        RUNS_ON.with(|runs| runs.set(self.0));
+    }
+}
+
+/// Whether the thread's public call runs on `shared` past its check of its loss ([`RunsOn`]):
+/// a loss of it since follows the call, which its checks do not refuse (`Device::is_lost`).
+#[cold]
+pub(super) fn runs_on(shared: &DeviceShared) -> bool {
+    RUNS_ON.with(|runs| runs.get() == std::ptr::from_ref(shared).addr())
+}
+
 /// The device a call goes to ([`Device::current`]): the caller's own handle, or one of the
 /// generation that serves.
 pub(crate) enum Current<'a> {
@@ -598,6 +633,71 @@ impl Device {
             true => Current::This(self),
             false => Current::Serving(self.line().current(self)),
         }
+    }
+
+    /// Run `call`, a public call of this handle, on the generation it goes to
+    /// ([`current`](Self::current)), and again on the one serving next wherever the generation it
+    /// ran on was lost under it and refused it for that ([`lost_under`](Self::lost_under)): a
+    /// call of the device Metal keeps across a recovery is not refused because the generation it
+    /// took was lost while it ran. Refused so, a run kept nothing it made, so the call runs whole
+    /// again. Bounded as the line's waits are: each run is on a later generation than the one
+    /// before, after its recovery, which [`Line::current`] waits for (announced past
+    /// [`RECOVERY_NOTICE`]); a line that cannot recover answers the loss.
+    pub(crate) fn at_serving<T>(
+        &self,
+        mut call: impl FnMut(&Device) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        loop {
+            let device = self.current();
+            match call(&*device) {
+                Err(refused) if device.lost_under(&refused) => continue,
+                answer => return answer,
+            }
+        }
+    }
+
+    /// [`at_serving`](Self::at_serving) of a call that takes `taken`, arguments it consumes (host
+    /// memory and what gives it back, a range token), which a run refused for a loss could not
+    /// give a later one: they go to the generation the call goes to once it is not lost, else to
+    /// the one serving next, and the call then runs on it whole, a loss of it from then on
+    /// following the call, as one after the call returned would. Its checks of the generation's
+    /// loss answer so ([`RunsOn`]): the call is not refused for a loss once it took its
+    /// arguments, and answers as on a generation lost after it (its objects of that generation,
+    /// refused where they meet the next: `RuntimeGap::MadeBeforeRecovery`). A line that cannot
+    /// recover refuses it as before.
+    pub(crate) fn at_serving_taking<A, T>(
+        &self,
+        taken: A,
+        call: impl FnOnce(&Device, A) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        loop {
+            let device = self.current();
+            if device.shared().lost() {
+                let refused = device.lost_refusal();
+                if device.lost_under(&refused) {
+                    continue;
+                }
+                return Err(refused);
+            }
+            let _runs = RunsOn::enter(device.shared());
+            return call(&*device, taken);
+        }
+    }
+
+    /// Whether `refused`, a call's answer on this generation, is the refusal of its loss
+    /// (`DeviceLost`, or `RuntimeGap::MadeBeforeRecovery` as [`lost_refusal`](Self::lost_refusal)
+    /// answers it) and the line went past it: the call goes to the generation serving next
+    /// ([`at_serving`](Self::at_serving)). A call refused for an object of an earlier generation
+    /// while its own still serves is answered so, as is one of a thread command buffers'
+    /// completion depends on, whose calls reach the lost generation ([`Line::current`]).
+    #[cold]
+    fn lost_under(&self, refused: &Error) -> bool {
+        let loss = matches!(
+            refused,
+            Error::DeviceLost | Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)
+        );
+        loss && !crate::exit_guard::serving_completion()
+            && self.line().recovers_past(self.shared().generation)
     }
 
     /// The refusal of a call that reaches this generation after its loss: where the device's line

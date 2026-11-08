@@ -1356,7 +1356,7 @@ impl Device {
         kind: ResourceIdKind,
         ids: &[ResourceId],
     ) -> Result<(), Error> {
-        self.current().reserve_resource_ids_now(kind, ids)
+        self.at_serving(|device| device.reserve_resource_ids_now(kind, ids))
     }
 
     /// [`Device::reserve_resource_ids`] on the generation that serves (`device/line.rs`).

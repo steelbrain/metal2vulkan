@@ -366,3 +366,50 @@ fn a_later_recovery_announces_its_failure() {
     ));
     assert_eq!(device.work_counts().device_recoveries, 1);
 }
+
+/// A device call whose generation is lost under it, refused for that, runs again on the generation
+/// serving next (`Device::at_serving`): the loss here comes inside the call's first run, as a
+/// recovery on another thread may, and the call answers with a buffer of the new generation.
+#[test]
+fn a_call_refused_for_a_loss_under_it_runs_again_on_the_next_generation() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let mut runs = 0;
+    let buffer = device
+        .at_serving(|serving| {
+            runs += 1;
+            if runs == 1 {
+                serving.recover_for_test().unwrap();
+            }
+            serving.new_buffer_now(4096, ResourceOptions::shared())
+        })
+        .unwrap();
+    assert_eq!(runs, 2, "the call ran once more, on the next generation");
+    assert!(buffer.device().generation_serves());
+    assert_eq!(device.work_counts().device_recoveries, 1);
+}
+
+/// A device call that took its arguments (`Device::at_serving_taking`) before its generation's
+/// loss is not refused for it: it completes on that generation, as one the loss followed, and
+/// its buffer is one made before the recovery.
+#[test]
+fn a_call_that_took_its_arguments_completes_on_a_generation_lost_after() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let buffer = device
+        .at_serving_taking(4096, |serving, length| {
+            serving.recover_for_test().unwrap();
+            serving.new_buffer_now(length, ResourceOptions::shared())
+        })
+        .unwrap();
+    assert!(!buffer.device().generation_serves());
+    assert!(matches!(
+        buffer
+            .device()
+            .new_buffer_now(4096, ResourceOptions::shared()),
+        Err(Error::NotImplemented(crate::RuntimeGap::MadeBeforeRecovery))
+    ));
+    // The device itself goes on, on the new generation.
+    let next = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    assert!(next.device().generation_serves());
+}

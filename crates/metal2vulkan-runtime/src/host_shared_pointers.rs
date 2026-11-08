@@ -36,7 +36,7 @@ impl Device {
     /// Fails only where the answer cannot be found: out of host memory for the page, or the
     /// device lost. The device's refusal of the pointer is no failure but the answer, false.
     pub fn imports_shared_host_pointers(&self) -> Result<bool, Error> {
-        self.current().imports_shared_host_pointers_now()
+        self.at_serving(|device| device.imports_shared_host_pointers_now())
     }
 
     /// [`Device::imports_shared_host_pointers`] on the generation that serves (`device/line.rs`).

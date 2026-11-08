@@ -594,8 +594,7 @@ impl Device {
         descriptor: &RenderPipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<RenderPipelineState, Error> {
-        self.current()
-            .new_render_pipeline_state_now(descriptor, options)
+        self.at_serving(|device| device.new_render_pipeline_state_now(descriptor, options))
     }
 
     /// [`Device::new_render_pipeline_state`] on the generation that serves (`device/line.rs`).
@@ -619,8 +618,9 @@ impl Device {
         descriptor: &RenderPipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error> {
-        self.current()
-            .new_render_pipeline_state_with_reflection_now(descriptor, options)
+        self.at_serving(|device| {
+            device.new_render_pipeline_state_with_reflection_now(descriptor, options)
+        })
     }
 
     /// [`Device::new_render_pipeline_state_with_reflection`] on the generation that serves
@@ -694,8 +694,7 @@ impl Device {
         descriptor: &MeshPipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<RenderPipelineState, Error> {
-        self.current()
-            .new_mesh_render_pipeline_state_now(descriptor, options)
+        self.at_serving(|device| device.new_mesh_render_pipeline_state_now(descriptor, options))
     }
 
     /// [`Device::new_mesh_render_pipeline_state`] on the generation that serves (`device/line.rs`).
@@ -723,8 +722,9 @@ impl Device {
         descriptor: &MeshPipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error> {
-        self.current()
-            .new_mesh_render_pipeline_state_with_reflection_now(descriptor, options)
+        self.at_serving(|device| {
+            device.new_mesh_render_pipeline_state_with_reflection_now(descriptor, options)
+        })
     }
 
     /// [`Device::new_mesh_render_pipeline_state_with_reflection`] on the generation that serves

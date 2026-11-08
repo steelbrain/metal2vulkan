@@ -3120,7 +3120,7 @@ bound.
   command buffers in flight took past 10 seconds to fail, and where its new `VkDevice` could not
   be made, after which the device answers as a lost one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the objects made
   before the recovery are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it
-  wait for it.
+  wait for it, and a device call the loss met while it ran runs again after it.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
   private device properties the device has no answer for: no document describes them and nothing the
   device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is

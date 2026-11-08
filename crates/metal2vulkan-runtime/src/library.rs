@@ -147,7 +147,7 @@ impl Device {
     /// bytes that are no metallib, on an Apple M4. AIR goes in through the translator
     /// ([`Device::new_library_with_compile_library`]).
     pub fn new_library_with_data(&self, data: &[u8]) -> Result<Library, Error> {
-        self.current().new_library_with_data_now(data)
+        self.at_serving(|device| device.new_library_with_data_now(data))
     }
 
     /// [`Device::new_library_with_data`] on the generation that serves (`device/line.rs`).
@@ -164,7 +164,7 @@ impl Device {
     /// ahead of time with Apple's `metal` tool and load the metallib with
     /// [`new_library_with_data`](Self::new_library_with_data).
     pub fn new_library_with_source(&self, _source: &str) -> Result<Library, Error> {
-        self.current().new_library_with_source_now(_source)
+        self.at_serving(|device| device.new_library_with_source_now(_source))
     }
 
     /// [`Device::new_library_with_source`] on the generation that serves (`device/line.rs`).

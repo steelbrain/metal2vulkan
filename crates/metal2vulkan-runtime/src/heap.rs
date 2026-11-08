@@ -489,7 +489,7 @@ impl Device {
     /// `maxBufferSize` (`NotImplemented(HeapPastMaxBufferSize)`); a pinned address whose range
     /// meets another resource's bytes or leaves the space (`PlacementConflict`).
     pub fn new_heap(&self, descriptor: &HeapDescriptor) -> Result<Heap, Error> {
-        self.current().new_heap_now(descriptor)
+        self.at_serving(|device| device.new_heap_now(descriptor))
     }
 
     /// [`Device::new_heap`] on the generation that serves (`device/line.rs`).
@@ -509,8 +509,9 @@ impl Device {
         descriptor: &HeapDescriptor,
         token: RangeToken,
     ) -> Result<Heap, Error> {
-        self.current()
-            .new_heap_with_range_token_now(descriptor, token)
+        self.at_serving_taking(token, |device, token| {
+            device.new_heap_with_range_token_now(descriptor, token)
+        })
     }
 
     /// [`Device::new_heap_with_range_token`] on the generation that serves (`device/line.rs`).
@@ -608,15 +609,13 @@ impl Device {
         deallocator: Option<Deallocator>,
         keep_alive: Option<KeepAlive>,
     ) -> Result<Heap, Error> {
-        // SAFETY: the caller's contract.
-        unsafe {
-            self.current().new_heap_with_bytes_no_copy_now(
-                memory,
-                descriptor,
-                deallocator,
-                keep_alive,
-            )
-        }
+        let taken = (memory, deallocator, keep_alive);
+        self.at_serving_taking(taken, |device, (memory, deallocator, keep_alive)| {
+            // SAFETY: the caller's contract.
+            unsafe {
+                device.new_heap_with_bytes_no_copy_now(memory, descriptor, deallocator, keep_alive)
+            }
+        })
     }
 
     /// [`Device::new_heap_with_bytes_no_copy`] on the generation that serves (`device/line.rs`).
@@ -647,17 +646,19 @@ impl Device {
         keep_alive: Option<KeepAlive>,
         token: RangeToken,
     ) -> Result<Heap, Error> {
-        // SAFETY: the caller's contract.
-        unsafe {
-            self.current()
-                .new_heap_with_bytes_no_copy_and_range_token_now(
+        let taken = (memory, deallocator, keep_alive, token);
+        self.at_serving_taking(taken, |device, (memory, deallocator, keep_alive, token)| {
+            // SAFETY: the caller's contract.
+            unsafe {
+                device.new_heap_with_bytes_no_copy_and_range_token_now(
                     memory,
                     descriptor,
                     deallocator,
                     keep_alive,
                     token,
                 )
-        }
+            }
+        })
     }
 
     /// [`Device::new_heap_with_bytes_no_copy_and_range_token`] on the generation that serves

@@ -445,12 +445,14 @@ impl Device {
         tile_size: Size,
         mode: SparseTextureRegionAlignmentMode,
     ) -> Result<(), Error> {
-        self.current().convert_sparse_pixel_regions_now(
-            pixel_regions,
-            tile_regions,
-            tile_size,
-            mode,
-        )
+        self.at_serving(|device| {
+            device.convert_sparse_pixel_regions_now(
+                pixel_regions,
+                &mut *tile_regions,
+                tile_size,
+                mode,
+            )
+        })
     }
 
     /// [`Device::convert_sparse_pixel_regions`] on the generation that serves (`device/line.rs`).
