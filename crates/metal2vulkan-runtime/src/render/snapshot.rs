@@ -126,6 +126,9 @@
 //!   split's copy. A reader covering the whole target takes the split from its second pass on, one
 //!   covering 3% of it keeps the snapshot. Both forms give Metal's results; a reader whose
 //!   coverage changes takes the form its old count chose until a pass after the change completes.
+//!   In `snapshot_area_costs` a reader covering half the target or all of it took 0.99 to 1.01
+//!   times the split's GPU time on the Iris Xe, 0.95 to 1.03 on the Radeon 780M and 0.83 to 0.91
+//!   on the RX 7900 XTX, where the rule alone takes the snapshot (above).
 //! - **Pins.** A fetch of a color in the pixel interlock reads and writes its image as a storage
 //!   image, so a later fetch of a color whose image lacks `STORAGE` renders it through a stand-in
 //!   (`attachment_stand_in.rs`), which the pass's end puts in place for the whole pass, copied in

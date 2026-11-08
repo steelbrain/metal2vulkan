@@ -19,10 +19,10 @@
 //!   state's readers of the texture in its pass ([`ReaderKey`]). A texture keeps [`LEARNED`] at
 //!   most, the oldest going first, and each later pass's count replaces its reader's.
 //! - **Weighed.** A reader whose identity has a count takes the snapshot where the snapshot draw's
-//!   `SNAPSHOT_PIXEL_COST` (`render/snapshot.rs`) at each pixel it covered, for each color, costs no
-//!   more than the split's copy ([`snapshot_covers`]), the two forms' fixed costs (about a mebibyte
-//!   of the copy each, measured) left out on both sides; a reader with none is weighed by the
-//!   area rule. Counted: `WorkCounts::reading_draws_by_coverage`, the queries recorded,
+//!   `SNAPSHOT_PIXEL_COST` (`render/snapshot.rs`) at each pixel it covered, for each color, costs
+//!   no more than the split's copy ([`snapshot_covers`]), the two forms' fixed costs (about a
+//!   mebibyte of the copy each, measured) left out on both sides; a reader with none is weighed by
+//!   the area rule. Counted: `WorkCounts::reading_draws_by_coverage`, the queries recorded,
 //!   `WorkCounts::coverage_queries`, and the pools made, `WorkCounts::coverage_pools_made`.
 //! - **What a stale count costs.** A reader that covers another share than its count holds takes
 //!   the form the count chose until a pass after the change completes: one pass where each waits
@@ -198,10 +198,11 @@ impl Readers {
 
 /// A device's occlusion query pools of [`MEASURED`] queries that no pass holds, [`SPARE_POOLS`]
 /// at most, which the next pass that measures a reader takes before making one: a pool made
-/// and released for each pass costs the GPU work running as it is released (on the Iris Xe,
-/// about 15% of the passes' GPU time in `runtime_lane::attachment_read_costs::
-/// snapshot_crossover`, whose passes commit four command buffers back to back), and the host its
-/// making. Released as the device ends.
+/// and released for each pass slows the GPU work running as it is released. On the Iris Xe, in
+/// `runtime_lane::attachment_read_costs::snapshot_crossover` (four command buffers committed back
+/// to back), readers measured from a pool made for each pass took 1.07 to 1.19 times the GPU
+/// time of the same forms unmeasured, and from spare pools 1.00 to 1.06. Released as the device
+/// ends.
 #[derive(Default)]
 pub(crate) struct SparePools(Mutex<Vec<vk::QueryPool>>);
 
@@ -290,8 +291,9 @@ impl Drop for Pool {
     }
 }
 
-/// A pass's measured readers, held by its command buffer until it completes ([`Readers::readback`]):
-/// as it drops, each query that ran gives its reader's count to its texture.
+/// A pass's measured readers, held by its command buffer until it completes
+/// ([`Readers::readback`]): as it drops, each query that ran gives its reader's count to its
+/// texture.
 pub(super) struct Readback {
     pool: Pool,
     measured: Vec<Measured>,

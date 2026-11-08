@@ -238,26 +238,37 @@ recorded here.
   a 1920x1080 surface) 0.56 to 0.99 times the split's GPU time through scissors of 960x540 and up,
   at most 1.08 times through the whole target and 1.2 times through a 320x180 scissor it covers
   half of or more.
-  Elsewhere the area rule (`render/snapshot.rs`) weighs each form at the share of its scissors
-  least favourable to it, as a draw's recording cannot know what it covers: the snapshot draw at
-  20 bytes of the split's copy for each pixel its scissors bound, the split at its copy (a
-  one-level, one-slice color's texels around the draw's scissors, a pixel wider each way, as the
-  copy is cut; else every texel of the level), each beside a reader's fixed cost of a mebibyte of
-  the copy; it takes the form whose cost there is the smaller multiple of the other's. A 4-byte
-  color's reader takes the snapshot through scissors whose rectangle holds about 1024x768 pixels
-  or more, and splits through smaller ones. Through no scissor over private `BGRA8Unorm` targets
-  of 1280x720 to 3662x2039 (`runtime_lane::attachment_read_costs::snapshot_area_costs`, the split
-  on a device that withholds `fragmentShaderPixelInterlock`), a reader covering 1.5% of the target
-  took 0.09 to 0.33 times the split's GPU time on the Iris Xe, 0.09 to 0.23 on the Radeon 780M and
-  0.25 to 0.43 on the RX 7900 XTX; one covering the whole target, the rule's worst case, 1.03 to
-  1.20 times, 1.95 to 2.30 times and 1.30 to 2.10 times. Over a private 1920x1080 target
-  (`runtime_lane::attachment_read_costs::snapshot_crossover`, against the split of the build
-  before the rule), readers through scissors of 320x180 and 960x540 split, and through 1280x720
-  and the whole target take the snapshot: one covering 1.5% of its scissor took 0.36 to 0.64
-  times the split's GPU time on the Iris Xe and 0.28 to 0.97 on the Radeon 780M, one covering
-  the whole scissor 1.12 to 1.18 times and 1.97 to 2.34 times; on the RX 7900 XTX, whose times
-  for one build varied up to 1.75 times between runs, 0.69 to 1.09 and 1.5 to 2.6 times. Other
-  devices are not measured.
+  Elsewhere the area rule (`render/snapshot.rs`) weighs each form at the share of its scissors least
+  favourable to it, as a draw's recording cannot know what it covers: the snapshot draw at 20 bytes
+  of the split's copy for each pixel its scissors bound, the split at its copy (a one-level,
+  one-slice color's texels around the draw's scissors, a pixel wider each way, as the copy is cut;
+  else every texel of the level), each beside a reader's fixed cost of a mebibyte of the copy; it
+  takes the form whose cost there is the smaller multiple of the other's. A 4-byte color's reader
+  takes the snapshot through scissors whose rectangle holds about 1024x768 pixels or more, and
+  splits through smaller ones. On a device that measures readers (`occlusionQueryPrecise`, queries
+  reset on the host: the Iris Xe, the Radeon 780M and the RX 7900 XTX among those that take the
+  snapshot path), each reader the rule weighs records its drawing commands inside a precise
+  occlusion query, and from the pass after one completed it is weighed at the pixels it covered
+  there instead (`render/coverage.rs`): the snapshot where 20 bytes of the copy for each of them,
+  for each color, cost no more than the copy. A reader whose coverage changes takes the form its
+  last count chose until a pass after the change completes; both forms are exact. The query costs
+  about a microsecond a reader on the Iris Xe; on the Radeon 780M passes that measured took 1.00 to
+  1.01 times those that did not, on the RX 7900 XTX 1.00 to 1.08 times (its times for one build vary
+  up to 1.4 times between runs). Through no scissor over private `BGRA8Unorm` targets of 1280x720 to
+  3662x2039 (`runtime_lane::attachment_read_costs::snapshot_area_costs`, the split on a device that
+  withholds `fragmentShaderPixelInterlock`), a reader covering 1.5% to 12.5% of the target took 0.09
+  to 0.63 times the split's GPU time on the Iris Xe, 0.10 to 0.67 on the Radeon 780M and 0.26 to
+  0.65 on the RX 7900 XTX; one covering half of it or all of it takes the split from its second
+  pass, 0.99 to 1.01 times, 0.95 to 1.03 and 0.83 to 0.91. Over a private 1920x1080 target
+  (`runtime_lane::attachment_read_costs::snapshot_crossover`, against the build before the area
+  rule), readers covering 1.5% or 12.5% of a scissor of 960x540 or more take the snapshot, 0.37 to
+  0.85 times the GPU time on the Iris Xe, 0.31 to 1.26 on the Radeon 780M (1.15 to 1.26 for one over
+  12.5% of a scissor its pass filled whole, as under the area rule alone) and 0.68 to 1.05 on the RX
+  7900 XTX, and those covering half of it or all of it the split, 1.00 to 1.03 times, 1.00 and 0.74
+  to 1.02; through a 320x180 scissor, 0.75 to 0.80 times covering half or all, and 1.05 to 1.07
+  times covering 1.5% or 12.5%, where both builds take the snapshot and the query is the difference
+  (on the Radeon 780M 0.55 to 0.71 and 1.04, on the RX 7900 XTX 0.90 to 0.91 and 1.04 to 1.05).
+  Other devices are not measured.
 - **A texture over a no-copy buffer's host pages, or over a host-visible buffer longer than 32
   MiB, that a shader writes of 1- or 2-byte texels (or whose class's check has not passed for an
   access of its, or whose format, usage or pitch no image takes, or under
