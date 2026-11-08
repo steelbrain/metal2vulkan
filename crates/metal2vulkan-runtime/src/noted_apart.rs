@@ -29,7 +29,10 @@
 //! command buffer's notes of them. It is not recorded (`WorkCounts::uses_noted_covered`), as a
 //! draw whose buffer offset moves along a buffer reads from a later offset to its end, and it is
 //! kept in place of the covering one: the kept uses stay the last command's, each of them in the
-//! part, inside a use recorded before where it was not recorded itself.
+//! part, inside a use recorded before where it was not recorded itself. A draw moved whose moved
+//! uses each lie inside the uses before them at their place (`EncoderCore::note_moved`, a draw
+//! inside) compares none of them and keeps the covering ones: each kept use is then the last
+//! command's or one covering it, in the part either way.
 //!
 //! A draw's uses may begin with those of what its encoder made resident, which draws keep from
 //! one to the next and name by identity (`binding::ReachingPrefix`, with the identity of the keys
@@ -221,6 +224,17 @@ impl NotedApart {
             && self.prefix.is_none()
             && self.uses.len() == uses.len()
             && self.resident.iter().eq(resident)
+    }
+
+    /// Whether the kept use at each position `at` equals or covers `uses`' there (a draw noted
+    /// inside: `EncoderCore::note_moved`), in builds with debug assertions.
+    #[cfg(debug_assertions)]
+    pub(super) fn covers_at(&self, uses: &[Use<ResourceKey>], at: &[usize]) -> bool {
+        at.iter()
+            .all(|&at| match (self.uses.get(at), uses.get(at)) {
+                (Some(kept), Some(used)) => kept == used || kept.covers(used),
+                _ => false,
+            })
     }
 
     /// Note the command [`moves`](Self::moves) answers for, whose `uses` (reaching the keys

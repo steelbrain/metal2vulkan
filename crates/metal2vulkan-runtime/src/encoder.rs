@@ -1696,11 +1696,15 @@ impl EncoderCore {
     /// (`NotedApart::moves`), only those of the uses at `at` that differ are compared and
     /// recorded, with the host aliases' uses beside them, as `note_reaching` records the uses that
     /// differ; and none is touched, each key being the one the last command touched at its
-    /// position. Whether it noted the draw; else it noted nothing, and the caller notes it as
-    /// `note_reaching` does.
+    /// position. Where `inside`, each use at `at` lies inside the bytes of the last command's at
+    /// its place (`Use::covers`, or equals it), which `noted` keeps or keeps one covering
+    /// (`noted_apart.rs`): none is compared, and the kept uses stay
+    /// (`WorkCounts::draws_moved_inside`). Whether it noted the draw; else it noted nothing, and
+    /// the caller notes it as `note_reaching` does.
     pub(super) fn note_moved(
         &mut self,
         (uses, resident, at): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>, &[usize]),
+        inside: bool,
         noted: &mut NotedApart,
     ) -> Result<bool, Error> {
         if self.uses.ordered() {
@@ -1715,16 +1719,30 @@ impl EncoderCore {
         }
         self.observe_fresh(uses, &[]);
         self.hold_resident();
-        let record = |stages, fresh: &[Use<ResourceKey>]| self.record_aliased(stages, fresh);
-        let covered = match noted.note_moved((uses, resident), at, record) {
-            Moved::AsBefore => {
-                self.counts().command_noted_as_before();
-                0
+        match inside {
+            // Noted already: each moved use is in the part inside the kept use at its place.
+            true => {
+                #[cfg(debug_assertions)]
+                assert!(
+                    noted.covers_at(uses, at),
+                    "a draw noted inside has a moved use outside the kept use at its place"
+                );
+                self.counts().draw_moved_inside();
             }
-            Moved::Covered(covered) | Moved::Recorded((), covered) => covered,
-        };
-        if covered > 0 {
-            self.counts().uses_noted_covered(covered as u64);
+            false => {
+                let record =
+                    |stages, fresh: &[Use<ResourceKey>]| self.record_aliased(stages, fresh);
+                let covered = match noted.note_moved((uses, resident), at, record) {
+                    Moved::AsBefore => {
+                        self.counts().command_noted_as_before();
+                        0
+                    }
+                    Moved::Covered(covered) | Moved::Recorded((), covered) => covered,
+                };
+                if covered > 0 {
+                    self.counts().uses_noted_covered(covered as u64);
+                }
+            }
         }
         // Touched already: each key at its position, named as touching it names it.
         #[cfg(debug_assertions)]

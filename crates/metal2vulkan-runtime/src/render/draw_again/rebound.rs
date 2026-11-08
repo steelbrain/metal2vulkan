@@ -63,7 +63,11 @@
 //!   compares and records where the last command noted is the kept draw (`EncoderCore::note_moved`);
 //!   a moved use inside the bytes of the use noted, or gathered, at its place before, as a vertex
 //!   buffer's offset moving along it reads, is noted and gathered already (`Use::covers`,
-//!   `noted_apart.rs`).
+//!   `noted_apart.rs`). One whose moved uses each lie inside the uses they replace in its bind
+//!   state, the last draw's (as the patch finds them), is inside (`WorkCounts::draws_moved_inside`):
+//!   each is in the encoder's part, the pass's reads and the instance's gathered uses already,
+//!   inside the last draw's or one covering it, so it notes, adds and gathers none of them,
+//!   comparing none.
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
@@ -72,7 +76,9 @@
 //!   0 it pushes or binds none of is the record's, its uses are unwritten in a pass whose
 //!   fragments wrote nothing, and of a draw narrowed, its other uses share no attachment memory,
 //!   meet no geometry write the moved ones do not, add nothing to the pass's reads, are noted and
-//!   touched as the last command's, and are the instance's last gathered uses.
+//!   touched as the last command's, and are the instance's last gathered uses; of a draw inside,
+//!   its moved uses lie inside the noted ones and add nothing to the pass's reads or the
+//!   instance's gathered uses.
 
 use ash::vk;
 use metal2vulkan::bind::{DescriptorRange, DrawCall};
@@ -249,12 +255,14 @@ impl Changed {
 /// ([`Changed::moved`]), whether its set-0 writes and dynamic offsets are then the kept draw's
 /// (its descriptor ranges are), and whether its uses differ from the kept draw's only at the
 /// moved slots' uses, listed in its bind state's kept storage (`KeptStorage::moved`): the draw is
-/// narrowed (the module docs).
+/// narrowed; and whether, narrowed, each of those uses lies inside the bytes of the last draw's at
+/// its place: the draw is inside (the module docs).
 #[derive(Clone, Copy)]
 struct Rebinding {
     moved: bool,
     writes_kept: bool,
     narrowed: bool,
+    inside: bool,
 }
 
 impl RenderLowering {
@@ -528,8 +536,13 @@ impl RenderLowering {
         // encoder made resident kept (`binding::command_uses_into`).
         let patch = (&**plan, &command, &stages[..]);
         let moved_uses = (&mut live.kept.moved_at, &mut live.kept.moved);
-        let patched = !images
-            && binding::patch_buffer_uses(patch, slots, &mut live.uses, moved_uses) == Ok(true);
+        let inside = match images {
+            true => None,
+            false => binding::patch_buffer_uses(patch, slots, &mut live.uses, moved_uses)
+                .ok()
+                .flatten(),
+        };
+        let patched = inside.is_some();
         // The tables a step that works the draw out again reads (its set-0 writes where they are
         // not the kept draw's, its uses where they were not patched), made only for one.
         let mut rebound = true;
@@ -576,6 +589,9 @@ impl RenderLowering {
         // listed them, every use that differs from the kept draw's, each of the kept use's key and
         // access types.
         let narrowed = moved && patched && live.uses.prefix().is_none();
+        // Of a draw narrowed, whether each moved use lies inside the bytes of the one it replaced,
+        // the last draw's at its place: the draw is inside (the module docs).
+        let inside = narrowed && inside == Some(true);
         // Its fixed-function vertex buffers at the changed slots, in the plan's order. A slot
         // whose offset alone moved binds the buffer the kept draw bound there, whose space starts
         // where it did, as no no-copy buffer moved since (`bring_in`): it is not looked at again
@@ -661,6 +677,7 @@ impl RenderLowering {
             moved,
             writes_kept,
             narrowed,
+            inside,
         };
         (unbarriered && (moved || !self.core.would_skip(named()))).then_some(rebinding)
     }
@@ -752,7 +769,7 @@ impl RenderLowering {
         let noted = match narrowed {
             true => {
                 let moved = (&**uses, uses.resident(), &live.kept.moved_at[..]);
-                (self.core).note_moved(moved, &mut live.noted)?
+                (self.core).note_moved(moved, rebinding.inside, &mut live.noted)?
             }
             false => false,
         };
@@ -780,8 +797,20 @@ impl RenderLowering {
             }
         }
         // The pass's reads, and the instance's gathered uses: of a draw narrowed, the moved slots'
-        // uses alone, every other use being the kept draw's, which they hold.
+        // uses alone, every other use being the kept draw's, which they hold; of a draw inside,
+        // none, each moved use lying inside the last draw's at its place, which they hold.
         match (narrowed, prefix) {
+            (true, _) if rebinding.inside => {
+                #[cfg(debug_assertions)]
+                {
+                    let held = super::digest(self.pass_start.held());
+                    self.pass_start.add(&live.kept.moved);
+                    assert!(
+                        held == super::digest(self.pass_start.held()),
+                        "a draw inside's moved uses add to the pass's reads"
+                    );
+                }
+            }
             (true, _) => {
                 self.pass_start.add(&live.kept.moved);
                 #[cfg(debug_assertions)]
@@ -800,6 +829,18 @@ impl RenderLowering {
             }
         }
         match (narrowed, prefix) {
+            (true, _) if rebinding.inside => {
+                #[cfg(debug_assertions)]
+                {
+                    let gathering = self.gathering();
+                    let held = super::digest(gathering.gathered());
+                    assert!(
+                        gathering.add_moved(uses, &live.kept.moved_at)
+                            && held == super::digest(gathering.gathered()),
+                        "a draw inside's moved uses add to the instance's gathered uses"
+                    );
+                }
+            }
             (true, _) => {
                 let gathering = self.gathering();
                 if !gathering.add_moved(uses, &live.kept.moved_at) {

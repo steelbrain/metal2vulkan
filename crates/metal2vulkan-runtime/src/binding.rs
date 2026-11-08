@@ -2828,17 +2828,19 @@ fn bytes_use(
 /// the same (`render/draw_again/rebound.rs`). The first patch after the uses were made lists them
 /// ([`list_slot_uses`]); the patches after it, until they are made again, read that list. Builds
 /// with debug assertions check the list against the uses, and count the uses it looked at
-/// (`patched_slot_uses`).
+/// (`patched_slot_uses`). Where it patched, whether each use it patched in lies inside the bytes
+/// of the use it replaced (`Use::covers`, or equals it), as a buffer offset moving along a buffer
+/// reads; `None` where it did not.
 pub(super) fn patch_buffer_uses(
     (plan, command, stages): (&BindingPlan, &Command<'_>, &[(Stage, &ArgumentTable)]),
     changed: &[SlotRef],
     into: &mut CommandUses,
     (moved_at, moved): (&mut Vec<usize>, &mut Vec<Use<ResourceKey>>),
-) -> Result<bool, Error> {
+) -> Result<Option<bool>, Error> {
     moved_at.clear();
     moved.clear();
     if into.sources.len() != into.uses.len() {
-        return Ok(false);
+        return Ok(None);
     }
     if !into.slots_listed {
         list_slot_uses((plan, command), into);
@@ -2858,6 +2860,7 @@ pub(super) fn patch_buffer_uses(
         slots,
         ..
     } = into;
+    let mut inside = true;
     for &(slot, at) in slots.iter() {
         if !changed.contains(&slot) {
             continue;
@@ -2873,18 +2876,19 @@ pub(super) fn patch_buffer_uses(
         };
         let resource = resource.ok_or_else(|| internal("a use of a resource use since gone"))?;
         let Some((buffer, offset)) = stage_buffer(stages, slot) else {
-            return Ok(false);
+            return Ok(None);
         };
         // Its reads and writes are its resource use's, as the use made of it holds them.
         let now = bytes_use(resource, buffer, *offset, (used.read, used.write));
         if now.key != used.key {
-            return Ok(false);
+            return Ok(None);
         }
+        inside &= *used == now || used.covers(&now);
         moved_at.push(at);
         moved.push(now.clone());
         *used = now;
     }
-    Ok(true)
+    Ok(Some(inside))
 }
 
 /// List in `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, each of its

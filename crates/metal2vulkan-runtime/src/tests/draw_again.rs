@@ -837,6 +837,76 @@ fn draws_after_offsets_alone_moved_bind_what_every_step_binds() {
     assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
 }
 
+/// Draws after calls that moved only the vertex buffer's offset along the buffer are moved inside
+/// (`WorkCounts::draws_moved_inside`): the vertex function reads its points through a pointer,
+/// from the offset to the buffer's end, so each draw's use of them lies inside the draw before's,
+/// noted, read and gathered already, and the draw compares, notes, adds and gathers none of it;
+/// with the same commands of every kind, state commands and pixels as the same draws with a call
+/// between each that changes nothing for them, each of which takes every step and notes the use
+/// covered (`WorkCounts::uses_noted_covered`). The fragment buffer stays bound as it was.
+#[test]
+fn draws_moved_along_their_buffer_note_nothing_again() {
+    let scratch = Scratch::new("draw-again-inside");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(
+        &device,
+        "engine/tob_renders.ll",
+        ("tob_triangle", "tob_solid"),
+    );
+    let rectangles = rectangle_points(&device);
+    let color = bytes_of(&[0.25f32; 4], f32::to_le_bytes);
+    let colors = (device.new_buffer_with_bytes(&color, ResourceOptions::shared())).unwrap();
+    let along = |encoder: &mut RenderCommandEncoder,
+                 between: &dyn Fn(&mut RenderCommandEncoder)| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        encoder.set_fragment_buffer(Some(&colors), 0, 0).unwrap();
+        for at in 0..DRAWS {
+            if at > 0 {
+                encoder.set_vertex_buffer_offset(POINTS * at, 0).unwrap();
+                between(encoder);
+            }
+            rectangle(encoder);
+        }
+    };
+    let nothing = |_: &mut RenderCommandEncoder| {};
+    let same_color =
+        |encoder: &mut RenderCommandEncoder| encoder.set_blend_color(0.0, 0.0, 0.0, 0.0);
+    warm(&device, |encoder| along(encoder, &nothing));
+    let rebound = run(&device, |encoder| along(encoder, &nothing));
+    let every = run(&device, |encoder| along(encoder, &same_color));
+    let inside = rebound.counted(|counts| counts.draws_moved_inside);
+    assert_eq!(
+        rebound.counted(|counts| counts.draws_moved),
+        drawn_alone(HITS)
+    );
+    assert_eq!(inside, drawn_alone(HITS), "every draw moved is inside");
+    assert_eq!(every.counted(|counts| counts.draws_moved_inside), 0);
+    assert_eq!(rebound.commands, every.commands);
+    assert_eq!(rebound.commands["cmd_draw"], DRAWS);
+    assert_eq!(rebound.words, every.words, "the pixels of the draws");
+    // Every step notes each draw's use but the first's covered; a draw inside compares none.
+    let covered = |counts: &WorkCounts| counts.uses_noted_covered;
+    assert_eq!(every.counted(covered), DRAWS - 1);
+    assert_eq!(rebound.counted(covered) + inside, every.counted(covered));
+    let counts: [(&str, fn(&WorkCounts) -> u64); 3] = [
+        ("draw_states_recorded", |counts| counts.draw_states_recorded),
+        ("commands_noted_as_before", |counts| {
+            counts.commands_noted_as_before
+        }),
+        ("draws_pushing_set_zero", |counts| {
+            counts.draws_pushing_set_zero
+        }),
+    ];
+    for (name, count) in counts {
+        assert_eq!(rebound.counted(count), every.counted(count), "{name}");
+    }
+    // Column 0 holds the first draw's rectangle alone; the last column every draw's.
+    let last = SIDE as usize - 1;
+    assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
+}
+
 /// [`DRAWS`] 4x4 `RGBA8Unorm` textures, the `at`th's texel in column `x` of the bytes
 /// `(2 * (at + 1), 2 * (x + 1), 0, 1)`: what a draw sampled tells which texture and which of its
 /// columns.
