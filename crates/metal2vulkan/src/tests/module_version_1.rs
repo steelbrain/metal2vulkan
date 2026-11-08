@@ -395,19 +395,17 @@ fn write_record(w: &mut BitWriter, code: u32, ops: &[u64], blob: Option<&[u8]>) 
 /// [`VST_ABBREVS`] by their characters' width (a basic block's 7-bit name takes the 8-bit one),
 /// `VST_FNENTRY` through [`FNENTRY_ABBREVS`].
 fn vst_record(w: &mut BitWriter, code: u32, ops: &[u64]) {
-    let chars = if code == VST_FNENTRY { 2 } else { 1 };
+    let (ids, chars) = match code {
+        VST_ENTRY => ([4, 5, 6], 1),
+        VST_BBENTRY => ([4, 4, 7], 1),
+        VST_FNENTRY => ([8, 9, 10], 2),
+        _ => return w.record(code, ops),
+    };
     let name: Vec<u8> = ops[chars..]
         .iter()
         .map(|&c| u8::try_from(c).expect("a byte"))
         .collect();
-    let width = name_width(&name);
-    let id = match code {
-        VST_ENTRY => [4, 5, 6][width],
-        VST_BBENTRY => [4, 4, 7][width],
-        VST_FNENTRY => [8, 9, 10][width],
-        _ => return w.record(code, ops),
-    };
-    w.abbreviated(id, code, ops, None);
+    w.abbreviated(ids[name_width(&name)], code, ops, None);
 }
 
 /// Copy the rest of block `id`, just entered, as read (a function's symbol table spelled as
