@@ -34,18 +34,19 @@
 
 use super::indirect_host_steps::Setup;
 use super::{
-    layer_reported_nothing_at_all, run_queue_waits, validated_device, Messages, ScratchCache,
+    bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state, public_case,
+    run_queue_waits, validated_device, CaseResources, Messages, ScratchCache,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::{DeviceType, TEST_DEVICE};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
-use metal2vulkan::metal::DataType;
+use metal2vulkan::metal::{DataType, PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Deallocator,
     Device, DeviceKind, EventRef, HostMemory, PipelineOptions, ResourceOptions, SharedEvent,
-    SharedEventListener, Size,
+    SharedEventListener, Size, TextureDescriptor,
 };
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -774,6 +775,9 @@ fn child() {
             }
             exit_now(case, &messages);
         }
+        "released_import_exit" | "released_import_teardown_exit" => {
+            released_import(device, case, &messages);
+        }
         "handler_drops_last_exit" => {
             let (told, learn) = mpsc::channel();
             {
@@ -794,6 +798,154 @@ fn child() {
         }
         other => panic!("no case {other}"),
     }
+}
+
+/// The kernel the released-import cases dispatch after their fills: it samples a texture through a
+/// sampler, both named by the IDs its argument buffer holds, so its command buffer binds the
+/// device's heap set, which reaches every live texture.
+const ID_READER: &str =
+    "sample-an-unsigned-texture-through-a-sampler-held-beside-it-in-an-argument-buffer";
+
+/// How long the released-import cases' fills keep the GPU busy, as one fill's time predicts.
+const HELD: Duration = Duration::from_millis(60);
+
+/// The fills that keep the device busy for about [`HELD`]: a buffer's length and how many fills
+/// of it, as 16 fills' time measured on `queue` predicts on a GPU (16 to 1024 of them); on a CPU
+/// device [`in_flight`]'s.
+fn held_fills(device: &Device, queue: &CommandQueue) -> (u64, usize) {
+    let (length, fills) = in_flight();
+    if TEST_DEVICE == DeviceType::Cpu {
+        return (length, fills);
+    }
+    let buffer = device
+        .new_buffer(length, ResourceOptions::private())
+        .unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    fills_of(&command_buffer, &buffer, length, 16);
+    let start = Instant::now();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let each = (start.elapsed() / 16).as_nanos().max(1);
+    let fills = usize::try_from(HELD.as_nanos() / each)
+        .unwrap_or(1024)
+        .clamp(16, 1024);
+    (length, fills)
+}
+
+/// Encode `fills` fills of `buffer`'s first `length` bytes, in one blit encoder.
+fn fills_of(command_buffer: &CommandBuffer, buffer: &Buffer, length: u64, fills: usize) {
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    for _ in 0..fills {
+        blit.fill_buffer(buffer, 0..length, FILLED).unwrap();
+    }
+    blit.end_encoding().unwrap();
+}
+
+/// The released-import cases, in reims-vgpu's shape (a texture over a surface released with the
+/// surface while a command buffer that binds the device's heap set runs): twice, a texture over a
+/// no-copy buffer of fresh host pages, whose deallocator unmaps them; a command buffer of fills
+/// that keep the device busy for about [`HELD`], then a dispatch that reads another texture
+/// through its ID ([`ID_READER`]); the texture and its buffer released once the command buffer is
+/// scheduled, while the fills run.
+///
+/// - `released_import_exit`: each command buffer and deallocator waited for, then everything let
+///   go of but the device, which the process keeps (a static of the program's), and the process
+///   exits at the end of `main`, the runtime still releasing what the program let go of.
+/// - `released_import_teardown_exit`: the second command buffer's completed handler tells the
+///   program, which has let go of everything, the device included, and exits at once: the command
+///   buffer's release on the handler thread lets go of the device's last reference, so its
+///   teardown runs as the process exits.
+fn released_import(device: Device, case: &str, messages: &Messages) {
+    // As reims-vgpu's test: the device's own checks end first.
+    let _ = device.settle_in_place_checks(WAIT);
+    let _ = device.settle_queue_switch_check(WAIT);
+    let _ = device.settle_submit_checks(WAIT);
+    let queue = device.new_command_queue().unwrap();
+    let reader = public_case(ID_READER).unwrap();
+    let state = pipeline_state(&device, &reader).unwrap();
+    let resources = CaseResources::new(&device, &reader).unwrap();
+    let buffers = bound_buffers(&device, &reader.compute, &resources).unwrap();
+    let (length, fills) = held_fills(&device, &queue);
+    let filled = device
+        .new_buffer(length, ResourceOptions::private())
+        .unwrap();
+    let page = host_page();
+    let len = (64 * 32 * 4usize).div_ceil(page) * page;
+    let teardown = case == "released_import_teardown_exit";
+    for round in 0..2 {
+        let (freed, seen) = mpsc::channel();
+        let memory = anonymous(len);
+        let deallocator: Deallocator = Box::new(move |at: NonNull<u8>, length: u64| {
+            // SAFETY: the pages `anonymous` mapped for this buffer alone, which nothing reads
+            // any more.
+            let unmapped = unsafe { libc::munmap(at.as_ptr().cast(), length as usize) } == 0;
+            let _ = freed.send(unmapped);
+        });
+        // SAFETY: the pages stay mapped until the deallocator runs.
+        let made = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(memory),
+                len as u64,
+                ResourceOptions::shared(),
+                Some(deallocator),
+            )
+        };
+        let buffer = match made {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                // A device that refuses the import typed: nothing to release.
+                println!("{REPORT}-SKIPPED {case}: {error}");
+                exit_now(case, messages);
+            }
+        };
+        let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, 64, 32, false);
+        descriptor.usage = TextureUsage::SHADER_READ;
+        descriptor.resource_options = ResourceOptions::shared();
+        let texture = buffer.new_texture(&descriptor, 0, 64 * 4).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        fills_of(&command_buffer, &filled, length, fills);
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encode_case(&mut encoder, &state, &reader.compute, &buffers, &resources).unwrap();
+        encoder.end_encoding().unwrap();
+        let (told, learn) = mpsc::channel();
+        command_buffer
+            .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+                let _ = told.send(());
+            }))
+            .unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_scheduled().unwrap();
+        let running = command_buffer.status() == CommandBufferStatus::Scheduled;
+        drop((texture, buffer));
+        println!(
+            "{REPORT}-ROUND {case} round={round} fills={fills} running={}",
+            u8::from(running)
+        );
+        if teardown && round == 1 {
+            drop((
+                command_buffer,
+                queue,
+                state,
+                resources,
+                buffers,
+                filled,
+                device,
+            ));
+            learn.recv_timeout(WAIT).expect("the handler ran");
+            exit_now(case, messages);
+        }
+        learn.recv_timeout(WAIT).expect("the handler ran");
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        assert_eq!(
+            seen.recv_timeout(WAIT),
+            Ok(true),
+            "the deallocator unmapped the pages"
+        );
+    }
+    // The program keeps its device for the process's life; the rest it lets go of, and its
+    // releases run as the process exits.
+    std::mem::forget(device);
+    report(case, messages);
 }
 
 /// The host's page size.
@@ -1239,6 +1391,15 @@ fn exits_right_after_learning_of_completion_are_clean() {
         "handler_learns_exit",
         "handler_drops_last_exit",
     ]);
+}
+
+/// An exit after a texture over a no-copy buffer's host pages was released while a command buffer
+/// that binds the device's heap set ran (reims-vgpu's shape): with the device kept for the
+/// process's life, the runtime still releasing what the program let go of, and with the device's
+/// last reference let go of on the handler thread, its teardown racing the exit.
+#[test]
+fn exits_after_a_released_import_are_clean() {
+    exits_cleanly(&["released_import_exit", "released_import_teardown_exit"]);
 }
 
 /// An exit handler of the program's, registered between two devices, finds the hook ran, and
