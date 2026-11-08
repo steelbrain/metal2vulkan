@@ -7,7 +7,10 @@ use std::ffi::CStr;
 /// No Metal counterpart: the Vulkan objects behind a runtime device, with the function tables the
 /// runtime loaded for them: what the caller needs to read the device, or to make its own objects
 /// on it (a surface's swapchain, for example). The runtime keeps owning all of them; the
-/// references live as long as the borrow of the device.
+/// references live as long as the borrow of the device. A root handle's are of the `VkDevice`
+/// that served at the [`Device::raw`] call: after a recovery from its loss, that `VkDevice` stays
+/// alive until a later `raw` call of a root handle, so what the caller made with it is destroyed
+/// first (`Device::raw`).
 #[non_exhaustive]
 #[derive(Clone, Copy)]
 pub struct DeviceHandles<'a> {
@@ -163,7 +166,9 @@ impl Device {
     /// A root handle's (the device the program made, and its clones) are of the `VkDevice` that
     /// serves at the call. Once a recovery made a new one (`Degradation::DeviceRecovered`,
     /// [`Device::recover_for_test`]), they stay valid until a later call of a root handle's
-    /// returns the new one's; after that the caller uses them no more.
+    /// returns the new one's; after that the caller uses them no more. The lost `VkDevice` stays
+    /// alive until then, though the runtime's own objects made on it went, so the caller
+    /// destroys what it made with these handles (a swapchain, an import) before that call.
     pub unsafe fn raw(&self) -> DeviceHandles<'_> {
         let shared = match &self.0 {
             super::Pin::Generation(shared) => &**shared,

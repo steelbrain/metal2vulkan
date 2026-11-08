@@ -625,7 +625,8 @@ meanwhile wait for it.
   reads 2 until then. `vk_devices_made` and `device_recoveries` count the rest.
 - Each recovery is announced (`device-recovered`), naming the hang's command buffer.
 - `Device::raw` answers the new `VkDevice`'s handles once a later call asks; the handles it
-  answered before stay valid until then.
+  answered before stay valid until then, and the lost `VkDevice` stays alive until then, so the
+  consumer destroys what it made with those handles (a swapchain, an import) first.
 - A device the consumer made (`Device::from_raw`) is not made again: it answers `DeviceLost` from
   the loss on.
 
