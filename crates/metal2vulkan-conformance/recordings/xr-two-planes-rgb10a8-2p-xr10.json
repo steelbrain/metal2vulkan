@@ -1140,16 +1140,17 @@
         "gate_waits_slept": 9,
         "heads_held_for_host_steps": 13,
         "heap_tables_worked_out": 4,
+        "host_copy_blocks_readied": 1,
         "host_steps_recorded": 4,
         "images_started_on_the_host": 2,
         "new_buffer_bytes_cleared": 4784272,
-        "object_churn.buffers_evicted": 17,
+        "object_churn.buffers_evicted": 19,
         "object_churn.buffers_parked": 18,
         "object_churn.buffers_recycled": 1,
         "object_churn.images_own_memory": 2,
         "object_churn.textures_image": 2,
         "object_churn.vk_buffer_bindings": 17,
-        "object_churn.vk_buffers_destroyed": 17,
+        "object_churn.vk_buffers_destroyed": 19,
         "object_churn.vk_buffers_made": 17,
         "object_churn.vk_image_bindings": 2,
         "object_churn.vk_image_views_made": 4,
@@ -1176,7 +1177,7 @@
         "trail_waits": 9,
         "variant_pipelines_made": 4,
         "wakes_completion_waiters": 9,
-        "wakes_spared": 65
+        "wakes_spared": 66
       },
       "moving": {
         "gate_waits_slept": 7,
@@ -1194,6 +1195,7 @@
         "commands_recorded.end_command_buffer": 22,
         "device_memory_allocated": 268435712,
         "dispatch_used_resources_listed": 1,
+        "host_copy_blocks_readied": 1,
         "pooled_memory_blocks_made": 4,
         "queues_sharing_a_vk_queue": 0
       },

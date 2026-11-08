@@ -419,6 +419,8 @@
         "draw_shapes_made": 4,
         "draw_states_recorded": 44,
         "draws_settled": 4,
+        "draws_unkept": 4,
+        "draws_unkept_writing": 4,
         "driver_diagnostics_withheld": 4,
         "encoder_command_buffers_begun": 8,
         "fence_waits": 1,
@@ -464,6 +466,7 @@
       "composed": {
         "argument_samplers_taken": 4,
         "device_memory_allocated": 201326592,
+        "draw_shapes_made": 4,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 1
       },

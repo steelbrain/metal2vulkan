@@ -8572,9 +8572,9 @@
     {
       "venue": "Apple M3 Max",
       "runs": 0,
-      "measured": "no measurement: the run stopped before the case finished (a call did not answer, at MTLPixelFormatRGB10A8_2P/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture)",
+      "measured": "no measurement: the run stopped before the case finished (refused unsupported: Unsupported { feature: Format, needs: NotImplemented, location: None, symbol: Some(\"MTLPixelFormatRGB10A8_2P\") }, at MTLPixelFormatRGB10A8_2P/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture)",
       "bounds": {},
-      "unmeasurable": "a call did not answer, at MTLPixelFormatRGB10A8_2P/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture"
+      "unmeasurable": "refused unsupported: Unsupported { feature: Format, needs: NotImplemented, location: None, symbol: Some(\"MTLPixelFormatRGB10A8_2P\") }, at MTLPixelFormatRGB10A8_2P/Type2D/64x64x1/levels-1/samples-1/slices-1/usage-0x1/shared/makes-texture"
     }
   ],
   "times": [

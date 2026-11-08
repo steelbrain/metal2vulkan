@@ -472,6 +472,7 @@
         "draw_shapes_made": 2,
         "draw_shapes_reused": 2,
         "draw_states_recorded": 33,
+        "draws_rebind_stopped": 4,
         "draws_settled": 2,
         "driver_diagnostics_withheld": 2,
         "encoder_command_buffers_begun": 3,
@@ -485,7 +486,7 @@
         "heap_tables_worked_out": 14,
         "linked_use_questions_asked": 4,
         "new_buffer_bytes_cleared": 4288,
-        "object_churn.buffers_evicted": 1,
+        "object_churn.buffers_evicted": 5,
         "object_churn.buffers_parked": 2,
         "object_churn.buffers_recycled": 1,
         "object_churn.images_own_memory": 2,
@@ -493,7 +494,7 @@
         "object_churn.images_recycled": 1,
         "object_churn.textures_image": 2,
         "object_churn.vk_buffer_bindings": 1,
-        "object_churn.vk_buffers_destroyed": 1,
+        "object_churn.vk_buffers_destroyed": 5,
         "object_churn.vk_buffers_made": 1,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 2,
@@ -533,6 +534,7 @@
         "gate_waits_slept": 0
       },
       "composed": {
+        "argument_samplers_taken": 2,
         "command_buffers_deferred": 0,
         "commands_recorded.cmd_begin_render_pass": 0,
         "commands_recorded.cmd_bind_descriptor_sets": 1,

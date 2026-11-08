@@ -204,15 +204,15 @@
         "scheduled_where_submitted": 2,
         "scheduler_passes": 3,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 3,
-        "scheduler_wakes_commit": 2,
+        "scheduler_sleeps": 2,
+        "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 1,
         "slot_returns": 2,
         "spare_command_pools_taken": 2,
         "submit_infos": 2,
         "trail_waits": 2,
         "wakes_completion_waiters": 2,
-        "wakes_spared": 15
+        "wakes_spared": 16
       },
       "moving": {
         "gate_waits_slept": 0

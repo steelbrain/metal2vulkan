@@ -336,6 +336,9 @@
         "gate_waits_slept": 1,
         "heap_tables_worked_out": 1,
         "host_steps_recorded": 1,
+        "memory_frees.blocks": 1,
+        "memory_frees.kept_stale": 1,
+        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 4672,
         "object_churn.buffers_parked": 3,
         "object_churn.buffers_recycled": 3,
@@ -343,9 +346,11 @@
         "object_churn.images_parked": 1,
         "object_churn.images_recycled": 1,
         "object_churn.textures_image": 1,
+        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_image_views_made": 1,
         "object_churn.vk_images_destroyed": 1,
         "object_churn.vk_images_made": 1,
+        "object_churn.vk_memory_freed": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 1,
@@ -365,6 +370,11 @@
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
+      },
+      "moving": {
+        "memory_frees.blocks": 0,
+        "memory_frees.kept_stale": 0,
+        "memory_frees_posted": 0
       },
       "composed": {
         "command_buffers_begun": 5,
@@ -388,6 +398,9 @@
         "encoder_command_buffers_begun": 3,
         "functions_translated": 1,
         "host_steps_recorded": 1,
+        "memory_frees.blocks": 0,
+        "memory_frees.kept_stale": 0,
+        "memory_frees_posted": 0,
         "queues_sharing_a_vk_queue": 0,
         "stage_entries_specialized": 1,
         "submit_infos": 2,

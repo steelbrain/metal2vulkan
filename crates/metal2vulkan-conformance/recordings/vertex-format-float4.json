@@ -2265,6 +2265,8 @@
         "draw_shapes_made": 8,
         "draw_states_recorded": 494,
         "draws_settled": 45,
+        "draws_unkept": 45,
+        "draws_unkept_writing": 45,
         "driver_diagnostics_withheld": 45,
         "encoder_command_buffers_begun": 90,
         "fence_waits": 1,

@@ -304,8 +304,9 @@
         "functions_translated": 2,
         "gate_waits": 1,
         "gate_waits_slept": 1,
-        "heads_held_for_host_steps": 4,
+        "heads_held_for_host_steps": 3,
         "heap_tables_worked_out": 1,
+        "host_copy_blocks_readied": 1,
         "host_steps_recorded": 1,
         "host_texel_copies": 2,
         "images_started_on_the_host": 1,
@@ -326,7 +327,7 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 5,
+        "scheduler_passes": 4,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 1,
@@ -357,6 +358,7 @@
         "commands_recorded.end_command_buffer": 0,
         "device_memory_allocated": 268435584,
         "dispatch_used_resources_listed": 1,
+        "host_copy_blocks_readied": 1,
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {

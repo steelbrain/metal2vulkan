@@ -6815,10 +6815,11 @@
       "bounds": {
         "addressable_buffers_made": 2,
         "device_memory_allocated": 335544320,
+        "host_copy_blocks_made_in_place": 1,
+        "host_copy_blocks_readied": 1,
         "images_started_on_the_host": 12,
         "memory_blocks_live": 1,
         "new_buffer_bytes_cleared": 512,
-        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 4,
         "object_churn.buffers_recycled": 3,
         "object_churn.images_evicted": 32,
@@ -6828,7 +6829,6 @@
         "object_churn.textures_image": 44,
         "object_churn.textures_texels": 4,
         "object_churn.vk_buffer_bindings": 1,
-        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_buffers_made": 1,
         "object_churn.vk_image_bindings": 44,
         "object_churn.vk_images_destroyed": 71,
@@ -6840,6 +6840,8 @@
       },
       "composed": {
         "device_memory_allocated": 335544320,
+        "host_copy_blocks_made_in_place": 1,
+        "host_copy_blocks_readied": 1,
         "requirement_images_made": 15,
         "requirement_limits_asked": 15
       },

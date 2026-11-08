@@ -239,8 +239,6 @@
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_images_destroyed": 32,
         "object_churn.vk_images_made": 1,
-        "object_churn.vk_memory_freed": 2,
-        "pooled_memory_blocks_freed": 2,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 3,
         "queues_sharing_a_vk_queue": 1,

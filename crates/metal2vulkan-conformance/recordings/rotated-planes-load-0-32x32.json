@@ -417,9 +417,13 @@
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 1,
         "heap_tables_worked_out": 2,
+        "host_copy_blocks_made_in_place": 1,
         "host_texel_copies": 1,
         "images_started_on_the_host": 1,
         "linked_use_questions_asked": 2,
+        "memory_frees.blocks": 1,
+        "memory_frees.kept_stale": 1,
+        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 4624,
         "object_churn.buffers_evicted": 4,
         "object_churn.buffers_parked": 3,
@@ -434,6 +438,7 @@
         "object_churn.vk_image_views_made": 3,
         "object_churn.vk_images_destroyed": 1,
         "object_churn.vk_images_made": 1,
+        "object_churn.vk_memory_freed": 1,
         "owned_descriptor_pools": 1,
         "owned_kernel_spirv_bytes": 6880,
         "owned_kernels_made": 1,
@@ -481,7 +486,10 @@
         "wakes_spared": 7
       },
       "moving": {
-        "gate_waits_slept": 0
+        "gate_waits_slept": 0,
+        "memory_frees.blocks": 0,
+        "memory_frees.kept_stale": 0,
+        "memory_frees_posted": 0
       },
       "composed": {
         "argument_samplers_taken": 1,
@@ -523,7 +531,11 @@
         "draw_shapes_made": 1,
         "driver_diagnostics_withheld": 1,
         "functions_translated": 2,
+        "host_copy_blocks_made_in_place": 1,
         "linked_use_questions_asked": 2,
+        "memory_frees.blocks": 0,
+        "memory_frees.kept_stale": 0,
+        "memory_frees_posted": 0,
         "owned_kernel_spirv_bytes": 6880,
         "owned_kernels_made": 1,
         "queues_sharing_a_vk_queue": 0,

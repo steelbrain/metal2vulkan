@@ -408,6 +408,7 @@
         "gate_waits_slept": 0
       },
       "composed": {
+        "argument_samplers_taken": 1,
         "command_buffers_deferred": 0,
         "commands_recorded.cmd_begin_render_pass": 0,
         "commands_recorded.cmd_bind_descriptor_sets": 0,
@@ -438,6 +439,7 @@
         "commands_recorded.end_command_buffer": 0,
         "creation_render_pipelines_made": 1,
         "device_memory_allocated": 201326592,
+        "draw_shapes_made": 1,
         "driver_diagnostics_withheld": 2,
         "functions_translated": 2,
         "linked_use_questions_asked": 2,
