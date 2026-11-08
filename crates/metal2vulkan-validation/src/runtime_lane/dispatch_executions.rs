@@ -374,15 +374,26 @@ fn kept_recorded(device: &Device) -> u64 {
     counts.barrier_buffers_kept + counts.stamped_buffers_kept
 }
 
-/// Require that `device`'s scheduler recorded no barrier command buffer to keep since it had
-/// recorded `before` ([`kept_recorded`]): the barriers counted since are the commands' and their
-/// encoders' own.
-fn none_kept_since(device: &Device, before: u64, at: &str) {
-    assert_eq!(
-        kept_recorded(device) - before,
-        0,
-        "{at}: the batches recorded barrier command buffers to keep, so the barriers counted are \
-         not the commands' own alone"
+/// How many times [`own_barriers`] runs a counted window at most.
+const WINDOW_RUNS: usize = 3;
+
+/// The barriers a run of `window` counted (what it returns) in a run that recorded no barrier
+/// command buffer to keep ([`kept_recorded`]): the commands' and their encoders' own. A queue
+/// keeps each list of a batch's barriers it meets, recorded once; a counted run may meet one the
+/// uncounted runs before it did not, and record it to keep, its barriers counted with the
+/// commands'. That run is not counted, and the window runs again, at most [`WINDOW_RUNS`] times:
+/// a list recorded again at each of its uses fails every run.
+fn own_barriers(device: &Device, at: &str, mut window: impl FnMut() -> u64) -> u64 {
+    for _ in 0..WINDOW_RUNS {
+        let kept_before = kept_recorded(device);
+        let counted = window();
+        if kept_recorded(device) == kept_before {
+            return counted;
+        }
+    }
+    panic!(
+        "{at}: each of {WINDOW_RUNS} runs recorded barrier command buffers to keep, so the \
+         barriers counted are not the commands' own alone"
     );
 }
 
@@ -429,7 +440,8 @@ const STEPPED: [Degradation; 2] = [HOST_STEPS[0], Degradation::SplitDispatch];
 /// serial encoder's commands take a barrier between every two, the concurrent encoder's none: no
 /// route set a barrier in the buffer's records. Both encoders run twice, and the second time is
 /// counted: the first records the queue's kept barrier command buffers ([`kept_recorded`]), and
-/// the second records none, so its barriers are the commands' and their encoder's own.
+/// the second counts a run that recorded none ([`own_barriers`]), so its barriers are the
+/// commands' and their encoder's own.
 #[test]
 fn each_command_runs_its_own_state_and_group_count() {
     on_device(|device, messages| {
@@ -439,33 +451,37 @@ fn each_command_runs_its_own_state_and_group_count() {
             [DispatchType::Serial, DispatchType::Concurrent].map(|kind| (counted, kind))
         });
         for (counted, dispatch_type) in passes.into_iter().flatten() {
-            let setup = Setup::new(device);
-            let command_buffer = queue.command_buffer().unwrap();
-            setup.writable(&command_buffer);
-            let before = dispatches_indirect(device);
-            let barriers_before = barriers(device);
-            let kept_before = kept_recorded(device);
-            let mut encoder = command_buffer
-                .compute_command_encoder_with_dispatch_type(dispatch_type)
-                .unwrap();
-            setup.resident(&mut encoder);
-            encoder
-                .execute_commands_in_buffer(&setup.icb, 0..COMMANDS)
-                .unwrap();
-            encoder.end_encoding().unwrap();
-            complete(&command_buffer);
             let at = format!("{dispatch_type:?}");
-            assert_eq!(setup.output(), expected(0..COMMANDS as usize), "{at}");
-            assert!(ran_flat(&command_buffer), "{at}");
-            let states = setup.states.len() as u64;
-            assert_eq!(
-                dispatches_indirect(device) - before,
-                COMMANDS * states,
-                "{at}: one indirect dispatch per command and state"
-            );
-            if counted {
-                none_kept_since(device, kept_before, &at);
-                ordered.push(barriers(device) - barriers_before);
+            let run = || {
+                let setup = Setup::new(device);
+                let command_buffer = queue.command_buffer().unwrap();
+                setup.writable(&command_buffer);
+                let before = dispatches_indirect(device);
+                let barriers_before = barriers(device);
+                let mut encoder = command_buffer
+                    .compute_command_encoder_with_dispatch_type(dispatch_type)
+                    .unwrap();
+                setup.resident(&mut encoder);
+                encoder
+                    .execute_commands_in_buffer(&setup.icb, 0..COMMANDS)
+                    .unwrap();
+                encoder.end_encoding().unwrap();
+                complete(&command_buffer);
+                assert_eq!(setup.output(), expected(0..COMMANDS as usize), "{at}");
+                assert!(ran_flat(&command_buffer), "{at}");
+                let states = setup.states.len() as u64;
+                assert_eq!(
+                    dispatches_indirect(device) - before,
+                    COMMANDS * states,
+                    "{at}: one indirect dispatch per command and state"
+                );
+                barriers(device) - barriers_before
+            };
+            match counted {
+                false => {
+                    run();
+                }
+                true => ordered.push(own_barriers(device, &at, run)),
             }
         }
         assert_eq!(
@@ -550,48 +566,53 @@ fn a_copied_record_runs_its_released_state_s_program_on_the_gpu_alone() {
 /// before its batch is submitted (the batch waits for an event the CPU signals after the set): the
 /// commands run on the GPU alone, with as many barriers as the serial encoder's, and write what
 /// Metal computes. Without the set, none. A first execution without the set, not counted, records
-/// the queue's kept barrier command buffers ([`kept_recorded`]); the counted ones record none, so
-/// their barriers are the commands' and their encoder's own.
+/// the queue's kept barrier command buffers ([`kept_recorded`]); the counted ones count a run that
+/// recorded none ([`own_barriers`]), so their barriers are the commands' and their encoder's own.
 #[test]
 fn a_barrier_set_after_the_commit_records_the_commands_again() {
     on_device(|device, messages| {
         let queue = device.new_command_queue().unwrap();
         let mut taken = Vec::new();
         for (counted, set) in [(false, false), (true, false), (true, true)] {
-            let setup = Setup::new(device);
-            let event = device.new_shared_event().unwrap();
-            let command_buffer = queue.command_buffer().unwrap();
-            setup.writable(&command_buffer);
-            command_buffer
-                .encode_wait_for_event(EventRef::from(&event), 1)
-                .unwrap();
-            let mut encoder = command_buffer
-                .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)
-                .unwrap();
-            setup.resident(&mut encoder);
-            encoder
-                .execute_commands_in_buffer(&setup.icb, 0..COMMANDS)
-                .unwrap();
-            encoder.end_encoding().unwrap();
-            let before = barriers(device);
-            let kept_before = kept_recorded(device);
-            command_buffer.commit().unwrap();
-            if set {
-                let command = setup.icb.indirect_compute_command_at(3).unwrap();
-                command.set_barrier().unwrap();
-            }
-            event.set_signaled_value(1);
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-            assert_eq!(
-                command_buffer.execution_report(),
-                Some(StatusReport::default())
-            );
-            assert_eq!(setup.output(), expected(0..COMMANDS as usize), "set {set}");
-            assert!(ran_flat(&command_buffer), "set {set}");
-            if counted {
-                none_kept_since(device, kept_before, &format!("set {set}"));
-                taken.push(barriers(device) - before);
+            let at = format!("set {set}");
+            let run = || {
+                let setup = Setup::new(device);
+                let event = device.new_shared_event().unwrap();
+                let command_buffer = queue.command_buffer().unwrap();
+                setup.writable(&command_buffer);
+                command_buffer
+                    .encode_wait_for_event(EventRef::from(&event), 1)
+                    .unwrap();
+                let mut encoder = command_buffer
+                    .compute_command_encoder_with_dispatch_type(DispatchType::Concurrent)
+                    .unwrap();
+                setup.resident(&mut encoder);
+                encoder
+                    .execute_commands_in_buffer(&setup.icb, 0..COMMANDS)
+                    .unwrap();
+                encoder.end_encoding().unwrap();
+                let before = barriers(device);
+                command_buffer.commit().unwrap();
+                if set {
+                    let command = setup.icb.indirect_compute_command_at(3).unwrap();
+                    command.set_barrier().unwrap();
+                }
+                event.set_signaled_value(1);
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+                assert_eq!(
+                    command_buffer.execution_report(),
+                    Some(StatusReport::default())
+                );
+                assert_eq!(setup.output(), expected(0..COMMANDS as usize), "{at}");
+                assert!(ran_flat(&command_buffer), "{at}");
+                barriers(device) - before
+            };
+            match counted {
+                false => {
+                    run();
+                }
+                true => taken.push(own_barriers(device, &at, run)),
             }
         }
         assert!(
