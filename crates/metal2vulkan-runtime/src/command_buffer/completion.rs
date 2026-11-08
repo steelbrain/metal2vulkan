@@ -175,7 +175,7 @@
 
 use super::gate::Hold;
 use super::CommandBufferShared;
-use crate::copied::Written;
+use crate::copied::CopiesReached;
 use crate::device::lock;
 use crate::error::{CommandBufferError, Error, MemoryKind, VkResultCode};
 use crate::event::EventShared;
@@ -630,11 +630,11 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     // compared.
     let copied = &device.shared().copied;
     if copied.any() {
-        let mut written = Written::default();
+        let mut written = CopiesReached::default();
         for (_, batch) in &finished {
             let buffer = &batch.buffer;
             if buffer.unnoted.load(Ordering::Relaxed) || lock(&buffer.state).writes_unnamed {
-                written = Written::all();
+                written = CopiesReached::all();
                 break;
             }
             lock(&buffer.dirty).copies_written(&mut written);

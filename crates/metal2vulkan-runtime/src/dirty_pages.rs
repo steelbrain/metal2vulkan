@@ -68,7 +68,7 @@
 //!
 //! [`HostMemory::with_dirty_pages`]: crate::HostMemory::with_dirty_pages
 
-use super::copied::Written;
+use super::copied::CopiesReached;
 use super::device::lock;
 use super::key_hash::KeyMap;
 use super::resource::ResourceKey;
@@ -1246,6 +1246,10 @@ pub(crate) struct DirtyCommit {
     waiting: Option<Arc<WaitingWrites>>,
     /// Its writes were more than [`WRITES`]: `written` holds the first alone.
     overflowed: bool,
+    /// The keys its commands used (read or wrote), for the copy in of copied host buffers at its
+    /// commit (`copied.rs`): at most [`WRITES`] of them, past which `used_all`.
+    used: KeyMap<ResourceKey, ()>,
+    used_all: bool,
     /// Its writes into host pages imported in place whose memory is logged: each pages' logs,
     /// and the bytes written, in order, at most [`HOST_RANGES`] of them, past which the pages
     /// are written whole.
@@ -1274,9 +1278,20 @@ fn written_bytes(used: &Use<ResourceKey>) -> Range<u64> {
 const HOST_RANGES: usize = 64;
 
 impl DirtyCommit {
-    /// Note a command's `uses`: its writes, each once; and of them, those into logged host pages
-    /// imported in place (`shadows`' [`Imports`]).
+    /// Note a command's `uses`: the keys it used, each once; its writes, each once; and of them,
+    /// those into logged host pages imported in place (`shadows`' [`Imports`]).
     pub(crate) fn note(&mut self, uses: &[Use<ResourceKey>], shadows: &DirtyShadows) {
+        for used in uses.iter().filter(|_| !self.used_all) {
+            match self.used.len() < WRITES || self.used.contains_key(&used.key) {
+                true => {
+                    self.used.insert(used.key, ());
+                }
+                false => {
+                    self.used_all = true;
+                    self.used.clear();
+                }
+            }
+        }
         let imports = shadows.in_place().then(|| lock(&shadows.imports));
         for used in uses.iter().filter(|used| !used.write.is_empty()) {
             let seen = (self.written.iter().rev().take(8))
@@ -1308,13 +1323,25 @@ impl DirtyCommit {
 
     /// Its commands' writes, for the merge back of copied host buffers (`copied.rs`): the keys
     /// they wrote, or every copy where it kept them not all apart.
-    pub(crate) fn copies_written(&self, into: &mut Written) {
+    pub(crate) fn copies_written(&self, into: &mut CopiesReached) {
         if self.overflowed {
-            into.wrote_all();
+            into.reached_all();
             return;
         }
         for used in &self.written {
-            into.wrote(used.key);
+            into.reached(used.key);
+        }
+    }
+
+    /// Its commands' uses, for the copy in of copied host buffers at its commit (`copied.rs`): the
+    /// keys they read or wrote, or every copy where it kept them not all apart.
+    pub(crate) fn copies_used(&self, into: &mut CopiesReached) {
+        if self.used_all {
+            into.reached_all();
+            return;
+        }
+        for key in self.used.keys() {
+            into.reached(*key);
         }
     }
 

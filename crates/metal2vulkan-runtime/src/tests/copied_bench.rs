@@ -6,11 +6,11 @@
 //! pages' writes, each merge back taking every copy as written; with one log over every copy's
 //! pages (a guest RAM's, its offsets host addresses, [`BenchLog`]) told of each CPU write, as a
 //! consumer's dirty log would be, likewise; and logged, each merge back taking as written only
-//! the copies the GPU wrote, as their command buffers' uses would name them (`Written`). Each
+//! the copies the GPU wrote, as their command buffers' uses would name them (`CopiesReached`). Each
 //! prints its median over its runs (`COPIED-BENCH`). Ignored: run it in release,
 //! `cargo test --release -p metal2vulkan-runtime --lib copied_bench -- --ignored --nocapture`.
 
-use crate::copied::{CopiedBuffers, Written};
+use crate::copied::{CopiedBuffers, CopiesReached};
 use crate::dirty_pages::{hook, DirtySource, DirtyTally, PagesLog};
 use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
@@ -158,13 +158,13 @@ fn bench(logged: bool, named: bool) {
     }
     let written = |changed: &[usize]| match named {
         true => {
-            let mut written = Written::default();
+            let mut written = CopiesReached::default();
             for &pair in changed {
-                written.wrote(keys[pair]);
+                written.reached(keys[pair]);
             }
             written
         }
-        false => Written::all(),
+        false => CopiesReached::all(),
     };
     let tell = |range: Range<u64>| log.told(range, 0);
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
@@ -179,7 +179,7 @@ fn bench(logged: bool, named: bool) {
         for _ in 0..RUNS {
             change_cpu(&mut pairs, &mut rng, &tell);
             let started = Instant::now();
-            buffers.copy_in(&counts, &tally, Vec::new);
+            buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
             ins.push(started.elapsed().as_secs_f64() * 1e3);
             let changed = change_gpu(&mut pairs, &mut rng, &|_| {});
             let written = written(&changed);
@@ -196,9 +196,9 @@ fn bench(logged: bool, named: bool) {
         );
     };
     // Every byte agrees first, and the logged copies hold a stamp.
-    buffers.copy_in(&counts, &tally, Vec::new);
-    buffers.merge_back(&counts, &Written::all());
-    buffers.copy_in(&counts, &tally, Vec::new);
+    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    buffers.merge_back(&counts, &CopiesReached::all());
+    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
     let mut nothing = |_: &mut [Pair], _: &mut Rng, _: &dyn Fn(Range<u64>)| Vec::new();
     let mut nothing_either = |_: &mut [Pair], _: &mut Rng, _: &dyn Fn(Range<u64>)| Vec::new();
     report("(a) nothing changed", &mut nothing, &mut nothing_either);
@@ -257,8 +257,9 @@ fn bench(logged: bool, named: bool) {
 /// (11-07, 5080: 512 copies of 1.25 GiB, each view thousands of 4 KiB runs of its guest RAM):
 /// [`STITCHED`] copies of [`STITCHED_PAGES`] pages each, every page its own run of one guest RAM
 /// log, no two adjacent. Each commit's copy in, with the RAM written at `writes` pages since the
-/// last (none, a few, many: the log's answer grows with them, the copies' runs do not), prints
-/// its median over [`STITCHED_RUNS`] commits (`COPIED-STITCHED`). Ignored: run it in release,
+/// last (none, a few, many: the log's answer grows with them, the copies' runs do not), for a
+/// command buffer that uses 8 of the copies and for one whose commands may reach every copy,
+/// prints its median over [`STITCHED_RUNS`] commits (`COPIED-STITCHED`). Ignored: run it in release,
 /// `cargo test --release -p metal2vulkan-runtime --lib copied_stitched_bench -- --ignored --nocapture`.
 #[test]
 #[ignore = "a release-mode benchmark"]
@@ -281,6 +282,7 @@ fn copied_stitched_bench() {
         .collect();
     // Copy `c`'s page `k` is RAM page `2 * (c * STITCHED_PAGES + k)`: its offset in the log.
     let ram_page = |c: usize, k: usize| (2 * (c * STITCHED_PAGES + k) * PAGE) as u64;
+    let keys: Vec<ResourceKey> = (0..STITCHED).map(|_| ResourceKey::new()).collect();
     let mut kept = Vec::new();
     for (c, pair) in pairs.iter_mut().enumerate() {
         let pages = NonNull::new(pair.pages.as_mut_ptr()).unwrap();
@@ -299,14 +301,24 @@ fn copied_stitched_bench() {
         let pages_log =
             PagesLog::new((at, length as u64), None, Some((&source, &window, 0))).unwrap();
         copied.set_log(&pages_log);
-        copied.name(ResourceKey::new());
+        copied.name(keys[c]);
         kept.push(copied);
     }
     // Every byte agrees first, and each copy holds a stamp.
-    buffers.copy_in(&counts, &tally, Vec::new);
-    buffers.copy_in(&counts, &tally, Vec::new);
+    let every = CopiesReached::all();
+    buffers.copy_in(&counts, &tally, &every, Vec::new);
+    buffers.copy_in(&counts, &tally, &every, Vec::new);
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    for writes in [0usize, 16, 256, 4096] {
+    // A command buffer that uses 8 of the copies, and one whose commands may reach any.
+    let mut eight = CopiesReached::default();
+    for key in keys.iter().step_by(STITCHED / 8) {
+        eight.reached(*key);
+    }
+    for ((writes, used), uses) in [0usize, 16, 256, 4096]
+        .into_iter()
+        .flat_map(|writes| [(writes, &eight), (writes, &every)])
+        .zip(["8 copies used", "every copy reached"].into_iter().cycle())
+    {
         let mut ins = Vec::new();
         for _ in 0..STITCHED_RUNS {
             for _ in 0..writes {
@@ -317,11 +329,11 @@ fn copied_stitched_bench() {
                 log.told(ram_page(c, k)..ram_page(c, k) + PAGE as u64, 0);
             }
             let started = Instant::now();
-            buffers.copy_in(&counts, &tally, Vec::new);
+            buffers.copy_in(&counts, &tally, used, Vec::new);
             ins.push(started.elapsed().as_secs_f64() * 1e3);
         }
         eprintln!(
-            "COPIED-STITCHED {STITCHED} copies of {STITCHED_PAGES} runs, {} MiB, {writes} pages written: copy in {:.3} ms (median of {STITCHED_RUNS})",
+            "COPIED-STITCHED {STITCHED} copies of {STITCHED_PAGES} runs, {} MiB, {writes} pages written, {uses}: copy in {:.3} ms (median of {STITCHED_RUNS})",
             (STITCHED * length) >> 20,
             median(ins),
         );

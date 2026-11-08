@@ -61,6 +61,7 @@ pub(super) use submit::{BatchLists, Submitting};
 use super::apple_only::AppleOnly;
 use super::compute::EncoderState;
 use super::contexts::{self, Run};
+use super::copied::CopiesReached;
 use super::deferred::{Deferred, Prepared, StepInputs};
 use super::degradation::Degradation;
 use super::descriptor_arena::DescriptorArena;
@@ -3326,14 +3327,23 @@ impl CommandBuffer {
             .filter(|(_, prepared)| prepared.pipelines)
             .map(|((work, _), _)| work.clone())
             .collect();
-        // Every byte the CPU changed in a copied host buffer's pages is in its copy before any of
-        // this command buffer's work is submitted (`copied.rs`): copied in with no lock of the
-        // command buffer's held, as a copy over logged pages waits for the log's publication.
-        shared
-            .copied
-            .copy_in(&shared.counts, shared.dirty.tally(), || {
-                shared.dirty.in_flight()
-            });
+        // Every byte the CPU changed in the pages of a copied host buffer this command buffer's
+        // commands use is in its copy before any of its work is submitted (`copied.rs`): every
+        // copy where its uses went unnoted, or a command may reach memory no use names. Copied
+        // in with no lock of the command buffer's held, as a copy over logged pages waits for
+        // the log's publication.
+        if shared.copied.any() {
+            let mut used = CopiesReached::default();
+            match self.0.unnoted.load(Ordering::Relaxed) || self.state().reaches_unnamed {
+                true => used.reached_all(),
+                false => self.dirty().copies_used(&mut used),
+            }
+            shared
+                .copied
+                .copy_in(&shared.counts, shared.dirty.tally(), &used, || {
+                    shared.dirty.in_flight()
+                });
+        }
         let (waits, away, reaches, unreplayable, reset) = {
             let mut state = self.state();
             state.committing = false;

@@ -334,6 +334,7 @@ pub(crate) struct Counters {
     copied_host_buffers_shared: AtomicU64,
     copied_copy_in_bytes: AtomicU64,
     copied_copy_in_bytes_skipped: AtomicU64,
+    copied_copy_ins_unused: AtomicU64,
     copied_merge_back_bytes: AtomicU64,
     copied_merges_compared: AtomicU64,
     copied_merges_skipped: AtomicU64,
@@ -2807,6 +2808,12 @@ impl Counters {
     /// reported them written since the copy last synced (`copied.rs`).
     pub(crate) fn copied_copy_in_skipped(&self, bytes: u64) {
         (self.copied_copy_in_bytes_skipped).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A commit's copy in left `copies` copied host buffers alone: no command of its command
+    /// buffer used them (`copied.rs`).
+    pub(crate) fn copied_copy_ins_unused(&self, copies: u64) {
+        (self.copied_copy_ins_unused).fetch_add(copies, Ordering::Relaxed);
     }
 
     /// A batch's completion merged `bytes` the GPU changed back into the caller's pages
@@ -5736,6 +5743,11 @@ pub struct WorkCounts {
     /// `HostRam::with_dirty_pages`), which reported none of them written since the copy last
     /// synced to it.
     pub copied_copy_in_bytes_skipped: u64,
+    /// The copied host buffers commits' copies in left alone, one per copy and commit: no
+    /// command of the committed command buffer used them (none reached memory its uses do not
+    /// name), so neither their bytes nor their pages' logs were asked; the first commit that uses
+    /// one takes every write since.
+    pub copied_copy_ins_unused: u64,
     /// The bytes the GPU changed in copied host buffers' copies that batches' completions merged
     /// back into the caller's pages.
     pub copied_merge_back_bytes: u64,
@@ -7110,6 +7122,7 @@ impl Device {
             copied_copy_in_bytes: counters.copied_copy_in_bytes.load(Ordering::Relaxed),
             copied_copy_in_bytes_skipped: (counters.copied_copy_in_bytes_skipped)
                 .load(Ordering::Relaxed),
+            copied_copy_ins_unused: counters.copied_copy_ins_unused.load(Ordering::Relaxed),
             copied_merge_back_bytes: counters.copied_merge_back_bytes.load(Ordering::Relaxed),
             copied_merges_compared: counters.copied_merges_compared.load(Ordering::Relaxed),
             copied_merges_skipped: counters.copied_merges_skipped.load(Ordering::Relaxed),

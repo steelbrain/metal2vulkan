@@ -25,8 +25,10 @@
 //!   are dropped keep their own (`host_aliases.rs`, "Not joined").
 //! - **Coherence.** The runtime keeps, for each copy, the bytes the pages and the copy last agreed
 //!   on (its snapshot). At each commit, before any of the command buffer's work is submitted,
-//!   every byte the CPU changed in the pages since then is written into the copy
-//!   ([`CopiedBuffers::copy_in`]). At each batch's completion, before its events are seen
+//!   every byte the CPU changed in the pages since then is written into each copy its commands
+//!   use, or into every copy where one may reach memory no use names (a function that reaches
+//!   buffers through addresses, work on the GPU alone; [`CopiedBuffers::copy_in`]): a copy the
+//!   command buffer does not use takes the CPU's writes at the first commit that uses it. At each batch's completion, before its events are seen
 //!   signaled, the scheduler is told, its handlers run or a waiter returns, every byte the GPU
 //!   changed in the copy is written back into the pages, where the CPU did not change that byte
 //!   since ([`CopiedBuffers::merge_back`]): a byte both changed keeps the CPU's, which the next
@@ -34,7 +36,7 @@
 //!   whose buffer's (or heap's) key a use of their command buffers' commands wrote, and every
 //!   copy where one of those may have written memory no use names (the loaded addresses of a
 //!   function that may store or update memory atomically, an indirect command buffer's
-//!   executions; `Written`), or kept its writes not all apart. Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Bytes are compared a page (4 KiB) at a time, and inside a page that
+//!   executions; `CopiesReached`), or kept its writes not all apart. Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Bytes are compared a page (4 KiB) at a time, and inside a page that
 //!   differs 8 at a time and then one at a time, so a merge writes no byte the GPU did not change
 //!   ([`sync`]). Each batch ends with a barrier that makes its writes visible to the host
 //!   (`tracker::Barrier::to_host`). Where the pages' memory came with a log of the writes to them
@@ -132,37 +134,40 @@ pub(crate) struct CopiedBuffers {
     owed: AtomicBool,
 }
 
-/// What the batches a completion turn finishes may have written ([`CopiedBuffers::merge_back`]):
-/// the keys their command buffers' commands wrote (`DirtyCommit::copies_written`), or every copy.
+/// The copies commands reached, by the keys of their uses, or every copy: what the batches a
+/// completion turn finishes may have written ([`CopiedBuffers::merge_back`], the keys their
+/// command buffers' commands wrote, `DirtyCommit::copies_written`), or what a committed command
+/// buffer's commands may read or write ([`CopiedBuffers::copy_in`], the keys they used,
+/// `DirtyCommit::copies_used`).
 #[derive(Default)]
-pub(crate) struct Written {
+pub(crate) struct CopiesReached {
     keys: KeyMap<ResourceKey, ()>,
     all: bool,
 }
 
-impl Written {
-    /// Every copy may have been written.
-    pub(crate) fn all() -> Written {
-        Written {
+impl CopiesReached {
+    /// Every copy may have been reached.
+    pub(crate) fn all() -> CopiesReached {
+        CopiesReached {
             keys: KeyMap::default(),
             all: true,
         }
     }
 
-    /// A command wrote the bytes of `key`.
-    pub(crate) fn wrote(&mut self, key: ResourceKey) {
+    /// A command reached the bytes of `key`.
+    pub(crate) fn reached(&mut self, key: ResourceKey) {
         if !self.all {
             self.keys.insert(key, ());
         }
     }
 
-    /// Some command may have written a copy no use of it names.
-    pub(crate) fn wrote_all(&mut self) {
+    /// Some command may have reached a copy no use of it names.
+    pub(crate) fn reached_all(&mut self) {
         self.all = true;
         self.keys.clear();
     }
 
-    /// Whether a command may have written the copy whose uses take `keys`.
+    /// Whether a command may have reached the copy whose uses take `keys`.
     fn meets(&self, keys: &[(ResourceKey, usize)]) -> bool {
         self.all || keys.iter().any(|(key, _)| self.keys.contains_key(key))
     }
@@ -416,8 +421,14 @@ impl CopiedBuffers {
         })
     }
 
-    /// At a commit: write into each copy the bytes the CPU changed in its pages since they last
-    /// agreed, before any of the command buffer's work is submitted.
+    /// At a commit: write into each copy the command buffer's commands may reach (`used`: the
+    /// keys they used, `DirtyCommit::copies_used`, or every copy where one may reach memory no
+    /// use names) the bytes the CPU changed in its pages since they last agreed, before any of
+    /// the command buffer's work is submitted. A copy none of them reaches is neither compared nor
+    /// asked of its logs, and keeps the stamp it last synced to, so the first commit whose
+    /// commands reach it takes every write since: a command buffer reads only the resources its
+    /// commands use, as Metal's GPU reaches only those (counted:
+    /// `WorkCounts::copied_copy_ins_unused`).
     ///
     /// A copy whose pages' memory came with a log of the writes to them ([`Copied::set_log`])
     /// compares only the pages the log reports written since the stamp its last copy in synced
@@ -438,6 +449,7 @@ impl CopiedBuffers {
         &self,
         counts: &Counters,
         tally: &DirtyTally,
+        used: &CopiesReached,
         in_flight: impl FnOnce() -> Vec<Range<u64>>,
     ) {
         if self.live.load(Ordering::Relaxed) == 0 {
@@ -445,6 +457,7 @@ impl CopiedBuffers {
         }
         let in_flight = in_flight();
         let asked: Vec<Asked> = (lock(&self.entries).iter())
+            .filter(|entry| used.meets(&entry.keys))
             .filter_map(|entry| {
                 let log = entry.log.as_ref()?;
                 Some(Asked {
@@ -459,8 +472,12 @@ impl CopiedBuffers {
             })
             .collect();
         let plans = planned(asked, tally, &in_flight);
-        let (mut moved, mut skipped) = (0u64, 0u64);
+        let (mut moved, mut skipped, mut unused) = (0u64, 0u64, 0u64);
         for entry in lock(&self.entries).iter_mut() {
+            if !used.meets(&entry.keys) {
+                unused += 1;
+                continue;
+            }
             let plan = match &entry.log {
                 Some(_) => (plans.binary_search_by_key(&entry.id, |(id, _)| *id).ok())
                     .map(|at| &plans[at].1),
@@ -496,6 +513,7 @@ impl CopiedBuffers {
         }
         counts.copied_copied_in(moved);
         counts.copied_copy_in_skipped(skipped);
+        counts.copied_copy_ins_unused(unused);
     }
 
     /// At a batch's completion: write back into each copy's pages the bytes the GPU changed in the
@@ -521,7 +539,7 @@ impl CopiedBuffers {
     /// ([`DirtyPages::wrote_runs_as`](crate::DirtyPages::wrote_runs_as)), before this returns:
     /// the log sees no write the runtime makes, and every other copy and shadow of those pages
     /// must take them, while the copy's own copies in need not.
-    pub(crate) fn merge_back(&self, counts: &Counters, written: &Written) {
+    pub(crate) fn merge_back(&self, counts: &Counters, written: &CopiesReached) {
         if self.live.load(Ordering::Relaxed) == 0 {
             return;
         }

@@ -2582,6 +2582,7 @@ field	metal2vulkan-runtime::WorkCounts.completion_waiter_parks_timed_out	pub com
 field	metal2vulkan-runtime::WorkCounts.compute_pipeline_create_nanos	pub compute_pipeline_create_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64
+field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_unused	pub copied_copy_ins_unused: u64
 field	metal2vulkan-runtime::WorkCounts.copied_dropped_bytes	pub copied_dropped_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_heaps_made	pub copied_heaps_made: u64
 field	metal2vulkan-runtime::WorkCounts.copied_host_buffers_degraded	pub copied_host_buffers_degraded: u64
