@@ -389,9 +389,16 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
-- **On RADV after the GPU idled into runtime suspend, a new `Shared` or `Managed` texture's first
-  CPU write waits until the program's queued GPU work ends**: 442 to 572 ms behind about 1.5 s of
-  fills on the RX 7900 XTX (Mesa 26.2.6; `tests::zeroed_start`), 71 us with the GPU awake.
+- **On RADV, a texture's first CPU copy after a runtime suspend moved its memory waits for the
+  moves back**: where the GPU idles into runtime suspend while a program runs, the kernel moves the
+  program's device-local memory out and back at its next submission, and the first
+  `replace_region` into a texture placed before the suspend waited 86 ms on the RX 7900 XTX (Mesa
+  26.2.6). A `Shared` or `Managed` texture larger than half a block takes a block of its own, made
+  as it is rather than ready ahead (`memory/ready.rs`): its first `replace_region` after such a
+  suspend waited 73 ms there. The pooled blocks those textures place in are made ready ahead, every
+  page touched: in processes started with the GPU suspended, the first `replace_region` into a
+  texture made behind about 1.5 s of fills took 55 to 114 us, against 553 to 654 ms without
+  (`tests::zeroed_start`, five processes each), and 58 to 63 us with the GPU awake.
 
 - **A draw that reads and writes a color in the pixel interlock after an earlier draw of its
   instance wrote it begins a render pass instance of its own on MoltenVK on Apple's GPUs**
