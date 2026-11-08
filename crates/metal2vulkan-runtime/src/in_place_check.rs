@@ -9,16 +9,18 @@
 //!   refuses by their pointer, imported as dma-bufs), fills a window of it with a pattern, and
 //!   makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture takes
 //!   the image in place exactly as the product's would ([`checking`](crate::in_place::checking)
-//!   lets it whatever the verdict); the fresh-pages class once the device's submission checks
-//!   answered whether its buffers take fresh pages (`submit_check.rs`), unchecked where they do
-//!   not, as the product then makes no such buffer. A thread of its own then writes the
-//!   pattern's complement into the window, each byte once, at a stride that reaches texels, the
-//!   bytes between rows and the bytes after the image from its first writes, while the device
-//!   makes the image's first move
-//!   (an internal submission naming the texture, waited for) and until it completed. Every byte
-//!   must then read the CPU's write where the CPU wrote it, and the pattern elsewhere. Each class
-//!   runs every shape of [`SHAPES`] (texels of 1, 2, 4, 8 and 16 bytes, rows apart or one after
-//!   another, and 3840x2160 at 4 bytes) [`ROUNDS`] times.
+//!   lets it whatever the verdict); the fresh-pages class's buffer in fresh pages wherever the
+//!   device takes them, whatever its submission checks found a held import costs
+//!   (`submit_check.rs`): the product's long buffers lie in them only where that cost is none
+//!   (`fresh_pages.rs`), but a rebind's copy under an image in place lies in them wherever the
+//!   class passed (`buffer_descriptor.rs`), and the check's buffer, never parked, holds its import
+//!   for its round alone; unchecked where the device takes none. A thread of its own then writes
+//!   the pattern's complement into the window, each byte once, at a stride that reaches texels, the
+//!   bytes between rows and the bytes after the image from its first writes, while the device makes
+//!   the image's first move (an internal submission naming the texture, waited for) and until it
+//!   completed. Every byte must then read the CPU's write where the CPU wrote it, and the pattern
+//!   elsewhere. Each class runs every shape of [`SHAPES`] (texels of 1, 2, 4, 8 and 16 bytes, rows
+//!   apart or one after another, and 3840x2160 at 4 bytes) [`ROUNDS`] times.
 //! - **An image that renders** ([`Access::Renders`]) is checked apart, in rounds of their own: the
 //!   texture is made with `RenderTarget` usage as well, as the program's render targets are, so
 //!   its image takes the feedback loop usage where the product's does; the writer writes the bytes
@@ -607,19 +609,15 @@ impl ClassPages {
     /// A buffer of `length` bytes in pages of `class` on `device`, where the device makes one
     /// there; inside a section of its own.
     fn make(device: &Device, class: PagesClass, length: u64) -> Option<ClassPages> {
-        // Whether the device's buffers take fresh pages is its submission checks' answer
-        // (`submit_check.rs`): the class is checked once they gave it, as the product makes its
-        // buffers then.
-        if matches!(class, PagesClass::Fresh) {
-            device.settle_submit_checks(crate::submit_check::ANSWER_WAIT);
-        }
         let _busy = exit_guard::enter()?;
         match class {
             PagesClass::Pointer => pointer_pages(device, length),
+            // In fresh pages wherever the device takes them, whatever its submission checks
+            // found a held import costs: a rebind's copy under an image in place lies in them
+            // where this class passed (`buffer_descriptor.rs`'s `copied_pages`), the product's
+            // long buffers where that cost is none (`fresh_pages.rs`).
             PagesClass::Fresh => {
-                let buffer = device
-                    .new_buffer_placed(length, ResourceOptions::shared(), AddressPlacement::Outside)
-                    .ok()?;
+                let buffer = device.fresh_pages_check_buffer(length).ok()?;
                 if !buffer.in_fresh_pages() {
                     return None;
                 }

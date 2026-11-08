@@ -313,9 +313,9 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
                 };
                 // A long buffer of the device's own lies in fresh pages where its submission
                 // checks found a held import adds nothing to a submission (`fresh_pages.rs`),
-                // made then or parked by an earlier one of its length (the device's in-place
-                // check makes one): none does on a device whose held imports cost its
-                // submissions, or which imports no host memory, and those alone skip the class.
+                // made then or parked by an earlier one of its length: none does on a device
+                // whose held imports cost its submissions, or which imports no host memory, and
+                // those alone skip the class.
                 if class == "Fresh" && !device.fresh_pages_pay() {
                     let report = device.submit_check_report();
                     let taxed = report.contains("import tax Holds");

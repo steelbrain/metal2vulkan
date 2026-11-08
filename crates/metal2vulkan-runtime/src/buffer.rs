@@ -2204,14 +2204,45 @@ impl Device {
         of_heap: bool,
         placement: impl Into<Place>,
     ) -> Result<Buffer, Error> {
+        let of = match of_heap {
+            true => NewBufferOf::Heap,
+            false => NewBufferOf::Runtime(FreshPages::WherePaid),
+        };
         let (buffer, bytes) =
-            self.placed_new_buffer(call, length, modes, class, of_heap, placement.into())?;
+            self.placed_new_buffer(call, length, modes, class, of, placement.into())?;
         // Fresh pages read zero as mapped (`fresh_pages.rs`): nothing is written.
         if bytes == NewBytes::Zero {
             return Ok(buffer);
         }
         // Dropping `buffer` on failure releases it.
         buffer.clear_first()?;
+        Ok(buffer)
+    }
+
+    /// A `Shared` buffer of `length` bytes (above half a pooled block, `FRESH_PAGES_PAST`), all
+    /// zero, outside the Metal address space, in fresh pages wherever the device takes them, the
+    /// cost of a held import to its submissions aside ([`FreshPages::Wherever`]): the in-place
+    /// check's fresh-pages class (`in_place_check.rs`). Where the device takes no such pages, a
+    /// buffer as ever, not in them (`Buffer::in_fresh_pages`). Refused as [`Device::new_buffer`]
+    /// refuses its length.
+    pub(super) fn fresh_pages_check_buffer(&self, length: u64) -> Result<Buffer, Error> {
+        const CALL: &str = "new_buffer";
+        let modes = Modes::of(ResourceOptions::shared())?;
+        let class = buffer_class(CALL, modes)?;
+        if length == 0 || length > self.properties().max_buffer_length {
+            return Err(nil(CALL, Problem::BufferLength { length }));
+        }
+        let (buffer, bytes) = self.placed_new_buffer(
+            CALL,
+            length,
+            modes,
+            class,
+            NewBufferOf::Runtime(FreshPages::Wherever),
+            AddressPlacement::Outside.into(),
+        )?;
+        if bytes == NewBytes::AsPlaced {
+            buffer.clear_first()?;
+        }
         Ok(buffer)
     }
 
@@ -2262,24 +2293,31 @@ impl Device {
             length,
             modes,
             class,
-            false,
+            NewBufferOf::Runtime(FreshPages::WherePaid),
             AddressPlacement::Outside.into(),
         )
     }
 
     /// [`zeroed_buffer`](Device::zeroed_buffer)'s buffer before its bytes are set to zero, and
     /// what they hold: its memory's bytes as placed, or zero where it lies in fresh pages it
-    /// imported (`fresh_pages.rs`). A buffer not of a heap is a parked one of the same making
-    /// where the recycler holds one, and is noted as one it may park as it goes (`recycle.rs`).
+    /// imported (`fresh_pages.rs`), which `of` says where it takes. A buffer of the runtime's own
+    /// made where fresh pages are paid for is a parked one of the same making where the recycler
+    /// holds one, and is noted as one it may park as it goes (`recycle.rs`); one made wherever the
+    /// device takes them is neither: it is the in-place check's, whose import is held only for its
+    /// round.
     fn placed_new_buffer(
         &self,
         call: &'static str,
         length: u64,
         modes: Modes,
         class: MemoryClass,
-        of_heap: bool,
+        of: NewBufferOf,
         placement: Place,
     ) -> Result<(Buffer, NewBytes), Error> {
+        let (of_heap, fresh) = match of {
+            NewBufferOf::Heap => (true, FreshPages::WherePaid),
+            NewBufferOf::Runtime(fresh) => (false, fresh),
+        };
         if self.is_lost() {
             return Err(Error::DeviceLost);
         }
@@ -2311,8 +2349,8 @@ impl Device {
         let wants_fresh = !of_heap
             && fresh_pages::takes_fresh_pages(size, class)
             && shared.host_import.is_ok()
-            && self.fresh_pages_pay();
-        let making = (!of_heap).then_some(BufferMaking {
+            && (fresh == FreshPages::Wherever || self.fresh_pages_pay());
+        let making = (!of_heap && fresh == FreshPages::WherePaid).then_some(BufferMaking {
             size,
             class,
             fresh_pages: wants_fresh,
@@ -2851,6 +2889,29 @@ impl Device {
             }
         }
     }
+}
+
+/// Whose a buffer [`Device::placed_new_buffer`] makes is: a heap's own buffer, or one of the
+/// runtime's own, with where it lies in fresh pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NewBufferOf {
+    /// A heap's own buffer (`heap.rs`), never in fresh pages.
+    Heap,
+    /// A buffer of the runtime's own, in fresh pages where it says.
+    Runtime(FreshPages),
+}
+
+/// Where [`Device::placed_new_buffer`] lays a long host-visible buffer of the runtime's own in
+/// fresh pages (`fresh_pages.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FreshPages {
+    /// Where the device takes them and its submission checks found that a held import adds
+    /// nothing to its submissions: the product's buffers.
+    WherePaid,
+    /// Wherever the device takes them: the in-place check's buffer of its fresh-pages class,
+    /// which lies where a rebind's copy under an image in place lies whatever that cost
+    /// (`buffer_descriptor.rs`'s `copied_pages`), and whose import lives only for its round.
+    Wherever,
 }
 
 /// What a new buffer's bytes hold as [`Device::placed_new_buffer`] makes it.

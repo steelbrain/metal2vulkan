@@ -3,6 +3,8 @@
 //! space"), so no pin or pick of the program's depends on whether or when the check runs, and the
 //! space's state changes no verdict. Nor does it take a texture ID: its textures are the
 //! runtime's own (`resource_ids.rs`), so the program's IDs are Metal's whether or when it runs.
+//! And it checks fresh pages wherever the device takes them, also where its held imports cost its
+//! submissions and no long buffer of the product's lies in them.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Each device's shader cache is a fresh
@@ -11,6 +13,8 @@
 
 use super::blit_holds::{device, Scratch};
 use crate::address::{PAGE, SPACE_BASE, SPACE_END};
+use crate::fresh_pages::FRESH_PAGES_PAST;
+use crate::in_place::{Access, PagesClass, Verdict as InPlaceVerdict};
 use crate::submit_check::{encode, record_name, Check, Measured, Verdict};
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
@@ -33,21 +37,26 @@ const PINNED: u64 = 16 << 10;
 
 /// The submission checks' answers each device the placement test compares recalls
 /// ([`answering`]), in `Check::ALL`'s order: a held import adds nothing to a submission, so the
-/// device's long buffers take fresh pages where it makes them and the check's `Fresh` class is
-/// checked; the merge and the follows check answer as a driver without either property does.
+/// device's long buffers take fresh pages where it makes them; the merge and the follows check
+/// answer as a driver without either property does.
 const ANSWERS: [Verdict; 3] = [Verdict::Fails, Verdict::Fails, Verdict::Fails];
 
-/// A record of [`ANSWERS`] for the driver of the device the cfg selects, and its path under a
-/// shader cache's directory.
+/// [`ANSWERS`] but that a held import adds to every submission's cost, as on RADV: the device's
+/// long buffers take no fresh pages (`fresh_pages.rs`).
+const TAXED: [Verdict; 3] = [Verdict::Fails, Verdict::Holds, Verdict::Fails];
+
+/// A record of submission-check answers for the driver of the device the cfg selects, and its
+/// path under a shader cache's directory.
 struct AnswersRecord {
+    answers: [Verdict; 3],
     bytes: Vec<u8>,
     under: PathBuf,
 }
 
 impl AnswersRecord {
-    /// The record, its identity and path read from a device made over a cache of its own and
-    /// dropped before any device that recalls the record is made.
-    fn new() -> AnswersRecord {
+    /// The record of `answers`, its identity and path read from a device made over a cache of its
+    /// own and dropped before any device that recalls the record is made.
+    fn new(answers: [Verdict; 3]) -> AnswersRecord {
         let scratch = Scratch::new("in-place-check-identity");
         let probe = device(&scratch.0);
         let identity = probe.driver_identity();
@@ -55,19 +64,19 @@ impl AnswersRecord {
             .record_path(&record_name(&identity));
         let under = path.strip_prefix(&scratch.0).unwrap().to_owned();
         AnswersRecord {
-            bytes: encode(&identity, ANSWERS, Measured::default()),
+            answers,
+            bytes: encode(&identity, answers, Measured::default()),
             under,
         }
     }
 }
 
-/// A device over `scratch`'s shader cache that recalls [`ANSWERS`] from `record`, written there
-/// before it is made, and runs no submission check (`submit_check.rs`): what places a long buffer
-/// in fresh pages or not (`fresh_pages.rs`), so what the check's `Fresh` class can check at all.
-/// Two devices made so differ in no answer the check's classes follow, where the submission
-/// checks each timed under the load beside it can answer apart: a held import measured to cost
-/// 1.2 us a submission on one llvmpipe device and 0.3 us on the next, either side of the check's
-/// 1 us (`TAX_FLOOR`).
+/// A device over `scratch`'s shader cache that recalls `record`'s answers, written there before
+/// it is made, and runs no submission check (`submit_check.rs`): what places the product's long
+/// buffers in fresh pages or not (`fresh_pages.rs`). Two devices made so place them alike, where
+/// the submission checks each timed under the load beside it can answer apart: a held import
+/// measured to cost 1.2 us a submission on one llvmpipe device and 0.3 us on the next, either side
+/// of the check's 1 us (`TAX_FLOOR`).
 fn answering(scratch: &Scratch, record: &AnswersRecord) -> Device {
     let path = scratch.0.join(&record.under);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -80,7 +89,10 @@ fn answering(scratch: &Scratch, record: &AnswersRecord) -> Device {
         "the device recalled the written answers and ran no submission check"
     );
     let recalled = Check::ALL.map(|check| device.shared().submit_checks.verdict(check));
-    assert_eq!(recalled, ANSWERS, "the recalled submission-check verdicts");
+    assert_eq!(
+        recalled, record.answers,
+        "the recalled submission-check verdicts"
+    );
     device
 }
 
@@ -115,7 +127,7 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
             .take(lines)
             .collect()
     };
-    let record = AnswersRecord::new();
+    let record = AnswersRecord::new(ANSWERS);
     let reference = {
         let scratch = Scratch::new("in-place-check-reference");
         let device = answering(&scratch, &record);
@@ -160,6 +172,47 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
     );
     assert_eq!(answered, reference, "the verdicts with the space held");
     drop((held, pool));
+}
+
+/// A device whose held imports cost its submissions (recalled: [`TAXED`]), so that no long buffer
+/// of the product's lies in fresh pages, checks the `Fresh` class all the same wherever it takes
+/// such pages, as a rebind's copy under a texture in place lies in them where that class passed
+/// (`buffer_descriptor.rs`'s `copied_pages`): each of its `Fresh` verdicts is passed or failed
+/// where a device recalling [`ANSWERS`] lays a long buffer of its own in fresh pages, and
+/// unchecked where it does not.
+#[test]
+fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
+    let takes = {
+        let scratch = Scratch::new("in-place-check-untaxed");
+        let device = answering(&scratch, &AnswersRecord::new(ANSWERS));
+        let buffer = device.new_buffer(2 * FRESH_PAGES_PAST, ResourceOptions::shared());
+        buffer.unwrap().in_fresh_pages()
+    };
+    let scratch = Scratch::new("in-place-check-taxed");
+    let device = answering(&scratch, &AnswersRecord::new(TAXED));
+    assert!(
+        !device.fresh_pages_pay(),
+        "the recalled answers keep long buffers out of fresh pages"
+    );
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let fresh = Access::ALL.map(|access| device.in_place_verdict(PagesClass::Fresh, access));
+    eprintln!(
+        "IN-PLACE-CHECK-TAXED on {}: a long buffer in fresh pages where held imports cost \
+         nothing {takes}; the Fresh verdicts where they cost {fresh:?}; fresh-page buffers made {}",
+        device.name(),
+        device.work_counts().fresh_page_buffers_made
+    );
+    match takes {
+        true => assert!(
+            !fresh.contains(&InPlaceVerdict::Unchecked),
+            "every Fresh verdict checked: {fresh:?}"
+        ),
+        false => assert_eq!(
+            fresh,
+            [InPlaceVerdict::Unchecked; 3],
+            "no fresh pages to check"
+        ),
+    }
 }
 
 /// A private 4x4 `RGBA8Unorm` texture of the program's, at a plain ID.

@@ -180,9 +180,8 @@ pub(crate) const TAX_REPEATS: usize = 2;
 /// How long one wait for a fence lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
-/// The longest a making whose path the verdicts choose once for good waits for them (the in-place
-/// check's fresh-pages class, `in_place_check.rs`; a guest RAM with a source of dma-bufs,
-/// `host_ram.rs`): their run takes milliseconds.
+/// The longest a making whose path the verdicts choose once for good waits for them (a guest RAM
+/// with a source of dma-bufs, `host_ram.rs`): their run takes milliseconds.
 pub(crate) const ANSWER_WAIT: Duration = Duration::from_secs(10);
 
 /// The bytes the follows check copies.
