@@ -87,7 +87,11 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
         CommandBufferStatus::Completed,
         "the making waited {took:?} for the GPU's busy work"
     );
-    if zeroed {
+    // Where its image copies on the host: elsewhere (a color texture on a device with a staging
+    // queue and no host-cached memory, NVIDIA's; `texture/staging_copy.rs`) the staging queue
+    // writes its zeros.
+    let hosted = after.images_started_on_the_host - before.images_started_on_the_host;
+    if zeroed && hosted == 1 {
         assert_eq!(
             after.images_started_zeroed - before.images_started_zeroed,
             1,
@@ -112,8 +116,9 @@ const MANY: usize = 1000;
 /// again, twice: the first round's lie past every range placed before, the others' in ranges the
 /// first used, the third's in memory the host already wrote on any device. Each making's time,
 /// and the blocks they take, are printed (`ZEROED-MAKES`): on a device that starts them zeroed,
-/// as many pooled blocks as on one that writes their zeros, and no block of its own each. Every
-/// texture read reads zero.
+/// as many pooled blocks as on one that writes their zeros, and no block of its own each; there
+/// every one of the first round that copies on the host starts zeroed. Every texture read reads
+/// zero.
 #[test]
 fn many_shared_textures_made_in_turn_take_pooled_blocks() {
     let scratch = Scratch::new("zeroed-makes");
@@ -167,11 +172,13 @@ fn many_shared_textures_made_in_turn_take_pooled_blocks() {
         for texture in [&made[0], &made[MANY / 2], &made[MANY - 1]] {
             assert!(reads_zero(texture), "a texel read nonzero ({round})");
         }
+        // Every one that started on the host: on a device whose color textures copy on a
+        // staging queue, none does (`texture/staging_copy.rs`).
         if zeroed && round == "past every range" {
             assert_eq!(
                 after.images_started_zeroed - before.images_started_zeroed,
-                MANY as u64,
-                "a texture past every range placed did not start zeroed"
+                after.images_started_on_the_host - before.images_started_on_the_host,
+                "a texture past every range placed started on the host but not zeroed"
             );
         }
     }
