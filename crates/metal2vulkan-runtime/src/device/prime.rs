@@ -949,6 +949,10 @@ impl Primer<'_> {
             self.made(Call::CreateBuffer);
             let requirements = device.get_buffer_memory_requirements(buffer);
             self.made(Call::GetBufferMemoryRequirements);
+            let mut requirements2 = vk::MemoryRequirements2::default();
+            let query = vk::BufferMemoryRequirementsInfo2::default().buffer(buffer);
+            device.get_buffer_memory_requirements2(&query, &mut requirements2);
+            self.made(Call::GetBufferMemoryRequirements2);
             let host =
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
             let memory = match self.allocate(requirements, host, device_addresses) {

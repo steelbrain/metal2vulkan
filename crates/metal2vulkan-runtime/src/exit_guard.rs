@@ -571,6 +571,10 @@ calls! {
     // not make ([`UNPRIMED`](crate::device::prime::UNPRIMED)).
     GetImageMemoryRequirements2 => c"vkGetImageMemoryRequirements2",
     GetImageSubresourceLayout => c"vkGetImageSubresourceLayout",
+    // An exportable buffer's requirements with its dedicated ones, made by the device's check of
+    // textures over exported memory on the check's thread as the program's thread makes one
+    // (`in_place_check.rs`, `exported_memory.rs`).
+    GetBufferMemoryRequirements2 => c"vkGetBufferMemoryRequirements2",
     CreateRenderPass => c"vkCreateRenderPass",
     CreateRenderPass2 => c"vkCreateRenderPass2",
     CreateFramebuffer => c"vkCreateFramebuffer",
