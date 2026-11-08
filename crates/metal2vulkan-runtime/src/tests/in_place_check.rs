@@ -215,7 +215,7 @@ fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
         ),
         false => assert_eq!(
             fresh,
-            [InPlaceVerdict::Unchecked; 6],
+            vec![InPlaceVerdict::Unchecked; RowEnds::ALL.len() * Access::ALL.len()],
             "no fresh pages to check"
         ),
     }
@@ -394,7 +394,8 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
     let in_place = unsafe { texture.vk_image() }.is_some();
     eprintln!(
         "IN-PLACE-DMA-BUF on {}: pointer-first import over the dma-buf {}, dma-buf-only {}; the \
-         DmaBuf verdicts (rows in lines, then on lines; reads, renders, writes, buffer writes) \
+         DmaBuf verdicts (rows in lines, then on lines; reads, renders, writes, buffer writes, \
+         narrow writes, narrow buffer writes) \
          {verdicts:?}; a 234x18 BGRA8Unorm texture at 1024-byte rows ({rows:?}, reads {reads:?}) \
          in place {in_place}",
         device.name(),
