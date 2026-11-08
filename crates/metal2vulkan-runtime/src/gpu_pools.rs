@@ -260,9 +260,10 @@ impl<T> QueueBlocks<T> {
             })
             .map(|(&queue, _)| queue)
             .collect();
-        quiet
-            .into_iter()
+        let gone: Vec<T> = (quiet.into_iter())
             .filter_map(|queue| self.slots.remove(&queue).and_then(|slot| slot.block))
+            .collect();
+        gone.into_iter()
             .filter_map(|block| self.keep(block))
             .collect()
     }
