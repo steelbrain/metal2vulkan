@@ -12,12 +12,19 @@ use crate::{PrivateAnswer, PrivateCount, PrivateFlag, PrivateProperties};
 use metal2vulkan::device::{Device, DevicePolicy};
 use metal2vulkan::metal::TextureType;
 
-/// The device linear texture alignment [`answers`] reads from, as a device whose images need 256
-/// bytes answers (`Device::device_linear_texture_alignment`, which only a device answers).
-const LINEAR: u64 = 256;
+/// The device linear texture alignment [`answers`] reads from on the committed profile `stem`
+/// (`Device::device_linear_texture_alignment`, which only a device answers): MoltenVK's 16, Metal's
+/// own, as the M3 Max's answers (its linear images lay rows at the packed row rounded up to 16 and
+/// align their memory to 16), and 256 elsewhere, as a device whose images need more answers.
+fn linear(stem: &str) -> u64 {
+    match stem.starts_with("moltenvk-") {
+        true => 16,
+        false => 256,
+    }
+}
 
 /// The answers on the committed profile `stem`, as `Device::private_properties` reads them, its
-/// linear texture alignment [`LINEAR`].
+/// linear texture alignment [`linear`]'s.
 fn answers(stem: &str, desc: &metal2vulkan::device::DeviceDescription) -> PrivateProperties {
     let (enabled, properties) = created(stem, desc);
     let compile = Device::new(enabled.clone(), DevicePolicy::UNTRUSTED).unwrap();
@@ -27,7 +34,7 @@ fn answers(stem: &str, desc: &metal2vulkan::device::DeviceDescription) -> Privat
         &properties,
         compile.metal_properties(),
         &rows,
-        (&formats, LINEAR),
+        (&formats, linear(stem)),
     )
 }
 
@@ -247,7 +254,7 @@ fn the_core_count_and_fp16_are_the_devices() {
                 properties,
                 compile.metal_properties(),
                 &rows,
-                (&formats, LINEAR),
+                (&formats, linear(&stem)),
             )
         };
         let unknown = of(&properties).count(PrivateCount::GpuCoreCount);
@@ -287,8 +294,8 @@ fn the_alignments_atomics_and_formats_are_the_devices() {
         let (enabled, _) = created(&stem, &desc);
         let p = answers(&stem, &desc);
         for (c, answer) in [
-            (C::DeviceLinearTextureAlignmentBytes, LINEAR),
-            (C::LinearTextureAlignmentBytes, LINEAR),
+            (C::DeviceLinearTextureAlignmentBytes, linear(&stem)),
+            (C::LinearTextureAlignmentBytes, linear(&stem)),
             (
                 C::IosurfaceTextureAlignmentBytes,
                 crate::linear_plan::LINEAR_ALIGNMENT,
