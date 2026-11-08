@@ -873,14 +873,20 @@ fn model(
         let second = fb.convert(ConvOp::Bitcast, second, t.uvec2)?;
         Ok(([first, second], weight))
     };
-    // The bilinear blend of the four values `[v00, v10, v01, v11]` by the weights `k` (a `vec2`).
-    let blend = |fb: &mut FunctionBuilder<'_>, [v00, v10, v01, v11]: [SValue; 4], k: SValue| {
-        let kx = fb.composite_extract(k, &[0])?;
-        let ky = fb.composite_extract(k, &[1])?;
-        let low = fb.glsl(GlslOp::FMix, &[v00, v10, kx])?;
-        let high = fb.glsl(GlslOp::FMix, &[v01, v11, kx])?;
-        fb.glsl(GlslOp::FMix, &[low, high, ky])
-    };
+    // The bilinear blend of the four values `[v00, v10, v01, v11]` by the weights `k` (a `vec2`):
+    // floats, or `vec2`s of a pair where `pair`, each lane weighed alike.
+    let blend =
+        |fb: &mut FunctionBuilder<'_>, [v00, v10, v01, v11]: [SValue; 4], k: SValue, pair: bool| {
+            let mut kx = fb.composite_extract(k, &[0])?;
+            let mut ky = fb.composite_extract(k, &[1])?;
+            if pair {
+                kx = fb.composite_construct(vec2, &[kx, kx])?;
+                ky = fb.composite_construct(vec2, &[ky, ky])?;
+            }
+            let low = fb.glsl(GlslOp::FMix, &[v00, v10, kx])?;
+            let high = fb.glsl(GlslOp::FMix, &[v01, v11, kx])?;
+            fb.glsl(GlslOp::FMix, &[low, high, ky])
+        };
     let corners =
         |fb: &mut FunctionBuilder<'_>, [a, b]: [SValue; 2]| -> BResult<[[SValue; 2]; 4]> {
             let (x0, y0) = (
@@ -912,7 +918,7 @@ fn model(
         let code = fb.binary(BinOp::ShiftRightLogical, code, conversion.code_shift)?;
         *out = fb.convert(ConvOp::ConvertUToF, code, t.f32_)?;
     }
-    let y = blend(fb, luma, luma_k)?;
+    let y = blend(fb, luma, luma_k, false)?;
     // Chroma: its plane's four texels around the same point, sited at their luma pairs'
     // midpoints, each pair one element.
     let chroma_at = fb.binary(BinOp::FMul, texels, half2)?;
@@ -929,7 +935,7 @@ fn model(
         let v = fb.binary(BinOp::ShiftRightLogical, v, shift)?;
         *out = fb.convert(ConvOp::ConvertUToF, v, vec2)?;
     }
-    let c = blend(fb, pairs, chroma_k)?;
+    let c = blend(fb, pairs, chroma_k, true)?;
     let cb = fb.composite_extract(c, &[0])?;
     let cr = fb.composite_extract(c, &[1])?;
     // Each channel `clamp(a Y + kb Cb + kr Cr + d, 0, 1)` in the codes counted as 10-bit ones.

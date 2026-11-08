@@ -637,10 +637,8 @@ fn video_frame_parts() {
     use metal2vulkan::device::YCbCrInPlacePolicy;
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let exact = DevicePolicy {
-        ycbcr_in_place_reads: YCbCrInPlacePolicy::Exact,
-        ..DevicePolicy::default()
-    };
+    let mut exact = DevicePolicy::default();
+    exact.ycbcr_in_place_reads = YCbCrInPlacePolicy::Exact;
     for (policy, forms) in [
         (
             DevicePolicy::default(),
