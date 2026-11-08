@@ -858,7 +858,7 @@ type Aliased = Result<(Arc<Image>, AliasCount), (String, Option<ShadowCause>)>;
 /// the texture is made (`Device::storage_over_buffer`), or as a shadow made before its pooled
 /// class's verdicts moves to it (`texture/storage_form.rs`).
 #[derive(Clone, Copy)]
-pub(super) struct AliasCount {
+struct AliasCount {
     /// A `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch (`WorkCounts::pooled_pitched_images`).
     pitched: bool,
     /// Its rows (or slices) lie apart over bytes its buffer declares unobserved
@@ -870,7 +870,7 @@ pub(super) struct AliasCount {
 
 impl AliasCount {
     /// Count the image in `counts`.
-    pub(super) fn count(self, counts: &crate::work_counts::Counters) {
+    fn count(self, counts: &crate::work_counts::Counters) {
         if self.pitched {
             counts.pooled_pitched_image();
         }
@@ -3108,7 +3108,7 @@ impl Device {
     /// with, over `texels`: the image the texture would have been made with had the verdict been
     /// known then ([`alias_over_device`](Self::alias_over_device), of its declared plan), with what
     /// it counts as it moves in; `None` where the device makes none.
-    pub(super) fn pooled_move_image(
+    fn pooled_move_image(
         &self,
         pending: &in_place::PendingMove,
         texels: &Texels,
