@@ -808,17 +808,21 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
 /// compressed image's texels apart from its memory
 /// (`DriverFact::CompressedImagesHideAliasedWrites`: ANV), a heap's `RGBA8Unorm` texture that Metal
 /// keeps losslessly compressed (render-target and sampled-only usage, 64 and 1024 texels a side)
-/// takes the driver's compressed image, announced once (`heap-texture-compressed`); its texels the
-/// buffer's write may leave alone, as Metal's compressed texture shows such a write otherwise than
-/// as written: printed (`HEAPTEX compressed` lines), not asserted. One Metal keeps uncompressed
-/// (storage usage, or 8 texels a side) takes the uncompressed image it takes under
-/// `HeapCompressionPolicy::Uncompressed`, so the buffer's write changes every texel it reads
-/// ([`alias_round_trip`]). Elsewhere no route is announced.
+/// takes the driver's compressed image where that image fits Metal's answer, announced once
+/// (`heap-texture-compressed`); its texels the buffer's write may leave alone, as Metal's
+/// compressed texture shows such a write otherwise than as written: printed (`HEAPTEX compressed`
+/// lines), not asserted. Where the compressed image does not fit (ANV on an Iris Xe aligns it to
+/// 64 KiB, where Metal answers 128), the texture lies in place as an image that fits
+/// (`WorkCounts::heap_textures_refit`: host-transfer usage or a linear image). That one, and one
+/// Metal keeps uncompressed (storage usage, or 8 texels a side), which takes the uncompressed image
+/// it takes under `HeapCompressionPolicy::Uncompressed`, show the buffer's write in every texel
+/// they read ([`alias_round_trip`]), announced `heap-texture-host-transfer` or
+/// `heap-texture-linear`, each once. Elsewhere no route is announced.
 #[test]
 fn a_heap_texture_metal_compresses_keeps_the_driver_s_compression_by_default() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let (hides, compressed_made, uncompressed_made) = {
+    let (hides, compressed_made, uncompressed_made, refit) = {
         let device = &validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.heap_compression = HeapCompressionPolicy::Compressed;
         })
@@ -827,7 +831,7 @@ fn a_heap_texture_metal_compresses_keeps_the_driver_s_compression_by_default() {
             .properties()
             .driver_facts
             .contains(&DriverFact::CompressedImagesHideAliasedWrites);
-        let (mut compressed_made, mut uncompressed_made) = (false, false);
+        let (mut compressed_made, mut uncompressed_made, mut refit) = (false, false, false);
         let queue = device.new_command_queue().unwrap();
         for storage in [StorageMode::Shared, StorageMode::Private] {
             let options = tracked(storage);
@@ -853,19 +857,23 @@ fn a_heap_texture_metal_compresses_keeps_the_driver_s_compression_by_default() {
                 let mut descriptor = rgba8(side, options);
                 descriptor.usage = usage;
                 let what = format!("{storage:?} {side}x{side} {usage:?}");
+                let before = device.work_counts().heap_textures_refit;
                 let Some(unchanged) = alias_round_trip(&queue, &heap, &descriptor, &what) else {
                     continue;
                 };
-                if compressed {
+                let fitted = device.work_counts().heap_textures_refit > before;
+                refit |= fitted;
+                if compressed && !fitted {
                     compressed_made = true;
                     eprintln!("HEAPTEX compressed {what}: {unchanged} texels unchanged");
                 } else {
-                    uncompressed_made = true;
+                    uncompressed_made |= !compressed;
+                    eprintln!("HEAPTEX uncompressed {what}: in place of a shadow {fitted}");
                     assert_eq!(unchanged, 0, "{what}: texels the buffer's write left alone");
                 }
             }
         }
-        (hides, compressed_made, uncompressed_made)
+        (hides, compressed_made, uncompressed_made, refit)
     };
     let notices = counts(&messages.take_notices());
     let count = |kind: Degradation| notices.get(&kind).copied().unwrap_or(0);
@@ -878,7 +886,9 @@ fn a_heap_texture_metal_compresses_keeps_the_driver_s_compression_by_default() {
     );
     assert_eq!(compressed, usize::from(hides && compressed_made));
     assert_eq!(hidden, 0);
-    assert_eq!(transfer + linear, usize::from(hides && uncompressed_made));
+    assert!(transfer <= 1 && linear <= 1, "a route announced twice");
+    let routed = (hides && uncompressed_made) || refit;
+    assert_eq!(transfer + linear > 0, routed);
     layer_reported_nothing_at_all(&messages);
 }
 
