@@ -354,10 +354,10 @@ fn pooled_surface_costs() {
 
 /// The `pooled_sample_costs` caches, (width, rows, padded row bytes): one of the consumer's common
 /// small device caches, a browser's tile, a browser's window and the desktop; each also at its
-/// tight rows.
+/// tight rows, a multiple of the 16 bytes Metal's pitch takes here (each width a multiple of 4).
 const SAMPLED: [(u64, u64, u64); 4] = [
     (172, 67, 704),
-    (1307, 512, 5248),
+    (1308, 512, 5248),
     (1324, 940, 5312),
     (3648, 2038, 14848),
 ];
