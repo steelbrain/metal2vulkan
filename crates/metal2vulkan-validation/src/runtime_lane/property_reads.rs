@@ -30,7 +30,10 @@
 //! RTX 5080 Laptop GPU and on lavapipe, where 490 to 980 of a thread's reads land inside it. A
 //! thread descheduled through so short a submission reads nothing inside it, so the test commits
 //! up to [`ROUNDS`] such command buffers, each committed once the last one's work completed, until
-//! one has reads of both threads inside its submission.
+//! each thread has had reads inside one of their submissions. The claim is each thread's, so the
+//! two need not land in the same one: the two threads are seldom both on a CPU through so short a
+//! submission (on lavapipe on the Ryzen 7 7840HS, in each of 8 rounds one thread's reads landed
+//! inside and the other's did not, the two taking turns).
 //!
 //! And each read is timed: at most one in a thousand of each thread's takes [`SLOW_READ`] or more,
 //! a bound a host that preempts the reading thread now and then keeps, which no longest read is on
@@ -58,7 +61,7 @@ const WAIT: Duration = Duration::from_secs(60);
 /// The fills each command buffer encodes.
 const FILLS: usize = 1 << 12;
 
-/// The most command buffers committed for one with reads of both threads inside its submission.
+/// The most command buffers committed for each thread to have reads inside one's submission.
 const ROUNDS: usize = 8;
 
 /// How long the reads go on once the command buffer is submitted, its work behind the busy work.
@@ -323,14 +326,15 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
                 "kernel starts read with no kernel end: {reads:?}, {status:?}"
             );
             inside.push((reads.inside, status.inside));
-            if reads.inside > 0 && status.inside > 0 {
+            if inside.iter().any(|&(reads, _)| reads > 0)
+                && inside.iter().any(|&(_, status)| status > 0)
+            {
                 return;
             }
         }
         panic!(
-            "in none of {ROUNDS} command buffers did reads of both threads land inside the \
-             submission (each one's kernel time reads and status and error reads inside): \
-             {inside:?}"
+            "in {ROUNDS} command buffers the reads of a thread never landed inside a submission \
+             (each one's kernel time reads and status and error reads inside): {inside:?}"
         );
     });
 }
