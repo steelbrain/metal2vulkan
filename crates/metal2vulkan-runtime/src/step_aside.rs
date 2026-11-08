@@ -22,6 +22,10 @@
 //! - **Never for a waiter.** A step steps aside for no one while a program's call waits for the
 //!   check's verdicts (`SubmitChecks::wait`, `InPlaceChecks::wait`), so such a wait is the check's
 //!   own run alone.
+//! - **Never for long.** A step waits at most [`MOST_ASIDE`]: a program whose allocations and
+//!   frees never pause for [`QUIET`] (one that allocates every few milliseconds) still sees each
+//!   check go on, a step at least each [`MOST_ASIDE`], so its verdicts come, its steps a short
+//!   share of that time.
 //! - **What it costs.** A check's verdicts come later while the device's work goes on: until then
 //!   the device takes the forms a device without them takes (each check's module docs). Counted:
 //!   `WorkCounts::device_checks` (`steps_aside`, `aside_nanos`).
@@ -37,6 +41,9 @@ use std::time::{Duration, Instant};
 /// check's step goes on: the gaps between a burst's makings are shorter, so a check's step does
 /// not start inside a burst.
 pub(crate) const QUIET: Duration = Duration::from_millis(20);
+
+/// The longest a step waits before it goes on whatever the device does.
+pub(crate) const MOST_ASIDE: Duration = Duration::from_millis(100);
 
 /// The longest one sleep of a waiting step lasts before it looks again.
 const SLICE: Duration = Duration::from_millis(2);
@@ -110,19 +117,20 @@ impl Activity {
         QUIET.saturating_sub(since).min(SLICE)
     }
 
-    /// Wait, on a check's thread, until a step may go on ([`Activity::left`]) or `stop` says to
-    /// go on now (the check stops, or a call waits for its verdicts): the time it waited, `None`
-    /// where it went on at once.
+    /// Wait, on a check's thread, until a step may go on ([`Activity::left`]), `stop` says to
+    /// go on now (the check stops, or a call waits for its verdicts) or it waited
+    /// [`MOST_ASIDE`]: the time it waited, `None` where it went on at once.
     pub(crate) fn step_aside(&self, stop: impl Fn() -> bool) -> Option<Duration> {
         let began = Instant::now();
         let mut waited = false;
         loop {
             let left = self.left();
-            if left.is_zero() || stop() {
-                return waited.then(|| began.elapsed());
+            let past = began.elapsed();
+            if left.is_zero() || stop() || past >= MOST_ASIDE {
+                return waited.then_some(past);
             }
             waited = true;
-            std::thread::sleep(left);
+            std::thread::sleep(left.min(MOST_ASIDE - past));
         }
     }
 }
@@ -142,6 +150,18 @@ mod tests {
         let waited = activity.step_aside(|| false).expect("it waited");
         assert!(waited >= QUIET - SLICE, "waited {waited:?}");
         assert_eq!(activity.left(), Duration::ZERO, "quiet since");
+    }
+
+    /// An allocation that never ends (or allocations that never pause) hold a step back for
+    /// [`MOST_ASIDE`] alone.
+    #[test]
+    fn a_step_goes_on_after_the_longest_wait() {
+        let activity = Activity::new();
+        assert!(activity.begin());
+        let waited = activity.step_aside(|| false).expect("it waited");
+        assert!(waited >= MOST_ASIDE, "waited {waited:?}");
+        assert!(waited < MOST_ASIDE * 3, "waited {waited:?}");
+        activity.end();
     }
 
     #[test]
