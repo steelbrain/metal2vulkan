@@ -217,4 +217,16 @@ fn memory_block_bench() {
         after.memory_blocks_live,
         after.empty_memory_blocks_live,
     );
+    let moved = |of: fn(&crate::WorkCounts) -> u64| of(&after) - of(&before);
+    eprintln!(
+        "BLOCK-MAKES ahead: blocks of buffers made ahead {}, in place {}; of images made ahead {}, \
+         in place {}; waited for {}, past the quiet wait {}, unused {}",
+        moved(|counts| counts.buffer_blocks_made_ahead),
+        moved(|counts| counts.buffer_blocks_made_in_place),
+        moved(|counts| counts.image_blocks_made_ahead),
+        moved(|counts| counts.image_blocks_made_in_place),
+        moved(|counts| counts.blocks_ahead_waited_for),
+        moved(|counts| counts.blocks_ahead_past_quiet_wait),
+        moved(|counts| counts.blocks_ahead_unused),
+    );
 }

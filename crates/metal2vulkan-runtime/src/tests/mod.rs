@@ -38,6 +38,8 @@ mod blit_holds;
 mod blit_order;
 mod blit_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod blocks_ahead;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod buffer_tail_device;
 mod buffer_texture;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -349,6 +351,7 @@ mod push_raw_writes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod query_reset_gap;
 mod queue;
+mod queue_quiet;
 mod queue_share;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod queue_share_device;

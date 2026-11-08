@@ -2019,13 +2019,12 @@ const KEEPERS: [(&str, &str); 31] = [
     ),
     (
         "memory.rs",
-        "a creation call's parameter, handed to the making of a block ready for host copies \
-         (`keep_room`)",
+        "a creation call's parameter, handed to the making of a block ahead (`keep_room`)",
     ),
     (
         "memory/ready.rs",
-        "a block's making ready for host copies, on a thread of its own inside a section; the \
-         teardown joins it as it destroys the memory (`Memory::destroy`), before vkDestroyDevice",
+        "a pooled block's making ahead, on a thread of its own inside a section; the teardown \
+         stops or joins it as it destroys the memory (`Memory::destroy`), before vkDestroyDevice",
     ),
     (
         "pipeline/creation_log.rs",

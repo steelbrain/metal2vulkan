@@ -2561,10 +2561,15 @@ field	metal2vulkan-runtime::WorkCounts.batches_with_one_pending	pub batches_with
 field	metal2vulkan-runtime::WorkCounts.batches_with_two_or_three_pending	pub batches_with_two_or_three_pending: u64
 field	metal2vulkan-runtime::WorkCounts.bind_views_worked_out	pub bind_views_worked_out: u64
 field	metal2vulkan-runtime::WorkCounts.block_decode_passes	pub block_decode_passes: u64
+field	metal2vulkan-runtime::WorkCounts.blocks_ahead_past_quiet_wait	pub blocks_ahead_past_quiet_wait: u64
+field	metal2vulkan-runtime::WorkCounts.blocks_ahead_unused	pub blocks_ahead_unused: u64
+field	metal2vulkan-runtime::WorkCounts.blocks_ahead_waited_for	pub blocks_ahead_waited_for: u64
 field	metal2vulkan-runtime::WorkCounts.bound_notices_made	pub bound_notices_made: u64
 field	metal2vulkan-runtime::WorkCounts.bound_offsets_moved	pub bound_offsets_moved: u64
 field	metal2vulkan-runtime::WorkCounts.bounded_run_draws	pub bounded_run_draws: u64
 field	metal2vulkan-runtime::WorkCounts.bounded_shadow_copies	pub bounded_shadow_copies: u64
+field	metal2vulkan-runtime::WorkCounts.buffer_blocks_made_ahead	pub buffer_blocks_made_ahead: u64
+field	metal2vulkan-runtime::WorkCounts.buffer_blocks_made_in_place	pub buffer_blocks_made_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.calibration_deviation_most	pub calibration_deviation_most: u64
 field	metal2vulkan-runtime::WorkCounts.calibration_disagreements	pub calibration_disagreements: u64
 field	metal2vulkan-runtime::WorkCounts.calibration_readings	pub calibration_readings: u64
@@ -2868,6 +2873,8 @@ field	metal2vulkan-runtime::WorkCounts.host_textures_in_place_written	pub host_t
 field	metal2vulkan-runtime::WorkCounts.host_textures_moved_in_place	pub host_textures_moved_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.idle_submits	pub idle_submits: u64
 field	metal2vulkan-runtime::WorkCounts.image_blits_recorded	pub image_blits_recorded: u64
+field	metal2vulkan-runtime::WorkCounts.image_blocks_made_ahead	pub image_blocks_made_ahead: u64
+field	metal2vulkan-runtime::WorkCounts.image_blocks_made_in_place	pub image_blocks_made_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.images_started_on_the_host	pub images_started_on_the_host: u64
 field	metal2vulkan-runtime::WorkCounts.images_started_zeroed	pub images_started_zeroed: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_failed	pub in_place_checks_failed: u64

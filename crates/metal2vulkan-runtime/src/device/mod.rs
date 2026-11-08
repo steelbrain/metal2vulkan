@@ -28,6 +28,7 @@ pub(super) mod keeper;
 pub(crate) mod line;
 pub(super) mod prime;
 pub(super) mod properties;
+pub(crate) mod queue_quiet;
 pub(crate) mod relay;
 mod staging;
 pub(super) mod submit;
@@ -631,6 +632,10 @@ pub(super) struct DeviceShared {
     /// Counts of its commit path's work, for the lanes (`work_counts.rs`). Shared with the
     /// queue-switch check's thread (`queue_switch_check.rs`).
     pub(super) counts: Arc<super::work_counts::Counters>,
+    /// Its uses of its `VkQueue`s seen as one, which its blocks made ahead wait on for a moment
+    /// right after a burst of submissions (`queue_quiet.rs`, `memory/ready.rs`). Shared with
+    /// each of its queues' slots.
+    pub(crate) queue_quiet: Arc<queue_quiet::QueueQuiet>,
     /// Where the driver fails pending work as memory a device-address buffer lay in is freed,
     /// the record of its batches the memory's blocks that go wait by (`freed_memory.rs`).
     pub(crate) parking: OnceLock<Arc<Parking>>,
@@ -1046,6 +1051,8 @@ pub(crate) struct QueueSlot {
     submitted_before: AtomicU64,
     /// Its part in the command queues' sharing of `VkQueue`s (`queue_share.rs`).
     pub(crate) share: crate::queue_share::SlotShare,
+    /// The device's queue uses, which each hold of the queue's lock counts (`queue_quiet.rs`).
+    quiet: Arc<queue_quiet::QueueQuiet>,
 }
 
 impl QueueSlot {
@@ -1076,6 +1083,7 @@ impl QueueSlot {
         let asked = gpu_time::host_nanos();
         let raw = lock(&self.raw);
         let waited = gpu_time::host_nanos().saturating_sub(asked);
+        self.quiet.began();
         SlotHold {
             slot: self,
             raw,
@@ -1136,13 +1144,20 @@ impl QueueSlot {
     }
 }
 
-/// A hold of a [`QueueSlot`]'s lock ([`QueueSlot::hold`]), let go as it drops.
+/// A hold of a [`QueueSlot`]'s lock ([`QueueSlot::hold`]), let go as it drops: one use of the
+/// device's queues (`queue_quiet.rs`) while it lasts.
 pub(super) struct SlotHold<'a> {
     slot: &'a QueueSlot,
     raw: MutexGuard<'a, (vk::Queue, submit_stalls::Period)>,
     /// How long the hold waited for the lock, in nanoseconds: the first counted use's wait
     /// (`Period::entered`), 0 for the later ones.
     waited: u64,
+}
+
+impl Drop for SlotHold<'_> {
+    fn drop(&mut self) {
+        self.slot.quiet.ended();
+    }
 }
 
 impl SlotHold<'_> {
@@ -1326,11 +1341,12 @@ impl Device {
     }
 
     /// Keep room in the memory pools the runtime's encodings and commits place their own
-    /// resources in (`memory::keep_room`): called by the creation calls that may wait (a queue's,
-    /// a pipeline state's, a buffer's, a texture's, a heap's), so that no encoding or commit makes
-    /// a memory block, whose `vkAllocateMemory` waited 2.37 s for other processes' GPU work on
-    /// NVIDIA's driver. Nothing in a host step, a serial point of the command buffers' stream
-    /// that makes only what it needs.
+    /// resources in, and make their blocks ahead while they grow (`memory::keep_room`,
+    /// `memory/ready.rs`): called by the creation calls that may wait (a queue's, a pipeline
+    /// state's, a buffer's, a texture's, a heap's), so that no encoding or commit makes a memory
+    /// block, whose `vkAllocateMemory` waited 2.37 s for other processes' GPU work on NVIDIA's
+    /// driver. Nothing in a host step, a serial point of the command buffers' stream that makes
+    /// only what it needs.
     pub(crate) fn keep_room(&self) {
         if crate::exit_guard::in_host_step() {
             return;
@@ -1342,7 +1358,7 @@ impl Device {
             memory,
             shared.vk(),
             &shared.counts,
-            &shared.functions,
+            (&shared.functions, &shared.queue_quiet),
             copies,
         );
     }
@@ -1749,6 +1765,7 @@ impl Device {
             (families.get(family as usize)).map_or(vk::QueueFlags::empty(), |p| p.queue_flags)
         };
         let nudge = timelines[queue_places.len()];
+        let queue_quiet = Arc::new(queue_quiet::QueueQuiet::default());
         let queues: Vec<QueueSlot> = queue_places
             .iter()
             .zip(&timelines)
@@ -1769,6 +1786,7 @@ impl Device {
                     submitted: AtomicU64::new(0),
                     submitted_before: AtomicU64::new(0),
                     share: crate::queue_share::SlotShare::default(),
+                    quiet: Arc::clone(&queue_quiet),
                 }
             })
             .collect();
@@ -2317,6 +2335,7 @@ impl Device {
             addresses: Arc::clone(&carried.addresses),
             identifiers: Arc::clone(&carried.identifiers),
             counts: Arc::clone(&carried.counts),
+            queue_quiet,
             holds: Arc::clone(&line.holds),
             line,
             lineage,

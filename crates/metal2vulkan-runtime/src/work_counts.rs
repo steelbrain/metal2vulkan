@@ -4705,6 +4705,35 @@ pub struct WorkCounts {
     /// (none held, or its making still under way): their pages untouched, a host copy's first
     /// touch there may wait for the memory's kernel work (`memory/ready.rs`).
     pub host_copy_blocks_made_in_place: u64,
+    /// Of `pooled_memory_blocks_made`, the blocks of buffers made ahead off the program's thread,
+    /// each right after a burst of the device's submissions ended, and added to their pool where
+    /// room was needed: blocks of the pools the runtime's encodings and commits place their own
+    /// resources in, made while such a pool grows (`memory/ready.rs`). A block's
+    /// `vkAllocateMemory` holds the device's submissions while it runs on RADV and on NVIDIA's
+    /// driver, so it is made between them.
+    pub buffer_blocks_made_ahead: u64,
+    /// The blocks of buffers of those pools a call made itself, finding none made ahead: a
+    /// creation call that found its pool without room for half a block, or a placement that
+    /// found no room (`memory/ready.rs`).
+    pub buffer_blocks_made_in_place: u64,
+    /// As `buffer_blocks_made_ahead`, of images, those of the pool host copies place in among
+    /// them (`host_copy_blocks_readied`).
+    pub image_blocks_made_ahead: u64,
+    /// As `buffer_blocks_made_in_place`, of images, those of the pool host copies place in among
+    /// them (`host_copy_blocks_made_in_place`).
+    pub image_blocks_made_in_place: u64,
+    /// Of the blocks made ahead, those a call needed while their making was under way, and
+    /// waited for, rather than make a second block (`memory/ready.rs`): never in the pool host
+    /// copies place in, whose making is not waited for.
+    pub blocks_ahead_waited_for: u64,
+    /// Of the blocks made ahead, those whose wait for a burst of the device's submissions to end
+    /// reached its bound (50 ms), made all the same: the device submitted with no gap of 1 ms
+    /// between its bursts (`device/queue_quiet.rs`).
+    pub blocks_ahead_past_quiet_wait: u64,
+    /// The blocks made ahead that went unused and were freed, their pool having stopped growing
+    /// 10 s before with room for half a block (`memory/ready.rs`): counted in
+    /// `pooled_memory_blocks_made` and `pooled_memory_blocks_freed`.
+    pub blocks_ahead_unused: u64,
     /// Every block its allocator freed so far, by what made it go (`MemoryFrees`): one
     /// `vkFreeMemory` each, and the allocator's whole share of
     /// `object_churn.vk_memory_freed`.
@@ -7347,7 +7376,16 @@ impl Device {
         let command_buffer_spared = counters.command_buffer_wakes_spared.load(Ordering::Relaxed);
         let event_wakes = counters.event_wakes.load(Ordering::Relaxed);
         let event_spared = counters.event_wakes_spared.load(Ordering::Relaxed);
-        let (allocated, overflows, census, (parked, waiting), (made, freed), frees, host_copy) = {
+        let (
+            allocated,
+            overflows,
+            census,
+            (parked, waiting),
+            (made, freed),
+            frees,
+            host_copy,
+            ahead,
+        ) = {
             let memory = lock(&self.shared().memory);
             let turnover = memory.turnover();
             (
@@ -7358,6 +7396,7 @@ impl Device {
                 turnover,
                 memory.frees(),
                 memory.host_copy_blocks(),
+                memory.ahead_blocks(),
             )
         };
         let (frees_posted, frees_queue_full, free_waits) = self.shared().frees.counts();
@@ -7520,6 +7559,13 @@ impl Device {
             dedicated_memory_blocks_live: census.dedicated,
             host_copy_blocks_readied: host_copy.readied,
             host_copy_blocks_made_in_place: host_copy.made_in_place,
+            buffer_blocks_made_ahead: ahead.buffers_ahead,
+            buffer_blocks_made_in_place: ahead.buffers_in_place,
+            image_blocks_made_ahead: ahead.images_ahead,
+            image_blocks_made_in_place: ahead.images_in_place,
+            blocks_ahead_waited_for: ahead.waited_for,
+            blocks_ahead_past_quiet_wait: ahead.past_quiet_wait,
+            blocks_ahead_unused: ahead.unused,
             memory_frees: MemoryFrees {
                 dedicated: frees[FreeCause::Dedicated as usize],
                 pooled_emptied: frees[FreeCause::PooledEmptied as usize],

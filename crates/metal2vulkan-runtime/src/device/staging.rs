@@ -246,10 +246,12 @@ impl StagingLock<'_> {
         // executable; every value waited for was signalled (the host saw it); the signal of the
         // timeline is above its value.
         shared.counts.queue_submitted(1, buffers.len());
+        shared.queue_quiet.began();
         let submitted = unsafe {
             staging.word.restore();
             raw.queue_submit(queue, &[submit], vk::Fence::null())
         };
+        shared.queue_quiet.ended();
         exit_guard::called(Call::QueueSubmit);
         submitted.map_err(|error| device.failed(error))?;
         made.signalled = value;
