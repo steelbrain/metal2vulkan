@@ -3,14 +3,18 @@
 //!
 //! - **The decision.** Under `HostPageTexturePolicy::Shadow` every texture is a shadow, the check
 //!   never asked; under `InPlace` a texture a shader writes (`ShaderWrite`, `ShaderAtomic`,
-//!   `Unknown`, whatever else it holds) of texels the check's kernel stores none of (1 or 2
-//!   bytes) is one counted by its width, the check never asked; and every other texture is tried
-//!   in place exactly where its class's check passed, for texels that lie in lines as its own do,
-//!   for each access it takes (one that renders, `RenderTarget`, its render check; one a shader
-//!   writes, its storage check; one that does neither, its read check), asked in that order until
-//!   one did not pass, else a shadow naming that check's answer (pending, failed, unchecked), its
-//!   access and its row ends. A texture a shader writes whose rows' padding is free asks the
-//!   check of writes that lets that padding change in the stead of the one that keeps it.
+//!   `Unknown`, whatever else it holds) of texels of a width the check's kernel stores none of
+//!   (none of 1, 2, 4, 8 and 16 bytes) is one counted by its width, the check never asked; and
+//!   every other texture is tried in place exactly where its class's check passed, for texels
+//!   that lie in lines as its own do, for each access it takes (one that renders,
+//!   `RenderTarget`, its render check; one a shader writes, the storage check of its texels'
+//!   width, those of 1 or 2 bytes apart from the rest; one that does neither, its read check),
+//!   asked in that order until one did not pass, else a shadow naming that check's answer
+//!   (pending, failed, unchecked), its access and its row ends. A texture a shader writes whose
+//!   rows' padding is free asks the check of writes that lets that padding change in the stead of
+//!   the one that keeps it. A texture that renders takes the storage usage too exactly where no
+//!   shader writes it by its usage and the storage check of its texels' width that keeps every
+//!   byte passed.
 //! - **The padding rule.** Rows' padding is free exactly over a buffer's own rows whose every row,
 //!   to its pitch, shares no line with bytes past them; a round of storage writes that changed
 //!   bytes of that padding alone (any row's, the last's included) fails the check of writes that
@@ -28,12 +32,13 @@
 //! - **A waiter** for one verdict wakes as that verdict is given, or as the check settles.
 
 use crate::in_place::{
-    decode, encode, in_place, record_name, verdict_index, Access, DriverIdentity, InPlaceChecks,
-    Padding, PagesClass, RowEnds, ShadowCause, Verdict, CHECK_VERSION, STORED_TEXEL_BYTES,
-    VERDICTS,
+    decode, encode, in_place, record_name, storable, verdict_index, Access, DriverIdentity,
+    InPlaceChecks, Padding, PagesClass, RowEnds, ShadowCause, Verdict, CHECK_VERSION,
+    NARROW_TEXEL_BYTES, STORED_TEXEL_BYTES, VERDICTS,
 };
 use crate::in_place_check::{
-    verdicts, Bytes, Due, Pattern, Round, Shape, Tally, Written, SHAPES, STORE_SHAPES,
+    verdicts, Bytes, Due, Pattern, Round, Shape, Tally, Written, NARROW_STORE_SHAPES, SHAPES,
+    STORE_SHAPES,
 };
 use crate::linear_plan::BufferLayout;
 use metal2vulkan::device::HostPageTexturePolicy;
@@ -71,11 +76,23 @@ fn unchecked_width(usage: TextureUsage, texel: u64) -> Option<ShadowCause> {
     }
 }
 
-/// The accesses whose checks `usage` asks of a texture whose rows' padding is as `padding` says,
-/// in their order: renders where it holds `RenderTarget`, writes where it holds `ShaderWrite` or
-/// `ShaderAtomic` (those that let the padding change where it is free), reads where it holds
-/// neither.
-fn accesses_of(usage: TextureUsage, padding: Padding) -> Vec<Access> {
+/// The check of a shader's writes of texels of `texel` bytes, a width the check's kernel stores,
+/// of a texture whose rows' padding is as `padding` says: those of 1 or 2 bytes apart from the
+/// rest, each in the form that lets the padding change where it is free.
+fn writes_of(texel: u64, padding: Padding) -> Access {
+    match (NARROW_TEXEL_BYTES.contains(&texel), padding) {
+        (false, Padding::Kept) => Access::Writes,
+        (false, Padding::Free) => Access::BufferWrites,
+        (true, Padding::Kept) => Access::NarrowWrites,
+        (true, Padding::Free) => Access::NarrowBufferWrites,
+    }
+}
+
+/// The accesses whose checks `usage` asks of a texture of texels of `texel` bytes whose rows'
+/// padding is as `padding` says, in their order: renders where it holds `RenderTarget`, writes
+/// where it holds `ShaderWrite` or `ShaderAtomic` (of its texels' width, [`writes_of`]), reads
+/// where it holds neither.
+fn accesses_of(usage: TextureUsage, padding: Padding, texel: u64) -> Vec<Access> {
     let renders = usage.contains(TextureUsage::RENDER_TARGET);
     let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
     let mut accesses = Vec::new();
@@ -86,12 +103,16 @@ fn accesses_of(usage: TextureUsage, padding: Padding) -> Vec<Access> {
         accesses.push(Access::Renders);
     }
     if writes {
-        accesses.push(match padding {
-            Padding::Free => Access::BufferWrites,
-            Padding::Kept => Access::Writes,
-        });
+        accesses.push(writes_of(texel, padding));
     }
     accesses
+}
+
+/// The answer after `verdict` in [`ANSWERS`]' order (the last's, the first): the narrow checks'
+/// answers in the decision's test, so that each differs from its wider twin's.
+fn next(verdict: Verdict) -> Verdict {
+    let at = ANSWERS.iter().position(|&answer| answer == verdict);
+    ANSWERS[(at.unwrap_or(0) + 1) % ANSWERS.len()]
 }
 
 #[test]
@@ -112,13 +133,15 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
             | TextureUsage::SHADER_ATOMIC,
     );
     usages.push(TextureUsage::empty());
-    // Each access's verdict, every one of them with every other.
+    // Each access's verdict, every one of them with every other; the narrow checks' each the
+    // answer after its wider twin's, so that each takes every answer and differs from the twin's.
     let mut answers = Vec::new();
     for reads in ANSWERS {
         for renders in ANSWERS {
             for writes in ANSWERS {
                 for buffer_writes in ANSWERS {
-                    answers.push([reads, renders, writes, buffer_writes]);
+                    let narrow = [next(writes), next(buffer_writes)];
+                    answers.push([reads, renders, writes, buffer_writes, narrow[0], narrow[1]]);
                 }
             }
         }
@@ -130,7 +153,9 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
     });
     for (class, rows, padding) in each {
         for &usage in &usages {
-            for texel in [1u64, 2, 4, 8, 16] {
+            // A 3-byte texel, of no format a buffer backs, stands for a width the kernel stores
+            // none of.
+            for texel in [1u64, 2, 3, 4, 8, 16] {
                 for answer in &answers {
                     let of = |access: Access| answer[access.index()];
                     // Shadow: always the exact form, the check never asked.
@@ -156,7 +181,7 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
                     let (expected, due) = match unchecked_width(usage, texel) {
                         Some(cause) => (Err(cause), Vec::new()),
                         None => {
-                            let accesses = accesses_of(usage, padding);
+                            let accesses = accesses_of(usage, padding, texel);
                             let first = accesses.iter().position(|&a| of(a) != Verdict::Passed);
                             match first {
                                 None => (Ok(()), accesses),
@@ -177,6 +202,29 @@ fn the_decision_takes_a_texture_whose_class_passed_each_of_its_accesses() {
                         format!("{class:?} {rows:?} {padding:?} {usage:?} {texel} {answer:?}");
                     assert_eq!(decided, expected, "{case}");
                     assert_eq!(*asked.borrow(), due, "{case}");
+                    // The storage usage of a texture that renders: the check of its texels'
+                    // width that keeps every byte, where no shader writes it by its usage.
+                    let renders = usage.contains(TextureUsage::RENDER_TARGET);
+                    let writes =
+                        usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
+                    let stores = STORED_TEXEL_BYTES.contains(&texel);
+                    let due = renders
+                        && !writes
+                        && stores
+                        && of(writes_of(texel, Padding::Kept)) == Verdict::Passed;
+                    let asked = std::cell::RefCell::new(Vec::new());
+                    let takes =
+                        storable(usage, (class, rows, texel), |of_class, access, of_rows| {
+                            assert_eq!((of_class, of_rows), (class, rows));
+                            asked.borrow_mut().push(access);
+                            of(access)
+                        });
+                    assert_eq!(takes, due, "storable: {case}");
+                    let wanted = match renders && !writes && stores {
+                        true => vec![writes_of(texel, Padding::Kept)],
+                        false => Vec::new(),
+                    };
+                    assert_eq!(*asked.borrow(), wanted, "storable: {case}");
                 }
             }
         }
@@ -203,6 +251,9 @@ fn every_shadow_cause_names_itself() {
         ShadowCause::CheckFailed(PagesClass::Pointer, Access::Renders, on),
         ShadowCause::CheckFailed(PagesClass::Pointer, Access::BufferWrites, inside),
         ShadowCause::CheckPending(PagesClass::Fresh, Access::BufferWrites, on),
+        ShadowCause::CheckFailed(PagesClass::Pointer, Access::NarrowWrites, inside),
+        ShadowCause::Unchecked(PagesClass::DmaBuf, Access::NarrowBufferWrites, on),
+        ShadowCause::StoreWidth(3),
     ];
     let words: Vec<String> = causes.iter().map(ShadowCause::words).collect();
     for (at, word) in words.iter().enumerate() {
@@ -214,6 +265,9 @@ fn every_shadow_cause_names_itself() {
     }
     assert!(words[0].contains("HostPageTexturePolicy::Shadow"));
     assert!(words[1].contains("ShaderWrite") && words[1].contains("not of 2"));
+    assert!(words[16].contains("1- or 2-byte texels") && !words[16].contains("over a buffer"));
+    assert!(words[17].contains("1- or 2-byte texels") && words[17].contains("over a buffer"));
+    assert!(words[18].contains("1, 2, 4, 8 and 16 bytes, not of 3"));
     assert!(words[2].contains("not answered") && words[3].contains("not answered"));
     assert!(words[3].contains("render pass"));
     assert!(words[4].contains("dma-bufs"));
@@ -434,7 +488,11 @@ fn shapes_at_a_driver_s_own_pitch_run_only_where_none_of_their_texel_size_was_ma
         tried.iter().filter(at).count()
     };
     let store: Vec<Shape> = STORE_SHAPES.iter().map(|(shape, _)| *shape).collect();
-    for shapes in [SHAPES.to_vec(), store] {
+    let narrow: Vec<Shape> = NARROW_STORE_SHAPES
+        .iter()
+        .map(|(shape, _)| *shape)
+        .collect();
+    for shapes in [SHAPES.to_vec(), store, narrow] {
         let tight = |multiple| {
             shapes
                 .iter()
@@ -514,16 +572,19 @@ fn texels_share_no_line_exactly_where_each_gap_starts_and_ends_on_one() {
             shape.bytes_per_row == pitch && shape.rows(line) == inside
         };
         assert!(SHAPES.iter().any(at), "{multiple}-byte rows");
-        assert!(
-            STORE_SHAPES.iter().any(|(shape, _)| at(shape)),
-            "{multiple}-byte rows"
-        );
+        for stored in [&STORE_SHAPES[..], &NARROW_STORE_SHAPES[..]] {
+            let shapes = stored.iter().map(|(shape, _)| shape);
+            assert!(shapes.clone().any(at), "{multiple}-byte rows");
+        }
     }
     // At the 256-byte lines of a device whose atom is that long, two still share none.
     assert!(rows(256).iter().filter(|&&rows| rows == on).count() >= 2);
-    // And each row ends has shapes of the check of storage writes.
+    // And each row ends has shapes of each check of storage writes.
     for rows in RowEnds::ALL {
         assert!(STORE_SHAPES.iter().any(|(shape, _)| shape.rows(64) == rows));
+        assert!(NARROW_STORE_SHAPES
+            .iter()
+            .any(|(shape, _)| shape.rows(64) == rows));
     }
 }
 
@@ -588,7 +649,7 @@ fn rows_padding_is_free_over_a_buffer_s_own_rows_that_end_on_lines() {
     assert_eq!(Padding::of(0, &slices(1184), 64, true), kept);
     // The check's storage shapes: free at 16-byte lines, and at 64-byte ones but for the pair at
     // the 16-byte pitch of a driver that lays rows tight, whose rows end inside such a line.
-    for (shape, _) in STORE_SHAPES {
+    for (shape, _) in STORE_SHAPES.into_iter().chain(NARROW_STORE_SHAPES) {
         assert_eq!(shape.padding(16), free, "{shape:?}");
         let tight16 = shape.tight && shape.bytes_per_row % 64 != 0;
         let due = match tight16 {
@@ -695,6 +756,11 @@ fn a_round_that_changed_padding_alone_fails_only_the_check_of_writes_that_keeps_
         tally.verdicts(Access::Writes, None, false),
         vec![[Failed, Passed], [Passed, Passed]]
     );
+    // The narrow check's rounds answer its own two alike, for 1- and 2-byte texels.
+    assert_eq!(
+        tally.verdicts(Access::NarrowWrites, None, false),
+        vec![[Failed, Passed], [Passed, Passed]]
+    );
     // The other accesses' rounds answer their own verdicts alone.
     assert_eq!(
         tally.verdicts(Access::Renders, None, false),
@@ -729,4 +795,40 @@ fn a_round_that_changed_padding_alone_fails_only_the_check_of_writes_that_keeps_
         tally.verdicts(Access::Writes, None, true),
         vec![[Unchecked, Failed], [Unchecked, Failed]]
     );
+}
+
+/// Each check of storage writes stores its texels' width through a view of that width: the narrow
+/// shapes 1- and 2-byte texels (`R8Uint` through `R8_UINT`, `R16Uint` through `R16_UINT`), each a
+/// word of the kernel's buffers, with rows that end inside a word and odd heights among each
+/// width's; the others 4, 8 and 16 bytes, each its view's words. Every narrow shape's window fits
+/// a class's buffer.
+#[test]
+fn each_check_of_storage_writes_stores_its_texels_width() {
+    use metal2vulkan::bind::ShadowTexelView;
+    use metal2vulkan::metal::PixelFormat;
+    for (shape, view) in NARROW_STORE_SHAPES {
+        let due = match shape.texel {
+            1 => (PixelFormat::R8Uint, ShadowTexelView::R8Uint),
+            2 => (PixelFormat::R16Uint, ShadowTexelView::R16Uint),
+            other => panic!("a narrow shape of {other}-byte texels"),
+        };
+        assert_eq!((shape.format, view), due, "{shape:?}");
+        assert_eq!(view.words(), 1, "{shape:?}");
+        assert!(shape.width * shape.height * 4 <= 40 << 20, "{shape:?}");
+    }
+    for (shape, view) in STORE_SHAPES {
+        assert!(!NARROW_TEXEL_BYTES.contains(&shape.texel), "{shape:?}");
+        assert_eq!(4 * u64::from(view.words()), shape.texel, "{shape:?}");
+    }
+    for texel in NARROW_TEXEL_BYTES {
+        let ends_inside = |(shape, _): &&(Shape, ShadowTexelView)| {
+            shape.texel == texel
+                && !(shape.width * shape.texel).is_multiple_of(4)
+                && shape.height % 2 == 1
+        };
+        assert!(
+            NARROW_STORE_SHAPES.iter().any(|shape| ends_inside(&shape)),
+            "{texel}-byte texels"
+        );
+    }
 }

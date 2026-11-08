@@ -1,8 +1,8 @@
 //! A render target over host pages in place (`texture/in_place_image.rs`) takes the storage usage
 //! a snapshot's fetch of it in the pixel interlock reads through (`render/snapshot.rs`) only where
-//! the device's check passed for a shader's writes over such pages, and for a texel the check's
-//! kernel stores: with that usage a shader writes its texels in place. Its image's plan says which
-//! usages it took.
+//! the device's check passed for a shader's writes over such pages of texels of its width (those
+//! of 1 byte checked apart from those of 4 and 8): with that usage a shader writes its texels in
+//! place. Its image's plan says which usages it took.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The device's shader cache is a fresh
@@ -10,7 +10,7 @@
 
 use super::blit_holds::{device, over_host, Host, Scratch};
 use crate::framebuffer_fetch::through_storage;
-use crate::in_place::Access;
+use crate::in_place::{Access, Padding};
 use crate::TextureDescriptor;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::vk::ImageUsageFlags;
@@ -54,6 +54,7 @@ fn a_render_target_in_place_takes_the_storage_usage_only_where_writes_passed() {
         (PixelFormat::RGBA8Unorm, 4),
         (PixelFormat::BGRA8Unorm, 4),
         (PixelFormat::RGBA16Float, 8),
+        (PixelFormat::R8Unorm, 1),
     ] {
         let mut descriptor = TextureDescriptor::texture_2d(format, SIDE, SIDE, false);
         descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -73,8 +74,10 @@ fn a_render_target_in_place_takes_the_storage_usage_only_where_writes_passed() {
                 passed(Access::Renders, SIDE * texel),
                 "{format:?}: in place where the check did not pass for render targets"
             );
+            let written = Access::written(texel, Padding::Kept);
+            let writes = written.is_some_and(|written| passed(written, SIDE * texel));
             assert!(
-                !storage || (passed(Access::Writes, SIDE * texel) && feedback && fetches),
+                !storage || (writes && feedback && fetches),
                 "{format:?}: the storage usage where the check did not pass for a shader's \
                  writes, or with no fetch to read through it"
             );

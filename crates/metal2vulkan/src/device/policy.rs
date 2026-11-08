@@ -305,11 +305,11 @@ pub enum HostPageTexturePolicy {
     /// driver and release, shows that the first move of such an image leaves every byte alone
     /// while the CPU writes beside it, for a texture that renders, its render passes' load and
     /// store operations and its moves into the feedback loop layout and back too, and for one a
-    /// shader writes (`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes), a kernel's
-    /// storage writes of its texels; and where the device makes the image (its format and usage
-    /// linear) and lays it out at the buffer's row pitch. Elsewhere, and for a texture a shader
-    /// writes of 1- or 2-byte texels, the shadow below. A texture made before the check's verdict
-    /// is known is a shadow too.
+    /// shader writes (`ShaderWrite` or `ShaderAtomic`, of texels of 1, 2, 4, 8 or 16 bytes, those
+    /// of 1 or 2 checked apart), a kernel's storage writes of its texels; and where the device
+    /// makes the image (its format and usage linear) and lays it out at the buffer's row pitch.
+    /// Elsewhere the shadow below. A texture made before the check's verdict is known is a shadow
+    /// too.
     #[default]
     InPlace,
     /// A shadow on every device: an image of the runtime's own memory the encoders copy the

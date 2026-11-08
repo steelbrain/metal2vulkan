@@ -189,14 +189,16 @@ pub(super) struct HostCell {
 /// An image in place over a buffer's host pages ([`HostCell`], `texture/in_place_image.rs`),
 /// which a rebind makes again over the new pages: the image (`texture.rs`'s `Image`), held weakly
 /// and by type erased as [`NotedTexture`] holds it, where its texels lie in bytes from the pages'
-/// first byte, how Metal lays them out from there, and whether their rows' padding is the
-/// buffer's own (`in_place::Padding`).
+/// first byte, how Metal lays them out from there, whether their rows' padding is the buffer's
+/// own (`in_place::Padding`), and the bytes of one texel (whose width picks the check of a
+/// shader's writes, `in_place::Access::written`).
 #[derive(Clone)]
 pub(super) struct InPlaceWatch {
     pub(super) image: Weak<dyn Any + Send + Sync>,
     pub(super) from_base: u64,
     pub(super) layout: crate::linear_plan::BufferLayout,
     pub(super) padding_owned: bool,
+    pub(super) texel: u64,
 }
 
 impl InPlaceWatch {

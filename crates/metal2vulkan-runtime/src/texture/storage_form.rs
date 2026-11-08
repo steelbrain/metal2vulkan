@@ -601,10 +601,8 @@ impl Texture {
             }
             in_place::in_place(policy, pending.usage, pages, verdict).ok()?;
             // As the texture would have taken it as it was made (`Device::storage_over_buffer`).
-            let storable = InPlaceAccess::Renders.takes(pending.usage)
-                && !InPlaceAccess::Writes.takes(pending.usage)
-                && in_place::STORED_TEXEL_BYTES.contains(&pages.2)
-                && verdict(pending.class, InPlaceAccess::Writes, pending.rows) == Verdict::Passed;
+            let made = (pending.class, pending.rows, pages.2);
+            let storable = in_place::storable(pending.usage, made, verdict);
             Some(Wanted::Move {
                 texels: Arc::clone(texels),
                 pending: pending.clone(),

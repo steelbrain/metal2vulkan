@@ -6175,8 +6175,8 @@ pub struct WorkCounts {
     /// whatever else it holds; an `Unknown` usage among them).
     pub host_texture_shadows_shader_write: u64,
     /// Textures over host pages made shadows because their usage writes them through a shader
-    /// and their texels are of a width the device's check of storage writes stores none of
-    /// (texels of 1 or 2 bytes: it stores those of 4, 8 and 16).
+    /// and their texels are of a width the device's check of storage writes stores none of (it
+    /// stores those of 1, 2, 4, 8 and 16 bytes, every width a buffer backs).
     pub host_texture_shadows_store_width: u64,
     /// Textures over host pages made shadows because the device's check of their class and an
     /// access of theirs (one that reads, renders or a shader writes) had not answered yet (a

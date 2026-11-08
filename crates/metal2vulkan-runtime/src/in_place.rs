@@ -47,12 +47,15 @@
 //!   whose check passed, for texels that lie in lines as the texture's do ([`RowEnds::of`], from
 //!   the texels' address, offset and pitches), for each access the texture's declared usage (as
 //!   Metal reports it, an `Unknown` one every usage) takes ([`Access::takes`]): it renders (`RenderTarget`), a shader
-//!   writes it (`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes, the widths the
-//!   check's kernel stores: [`STORED_TEXEL_BYTES`]), or it is sampled or read alone. Of a texture
+//!   writes it (`ShaderWrite` or `ShaderAtomic`, of texels of 1, 2, 4, 8 or 16 bytes, the widths
+//!   the check's kernel stores: [`STORED_TEXEL_BYTES`]; those of 1 or 2 bytes by a check of their
+//!   own, [`Access::NarrowWrites`], so a driver's writes of such texels decide none of the wider
+//!   ones'), or it is sampled or read alone. Of a texture
 //!   a shader writes over a buffer's rows whose padding is free ([`Padding`]: real Macs' GPUs
 //!   disagree on those bytes under a kernel's writes, and the owner's ruling of 2026-11-07 takes
 //!   the x86 Macs' envelope), the check of writes is the one that lets a byte of the rows'
-//!   padding change ([`Access::BufferWrites`]); renders, and an IOSurface plane's rows, keep
+//!   padding change ([`Access::BufferWrites`], [`Access::NarrowBufferWrites`]); renders, and an
+//!   IOSurface plane's rows, keep
 //!   every byte. Plain Metal also writes through a texture beyond its declared usage, and renders
 //!   into one made without `RenderTarget`: such a write binds the texture's usage shadow
 //!   (`texture/usage_shadow.rs`), and such a pass renders through an attachment stand-in
@@ -153,25 +156,44 @@ pub(crate) enum Access {
     /// usage never takes it alone: [`in_place`] asks it in the stead of
     /// [`Writes`](Self::Writes) for such a texture.
     BufferWrites,
+    /// As [`Writes`](Self::Writes), of a texture of 1- or 2-byte texels
+    /// ([`NARROW_TEXEL_BYTES`]), checked apart in rounds of their own that store such texels: a
+    /// driver may write a narrow texel through a wider access than a 4-byte one's. A usage never
+    /// takes it alone: [`in_place`] asks it in the stead of [`Writes`](Self::Writes) for such a
+    /// texture ([`Access::written`]).
+    NarrowWrites,
+    /// As [`BufferWrites`](Self::BufferWrites), of a texture of 1- or 2-byte texels: its rounds
+    /// are those of [`NarrowWrites`](Self::NarrowWrites), but a byte of its rows' padding may
+    /// change.
+    NarrowBufferWrites,
 }
 
 /// The bytes of the texels a texture a shader writes may have to be in place: those the check's
-/// kernel stores ([`Access::Writes`]; the crate-owned copy-in kernel's unsigned-integer views).
-pub(crate) const STORED_TEXEL_BYTES: [u64; 3] = [4, 8, 16];
+/// kernel stores ([`Access::Writes`] and [`Access::NarrowWrites`]; the crate-owned copy-in
+/// kernel's unsigned-integer views).
+pub(crate) const STORED_TEXEL_BYTES: [u64; 5] = [1, 2, 4, 8, 16];
+
+/// The bytes of the texels the check's narrow rounds store ([`Access::NarrowWrites`]), apart
+/// from the others' ([`Access::Writes`]).
+pub(crate) const NARROW_TEXEL_BYTES: [u64; 2] = [1, 2];
 
 impl Access {
     /// Every access, in the order the check runs them and the record holds their verdicts.
-    pub(crate) const ALL: [Access; 4] = [
+    pub(crate) const ALL: [Access; 6] = [
         Access::Reads,
         Access::Renders,
         Access::Writes,
         Access::BufferWrites,
+        Access::NarrowWrites,
+        Access::NarrowBufferWrites,
     ];
 
     /// Whether a texture of Metal `usage` (as Metal reports it) takes this access: one that
     /// renders, one a shader writes (both, where it does both), or one that only samples or
     /// reads. Each of its accesses' checks covers its first move. None takes
-    /// [`BufferWrites`](Self::BufferWrites) alone ([`in_place`]).
+    /// [`BufferWrites`](Self::BufferWrites) or the narrow accesses alone ([`in_place`] asks the
+    /// one of its texels and padding in the stead of [`Writes`](Self::Writes),
+    /// [`Access::written`]).
     pub(crate) fn takes(self, usage: TextureUsage) -> bool {
         let renders = usage.contains(TextureUsage::RENDER_TARGET);
         let writes = usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
@@ -179,19 +201,38 @@ impl Access {
             Access::Reads => !renders && !writes,
             Access::Renders => renders,
             Access::Writes => writes,
-            Access::BufferWrites => false,
+            Access::BufferWrites | Access::NarrowWrites | Access::NarrowBufferWrites => false,
         }
     }
 
+    /// The check of a shader's writes of texels `texel` bytes wide, of a texture whose rows'
+    /// padding is as `padding` says: [`Writes`](Self::Writes) of texels of 4, 8 or 16 bytes,
+    /// [`NarrowWrites`](Self::NarrowWrites) of those of 1 or 2 ([`NARROW_TEXEL_BYTES`]), each's
+    /// form that lets the padding change where it is free; `None` for a width the check's kernel
+    /// stores none of ([`STORED_TEXEL_BYTES`]).
+    pub(crate) fn written(texel: u64, padding: Padding) -> Option<Access> {
+        if !STORED_TEXEL_BYTES.contains(&texel) {
+            return None;
+        }
+        Some(match (NARROW_TEXEL_BYTES.contains(&texel), padding) {
+            (false, Padding::Kept) => Access::Writes,
+            (false, Padding::Free) => Access::BufferWrites,
+            (true, Padding::Kept) => Access::NarrowWrites,
+            (true, Padding::Free) => Access::NarrowBufferWrites,
+        })
+    }
+
     /// The accesses the check's rounds of this one give verdicts of, in [`ALL`](Self::ALL)'s
-    /// order: its own, and of [`Writes`](Self::Writes) those of
-    /// [`BufferWrites`](Self::BufferWrites) too, which has no rounds of its own.
+    /// order: its own, and of [`Writes`](Self::Writes) and [`NarrowWrites`](Self::NarrowWrites)
+    /// those of [`BufferWrites`](Self::BufferWrites) and
+    /// [`NarrowBufferWrites`](Self::NarrowBufferWrites) too, which have no rounds of their own.
     pub(crate) fn answered(self) -> &'static [Access] {
         match self {
             Access::Reads => &[Access::Reads],
             Access::Renders => &[Access::Renders],
             Access::Writes => &[Access::Writes, Access::BufferWrites],
-            Access::BufferWrites => &[],
+            Access::NarrowWrites => &[Access::NarrowWrites, Access::NarrowBufferWrites],
+            Access::BufferWrites | Access::NarrowBufferWrites => &[],
         }
     }
 
@@ -202,6 +243,8 @@ impl Access {
             Access::Renders => 1,
             Access::Writes => 2,
             Access::BufferWrites => 3,
+            Access::NarrowWrites => 4,
+            Access::NarrowBufferWrites => 5,
         }
     }
 
@@ -220,6 +263,14 @@ impl Access {
             Access::BufferWrites => {
                 "the first move and a kernel's storage writes of the texels of an image a shader \
                  writes over a buffer's rows, beside their padding"
+            }
+            Access::NarrowWrites => {
+                "the first move and a kernel's storage writes of the 1- or 2-byte texels of an \
+                 image a shader writes"
+            }
+            Access::NarrowBufferWrites => {
+                "the first move and a kernel's storage writes of the 1- or 2-byte texels of an \
+                 image a shader writes over a buffer's rows, beside their padding"
             }
         }
     }
@@ -397,7 +448,8 @@ pub(crate) enum ShadowCause {
     /// The device's policy asks the shadow (`HostPageTexturePolicy::Shadow`).
     Exact,
     /// Its usage writes it through a shader, and its texels are of a width (the bytes given) the
-    /// check's kernel stores none of ([`STORED_TEXEL_BYTES`]): no check covers its writes.
+    /// check's kernel stores none of ([`STORED_TEXEL_BYTES`]): no check covers its writes. Every
+    /// width a buffer backs (1, 2, 4, 8 and 16 bytes) is stored; this names one outside them.
     StoreWidth(u64),
     /// Its class's check for its access, of texels that lie in lines as its own do, has not
     /// answered yet.
@@ -475,8 +527,8 @@ impl ShadowCause {
                 .to_owned(),
             ShadowCause::StoreWidth(bytes) => format!(
                 "its usage writes it through a shader (ShaderWrite or ShaderAtomic), and the \
-                 device's check of storage writes stores texels of 4, 8 and 16 bytes, not of \
-                 {bytes}: no check covers a driver's writes of such texels beside them"
+                 device's check of storage writes stores texels of 1, 2, 4, 8 and 16 bytes, not \
+                 of {bytes}: no check covers a driver's writes of such texels beside them"
             ),
             ShadowCause::CheckPending(class, access, rows) => format!(
                 "the device's check of {} over {}, for {}, has not answered yet",
@@ -508,9 +560,11 @@ impl ShadowCause {
 /// shadow (the module docs). `verdict` answers the device's check for the class, each access the
 /// texture takes ([`Access::takes`]), in [`Access::ALL`]'s order, and the row ends, asked only of
 /// a texture the policy and texel width let through (a pending one starts the check), until one
-/// did not pass: for a shader's writes of a texture whose padding is free, the verdict of
-/// [`Access::BufferWrites`], which passes wherever that of [`Access::Writes`] does (the same
-/// rounds give both, and it lets more change).
+/// did not pass: for a shader's writes, the verdict of the check of its texels' width and
+/// padding ([`Access::written`]): of 1- or 2-byte texels [`Access::NarrowWrites`]', and of a
+/// texture whose padding is free [`Access::BufferWrites`]' (or [`Access::NarrowBufferWrites`]'),
+/// which passes wherever the one that keeps the padding does (the same rounds give both, and it
+/// lets more change).
 pub(crate) fn in_place(
     policy: HostPageTexturePolicy,
     usage: TextureUsage,
@@ -520,12 +574,13 @@ pub(crate) fn in_place(
     if policy == HostPageTexturePolicy::Shadow {
         return Err(ShadowCause::Exact);
     }
-    if Access::Writes.takes(usage) && !STORED_TEXEL_BYTES.contains(&texel) {
+    let written = Access::written(texel, padding);
+    if Access::Writes.takes(usage) && written.is_none() {
         return Err(ShadowCause::StoreWidth(texel));
     }
     for access in Access::ALL.into_iter().filter(|access| access.takes(usage)) {
-        let access = match (access, padding) {
-            (Access::Writes, Padding::Free) => Access::BufferWrites,
+        let access = match (access, written) {
+            (Access::Writes, Some(written)) => written,
             (access, _) => access,
         };
         match verdict(class, access, rows) {
@@ -536,6 +591,25 @@ pub(crate) fn in_place(
         }
     }
     Ok(())
+}
+
+/// Whether an image in place of a texture of Metal `usage` that renders, over host pages of
+/// `class`, its texels of `texel` bytes lying in the device's lines as `rows` says, takes the
+/// storage usage too: where no shader writes it by its usage (whose own check covers such
+/// writes), and `verdict` passed the check of a shader's writes of texels of its width that keeps
+/// every byte beside them ([`Access::written`] of [`Padding::Kept`]: a render target's rows keep
+/// their padding). A draw that reads such a texture through a snapshot fetches it in the pixel
+/// interlock through that usage (`render/snapshot.rs`), and with it a shader's writes reach the
+/// texels in place, as the check's writes do.
+pub(crate) fn storable(
+    usage: TextureUsage,
+    (class, rows, texel): (PagesClass, RowEnds, u64),
+    mut verdict: impl FnMut(PagesClass, Access, RowEnds) -> Verdict,
+) -> bool {
+    Access::Renders.takes(usage)
+        && !Access::Writes.takes(usage)
+        && Access::written(texel, Padding::Kept)
+            .is_some_and(|written| verdict(class, written, rows) == Verdict::Passed)
 }
 
 /// A device's check verdicts (`DeviceShared::in_place`): one per class, access and row ends
@@ -677,7 +751,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 8;
+pub(crate) const CHECK_VERSION: u32 = 9;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -754,7 +828,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// magic          8 bytes   "M2VINPL\0"
 /// version        u32       CHECK_VERSION
 /// identity       32 bytes  DriverIdentity::digest
-/// verdicts       24 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
+/// verdicts       36 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
@@ -951,12 +1025,14 @@ impl Device {
     /// (`Pointer: Passed`), then one per class for one that renders (`Pointer renders: Passed`),
     /// then one per class for one a shader writes (`Pointer writes: Passed`), then one per class
     /// for one a shader writes over a buffer's rows whose padding may change (`Pointer buffer
-    /// writes: Passed`, `in_place::Padding`), each for texels that share a line with bytes beside
-    /// them (`RowEnds::InLines`); then the same twelve for texels that share none (`Pointer, rows
-    /// on lines: Passed`, `Pointer renders, rows on lines: Passed`, `Pointer writes, rows on
-    /// lines: Passed`, `Pointer buffer writes, rows on lines: Passed`); and what it found changed
-    /// where one failed (or where only a row's padding changed). A runtime extension for the
-    /// lanes that report it.
+    /// writes: Passed`, `in_place::Padding`), then the same two for one of 1- or 2-byte texels
+    /// (`Pointer narrow writes: Passed`, `Pointer narrow buffer writes: Passed`), each for texels
+    /// that share a line with bytes beside them (`RowEnds::InLines`); then the same eighteen for
+    /// texels that share none (`Pointer, rows on lines: Passed`, `Pointer renders, rows on lines:
+    /// Passed`, `Pointer writes, rows on lines: Passed`, `Pointer buffer writes, rows on lines:
+    /// Passed`, `Pointer narrow writes, rows on lines: Passed`, `Pointer narrow buffer writes,
+    /// rows on lines: Passed`); and what it found changed where one failed (or where only a row's
+    /// padding changed). A runtime extension for the lanes that report it.
     #[doc(hidden)]
     pub fn in_place_check_report(&self) -> Vec<String> {
         self.current().in_place_check_report_now()
@@ -976,6 +1052,10 @@ impl Device {
                 Access::Renders => format!("{class:?} renders{lines}: {verdict:?}"),
                 Access::Writes => format!("{class:?} writes{lines}: {verdict:?}"),
                 Access::BufferWrites => format!("{class:?} buffer writes{lines}: {verdict:?}"),
+                Access::NarrowWrites => format!("{class:?} narrow writes{lines}: {verdict:?}"),
+                Access::NarrowBufferWrites => {
+                    format!("{class:?} narrow buffer writes{lines}: {verdict:?}")
+                }
             }
         };
         let line = &line;

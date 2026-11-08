@@ -359,6 +359,7 @@ impl Device {
                     from_base: buffer_offset + layout.offset - base,
                     layout,
                     padding_owned: texels.padding_owned(),
+                    texel: texels.texel_bytes(),
                 });
             }
         }
@@ -479,16 +480,12 @@ impl Device {
     /// Whether a shader's writes of `texels` of a texture that does not render, over host pages
     /// of `class`, may reach them in place: they are of a width the device's check's kernel stores
     /// (`in_place::STORED_TEXEL_BYTES`), and its check passed for such writes over the class, of
-    /// texels that lie in lines as these do, those that let their rows' padding change where it is
-    /// free (`in_place::in_place`).
+    /// texels of their width that lie in lines as these do, those that let their rows' padding
+    /// change where it is free (`in_place::Access::written`, as `in_place::in_place` asks it).
     fn writes_reach(&self, texels: &Texels, class: PagesClass) -> bool {
-        if !in_place::STORED_TEXEL_BYTES.contains(&texels.texel_bytes()) {
-            return false;
-        }
         let line = self.shared().in_place.line();
-        let written = match texels.padding(line) {
-            Padding::Free => Access::BufferWrites,
-            Padding::Kept => Access::Writes,
+        let Some(written) = Access::written(texels.texel_bytes(), texels.padding(line)) else {
+            return false;
         };
         let rows = texels.rows(line);
         self.shared().in_place.verdict(class, written, rows) == Verdict::Passed
@@ -1058,39 +1055,50 @@ impl Device {
     }
 
     /// How the texels `watch` notes lie in the device's lines of memory (`in_place::RowEnds`),
-    /// and whether a shader's writes may change their rows' padding (`in_place::Padding`):
-    /// `from_base` past the pages' first byte, which starts a page.
-    fn watched_rows(&self, watch: &InPlaceWatch) -> (RowEnds, Padding) {
+    /// whether a shader's writes may change their rows' padding (`in_place::Padding`), and the
+    /// bytes of one texel: `from_base` past the pages' first byte, which starts a page.
+    fn watched_rows(&self, watch: &InPlaceWatch) -> (RowEnds, Padding, u64) {
         let start = watch.from_base - watch.layout.offset;
         let line = self.shared().in_place.line();
         let padding = Padding::of(start, &watch.layout, line, watch.padding_owned);
-        (RowEnds::of(start, &watch.layout, line), padding)
+        (
+            RowEnds::of(start, &watch.layout, line),
+            padding,
+            watch.texel,
+        )
     }
 
     /// Whether the device's check passed for fresh pages, each of `image`'s accesses and texels
-    /// that lie in lines as `rows` says: an image of attachment usage renders, one of storage
-    /// usage is written, one of neither reads. The writes of one that does not render whose
-    /// rows' padding is free take the check that lets it change (`in_place::in_place`); one that
-    /// renders may hold the storage usage where the check that keeps it passed (the route's
-    /// `storable`, `texture/route.rs`), which it asks.
-    fn fresh_pages_take(&self, image: &Image, (rows, padding): (RowEnds, Padding)) -> bool {
+    /// of `texel` bytes that lie in lines as `rows` says: an image of attachment usage renders,
+    /// one of storage usage is written, one of neither reads. The writes take the check of the
+    /// texels' width (`in_place::Access::written`), and of one that does not render whose rows'
+    /// padding is free the form that lets it change (`in_place::in_place`); one that renders may
+    /// hold the storage usage a render target takes where the form that keeps it passed
+    /// (`in_place::storable`), which it asks.
+    fn fresh_pages_take(
+        &self,
+        image: &Image,
+        (rows, padding, texel): (RowEnds, Padding, u64),
+    ) -> bool {
         use metal2vulkan::vk::ImageUsageFlags;
         let usage = image.plan().usage;
         let renders = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT);
         let writes = usage.contains(ImageUsageFlags::STORAGE);
-        let written = match (padding, renders) {
-            (Padding::Free, false) => Access::BufferWrites,
-            _ => Access::Writes,
+        let padding = match renders {
+            true => Padding::Kept,
+            false => padding,
         };
         let accesses = [
-            (Access::Reads, !renders && !writes),
-            (Access::Renders, renders),
-            (written, writes),
+            (Some(Access::Reads), !renders && !writes),
+            (Some(Access::Renders), renders),
+            (Access::written(texel, padding), writes),
         ];
         accesses.into_iter().all(|(access, takes)| {
             !takes
-                || self.in_place_verdict(PagesClass::Fresh, access, rows)
-                    == crate::in_place::Verdict::Passed
+                || access.is_some_and(|access| {
+                    self.in_place_verdict(PagesClass::Fresh, access, rows)
+                        == crate::in_place::Verdict::Passed
+                })
         })
     }
 

@@ -353,13 +353,15 @@ the record the pass is making.
   a long buffer's fresh pages, an image bound to them would start `UNDEFINED`, and Vulkan lets its
   first move, and a render pass's load and store, rewrite any byte bound to it: by default
   (`HostPageTexturePolicy::InPlace`) a texture there that samples, reads, renders into it or is
-  written through a shader (of texels of 4, 8 or 16 bytes) is an image in place wherever the
+  written through a shader (of texels of 1, 2, 4, 8 or 16 bytes, the narrow ones checked apart)
+  is an image in place wherever the
   device makes it and its own check showed those operations keeping every byte for that kind of
   pages (but the rows' padding of a texture over a buffer a kernel writes, which an x86 Mac's GPU
   may change too: docs/API.md, section 10), on a discrete GPU as on any other (run once per driver and release on a thread of its
   own, kept in the shader cache). The runtime keeps a copy and announces it (`shadowed-texture`,
   naming why) for every other texture there (under `HostPageTexturePolicy::Shadow`, one a shader
-  writes of 1- or 2-byte texels, one made before the check answered or whose check did not
+  writes of texels of a width the check stores none of, one made before the check answered or
+  whose check did not
   pass), where the device's linear images cannot hold Metal's layout, and where the rows lie with
   bytes between them (but over a buffer whose maker declared them unobserved,
   `BufferDescriptor::padding_unobserved`, below). On a discrete GPU, a `Managed` texture

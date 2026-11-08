@@ -506,7 +506,10 @@ fn the_answer_is_the_route_the_texture_takes() {
         let public_access = match access {
             Access::Reads => InPlaceAccess::Reads,
             Access::Renders => InPlaceAccess::Renders,
-            Access::Writes | Access::BufferWrites => InPlaceAccess::Writes,
+            Access::Writes
+            | Access::BufferWrites
+            | Access::NarrowWrites
+            | Access::NarrowBufferWrites => InPlaceAccess::Writes,
         };
         let (access, row_ends) = (public_access, public_rows(rows));
         let due = match verdict {

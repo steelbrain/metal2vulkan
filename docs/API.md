@@ -330,15 +330,15 @@ and write every byte bound to it, where Metal keeps every CPU write to bytes a c
 not write; a render pass's load and store operations may too, for an image it renders. Under the
 default `HostPageTexturePolicy::InPlace` the runtime relies on the driver there, checked: a texture
 over host pages whose declared usage samples, reads, renders into it or writes it through a shader
-(`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes) is a linear image aliasing the
-pages (one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired
+(`ShaderWrite` or `ShaderAtomic`, of texels of 1, 2, 4, 8 or 16 bytes) is a linear image aliasing
+the pages (one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired
 from `VK_QUEUE_FAMILY_FOREIGN_EXT`) wherever the device makes such an image and its own check
 passed for that kind of pages and each of its accesses (`WorkCounts::host_textures_in_place`,
 `dma_buf_textures_in_place`, `fresh_page_textures_in_place`, and `host_textures_in_place_written`
 for one a shader writes), on a discrete GPU as on any other. A texture that renders takes the
 feedback loop usage where the device makes the image with it, and the storage usage too where the
-check passed for a shader's writes over that kind of pages and its texels are of 4, 8 or 16 bytes
-(with it a shader writes the texels in place, as one declared to), so a draw that reads it after
+check passed for a shader's writes of texels of its width over that kind of pages (with it a shader
+writes the texels in place, as one declared to), so a draw that reads it after
 a render-target barrier reads it through a snapshot (`WorkCounts::feedback_loop_alias_images`);
 without the storage usage such a draw splits its pass. The
 check makes such images of every texel size, small and 3840x2160, over each kind of pages while a
@@ -348,7 +348,11 @@ their first move, their moves into the feedback loop layout and back, and a rend
 clears and stores them, while the CPU writes the bytes between their rows and after them; and for
 one a shader writes, images made with `ShaderWrite` usage, whose every texel a kernel stores
 through an unsigned-integer view of 4, 8 or 16-byte texels while the CPU writes the bytes beside
-them (a program's atomics are among no round). Each verdict is given apart for texels that share
+them (a program's atomics are among no round), and apart from those, images of 1- and 2-byte
+texels stored through `R8_UINT` and `R16_UINT` views, rows of which end inside a 4-byte word: a
+driver may store a narrow texel through a wider access, so 1- and 2-byte texels take verdicts of
+their own, and a byte their rounds changed keeps no wider texel's texture a shadow (a device
+without `shaderStorageImageExtendedFormats` leaves them unchecked). Each verdict is given apart for texels that share
 a line of the device's memory (`nonCoherentAtomSize` bytes) with bytes beside them and for texels
 that share none (their first byte, their end and, with bytes between rows, each row's start and
 end on a line): a device that writes back a texel's line whole puts an older value back over a
@@ -374,8 +378,9 @@ write reaches them as it reaches the buffer's.
 
 Every other texture over host pages is a shadow (`shadowed-texture`, the notice naming why): under
 `HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one a shader writes of texels of
-1 or 2 bytes, which the check's kernel stores none of; one made before the check for an access of
-its answered, or where it failed or made no image; and one no image in place serves (its format or
+a width the check's kernel stores none of (none of 1, 2, 4, 8 and 16 bytes); one made before the
+check for an access of its answered, or where it failed or made no image; and one no image in
+place serves (its format or
 usage the device makes no linear image of, the bytes' pitch, placement or memory, or over dma-buf
 pages no dma-buf of the texture's own pages). `WorkCounts::host_texture_shadows_*` counts each
 reason apart (the texel width, `_store_width`), and of them all those whose usage renders into

@@ -62,8 +62,9 @@ pub enum TextureShadowReason {
     /// (`HostPageTexturePolicy::Shadow`, one of `DevicePolicy::exact_answers`).
     Policy,
     /// A shader writes the texture (`ShaderWrite` or `ShaderAtomic`), and its texels are
-    /// `texel_bytes` wide, a width of which the check's kernel stores none (it stores 4, 8 and 16
-    /// bytes): no check covers a driver's writes of such texels.
+    /// `texel_bytes` wide, a width of which the check's kernel stores none (it stores 1, 2, 4, 8
+    /// and 16 bytes, every width a buffer backs): no check covers a driver's writes of such
+    /// texels.
     StoreWidth {
         /// The bytes of one texel.
         texel_bytes: u64,
@@ -127,10 +128,11 @@ pub enum InPlaceAccess {
     /// store operations and the feedback loop moves.
     Renders,
     /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`): its image also
-    /// takes kernels' storage writes of its texels. Of a texture over a buffer's rows whose rows,
-    /// each to its pitch, start and end on a line, its buffer holding the last row to its pitch,
-    /// the check that lets those writes change the bytes between a row's texels and its pitch,
-    /// which Metal's GPUs differ on; else the one that keeps every byte beside the texels.
+    /// takes kernels' storage writes of its texels, checked by their width: texels of 1 or 2
+    /// bytes apart from those of 4, 8 or 16. Of a texture over a buffer's rows whose rows, each
+    /// to its pitch, start and end on a line, its buffer holding the last row to its pitch, the
+    /// check that lets those writes change the bytes between a row's texels and its pitch, which
+    /// Metal's GPUs differ on; else the one that keeps every byte beside the texels.
     Writes,
 }
 
@@ -186,7 +188,10 @@ impl InPlaceAccess {
         match access {
             in_place::Access::Reads => InPlaceAccess::Reads,
             in_place::Access::Renders => InPlaceAccess::Renders,
-            in_place::Access::Writes | in_place::Access::BufferWrites => InPlaceAccess::Writes,
+            in_place::Access::Writes
+            | in_place::Access::BufferWrites
+            | in_place::Access::NarrowWrites
+            | in_place::Access::NarrowBufferWrites => InPlaceAccess::Writes,
         }
     }
 }

@@ -157,8 +157,8 @@ pub(super) fn writes_passed(
 pub(super) type Rows = (u64, u64, u64);
 
 /// The verdicts the device's check gives, each a line of its report before what it found
-/// changed: three classes, four accesses, two row ends.
-const VERDICTS: usize = 24;
+/// changed: three classes, six accesses, two row ends.
+const VERDICTS: usize = 36;
 
 /// The devices made again where load beside the submission checks split their import tax's tries
 /// ([`answered_device`]).
@@ -1293,8 +1293,9 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         let counts = device.work_counts();
         // Each class's verdicts, for a texture that reads, one that renders and one a shader
-        // writes, each for texels that share a line with bytes beside them and for texels that
-        // share none.
+        // writes (of 4-, 8- or 16-byte texels and of 1- or 2-byte ones, each with its padding
+        // kept or free), each for texels that share a line with bytes beside them and for texels
+        // that share none.
         assert_eq!(counts.in_place_checks_recalled, VERDICTS as u64);
         assert_eq!(counts.in_place_checks_run, 0);
         assert!(device.settle_in_place_checks(std::time::Duration::ZERO));

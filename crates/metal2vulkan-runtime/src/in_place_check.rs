@@ -50,7 +50,12 @@
 //!   class runs every shape of [`STORE_SHAPES`] (texels of 4, 8 and 16 bytes, the widths the
 //!   kernel's views store, rows apart, some of a width no multiple of 4 and an odd height, so that
 //!   a driver's write of a block wider than a texel past a row's or the image's end shows, or one
-//!   after another, and 1920x1080 at 4 bytes) [`ROUNDS`] times. Its rounds are stores: a program's
+//!   after another, and 1920x1080 at 4 bytes) [`ROUNDS`] times. Texels of 1 and 2 bytes
+//!   ([`Access::NarrowWrites`]) take rounds of their own, of [`NARROW_STORE_SHAPES`], through the
+//!   kernel's `R8_UINT` and `R16_UINT` views (each texel a word of its buffers): a driver may
+//!   store such a texel through an access wider than it, a word or more, over the texels beside
+//!   it and past a row's end, which no wider texel's store shows, so their verdicts are their own
+//!   and a byte one of their rounds changed fails no verdict of wider texels'. Its rounds are stores: a program's
 //!   atomics on such a texture are kernels' storage writes of its texels too, but none is among
 //!   the rounds. The same rounds give the verdicts of a shader's writes of a texture over a
 //!   buffer's rows whose padding is free ([`Access::BufferWrites`], `in_place::Padding`): a round
@@ -204,6 +209,56 @@ pub(crate) const SHAPES: [Shape; 15] = [
     tight(PixelFormat::BGRA8Unorm, 4, 101, 51, 448),
     tight(PixelFormat::RGBA16Float, 8, 33, 17, 320),
     shape(PixelFormat::BGRA8Unorm, 4, 3840, 2160, 15360),
+];
+
+/// The shapes the check of storage writes of 1- and 2-byte texels writes
+/// ([`Access::NarrowWrites`]), each with the view its kernel stores through (`R8_UINT`, `R16_UINT`:
+/// `in_place::NARROW_TEXEL_BYTES`), as [`STORE_SHAPES`] lays its own out: rows one after another,
+/// rows apart at the 256-byte pitch of the guests' 1- and 2-byte textures a shader writes (32x32
+/// `R8Unorm` and `A8Unorm` among them), of widths whose rows end inside a 4-byte word and odd
+/// heights, so that a driver's store of a word or a block past a row's or the image's end shows,
+/// at the 16-byte pitch a driver that lays rows tight lays them at and at the 64-byte pitch of one
+/// that lays them at the next multiple of 64 (run as there: [`Shape::runs`]), and one 1024x1024
+/// surface of 1-byte texels, last, the size of the largest such guest texture. A shape the device
+/// makes no image of in place, or no dispatch over (a device without
+/// `shaderStorageImageExtendedFormats`, whose kernels of those views it refuses), is skipped.
+pub(crate) const NARROW_STORE_SHAPES: [(Shape, ShadowTexelView); 9] = [
+    (
+        shape(PixelFormat::R8Uint, 1, 256, 16, 256),
+        ShadowTexelView::R8Uint,
+    ),
+    (
+        shape(PixelFormat::R16Uint, 2, 128, 16, 256),
+        ShadowTexelView::R16Uint,
+    ),
+    (
+        shape(PixelFormat::R8Uint, 1, 61, 37, 256),
+        ShadowTexelView::R8Uint,
+    ),
+    (
+        shape(PixelFormat::R16Uint, 2, 45, 29, 256),
+        ShadowTexelView::R16Uint,
+    ),
+    (
+        tight(PixelFormat::R8Uint, 1, 101, 51, 112),
+        ShadowTexelView::R8Uint,
+    ),
+    (
+        tight(PixelFormat::R16Uint, 2, 33, 17, 80),
+        ShadowTexelView::R16Uint,
+    ),
+    (
+        tight(PixelFormat::R8Uint, 1, 101, 51, 128),
+        ShadowTexelView::R8Uint,
+    ),
+    (
+        tight(PixelFormat::R16Uint, 2, 33, 17, 128),
+        ShadowTexelView::R16Uint,
+    ),
+    (
+        shape(PixelFormat::R8Uint, 1, 1024, 1024, 1024),
+        ShadowTexelView::R8Uint,
+    ),
 ];
 
 /// The shapes the check of storage writes writes ([`Access::Writes`]), each with the view its
@@ -468,8 +523,9 @@ fn word_overwritten(device: &Device) -> bool {
 /// ([`Shape::rows`]), until one changes a byte, or until the device's loader word is found
 /// overwritten (unchecked then where no round ran); [`Tally::verdicts`] gives them. A round of
 /// storage writes that changed no byte but of its shape's rows' padding, where that padding is
-/// free ([`Shape::padding`]), fails [`Access::Writes`] for its row ends and counts for
-/// [`Access::BufferWrites`] as a round that kept every byte, and the rounds go on. `None` where
+/// free ([`Shape::padding`]), fails [`Access::Writes`] (or [`Access::NarrowWrites`]) for its row
+/// ends and counts for [`Access::BufferWrites`] (or [`Access::NarrowBufferWrites`]) as a round
+/// that kept every byte, and the rounds go on. `None` where
 /// the process is exiting, or the program's last drop stopped the device's holds before a round
 /// (`device/holds.rs`).
 fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec<[Verdict; 2]>> {
@@ -482,7 +538,11 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec
     // The command queue an image that renders takes its passes on, the check's own, and the
     // draw it takes after them.
     let mut renders = match access {
-        Access::Reads | Access::Writes | Access::BufferWrites => None,
+        Access::Reads
+        | Access::Writes
+        | Access::BufferWrites
+        | Access::NarrowWrites
+        | Access::NarrowBufferWrites => None,
         Access::Renders => {
             let made = exit_guard::enter().map(|_busy| {
                 let queue = device.new_command_queue_now()?;
@@ -494,12 +554,15 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec
             }
         }
     };
-    // An image a shader writes takes the shapes its kernel stores, each with its view; those
-    // whose texels share no line with bytes beside them first.
+    // An image a shader writes takes the shapes its kernel stores of its texels' width, each
+    // with its view; those whose texels share no line with bytes beside them first.
+    let stored = |shapes: &[(Shape, ShadowTexelView)]| {
+        let stored = shapes.iter().map(|&(shape, texel)| (shape, Some(texel)));
+        stored.collect::<Vec<_>>()
+    };
     let mut shapes: Vec<(Shape, Option<ShadowTexelView>)> = match access {
-        Access::Writes | Access::BufferWrites => STORE_SHAPES
-            .map(|(shape, texel)| (shape, Some(texel)))
-            .to_vec(),
+        Access::Writes | Access::BufferWrites => stored(&STORE_SHAPES),
+        Access::NarrowWrites | Access::NarrowBufferWrites => stored(&NARROW_STORE_SHAPES),
         Access::Reads | Access::Renders => SHAPES.map(|shape| (shape, None)).to_vec(),
     };
     shapes.sort_by_key(|(shape, _)| shape.rows(line) != RowEnds::OnLines);
@@ -566,6 +629,9 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec
                 Access::Writes | Access::BufferWrites => {
                     "the first move or a kernel's storage writes"
                 }
+                Access::NarrowWrites | Access::NarrowBufferWrites => {
+                    "the first move or a kernel's storage writes of 1- or 2-byte texels"
+                }
             };
             let lines = match rows {
                 RowEnds::InLines => "",
@@ -619,9 +685,10 @@ impl Tally {
     /// a device made to fail its check where `forced`, where `changed` names the row ends of the
     /// round that changed a byte but of its shape's free padding, where one did (which ends the
     /// class's rounds): the access's own ([`verdicts`]), of its rounds that kept every byte, the
-    /// row ends of the first that changed any byte failed; then, of [`Access::Writes`], those of
-    /// [`Access::BufferWrites`], of its rounds that changed no byte but of that padding, those
-    /// of `changed` failed.
+    /// row ends of the first that changed any byte failed; then, of [`Access::Writes`] and
+    /// [`Access::NarrowWrites`], those of [`Access::BufferWrites`] and
+    /// [`Access::NarrowBufferWrites`], of its rounds that changed no byte but of that padding,
+    /// those of `changed` failed.
     pub(crate) fn verdicts(
         &self,
         access: Access,
@@ -768,8 +835,10 @@ fn store_round(
         return Round::NotMade;
     };
     // The bytes the kernel stores, row after row, and the part it keeps them in too: buffers
-    // outside the Metal address space, as the check's are (the module docs).
-    let row = shape.width * shape.texel;
+    // outside the Metal address space, as the check's are (the module docs). A texel takes the
+    // view's words there: a 1- or 2-byte texel a whole word, its bytes low and zero above them.
+    let held = 4 * u64::from(texel.words());
+    let row = shape.width * held;
     let length = row * shape.height;
     let buffer =
         || device.new_buffer_placed(length, ResourceOptions::shared(), AddressPlacement::Outside);
@@ -780,18 +849,23 @@ fn store_round(
         return Round::NotMade;
     };
     for y in 0..shape.height {
-        let mut to = (y * row) as usize;
-        for (from, count) in pattern.spans(y * shape.bytes_per_row, row as usize) {
-            // SAFETY: the source's bytes `to..to + count`, mapped and writable, which nothing else
-            // uses yet; the pattern's bytes are apart from them.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    pattern.stored[from..].as_ptr(),
-                    words.as_ptr().add(to),
-                    count,
-                )
-            };
-            to += count;
+        let from = y * shape.bytes_per_row;
+        let to = (y * row) as usize;
+        if held == shape.texel {
+            // SAFETY: the source's row `to..to + row`, of its `length`, mapped and writable,
+            // which nothing else uses yet.
+            unsafe { pattern.store_row(from, row, words, to) };
+            continue;
+        }
+        for x in 0..shape.width {
+            let mut word = [0u8; 4];
+            for (at, byte) in word.iter_mut().enumerate().take(shape.texel as usize) {
+                *byte = pattern.stored_at(from + x * shape.texel + at as u64);
+            }
+            let at = to + (x * held) as usize;
+            // SAFETY: the source's 4 bytes from `at`, of its `length`, mapped and writable, which
+            // nothing else uses yet.
+            unsafe { std::ptr::copy_nonoverlapping(word.as_ptr(), words.as_ptr().add(at), 4) };
         }
     }
     let stop = AtomicBool::new(false);
@@ -1058,6 +1132,33 @@ impl Pattern {
     /// Its byte at `offset` of the window.
     pub(crate) fn at(&self, offset: u64) -> u8 {
         self.bytes[(offset % PERIOD as u64) as usize]
+    }
+
+    /// The byte a kernel stores at `offset` of the window.
+    fn stored_at(&self, offset: u64) -> u8 {
+        self.stored[(offset % PERIOD as u64) as usize]
+    }
+
+    /// Copy the bytes a kernel stores at the window's `length` bytes from `offset` into `to`'s
+    /// bytes from `at`, a period's run at a time.
+    ///
+    /// # Safety
+    ///
+    /// `to`'s bytes `at..at + length` are mapped and writable, and nothing else uses them
+    /// meanwhile.
+    unsafe fn store_row(&self, offset: u64, length: u64, to: NonNull<u8>, mut at: usize) {
+        for (from, count) in self.spans(offset, length as usize) {
+            // SAFETY: the caller's bytes `at..at + count` of `to`, within its contract's; the
+            // pattern's bytes are apart from them.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    self.stored[from..].as_ptr(),
+                    to.as_ptr().add(at),
+                    count,
+                )
+            };
+            at += count;
+        }
     }
 
     /// The window's bytes `offset..offset + length` as runs within one period, in order: each

@@ -216,15 +216,9 @@ impl Device {
         };
         match in_place::in_place(policy, usage, pages, verdict) {
             // A texture that renders takes the storage usage too where the check passed for a
-            // shader's writes over the class and its texel is one the check's kernel stores: a
-            // draw that reads it through a snapshot fetches it in the pixel interlock through that
-            // usage (`render/snapshot.rs`), and with it a shader's writes reach the texels in
-            // place, as the check's writes do.
+            // shader's writes of its texels over the class (`in_place::storable`).
             Ok(()) => host(HostWay::InPlace {
-                storable: Access::Renders.takes(usage)
-                    && !Access::Writes.takes(usage)
-                    && in_place::STORED_TEXEL_BYTES.contains(&pages.2)
-                    && verdict(class, Access::Writes, rows) == Verdict::Passed,
+                storable: in_place::storable(usage, (class, rows, pages.2), verdict),
             }),
             Err(cause) => host(HostWay::Shadow(cause)),
         }

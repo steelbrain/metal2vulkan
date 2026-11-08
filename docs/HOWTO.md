@@ -297,9 +297,10 @@ command buffer does not write.
 
 By default (`HostPageTexturePolicy::InPlace`) the runtime relies on the driver there, checked. A
 texture whose declared usage samples, reads, renders into it or writes it through a shader (of
-texels of 4, 8 or 16 bytes) is a linear image aliasing the pages wherever the device makes one and
-its own check passed for that kind of pages (pointer imports, dma-buf imports, fresh pages) and
-each of its accesses (a texture that renders, and one a shader writes, are checked apart), on a
+texels of 1, 2, 4, 8 or 16 bytes) is a linear image aliasing the pages wherever the device makes
+one and its own check passed for that kind of pages (pointer imports, dma-buf imports, fresh
+pages) and each of its accesses (a texture that renders, and one a shader writes, are checked
+apart, and a shader's writes of 1- or 2-byte texels apart from wider ones'), on a
 discrete GPU as on any other: the check makes such images while a CPU thread writes beside their
 texels and passes a kind only where every first move (and render pass, for one that renders, and
 kernel's storage writes, for one a shader writes) kept every byte. It runs on a thread of its own, started by the first such texture, once per driver and
@@ -319,8 +320,8 @@ verdicts are known. A program that routes each surface either to a texture over 
 copy of its own asks `Buffer::texture_placement` (or `texture_placement_with_iosurface_plane`)
 with the arguments it would make the texture with: the answer (`TexturePlacement`: in place,
 pending, a shadow and why, no host pages, another shape) is the making's own decision, so no report
-string needs parsing. A texture a shader writes of 1- or 2-byte
-texels (`host_texture_shadows_store_width`), one the check failed or could not cover, and one
+string needs parsing. A texture a shader writes of texels of a width the check stores none of
+(`host_texture_shadows_store_width`), one the check failed or could not cover, and one
 no image in place serves (a pitch the device's linear images do not take --
 `host_texture_shadows_refused_pitch`; over dma-buf pages, a source that makes no one dma-buf of
 the texture's own pages, as a chunked `udmabuf` import does -- `host_texture_shadows_refused_source`)
