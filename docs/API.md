@@ -1655,6 +1655,11 @@ bound.
   its check of such images over its pooled memory has not passed for the texture's accesses:
   pending, failed or unchecked, as over host pages, a pending one moving to the image once the
   verdict passes, at a quiet commit, with no copy (`WorkCounts::pooled_textures_moved_in_place`);
+  over memory the runtime exports (`MemoryExport`, a runtime extension), where either image names
+  the memory's handle type as Vulkan requires and so starts `UNDEFINED`, its check of that exported
+  memory has not passed for the texture's accesses (a pending one moving the same way), the
+  device's image format query takes the handle type for no such image but in a dedicated
+  allocation, or the memory is the buffer's dedicated allocation, to which no image may be bound;
   for one that renders, whose rows each to its
   pitch share no line with bytes past them, the check of renders that lets the rows' padding
   change, as the declaration does, and no byte past the last row's pitch); past a bound in bytes of its rows to their
