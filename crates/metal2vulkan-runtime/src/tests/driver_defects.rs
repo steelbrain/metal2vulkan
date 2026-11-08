@@ -54,8 +54,9 @@ const ALIASED_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::AliasedImportBli
 /// reads as words, and the implicit
 /// preprocessing after an execution set on every GPU but the 780M (Phoenix's and Hawk Point's),
 /// measured clean; ANV
-/// the compressed image's short size, the occlusion count per color output and the pushed
-/// descriptors a pipeline bind leaves stale on every GPU (Arrow Lake's, not measured, too);
+/// the compressed image's short size, the occlusion count per color output, the pushed
+/// descriptors a pipeline bind leaves stale and the blits through two imports of the same host
+/// pages a barrier does not order on every GPU (Arrow Lake's, not measured, too);
 /// NVIDIA's the
 /// stencil colour copies on every GPU but the RTX 5080 Laptop GPU, measured clean (the GTX 1060 and
 /// the RTX 5080 desktop GPU, not measured, take them), the 10-bit codes its Y′CbCr conversion reads
@@ -101,7 +102,9 @@ fn the_committed_profiles_drivers_have_their_defects() {
                 vec![NAN_COPIES, TEN_BIT_WORDS]
             }
             Some(DriverId::MESA_RADV) => vec![NAN_COPIES, PREPROCESS, TEN_BIT_WORDS],
-            Some(DriverId::INTEL_OPEN_SOURCE_MESA) => vec![COMPRESSION, COUNTS, STALE_PUSHES],
+            Some(DriverId::INTEL_OPEN_SOURCE_MESA) => {
+                vec![COMPRESSION, COUNTS, STALE_PUSHES, ALIASED_BLITS]
+            }
             Some(DriverId::NVIDIA_PROPRIETARY) if desc.device_id == 0x2c19 => {
                 vec![TEN_BIT_WORDS, UNPINNABLE]
             }

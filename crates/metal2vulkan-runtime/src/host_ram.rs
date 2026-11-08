@@ -95,9 +95,10 @@
 //!   ended at the use's end or the allocation limit's margin) or failed the chunk, where the
 //!   device's allocations are within that margin, where the device's barriers do not order blits
 //!   through two imports of the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`,
-//!   MoltenVK's: there every object over a chunk's pages lies in the chunk's one import, which
-//!   Metal orders), where the run is the whole chunk, or where the run's import fails, the object
-//!   imports the chunk on its own thread, or waits for the import of it under way.
+//!   MoltenVK's and ANV's: there every object over a chunk's pages lies in the chunk's one import,
+//!   whose blits the barriers order), where the run is the whole chunk, or where the run's import
+//!   fails, the object imports the chunk on its own thread, or waits for the import of it under
+//!   way.
 //! - **Paced.** The thread runs as the system's batch work (never at a weight the system may
 //!   starve: it holds a chunk's lock and, pinning, the process's memory map lock), yields between
 //!   chunks, and on Linux faults each chunk's pages in 2 MiB at a time before its import, so that
@@ -1516,8 +1517,8 @@ impl Device {
     /// bound in an import of its own run alone while the thread imports the chunk, so that no
     /// making waits for a chunk's import (`WorkCounts::run_bound_buffers_made`); on a driver whose
     /// barriers do not order blits through two imports of the same pages
-    /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's) it imports the chunk
-    /// instead, or waits for the thread's import of it. The thread
+    /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's and ANV's) it imports the
+    /// chunk instead, or waits for the thread's import of it. The thread
     /// faults in and pins no more than the window past the objects, and never goes back. It is
     /// paced (the system's batch work, a yield between chunks) and stops a quarter of the
     /// device's `maxMemoryAllocationCount` short of it, the chunks it imported that no object

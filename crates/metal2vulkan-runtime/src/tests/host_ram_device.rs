@@ -48,11 +48,12 @@
 //!   chunk's over the same pages order by their host bytes, a write through either before a read
 //!   through the other, in one blit encoder, in two encoders of one command buffer and across
 //!   queues; so do a buffer bound in a run's import and a copy of its pages through the chunk's
-//!   (`copy_from_host_ram` after a fill through the buffer, `copy_to_host_ram` before a copy out
-//!   of it). Within the allocation limit's margin no run is imported alone. On a driver whose
-//!   barriers do not order blits through two imports of the same pages
-//!   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's) no run is imported alone
-//!   either: an object over a chunk not imported imports the chunk, and the tests hold it to that.
+//!   (`copy_from_host_ram` after a fill through the buffer, `copy_to_host_ram` before a copy out of
+//!   it). Within the allocation limit's margin no run is imported alone. On a driver whose barriers
+//!   do not order blits through two imports of the same pages
+//!   (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's and ANV's) no run is imported
+//!   alone either: an object over a chunk not imported imports the chunk, and the tests hold it to
+//!   that.
 //!
 //! - **Shared RAM a device refuses.** On a device that refuses pointers to shared memory (RADV),
 //!   a RAM of a `memfd` mapped shared with no dma-buf source imports no chunk, and an object over
@@ -661,10 +662,10 @@ fn settled(device: &Device, done: impl Fn(&crate::WorkCounts) -> bool) -> crate:
     later
 }
 
-/// 1 where the device binds an object over a chunk not imported yet in an import of its own run,
-/// 0 where its barriers do not order blits through two imports of the same pages
-/// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's) and the object imports the
-/// chunk, as one that finds the device's thread stopped does.
+/// 1 where the device binds an object over a chunk not imported yet in an import of its own run, 0
+/// where its barriers do not order blits through two imports of the same pages
+/// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's and ANV's) and the object
+/// imports the chunk, as one that finds the device's thread stopped does.
 fn runs_alone(device: &Device) -> u64 {
     let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
     u64::from(!device.properties().driver_defects.contains(&defect))

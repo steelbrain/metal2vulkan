@@ -511,6 +511,18 @@ pub(super) struct Affected {
 ///   encoders and across queues. Nothing is refused: an object over a chunk not yet imported is
 ///   bound in the chunk's import, which it waits for, never in an import of its own run
 ///   (`host_ram.rs`'s `RamOnDevice::for_object`).
+/// - Mesa's ANV (`INTEL_OPEN_SOURCE_MESA`): in one command buffer, a fill through a buffer bound in
+///   one import of a guest RAM's pages, a global memory barrier from the transfer write to the
+///   transfer read, then a copy of the same bytes through a buffer bound in another import of them
+///   read none of the fill (0 of 4096 bytes), in one blit encoder and in two, whichever of a run's
+///   import and the chunk's the fill went through, where the CPU then saw all 4096. Two command
+///   buffers of one queue, a wait for the fill's before the copy's commit, and two queues each
+///   ordered them (all 4096), and so did every way through one import (one chunk-bound buffer to
+///   another). Measured on Iris Xe Graphics (Raptor Lake-P) under Mesa 26.2.6, a probe of each way
+///   run twice; and
+///   `tests::host_ram_device::a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_bytes`
+///   and `a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes` failed there in
+///   each of two runs. Nothing is refused, as on MoltenVK.
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -662,6 +674,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::AliasedImportBlitsUnordered,
         driver: DriverId::MOLTENVK,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::AliasedImportBlitsUnordered,
+        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         clean: &[],
     },
 ];

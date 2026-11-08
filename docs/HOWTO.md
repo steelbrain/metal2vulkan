@@ -507,9 +507,9 @@ submission, can give the device the guest's RAM once instead:
   does not run (it stopped at the allocation limit's margin, below), failed the chunk or gave it
   back, where the device's allocations are within that margin, where the object's run is the whole
   chunk, or on a driver whose barriers do not order blits through two imports of the same pages
-  (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's: there every object over a chunk
-  lies in its one import), the object imports the chunk as it is made, or waits for the import of it
-  under way. The thread faults in no more than the window past the objects, and never goes back for
+  (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's and ANV's: there every object
+  over a chunk lies in its one import), the object imports the chunk as it is made, or waits for
+  the import of it under way. The thread faults in no more than the window past the objects, and never goes back for
   a chunk a take skipped. What an
   import costs is faulting in the chunk's fresh pages, not the pin. On an RTX 5080 laptop
   (NVIDIA 615.71.09, Linux 7.2), the import of 64 MiB already resident took 2 to 3 ms; the
