@@ -206,7 +206,7 @@ fn write_through_import(device: &Device, exported: crate::ExportedMemory) {
         .push_next(&mut features12);
     // SAFETY: the physical device is the instance's and lists the extensions (the export ran).
     let second = unsafe { instance.create_device(physical, &info, None) }.unwrap();
-    let fds = ash::khr::external_memory_fd::Device::new(&instance, &second);
+    let fds = ash::khr::external_memory_fd::Device::new(instance, &second);
     let handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
     let mut fd_properties = vk::MemoryFdPropertiesKHR::default();
     // SAFETY: the descriptor is a dma-buf the runtime exported, of this physical device.
