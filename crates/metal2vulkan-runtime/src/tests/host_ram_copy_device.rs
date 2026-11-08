@@ -32,8 +32,15 @@
 //!   into a `Shared` and a `Private` buffer and scattered back by a dispatch per chunk and no
 //!   region: every other byte of their pages (each a pattern) stays. A scatter of such runs that
 //!   name bytes twice takes regions, and leaves the later's.
+//! - **A laid-out surface in one call**: rows at a pitch over scattered pages (two side by side,
+//!   one before the first chunk's end, one in the second), each run at its byte of a buffer that
+//!   keeps the layout (`copy_runs_from_host_ram`, `copy_runs_to_host_ram`): rows of 4-byte texels
+//!   by a dispatch per chunk both ways, rows of 2-byte texels and rows from a byte of the buffer
+//!   off a word by regions; the buffer's padding (a sentinel) and every byte of the RAM the runs
+//!   do not name stay. A gather of two runs at one byte of the buffer keeps the later's bytes.
 //! - **Refused**: runs off a word, empty or outside the RAM, a RAM the device does not use (or no
-//!   longer does), bytes past the buffer and an offset off a word; no runs copy nothing.
+//!   longer does), bytes past the buffer and an offset off a word; of runs each at a byte of
+//!   their own, one past the buffer or at a byte past `u64`; no runs copy nothing.
 //! - **A chunk taken as an object takes it**, on a device whose thread imports ahead: a gather
 //!   from the RAM's first chunk finds it imported ahead and opens the full window past it, and a
 //!   scatter into a chunk past the window imports its page alone while the thread imports the
@@ -672,6 +679,163 @@ fn runs_of_words_inside_pages_take_a_dispatch_per_chunk_and_leave_the_rest_of_th
     );
 }
 
+/// The pages of a laid-out surface: its 4 KiB pages lie apart in the RAM, two of them side by
+/// side, one before the first chunk's end and one in the second chunk.
+const SURFACE_PAGES: [u64; 8] = [30, 12, 13, SECOND - 1, SECOND + 2, 7, 50, 51];
+
+/// A laid-out surface's rows of `row_bytes` texel bytes at a `pitch`, over [`SURFACE_PAGES`], as
+/// runs each at its byte of a buffer that keeps the layout from byte `base`: row `r` at
+/// `base + r × pitch`, cut where a page of the surface ends (the next lies elsewhere in the RAM).
+fn laid_out(start: u64, (pitch, row_bytes): (u64, u64), base: u64) -> Vec<(u64, Range<u64>)> {
+    let surface = SURFACE_PAGES.len() as u64 * PAGE;
+    let mut runs = Vec::new();
+    for row in 0..surface / pitch {
+        let mut at = row * pitch;
+        let end = at + row_bytes;
+        while at < end {
+            let cut = end.min((at / PAGE + 1) * PAGE);
+            let host = start + SURFACE_PAGES[(at / PAGE) as usize] * PAGE + at % PAGE;
+            runs.push((base + at, host..host + (cut - at)));
+            at = cut;
+        }
+    }
+    runs
+}
+
+/// One laid-out download and upload, each one call over `runs` (at their bytes from `base` of a
+/// buffer of `length` bytes): the buffer's bytes between the runs (a row's padding, each a
+/// sentinel) and every byte of the RAM the runs do not name stay as they were. The calls'
+/// dispatches and regions.
+fn laid_out_both_ways(
+    device: &Device,
+    ram: &HostRam,
+    start: u64,
+    runs: &[(u64, Range<u64>)],
+    length: u64,
+) -> [(u64, u64); 2] {
+    let counted = |before: &crate::WorkCounts, after: &crate::WorkCounts| {
+        (
+            after.host_ram_copy_dispatches - before.host_ram_copy_dispatches,
+            after.host_ram_copy_regions - before.host_ram_copy_regions,
+        )
+    };
+    for &page in &SURFACE_PAGES {
+        write_pattern(start + page * PAGE..start + (page + 1) * PAGE, 11);
+    }
+    // The gather: each run's bytes at its byte of the buffer, every other byte of it its
+    // sentinel.
+    let out = shared(device, length, |_| 0xee);
+    let mut want = vec![0xee; length as usize];
+    for (at, run) in runs {
+        let at = *at as usize;
+        want[at..at + (run.end - run.start) as usize].copy_from_slice(&bytes(run.clone()));
+    }
+    let before = device.work_counts();
+    blit(device, |encoder| {
+        encoder.copy_runs_from_host_ram(ram, runs, &out).unwrap();
+    });
+    let gather = counted(&before, &device.work_counts());
+    assert!(
+        contents(&out) == want,
+        "the rows at their bytes, the padding's sentinels kept"
+    );
+    // The scatter: each run takes the bytes at its byte of the source, and no other byte of the
+    // RAM changes, the rows' padding in their pages among them.
+    let source = shared(device, length, |at| pattern(at, 4));
+    let mut want = bytes(start..start + RAM_BYTES);
+    for (at, run) in runs {
+        for (i, address) in run.clone().enumerate() {
+            want[(address - start) as usize] = pattern(at + i as u64, 4);
+        }
+    }
+    let before = device.work_counts();
+    blit(device, |encoder| {
+        encoder.copy_runs_to_host_ram(&source, ram, runs).unwrap();
+    });
+    let scatter = counted(&before, &device.work_counts());
+    let now = bytes(start..start + RAM_BYTES);
+    for &page in &SURFACE_PAGES {
+        let at = (page * PAGE) as usize;
+        assert!(
+            now[at..at + PAGE as usize] == want[at..at + PAGE as usize],
+            "the surface's page {page:x}"
+        );
+    }
+    assert!(now == want, "the rows alone, and no other byte of the RAM");
+    [gather, scatter]
+}
+
+#[test]
+fn a_laid_out_surface_copies_in_one_call_each_row_at_its_byte_of_the_buffer() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let _used = device.use_host_ram(&ram).unwrap();
+    let length = 64 + SURFACE_PAGES.len() as u64 * PAGE + 64;
+    // Rows of 375 4-byte texels at a 1536-byte pitch, from byte 64 of the buffer: words, so a
+    // dispatch for each chunk the rows touch, no region, both ways.
+    let rows = laid_out(start, (1536, 1500), 64);
+    assert!(rows.len() > 21, "rows cut where a page of the surface ends");
+    let counts = laid_out_both_ways(&device, &ram, start, &rows, length);
+    assert_eq!(
+        counts,
+        [(2, 0); 2],
+        "a dispatch per chunk, no region, both ways"
+    );
+    // Rows of 751 2-byte texels: each ends 2 bytes past a word, so a region a run's bytes in a
+    // chunk, no dispatch.
+    let rows = laid_out(start, (1536, 1502), 64);
+    let counts = laid_out_both_ways(&device, &ram, start, &rows, length);
+    for (dispatches, regions) in counts {
+        assert_eq!(dispatches, 0, "no dispatch");
+        assert!(regions >= 21, "a region a run: {regions}");
+    }
+    // Rows of 4-byte texels from a byte of the buffer off a word: regions.
+    let rows = laid_out(start, (1536, 1500), 66);
+    let counts = laid_out_both_ways(&device, &ram, start, &rows, length);
+    for (dispatches, regions) in counts {
+        assert_eq!(dispatches, 0, "no dispatch off a word of the buffer");
+        assert!(regions >= 21, "a region a run: {regions}");
+    }
+    // A gather of two runs at one byte of the buffer: regions, a round each, so the later's
+    // bytes are the ones left.
+    let page = |n: u64| start + n * PAGE;
+    write_pattern(page(60)..page(62), 12);
+    let twice = [
+        (16, page(60)..page(60) + 400),
+        (16, page(61) + 8..page(61) + 208),
+    ];
+    let out = shared(&device, 1024, |_| 0xee);
+    let before = device.work_counts();
+    blit(&device, |encoder| {
+        encoder.copy_runs_from_host_ram(&ram, &twice, &out).unwrap();
+    });
+    let after = device.work_counts();
+    let got = contents(&out);
+    assert!(
+        got[16..216] == bytes(page(61) + 8..page(61) + 208)[..],
+        "the later run's"
+    );
+    assert!(
+        got[216..416] == bytes(page(60) + 200..page(60) + 400)[..],
+        "the earlier's rest"
+    );
+    assert!(got[..16]
+        .iter()
+        .chain(&got[416..])
+        .all(|&byte| byte == 0xee));
+    assert_eq!(
+        after.host_ram_copy_regions - before.host_ram_copy_regions,
+        2,
+        "a region a run, in two rounds"
+    );
+    assert_eq!(
+        after.host_ram_copy_dispatches - before.host_ram_copy_dispatches,
+        0
+    );
+}
+
 #[test]
 fn the_cpus_writes_before_the_commit_are_gathered_and_a_scatter_is_in_the_pages_after() {
     let Some(device) = device() else {
@@ -1064,8 +1228,28 @@ fn copies_off_a_word_outside_the_ram_or_past_the_buffer_are_refused() {
         encoder.copy_from_host_ram(&ram, &first, &out, 2),
         true
     ));
+    // Runs each at a byte of their own: one past the buffer, or at a byte that passes `u64`;
+    // a host run off a word.
+    for (runs, host_ram) in [
+        (
+            vec![(0, page(1)..page(2)), (8 * PAGE - 8, page(3)..page(3) + 16)],
+            false,
+        ),
+        (vec![(u64::MAX - 4, page(1)..page(1) + 16)], false),
+        (vec![(0, page(1) + 2..page(2))], true),
+    ] {
+        assert!(
+            refused(encoder.copy_runs_from_host_ram(&ram, &runs, &out), host_ram),
+            "{runs:x?}"
+        );
+        assert!(
+            refused(encoder.copy_runs_to_host_ram(&out, &ram, &runs), host_ram),
+            "{runs:x?}"
+        );
+    }
     // No runs copy nothing; the encoder goes on.
     encoder.copy_from_host_ram(&ram, &[], &out, 0).unwrap();
+    encoder.copy_runs_from_host_ram(&ram, &[], &out).unwrap();
     write_pattern(page(1)..page(2), 10);
     encoder.copy_from_host_ram(&ram, &first, &out, 0).unwrap();
     encoder.end_encoding().unwrap();

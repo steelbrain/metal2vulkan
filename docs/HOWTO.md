@@ -678,6 +678,18 @@ submission, can give the device the guest's RAM once instead:
   runs' bytes overlap (`Invalid`, `Problem::HostRam`); bytes past the buffer (`Invalid`,
   `Problem::RangeOutOfBounds`); a chunk the device cannot import (the import's error). A caller
   falls back to its own copy on any of them.
+- `BlitCommandEncoder::copy_runs_from_host_ram(ram, runs, destination)` and
+  `copy_runs_to_host_ram(source, ram, runs)` are the same copies with each run at a byte of the
+  buffer of its own: `runs` are `(buffer byte, host run)` pairs, for a device cache that keeps a
+  surface's layout (row `r`'s texels at `base + r × pitch`, the padding between rows the guest's,
+  neither read nor written): one call for all its rows, whose dispatches number by the chunks the
+  rows touch, where a call a row takes a dispatch or more for each row. The host runs are as above; a run that starts where the one before ended,
+  in the RAM and in the buffer, joins it. Where every run also ends on a word and lies at a word
+  of the buffer's memory, the runs take the dispatches; otherwise, or where two runs name one
+  destination byte (the later run's bytes stay), regions. Hazard tracking takes the buffer's
+  bytes from the lowest run's first to the highest's last. Refused as above, and a run whose bytes
+  pass the buffer's length (`Invalid`, `Problem::RangeOutOfBounds`, the first such run's); a run
+  at a byte of the buffer off a word is copied by regions, not refused.
 
 ## 7. Check the integration
 

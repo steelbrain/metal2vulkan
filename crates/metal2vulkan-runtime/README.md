@@ -548,7 +548,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   a copy region per run in a chunk; neither touches another byte of their pages; with no view
   of the pages and no import of their own; ordered and seen as a copy between the buffer and a
   no-copy buffer over the pages
-  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)).
+  ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)). `copy_runs_from_host_ram` and
+  `copy_runs_to_host_ram` take each run at a byte of the buffer of its own, so a buffer that
+  keeps a surface's layout (rows at a pitch, the padding between them untouched) is one call for
+  every row.
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through
   the pointer, where the slice forms would need the caller's own copy first.

@@ -560,14 +560,15 @@ pub enum Problem {
     DmaBuf,
     /// Guest RAM, or a run resolver's answer, that breaks its runtime extension's contract
     /// (`HostRam::new`, `Device::use_host_ram`, `HostMemory::with_runs`,
-    /// `BlitCommandEncoder::copy_from_host_ram` and `copy_to_host_ram`; Metal has none). For the
-    /// RAM: no range, or a range that is empty, starts or ends off the host page, runs past the
-    /// address space's end or overlaps another (of the same RAM, or of another RAM the device
-    /// uses). For an answer: runs that are not whole host pages or do not cover exactly the pages
-    /// asked for. For a copy: a RAM the device does not use, a run that is empty, starts off a
-    /// 4-byte word or lies outside the RAM's ranges, bytes of the buffer that start off a 4-byte
-    /// word of its memory, or, of runs not all whole 4 KiB pages, a buffer over host pages the
-    /// runs' bytes overlap.
+    /// `BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`, `copy_runs_from_host_ram`
+    /// and `copy_runs_to_host_ram`; Metal has none). For the RAM: no range, or a range that is
+    /// empty, starts or ends off the host page, runs past the address space's end or overlaps
+    /// another (of the same RAM, or of another RAM the device uses). For an answer: runs that are
+    /// not whole host pages or do not cover exactly the pages asked for. For a copy: a RAM the
+    /// device does not use, a run that is empty, starts off a 4-byte word or lies outside the
+    /// RAM's ranges, of runs one after another bytes of the buffer that start off a 4-byte word
+    /// of its memory, or, of a copy by regions, a buffer over host pages the copy's bytes
+    /// overlap.
     ///
     /// Basis: ours (a runtime extension's own contract: Metal imports no guest RAM).
     HostRam,

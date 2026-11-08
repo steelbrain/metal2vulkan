@@ -5,11 +5,12 @@
 //! buffer made with `HostMemory::with_runs`, so imported by its pointer) and a blit between it and
 //! the buffer.
 //!
-//! Then the same surface's pages as rows of texels at a pitch ([`LAID_OUT`]), downloaded as a
-//! consumer downloads a laid-out device cache: each row's texels alone, by `copy_to_host_ram` of
-//! the surface's runs cut to the row, one call a row (and once as one call of every row's runs):
+//! Then the same surface's pages as rows of texels at a pitch ([`LAID_OUT`]), downloaded from a
+//! cache that keeps that layout as a consumer downloads a laid-out device cache: each row's
+//! texels alone, by `copy_to_host_ram` of the surface's runs cut to the row, one call a row, and
+//! by `copy_runs_to_host_ram` of every row's runs, each at its byte of the cache, in one call:
 //! rows of 4-byte texels end on a word, so copied by dispatches, and rows of 2-byte texels that
-//! end 2 bytes past one by regions; and by the view, a blit a row from the buffer into it
+//! end 2 bytes past one by regions; and by the view, a blit a row from the cache into it
 //! (`LAID-OUT` lines).
 //!
 //! The surface: a 3840x2054 `BGRA8Unorm` one, 31,549,440 bytes, as whole runs of `UNIT` bytes
@@ -408,20 +409,25 @@ fn laid_out_copies(
         (after.host_ram_copy_regions - before.host_ram_copy_regions) / ITERATIONS as u64,
         (after.host_ram_copy_dispatches - before.host_ram_copy_dispatches) / ITERATIONS as u64,
     );
-    // The rows' runs in one call, from a buffer of the rows' texels alone.
-    let texels = device
-        .new_buffer(rows * row_bytes, ResourceOptions::private())
-        .unwrap();
+    // The rows' runs in one call from the laid-out cache, each run at its byte of it.
+    let mut laid = Vec::with_capacity(every.len());
+    for (span, runs) in spans.iter().zip(&row_runs) {
+        let mut at = span.start;
+        for run in runs {
+            laid.push((at, run.clone()));
+            at += run.end - run.start;
+        }
+    }
     let before = device.work_counts();
     for _ in 0..ITERATIONS {
         timed(queue, &mut at_once, |encoder| {
             let started = thread_cpu();
-            encoder.copy_to_host_ram(&texels, 0, ram, &every).unwrap();
+            encoder.copy_runs_to_host_ram(cache, ram, &laid).unwrap();
             thread_cpu() - started
         });
     }
     let after = device.work_counts();
-    at_once.print(&format!("{what} copy_to_host_ram in one call"));
+    at_once.print(&format!("{what} copy_runs_to_host_ram in one call"));
     eprintln!(
         "HOST-RAM-COPY-BENCH {what} in one call: {} regions and {} dispatches a download",
         (after.host_ram_copy_regions - before.host_ram_copy_regions) / ITERATIONS as u64,
@@ -504,7 +510,8 @@ fn host_ram_copy_bench() {
     for &unit in &units {
         let runs = surface_runs(start, unit, 0x2545_f491_4f6c_dd1d);
         let length: u64 = runs.iter().map(|run| run.end - run.start).sum();
-        let merged = crate::host_ram::copy::merged(&runs).unwrap().len();
+        let laid = crate::host_ram::copy::one_after_another(0, &runs).unwrap();
+        let merged = crate::host_ram::copy::merged(&laid).unwrap().len();
         let descending = (runs.windows(2))
             .filter(|pair| pair[1].end == pair[0].start)
             .count();
