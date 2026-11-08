@@ -1,9 +1,9 @@
-//! Not a consumer's example: what a draw costs the thread that encodes it, in three shapes of a
+//! Not a consumer's example: what a draw costs the thread that encodes it, in four shapes of a
 //! consumer's render work (a guest's command buffers as its host replays them on the runtime),
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k]... [--runs N] [--calls] [--counts] [--heap] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips]... [--runs N] [--calls] [--counts] [--heap] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -17,6 +17,11 @@
 //! - **many**, a guest's frame in short command buffers: 64 command buffers of 16 draws, each a
 //!   `set_vertex_buffer` at the next slot and a 3-vertex triangle list.
 //! - **10k**: 3 command buffers of 10,000 such draws.
+//! - **clips**, a compositor's frames under clips: 8 command buffers of 500 draws, each a 4-vertex
+//!   triangle strip after `set_vertex_buffer` at the next slot; before every second one,
+//!   `set_scissor_rect` (the top half of the target, then the bottom, in turn); every 4 draws
+//!   instead `set_render_pipeline_state` (the next of 4), `set_fragment_sampler_states` and
+//!   `set_fragment_texture` (the next of 16).
 //!
 //! The slots lie in 64 KiB no-copy buffers over host pages (`new_buffer_with_bytes_no_copy`), as
 //! a guest's upload chunks do, each command buffer's in chunks of its own. With `--heap`, the
@@ -70,8 +75,8 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceOptions,
     Heap, HeapDescriptor, HeapType, HostMemory, Library, LoadAction, MessageSink, PipelineOptions,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, StoreAction, Texture,
-    TextureDescriptor,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, SamplerState, ScissorRect,
+    StoreAction, Texture, TextureDescriptor,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -115,7 +120,28 @@ enum Stream {
     /// A compositor's: each draw a texture and its fragment and vertex slots, the pipeline state
     /// and the sampler again every [`RUN`] draws.
     Layers,
+    /// A compositor's under clips: each draw its vertex slot, every second one a scissor
+    /// rectangle of [`CLIPS`] before it, and every [`RUN`] draws instead the pipeline state, the
+    /// sampler and a texture again.
+    Clipped,
 }
+
+/// The scissor rectangles a clipped stream's draws take in turn: the target's top half, then its
+/// bottom half.
+const CLIPS: [ScissorRect; 2] = [
+    ScissorRect {
+        x: 0,
+        y: 0,
+        width: SIDE,
+        height: SIDE / 2,
+    },
+    ScissorRect {
+        x: 0,
+        y: SIDE / 2,
+        width: SIDE,
+        height: SIDE / 2,
+    },
+];
 
 /// Command buffers of `draws` draws of `stream`'s each.
 #[derive(Clone, Copy)]
@@ -127,7 +153,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 3] = [
+const SHAPES: [Shape; 4] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -146,13 +172,19 @@ const SHAPES: [Shape; 3] = [
         draws: 10_000,
         stream: Stream::Bytes,
     },
+    Shape {
+        name: "clips",
+        buffers: 8,
+        draws: 500,
+        stream: Stream::Clipped,
+    },
 ];
 
 impl Shape {
     /// The slots a draw takes: its vertex bytes, and its fragment bytes in a compositor's stream.
     fn slots(self) -> u64 {
         match self.stream {
-            Stream::Bytes => 1,
+            Stream::Bytes | Stream::Clipped => 1,
             Stream::Layers => 2,
         }
     }
@@ -171,7 +203,7 @@ impl Shape {
 }
 
 /// The calls `--calls` counts apart, by their index in a [`Tally`].
-const CALLS: [&str; 11] = [
+const CALLS: [&str; 12] = [
     "command_buffer",
     "render_command_encoder",
     "set_render_pipeline_state",
@@ -183,6 +215,7 @@ const CALLS: [&str; 11] = [
     "end_encoding",
     "add_completed_handler",
     "commit",
+    "set_scissor_rect",
 ];
 
 /// Each call's count and instructions, over a run's counted repetitions.
@@ -225,6 +258,7 @@ enum Step<'a> {
     FragmentBuffer(&'a Buffer, u64, u32),
     FragmentTexture(&'a Texture),
     FragmentSampler(&'a SamplerState),
+    Scissor(ScissorRect),
     Draw(PrimitiveType, u32),
 }
 
@@ -417,6 +451,18 @@ impl Bench {
                     steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
                     steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
                 }
+                Stream::Clipped => {
+                    if draw % RUN == 0 {
+                        steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
+                        steps.push(Step::FragmentSampler(&self.sampler));
+                        steps.push(Step::FragmentTexture(&self.textures[draw / RUN % TEXTURES]));
+                    } else if draw % 2 == 1 {
+                        steps.push(Step::Scissor(CLIPS[draw / 2 % CLIPS.len()]));
+                    }
+                    let (chunk, offset) = shape.slot(buffer, slot);
+                    steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
+                    steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
+                }
             }
         }
         steps
@@ -454,6 +500,7 @@ impl Bench {
                     Step::FragmentSampler(sampler) => call(&mut tally, 6, || {
                         encoder.set_fragment_sampler_states(&[Some(sampler)], None, 0)
                     }),
+                    Step::Scissor(rect) => call(&mut tally, 11, || encoder.set_scissor_rect(rect)),
                     Step::Draw(primitive, count) => call(&mut tally, 7, || {
                         encoder.draw_primitives(primitive, 0, count, 1, 0)
                     }),
@@ -886,7 +933,7 @@ fn main() -> Result<()> {
                 *SHAPES
                     .iter()
                     .find(|shape| shape.name == name)
-                    .ok_or_else(|| format!("no shape {name}: ws, many or 10k"))?,
+                    .ok_or_else(|| format!("no shape {name}: ws, many, 10k or clips"))?,
             ),
         }
     }
