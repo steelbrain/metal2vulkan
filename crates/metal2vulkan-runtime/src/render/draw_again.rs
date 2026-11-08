@@ -314,6 +314,13 @@ impl RenderLowering {
         }
     }
 
+    /// A draw of the kept draw again after calls that takes every step: counted
+    /// (`WorkCounts::draws_rebind_stopped`).
+    pub(super) fn rebind_stopped(&self) -> Again {
+        self.core.counts().draw_rebind_stopped();
+        Again::No
+    }
+
     /// The stamps of the encoder's vertex, fragment, object and mesh tables.
     pub(super) fn table_stamps(&self) -> [Stamp; 4] {
         [&self.vertex, &self.fragment, &self.object, &self.mesh].map(|table| table.stamp())
@@ -356,14 +363,10 @@ impl RenderLowering {
         }
         let stamps = self.table_stamps();
         if kept.stamps != stamps || kept.between {
-            let again = match kept.rebinds {
+            return match kept.rebinds {
                 true => self.draw_rebound(live, call, (assembly, draw), buffers, stamps, checked),
-                false => Again::No,
+                false => self.rebind_stopped(),
             };
-            if matches!(again, Again::No) {
-                self.core.counts().draw_rebind_stopped();
-            }
-            return again;
         }
         #[cfg(debug_assertions)]
         {

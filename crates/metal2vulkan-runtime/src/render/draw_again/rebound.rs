@@ -283,10 +283,10 @@ impl RenderLowering {
         // A notice met at each occurrence forgets the draw once recorded, as its every step does.
         let watch = crate::degradation::EachWatch::start();
         let Some(changed) = self.bring_in(live, stamps) else {
-            return Again::No;
+            return self.rebind_stopped();
         };
         let Some(rebinding) = self.rebind(call, live, &changed, (draw, buffers)) else {
-            return Again::No;
+            return self.rebind_stopped();
         };
         #[cfg(debug_assertions)]
         {
