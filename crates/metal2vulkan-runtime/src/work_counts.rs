@@ -5384,7 +5384,7 @@ pub struct WorkCounts {
     pub commands_noted_as_before: u64,
     /// Uses of draws noted apart that their encoder did not record: each differs from the use the
     /// last command it noted had at its place only by a range that one holds, of the same
-    /// resource, tracking and access types, which its noting recorded into the same part
+    /// resource, tracking and access types, whose bytes are in the same part already
     /// (`noted_apart.rs`), as a draw whose buffer offsets move along a buffer reads bytes its
     /// earlier draw's read held.
     pub uses_noted_covered: u64,

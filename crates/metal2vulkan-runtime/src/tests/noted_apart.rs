@@ -198,11 +198,11 @@ fn a_draw_s_resident_uses_are_touched_once_by_their_identity() {
 }
 
 /// A command whose use differs from the last one's at its place only by bytes inside that one's
-/// range, of the same resource and access types, records nothing for it (`Use::covers`), its kept
-/// use the covering one, as a draw whose buffer offset moves along a buffer reads from a later
-/// offset to its end: the command noted after it compares against the covering use, and a range
-/// past it is recorded. A moved command (`NotedApart::note_moved`) takes it so too, and is noted
-/// as before only where every use is the last one's.
+/// range, of the same resource and access types, records nothing for it (`Use::covers`), as a
+/// draw whose buffer offset moves along a buffer reads from a later offset to its end, and its
+/// own use is kept: the command noted after it compares against that, and a range past it is
+/// recorded. A moved command (`NotedApart::note_moved`) takes it so too, and is noted as before
+/// only where every use is the last one's.
 #[test]
 fn a_use_inside_the_last_one_s_range_is_noted_already() {
     let (buffer, other) = (ResourceKey::new(), ResourceKey::new());
@@ -223,17 +223,20 @@ fn a_use_inside_the_last_one_s_range_is_noted_already() {
     assert_eq!(fresh(&mut noted, &at(0)), at(0));
     assert_eq!(fresh(&mut noted, &at(256)), []);
     assert_eq!(noted.covered(), 1);
-    // Kept: the covering use, which the next command compares with.
-    assert!(noted.holds(stages, (&at(0), &resident), into));
-    assert!(!noted.holds(stages, (&at(256), &resident), into));
+    // Kept: the command's own uses, which the next command compares with.
+    assert!(noted.holds(stages, (&at(256), &resident), into));
+    assert!(!noted.holds(stages, (&at(0), &resident), into));
+    assert_eq!(fresh(&mut noted, &at(512)), []);
+    assert_eq!(noted.covered(), 1);
     // Bytes past it, or another access of them, are recorded.
+    assert_eq!(fresh(&mut noted, &at(256)), [at(256)[1].clone()]);
+    assert_eq!(noted.covered(), 0);
     let wider = [read(other, 0..16), read(buffer, 0..8192)];
     assert_eq!(fresh(&mut noted, &wider), [wider[1].clone()]);
-    assert_eq!(noted.covered(), 0);
     let written = Use::writes(buffer, true, UseRange::Bytes(512..4096), wider[1].read);
     let mixed = [read(other, 0..16), written];
     assert_eq!(fresh(&mut noted, &mixed), [mixed[1].clone()]);
-    // Moved: covered, recorded past it, and as before.
+    // Moved: covered, as before, and recorded past it.
     let mut moved = NotedApart::default();
     fresh(&mut moved, &at(0));
     assert!(moved.moves((&at(256), &resident), into));
@@ -246,8 +249,12 @@ fn a_use_inside_the_last_one_s_range_is_noted_already() {
         }
     };
     assert_eq!(note(&mut moved, &at(256)), (None, 1, false));
-    assert!(moved.holds(stages, (&at(0), &resident), into));
-    assert_eq!(note(&mut moved, &at(0)), (None, 0, true));
+    assert!(moved.holds(stages, (&at(256), &resident), into));
+    assert_eq!(note(&mut moved, &at(256)), (None, 0, true));
+    assert_eq!(
+        note(&mut moved, &at(0)),
+        (Some(vec![at(0)[1].clone()]), 0, false)
+    );
     let past = [read(other, 0..16), read(buffer, 0..8192)];
     assert_eq!(
         note(&mut moved, &past),

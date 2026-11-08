@@ -779,7 +779,8 @@ fn moved_rectangles(
 /// that changes nothing for them, each of which takes every step; each at another offset of both
 /// buffers, in another color each, as each column's count of draws and each draw's color show.
 /// The vertex function reads its points through a pointer, from the offset to the buffer's end, so
-/// each draw's use of them lies inside the first's, noted already (`WorkCounts::uses_noted_covered`).
+/// each draw's use of them lies inside the draw before's, noted already
+/// (`WorkCounts::uses_noted_covered`).
 #[test]
 fn draws_after_offsets_alone_moved_bind_what_every_step_binds() {
     let scratch = Scratch::new("draw-again-moved");
