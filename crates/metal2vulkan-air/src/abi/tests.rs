@@ -2666,6 +2666,47 @@ fn module_level_metadata_decodes() {
     assert_eq!(abi.producer, Some(DiagName::new("producer")));
 }
 
+/// A module Metal links at run time from several (Core Image's kernels) merges their option
+/// lists, so an option may repeat; each repeat states the option it already stated.
+#[test]
+fn a_repeated_compile_option_states_it_once() {
+    let options = |list: &[&str]| {
+        module_with(|b| {
+            let nodes: Vec<_> = list.iter().map(|&o| node(b, &[S(o)])).collect();
+            b.named_md("air.compile_options", &nodes);
+        })
+        .map(|abi| abi.compile)
+    };
+    let once = [
+        "air.compile.denorms_disable",
+        "air.compile.fast_math_enable",
+        "air.compile.framebuffer_fetch_disable",
+    ];
+    let twice: Vec<&str> = once.iter().chain(once.iter()).copied().collect();
+    let want = CompileOptions {
+        fast_math: Some(true),
+        denorms_disable: true,
+        framebuffer_fetch: Some(false),
+    };
+    assert_eq!(options(&once).unwrap(), want);
+    assert_eq!(options(&twice).unwrap(), want);
+    // Repeated next to each other, and each kind of option alone.
+    assert_eq!(
+        options(&[
+            "air.compile.fast_math_disable",
+            "air.compile.fast_math_disable",
+            "air.compile.denorms_disable",
+            "air.compile.denorms_disable",
+        ])
+        .unwrap(),
+        CompileOptions {
+            fast_math: Some(false),
+            denorms_disable: true,
+            framebuffer_fetch: None,
+        }
+    );
+}
+
 #[test]
 fn closed_module_level_sets() {
     // Unknown named metadata.
@@ -2684,15 +2725,26 @@ fn closed_module_level_sets() {
         }),
         AbiError::UnknownKey,
     );
-    // Contradictory compile options.
-    expect_abi(
-        module_with(|b| {
-            let a = node(b, &[S("air.compile.fast_math_enable")]);
-            let c = node(b, &[S("air.compile.fast_math_disable")]);
-            b.named_md("air.compile_options", &[a, c]);
-        }),
-        AbiError::BadValue,
-    );
+    // Contradictory compile options, alone and after a repeat of the first.
+    for list in [
+        &[
+            "air.compile.fast_math_enable",
+            "air.compile.fast_math_disable",
+        ][..],
+        &[
+            "air.compile.framebuffer_fetch_disable",
+            "air.compile.framebuffer_fetch_disable",
+            "air.compile.framebuffer_fetch_enable",
+        ],
+    ] {
+        expect_abi(
+            module_with(|b| {
+                let nodes: Vec<_> = list.iter().map(|&o| node(b, &[S(o)])).collect();
+                b.named_md("air.compile_options", &nodes);
+            }),
+            AbiError::BadValue,
+        );
+    }
     // Unknown module flag.
     expect_abi(
         module_with(|b| {

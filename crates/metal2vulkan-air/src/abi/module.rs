@@ -313,7 +313,10 @@ fn version(m: &Module, id: MdId, site: &Site) -> Result<Version, Error> {
     Ok(v)
 }
 
-/// `!air.compile_options`: a closed set of single-string nodes.
+/// `!air.compile_options`: a closed set of single-string nodes. An option may repeat (a module
+/// Metal links at run time merges its modules' lists, Core Image's kernels among them); a repeat
+/// states nothing new. An option stated both enabled and disabled is refused: the format gives
+/// neither precedence.
 fn compile_options(
     m: &Module,
     ops: &[MdId],
@@ -332,16 +335,16 @@ fn compile_options(
             b"air.compile.fast_math_disable" => (&mut c.fast_math, false),
             b"air.compile.framebuffer_fetch_enable" => (&mut c.framebuffer_fetch, true),
             b"air.compile.framebuffer_fetch_disable" => (&mut c.framebuffer_fetch, false),
-            b"air.compile.denorms_disable" if !c.denorms_disable => {
+            b"air.compile.denorms_disable" => {
                 c.denorms_disable = true;
                 continue;
             }
-            b"air.compile.denorms_disable" => return Err(site.err(AbiError::BadValue, key)),
             _ => return Err(site.err(AbiError::UnknownKey, key)),
         };
-        if slot.replace(value).is_some() {
+        if slot.is_some_and(|stated| stated != value) {
             return Err(site.err(AbiError::BadValue, key));
         }
+        *slot = Some(value);
     }
     Ok(c)
 }
