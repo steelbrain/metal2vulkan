@@ -55,7 +55,7 @@ fn the_sections_in_progress_name_where_they_began() {
     let (outer, line) = (guard.enter().expect("open"), line!());
     let nested = guard.enter().expect("open");
     let here = format!("{}:{line}", file!());
-    assert_eq!(guard.places_in_progress(), [here.clone()]);
+    assert_eq!(guard.places_in_progress(), std::slice::from_ref(&here));
     let (entered, done) = (Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2)));
     let worker = {
         let (entered, done) = (Arc::clone(&entered), Arc::clone(&done));
