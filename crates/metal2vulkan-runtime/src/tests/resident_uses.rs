@@ -13,9 +13,12 @@
 //! (`binding::kept_resident_checks`), and its gathering, checks and noting against those of its
 //! whole uses. The draws read through a root table and a handle table, so no draw of theirs is kept to
 //! draw again or rebind (`render/draw_again.rs`): each takes every step.
-//! A draw after the encoder made another resource resident, a draw of another plan, and the
-//! first draw of an encoder of the same residency's shape over other resources (the same plan, a
-//! residency of another generation) work them out again.
+//! A draw after the encoder made another resource resident, a draw of its pipeline state under
+//! another plan, and the first draw of an encoder of the same residency's shape over other
+//! resources (the same plan, a residency of another generation) work them out again. A draw after
+//! draws of another pipeline state keeps those its own state's last draw worked out, which its
+//! encoder set aside with that state's bind state (`live_bind.rs`), and notes them again: its
+//! encoder keeps only its last draw's noting apart.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`) with debug assertions, on the kind of device the cfg selects. The functions are
@@ -263,9 +266,12 @@ fn encode(scene: &Scene, resources: &Resources, later: u64) -> Vec<Drawn> {
 
 /// Two encoders, the second over other resources of the same residency's shape: within each,
 /// the draws after the first work out the uses of what it made resident only after it made
-/// another resource resident (the first encoder's fourth) and after a draw of another plan (the
-/// last), and only those walk them as they gather them for their render pass instance, check
-/// them against its fragment stages and attachments, and note them; every other draw keeps them,
+/// another resource resident (the first encoder's fourth), and only those walk them as they
+/// gather them for their render pass instance, check them against its fragment stages and
+/// attachments, and note them. The last, after a draw of another pipeline state, keeps those its
+/// state's last draw worked out and noted, and notes them again, as its encoder keeps only its
+/// last draw's noting apart; the keys it reaches through the resident set alone are those of its
+/// state's last draw, which bound the same table, so it moves none. Every other draw keeps them,
 /// and its kept uses are those it would make whole, and of the keys it reaches through the
 /// resident set alone moves only the two tables, the one it binds and the one the last draw
 /// bound, however many the encoder made resident. The second encoder's first draw, of the plan
@@ -280,7 +286,7 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
         let resources = Resources::new(&scene, corner);
         let each = encode(&scene, &resources, later);
         let entry_draws = POSITIONS as usize;
-        let made_again = [0, later as usize, entry_draws + 1];
+        let made_again = [0, later as usize];
         for (at, drawn) in each.iter().enumerate() {
             let what = format!("encoder {encoder} draw {at}: {drawn:?}");
             // No draw of the scene writes before its fragments: none checks against such writes.
@@ -306,6 +312,16 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
                     assert!(walked.iter().all(|walked| *walked > 0), "{what}");
                     // The positions and the tables, worked out whole.
                     assert!(drawn.settled > POSITIONS, "{what}");
+                }
+                // After the slot shape's draw, from the entry state's own bind state.
+                at if at == entry_draws + 1 => {
+                    let (noted, kept) = (walked[4], [&walked[..4], &walked[5..]].concat());
+                    assert!(
+                        noted > 0 && kept.iter().all(|walked| *walked == 0),
+                        "{what}"
+                    );
+                    assert!(drawn.checked > 0, "{what}");
+                    assert_eq!(drawn.settled, 0, "{what}");
                 }
                 _ => {
                     assert_eq!(walked, [0; 9], "{what}");
@@ -488,9 +504,9 @@ fn draws_announce_each_read_of_what_their_encoder_made_resident_their_pass_s_fra
         let what = format!("draw {at}: {drawn:?}, announced {announced}");
         assert!(drawn.against > 0, "{what}");
         match at {
-            // Before the marker; the first after it, of a plan other than the last draw's.
+            // Before the marker; the rest, the first after it of its own state's bind state, which
+            // the marker's draw went beside.
             0 => assert!(drawn.made > 0 && *announced == 0, "{what}"),
-            1 => assert!(drawn.made > 0 && *announced == 1, "{what}"),
             _ => assert!(drawn.made == 0 && *announced == 1, "{what}"),
         }
     }
