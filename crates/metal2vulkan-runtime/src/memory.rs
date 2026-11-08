@@ -1943,7 +1943,7 @@ impl Memory {
             return false;
         }
         let readying = self.readying.swap_remove(at);
-        let waited_for = readying.hurried();
+        let waited_for = readying.waited_for();
         let Some(made) = readying.take() else {
             return false;
         };

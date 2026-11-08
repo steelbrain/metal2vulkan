@@ -66,7 +66,7 @@ use crate::device::lock;
 use crate::device::queue_quiet::{QueueQuiet, Waited};
 use crate::exit_guard;
 use crate::work_counts::Counters;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -101,6 +101,8 @@ pub(super) struct Readying {
 struct Shared {
     /// What the thread does while it has not begun the making: [`WAIT`], [`NOW`] or [`STOP`].
     go: AtomicU8,
+    /// A call waited for the making ([`Waiter::wait`]).
+    waited_for: AtomicBool,
     /// Whether the making ended, and its block until a call takes it: `None` where it could not
     /// be made, it was stopped, or the process exits.
     made: Mutex<(bool, Option<Made>)>,
@@ -121,6 +123,7 @@ impl Waiter {
     /// Ask the making to stop waiting for a burst's end, and wait for it to end.
     pub(super) fn wait(self) {
         let shared = self.0;
+        shared.waited_for.store(true, Ordering::Release);
         let _ = shared
             .go
             .compare_exchange(WAIT, NOW, Ordering::AcqRel, Ordering::Acquire);
@@ -144,6 +147,7 @@ impl Readying {
     ) -> Option<Readying> {
         let shared = Arc::new(Shared {
             go: AtomicU8::new(WAIT),
+            waited_for: AtomicBool::new(false),
             made: Mutex::new((false, None)),
             ended: Condvar::new(),
         });
@@ -186,9 +190,9 @@ impl Readying {
         lock(&self.shared.made).0
     }
 
-    /// Whether a call asked it to go at once, to wait for it ([`Waiter::wait`]).
-    pub(super) fn hurried(&self) -> bool {
-        self.shared.go.load(Ordering::Acquire) == NOW
+    /// Whether a call waited for it ([`Waiter::wait`]).
+    pub(super) fn waited_for(&self) -> bool {
+        self.shared.waited_for.load(Ordering::Acquire)
     }
 
     /// A wait for its making, to run with no lock of the memory held.
