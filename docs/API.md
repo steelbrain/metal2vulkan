@@ -1179,7 +1179,10 @@ and where they lie, and the vertex buffers they bind (`None` where `rebind_draw_
 answers `Ok(false)` whatever the state). `rebind_draw_slots_with` then rebinds those slots by
 them, looking at the state and the commands alone, with the answers and commands
 `rebind_draw_slots_into` gives: keep the `SlotRebinds` beside the commands for draws that change
-the same slots of the same plan.
+the same slots of the same plan. `slot_rebinds_into` makes them again in a `SlotRebinds` you keep
+(its default holds none), for other slots or another plan, in place of what it held: its lists keep
+their room, so making them again allocates nothing where they had room; `SlotRebinds::slots` names
+the slots they were made for.
 
 A plan that reads handles (a texture's or sampler state's resource ID, a visible function table's)
 writes heap tables among its descriptor bytes, after the stage tables: its handle tables, sampler

@@ -2880,9 +2880,23 @@ impl BindingPlan {
     /// answers `Ok(false)`. Made once, it serves every rebind of the same slots on this plan
     /// ([`rebind_draw_slots_with`](Self::rebind_draw_slots_with)).
     pub fn slot_rebinds(&self, slots: &[SlotRef]) -> Option<SlotRebinds> {
+        let mut rebinds = SlotRebinds::default();
+        self.slot_rebinds_into(slots, &mut rebinds)
+            .then_some(rebinds)
+    }
+
+    /// [`slot_rebinds`](Self::slot_rebinds) of `slots`, made in `into` in place of what it held,
+    /// keeping its lists' room: whether the plan rebinds them so (`into` then holds the same
+    /// rebinds `slot_rebinds` answers), else `into` serves no rebind. A caller that makes rebinds
+    /// again for other slots or another plan allocates nothing where `into` had room for them.
+    pub fn slot_rebinds_into(&self, slots: &[SlotRef], into: &mut SlotRebinds) -> bool {
         match self.graphics.as_ref() {
-            Some(t) if !t.other_layer_variant => rebinds_of(t, slots),
-            _ => None,
+            Some(t) if !t.other_layer_variant => rebinds_into(t, slots, into),
+            _ => {
+                into.slots.clear();
+                into.slots.extend_from_slice(slots);
+                false
+            }
         }
     }
 
@@ -2898,11 +2912,13 @@ impl BindingPlan {
         state: &BindState,
         commands: &mut DrawCommands,
     ) -> Result<bool, BindError> {
-        debug_assert_eq!(
-            Some(rebinds),
-            self.slot_rebinds(&rebinds.slots).as_ref(),
-            "slot rebinds another plan made"
-        );
+        // Made again in a scratch of the thread's, whose lists keep their room from check to
+        // check, so the check allocates nothing past its first.
+        #[cfg(debug_assertions)]
+        REBINDS_MADE_AGAIN.with_borrow_mut(|again| {
+            let made = self.slot_rebinds_into(&rebinds.slots, again);
+            assert!(made && again == rebinds, "slot rebinds another plan made");
+        });
         match self.graphics.as_ref() {
             Some(t) if !t.other_layer_variant => rebind_with(t, rebinds, state, commands),
             _ => Ok(false),
@@ -4849,14 +4865,14 @@ struct FieldAt {
 
 /// One changed buffer slot of a [`SlotRebinds`]: its place among the template's buffer slots, its
 /// descriptor range's place among the commands' and its `(set, binding)` where the plan binds it
-/// a descriptor-form buffer, and the push fields that read its residual (`SlotBindOffset`) and
-/// its guest address (`SlotGuestBase`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// a descriptor-form buffer, and the ranges of [`SlotRebinds::words`] that hold the push fields
+/// reading its residual (`SlotBindOffset`) and its guest address (`SlotGuestBase`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SlotRebind {
     buffer: usize,
     place: Option<(usize, (u32, u32))>,
-    offsets: Vec<FieldAt>,
-    bases: Vec<FieldAt>,
+    offsets: (usize, usize),
+    bases: (usize, usize),
 }
 
 /// A push field of a changed slot that no changed buffer slot of the template holds: its word is
@@ -4875,22 +4891,93 @@ enum LooseWord {
 /// ([`BindingPlan::slot_rebinds`]): each changed buffer slot's descriptor range place, the push
 /// fields that read the slots and where they lie, and the fixed-function vertex buffers they bind.
 /// Made once for a plan and its slots, it serves each rebind of them
-/// ([`BindingPlan::rebind_draw_slots_with`]), which looks at the state and the commands alone.
-/// Opaque.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// ([`BindingPlan::rebind_draw_slots_with`]), which looks at the state and the commands alone;
+/// made again in place for other slots or another plan
+/// ([`BindingPlan::slot_rebinds_into`]), it keeps its lists' room, so a rebinds made again of no
+/// more slots and fields allocates nothing. Its default is made of nothing. Opaque.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SlotRebinds {
     /// The slots they were made for.
     slots: Vec<SlotRef>,
     /// Each changed buffer slot, in the template's order of buffer slots.
     buffers: Vec<SlotRebind>,
+    /// The push fields of the entries of `buffers`, each entry's at its ranges.
+    words: Vec<FieldAt>,
     /// The push fields of changed slots no entry of `buffers` holds, in placement order.
     loose: Vec<(FieldAt, LooseWord)>,
     /// Each changed fixed-function vertex buffer's place among the template's.
     vertex: Vec<usize>,
 }
 
-/// [`BindingPlan::slot_rebinds`] of a render plan's template `t`.
-fn rebinds_of(t: &GraphicsTemplate, slots: &[SlotRef]) -> Option<SlotRebinds> {
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The rebinds [`BindingPlan::rebind_draw_slots_with`] makes again to check those it is given
+    /// (builds with debug assertions), kept with their lists' room.
+    static REBINDS_MADE_AGAIN: std::cell::RefCell<SlotRebinds> =
+        std::cell::RefCell::new(SlotRebinds::default());
+}
+
+impl SlotRebinds {
+    /// The slots they were made for.
+    pub fn slots(&self) -> &[SlotRef] {
+        &self.slots
+    }
+}
+
+/// Each push field of the template `t` that reads a slot `changed` answers for, with that slot,
+/// its word and where it lies, in placement order; an item `None` where such a field cannot be
+/// rewritten alone (a changed texture's in-place planes, a field of a stage with no push range).
+fn changed_fields<'a>(
+    t: &'a GraphicsTemplate,
+    slots: &'a [SlotRef],
+    changed: impl Fn(SlotRef) -> bool + Copy + 'a,
+) -> impl Iterator<Item = Option<(SlotRef, LooseWord, FieldAt)>> + 'a {
+    let pushes = t.stages.iter().scan(0, |pushes, st| {
+        let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
+        let push = (push_size != 0).then(|| {
+            *pushes += 1;
+            *pushes - 1
+        });
+        Some((st, push, push_start))
+    });
+    pushes.flat_map(move |(st, push, push_start)| {
+        st.fields.iter().filter_map(move |f| {
+            let (slot, word) = match f.field {
+                PushField::SlotBindOffset(slot) if changed(slot) => (slot, LooseWord::Offset),
+                PushField::SlotGuestBase(slot) if changed(slot) => (slot, LooseWord::Base(slot)),
+                PushField::VertexBufferStride(layout) => {
+                    let slot = SlotRef {
+                        stage: Stage::Vertex,
+                        class: SlotClass::Buffer,
+                        index: layout,
+                    };
+                    if !changed(slot) {
+                        return None;
+                    }
+                    (slot, LooseWord::Stride(layout))
+                }
+                // A changed texture's in-place planes.
+                PushField::YCbCrInPlace(slot) if slots.contains(&slot) => return Some(None),
+                _ => return None,
+            };
+            let field = push.map(|push| FieldAt {
+                push,
+                push_start,
+                loc: f.loc,
+            });
+            Some(field.map(|field| (slot, word, field)))
+        })
+    })
+}
+
+/// [`BindingPlan::slot_rebinds_into`] of a render plan's template `t`.
+fn rebinds_into(t: &GraphicsTemplate, slots: &[SlotRef], into: &mut SlotRebinds) -> bool {
+    into.slots.clear();
+    into.slots.extend_from_slice(slots);
+    into.buffers.clear();
+    into.words.clear();
+    into.loose.clear();
+    into.vertex.clear();
     let changed = |slot: SlotRef| slot.class == SlotClass::Buffer && slots.contains(&slot);
     // What the slots decide some other way than below: a stage's argument or root table, a mesh
     // or patch draw's own reads, a de-indexed draw's layout, and a uniform view a written slot
@@ -4908,13 +4995,12 @@ fn rebinds_of(t: &GraphicsTemplate, slots: &[SlotRef]) -> Option<SlotRebinds> {
     let texels = slots
         .iter()
         .any(|slot| slot.class == SlotClass::Texture && texel_range(slot));
-    if other_reads || texels {
-        return None;
+    if other_reads || texels || changed_fields(t, slots, changed).any(|f| f.is_none()) {
+        return false;
     }
     // Each changed slot, with its descriptor-form range's place among the bound ones' (in
     // `bind_buffers`' order). What the plan's shape binds at a slot is what the state binds there
     // (`bound_buffer` holds the state to it): a bound descriptor-form slot takes its place.
-    let mut buffers = Vec::new();
     let mut at = 0;
     for (index, pb) in t.buffers.iter().enumerate() {
         let descriptor = match (pb.form, pb.binding) {
@@ -4928,81 +5014,50 @@ fn rebinds_of(t: &GraphicsTemplate, slots: &[SlotRef]) -> Option<SlotRebinds> {
                 Some((at - 1, key))
             }
             // A device-address slot's root entry.
-            (true, None) if changed(pb.slot) => return None,
+            (true, None) if changed(pb.slot) => return false,
             _ => None,
         };
         if changed(pb.slot) {
-            buffers.push(SlotRebind {
+            // The push fields that read its residual, then those that read its guest address.
+            let fields = || changed_fields(t, slots, changed).flatten();
+            let from = into.words.len();
+            let offsets = fields()
+                .filter(|(slot, word, _)| *slot == pb.slot && matches!(word, LooseWord::Offset));
+            into.words.extend(offsets.map(|(_, _, field)| field));
+            let middle = into.words.len();
+            let bases = fields()
+                .filter(|(slot, word, _)| *slot == pb.slot && matches!(word, LooseWord::Base(_)));
+            into.words.extend(bases.map(|(_, _, field)| field));
+            into.buffers.push(SlotRebind {
                 buffer: index,
                 place,
-                offsets: Vec::new(),
-                bases: Vec::new(),
+                offsets: (from, middle),
+                bases: (middle, into.words.len()),
             });
         }
     }
-    // The push fields that read them, in each stage's push write.
-    let mut loose = Vec::new();
-    let mut pushes = 0;
-    for st in &t.stages {
-        let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
-        let push = match push_size {
-            0 => None,
-            _ => {
-                pushes += 1;
-                Some(pushes - 1)
-            }
-        };
-        for f in &st.fields {
-            let word = match f.field {
-                PushField::SlotBindOffset(slot) if changed(slot) => (slot, LooseWord::Offset),
-                PushField::SlotGuestBase(slot) if changed(slot) => (slot, LooseWord::Base(slot)),
-                PushField::VertexBufferStride(layout) => {
-                    let slot = SlotRef {
-                        stage: Stage::Vertex,
-                        class: SlotClass::Buffer,
-                        index: layout,
-                    };
-                    if !changed(slot) {
-                        continue;
-                    }
-                    (slot, LooseWord::Stride(layout))
-                }
-                // A changed texture's in-place planes.
-                PushField::YCbCrInPlace(slot) if slots.contains(&slot) => return None,
-                _ => continue,
-            };
-            let field = FieldAt {
-                push: push?,
-                push_start,
-                loc: f.loc,
-            };
-            let entry = (buffers.iter_mut()).find(|e| t.buffers[e.buffer].slot == word.0);
-            match (word.1, entry) {
-                (LooseWord::Offset, Some(entry)) => entry.offsets.push(field),
-                (LooseWord::Base(_), Some(entry)) => entry.bases.push(field),
-                (loose_word, _) => loose.push((field, loose_word)),
-            }
-        }
-    }
+    // The push fields of changed slots no changed buffer slot of the template holds, or not as
+    // its residual or guest address, in placement order.
+    let buffers = &into.buffers;
+    let held = |slot: SlotRef| (buffers.iter()).any(|e| t.buffers[e.buffer].slot == slot);
+    let loose = changed_fields(t, slots, changed)
+        .flatten()
+        .filter(|(slot, word, _)| matches!(word, LooseWord::Stride(_)) || !held(*slot));
+    into.loose
+        .extend(loose.map(|(_, word, field)| (field, word)));
     // Each changed fixed-function vertex buffer, at its binding's place (bound in
     // `t.vertex_buffers`' order); a per-bind stride's binding, whose extent and stride may move
     // with it, is written whole.
-    let mut vertex = Vec::new();
     for (place, vb) in t.vertex_buffers.iter().enumerate() {
         if !changed(vb.slot) {
             continue;
         }
         if matches!(vb.stride, VertexStride::PerBind) {
-            return None;
+            return false;
         }
-        vertex.push(place);
+        into.vertex.push(place);
     }
-    Some(SlotRebinds {
-        slots: slots.to_vec(),
-        buffers,
-        loose,
-        vertex,
-    })
+    true
 }
 
 /// Write `word` at `field` of the commands' push writes: whether they hold its write.
@@ -5074,12 +5129,13 @@ fn rebind_with(
             written.range = range;
             residual = slot_residual;
         }
-        for &field in &entry.offsets {
+        let (offsets, bases) = (entry.offsets, entry.bases);
+        for &field in &rebinds.words[offsets.0..offsets.1] {
             if !put_word(out, field, residual.to_le_bytes())? {
                 return Ok(false);
             }
         }
-        for &field in &entry.bases {
+        for &field in &rebinds.words[bases.0..bases.1] {
             if !put_word(out, field, base.to_le_bytes())? {
                 return Ok(false);
             }

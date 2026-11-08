@@ -8651,6 +8651,7 @@ method	metal2vulkan::bind::BindingPlan::rebind_draw_slots_with	pub fn rebind_dra
 method	metal2vulkan::bind::BindingPlan::relisted_sampler_tables	pub fn relisted_sampler_tables(&self, device: &crate::device::Device, samplers: &[crate::bind::ArgumentSampler], placement: HeapPlacement) -> Result<Option<Vec<crate::bind::instantiate::DescriptorBytes>>, BindError>
 method	metal2vulkan::bind::BindingPlan::sampler_tables	pub fn sampler_tables(&self) -> Vec<(u32, u32)>
 method	metal2vulkan::bind::BindingPlan::slot_rebinds	pub fn slot_rebinds(&self, slots: &[SlotRef]) -> Option<SlotRebinds>
+method	metal2vulkan::bind::BindingPlan::slot_rebinds_into	pub fn slot_rebinds_into(&self, slots: &[SlotRef], into: &mut SlotRebinds) -> bool
 method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_value(&self, key: SpecKey) -> Option<u64>
 method	metal2vulkan::bind::BlockDecodeModule::shape	pub fn shape([width, height, depth]: [u32; 3]) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::BoundAccelerationStructure::new	pub fn new(instance_count: u32) -> BoundAccelerationStructure
@@ -8922,6 +8923,7 @@ method	metal2vulkan::bind::ShadowMergeModule::groups	pub fn groups(count: u32) -
 method	metal2vulkan::bind::ShadowMergeModule::shape	pub fn shape(width: u32, count: u32, row_words: u32, first_word: u32) -> [u8; 16]
 method	metal2vulkan::bind::ShadowMergeRead::words	pub fn words(self) -> u32
 method	metal2vulkan::bind::ShadowTexelView::words	pub fn words(self) -> u32
+method	metal2vulkan::bind::SlotRebinds::slots	pub fn slots(&self) -> &[SlotRef]
 method	metal2vulkan::bind::SparseTileMap::byte_len	pub fn byte_len(&self) -> u64
 method	metal2vulkan::bind::SparseTileMap::is_mapped	pub fn is_mapped(&self, level: u32, slice: u32, texel: [u32; 3]) -> bool
 method	metal2vulkan::bind::SparseTileMap::new	pub fn new(texture_type: TextureType, extent: [u32; 3], levels: u32, slices: u32, tile: [u32; 3], first_level_in_tail: u32) -> Result<SparseTileMap, TileMapError>
@@ -9890,7 +9892,7 @@ struct	metal2vulkan::bind::ShadowCopyBackModule	#[derive(Clone, Debug, PartialEq
 struct	metal2vulkan::bind::ShadowCopyInModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShadowCopyInModule
 struct	metal2vulkan::bind::ShadowMergeImageModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShadowMergeImageModule
 struct	metal2vulkan::bind::ShadowMergeModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ShadowMergeModule
-struct	metal2vulkan::bind::SlotRebinds	#[derive(Clone, Debug, PartialEq, Eq)] pub struct SlotRebinds
+struct	metal2vulkan::bind::SlotRebinds	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct SlotRebinds
 struct	metal2vulkan::bind::SparseTileMap	#[derive(Clone, Debug, PartialEq, Eq)] pub struct SparseTileMap
 struct	metal2vulkan::bind::StageInRegion	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageInRegion
 struct	metal2vulkan::bind::StageShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageShape

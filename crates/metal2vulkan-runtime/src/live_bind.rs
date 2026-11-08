@@ -324,12 +324,14 @@ struct SetAside {
 /// What a recorded draw settled of its state's shape (`GraphicsState::settle_shape`): the variant
 /// and plan, the program it ran (named without being held) and the buffer forms it took; the shape
 /// is the state's kept one, compared by identity. With them, the plan's slot rebinds
-/// (`BindingPlan::slot_rebinds`) of the slots the last draw rebound changed, with those slots.
+/// (`BindingPlan::slot_rebinds`) of the slots the last draw rebound changed, and whether the plan
+/// rebinds those slots so; `None` before one was made for this settle.
 pub(super) struct SettledHere {
     program: ProgramName,
     forms: BufferForms,
     settled: Settled,
-    rebinds: Option<(Vec<SlotRef>, Option<SlotRebinds>)>,
+    rebinds: SlotRebinds,
+    made: Option<bool>,
 }
 
 impl SettledHere {
@@ -344,22 +346,34 @@ impl SettledHere {
             program: pipeline.program_name(),
             forms,
             settled,
-            rebinds: None,
+            rebinds: SlotRebinds::default(),
+            made: None,
         }
     }
 
+    /// Take the place of `replaced`, the state's settle before: the slot rebinds are made in its,
+    /// whose lists keep their room (`BindingPlan::slot_rebinds_into`), so the state's draws
+    /// rebound after a new settle allocate none for them where those lists had room. None is made
+    /// for this settle yet.
+    pub(super) fn took_place_of(&mut self, replaced: SettledHere) {
+        self.rebinds = replaced.rebinds;
+        self.made = None;
+    }
+
     /// What the draw settled, and its plan's slot rebinds of `slots` (`None` where the plan reads
-    /// one of them some other way): made at the first draw rebound that changed those slots, and
-    /// kept for each next one that changes the same slots, as the plan is the same.
+    /// one of them some other way): made at the first draw rebound that changed those slots, in
+    /// place of those made before for other slots, and kept for each next one that changes the
+    /// same slots, as the plan is the same.
     pub(super) fn rebinds(&mut self, slots: &[SlotRef]) -> (&Settled, Option<&SlotRebinds>) {
-        let made = match &mut self.rebinds {
-            Some((made_for, made)) if made_for[..] == *slots => made,
-            rebinds => {
-                let made = self.settled.plan.slot_rebinds(slots);
-                &mut rebinds.insert((slots.to_vec(), made)).1
+        let made = match self.made {
+            Some(made) if self.rebinds.slots() == slots => made,
+            _ => {
+                let made = (self.settled.plan).slot_rebinds_into(slots, &mut self.rebinds);
+                self.made = Some(made);
+                made
             }
         };
-        (&self.settled, made.as_ref())
+        (&self.settled, made.then_some(&self.rebinds))
     }
 }
 

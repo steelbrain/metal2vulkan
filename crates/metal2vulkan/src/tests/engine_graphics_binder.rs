@@ -1040,6 +1040,14 @@ fn a_rebind_of_buffer_slots_writes_what_an_instantiation_writes() {
                 plan.slot_rebinds(&[scale]),
                 plan.slot_rebinds(&[vertex, scale]),
             );
+            // Made again in place, over rebinds of other slots, they are the same, and name their
+            // slots.
+            let mut again = SlotRebinds::default();
+            for (slots, made) in [(&[vertex, scale][..], &both), (&[scale][..], &scale_alone)] {
+                let rebinds = plan.slot_rebinds_into(slots, &mut again);
+                assert_eq!(rebinds.then_some(&again), made.as_ref());
+                assert_eq!(again.slots(), slots);
+            }
             // The scale slot alone named, the vertex slot before it bound as before: its place
             // among the bound ones taken from the plan.
             for &s in &scales {
