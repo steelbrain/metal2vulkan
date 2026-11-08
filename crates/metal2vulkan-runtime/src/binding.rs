@@ -3147,6 +3147,27 @@ impl CommandUses {
     pub(super) fn resident(&self) -> &BTreeSet<ResourceKey> {
         &self.resident
     }
+
+    /// Of its uses that [`patch_buffer_uses`] patched for the buffer slots `changed` (those of
+    /// its list of uses of buffer slots, `CommandUses::slots`), the positions into `at` and the
+    /// uses into `uses`, both emptied first, in the list's order: every use a call that changed
+    /// those slots changed. Call it after a patch that patched them.
+    pub(super) fn slot_uses_into(
+        &self,
+        changed: &[SlotRef],
+        (at, uses): (&mut Vec<usize>, &mut Vec<Use<ResourceKey>>),
+    ) {
+        debug_assert!(self.slots_listed, "a command's patched uses read unlisted");
+        at.clear();
+        uses.clear();
+        for &(slot, place) in &self.slots {
+            if changed.contains(&slot) {
+                let place = place as usize;
+                at.push(place);
+                uses.push(self.uses[place].clone());
+            }
+        }
+    }
 }
 
 impl Deref for CommandUses {

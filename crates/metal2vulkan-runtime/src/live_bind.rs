@@ -377,6 +377,12 @@ impl ReadFrom {
         self.moved == moved && self.through(interface) && self.maps == *maps
     }
 
+    /// Whether the tables were read through `interface` at `moved` moves, with the maps they were
+    /// read with: [`reads`](Self::reads) of its own maps, which it compares with none.
+    pub(super) fn reads_through(&self, interface: &PipelineInterface, moved: u64) -> bool {
+        self.moved == moved && self.through(interface)
+    }
+
     /// The maps the tables were read with.
     pub(super) fn maps(&self) -> &SamplerMaps {
         &self.maps
@@ -433,6 +439,26 @@ impl ReadFrom {
         }
         if self.maps != *maps {
             self.maps = maps.clone();
+        }
+        self.tables = stamps.map(Some);
+        self.moved = moved;
+    }
+
+    /// [`read`](Self::read) with the maps the tables were read with, which it neither compares
+    /// nor copies: the tables of `stamps` read now through `interface` (of the drawing state
+    /// `state` gives) at `moved` moves.
+    pub(super) fn read_again(
+        &mut self,
+        stamps: [Stamp; 4],
+        (interface, state): (
+            &PipelineInterface,
+            impl FnOnce() -> Arc<dyn Any + Send + Sync>,
+        ),
+        moved: u64,
+    ) {
+        if !self.through(interface) {
+            let at = std::ptr::from_ref(interface).addr();
+            self.interface = Some((at, Arc::downgrade(&state())));
         }
         self.tables = stamps.map(Some);
         self.moved = moved;

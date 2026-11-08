@@ -181,6 +181,76 @@ impl NotedApart {
         holds
     }
 
+    /// Whether a command with `uses`, of which it reaches the keys `resident` through the
+    /// resident set alone, noted into `into`, may be noted as the last one moved
+    /// ([`note_moved`](Self::note_moved)): the last one was noted into `into`, with no uses of
+    /// what its encoder made resident, as many uses and the same keys reached so. Its caller
+    /// knows the positions where its uses may differ from the last one's, each of the same key
+    /// and access types (a draw whose calls moved buffer offsets alone:
+    /// `render/draw_again/rebound.rs`).
+    pub(super) fn moves(
+        &self,
+        (uses, resident): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>),
+        into: NotedInto,
+    ) -> bool {
+        self.core == Some(into.core)
+            && self.into() == into
+            && self.prefix.is_none()
+            && self.uses.len() == uses.len()
+            && self.resident.iter().eq(resident)
+    }
+
+    /// Note the command [`moves`](Self::moves) answers for, whose `uses` (reaching the keys
+    /// `resident` through the resident set alone) differ from the last one's at the positions
+    /// `at` alone: `record` records those of them that differ, which the encoder's current part
+    /// may lack (the module docs), and they are kept in place. What `record` answers; `None`
+    /// where none differs, the command noted already. Its stages are the last one's, its uses'
+    /// access types being theirs.
+    pub(super) fn note_moved<T>(
+        &mut self,
+        (uses, resident): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>),
+        at: &[usize],
+        record: impl FnOnce(vk::PipelineStageFlags2, &[Use<ResourceKey>]) -> T,
+    ) -> Option<T> {
+        self.fresh.clear();
+        self.fresh_at.clear();
+        for &at in at {
+            if self.uses[at] != uses[at] {
+                self.fresh.push(uses[at].clone());
+                self.fresh_at.push(at);
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            let moved = |place: &usize| at.contains(place);
+            let kept = self.uses.iter().enumerate().zip(uses);
+            assert!(
+                kept.filter(|((place, _), _)| !moved(place))
+                    .all(|((_, kept), used)| kept == used),
+                "a command noted moved differs from the last one where it did not move"
+            );
+            let stages = (uses.iter()).fold(vk::PipelineStageFlags2::empty(), |all, used| {
+                all | used.read.stages | used.write.stages
+            });
+            assert!(
+                stages == self.stages,
+                "a command noted moved runs in other stages than the last one"
+            );
+        }
+        if self.fresh.is_empty() {
+            return None;
+        }
+        let answer = record(self.stages, &self.fresh);
+        for (&at, used) in self.fresh_at.iter().zip(&self.fresh) {
+            self.uses[at].clone_from(used);
+        }
+        #[cfg(debug_assertions)]
+        self.note_whole((uses, resident));
+        #[cfg(not(debug_assertions))]
+        let _ = resident;
+        Some(answer)
+    }
+
     /// Whether the last command was noted into `into`: then a command noted with its stages and
     /// uses, reaching the same keys through the resident set alone, is noted already
     /// ([`holds`](Self::holds)).

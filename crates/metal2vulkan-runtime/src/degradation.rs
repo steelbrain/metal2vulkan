@@ -3138,6 +3138,36 @@ impl Device {
         Ok(())
     }
 
+    /// [`degrade_attachment_reads`](Self::degrade_attachment_reads) of a draw whose `uses` differ
+    /// from those of the last draw of its encoder, drawn against the same attachments, only in
+    /// `moved` (a draw moved: `render/draw_again/rebound.rs`): of those alone, as each other use
+    /// is that draw's, which the check found sharing none while it ran (checked in builds with
+    /// debug assertions).
+    pub(super) fn degrade_moved_attachment_reads(
+        &self,
+        call: &'static str,
+        mut shares: impl FnMut(&[Use<ResourceKey>]) -> Result<bool, Error>,
+        (moved, uses): (&[Use<ResourceKey>], &[Use<ResourceKey>]),
+    ) -> Result<(), Error> {
+        let kind = Degradation::AttachmentReadInPlace;
+        if !self.shared().announced.pending(kind) {
+            return Ok(());
+        }
+        let shared = shares(moved)?;
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            shared,
+            shares(uses)?,
+            "a draw moved's uses but the moved ones share memory with an attachment"
+        );
+        #[cfg(not(debug_assertions))]
+        let _ = uses;
+        if shared {
+            self.degrade(kind, || attachment_read_notice(call));
+        }
+        Ok(())
+    }
+
     /// [`degrade_attachment_reads`](Self::degrade_attachment_reads) of a draw whose `uses` begin
     /// with those of what its encoder made resident of the identity `prefix`: of those, the uses
     /// past them alone where they were found to share none with a layout of `version`

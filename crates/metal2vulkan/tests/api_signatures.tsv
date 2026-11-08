@@ -2651,6 +2651,7 @@ field	metal2vulkan-runtime::WorkCounts.draw_states_recorded	pub draw_states_reco
 field	metal2vulkan-runtime::WorkCounts.draws_as_before	pub draws_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_still_making	pub draws_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
+field	metal2vulkan-runtime::WorkCounts.draws_moved	pub draws_moved: u64
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebound	pub draws_rebound: u64
 field	metal2vulkan-runtime::WorkCounts.draws_settled	pub draws_settled: u64

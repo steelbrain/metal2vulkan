@@ -276,24 +276,52 @@ impl InstanceShadows {
                 Some(kept) => kept.clone_from(used),
                 None => self.last.push(used.clone()),
             }
-            for (write, access) in [(false, used.read), (true, used.write)] {
-                if access.is_empty() {
-                    continue;
+            self.gather(used);
+        }
+    }
+
+    /// [`add`](Self::add) a recorded draw's `uses`, which use no shadowed texture, where they
+    /// differ from the last draw's only at the positions `at` (a draw whose calls moved buffer
+    /// offsets alone: `render/draw_again/rebound.rs`): those positions alone are looked at, as
+    /// `add` skips every use equal to the last draw's at its place. Whether it took them so: the
+    /// last draw's uses were as many; else it changed nothing, and the caller adds them whole.
+    pub(super) fn add_moved(&mut self, uses: &[Use<ResourceKey>], at: &[usize]) -> bool {
+        if self.last.len() != uses.len() {
+            return false;
+        }
+        for &at in at {
+            let used = &uses[at];
+            if self.last[at] != *used {
+                self.last[at].clone_from(used);
+                self.gather(used);
+            }
+        }
+        debug_assert!(
+            *self.last == *uses,
+            "an instance gathered a draw moved whose other uses differ from the last draw's"
+        );
+        true
+    }
+
+    /// Gather `used`'s reads and writes ([`add`](Self::add)).
+    fn gather(&mut self, used: &Use<ResourceKey>) {
+        for (write, access) in [(false, used.read), (true, used.write)] {
+            if access.is_empty() {
+                continue;
+            }
+            match &used.range {
+                UseRange::Bytes(range) => {
+                    let ranges = ranges_mut(&mut self.bytes, &mut self.held, (used.key, write));
+                    insert(ranges, range.clone());
                 }
-                match &used.range {
-                    UseRange::Bytes(range) => {
-                        let ranges = ranges_mut(&mut self.bytes, &mut self.held, (used.key, write));
-                        insert(ranges, range.clone());
-                    }
-                    image => {
-                        let key = (used.key, write);
-                        match self.images.binary_search_by_key(&key, |&(at, _)| at) {
-                            Ok(at) => {
-                                let held = &mut self.images[at].1;
-                                *held = span(held, image);
-                            }
-                            Err(at) => self.images.insert(at, (key, image.clone())),
+                image => {
+                    let key = (used.key, write);
+                    match self.images.binary_search_by_key(&key, |&(at, _)| at) {
+                        Ok(at) => {
+                            let held = &mut self.images[at].1;
+                            *held = span(held, image);
                         }
+                        Err(at) => self.images.insert(at, (key, image.clone())),
                     }
                 }
             }

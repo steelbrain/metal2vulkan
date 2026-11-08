@@ -1654,6 +1654,53 @@ impl EncoderCore {
         Ok(())
     }
 
+    /// [`note_reaching`](Self::note_reaching) a draw with `uses`, of which it reaches the keys
+    /// `resident` through the resident set alone, whose uses differ from those of the last
+    /// command `noted` keeps only at the positions `at`, each of the same key and access types
+    /// there (a draw whose calls moved buffer offsets alone: `render/draw_again/rebound.rs`):
+    /// where the last command was noted into the encoder's state now, with as many uses
+    /// (`NotedApart::moves`), only those of the uses at `at` that differ are compared and
+    /// recorded, with the host aliases' uses beside them, as `note_reaching` records the uses that
+    /// differ; and none is touched, each key being the one the last command touched at its
+    /// position. Whether it noted the draw; else it noted nothing, and the caller notes it as
+    /// `note_reaching` does.
+    pub(super) fn note_moved(
+        &mut self,
+        (uses, resident, at): (&[Use<ResourceKey>], &BTreeSet<ResourceKey>, &[usize]),
+        noted: &mut NotedApart,
+    ) -> Result<bool, Error> {
+        if self.uses.ordered() {
+            return Err(super::error::internal(
+                "a command recorded apart in an ordered encoder",
+            ));
+        }
+        // Read before the host aliases' uses are worked out, so a change made since counts.
+        let into = self.noted_into();
+        if !noted.moves((uses, resident), into) {
+            return Ok(false);
+        }
+        self.observe_fresh(uses, &[]);
+        self.hold_resident();
+        let record = |stages, fresh: &[Use<ResourceKey>]| self.record_aliased(stages, fresh);
+        if noted.note_moved((uses, resident), at, record).is_none() {
+            self.counts().command_noted_as_before();
+        }
+        // Touched already: each key at its position, named as touching it names it.
+        #[cfg(debug_assertions)]
+        {
+            let rebinds = self.device().shared().rebinds.any();
+            for (place, used) in uses.iter().enumerate() {
+                let named = rebinds && !resident.contains(&used.key);
+                assert!(
+                    self.touched.get(place) == Some(&(used.key, named)),
+                    "a draw noted moved touches a key its last command did not touch there"
+                );
+            }
+            assert_eq!(self.touched.len(), uses.len());
+        }
+        Ok(true)
+    }
+
     /// The encoder's state a command noted apart now is noted into (`NotedInto`).
     pub(super) fn noted_into(&self) -> NotedInto {
         let shared = self.device().shared();

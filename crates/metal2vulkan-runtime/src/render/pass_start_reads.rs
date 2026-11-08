@@ -562,12 +562,20 @@ impl PassStartReads {
     /// pass's earlier instances (`compute_after`), as the draw's dispatches before its own
     /// instance do (`render.rs`).
     pub(super) fn announce(&self, device: &Device, uses: &[Use<ResourceKey>], compute_after: bool) {
-        let in_place = uses.iter().find_map(|used| self.in_place(used));
+        let in_place = match self.fragment.is_empty() {
+            true => None,
+            false => uses.iter().find_map(|used| self.in_place(used)),
+        };
         if let Some(range) = in_place {
             device.degrade(Degradation::InPlaceVertexReads, || in_place_notice(range));
         }
-        let stages = (Self::readers(compute_after), Self::writers(compute_after));
-        let ordered = uses.iter().find_map(|used| self.ordered(used, stages));
+        let ordered = match self.orders_nothing() {
+            true => None,
+            false => {
+                let stages = (Self::readers(compute_after), Self::writers(compute_after));
+                uses.iter().find_map(|used| self.ordered(used, stages))
+            }
+        };
         if let Some(ordered) = ordered {
             device.degrade(Degradation::FragmentsBeforeGeometry, || {
                 ordered_notice(ordered)
@@ -676,14 +684,28 @@ impl PassStartReads {
 
     /// The first of `uses` each kind [`announce`](Self::announce) announces meets ([`Found`]).
     fn found(&self, uses: &[Use<ResourceKey>], compute_after: bool) -> Found {
-        let in_place = (uses.iter().enumerate())
-            .find_map(|(at, used)| self.in_place(used).map(|range| (at, range.clone())));
+        let in_place = match self.fragment.is_empty() {
+            true => None,
+            false => (uses.iter().enumerate())
+                .find_map(|(at, used)| self.in_place(used).map(|range| (at, range.clone()))),
+        };
+        if self.orders_nothing() {
+            return (in_place, None);
+        }
         let stages = (Self::readers(compute_after), Self::writers(compute_after));
         let ordered = uses.iter().enumerate().find_map(|(at, used)| {
             let (range, access, fragments) = self.ordered(used, stages)?;
             Some((at, range.clone(), access, fragments))
         });
         (in_place, ordered)
+    }
+
+    /// Whether no fragment stage of the pass read or wrote bytes so far: then no access of a
+    /// draw's stages before its fragments is one the device may order apart from Metal
+    /// ([`ordered`](Self::ordered) meets nothing). [`in_place`](Self::in_place) meets nothing
+    /// once no fragment stage wrote.
+    fn orders_nothing(&self) -> bool {
+        self.fragment.is_empty() && self.fragment_reads.is_empty()
     }
 
     /// The stages whose reads of bytes a fragment stage of the pass wrote count: a native object

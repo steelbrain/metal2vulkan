@@ -23,8 +23,9 @@ const DRAWS: u64 = 4000;
 
 /// The command counts the encoders' draws add, by name: those that follow from an encoder's own
 /// calls alone, so that each encoder of the same calls adds the same.
-const COUNTS: [(&str, fn(&WorkCounts) -> u64); 10] = [
+const COUNTS: [(&str, fn(&WorkCounts) -> u64); 11] = [
     ("draws_rebound", |counts| counts.draws_rebound),
+    ("draws_moved", |counts| counts.draws_moved),
     ("draws_as_before", |counts| counts.draws_as_before),
     ("stage_tables_read", |counts| counts.stage_tables_read),
     ("stage_tables_read_in_part", |counts| {

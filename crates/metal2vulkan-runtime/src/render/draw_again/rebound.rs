@@ -31,8 +31,12 @@
 //!   attachments' reads' refusal is answered here, the last of its checks, which may have
 //!   announced.
 //! - **What it records and notes.** Its uses noted as any draw notes them (`note_reaching`, the
-//!   unordered writes, the pass's reads, the instance's gathered uses, indirect reads and geometry
-//!   writes); the state commands that changed and its draw, recorded through the kept draw's
+//!   pass's reads, the instance's gathered uses), of the kept draw's access types: none writes or
+//!   reads indirect arguments (`draw_again::unwritten`), so the unordered writes, indirect reads and
+//!   geometry writes take none of them, and in a pass whose fragments wrote nothing the pass's
+//!   reads announce nothing of them; only uses that begin with those of what the encoder made
+//!   resident are walked there, as those trackers take them by their identity. The state commands
+//!   that changed and its draw, recorded through the kept draw's
 //!   recording against what its command buffer holds (`render/bound.rs`), which compares none of
 //!   the dynamic states a value there holds where nothing recorded through the record since the
 //!   kept draw, or the draw rebound before, set them (`Kept::settled`): it holds them, of the
@@ -40,13 +44,29 @@
 //!   and its new samplers retained; and the rest as a draw again: kept for recording again (but
 //!   where it met a notice met at each occurrence, as its every step forgets it then), its
 //!   execution record, its counts into its encoder's tally of the device's (`shards.rs`).
+//! - **A draw moved.** Where every call since the kept draw moved a buffer slot's offset (or
+//!   attribute stride) alone, the slot binding the buffer it bound (`argument_table::Changed`), the
+//!   draw is moved (`WorkCounts::draws_moved`): its tables bind the kept draw's objects, so it
+//!   looks at no stage's function tables, shadowed texture or detached buffer again; and where its
+//!   commands' descriptor ranges are the kept draw's, it keeps the kept draw's set-0 writes and
+//!   dynamic offsets (`binding::rebind_into` writes a buffer's descriptor of its buffer and range
+//!   alone). One whose uses were patched in place, none of them of what the encoder made resident,
+//!   is narrowed: its uses differ from the kept draw's only at the moved slots' uses
+//!   (`CommandUses::slot_uses_into`), which alone it checks against the attachments and the
+//!   geometry writes, adds to the pass's reads and gathers (`InstanceShadows::add_moved`), and
+//!   compares and records where the last command noted is the kept draw (`EncoderCore::note_moved`).
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
-//!   buffers and uses.
+//!   buffers and uses. What a draw moved skips is asserted where it skips it: its function tables
+//!   pass, it meets no shadow and no detached buffer, it pushes the kept draw's set-0 writes, its
+//!   uses are unwritten in a pass whose fragments wrote nothing, and of a draw narrowed, its other
+//!   uses share no attachment memory, meet no geometry write the moved ones do not, add nothing to
+//!   the pass's reads, are noted and touched as the last command's, and are the instance's last
+//!   gathered uses.
 
 use ash::vk;
-use metal2vulkan::bind::DrawCall;
+use metal2vulkan::bind::{DescriptorRange, DrawCall};
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
 use std::sync::Arc;
 
@@ -58,7 +78,9 @@ use crate::error::Error;
 use crate::live_bind::{LiveBind, Reshape};
 use crate::pipeline::{RenderStateKind, Settled};
 use crate::render::{Assembly, Bound, DrawBuffers, DrawState, Recording};
+use crate::resource::ResourceKey;
 use crate::texture::Texture;
+use crate::tracker::Use;
 
 /// The most slots a draw rebound takes changed: a draw after more takes every step.
 const SLOTS: usize = 8;
@@ -78,6 +100,11 @@ pub(crate) struct KeptStorage {
     unheld: Vec<vk::DynamicState>,
     /// The rest of its recording.
     recording: Option<KeptRecording>,
+    /// A draw moved's storage, kept likewise: its commands' descriptor ranges before it worked
+    /// them out, and the positions and uses of the moved slots' uses (the module docs).
+    ranges: Vec<DescriptorRange>,
+    moved_at: Vec<usize>,
+    moved: Vec<Use<ResourceKey>>,
 }
 
 /// A kept draw's recording but for what a draw rebound works out again (its set, dynamic
@@ -130,8 +157,9 @@ fn settles_kept(encoder: &RenderLowering, live: &LiveBind) -> bool {
 }
 
 /// The buffer, texture and sampler slots calls changed since the kept draw read its tables: at
-/// most [`SLOTS`]; and of the vertex stage's buffer slots below 64, those every one of those
-/// calls changed by the offset alone, a bit each.
+/// most [`SLOTS`]; of the vertex stage's buffer slots below 64, those every one of those calls
+/// changed by the offset alone, a bit each; and whether every one of those calls moved a buffer
+/// slot's offset alone.
 struct Changed {
     slots: [SlotRef; SLOTS],
     count: usize,
@@ -139,6 +167,9 @@ struct Changed {
     /// otherwise.
     offsets: u64,
     whole: u64,
+    /// Whether every call moved the offset of a buffer slot alone, keeping the buffer bound there
+    /// (`argument_table::Changed::offset`): the draw is moved (the module docs).
+    moved: bool,
 }
 
 impl Changed {
@@ -154,11 +185,13 @@ impl Changed {
             count: 0,
             offsets: 0,
             whole: 0,
+            moved: true,
         }
     }
 
     /// Note a call's change of `slot`, by its offset alone where `offset` (a buffer slot's).
     fn note(&mut self, slot: SlotRef, offset: bool) {
+        self.moved &= offset && slot.class == SlotClass::Buffer;
         if slot.stage != Stage::Vertex || slot.class != SlotClass::Buffer {
             return;
         }
@@ -201,6 +234,18 @@ impl Changed {
     }
 }
 
+/// What a draw rebound worked out of its rebinding (`RenderLowering::rebind`): whether it is moved
+/// ([`Changed::moved`]), whether its set-0 writes and dynamic offsets are then the kept draw's
+/// (its descriptor ranges are), and whether its uses differ from the kept draw's only at the
+/// moved slots' uses, listed in its bind state's kept storage (`KeptStorage::moved`): the draw is
+/// narrowed (the module docs).
+#[derive(Clone, Copy)]
+struct Rebinding {
+    moved: bool,
+    writes_kept: bool,
+    narrowed: bool,
+}
+
 impl RenderLowering {
     /// The kept draw again after calls that bound other buffers, offsets, textures or samplers in
     /// its tables, whose stamps are now `stamps` (the module docs): recorded, refused, or
@@ -221,9 +266,9 @@ impl RenderLowering {
         let Some(changed) = self.bring_in(live, stamps) else {
             return Again::No;
         };
-        if !self.rebind(call, live, &changed, (draw, buffers)) {
+        let Some(rebinding) = self.rebind(call, live, &changed, (draw, buffers)) else {
             return Again::No;
-        }
+        };
         #[cfg(debug_assertions)]
         {
             let hits = self.again.hits;
@@ -242,9 +287,15 @@ impl RenderLowering {
         let version = self.layout.version();
         let (memo, layout) = (&mut self.attached, &*self.layout);
         let mut shares = |uses: &[_]| memo.shares((layout, version), uses);
-        let attached = match live.uses.prefix() {
-            None => device.degrade_attachment_reads(call, shares, &live.uses),
-            Some(prefix) => {
+        // Of a draw narrowed, the moved slots' uses alone: every other use is the kept draw's,
+        // whose check found them sharing none (it was drawn), against the same attachments.
+        let attached = match (rebinding.narrowed, live.uses.prefix()) {
+            (true, _) => {
+                let moved = (&live.kept.moved[..], &live.uses[..]);
+                device.degrade_moved_attachment_reads(call, shares, moved)
+            }
+            (false, None) => device.degrade_attachment_reads(call, shares, &live.uses),
+            (false, Some(prefix)) => {
                 let shares = (&mut shares, Some(version));
                 device.degrade_resident_attachment_reads(call, shares, (&mut live.uses, prefix))
             }
@@ -253,7 +304,8 @@ impl RenderLowering {
             return Again::Refused(refused);
         }
         let counted = (stamps, changed.images());
-        let recorded = self.record_rebound(live, (call, assembly, draw), buffers, counted);
+        let recorded =
+            self.record_rebound(live, (call, assembly, draw), buffers, (counted, rebinding));
         if let Err(refused) = recorded {
             return Again::Refused(refused);
         }
@@ -276,8 +328,9 @@ impl RenderLowering {
         let interface = &pipeline.base().interface;
         let views = pipeline.at_bind_views();
         let moved = crate::buffer::host_cells_moved();
-        let maps = live.read_from.maps().clone();
-        if !live.read_from.reads(interface, &maps, moved) {
+        // Read with the maps they were read with, which only a changed texture or sampler may
+        // change (below).
+        if !live.read_from.reads_through(interface, moved) {
             return None;
         }
         let tables = [&self.vertex, &self.fragment, &self.object, &self.mesh];
@@ -328,7 +381,7 @@ impl RenderLowering {
             ];
             let layout = &pipeline.base().layout;
             let now = crate::address_map::sampler_maps(layout, &stages, Some(&self.residency));
-            if now.ok()? != maps {
+            if now.ok()? != *live.read_from.maps() {
                 return None;
             }
         }
@@ -341,15 +394,16 @@ impl RenderLowering {
             if stamps[at] == under {
                 continue;
             }
+            let maps = live.read_from.maps();
             let from = (live.state.stages.entry(stage).or_default(), under);
-            if !table.refresh_changed(from, (stage, interface), (&maps, views), &mut reshape) {
+            if !table.refresh_changed(from, (stage, interface), (maps, views), &mut reshape) {
                 live.reshaped(reshape);
                 return None;
             }
             read += 1;
         }
         live.read_from
-            .read(stamps, (interface, || pipeline.held()), &maps, moved);
+            .read_again(stamps, (interface, || pipeline.held()), moved);
         // Read now, whatever the draw does next: a draw that takes every step from here finds
         // them read, as the draw rebound does.
         self.core.counts().tables_read_in_part(read);
@@ -360,46 +414,61 @@ impl RenderLowering {
 
     /// Work out again in `live` what the slots `changed` decide of the kept draw, `draw` of
     /// `buffers`: its commands, set-0 writes and dynamic offsets, push bytes, vertex buffers and
-    /// uses, with the checks a draw's steps take of them (the module docs). Whether it did; else
-    /// the draw takes every step, which writes them all again.
+    /// uses, with the checks a draw's steps take of them (the module docs). What it worked out
+    /// where it did ([`Rebinding`]); else `None`, and the draw takes every step, which writes them
+    /// all again.
     fn rebind(
         &mut self,
         call: &'static str,
         live: &mut LiveBind,
         changed: &Changed,
         (draw, buffers): (&DrawCall, &DrawBuffers<'_>),
-    ) -> bool {
+    ) -> Option<Rebinding> {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_ref())
             .flatten();
-        let Some(Settled {
+        let Settled {
             variant,
             plan,
             facts,
             ..
-        }) = kept.map(|here| here.settled())
-        else {
-            return false;
-        };
+        } = kept?.settled();
         let slots = changed.list();
+        // A draw moved: its commands' descriptor ranges as the kept draw left them, which tell
+        // whether its set-0 writes are the kept draw's (below).
+        let moved = changed.moved;
+        if moved {
+            live.kept.ranges.clear();
+            (live.kept.ranges).extend_from_slice(&live.commands.descriptor_ranges);
+        }
         if plan.rebind_draw_slots_into(&live.state, slots, &mut live.commands) != Ok(true) {
-            return false;
+            return None;
         }
         let compiled = variant.pipeline();
         let interface = &compiled.interface;
+        // A moved offset binds the buffer the kept draw bound there, never a visible-function
+        // table (`argument_table::Changed::offset`): the tables' function tables are those the
+        // kept draw's checks passed.
+        let tables_checked = || {
+            (self.vertex)
+                .check_function_tables(call, Stage::Vertex, interface)
+                .is_ok()
+                && (self.fragment)
+                    .check_function_tables(call, Stage::Fragment, interface)
+                    .is_ok()
+        };
+        debug_assert!(
+            !moved || tables_checked(),
+            "a draw moved binds a function table its kept draw's checks did not pass"
+        );
         let checked = self
             .check_vertex_reach(&compiled.vertex_input.pulled, draw)
             .is_ok()
-            && (self.vertex)
-                .check_function_tables(call, Stage::Vertex, interface)
-                .is_ok()
-            && (self.fragment)
-                .check_function_tables(call, Stage::Fragment, interface)
-                .is_ok();
+            && (moved || tables_checked());
         // The pass's fragment writes, a copy of which a stage before the fragments may read
         // (`render/pass_start_reads.rs`): none, so each stage reads its encoder's table.
         if !checked || self.pass_start.fragments_wrote() {
-            return false;
+            return None;
         }
         // A changed texture: none its plan samples or writes is a color attachment's (a draw
         // that reads one reads its copy, or a snapshot, or records apart), and no extended-range
@@ -410,7 +479,7 @@ impl RenderLowering {
                 || self.storage_colors(facts) != 0
                 || !live.state.extended_shadows.is_empty())
         {
-            return false;
+            return None;
         }
         let stages = [
             (Stage::Vertex, &self.vertex),
@@ -441,20 +510,27 @@ impl RenderLowering {
             mesh: None,
             tessellation: None,
         };
+        // Set 0's writes and dynamic offsets: a draw moved whose descriptor ranges are the kept
+        // draw's binds the same buffers over the same ranges (`binding::rebind_into` writes a
+        // buffer's descriptor of its buffer and range alone), so it keeps them.
+        let writes_kept = moved && commands.descriptor_ranges == live.kept.ranges;
         let objects = variant.objects();
-        let rebound = {
-            let device = self.core.device();
-            let writes = &mut live.kept.writes[..];
-            let set_zero = (writes, objects.dynamic_bindings(), &mut live.offsets[..]);
-            let samplers = (Some(&mut self.bind_memo), &mut live.samplers);
-            binding::rebind_into(
-                call,
-                device,
-                (&**plan, &command, &tables),
-                slots,
-                set_zero,
-                samplers,
-            )
+        let rebound = match writes_kept {
+            true => Ok(true),
+            false => {
+                let device = self.core.device();
+                let writes = &mut live.kept.writes[..];
+                let set_zero = (writes, objects.dynamic_bindings(), &mut live.offsets[..]);
+                let samplers = (Some(&mut self.bind_memo), &mut live.samplers);
+                binding::rebind_into(
+                    call,
+                    device,
+                    (&**plan, &command, &tables),
+                    slots,
+                    set_zero,
+                    samplers,
+                )
+            }
         };
         let index = buffers.index.as_ref().map(DrawSource::metal);
         let uses = (plan, &command, &tables);
@@ -469,7 +545,7 @@ impl RenderLowering {
                 || binding::command_uses_into(call, uses, (index, None), &mut live.uses).is_ok())
             && binding::push_writes_into(&commands.push_constants, &[], &mut live.pushes).is_ok();
         if !rebound {
-            return false;
+            return None;
         }
         let made = live.uses.made() as u64;
         if !patched {
@@ -479,13 +555,21 @@ impl RenderLowering {
             }
             counts.resident_keys_settled(live.uses.settled() as u64);
         }
+        // A draw moved whose uses were patched, none of them of what the encoder made resident
+        // (whose trackers take them by their identity): the moved slots' uses, every use that
+        // differs from the kept draw's, each of the kept use's key and access types.
+        let narrowed = moved && patched && live.uses.prefix().is_none();
+        if narrowed {
+            let moved = (&mut live.kept.moved_at, &mut live.kept.moved);
+            live.uses.slot_uses_into(slots, moved);
+        }
         // Its fixed-function vertex buffers at the changed slots, in the plan's order. A slot
         // whose offset alone moved binds the buffer the kept draw bound there, whose space starts
         // where it did, as no no-copy buffer moved since (`bring_in`): it is not looked at again
         // (`LiveBind::vertex_starts`).
         let kept = (live.vertex_buffers.iter_mut()).zip(&mut live.vertex_starts);
         if plan.vertex_buffers.len() != kept.len() {
-            return false;
+            return None;
         }
         for (bind, (at, kept_start)) in plan.vertex_buffers.iter().zip(kept) {
             let slot = SlotRef {
@@ -506,37 +590,66 @@ impl RenderLowering {
                 (true, Some(_), _) => (at.1, *kept_start),
                 (_, Some((buffer, _)), _) => buffer.space(),
                 (_, None, Some(bytes)) => (bytes.region.raw(), bytes.region.offset()),
-                (_, None, None) => return false,
+                (_, None, None) => return None,
             };
             let (Some(&(_, offset)), (raw, start)) = (offset, space) else {
-                return false;
+                return None;
             };
             at.1 = raw;
             at.2 = start + offset;
             *kept_start = start;
         }
-        // No shadowed texture among its uses, and no barrier its fragments need after an earlier
-        // draw's geometry writes.
-        let textures = (self.vertex.textures.values())
-            .chain(self.fragment.textures.values())
-            .chain(self.object.textures.values())
-            .chain(self.mesh.textures.values())
-            .chain(self.residency.textures());
-        // Nor a detached buffer, a draw of which records nothing (`EncoderCore::skips`).
+        // No shadowed texture among its uses, no barrier its fragments need after an earlier
+        // draw's geometry writes, nor a detached buffer, a draw of which records nothing
+        // (`EncoderCore::skips`). A draw moved binds the kept draw's textures, and its uses name
+        // the kept draw's keys, which met no shadow and no detached buffer, as no no-copy buffer
+        // moved since (`Under`): it looks at neither again. Of a draw narrowed, only the moved
+        // slots' uses meet the geometry writes anew: every other use is the kept draw's, which
+        // met none of them, and no draw added any since.
         let uses = &live.uses;
-        let named = (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
+        let textures = || {
+            (self.vertex.textures.values())
+                .chain(self.fragment.textures.values())
+                .chain(self.object.textures.values())
+                .chain(self.mesh.textures.values())
+                .chain(self.residency.textures())
+        };
+        let named =
+            || (uses.iter().map(|used| used.key)).filter(|key| !uses.resident().contains(key));
+        debug_assert!(
+            !moved
+                || crate::shadow::shadow_uses(textures(), uses).is_empty()
+                    && !self.core.would_skip(named()),
+            "a draw moved met a shadow or a detached buffer its kept draw did not"
+        );
+        if !moved && !crate::shadow::shadow_uses(textures(), uses).is_empty() {
+            return None;
+        }
         let counts = self.core.counts();
-        crate::shadow::shadow_uses(textures, uses).is_empty()
-            && match uses.prefix() {
-                None => self.current.geometry_writes.barrier_before(uses).is_none(),
-                Some(prefix) => {
-                    let (barrier, walked) =
-                        (self.current.geometry_writes).barrier_before_draw((uses, prefix));
-                    counts.resident_uses_geometry_checked(walked as u64);
-                    barrier.is_none()
-                }
+        let unbarriered = match (narrowed, uses.prefix()) {
+            (true, _) => {
+                let writes = &self.current.geometry_writes;
+                let unbarriered = writes.barrier_before(&live.kept.moved).is_none();
+                debug_assert!(
+                    unbarriered == writes.barrier_before(uses).is_none(),
+                    "a draw narrowed's other uses meet a geometry write"
+                );
+                unbarriered
             }
-            && !self.core.would_skip(named)
+            (false, None) => self.current.geometry_writes.barrier_before(uses).is_none(),
+            (false, Some(prefix)) => {
+                let (barrier, walked) =
+                    (self.current.geometry_writes).barrier_before_draw((uses, prefix));
+                counts.resident_uses_geometry_checked(walked as u64);
+                barrier.is_none()
+            }
+        };
+        let rebinding = Rebinding {
+            moved,
+            writes_kept,
+            narrowed,
+        };
+        (unbarriered && (moved || !self.core.would_skip(named()))).then_some(rebinding)
     }
 
     /// Record the draw rebound in `live` (the module docs): its set 0, its uses noted, its state
@@ -546,28 +659,61 @@ impl RenderLowering {
         live: &mut LiveBind,
         (call, assembly, draw): (&'static str, Assembly, &DrawCall),
         buffers: &DrawBuffers<'_>,
-        (stamps, images): ([Stamp; 4], bool),
+        ((stamps, images), rebinding): (([Stamp; 4], bool), Rebinding),
     ) -> Result<(), Error> {
         let kept = settles_kept(self, live)
             .then_some(live.settled.as_ref())
             .flatten();
         let unsettled = || crate::error::internal("a draw rebound unsettled");
         let objects = kept.ok_or_else(unsettled)?.settled().variant.objects();
-        let (set, written) = match objects.pushes_set_zero() {
-            true => {
+        let narrowed = rebinding.narrowed;
+        let (set, written) = match (objects.pushes_set_zero(), rebinding.writes_kept) {
+            // Its set-0 writes the kept draw's (`rebind`): it pushes what the kept draw pushed.
+            (true, true) => {
+                #[cfg(debug_assertions)]
+                {
+                    let pushed = SetWrite::pushed(&live.kept.writes, objects.immutable_pushes());
+                    let same = (pushed.iter().zip(&live.pushed)).all(|(a, b)| a.same(b));
+                    assert!(
+                        same && pushed.len() == live.pushed.len(),
+                        "a draw moved pushes other writes than its kept draw"
+                    );
+                }
+                (None, None)
+            }
+            (true, false) => {
                 let immutable = objects.immutable_pushes();
                 SetWrite::push_into(&live.kept.writes, immutable, &mut live.pushed);
                 (None, None)
             }
-            false => self.core.set_zero_of(objects, &mut live.kept.writes)?,
+            (false, _) => self.core.set_zero_of(objects, &mut live.kept.writes)?,
         };
         let pushed: &[SetWrite] = match objects.pushes_set_zero() {
             true => &live.pushed,
             false => &[],
         };
         let uses = &live.uses;
-        match uses.reaching_prefix() {
-            None => {
+        let prefix = uses.prefix();
+        // Its uses are of the kept draw's access types, its plan's: none writes or reads
+        // indirect arguments (`draw_again::unwritten`), so none is an unordered write, an
+        // indirect read or a geometry write, and in a pass whose fragments wrote nothing
+        // (`rebind`) none meets what the pass's reads announce. Their noting adds them alone.
+        debug_assert!(
+            super::unwritten(uses).0 && !self.pass_start.fragments_wrote(),
+            "a draw rebound writes, or follows a fragment write of its pass"
+        );
+        // Noted: a draw narrowed's moved slots' uses alone where the last command noted is the
+        // kept draw (`EncoderCore::note_moved`), else the uses as any draw notes them.
+        let noted = match narrowed {
+            true => {
+                let moved = (&**uses, uses.resident(), &live.kept.moved_at[..]);
+                (self.core).note_moved(moved, &mut live.noted)?
+            }
+            false => false,
+        };
+        match (noted, uses.reaching_prefix()) {
+            (true, _) => {}
+            (false, None) => {
                 let stages = (uses.iter()).fold(vk::PipelineStageFlags2::empty(), |all, used| {
                     all | used.read.stages | used.write.stages
                 });
@@ -577,50 +723,57 @@ impl RenderLowering {
                     Some(&mut live.noted),
                 )?;
             }
-            Some(prefix) => {
+            (false, Some(prefix)) => {
                 let reaching = (&**uses, uses.resident(), prefix);
                 (self.core).note_draw(reaching, &mut live.noted)?;
             }
         }
-        let resident = uses.prefix().map_or(0, |prefix| prefix.len as u64);
-        let prefix = uses.prefix();
-        match prefix {
-            None => self.unordered.add(uses),
-            Some(prefix) => {
-                if self.unordered.add_draw((uses, prefix)) {
-                    self.core.counts().resident_uses_unordered_writes(resident);
+        let resident = prefix.map_or(0, |prefix| prefix.len as u64);
+        if let Some(prefix) = prefix {
+            if self.unordered.add_draw((uses, prefix)) {
+                self.core.counts().resident_uses_unordered_writes(resident);
+            }
+        }
+        // The pass's reads, and the instance's gathered uses: of a draw narrowed, the moved slots'
+        // uses alone, every other use being the kept draw's, which they hold.
+        match (narrowed, prefix) {
+            (true, _) => {
+                self.pass_start.add(&live.kept.moved);
+                #[cfg(debug_assertions)]
+                {
+                    let held = super::digest(self.pass_start.held());
+                    self.pass_start.add(uses);
+                    assert!(
+                        held == super::digest(self.pass_start.held()),
+                        "a draw narrowed's other uses add to the pass's reads"
+                    );
                 }
             }
-        }
-        match prefix {
-            None => {
-                self.pass_start.announce(self.core.device(), uses, false);
-                self.pass_start.add(uses);
+            (false, None) => self.pass_start.add(uses),
+            (false, Some(prefix)) => {
+                (self.pass_start).draw(self.core.device(), (uses, prefix), false);
             }
-            Some(prefix) => (self.pass_start).draw(self.core.device(), (uses, prefix), false),
         }
-        match prefix {
-            None => self.gathering().add(&[], uses),
-            Some(prefix) => {
+        match (narrowed, prefix) {
+            (true, _) => {
+                let gathering = self.gathering();
+                if !gathering.add_moved(uses, &live.kept.moved_at) {
+                    gathering.add(&[], uses);
+                }
+            }
+            (false, None) => self.gathering().add(&[], uses),
+            (false, Some(prefix)) => {
                 if self.gathering().add_draw(&[], (uses, prefix)) {
                     self.core.counts().resident_uses_gathered(prefix.len as u64);
                 }
             }
         }
-        match prefix {
-            None => self.current.indirect_reads.add(uses),
-            Some(prefix) => {
-                if self.current.indirect_reads.add_draw((uses, prefix)) {
-                    self.core.counts().resident_uses_indirect_reads(resident);
-                }
+        if let Some(prefix) = prefix {
+            if self.current.indirect_reads.add_draw((uses, prefix)) {
+                self.core.counts().resident_uses_indirect_reads(resident);
             }
-        }
-        match prefix {
-            None => self.current.geometry_writes.add(uses),
-            Some(prefix) => {
-                if self.current.geometry_writes.add_draw((uses, prefix)) {
-                    self.core.counts().resident_uses_geometry_writes(resident);
-                }
+            if self.current.geometry_writes.add_draw((uses, prefix)) {
+                self.core.counts().resident_uses_geometry_writes(resident);
             }
         }
         let owned = (live.kept.recording.as_ref())
@@ -679,6 +832,9 @@ impl RenderLowering {
         let counts = self.core.counts();
         let pushed = (recorded.states, recorded.writes_pushed);
         counts.draw_rebound((kept.pushes_set_zero, kept.last_vertex), pushed);
+        if rebinding.moved {
+            counts.draw_moved();
+        }
         recorded.count_equal_shapes(counts);
         self.current.recorded = true;
         let again = kept.again;

@@ -514,6 +514,7 @@ struct CommandCounters {
     set_zero_writes_pushed: AtomicU64,
     draws_as_before: AtomicU64,
     draws_rebound: AtomicU64,
+    draws_moved: AtomicU64,
     resident_uses_made: AtomicU64,
     argument_tables_held_at_bind: AtomicU64,
     bound_offsets_moved: AtomicU64,
@@ -919,6 +920,11 @@ impl Counting<'_> {
             counts.add(|counts| &counts.set_zero_writes_pushed, writes);
         }
         Self::kept_draw(&counts, kept);
+    }
+
+    /// A render draw rebound that was moved (`WorkCounts::draws_moved`).
+    pub(crate) fn draw_moved(&self) {
+        self.0.add(|counts| &counts.draws_moved, 1);
     }
 
     /// `tables` stage tables read into a kept draw's bind state, each bringing in only the slots
@@ -5468,6 +5474,13 @@ pub struct WorkCounts {
     /// does, and records the state commands that changed (`draw_states_recorded`) and its draw;
     /// it takes nothing of the shape memo (`draw_shapes_reused`) and settles nothing.
     pub draws_rebound: u64,
+    /// Of `draws_rebound`, those moved: each call since the draw they repeat moved a buffer slot's
+    /// offset alone, the slot binding the buffer it bound (`render/draw_again/rebound.rs`). A
+    /// draw moved looks at no visible-function table, shadow or detached buffer again, its slots
+    /// binding the objects that draw bound; keeps that draw's set-0 writes and dynamic offsets
+    /// where its descriptor ranges are that draw's; and where its moved slots' uses were patched
+    /// in place, checks, notes and gathers those uses alone, every other use being that draw's.
+    pub draws_moved: u64,
     /// The uses of resources a render encoder made resident (`useResource:usage:stages:`,
     /// `useHeap:stages:`) that its draws' binding plans list, as its draws worked them out for
     /// hazard tracking: a draw keeps the last draw's where its plan is the last draw's, or lists
@@ -7042,6 +7055,7 @@ impl Device {
             draw_shapes_carried: commands(|counts| &counts.draw_shapes_carried),
             draws_as_before: commands(|counts| &counts.draws_as_before),
             draws_rebound: commands(|counts| &counts.draws_rebound),
+            draws_moved: commands(|counts| &counts.draws_moved),
             resident_uses_made: commands(|counts| &counts.resident_uses_made),
             resident_keys_settled: commands(|counts| &counts.resident_keys_settled),
             resident_uses_gathered: commands(|counts| &counts.resident_uses_gathered),
