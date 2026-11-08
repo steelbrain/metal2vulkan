@@ -853,15 +853,20 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     let refused = delta(|c| c.reencodes_refused, (&encoded, &rebound));
     let reloaded = delta(|c| c.linear_runs_reloaded, (&encoded, &rebound));
     let recorded = delta(|c| c.linear_merges_recorded, (&before, &after));
+    let got = texels(&bytes(&queue, Over::Private, &buffer, row * H), width, row);
+    let differ = (0..got.len()).filter(|&i| got[i] != left[i]).count();
     println!(
         "LINEAR-RUNS reloaded on {}: {:?} {:?}; first encoding's merges taken over \
          {first_taken}; encoders encoded again {again}, refused {refused}, runs reloaded \
-         {reloaded}; linear merges recorded {recorded}",
+         {reloaded}; linear merges recorded {recorded}; {differ} of {} texel bytes differ from \
+         the private texture's",
         device.name(),
         command_buffer.status(),
         command_buffer.error(),
+        got.len(),
     );
     assert_eq!(command_buffer.error(), None);
+    assert_eq!(differ, 0, "the texels differ from the private texture's");
     assert_eq!(first_taken, 4, "the passes form two runs as first encoded");
     assert_eq!(
         (again, refused, reloaded),
@@ -871,8 +876,5 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     // The first run's, the two readers' own, the merge the fourth had taken over, and the
     // second run's last.
     assert_eq!(recorded, 5, "the merges recorded");
-    let got = texels(&bytes(&queue, Over::Private, &buffer, row * H), width, row);
-    let differ = (0..got.len()).filter(|&i| got[i] != left[i]).count();
-    assert_eq!(differ, 0, "the texels differ from the private texture's");
     drop((texture, buffer, chunk));
 }
