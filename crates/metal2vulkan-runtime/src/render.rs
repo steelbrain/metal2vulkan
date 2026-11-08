@@ -12236,7 +12236,6 @@ impl Recording<'_> {
     /// `render_target` made, of no views (`snapshot::Pair::record`).
     unsafe fn record(&self, bound: &mut Bound) -> Recorded {
         let (raw, cb) = (self.raw, self.command_buffer);
-        let dynamic = |state| self.dynamic.contains(&state);
         bound.follow(cb);
         let mut recorded = 0;
         let mut writes_pushed = 0;
@@ -12309,7 +12308,10 @@ impl Recording<'_> {
                 }
                 recorded += 1;
             }
-            let strides = dynamic(vk::DynamicState::VERTEX_INPUT_BINDING_STRIDE);
+            // Whether the pipeline takes the strides as dynamic state: looked up among its dynamic
+            // states only for a draw that binds a vertex buffer.
+            let strides = !self.vertex_buffers.is_empty()
+                && (self.dynamic).contains(&vk::DynamicState::VERTEX_INPUT_BINDING_STRIDE);
             for &(binding, buffer, offset, stride) in self.vertex_buffers {
                 match (strides, &self.extended) {
                     (true, Some(extended)) => {
