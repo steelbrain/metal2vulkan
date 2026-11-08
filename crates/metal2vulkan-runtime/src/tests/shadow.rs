@@ -5,8 +5,8 @@ use super::super::host_aliases::{self, Alias};
 use super::super::key_hash::KeyMap;
 use super::super::resource::ResourceKey;
 use super::super::shadow::{
-    self, Backing, CopyCause, KeptArea, Lost, ShadowBuffer, ShadowCarry, ShadowCopies, ShadowCopy,
-    ShadowSource, ShadowSync, ShadowTarget, ShadowUse, Step, Within,
+    self, Backing, CopyCause, ImageTruth, KeptArea, Lost, ShadowBuffer, ShadowCarry, ShadowCopies,
+    ShadowCopy, ShadowSource, ShadowSync, ShadowTarget, ShadowUse, Step, Within,
 };
 use super::super::shadow_merge::ScratchSpares;
 use super::super::tracker::{Access, Use, UseRange};
@@ -1431,6 +1431,15 @@ fn a_refused_scratch_changes_nothing() {
     );
 }
 
+/// An image no copy is recorded with: these tests track uses alone.
+struct NoImage;
+
+impl ImageTruth for NoImage {
+    fn raw(&self) -> vk::Image {
+        vk::Image::null()
+    }
+}
+
 /// A shadow of `levels` and `layers` of the image `image`: a texture view of another component
 /// layout on a device whose Vulkan views reinterpret none (`texture/view_shadow.rs`).
 fn view_of(image: ResourceKey, levels: Range<u32>, layers: Range<u32>) -> Arc<ShadowCopies> {
@@ -1441,7 +1450,7 @@ fn view_of(image: ResourceKey, levels: Range<u32>, layers: Range<u32>) -> Arc<Sh
     };
     Arc::new(ShadowCopies {
         source: ShadowSource::Image {
-            image: vk::Image::null(),
+            image: Arc::new(NoImage),
             key: image,
             range: range.clone(),
             shadow: vk::Image::null(),

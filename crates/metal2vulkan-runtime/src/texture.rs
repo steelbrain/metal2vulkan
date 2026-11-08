@@ -1262,6 +1262,14 @@ impl Image {
     }
 }
 
+/// A shadow's copies name the image's own `VkImage` as each is recorded (`shadow::ImageTruth`):
+/// the one it holds now, which its storage form swaps (`texture/storage_form.rs`).
+impl crate::shadow::ImageTruth for Image {
+    fn raw(&self) -> vk::Image {
+        self.own_raw()
+    }
+}
+
 impl Drop for Image {
     fn drop(&mut self) {
         // Once the process is exiting, the image is left to its end (`exit_guard`).

@@ -84,7 +84,10 @@
 //!   encoders name the image the texture has then, their uses after the copy in hazard
 //!   tracking. It waits at most [`SWITCH_WAIT`], and not at all on the scheduler's thread (a
 //!   submission check that makes a command buffer): past that, it gives the switch up, so
-//!   nothing swaps, and goes on with the old image.
+//!   nothing swaps, and goes on with the old image. A shadow of the image made before the swap
+//!   (a slot binding's usage shadow, as a draw reading its own pass's color attachment binds,
+//!   or a view's) names the image's `VkImage` as each of its copies is recorded
+//!   (`shadow::ImageTruth`), so its later copies take the image with `STORAGE`.
 //! - **Once per texture,** by construction: the storage form is a `OnceLock` of the image, which
 //!   is noted at most once. A switch the device refuses (the image's limits, memory) leaves the
 //!   texture its scratch, for good; a commit that fails or is given up leaves it waiting.

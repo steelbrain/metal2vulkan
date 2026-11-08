@@ -333,6 +333,16 @@ impl Backing {
     }
 }
 
+/// The image an image's shadow holds a copy of ([`ShadowSource::Image`]). Its copies name the
+/// image's `VkImage` as each is recorded, not as the shadow was made: a texture's storage form
+/// swaps its image's `VkImage` for one with `STORAGE` and destroys the first as the swapping
+/// command buffer completes (`texture/storage_form.rs`), and a shadow made before the swap (a
+/// slot binding's usage shadow, a view's) copies the image the texture holds from then on.
+pub(super) trait ImageTruth: Send + Sync {
+    /// The image's `VkImage` now.
+    fn raw(&self) -> vk::Image;
+}
+
 /// A shadow's truth: what the shadow holds a copy of between an encoder's copies (the module's
 /// rules, with the truth in the buffer's place).
 pub(super) enum ShadowSource {
@@ -356,7 +366,8 @@ pub(super) enum ShadowSource {
     /// view presents between the two, the same subresources, texel for texel (formats of one copy
     /// unit, whose copies keep every bit).
     Image {
-        image: vk::Image,
+        /// The image, whose `VkImage` each copy names as it is recorded ([`ImageTruth`]).
+        image: Arc<dyn ImageTruth>,
         /// The image's identity.
         key: ResourceKey,
         /// The image's levels and layers the view presents.
@@ -1910,9 +1921,9 @@ impl ShadowCopy {
                 ..
             } => {
                 let (from, to) = if into_shadow {
-                    (*image, *shadow)
+                    (image.raw(), *shadow)
                 } else {
-                    (*shadow, *image)
+                    (*shadow, image.raw())
                 };
                 if let Some(through) = through {
                     let (buffer, _) = through.buffer.at(0);
