@@ -14,14 +14,20 @@
 //! over a private texture of the same first texels, which merges nothing. The texels each blit
 //! read mid-sequence, and those the sequence left, are the same in all three.
 //!
+//! The frames of a WebGPU frame split at every indexed draw (`checked_frames_merge_once`, the
+//! consumer's `many_passes`): a clear, then 706 passes over a target over a `Private` buffer, each
+//! after a 1x1 encoder of no attachment whose state rasterizes nothing, beside a depth (and
+//! stencil) attachment, each pass's data in the command buffer's upload arena (`setVertexBytes`)
+//! or in a no-copy buffer over host pages: one run, merged once, in every shape.
+//!
 //! Each test waits for the device's in-place check to end before it makes anything
 //! (`merge_scratch::settled`), and reads the counts of a window of its own commands only then
 //! (`merge_scratch::counts_alone`): the check's own passes over linear images, on its thread, are
 //! counted with the test's.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixture
-//! `validation/fixtures/public/engine/tob_renders.ll` (`llvm-as`).
+//! `m2v_cpu_icd`), on the kind of device the cfg selects. The functions are the owned fixtures
+//! `validation/fixtures/public/engine/tob_renders.ll` and `ob3_index_buffer.ll` (`llvm-as`).
 
 use super::blit_holds::{device, Scratch, WAIT};
 use super::encoder_holds::{bytes_of, library};
@@ -886,24 +892,27 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     drop((texture, buffer, chunk));
 }
 
-/// The passes of a checked frame after its clear.
-const FRAME_PASSES: usize = 64;
+/// The passes of a checked frame after its clear: the measured frame's (the `stencilMask`
+/// sample's first, as [`CHUNK_PASSES`]).
+const FRAME_PASSES: usize = CHUNK_PASSES;
 
-/// What a checked frame's passes hold beside their target (`checked_frame`).
+/// What a checked frame's passes hold beside their target ([`checked_frame`]).
 #[derive(Clone, Copy, Debug)]
 struct Shape {
-    /// A `Depth32FloatStencil8` attachment, its stencil loaded and stored by each pass after
-    /// the clear; else a `Depth32Float` one.
+    /// A `Depth32Float_Stencil8` attachment, its stencil loaded and stored by each pass after the
+    /// clear; else a `Depth32Float` one.
     stencil: bool,
     /// A 1x1 encoder of no attachment before each pass, one draw of a state that rasterizes
-    /// nothing (a WebGPU frame's index check).
+    /// nothing (WebKit's check of a draw's indices).
     checks: bool,
-    /// Each pass's rectangle and color from a no-copy buffer over host pages; else its own bytes.
+    /// Each pass's rectangle and color from a no-copy buffer over host pages, at an offset of its
+    /// own (a consumer's upload chunk in its guest RAM); else its own bytes (`setVertexBytes`,
+    /// `setFragmentBytes`, which land in the command buffer's upload arena, `upload.rs`).
     chunk: bool,
 }
 
 /// The states of a checked frame: the blending one beside each depth format, the check's, and
-/// its depth and stencil state.
+/// the passes' depth and stencil state (depth written, the test and the stencil `Always`).
 struct FrameStates {
     depth: RenderPipelineState,
     stencil: RenderPipelineState,
@@ -933,17 +942,18 @@ impl FrameStates {
     }
 }
 
-/// One command buffer over `texture` of `shape`: a pass clearing it and its depth (and stencil),
-/// then [`FRAME_PASSES`] passes each loading and storing it (and the stencil), clearing and
-/// storing the depth, and blending rectangle `i` (`drawn`), from `chunk` at `i` strides where
-/// `shape.chunk`; committed and completed.
+/// One command buffer over `texture` of `shape`, as a WebGPU frame split at every indexed draw
+/// renders: a pass clearing it and its depth (and stencil), then [`FRAME_PASSES`] passes each
+/// loading and storing it (and the stencil), clearing and storing the depth, and blending
+/// rectangle `i` (`drawn`), from `chunk` at `i` strides where `shape.chunk`; committed and
+/// completed. Its GPU time, in seconds.
 fn checked_frame(
     queue: &CommandQueue,
     texture: &Texture,
     states: &FrameStates,
     shape: Shape,
     chunk: &Buffer,
-) {
+) -> f64 {
     let device = queue.device();
     let format = match shape.stencil {
         true => PixelFormat::Depth32FloatStencil8,
@@ -1016,23 +1026,27 @@ fn checked_frame(
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
+    command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
 }
 
-/// Checked frames of each shape over a target over a `Private` buffer (rows of 2048 bytes), the
-/// rule forced: the merges each records, and the texels against a private texture's.
+/// Checked frames ([`checked_frame`]) of every [`Shape`] over a target over a `Private` buffer
+/// (rows of 2048 bytes), the rule forced, as the consumer's `many_passes` renders its frame: the
+/// clear and every pass render the target apart, and the passes after the clear form one run,
+/// merged once (`pass_runs.rs`), every later pass taking its merge over, whether a pass's data
+/// lies in the command buffer's upload arena or in a no-copy buffer over host pages, beside a
+/// stencil it loads or none, a check encoder between every two passes or none; the texels those
+/// a private texture holds after the same frame.
 #[test]
-fn checked_frames_form_runs() {
+fn checked_frames_merge_once() {
     let (width, row) = (512, 2048);
-    let (host, chunk_pages) = (
-        Host::new(row * H),
-        Host::new(CHUNK_STRIDE * FRAME_PASSES as u64),
-    );
+    let chunk_bytes = (CHUNK_STRIDE * FRAME_PASSES as u64).next_multiple_of(64 << 10);
+    let (host, chunk_pages) = (Host::new(row * H), Host::new(chunk_bytes));
     let cache = Scratch::new("linear-runs-checked");
     let device = device(&cache.0);
     let queue = device.new_command_queue().unwrap();
     let states = FrameStates::new(&device);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
-    let mut data = vec![0u8; (CHUNK_STRIDE * FRAME_PASSES as u64) as usize];
+    let mut data = vec![0u8; chunk_bytes as usize];
     for i in 0..FRAME_PASSES {
         let (corners, rgba) = drawn(i);
         let at = i * CHUNK_STRIDE as usize;
@@ -1044,7 +1058,7 @@ fn checked_frames_form_runs() {
     let made = unsafe {
         device.new_buffer_with_bytes_no_copy(
             chunk_pages.memory(),
-            (CHUNK_STRIDE * FRAME_PASSES as u64).next_multiple_of(64 << 10),
+            chunk_bytes,
             ResourceOptions::default(),
             None,
         )
@@ -1058,6 +1072,7 @@ fn checked_frames_form_runs() {
         Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
     };
     let reference = private_texture(&device, PixelFormat::RGBA8Unorm, width, usage);
+    let passes = FRAME_PASSES as u64;
     let mut wrong = Vec::new();
     for bits in 0..8u8 {
         let shape = Shape {
@@ -1065,7 +1080,7 @@ fn checked_frames_form_runs() {
             checks: bits & 2 != 0,
             chunk: bits & 4 != 0,
         };
-        checked_frame(&queue, &reference, &states, shape, &chunk);
+        let private_gpu = checked_frame(&queue, &reference, &states, shape, &chunk);
         let left = texels_of(&queue, &reference);
         let Some((buffer, texture)) = target(&queue, Over::Private, (width, row), &host) else {
             return;
@@ -1077,9 +1092,7 @@ fn checked_frames_form_runs() {
         let forced = &device.shared().linear_rule_forced;
         forced.store(true, Ordering::Relaxed);
         let before = device.work_counts();
-        let started = std::time::Instant::now();
-        checked_frame(&queue, &texture, &states, shape, &chunk);
-        let took = started.elapsed();
+        let gpu = checked_frame(&queue, &texture, &states, shape, &chunk);
         let after = device.work_counts();
         forced.store(false, Ordering::Relaxed);
         let delta = |of: fn(&WorkCounts) -> u64| of(&after) - of(&before);
@@ -1091,17 +1104,21 @@ fn checked_frames_form_runs() {
         println!(
             "LINEAR-RUNS checked on {}: {shape:?}: {through} passes through copies, linear \
              merges {recorded} recorded and {taken_over} taken over; {differ} texel bytes \
-             differ; {took:?}",
-            device.name()
+             differ; GPU {:.3} ms, {:.3} ms over a private texture",
+            device.name(),
+            gpu * 1e3,
+            private_gpu * 1e3,
         );
-        if differ != 0 {
-            wrong.push(shape);
+        if (through, recorded, taken_over, differ) != (passes + 1, 1, passes - 1, 0) {
+            wrong.push((shape, through, recorded, taken_over, differ));
         }
         drop((texture, buffer));
     }
     assert!(
         wrong.is_empty(),
-        "the texels differ from the private texture's: {wrong:?}"
+        "every pass renders the target apart, the passes after the clear merge once as one run, \
+         and the texels are a private texture's; (shape, passes through copies, merges recorded, \
+         taken over, texel bytes differing): {wrong:?}"
     );
     drop(chunk);
 }
