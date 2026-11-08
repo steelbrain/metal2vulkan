@@ -492,16 +492,6 @@ fn a_texture_past_the_pooled_bound_is_a_shadow_of_its_linear_cost_over_private_m
 /// tight (688 bytes of texels a row) and so takes an image at its pitch: (width, height, pitch).
 const MOVED: (u64, u64, u64) = (172, 67, 704);
 
-/// The bytes of `buffer`'s first `length`, written by the CPU and read back.
-///
-/// # Safety
-///
-/// No command uses them while the slice lives.
-unsafe fn buffer_bytes(buffer: &Buffer, length: u64) -> &mut [u8] {
-    // SAFETY: the caller's contract; the buffer is mapped and at least `length` bytes long.
-    unsafe { std::slice::from_raw_parts_mut(buffer.contents().unwrap().as_ptr(), length as usize) }
-}
-
 /// A pass that clears `texture` to `color` and stores it, committed on `queue`, completed.
 fn cleared(queue: &crate::CommandQueue, texture: &Texture, color: crate::ClearColor) {
     let command_buffer = queue.command_buffer().unwrap();
@@ -541,9 +531,11 @@ fn a_rendered_texture_made_before_the_pooled_check_moves_to_its_pitched_image_on
     descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::shared();
     let buffer = own_buffer(&device, length, true);
-    // SAFETY: no command uses the buffer's bytes while they are written or read here: each
-    // command buffer below completed before.
-    let bytes = unsafe { buffer_bytes(&buffer, length) };
+    // SAFETY: the buffer's mapped bytes, which no command uses while they are written or read
+    // here: each command buffer below completed before.
+    let bytes = unsafe {
+        std::slice::from_raw_parts_mut(buffer.contents().unwrap().as_ptr(), length as usize)
+    };
     for (at, byte) in bytes.iter_mut().enumerate() {
         *byte = texel_byte(at as u64 % pitch, at as u64 / pitch);
     }
@@ -604,7 +596,10 @@ fn a_rendered_texture_made_before_the_pooled_check_moves_to_its_pitched_image_on
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(command_buffer.error(), None);
         // SAFETY: the read buffer's mapped bytes, which no command uses now.
-        unsafe { buffer_bytes(&out, row * height) }.to_vec()
+        unsafe {
+            std::slice::from_raw_parts(out.contents().unwrap().as_ptr(), (row * height) as usize)
+        }
+        .to_vec()
     };
     let at_move = read(&early);
     let after = device.work_counts();
