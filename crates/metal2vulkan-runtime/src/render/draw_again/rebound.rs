@@ -25,16 +25,21 @@
 //!   a texture's view and a sampler state's `VkSampler` as every step makes them, through its
 //!   encoder's memo), and the set its encoder's last set or its command buffer's holds, else a new
 //!   one (`EncoderCore::set_zero_of`); its push bytes and vertex buffers; and its uses, whole
-//!   (`binding::command_uses_into`). And the checks a draw of changed tables takes: a pulled
+//!   (`binding::command_uses_into`), a texture of a color attachment of its pass bound through its
+//!   copy (`texture/attached_reads.rs`); and its uses of shadowed textures
+//!   (`RenderLowering::draw_shadows`). And the checks a draw of changed tables takes: a pulled
 //!   attribute's reach, the stages' function tables, the attachments' reads. Each is the function
 //!   every step of the draw runs, on the same inputs.
 //! - **Where it stops.** At a changed shape or runtime samplers' address modes, a plan that reads a
 //!   changed slot some other way (a texture buffer, a YCbCr texture's planes, an argument sampler),
 //!   a refusal of any of those steps, a pass whose fragments wrote memory (a stage before them may
 //!   read a copy of it), a changed texture where its functions use a memoryless texture, the plan
-//!   samples or writes a color attachment's texture, or an extended-range texture binds through a
-//!   shadow, a shadowed texture among its uses, or a barrier its fragments need after an earlier
-//!   draw's geometry writes: the draw takes every step, which answers as it would have. Only the
+//!   writes a color attachment's texture, or an extended-range texture binds through a shadow, a
+//!   read of a color its pass clears behind its load actions, uses of shadowed textures other than
+//!   the kept draw's (another shadow, or one used otherwise: written, or its reads bounded
+//!   elsewhere, as a scissor restated bounds a read at the fragments' own pixels), or a barrier
+//!   its fragments need after an earlier draw's geometry writes: the draw takes every step, which
+//!   answers as it would have. Only the
 //!   attachments' reads' refusal is answered here, the last of its checks, which may have
 //!   announced.
 //! - **What it records and notes.** Its uses noted as any draw notes them (`note_reaching`, the
@@ -54,7 +59,9 @@
 //! - **A draw moved.** Where every call since the kept draw moved a buffer slot's offset (or
 //!   attribute stride) alone, the slot binding the buffer it bound (`argument_table::Changed`), the
 //!   draw is moved (`WorkCounts::draws_moved`): its tables bind the kept draw's objects, so it
-//!   looks at no stage's function tables, shadowed texture or detached buffer again; and where its
+//!   looks at no stage's function tables or detached buffer again, nor at shadowed textures where
+//!   the kept draw used none (where it used some, its reads' bounds may follow a scissor
+//!   restated, so it works them out as a draw rebound does); and where its
 //!   commands' descriptor ranges are the kept draw's, it keeps the kept draw's set-0 writes and
 //!   dynamic offsets (`binding::rebind_into` writes a buffer's descriptor of its buffer and range
 //!   alone): where nothing recorded through the record since the kept draw, the record holds that
@@ -75,7 +82,8 @@
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
 //!   buffers and uses. What a draw moved skips is asserted where it skips it: its function tables
-//!   pass, it meets no shadow and no detached buffer, it pushes the kept draw's set-0 writes, a set
+//!   pass, it meets no shadow where its kept draw met none and no detached buffer, it pushes the
+//!   kept draw's set-0 writes, a set
 //!   0 it pushes or binds none of is the record's, its uses are unwritten in a pass whose
 //!   fragments wrote nothing, and of a draw narrowed, its other uses share no attachment memory,
 //!   meet no geometry write the moved ones do not, add nothing to the pass's reads, are noted and

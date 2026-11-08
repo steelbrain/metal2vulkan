@@ -5950,20 +5950,24 @@ pub struct WorkCounts {
     /// generation, the device's host aliases kept their version and the encoder kept its parts
     /// and held images, after a draw that recorded one Vulkan draw into the instance as it
     /// stood, through a `VkPipeline` made ahead, with no barrier in its instance, no write among
-    /// its uses, no copy, shadow, snapshot, split, gather, index bounds or rewrite pass, mesh or
-    /// tessellation work, set 1, root table, rate map, color group or extended-range color, and
-    /// no notice the device announces at every occurrence (`render/draw_again.rs`). Each is
-    /// counted in `commands_noted_as_before`, `draws_pushing_set_zero` and
-    /// `provoking_last_pipeline_draws` as the draw it repeats was, and in no count of work it
-    /// does not take (`draw_shapes_reused`, `set_zero_sets_reused`, `draw_states_recorded`).
+    /// its uses, no copy, snapshot, split, gather, index bounds or rewrite pass, mesh or
+    /// tessellation work, set 1, root table, rate map, color group or extended-range color, no
+    /// read of a color its pass clears behind its load actions, and no notice the device
+    /// announces at every occurrence (`render/draw_again.rs`); its shadowed textures, where it
+    /// used any, gathered by its instance already. Each is counted in `commands_noted_as_before`,
+    /// `draws_pushing_set_zero`, `provoking_last_pipeline_draws`,
+    /// `attachment_reads_through_copies` and `own_pixel_reads` as the draw it repeats was, and in
+    /// no count of work it does not take (`draw_shapes_reused`, `set_zero_sets_reused`,
+    /// `draw_states_recorded`).
     pub draws_as_before: u64,
     /// Render encoders' direct draws recorded as their encoder's last draw again after calls
     /// that bound other buffers, offsets or bytes at buffer slots, or other textures or sampler
     /// states at texture and sampler slots, rather than taking every step of a draw: a draw that
     /// `draws_as_before` would count but for those calls, where the bind state kept its shape and
     /// its runtime samplers' address modes, the slots are read through set-0 descriptors
-    /// (dynamic or pushed), push fields or fixed-function vertex buffers alone, and the uses they
-    /// make need no barrier, copy or shadow (`render/draw_again/rebound.rs`). Each reads its
+    /// (dynamic or pushed), push fields or fixed-function vertex buffers alone, the uses they make
+    /// need no barrier or copy, and the draw uses the shadowed textures the kept draw used, each
+    /// as it used it (`render/draw_again/rebound.rs`). Each reads its
     /// changed stage tables in part (`stage_tables_read_in_part`), writes again only those slots'
     /// descriptors, dynamic offsets, push fields and vertex buffers, notes its uses as any draw
     /// does, and records the state commands that changed (`draw_states_recorded`) and its draw;
@@ -6010,8 +6014,10 @@ pub struct WorkCounts {
     pub draws_unkept_instance_steps: u64,
     /// Of `draws_unkept`, those that recorded after a barrier in their render pass instance.
     pub draws_unkept_barrier: u64,
-    /// Of `draws_unkept`, those with a shadowed texture among their uses, or that read through a
-    /// snapshot or an extended-range color's shadow.
+    /// Of `draws_unkept`, those that read a color their pass clears behind its load actions
+    /// through a copy (`texture/attached_reads.rs`), or that read through a snapshot or an
+    /// extended-range color's shadow. A draw that uses other shadowed textures is kept: its
+    /// instance gathered them (`render/draw_again.rs`).
     pub draws_unkept_shadowed: u64,
     /// Of `draws_unkept`, those that read a heap's set, a texture or sampler table, a root table
     /// or a push hole, or whose argument samplers left states out.

@@ -73,7 +73,8 @@
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
 //!   (`PassStartReads::add`, which takes an equal range once) and the instance's gathered uses
-//!   (`InstanceShadows::add`, which skips the uses of the last draw), its writes (none), its noted
+//!   (`InstanceShadows::add`, which skips the uses of the last draw and joins its shadowed
+//!   textures' as nothing new), its writes (none), its noted
 //!   uses, its retains (each a hold of an object held already: `LastRetained`, a table's stamp,
 //!   an index buffer the kept draw held), the shape memo's entries and the bind state (found as
 //!   the kept draw left them), and the pass's first instance, which the kept draw decided
