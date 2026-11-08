@@ -550,7 +550,7 @@
         "functions_translated": 6,
         "gate_waits": 3,
         "gate_waits_slept": 3,
-        "heads_held_for_host_steps": 7,
+        "heads_held_for_host_steps": 6,
         "heap_tables_worked_out": 3,
         "host_steps_recorded": 3,
         "host_texel_copies": 2,

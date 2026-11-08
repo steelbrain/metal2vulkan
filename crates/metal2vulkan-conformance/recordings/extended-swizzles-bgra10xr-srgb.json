@@ -3138,7 +3138,7 @@
         "variant_pipelines_made": 71,
         "variants_taken_back": 4,
         "wakes_completion_waiters": 35,
-        "wakes_spared": 274
+        "wakes_spared": 273
       },
       "moving": {
         "gate_waits_slept": 33,
