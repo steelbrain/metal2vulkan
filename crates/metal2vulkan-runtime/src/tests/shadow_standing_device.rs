@@ -42,8 +42,8 @@ use std::sync::Arc;
 pub(super) const WIDTH: u64 = 64;
 pub(super) const HEIGHT: u64 = 16;
 const ROW: u64 = WIDTH * 4;
-pub(super) const PITCH: u64 = ROW + 64;
-pub(super) const LENGTH: u64 = PITCH * HEIGHT;
+const PITCH: u64 = ROW + 64;
+const LENGTH: u64 = PITCH * HEIGHT;
 
 /// What the texture is read and written with: the kernel that reads it, the plain texture the
 /// kernel writes, the pipeline that draws into it, and a `Shared` buffer the buffer's bytes are
@@ -292,7 +292,7 @@ fn stood(before: &WorkCounts, after: &WorkCounts) -> Stood {
 
 /// Whether every texel the kernel wrote is a texel of the byte `value` inverted: its three color
 /// channels `!value`, its alpha `value`.
-pub(super) fn inverted(texels: &[u8], value: u8) -> bool {
+fn inverted(texels: &[u8], value: u8) -> bool {
     (texels.chunks(4)).all(|texel| texel == [!value, !value, !value, value])
 }
 

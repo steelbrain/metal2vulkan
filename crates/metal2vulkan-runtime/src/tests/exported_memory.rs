@@ -427,12 +427,20 @@ impl Drop for Writer {
 /// shadow, whose image stands across command buffers (`shadow_standing.rs`): another API's write
 /// of the bytes, which `Buffer::external_write_done` announces, lets go of the standing, so the
 /// texture's next read copies in what that write left, write after write; with no write between
-/// two reads, the second copies nothing in. The writes are a second `VkDevice`'s fills through an
-/// import of the buffer's opaque descriptor, as a decoder's; each read is a kernel's
-/// (`shadow_standing_device`'s `Tools`).
+/// two reads, the second copies nothing in. The texture is an `R8Unorm` plane, `PITCH` bytes a
+/// row, 64 past its texels; the writes are three fills (`0x11`, `0x22`, `0x33`) of a second
+/// `VkDevice` through an import of the buffer's opaque descriptor, as a decoder's of a cache;
+/// each read is a kernel's (`shadow_standing_device`'s `Tools`).
 #[test]
 fn a_shadow_over_an_exported_buffer_reads_each_announced_write() {
-    use super::shadow_standing_device::{inverted, Tools, HEIGHT, LENGTH, PITCH, WIDTH};
+    use super::shadow_standing_device::{Tools, HEIGHT, WIDTH};
+    const PITCH: u64 = WIDTH + 64;
+    const LENGTH: u64 = PITCH * HEIGHT;
+    // The kernel reads an `R8Unorm` texel as `(r, 0, 0, 1)` and writes its color inverted, its
+    // alpha kept.
+    let inverted = |texels: &[u8], value: u8| {
+        (texels.chunks(4)).all(|texel| texel == [!value, 0xff, 0xff, 0xff])
+    };
     let scratch = Scratch::new("exported-standing");
     let device = device(&scratch.0);
     let usage = crate::buffer::usage(device.shared().device_address);
@@ -451,7 +459,7 @@ fn a_shadow_over_an_exported_buffer_reads_each_announced_write() {
     };
     let tools = Tools::new(&device);
     let mut descriptor =
-        crate::TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
+        crate::TextureDescriptor::texture_2d(PixelFormat::R8Unorm, WIDTH, HEIGHT, false);
     descriptor.usage = TextureUsage::SHADER_READ;
     let plane = crate::IoSurfacePlane::new(0, PITCH, true);
     let texture = buffer.new_texture_with_iosurface_plane(&descriptor, plane);
@@ -461,7 +469,7 @@ fn a_shadow_over_an_exported_buffer_reads_each_announced_write() {
         "{name}: padded rows make a shadow"
     );
     let writer = Writer::import(&device, buffer.export_memory_fd().unwrap(), usage);
-    for value in [0x2a, 0x5c, 0x93] {
+    for value in [0x11, 0x22, 0x33] {
         writer.fill(value);
         buffer.external_write_done().unwrap();
         let (texels, first) = tools.texels(&texture);
