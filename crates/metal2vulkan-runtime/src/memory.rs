@@ -10,7 +10,7 @@
 //! - **Kept for reuse.** A block that empties is kept for the next placements rather than freed:
 //!   a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] empty ones are kept in its pool, and
 //!   past that, as a dedicated one of the runtime's own memory, while the empty blocks kept in its
-//!   heap stay within the heap's budget ([`kept_budget`]: an eighth of the heap, at most
+//!   heap stay within the heap's budget ([`Memory::kept_budget`]: an eighth of the heap, at most
 //!   [`KEPT_EMPTY_BYTES`]); else it is freed. A kept dedicated block takes the next dedicated
 //!   placement of its pool that its size fits ([`Pool::place_dedicated`]). So a working set that
 //!   dips and comes back makes and frees no block for it: a frame's buffers, returned as its
@@ -91,7 +91,7 @@ mod ready;
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 
 /// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget
-/// ([`Pool::release`], [`kept_budget`]). In a pool the encodings place in, one of them is mostly
+/// ([`Pool::release`], [`Memory::kept_budget`]). In a pool the encodings place in, one of them is mostly
 /// the block [`keep_room`] made for room: with one kept, every other block that emptied was freed,
 /// and a block made again as the next placements filled that one, so a frame's buffers, returned
 /// each frame, made and freed a block a frame. With two they make and free none
@@ -99,13 +99,13 @@ pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 pub(super) const KEPT_EMPTY_BLOCKS: usize = 2;
 
 /// The most bytes of empty blocks a heap keeps past its pools' [`KEPT_EMPTY_BLOCKS`]
-/// ([`kept_budget`]): 2 GiB, the eighth of an RTX 5080 Laptop GPU's 16 GiB. There a guest's page
+/// ([`Memory::kept_budget`]): 2 GiB, the eighth of an RTX 5080 Laptop GPU's 16 GiB. There a guest's page
 /// of two 4K HEVC clips made 12 pooled blocks and 66 decoded pictures of about 15 MiB each in
 /// exportable buffers (`exported_memory.rs`), 1.8 GB in all, and the clips' ends freed them.
 pub(super) const KEPT_EMPTY_BYTES: u64 = 2 << 30;
 
 /// The share of its heap's size a heap keeps of empty blocks, at most [`KEPT_EMPTY_BYTES`]: an
-/// eighth ([`kept_budget`]).
+/// eighth ([`Memory::kept_budget`]).
 const KEPT_EMPTY_SHARE: u64 = 8;
 
 /// How long a kept empty block stays empty before it is freed, but its pool's last pooled one
@@ -704,7 +704,7 @@ impl<T> Pool<T> {
     }
 
     /// Return `[offset, offset + size)` of block `index`, at `now`, where the empty blocks kept in
-    /// the pool's heap may grow by `spare` bytes more ([`kept_budget`]). A block that empties is
+    /// the pool's heap may grow by `spare` bytes more ([`Memory::kept_budget`]). A block that empties is
     /// kept: a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] other empty pooled blocks are, or
     /// its bytes fit in `spare`; a dedicated one where its bytes fit in `spare` and `reusable`
     /// says another placement may take its memory ([`Pool::place_dedicated`]). Else the block's
@@ -1984,7 +1984,7 @@ impl Memory {
 
     /// Return `[offset, offset + size)` of block `block` of memory type `type_index`, freeing the
     /// block when it empties and is not kept ([`Pool::release`], within its heap's
-    /// [`kept_budget`]); `after` goes once it is freed. `after`, given back for the caller to let
+    /// [`Memory::kept_budget`]); `after` goes once it is freed. `after`, given back for the caller to let
     /// go of with no lock held, unless the block waits with it. A kept empty block of the pool
     /// that stayed empty too long goes too ([`Pool::stale`]).
     fn release_range(
