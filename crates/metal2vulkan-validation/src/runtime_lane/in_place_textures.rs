@@ -1540,3 +1540,131 @@ fn unobserved_padding_costs() {
     messages.take_notices();
     layer_reported_nothing_at_all(&messages);
 }
+
+/// A guest's device caches on an Iris Xe (a consumer boot's 388 layouts, every row padded up to a
+/// 64-byte line): `BGRA8Unorm` textures that render, each over a `Private` buffer of the runtime's
+/// own, (width, rows, row bytes, count): eight of its most common small shapes at their counts
+/// and its large ones.
+const DEVICE_CACHES: [(u64, u64, u64, usize); 11] = [
+    (172, 67, 704, 15),
+    (136, 68, 576, 14),
+    (104, 52, 448, 13),
+    (164, 82, 704, 11),
+    (168, 81, 704, 10),
+    (88, 84, 384, 9),
+    (148, 74, 640, 8),
+    (58, 28, 256, 6),
+    (820, 410, 3328, 4),
+    (1640, 820, 6592, 2),
+    (920, 436, 3712, 1),
+];
+
+/// [`DEVICE_CACHES`] over buffers that declare the bytes between rows unobserved
+/// (`BufferDescriptor::padding_unobserved`) and over ones that do not, under the in-place policy
+/// with the device's check settled. The undeclared ones are shadows (`shadowed_textures`); a
+/// declared one is a `DRM_FORMAT_MOD_LINEAR` image at its pitch where the device's linear image
+/// lays its rows out otherwise, its rows take no more than the pooled bound
+/// (`TextureShadowReason::LinearCost` past it) and the device's check passed for its pooled memory
+/// (`pooled_pitched_images`), else the device's linear image or a shadow. Each frame one command
+/// buffer clears and stores every cache and then reads each whole through a fragment function's
+/// `read`. Printed (`POOLED-PITCHED-COST`): each form's caches in place and as shadows, and the
+/// median and fastest GPU time of a frame.
+#[test]
+fn pooled_pitched_costs() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+        options.layers.clear();
+        in_place(options);
+    })
+    .unwrap();
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "the check settles"
+    );
+    let queue = device.new_command_queue().unwrap();
+    let reads = reading(&device, PixelFormat::BGRA8Unorm, "tob_read");
+    let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
+    let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, 1640, 820, false);
+    d.usage = TextureUsage::RENDER_TARGET;
+    d.resource_options = ResourceOptions::private();
+    let target = device.new_texture(&d).unwrap();
+    for declared in [false, true] {
+        let before = device.work_counts();
+        let caches: Vec<(Buffer, Texture)> = (DEVICE_CACHES.iter())
+            .flat_map(|&(w, h, bpr, count)| (0..count).map(move |_| (w, h, bpr)))
+            .map(|(w, h, bpr)| {
+                let descriptor = BufferDescriptor::new(
+                    bpr * h,
+                    ResourceOptions::private(),
+                    BufferContents::Zero,
+                );
+                let descriptor = match declared {
+                    true => descriptor.with_padding_unobserved(),
+                    false => descriptor,
+                };
+                let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+                let texture = rendered(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
+                (buffer, texture)
+            })
+            .collect();
+        let after = device.work_counts();
+        let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
+        let shadows = after.shadowed_textures - before.shadowed_textures;
+        assert!(
+            declared || shadows == caches.len() as u64,
+            "undeclared: shadows"
+        );
+        let mut times = Vec::with_capacity(FRAMES);
+        for frame in 0..FRAMES {
+            let command_buffer = queue.command_buffer().unwrap();
+            for (_, texture) in &caches {
+                let mut pass = RenderPassDescriptor::new();
+                let color = &mut pass.color_attachments[0];
+                color.texture = Some(texture.clone());
+                color.load_action = LoadAction::Clear;
+                color.clear_color = ClearColor::new(frame as f64 / 64.0, 0.5, 0.25, 1.0);
+                color.store_action = StoreAction::Store;
+                let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+                encoder.end_encoding().unwrap();
+            }
+            for (_, texture) in &caches {
+                let mut pass = RenderPassDescriptor::new();
+                let color = &mut pass.color_attachments[0];
+                color.texture = Some(target.clone());
+                color.load_action = LoadAction::DontCare;
+                color.store_action = StoreAction::Store;
+                let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
+                encoder.set_render_pipeline_state(&reads).unwrap();
+                encoder
+                    .set_scissor_rect(ScissorRect::new(0, 0, texture.width(), texture.height()))
+                    .unwrap();
+                encoder.set_vertex_buffer(Some(&corners), 0, 0).unwrap();
+                encoder.set_fragment_texture(Some(texture), 0).unwrap();
+                encoder
+                    .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+                    .unwrap();
+                encoder.end_encoding().unwrap();
+            }
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None);
+            let gpu =
+                command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+            times.push(gpu);
+        }
+        times.sort_by(f64::total_cmp);
+        eprintln!(
+            "POOLED-PITCHED-COST on {}: {} device caches, declared {declared}: {pitched} in place \
+             at their pitch, {shadows} shadows; a frame's GPU time median {:.1} us, fastest {:.1} \
+             us over {} frames",
+            device.name(),
+            caches.len(),
+            times[times.len() / 2] * 1e6,
+            times[0] * 1e6,
+            times.len(),
+        );
+    }
+    messages.take_notices();
+    layer_reported_nothing_at_all(&messages);
+}
