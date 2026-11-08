@@ -232,6 +232,8 @@ pub(crate) struct Counters {
     submit_checks_run: AtomicU64,
     submit_checks_recalled: AtomicU64,
     submit_check_calls: AtomicU64,
+    check_steps_aside: AtomicU64,
+    check_aside_nanos: AtomicU64,
     queue_sharing_untimed: AtomicU64,
     slot_wait_nanos: AtomicU64,
     completed_waits: AtomicU64,
@@ -2226,6 +2228,14 @@ impl Counters {
     /// `device/relay.rs`).
     pub(crate) fn submit_check_called(&self, calls: usize) {
         (self.submit_check_calls).fetch_add(calls as u64, Ordering::Relaxed);
+    }
+
+    /// A step of one of the device's checks waited `waited` for the device's allocations and
+    /// frees on other threads (`step_aside.rs`).
+    pub(crate) fn check_stepped_aside(&self, waited: std::time::Duration) {
+        self.check_steps_aside.fetch_add(1, Ordering::Relaxed);
+        let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+        self.check_aside_nanos.fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// A device that could share `VkQueue`s does not: its command buffers write no timestamps it
@@ -4876,6 +4886,12 @@ pub struct WorkCounts {
     /// theirs, and on a device that relays its queues' failures the relay's mark after each of
     /// their uses of a queue.
     pub submit_check_calls: u64,
+    /// Steps of the device's checks (its submission, queue-switch and in-place checks) that
+    /// waited for the device's allocations and frees on other threads before they went on
+    /// (`step_aside.rs`).
+    pub check_steps_aside: u64,
+    /// The nanoseconds those steps waited, in all.
+    pub check_aside_nanos: u64,
     /// Devices of `QueueSharingPolicy::Adaptive` with two `VkQueue`s of one family to share that
     /// do not share, because their command buffers write no calibrated GPU timestamps the host
     /// reads (`gpu_times_from_host`, a driver whose timestamps wait for every queue's, or none):
@@ -6897,6 +6913,8 @@ impl Device {
             submit_checks_run: counters.submit_checks_run.load(Ordering::Relaxed),
             submit_checks_recalled: counters.submit_checks_recalled.load(Ordering::Relaxed),
             submit_check_calls: counters.submit_check_calls.load(Ordering::Relaxed),
+            check_steps_aside: counters.check_steps_aside.load(Ordering::Relaxed),
+            check_aside_nanos: counters.check_aside_nanos.load(Ordering::Relaxed),
             queue_sharing_untimed: counters.queue_sharing_untimed.load(Ordering::Relaxed),
             completed_waits: counters.completed_waits.load(Ordering::Relaxed),
             event_waits_met: counters.event_waits_met.load(Ordering::Relaxed),

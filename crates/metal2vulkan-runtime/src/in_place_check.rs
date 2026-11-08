@@ -72,6 +72,11 @@
 //!   check, whatever runtime release made it, until the check itself changes
 //!   (`in_place::CHECK_VERSION`). A failed write leaves the verdicts for the device's life. A
 //!   forced failure is kept nowhere.
+//! - **Out of the device's way.** Before each round the thread steps aside for the device's
+//!   allocations and frees on other threads (`step_aside.rs`): it goes on once none is in
+//!   progress and none ended for `step_aside::QUIET`, at once while a call waits for its verdicts
+//!   (`Device::settle_in_place_checks`). Its own buffers and textures, made through the product's
+//!   paths on its thread, count for nothing there.
 //! - **Its thread.** Each round's Vulkan work (the buffer, the texture, the submission and its
 //!   wait, the releases) runs inside a section of the exit guard (`exit_guard.rs`), as every
 //!   runtime thread's does. It holds its device through the registry of the runtime's own holds
@@ -254,10 +259,23 @@ impl Device {
     }
 }
 
+/// Before a round, step aside for the device's allocations and frees on other threads
+/// (`step_aside.rs`): not while the program's last drop stops the check or a call waits for its
+/// verdicts. Counted where it waited.
+fn step_aside(device: &Device) {
+    let shared = device.shared();
+    let activity = shared.allocations.allocations.activity();
+    let stop = || shared.holds.stopping() || shared.in_place.awaited();
+    if let Some(waited) = activity.step_aside(stop) {
+        shared.counts.check_stepped_aside(waited);
+    }
+}
+
 /// The check's thread: each class in turn, each of its accesses, each verdict given as it is
 /// known, then the record.
 fn run(weak: crate::device::WeakDevice) {
     mark_checking();
+    crate::step_aside::mark_a_check_s_thread();
     let started = Instant::now();
     let mut stopped = false;
     for class in PagesClass::ALL {
@@ -357,6 +375,7 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
             if !device.holds_go_on(Holder::InPlaceCheck) {
                 return None;
             }
+            step_aside(device);
             if word_overwritten(device) {
                 return Some(Verdict::Unchecked);
             }

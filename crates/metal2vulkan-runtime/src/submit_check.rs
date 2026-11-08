@@ -94,6 +94,13 @@
 //!   tax is the kernel's work on RADV), the check's version and the runtime's ([`record_name`]):
 //!   a device of the same driver, release and kernel reads them as it is made and runs no check.
 //!   A failed write leaves the verdicts for the device's life.
+//! - **Out of the device's way.** Before each step that allocates, frees, maps or unmaps pages,
+//!   or submits (each round, each import and its release, each submission of a phase, each copy
+//!   and remap), the thread steps aside for the device's allocations and frees on other threads
+//!   (`step_aside.rs`): it goes on once none is in progress and none ended for
+//!   `step_aside::QUIET`, at once while a call waits for its verdicts (`ANSWER_WAIT`,
+//!   `Device::settle_submit_checks`). Beside a program's burst of makings its verdicts so come
+//!   after the burst.
 //! - **Its thread** holds nothing of the device, as the queue-switch check's does
 //!   (`queue_switch_check.rs`): only the parts of it the checks work with ([`Parts`]), never a
 //!   handle, so the device's last handle never goes on it. It reads the stop between its steps
@@ -107,6 +114,7 @@
 //!   among none of the device's (`WorkCounts::commands_recorded`, `recorder::unrouted`). Its
 //!   submission calls hold the device's loader word (`loader_word.rs`).
 
+use crate::allocations::Allocations;
 use crate::command_buffer::fences::Fences;
 use crate::device::functions::{Functions, Vk};
 use crate::device::relay::{By, QueueUses};
@@ -126,7 +134,7 @@ use ash::vk;
 use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -267,6 +275,9 @@ pub(crate) struct SubmitChecks {
     unearned: AtomicBool,
     /// The device's teardown stopped the checks ([`SubmitChecks::stop`]): read between steps.
     stopping: AtomicBool,
+    /// The calls waiting for the verdicts ([`SubmitChecks::wait`]), for which no step steps
+    /// aside (`step_aside.rs`).
+    waiters: AtomicU32,
     /// Whether the checks' thread runs, and what tells its end.
     running: Mutex<bool>,
     ending: Condvar,
@@ -289,6 +300,7 @@ impl SubmitChecks {
             split: AtomicU64::new(0),
             unearned: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
+            waiters: AtomicU32::new(0),
             running: Mutex::new(false),
             ending: Condvar::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -354,6 +366,11 @@ impl SubmitChecks {
         self.stopping.load(Ordering::SeqCst)
     }
 
+    /// Whether a call waits for the verdicts ([`SubmitChecks::wait`]).
+    fn awaited(&self) -> bool {
+        self.waiters.load(Ordering::Acquire) > 0
+    }
+
     /// The checks' thread runs, or (`false`) ended: the device's teardown waits for its end.
     fn set_running(&self, running: bool) {
         *lock(&self.running) = running;
@@ -401,9 +418,12 @@ impl SubmitChecks {
         self.wake.notify_all();
     }
 
-    /// Wait until the verdicts are known, or `timeout` passed: whether they are.
+    /// Wait until the verdicts are known, or `timeout` passed: whether they are. Meanwhile the
+    /// checks step aside for nothing (`step_aside.rs`).
     fn wait(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
+        self.waiters.fetch_add(1, Ordering::AcqRel);
+        let _waiting = Waiting(&self.waiters);
         let mut settled = lock(&self.settled);
         while !*settled {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -665,6 +685,7 @@ impl Device {
             let _ends = Ends(Arc::clone(&parts.checks));
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             crate::loader_word::on_a_check_s_thread();
+            crate::step_aside::mark_a_check_s_thread();
             let parts = parts;
             run(&parts, made);
         });
@@ -770,6 +791,9 @@ struct Parts {
     fences: Arc<Fences>,
     loader_word: Arc<DeviceWord>,
     checks: Arc<SubmitChecks>,
+    /// The device's allocations, whose work in progress the checks step aside for
+    /// (`step_aside.rs`).
+    allocations: Arc<Allocations>,
     store: Arc<Store>,
     /// The device's importer of host pointers, where it imports them.
     importer: Option<Importer>,
@@ -844,6 +868,7 @@ impl Parts {
             fences: Arc::clone(&shared.fences),
             loader_word: Arc::clone(&shared.loader_word),
             checks: Arc::clone(&shared.submit_checks),
+            allocations: Arc::clone(&shared.allocations.allocations),
             store: shared.shader_cache.content_store_share(),
             importer: shared.host_import.as_ref().ok().cloned(),
             families: shared.queue_families.clone(),
@@ -876,11 +901,33 @@ impl Parts {
         unsafe { self.loader_word.step_hold(None) }
     }
 
-    /// Whether the checks go on to their next step (the device's teardown stops them).
+    /// Whether the checks go on to their next step (the device's teardown stops them), once they
+    /// stepped aside for the device's other work ([`Parts::step`]).
     fn goes_on(&self) -> bool {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.checks.held.pass();
+        self.step();
         !self.checks.stopping()
+    }
+
+    /// Step aside for the device's allocations and frees on other threads before a step that
+    /// allocates, frees, maps or submits (`step_aside.rs`): not while the checks stop or a call
+    /// waits for their verdicts. Counted where it waited.
+    fn step(&self) {
+        let checks = &*self.checks;
+        let activity = self.allocations.activity();
+        if let Some(waited) = activity.step_aside(|| checks.stopping() || checks.awaited()) {
+            self.counts.check_stepped_aside(waited);
+        }
+    }
+}
+
+/// A call waiting for the verdicts ([`SubmitChecks::wait`]), counted until it returns.
+struct Waiting<'a>(&'a AtomicU32);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -898,11 +945,13 @@ impl Drop for Ends {
 fn run(parts: &Parts, made: Made) {
     let checks = &*parts.checks;
     let started = Instant::now();
+    parts.step();
     let Some(objects) = Objects::make(parts, made) else {
         checks.settle_unchecked();
         return;
     };
     let ran = measure(parts, &objects);
+    parts.step();
     let released = objects.release(parts);
     let Some((measured, kept)) = ran.filter(|_| released) else {
         // The process is exiting, or the device's teardown stopped the checks: nothing is kept.
@@ -1023,7 +1072,10 @@ fn merge(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
 /// the system maps no pages or a call was refused; `None` where the check stops.
 fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
     let Some(pieces) = (0..TAX_IMPORTS)
-        .map(|_| Pages::map(TAX_BYTES / TAX_IMPORTS))
+        .map(|_| {
+            parts.step();
+            Pages::map(TAX_BYTES / TAX_IMPORTS)
+        })
         .collect::<Option<Vec<Pages>>>()
     else {
         return Some(None);
@@ -1040,6 +1092,7 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         let mut imports = Vec::new();
         if holding {
             for pages in &pieces {
+                parts.step();
                 match Import::make(parts, pages, false) {
                     Some(Some(import)) => imports.push(import),
                     made => {
@@ -1054,6 +1107,7 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         let mut times = Vec::with_capacity(TAX_SUBMITS);
         let mut refused = false;
         for submission in 0..=TAX_SUBMITS {
+            parts.step();
             match objects.submit_one(parts)? {
                 Some(nanos) if submission > 0 => times.push(nanos),
                 Some(_) => {}
@@ -1064,6 +1118,7 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
             }
         }
         for import in imports {
+            parts.step();
             import.release(parts)?;
         }
         if refused {
@@ -1133,10 +1188,12 @@ fn follows_pair(
     page: u64,
     before_first: bool,
 ) -> Option<Option<Read>> {
+    parts.step();
     let Some(pages) = Pages::map(2 * page) else {
         return Some(None);
     };
     pages.fill(OLD);
+    parts.step();
     let Some(import) = Import::make(parts, &pages, true)? else {
         return Some(None);
     };
@@ -1154,6 +1211,7 @@ fn follows_pair(
     let answer = (|| {
         if !before_first {
             pages.clear_second(page);
+            parts.step();
             if !objects.copy(parts, &import, page)? {
                 return Some(None);
             }
@@ -1161,15 +1219,19 @@ fn follows_pair(
                 return Some(None);
             }
         }
+        parts.step();
         if !pages.replace_first(page) {
             return Some(None);
         }
         pages.clear_second(page);
+        parts.step();
         if !objects.copy(parts, &import, page)? {
             return Some(None);
         }
         Some(Some(read(&pages)))
     })();
+    // The import's free, then the pages' unmapping as they go.
+    parts.step();
     import.release(parts)?;
     answer
 }

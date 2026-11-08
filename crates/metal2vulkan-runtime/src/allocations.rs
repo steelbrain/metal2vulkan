@@ -26,6 +26,7 @@
 //!   object took ([`Allocations::made`]), so they are gone before they could take the last.
 
 use crate::free_thread::FreeThread;
+use crate::step_aside::Activity;
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -48,6 +49,9 @@ pub(crate) struct Allocations {
     /// The device's free thread, whose posted frees an allocation at the limit waits for, set
     /// once the device is made.
     frees: OnceLock<Arc<FreeThread>>,
+    /// The allocations and frees in progress on threads not the device's checks', which those
+    /// step aside for (`step_aside.rs`).
+    activity: Activity,
 }
 
 impl Allocations {
@@ -59,7 +63,14 @@ impl Allocations {
             ahead: AtomicBool::new(false),
             give_back: OnceLock::new(),
             frees: OnceLock::new(),
+            activity: Activity::new(),
         }
+    }
+
+    /// The device's allocations and frees in progress on threads not its checks'
+    /// (`step_aside.rs`).
+    pub(crate) fn activity(&self) -> &Activity {
+        &self.activity
     }
 
     /// The margin of the limit the runtime's work ahead leaves: a quarter (1024 of the 4096 the
@@ -193,7 +204,7 @@ pub(crate) fn register(device: vk::Device, limit: u32) -> Registered {
 }
 
 /// `device`'s count, where it is registered.
-fn of(device: vk::Device) -> Option<Arc<Allocations>> {
+pub(crate) fn of(device: vk::Device) -> Option<Arc<Allocations>> {
     let devices = lock();
     (devices.iter())
         .find(|(known, _)| *known == device)
@@ -228,10 +239,30 @@ pub(crate) fn allocated(allocations: Option<Arc<Allocations>>, made: bool) {
     }
 }
 
-/// One allocation of `device` was freed.
-pub(crate) fn freed(device: vk::Device) {
-    if let Some(allocations) = of(device) {
+/// One allocation of the device of `allocations` (its count, where it is registered: [`of`]) was
+/// freed.
+pub(crate) fn freed(allocations: Option<&Allocations>) {
+    if let Some(allocations) = allocations {
         allocations.give();
+    }
+}
+
+/// An allocation or free of the device of `allocations` in progress on this thread, counted for
+/// its checks to step aside for (`step_aside.rs`) until this goes: none where the device is not
+/// registered or this is a check's thread.
+pub(crate) struct Busy<'a>(Option<&'a Allocations>);
+
+impl<'a> Busy<'a> {
+    pub(crate) fn of(allocations: Option<&'a Allocations>) -> Busy<'a> {
+        Busy(allocations.filter(|allocations| allocations.activity.begin()))
+    }
+}
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        if let Some(allocations) = self.0 {
+            allocations.activity.end();
+        }
     }
 }
 
@@ -289,7 +320,7 @@ mod tests {
         let admitted = before_allocation(handle).unwrap();
         allocated(admitted, true);
         assert_eq!(registered.allocations.live(), 1);
-        freed(handle);
+        freed(of(handle).as_deref());
         assert_eq!(registered.allocations.live(), 0);
         drop(registered);
         assert!(of(handle).is_none());

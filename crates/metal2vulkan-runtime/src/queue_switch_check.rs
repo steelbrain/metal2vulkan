@@ -31,6 +31,10 @@
 //!   (`shader_cache/store.rs`), named by the driver's identity, the check's version and the
 //!   runtime's (`queue_share::record_name`): a device of the same driver and release reads it as
 //!   it is made and runs no check. A failed run is kept nowhere.
+//! - **Out of the device's way.** Before each round the thread steps aside for the device's
+//!   allocations and frees on other threads (`step_aside.rs`): it goes on once none is in
+//!   progress and none ended for `step_aside::QUIET`, at once while a call waits for its verdict
+//!   (`Device::settle_queue_switch_check`).
 //! - **Its thread.** Each reach of the device runs inside a section of the exit guard
 //!   (`exit_guard.rs`), as every runtime thread's does: the objects' making, the submissions, each
 //!   wait of at most [`WAIT_SLICE`], and the releases. Once the process is exiting it ends,
@@ -50,6 +54,7 @@
 //!   then for the check to let its objects go, unrecorded and its verdict `Unchecked`, before the
 //!   check's thread drops its shares of the device's parts and ends.
 
+use crate::allocations::Allocations;
 use crate::command_buffer::fences::Fences;
 use crate::device::functions::{Functions, Vk};
 use crate::device::relay::{By, Mark, QueueUses};
@@ -117,6 +122,7 @@ pub(crate) fn start(device: &Device) -> bool {
         let switch = Arc::clone(&parts.switch);
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         crate::loader_word::on_a_check_s_thread();
+        crate::step_aside::mark_a_check_s_thread();
         run(&parts, made);
         // Its shares go before the teardown that waits for it goes on.
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -196,6 +202,9 @@ struct Parts {
     fences: Arc<Fences>,
     loader_word: Arc<DeviceWord>,
     switch: Arc<QueueSwitch>,
+    /// The device's allocations, whose work in progress the check steps aside for
+    /// (`step_aside.rs`).
+    allocations: Arc<Allocations>,
     store: Arc<Store>,
     /// The primary family, its pool's.
     family: u32,
@@ -221,6 +230,7 @@ impl Parts {
             fences: Arc::clone(&shared.fences),
             loader_word: Arc::clone(&shared.loader_word),
             switch: Arc::clone(&shared.queue_switch),
+            allocations: Arc::clone(&shared.allocations.allocations),
             store: shared.shader_cache.content_store_share(),
             family: shared.queue_family,
             round_robin: shared.round_robin(),
@@ -233,6 +243,17 @@ impl Parts {
     /// The device's functions.
     fn vk(&self) -> &Vk {
         self.functions.get()
+    }
+
+    /// Step aside for the device's allocations and frees on other threads before a round
+    /// (`step_aside.rs`): not while the check stops or a call waits for its verdict. Counted where
+    /// it waited.
+    fn step(&self) {
+        let switch = &*self.switch;
+        let activity = self.allocations.activity();
+        if let Some(waited) = activity.step_aside(|| switch.stopping() || switch.awaited()) {
+            self.counts.check_stepped_aside(waited);
+        }
     }
 
     /// What a use of one of the device's `VkQueue`s reaches.
@@ -424,6 +445,7 @@ impl Objects {
             if parts.switch.stopping() {
                 return Ok(false);
             }
+            parts.step();
             let queues = match round % 2 {
                 0 => [pair.0, pair.1],
                 _ => [pair.0, pair.0],

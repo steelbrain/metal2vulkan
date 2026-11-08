@@ -100,7 +100,8 @@ pub(crate) unsafe fn image_view(
 /// `VkDeviceMemory` of `info`, allocated by `device`: one call of `vkAllocateMemory`, counted
 /// whether or not the driver gave it, because a caller that tries memory types in turn pays for
 /// each try. Refused (`ERROR_TOO_MANY_OBJECTS`) with no call where the device has
-/// `maxMemoryAllocationCount` allocations live (`allocations.rs`).
+/// `maxMemoryAllocationCount` allocations live (`allocations.rs`). The call is the device's work
+/// in progress for its checks to step aside for (`step_aside.rs`).
 ///
 /// # Safety
 ///
@@ -115,8 +116,10 @@ pub(crate) unsafe fn allocate_memory(
         return Err(vk::Result::ERROR_TOO_MANY_OBJECTS);
     };
     vk_made(VkMaking::Memory, Location::caller());
+    let busy = allocations::Busy::of(admitted.as_deref());
     // SAFETY: the caller's.
     let memory = unsafe { device.allocate_memory(info, None) };
+    drop(busy);
     allocations::allocated(admitted, memory.is_ok());
     memory
 }

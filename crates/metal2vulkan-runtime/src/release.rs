@@ -40,7 +40,8 @@ pub(crate) struct WholeDevice;
 /// entry point; once the process is exiting, leave it to the process's end. Whether it was
 /// released. Inside a section already (a whole drop's), it is always released. An image, a
 /// buffer or a memory released is counted at its caller's place (`churn_counts.rs`), and a memory
-/// among its device's live allocations too (`allocations.rs`).
+/// among its device's live allocations too (`allocations.rs`), its free the device's work in
+/// progress for its checks to step aside for (`step_aside.rs`).
 ///
 /// # Safety
 ///
@@ -50,8 +51,12 @@ pub(crate) unsafe fn object<T: Released>(device: &ash::Device, object: T) -> boo
     let Some(_busy) = exit_guard::enter() else {
         return false;
     };
+    let frees = matches!(T::CALL, Call::FreeMemory);
+    let allocations = frees.then(|| allocations::of(device.handle())).flatten();
+    let in_progress = allocations::Busy::of(allocations.as_deref());
     // SAFETY: the caller's.
     unsafe { object.destroy(device, Door(())) };
+    drop(in_progress);
     exit_guard::called(T::CALL);
     let counted = match T::CALL {
         Call::DestroyImage => Some(VkRelease::Image),
@@ -63,8 +68,8 @@ pub(crate) unsafe fn object<T: Released>(device: &ash::Device, object: T) -> boo
     if let Some(what) = counted {
         churn_counts::vk_released(what, Location::caller());
     }
-    if matches!(T::CALL, Call::FreeMemory) {
-        allocations::freed(device.handle());
+    if frees {
+        allocations::freed(allocations.as_deref());
     }
     true
 }

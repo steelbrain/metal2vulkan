@@ -68,7 +68,9 @@ use crate::in_place::DriverIdentity;
 use crate::shader_cache::store::{hex, Lookup};
 use metal2vulkan::device::QueueSharingPolicy;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering,
+};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -342,6 +344,9 @@ pub(crate) struct QueueSwitch {
     ending: Condvar,
     /// The device's teardown began: the check stops at its next step ([`stop`](Self::stop)).
     stopping: AtomicBool,
+    /// The calls waiting for the verdict ([`QueueSwitch::wait`]), for which no round steps aside
+    /// (`step_aside.rs`).
+    waiters: AtomicU32,
     /// How long the teardown waited for the check's thread to end, in nanoseconds: 0 where it
     /// waited for none.
     stop_waited: AtomicU64,
@@ -373,6 +378,7 @@ impl QueueSwitch {
             running: Mutex::new(false),
             ending: Condvar::new(),
             stopping: AtomicBool::new(false),
+            waiters: AtomicU32::new(0),
             stop_waited: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Default::default(),
@@ -431,6 +437,11 @@ impl QueueSwitch {
     /// Whether the device's teardown began, so the check stops at its next step.
     pub(crate) fn stopping(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
+    }
+
+    /// Whether a call waits for the verdict ([`QueueSwitch::wait`]).
+    pub(crate) fn awaited(&self) -> bool {
+        self.waiters.load(Ordering::Acquire) > 0
     }
 
     /// The device's teardown: the check stops at its next step, and this waits until its thread
@@ -508,9 +519,12 @@ impl QueueSwitch {
         self.wake.notify_all();
     }
 
-    /// Wait until the verdict is known, or `timeout` passed: whether it is.
+    /// Wait until the verdict is known, or `timeout` passed: whether it is. Meanwhile the check's
+    /// rounds step aside for nothing (`step_aside.rs`).
     fn wait(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
+        self.waiters.fetch_add(1, Ordering::AcqRel);
+        let _waiting = Waiting(&self.waiters);
         let mut settled = lock(&self.settled);
         while !*settled {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -523,6 +537,15 @@ impl QueueSwitch {
             };
         }
         true
+    }
+}
+
+/// A call waiting for the verdict ([`QueueSwitch::wait`]), counted until it returns.
+struct Waiting<'a>(&'a AtomicU32);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 

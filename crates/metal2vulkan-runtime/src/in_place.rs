@@ -79,7 +79,7 @@ use ash::vk;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::TextureUsage;
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -392,6 +392,9 @@ pub(crate) struct InPlaceChecks {
     took: AtomicU64,
     /// What the check found changed, where a class failed: a line for each.
     notes: Mutex<Vec<String>>,
+    /// The calls waiting for the verdicts ([`InPlaceChecks::wait`]), for which no round steps
+    /// aside (`step_aside.rs`).
+    waiters: AtomicU32,
 }
 
 impl InPlaceChecks {
@@ -405,7 +408,13 @@ impl InPlaceChecks {
             fail,
             took: AtomicU64::new(0),
             notes: Mutex::new(Vec::new()),
+            waiters: AtomicU32::new(0),
         }
+    }
+
+    /// Whether a call waits for the verdicts ([`InPlaceChecks::wait`]).
+    pub(crate) fn awaited(&self) -> bool {
+        self.waiters.load(Ordering::Acquire) > 0
     }
 
     /// Note what the check found changed.
@@ -452,9 +461,12 @@ impl InPlaceChecks {
         self.wake.notify_all();
     }
 
-    /// Wait until every verdict is known, or `timeout` passed: whether they are.
+    /// Wait until every verdict is known, or `timeout` passed: whether they are. Meanwhile the
+    /// check's rounds step aside for nothing (`step_aside.rs`).
     pub(crate) fn wait(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
+        self.waiters.fetch_add(1, Ordering::AcqRel);
+        let _waiting = Waiting(&self.waiters);
         let mut settled = lock(&self.settled);
         while !*settled {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -475,6 +487,15 @@ impl InPlaceChecks {
             0 => None,
             nanos => Some(Duration::from_nanos(nanos)),
         }
+    }
+}
+
+/// A call waiting for the verdicts ([`InPlaceChecks::wait`]), counted until it returns.
+struct Waiting<'a>(&'a AtomicU32);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
