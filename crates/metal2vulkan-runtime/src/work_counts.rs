@@ -7312,7 +7312,7 @@ impl Device {
             let at = let_go.map_or(0, |let_go| let_go as usize + 1);
             counters.shadow_texels_unskipped_standing[at].load(Ordering::Relaxed)
         };
-        let split = |reason: SplitReason| {
+        let split_by = |reason: SplitReason| {
             counters.reading_draws_split[reason as usize].load(Ordering::Relaxed)
         };
         let never_stood = |missed: Missed| {
@@ -8129,21 +8129,21 @@ impl Device {
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
-            reading_draws_split_unreadable_own_pixel: split(SplitReason::UnreadableOwnPixel),
-            reading_draws_split_not_in_place: split(SplitReason::NotInPlace),
-            reading_draws_split_device_lacks: split(SplitReason::DeviceLacks),
-            reading_draws_split_visibility_query: split(SplitReason::VisibilityQuery),
-            reading_draws_split_pass_shape: split(SplitReason::PassShape),
-            reading_draws_split_other_format: split(SplitReason::OtherFormat),
-            reading_draws_split_stand_in: split(SplitReason::StandIn),
-            reading_draws_split_one_image: split(SplitReason::OneImage),
-            reading_draws_split_coverage: split(SplitReason::Coverage),
-            reading_draws_split_area: split(SplitReason::Area),
-            reading_draws_split_variant_refused: split(SplitReason::VariantRefused),
-            reading_draws_split_slot_left_out: split(SplitReason::SlotLeftOut),
-            reading_draws_split_views: split(SplitReason::Views),
-            reading_draws_split_storage_binding: split(SplitReason::StorageBinding),
-            reading_draws_split_other_attachment: split(SplitReason::OtherAttachment),
+            reading_draws_split_unreadable_own_pixel: split_by(SplitReason::UnreadableOwnPixel),
+            reading_draws_split_not_in_place: split_by(SplitReason::NotInPlace),
+            reading_draws_split_device_lacks: split_by(SplitReason::DeviceLacks),
+            reading_draws_split_visibility_query: split_by(SplitReason::VisibilityQuery),
+            reading_draws_split_pass_shape: split_by(SplitReason::PassShape),
+            reading_draws_split_other_format: split_by(SplitReason::OtherFormat),
+            reading_draws_split_stand_in: split_by(SplitReason::StandIn),
+            reading_draws_split_one_image: split_by(SplitReason::OneImage),
+            reading_draws_split_coverage: split_by(SplitReason::Coverage),
+            reading_draws_split_area: split_by(SplitReason::Area),
+            reading_draws_split_variant_refused: split_by(SplitReason::VariantRefused),
+            reading_draws_split_slot_left_out: split_by(SplitReason::SlotLeftOut),
+            reading_draws_split_views: split_by(SplitReason::Views),
+            reading_draws_split_storage_binding: split_by(SplitReason::StorageBinding),
+            reading_draws_split_other_attachment: split_by(SplitReason::OtherAttachment),
             reading_draws_by_coverage: counters.reading_draws_by_coverage.load(Ordering::Relaxed),
             coverage_queries: counters.coverage_queries.load(Ordering::Relaxed),
             coverage_pools_made: counters.coverage_pools_made.load(Ordering::Relaxed),
