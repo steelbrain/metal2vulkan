@@ -55,10 +55,11 @@
 //!   kernel's `R8_UINT` and `R16_UINT` views (each texel a word of its buffers): a driver may
 //!   store such a texel through an access wider than it, a word or more, over the texels beside
 //!   it and past a row's end, which no wider texel's store shows, so their verdicts are their own
-//!   and a byte one of their rounds changed fails no verdict of wider texels'. Its rounds are stores: a program's
-//!   atomics on such a texture are kernels' storage writes of its texels too, but none is among
-//!   the rounds. The same rounds give the verdicts of a shader's writes of a texture over a
-//!   buffer's rows whose padding is free ([`Access::BufferWrites`], `in_place::Padding`): a round
+//!   and a byte one of their rounds changed fails no verdict of wider texels'. Its rounds are
+//!   stores: a program's atomics on such a texture are kernels' storage writes of its texels too,
+//!   but none is among the rounds. The same rounds give the verdicts of a shader's writes of a
+//!   texture over a buffer's rows whose padding is free ([`Access::BufferWrites`],
+//!   [`Access::NarrowBufferWrites`], `in_place::Padding`): a round
 //!   whose texels all read the kernel's bytes, and every byte but of its rows' padding (after a
 //!   row's last texel, before its pitch, the last row's included) the CPU's or the pattern, where
 //!   the shape's padding is free ([`Shape::padding`]), fails the one and keeps the other
