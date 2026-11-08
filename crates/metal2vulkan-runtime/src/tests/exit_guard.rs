@@ -752,6 +752,74 @@ fn an_instance_made_registers_the_hook_again() {
     );
 }
 
+/// A driver's `vkCreate*Pipelines` that returned registers the hook again, so a destructor its
+/// compiler registered in the call (a static made at its first use of a path, or the constructors
+/// of a compiler it loaded only then) runs after the hook: the child's destructor, registered
+/// before the call returned, stands for it, on the program's own thread (no section).
+#[cfg(unix)]
+#[test]
+fn a_pipeline_making_that_returned_registers_the_hook_again() {
+    assert_eq!(
+        late_destructor_exit(exit_guard::pipelines_made),
+        42,
+        "the compiler's destructor ran before the hook"
+    );
+}
+
+/// The exit of a child whose earlier making (on its own thread) left a destructor of the driver's
+/// compiler behind it, while a making of a pool's piece is still in the compiler: the hook runs
+/// first and waits for the making, and the destructor runs once it ended. The destructor ends the
+/// child with 42 when the making had ended, 43 when it ran beside it. That is an exit mid-compile:
+/// on an RTX 5080 a consumer's test process ended with `SIGSEGV` at `0x18` inside
+/// `libnvidia-glvkspirv.so`, the driver's SPIR-V compiler, on a thread of the runtime's during its
+/// exit after its test passed (one test of a whole run under load; it passed alone).
+#[cfg(unix)]
+#[test]
+fn an_exit_mid_making_waits_for_it_before_an_earlier_making_s_destructor() {
+    static ENDED: AtomicBool = AtomicBool::new(false);
+    extern "C" fn compiler_static() {
+        let code = if ENDED.load(Ordering::SeqCst) { 42 } else { 43 };
+        // SAFETY: ends the child at once, from its exit handlers.
+        unsafe { libc::_exit(code) };
+    }
+    // SAFETY: the child registers its hook and the destructor, runs a making on a thread of its
+    // own (atomics, a sleep and the C library's `atexit`), and exits.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        exit_guard::register();
+        // The earlier making: its compiler's static, registered in the call, then the call's
+        // return.
+        // SAFETY: `compiler_static` is a function with no arguments that never unwinds.
+        unsafe { libc::atexit(compiler_static) };
+        exit_guard::pipelines_made();
+        // A pool's piece, in its section, its making still in the compiler as the child exits.
+        let (started, start) = mpsc::channel();
+        let piece = exit_guard::spawn(std::thread::Builder::new(), move || {
+            let _busy = exit_guard::enter().expect("the guard is open");
+            exit_guard::driver_making(|| {
+                started.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(300));
+                ENDED.store(true, Ordering::SeqCst);
+            });
+        });
+        assert!(piece.is_ok(), "the piece's thread started");
+        start.recv_timeout(Duration::from_secs(10)).unwrap();
+        // SAFETY: exits the child; its exit handlers end it.
+        unsafe { libc::exit(0) };
+    }
+    assert!(child > 0, "fork");
+    let mut status = 0;
+    // SAFETY: `child` is this process's child.
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    assert_eq!(reaped, child);
+    assert!(libc::WIFEXITED(status), "the child did not exit: {status}");
+    assert_eq!(
+        libc::WEXITSTATUS(status),
+        42,
+        "the compiler's destructor ran beside the making"
+    );
+}
+
 /// The exit of a child that registers an end (which ends it with 42), its hook (its first
 /// device), a destructor (a layer's static first made by a call on the program's thread, which
 /// registers no hook), and its hook again (a section after an entry point's first call), with a

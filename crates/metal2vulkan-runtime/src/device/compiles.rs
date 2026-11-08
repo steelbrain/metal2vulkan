@@ -33,7 +33,9 @@
 //!   self-check's, [`holding`]) keeps those its runtime thread held, for the self-check to read.
 //! - **The exit guard.** The thread is one of the runtime's (`exit_guard::spawn_scoped`) and makes
 //!   the call inside a section of its own. Where the host starts no thread, or once the process is
-//!   exiting (the guard closed), the asking thread makes the call itself, as before.
+//!   exiting (the guard closed), the asking thread makes the call itself, as before. Each driver
+//!   call that returned, on whichever thread made it, registers the exit hook again
+//!   (`exit_guard::pipelines_made`), after the destructors the driver's compiler registered in it.
 //! - **No compile outlives its call.** The runtime's thread is joined before the call returns
 //!   (`std::thread::scope`). Each device counts the calls in progress here, and in builds with
 //!   debug assertions the runtime's last hold of the device ([`unregister`], in the teardown just
@@ -364,6 +366,7 @@ unsafe extern "system" fn create_graphics_pipelines(
             driver(device, cache, count, infos, allocator, pipelines)
         });
         exit_guard::called(Call::CreateGraphicsPipelines);
+        exit_guard::pipelines_made();
         made
     })
 }
@@ -394,6 +397,7 @@ unsafe extern "system" fn create_compute_pipelines(
             driver(device, cache, count, infos, allocator, pipelines)
         });
         exit_guard::called(Call::CreateComputePipelines);
+        exit_guard::pipelines_made();
         made
     })
 }

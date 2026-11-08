@@ -37,9 +37,14 @@ use super::{
     layer_reported_nothing_at_all, run_queue_waits, validated_device, Messages, ScratchCache,
 };
 use crate::gpu::{DeviceType, TEST_DEVICE};
+use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
+use metal2vulkan::metal::DataType;
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Deallocator, Device, DeviceKind,
-    EventRef, HostMemory, ResourceOptions, SharedEvent, SharedEventListener,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Deallocator,
+    Device, DeviceKind, EventRef, HostMemory, PipelineOptions, ResourceOptions, SharedEvent,
+    SharedEventListener, Size,
 };
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -374,6 +379,43 @@ fn fill(command_buffer: &CommandBuffer, buffer: &Buffer, length: u64) {
     blit.end_encoding().unwrap();
 }
 
+/// A compute state of `fold_config_kernel` (the fixture's `fold_config`), its two layers' opcodes
+/// from the clock (shifted by `salt` bits), so no earlier process asked the driver for the same
+/// pipeline and the driver compiles it rather than finding it in a cache of its own. Where every
+/// dispatch has `threads` threads a threadgroup, its creation makes that region's pipeline on the
+/// calling thread; else it makes none.
+fn configured(device: &Device, threads: Option<u32>, salt: u32) -> ComputePipelineState {
+    let air = llvm_assemble(&engine_dir().join("fold_config_kernel.ll")).unwrap();
+    let library = device.new_library_with_air(&air).unwrap();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.subsec_nanos());
+    let opcodes = |shift: u32| {
+        (nanos >> (shift + salt))
+            .to_le_bytes()
+            .map(|byte| byte % 16)
+    };
+    let byte = |ty, value: u8| FunctionConstantValue::new(ty, vec![value]);
+    let constants = FunctionConstantValues::defaults()
+        .with_index(0, byte(DataType::Bool, 0))
+        .with_index(1, byte(DataType::Bool, 1))
+        .with_index(2, byte(DataType::Bool, 1))
+        .with_index(3, byte(DataType::UChar, 1))
+        .with_index(4, byte(DataType::UChar, 2))
+        .with_index(5, FunctionConstantValue::new(DataType::UChar4, opcodes(0)))
+        .with_index(6, FunctionConstantValue::new(DataType::UChar4, opcodes(3)))
+        .with_index(7, byte(DataType::UChar, 2));
+    let function = library
+        .new_function_with_name_constant_values("fold_config", &constants)
+        .unwrap();
+    let mut descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    descriptor.required_threads_per_threadgroup = threads.map(|threads| [threads, 1, 1]);
+    device
+        .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
+}
+
 /// A command buffer of `queue` that fills 16 bytes of a new buffer.
 fn small(queue: &CommandQueue) -> CommandBuffer {
     let buffer = queue
@@ -460,6 +502,31 @@ fn child() {
             let stepping = stepping(&queue, &setup);
             filling.commit().unwrap();
             stepping.commit().unwrap();
+            exit_now(case, &messages);
+        }
+        "making_exit" => {
+            // A state whose creation makes its pipeline to its end on this thread: the making's
+            // driver call, the driver's compile, returns before the exit.
+            drop(configured(&device, Some(64), 0));
+            // A state whose creation makes none: its first dispatch hands its region's making to
+            // the device's pool and goes on (`pipeline/dispatch_making.rs`), and the child exits
+            // while the pool's thread is in the driver's compile.
+            let pending = configured(&device, None, 3);
+            let queue = device.new_command_queue().unwrap();
+            let buffer = device
+                .new_buffer(64 * 4, ResourceOptions::shared())
+                .unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder.set_compute_pipeline_state(&pending).unwrap();
+            encoder.set_buffer(Some(&buffer), 0, 0).unwrap();
+            encoder.set_bytes(&[0; 80], 1).unwrap();
+            encoder.set_buffer(Some(&buffer), 0, 2).unwrap();
+            encoder
+                .dispatch_threadgroups(Size::new(2, 1, 1), Size::new(32, 1, 1))
+                .unwrap();
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
             exit_now(case, &messages);
         }
         "cpu_work_exit" => {
@@ -1009,6 +1076,17 @@ fn an_exit_while_a_host_step_waits_is_clean() {
     exits_cleanly(&["host_step_pending_exit"]);
 }
 
+/// An exit while a pool's thread makes a dispatch's pipeline, after a pipeline made to its end on
+/// the program's thread, both new to the driver (`configured`): the hook, registered again after
+/// the first making's driver call, runs before every destructor the driver's compiler registered
+/// in it, and waits for the second making before them. Seen before: on an RTX 5080 a consumer's
+/// test process ended with `SIGSEGV` at `0x18` inside `libnvidia-glvkspirv.so`, the driver's SPIR-V
+/// compiler, during its exit after its test passed (one test of a whole run under load).
+#[test]
+fn an_exit_mid_making_is_clean() {
+    exits_cleanly(&["making_exit"]);
+}
+
 /// An exit while a CPU device runs work submitted before it (fills it runs for about
 /// [`CPU_WORK_TIME`], then a fill of a shared marker) runs no exit handler beside that work, which
 /// runs on the process's own threads: the hook waits for the work, and the marker is written by
@@ -1219,7 +1297,8 @@ fn a_dropped_command_buffer_completes_once_its_event_is_signalled() {
 /// load stays loaded: with one device held, whose instance keeps the Vulkan loader, the driver and
 /// the layers loaded, 16 devices made and dropped after two that warm up add no registration at a
 /// device, one after each of their instances (a layer registers an exit handler at each), and the
-/// sections' registrations stay within their bound.
+/// sections' registrations stay within their bound (one after each pipeline making, priming's
+/// included, aside).
 #[test]
 fn devices_made_again_register_the_exit_hook_no_more() {
     let cache = ScratchCache::new().unwrap();
@@ -1245,7 +1324,8 @@ fn devices_made_again_register_the_exit_hook_no_more() {
             "each instance made registers the hook once after it"
         );
         assert!(
-            after.total - after.at_devices - after.at_instances <= after.section_bound,
+            after.total - after.at_devices - after.at_instances - after.at_makings
+                <= after.section_bound,
             "the sections registered past their bound: {after:?}"
         );
         drop(held);

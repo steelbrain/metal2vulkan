@@ -88,7 +88,19 @@
 //!   entry point the runtime calls in sections ([`Call`], a fixed set) registers the hook again,
 //!   after anything that call registered, and so does every section whose count in the process
 //!   reaches a power of two, for statics made at a later call with new parameters: at most 64,
-//!   and one per entry point of the table at each load. A load is where the first call counts
+//!   and one per entry point of the table at each load. Each `vkCreate*Pipelines` the runtime
+//!   makes on a device (`device/compiles.rs`, their one door: a pool's piece, a host step's, the
+//!   warm pass's, a self-check's, or the program's own on its thread) registers it again as the
+//!   driver's call returns, while the guard is open ([`pipelines_made`]): a
+//!   making runs the driver's compiler, which makes its statics at the first use of each of its
+//!   paths (a driver may load its compiler as a shared object only at its first compile), at any
+//!   making of the process's life, and a making takes milliseconds to seconds, beside which one
+//!   more entry in the C library's list of exit handlers costs nothing. So every destructor a
+//!   making that returned registered runs after the hook, which waits for the makings in progress
+//!   before it. Seen before: on an RTX 5080 (NVIDIA's driver), a consumer's test process ended
+//!   with `SIGSEGV` at `0x18` inside `libnvidia-glvkspirv.so`, the driver's SPIR-V compiler, on a
+//!   thread the test's had started, during its exit after its test passed: one test of a whole
+//!   run under load, which passed alone. A load is where the first call counts
 //!   from: the Vulkan loader unloads the layers with the last instance and loads them again with
 //!   the next, which make their statics again at each entry point's first call after the device
 //!   that registered at the load; so that device forgets the entry points called before
@@ -109,9 +121,10 @@
 //!   program makes once it learned of a section's work (from a handler, a wait, a status) comes
 //!   after that section's registration. Measured: while the scheduler posted a command buffer's
 //!   scheduling inside its section, an exit from a scheduled handler crashed the completion's poll
-//!   on MoltenVK in 10 runs of 10. The hole left: a static first made by a call after the hook's
-//!   last registration (one in progress as the exit begins included), when the process exits before
-//!   the next registration. The program's own calls register nothing, so one of those may make it
+//!   on MoltenVK in 10 runs of 10. The hole left: a static first made by a making in progress as
+//!   the exit begins, or by another call (not a making) after the hook's last registration, when
+//!   the process exits before the next registration. The program's own calls but its makings
+//!   register nothing, so one of those may make it
 //!   too: on the M3 Max (the validation layer 1.4.357.0 from Homebrew), the layer's descriptor set
 //!   layouts' empty lists
 //!   (`DescriptorSetLayoutDef::GetMutableTypes` and `GetImmutableSamplerCreateInfosFromIndex`),
@@ -265,6 +278,9 @@ pub(crate) fn runs_in_process(device: Weak<dyn InProcess>) {
 
 /// The process the hook is registered in; 0 before the first device.
 static REGISTERED: AtomicU32 = AtomicU32::new(0);
+
+/// The hook's registrations after makings ([`driver_making`]).
+static AT_MAKINGS: AtomicU64 = AtomicU64::new(0);
 
 /// The sections of the process's guard that ended: the hook is registered again when it reaches
 /// a power of two.
@@ -835,6 +851,17 @@ pub(crate) fn driver_making<T>(make: impl FnOnce() -> T) -> T {
     make()
 }
 
+/// A driver's `vkCreate*Pipelines` returned, on this thread, whichever it is (`device/compiles.rs`,
+/// the door of every one the runtime makes): register the hook again where it is registered in
+/// this process and the guard is still open, after every destructor the driver's compiler
+/// registered in the call (the module docs, "Registered again").
+pub(crate) fn pipelines_made() {
+    if !GUARD.is_closed() && REGISTERED.load(Ordering::SeqCst) == std::process::id() {
+        AT_MAKINGS.fetch_add(1, Ordering::Relaxed);
+        install();
+    }
+}
+
 /// This thread called `call`; the section it is in registers the hook again as it ends if no
 /// section that ended had called it.
 pub(crate) fn called(call: Call) {
@@ -1370,8 +1397,10 @@ pub struct Registrations {
     pub at_devices: u64,
     /// After instances the runtime created.
     pub at_instances: u64,
-    /// In all: at devices, after instances, and at the end of sections (after the first call of
-    /// an entry point of the table, and at powers of two of the sections' count).
+    /// After makings of `VkPipeline`s, one per making.
+    pub at_makings: u64,
+    /// In all: at devices, after instances, after makings, and at the end of sections (after the
+    /// first call of an entry point of the table, and at powers of two of the sections' count).
     pub total: u64,
     /// The most the sections can make: one per entry point of the table at each load a device
     /// was made after, the process's first device's included (It was one per entry point), and 64.
@@ -1383,6 +1412,7 @@ pub fn registrations() -> Registrations {
     Registrations {
         at_devices: AT_DEVICES.load(Ordering::Relaxed),
         at_instances: AT_INSTANCES.load(Ordering::Relaxed),
+        at_makings: AT_MAKINGS.load(Ordering::Relaxed),
         total: INSTALLED.load(Ordering::Relaxed),
         section_bound: Call::ALL.len() as u64 * LOADS.load(Ordering::Relaxed).max(1) + 64,
     }
