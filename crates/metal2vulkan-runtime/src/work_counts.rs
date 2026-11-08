@@ -4023,18 +4023,20 @@ pub struct CopySite {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemoryFrees {
     /// Blocks freed as the one resource placed in them went: a placement larger than half a
-    /// block, or an image bound while work was queued. One guest or runtime object going away,
-    /// each with memory of its own, so nothing but a shorter lifetime removes these.
+    /// block, an image bound while work was queued, or an exportable buffer's dedicated
+    /// allocation, each with memory of its own, past what its heap keeps empty
+    /// (`memory.rs`'s `KEPT_EMPTY_BYTES`). A kept one takes the next placement of its size.
     pub dedicated: u64,
     /// Pooled blocks freed as their last placement left them, their pool already keeping as many
-    /// empty ones as it keeps (`memory.rs`'s `KEPT_EMPTY_BLOCKS`). The allocator's own churn: a
-    /// working set that dips below its blocks and comes back frees and makes a block each time.
+    /// empty ones as it keeps and their heap as many bytes (`memory.rs`'s `KEPT_EMPTY_BLOCKS`
+    /// and `KEPT_EMPTY_BYTES`). The allocator's own churn: a working set that dips below its
+    /// blocks by more than those and comes back frees and makes a block each time.
     pub pooled_emptied: u64,
-    /// Kept empty pooled blocks freed after their quiet period without a placement
-    /// (`memory.rs`'s `KEPT_EMPTY_FOR`): a working set that shrank for good.
+    /// Kept empty blocks, pooled and dedicated, freed after their quiet period without a
+    /// placement (`memory.rs`'s `KEPT_EMPTY_FOR`): a working set that shrank for good.
     pub kept_stale: u64,
-    /// Kept empty pooled blocks freed so that a block of their memory type could be made, as one
-    /// failed to be made: the allocator giving memory back under pressure.
+    /// Kept empty blocks, pooled and dedicated, freed so that a block of their memory type could
+    /// be made, as one failed to be made: the allocator giving memory back under pressure.
     pub kept_for_room: u64,
     /// Imports of the caller's host memory, a dedicated block each, freed as their placement went
     /// (`memory::import_host`).
@@ -4609,15 +4611,17 @@ pub struct WorkCounts {
     /// with the blocks below and every dma-buf import, the allocations ANV on i915 lists in each
     /// of its kernel submissions, beside its own buffer objects.
     pub memory_blocks_live: u64,
-    /// Its live pooled blocks with no placement, kept for the next.
+    /// Its live blocks with no placement, pooled or dedicated, kept for the next placements
+    /// (`memory.rs`'s `KEPT_EMPTY_BLOCKS` and `KEPT_EMPTY_BYTES`).
     pub empty_memory_blocks_live: u64,
     /// The pooled blocks it made so far (`memory.rs`), each a `vkAllocateMemory`.
     pub pooled_memory_blocks_made: u64,
-    /// The pooled blocks it freed so far: emptied while its pool kept as many empty ones as it
-    /// keeps, kept empty past their quiet period, or freed for a block of their type that
-    /// failed to be made (`memory.rs`'s `KEPT_EMPTY_BLOCKS`).
+    /// The pooled blocks it freed so far: emptied past what their pool and heap keep, kept empty
+    /// past their quiet period, or freed for a block of their type that failed to be made
+    /// (`memory.rs`'s `KEPT_EMPTY_BLOCKS`, `KEPT_EMPTY_BYTES` and `KEPT_EMPTY_FOR`).
     pub pooled_memory_blocks_freed: u64,
-    /// Its live dedicated blocks: a placement larger than half a block, or one placed apart.
+    /// Its live dedicated blocks with their placement: a placement larger than half a block, one
+    /// placed apart, or an exportable buffer's dedicated allocation (`exported_memory.rs`).
     pub dedicated_memory_blocks_live: u64,
     /// Of `pooled_memory_blocks_made`, the blocks of the pool a color texture's host-transfer
     /// image places in made ready off the program's thread: allocated and every page of their
