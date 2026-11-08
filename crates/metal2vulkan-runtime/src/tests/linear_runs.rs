@@ -24,8 +24,8 @@ use super::merge_scratch::{blending, blit, bytes, drawn, first_bytes, staged, ta
 use super::merge_scratch::{Host, Over, H, TEXEL};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandQueue, Device, EventRef, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size,
+    StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
@@ -531,14 +531,24 @@ const CHUNK_PASSES: usize = 706;
 /// The bytes between two passes' data in [`passes_reading_host_pages_form_one_run`]'s chunk.
 const CHUNK_STRIDE: u64 = 256;
 
+/// Where a pass of [`pass_from`] reads its rectangle and color.
+#[derive(Clone, Copy)]
+enum Data<'a> {
+    /// Its own bytes (`setVertexBytes`, `setFragmentBytes`).
+    Bytes(([f32; 4], [f32; 4])),
+    /// A buffer's, at an offset and 16 bytes after (as a consumer's `setVertexBytes` and
+    /// `setFragmentBytes` land in an upload chunk of its own).
+    Chunk(&'a Buffer, u64),
+}
+
 /// Encode a pass over `texture` beside `depth`, loading and storing it, that blends with `state`
-/// the rectangle and the color `chunk` holds at `at` and 16 bytes after (as a consumer's
-/// `setVertexBytes` and `setFragmentBytes` land in an upload chunk of its own).
+/// the rectangle and the color `data` gives, inside `scissor` where it has one.
 fn pass_from(
     command_buffer: &CommandBuffer,
     (texture, depth): (&Texture, &Texture),
     state: &RenderPipelineState,
-    (chunk, at): (&Buffer, u64),
+    data: Data<'_>,
+    scissor: Option<ScissorRect>,
 ) {
     let mut descriptor = RenderPassDescriptor::new();
     let color = &mut descriptor.color_attachments[0];
@@ -550,10 +560,21 @@ fn pass_from(
     descriptor.depth_attachment.store_action = StoreAction::Store;
     let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
     encoder.set_render_pipeline_state(state).unwrap();
-    encoder.set_vertex_buffer(Some(chunk), at, 0).unwrap();
-    encoder
-        .set_fragment_buffer(Some(chunk), at + 16, 0)
-        .unwrap();
+    match data {
+        Data::Bytes((corners, rgba)) => {
+            (encoder.set_vertex_bytes(&bytes_of(&corners, f32::to_le_bytes), 0)).unwrap();
+            (encoder.set_fragment_bytes(&bytes_of(&rgba, f32::to_le_bytes), 0)).unwrap();
+        }
+        Data::Chunk(chunk, at) => {
+            encoder.set_vertex_buffer(Some(chunk), at, 0).unwrap();
+            encoder
+                .set_fragment_buffer(Some(chunk), at + 16, 0)
+                .unwrap();
+        }
+    }
+    if let Some(rect) = scissor {
+        encoder.set_scissor_rect(rect).unwrap();
+    }
     (encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)).unwrap();
     encoder.end_encoding().unwrap();
 }
@@ -612,7 +633,8 @@ fn passes_reading_host_pages_form_one_run() {
         let started = std::time::Instant::now();
         for i in 0..CHUNK_PASSES {
             let at = (i as u64) * CHUNK_STRIDE;
-            pass_from(&command_buffer, (texture, &depth), &blending, (&chunk, at));
+            let data = Data::Chunk(&chunk, at);
+            pass_from(&command_buffer, (texture, &depth), &blending, data, None);
         }
         let encoding = started.elapsed();
         command_buffer.commit().unwrap();
@@ -691,26 +713,28 @@ fn passes_reading_host_pages_form_one_run() {
 }
 
 /// The rectangles ([`drawn`]) of [`a_pass_of_a_run_encoded_again_alone_reloads_the_run`]'s
-/// passes, and whether each reads them from the chunk over host pages the test rebinds.
-const RELOADED: [(usize, bool); 6] = [
-    (0, false),
-    (5, true),
-    (1, false),
-    (2, true),
-    (3, false),
-    (6, false),
+/// passes, whether each reads them from the chunk over host pages the test rebinds, and its
+/// scissor's quarter of the target (`[column, row]` of the four), where it has one.
+const RELOADED: [(usize, bool, Option<[u64; 2]>); 6] = [
+    (0, false, Some([0, 0])),
+    (5, true, Some([1, 0])),
+    (1, false, None),
+    (2, true, None),
+    (3, false, None),
+    (6, false, None),
 ];
 
 /// Six passes over a target over a `Private` buffer (rows of 1024 bytes), the rule forced, behind
-/// a wait for a shared event only the host signals: the first opens a run over its rectangle, the
-/// second's reaches past it and opens one over the whole target (`pass_runs.rs`'s **A run**),
-/// which the other four go on with. The second and the fourth read their rectangle and color
-/// from a no-copy buffer over host pages, rebound over other pages holding the same bytes before
-/// the signal: the rebind encodes those two again alone (`command_buffer/reencode.rs`), each
-/// leaving its run, merging after itself and copying the run's box in again and keeping it for
-/// the passes after it (`pass_runs.rs`'s **Encoded again**); the texels are those a private
-/// texture holds after the same passes. Without the copy in again, the third pass would blend
-/// over texels no copy in wrote, outside the second's rectangle.
+/// a wait for a shared event only the host signals: the first, scissored to the target's top left
+/// quarter, opens a run over it; the second's scissor, the top right quarter, reaches past it and
+/// opens one over the whole target (`pass_runs.rs`'s **A run**), which the other four, not
+/// scissored, go on with. The second and the fourth read their rectangle and color from a no-copy
+/// buffer over host pages, rebound over other pages holding the same bytes before the signal: the
+/// rebind encodes those two again alone (`command_buffer/reencode.rs`), each leaving its run,
+/// merging after itself and copying the run's box in again and keeping it for the passes after
+/// it (`pass_runs.rs`'s **Encoded again**); the texels are those a private texture holds after
+/// the same passes. Without the copy in again, the third pass would blend over texels of the
+/// bottom half that no copy in wrote.
 #[test]
 fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     let (width, row) = (256, 1024);
@@ -730,8 +754,8 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     let depth = private_texture(&device, PixelFormat::Depth32Float, width, depth_usage);
     // The chunk: the readers' rectangles and colors, one stride apart, in their order.
     let mut data = vec![0u8; chunk_bytes as usize];
-    let readers = RELOADED.iter().filter(|(_, reads)| *reads);
-    for (at, &(i, _)) in readers.enumerate() {
+    let readers = RELOADED.iter().filter(|(_, reads, _)| *reads);
+    for (at, &(i, _, _)) in readers.enumerate() {
         let (corners, rgba) = drawn(i);
         let at = at * CHUNK_STRIDE as usize;
         data[at..at + 16].copy_from_slice(&bytes_of(&corners, f32::to_le_bytes));
@@ -759,14 +783,21 @@ fn a_pass_of_a_run_encoded_again_alone_reloads_the_run() {
     // The passes over `texture`: from the chunk where they read it, else their own bytes.
     let encode = |command_buffer: &CommandBuffer, texture: &Texture| {
         let mut read = 0;
-        for &(i, reads) in &RELOADED {
-            if reads {
-                let at = read * CHUNK_STRIDE;
-                pass_from(command_buffer, (texture, &depth), &blending, (&chunk, at));
-                read += 1;
-            } else {
-                pass(command_buffer, (texture, &depth), &blending, drawn(i), None);
-            }
+        for &(i, reads, quarter) in &RELOADED {
+            let data = match reads {
+                true => {
+                    read += 1;
+                    Data::Chunk(&chunk, (read - 1) * CHUNK_STRIDE)
+                }
+                false => Data::Bytes(drawn(i)),
+            };
+            let scissor = quarter.map(|[column, row]| ScissorRect {
+                x: column * width / 2,
+                y: row * H / 2,
+                width: width / 2,
+                height: H / 2,
+            });
+            pass_from(command_buffer, (texture, &depth), &blending, data, scissor);
         }
     };
     let reference = private_texture(&device, PixelFormat::RGBA8Unorm, width, usage);
