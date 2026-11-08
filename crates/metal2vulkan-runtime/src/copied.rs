@@ -105,8 +105,18 @@
 //!   copy: in fresh pages the runtime imported where an image in place rides on it, made as over
 //!   the caller's pages; else linear images of its memory that start `PREINITIALIZED`.
 //! - **What is not copied.** On macOS, memory whose GPU writes Metal's private option bit 24 drops
-//!   imports a read-only view of its pages (`read_only_view.rs`). A texture made over a copied
-//!   buffer is a shadow of its bytes (`shadowed-texture`).
+//!   imports a read-only view of its pages (`read_only_view.rs`).
+//! - **Textures over a copy.** A texture made over a copied buffer is a linear image over the copy,
+//!   bound in its memory at the texels' offset, where the device's in-place check passed for the
+//!   copy's memory and the caller's pages (a rebind may import them), for the texture's accesses
+//!   and how its texels lie in lines there (`in_place.rs`, `texture/route.rs`; counted:
+//!   `WorkCounts::copied_textures_in_place`): in fresh pages the runtime imported, the image made
+//!   for host allocations, as over the caller's pages; in memory the device allocates, the
+//!   driver's own linear image that starts `PREINITIALIZED`, else a `DRM_FORMAT_MOD_LINEAR` one at
+//!   Metal's pitch, under the check of the runtime's pooled memory (`PagesClass::Pooled`). Its
+//!   hazard identity is the buffer's, so its uses name the copy as the buffer's do: each commit
+//!   copies the CPU's writes in, and each completion that may have written it merges the GPU's
+//!   back. Elsewhere it is a shadow of the copy's bytes (`shadowed-texture`).
 
 use crate::device::lock;
 use crate::dirty_pages::{new_writer, DirtySource, DirtyTally, PagesLog};

@@ -469,7 +469,14 @@ the log reports written since the copy's last commit, and the bytes no log keeps
 publication (bounded) on the committing thread, and every copy compares every byte at its first
 commit and where a log answers `false`. The runtime reports to the log what the log cannot see: a
 copy's merge back, as the copy's own write, the GPU's writes into the pages through imports in
-place, and its own CPU writes into them. A texture over a copied buffer is a shadow of its bytes. The copy reads the pages through the kernel
+place, and its own CPU writes into them. A texture over a copied buffer is a linear image over the
+copy, bound in its memory, wherever the device's in-place check passed for that memory and for the
+caller's pages, for the texture's accesses (`copied_textures_in_place`): in fresh pages the runtime
+imported, an image made for host allocations, as over the pages; in memory the device allocates,
+the driver's own linear image where it lays the rows at the texture's pitch, which starts
+`PREINITIALIZED` and so keeps the copy's bytes, else a `DRM_FORMAT_MOD_LINEAR` image at that pitch
+under the check of the runtime's pooled memory. Elsewhere it is a shadow of the copy's bytes, its
+notice naming why. The copy reads the pages through the kernel
 first, and where the kernel cannot read them, with plain loads where the process maps every page
 with read permission: on Linux the kernel's read pins each page, which a mapping of a dma-buf
 (`VM_PFNMAP`) does not allow. Pages not mapped, or mapped
@@ -498,12 +505,15 @@ the copy (`copied_rebind_images_made`): where an image in place rides on it, the
 pages the runtime maps and imports by pointer, and the image is made as over the caller's pages,
 under the device's in-place check for fresh pages; else the copy is memory the device allocates,
 and each image a linear image of it that starts `PREINITIALIZED`, so its first move keeps the
-copy's bytes. Textures held as shadows read the copy. A buffer's
+copy's bytes, or where the driver lays that image's rows at another pitch, a
+`DRM_FORMAT_MOD_LINEAR` image at the texture's pitch, under the check of the runtime's pooled
+memory. Textures held as shadows read the copy. A buffer's
 rebind to bytes at another offset in their page than the old, under a texture planned at the old
 offset, is a copy laid out at the old offset too, the gate unasked (`copied_rebind_pages_moved`).
 A rebind is refused (`NotImplemented(RebindTextures)`) only where the device makes no such image
-over the copy (its driver lays the linear image out at other pitches, or in memory of another type
-or alignment), or where the buffer's GPU writes are dropped and its bytes moved in their page.
+over the copy (its driver lays the linear image out at other pitches and makes no
+`DRM_FORMAT_MOD_LINEAR` image at the texture's pitch that the pooled memory's check passed, or
+either lies in memory of another type or alignment), or where the buffer's GPU writes are dropped and its bytes moved in their page.
 
 ### Guest RAM imported whole
 

@@ -36,6 +36,13 @@
 //!   texture bound to its bytes read and write the new pages. A command buffer committed before
 //!   such a rebind and held back reaches the copy, encoded again; a rebind while one not yet
 //!   committed used the buffer is refused, the gate unasked.
+//! - **Textures over a copy.** A texture made over a copied buffer, sampled or rendered into, is an
+//!   image over the copy where the device's check passed for the copy's memory and the caller's
+//!   pages (`WorkCounts::copied_textures_in_place`), else a shadow (`shadowed-texture`): either
+//!   way it reads the caller's texels and a CPU write made before a commit, a blit into it and a
+//!   render pass's clear reach the texels' bytes in the pages alone, the bytes between its rows
+//!   and after it kept; a rebind to another copy and back to an import makes its image again over
+//!   each, which it follows.
 //! - **The answer.** `Buffer::host_backing` says which: a buffer whose pages the device imported
 //!   answers it imported them by their pointer, a copy answers `Copied` (each test's copy above
 //!   too), a buffer placed in a no-copy heap its heap's, a detached one `Detached`, and a buffer
@@ -1065,6 +1072,232 @@ fn copied_rebind_makes_a_texture_s_image_in_place_again_over_the_copy() {
     eprintln!(
         "COPIED-REBIND-IN-PLACE: texture {} over a gate-refused rebind's copy",
         if in_place { "in place" } else { "a shadow" }
+    );
+    drop((texture, buffer));
+}
+
+/// Whether the device's check passed, for a texture of `usage` over `buffer` (a copied buffer, its
+/// copy in memory the device allocates) at `pitch`, for its copy's memory (the runtime's pooled
+/// memory) and the caller's pages, each for texels that lie in lines as they lie there: whether
+/// the texture is to be an image over the copy (`texture/route.rs`).
+fn passed_over_copy(
+    device: &Device,
+    buffer: &Buffer,
+    usage: metal2vulkan::metal::TextureUsage,
+    pitch: usize,
+) -> bool {
+    use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+    let layout = crate::linear_plan::BufferLayout {
+        offset: 0,
+        row_pitch: pitch as u64,
+        slice_pitch: (pitch * SIDE) as u64,
+        row_bytes: (SIDE * TEXEL) as u64,
+        rows: SIDE as u64,
+        slices: 1,
+    };
+    let line = device.shared().in_place.line();
+    let caller = buffer.contents().unwrap().as_ptr().addr() as u64;
+    let copy = buffer.memory().1;
+    let renders = usage.contains(metal2vulkan::metal::TextureUsage::RENDER_TARGET);
+    let passes = |class, start| {
+        let rows = RowEnds::of(start, &layout, line);
+        let access = match renders {
+            true => Access::Renders,
+            false => Access::Reads,
+        };
+        device.in_place_verdict(class, access, rows) == Verdict::Passed
+    };
+    let policy = device.compile_device().policy().host_page_textures;
+    policy == metal2vulkan::device::HostPageTexturePolicy::InPlace
+        && passes(PagesClass::Pooled, copy)
+        && passes(PagesClass::Pointer, caller)
+}
+
+/// A 16 x 16 RGBA8 texture of `usage` over `buffer` at 0, its rows `pitch` apart, and whether it
+/// is an image over the buffer's copy (`WorkCounts::copied_textures_in_place`), its making
+/// counted as an image in place or a shadow alone.
+fn texture_over_copy(
+    device: &Device,
+    buffer: &Buffer,
+    usage: metal2vulkan::metal::TextureUsage,
+    pitch: usize,
+) -> (crate::Texture, bool) {
+    let mut descriptor = crate::TextureDescriptor::texture_2d(
+        metal2vulkan::metal::PixelFormat::RGBA8Unorm,
+        SIDE as u64,
+        SIDE as u64,
+        false,
+    );
+    descriptor.usage = usage;
+    descriptor.resource_options = buffer.resource_options();
+    let before = device.work_counts();
+    let texture = buffer.new_texture(&descriptor, 0, pitch as u64).unwrap();
+    let after = device.work_counts();
+    let over_copy = after.copied_textures_in_place - before.copied_textures_in_place;
+    let in_place = after.host_textures_in_place - before.host_textures_in_place;
+    let shadows = after.shadowed_textures - before.shadowed_textures;
+    assert_eq!(
+        in_place, over_copy,
+        "an image in place over a copy is over the copy"
+    );
+    assert_eq!(over_copy + shadows, 1, "an image over the copy or a shadow");
+    (texture, over_copy == 1)
+}
+
+/// A render pass's clear of `texture` (16 x 16 RGBA8 over `buffer`'s copy of `pages` at 0, rows
+/// `pitch` apart, in `pattern`) reaches the texels' bytes in the pages alone, at its completion.
+fn clear_reaches_the_pages(
+    device: &Device,
+    texture: &crate::Texture,
+    pages: NonNull<u8>,
+    pattern: &[u8],
+    pitch: usize,
+) {
+    let mut pass = crate::RenderPassDescriptor::new();
+    let color = &mut pass.color_attachments[0];
+    color.texture = Some(texture.clone());
+    color.load_action = crate::LoadAction::Clear;
+    color.store_action = crate::StoreAction::Store;
+    color.clear_color = crate::ClearColor::new(1.0, 0.0, 1.0, 0.0);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    (command_buffer.render_command_encoder(&pass).unwrap())
+        .end_encoding()
+        .unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    // SAFETY: the caller's bytes, which no command buffer uses now.
+    let now = unsafe { std::slice::from_raw_parts(pages.as_ptr(), LENGTH) }.to_vec();
+    for row in 0..SIDE {
+        let (start, end) = (row * pitch, row * pitch + SIDE * TEXEL);
+        assert!(
+            now[start..end]
+                .chunks(4)
+                .all(|texel| texel == [255, 0, 255, 0]),
+            "row {row}: the clear reached the pages"
+        );
+        let next = (row + 1) * pitch;
+        assert_eq!(
+            now[end..next],
+            pattern[end..next],
+            "row {row}: the bytes after it kept"
+        );
+    }
+    assert_eq!(
+        now[SIDE * pitch..],
+        pattern[SIDE * pitch..],
+        "past the texels"
+    );
+}
+
+/// A texture made over a copied buffer is an image over the copy where the device's check passed
+/// for the copy's memory and the caller's pages (`texture/route.rs`), sampled and rendered into
+/// alike; else a shadow. Either way it reads the caller's texels; a CPU write before a commit
+/// reaches it; a blit into it, and for one that renders a render pass's clear, reach the texels'
+/// bytes in the pages alone. Before textures took an image over a copy, each was a shadow: on a
+/// device whose check passed (lavapipe, the Iris Xe) the answer the verdicts give fails it.
+#[test]
+fn a_texture_over_a_copied_buffer_is_an_image_over_the_copy_where_the_check_passed() {
+    use metal2vulkan::metal::TextureUsage;
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    device.settle_in_place_checks(Duration::from_secs(120));
+    let usages = [
+        ("sampled", TextureUsage::SHADER_READ),
+        (
+            "rendered",
+            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+        ),
+    ];
+    for (seed, (name, usage)) in (40u8..).zip(usages) {
+        let host = Host::new(seed);
+        let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+        let buffer = host.buffer(&device, Some(gate(&asked, false)));
+        assert!(buffer.copied(), "the gate refused the import: a copy");
+        let expected = passed_over_copy(&device, &buffer, usage, PITCH);
+        let (texture, over_copy) = texture_over_copy(&device, &buffer, usage, PITCH);
+        eprintln!(
+            "COPIED-TEXTURE {name} on {}: the check passed {expected}, an image over the copy \
+             {over_copy}",
+            device.name()
+        );
+        assert_eq!(
+            over_copy, expected,
+            "{name}: an image over the copy where the check passed"
+        );
+        // A CPU write before a commit reaches the texture.
+        let pattern = host.pattern();
+        assert_eq!(
+            texels(&device, &texture),
+            rows(&pattern),
+            "{name}: the caller's texels"
+        );
+        host.write(0, &[0x3C; SIDE * TEXEL]);
+        let read = texels(&device, &texture);
+        assert!(
+            read[..SIDE * TEXEL].iter().all(|&byte| byte == 0x3C),
+            "{name}: the CPU's write reached the texture"
+        );
+        let mut written = pattern.clone();
+        written[..SIDE * TEXEL].fill(0x3C);
+        assert_eq!(
+            read[SIDE * TEXEL..],
+            rows(&written)[SIDE * TEXEL..],
+            "{name}: the rest"
+        );
+        if usage.contains(TextureUsage::RENDER_TARGET) {
+            clear_reaches_the_pages(&device, &texture, host.pointer, &written, PITCH);
+        }
+        texture_follows_the_copy(&device, &buffer, &texture, host.pointer, &host.bytes());
+        drop((texture, buffer));
+    }
+}
+
+/// A texture made over a copied buffer as an image over the copy follows its buffer's rebinds: to
+/// another copy (the gate refuses the new pages) and back to an import (no gate), its image made
+/// again over each (`copied_rebind_images_made` for the copy), reading the new texels, its writes
+/// reaching the new pages.
+#[test]
+fn a_texture_over_a_copy_follows_its_buffer_s_rebinds() {
+    use metal2vulkan::metal::TextureUsage;
+    let (first, second) = (Host::new(44), Host::new(45));
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    device.settle_in_place_checks(Duration::from_secs(120));
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let buffer = first.buffer(&device, Some(gate(&asked, false)));
+    let (texture, over_copy) =
+        texture_over_copy(&device, &buffer, TextureUsage::SHADER_READ, PITCH);
+    eprintln!(
+        "COPIED-TEXTURE-REBIND on {}: an image over the copy {over_copy}",
+        device.name()
+    );
+    assert_eq!(texels(&device, &texture), rows(&first.pattern()));
+    let before = device.work_counts();
+    rebind(&buffer, &second, Some(gate(&asked, false))).unwrap();
+    let after = device.work_counts();
+    let images = after.copied_rebind_images_made - before.copied_rebind_images_made;
+    assert_eq!(
+        images,
+        u64::from(over_copy),
+        "the image made again over the new copy"
+    );
+    texture_follows_the_copy(
+        &device,
+        &buffer,
+        &texture,
+        second.pointer,
+        &second.pattern(),
+    );
+    rebind(&buffer, &first, None).unwrap();
+    assert!(!buffer.copied(), "imported again");
+    assert_eq!(
+        texels(&device, &texture),
+        rows(&first.pattern()),
+        "the imported texels"
     );
     drop((texture, buffer));
 }

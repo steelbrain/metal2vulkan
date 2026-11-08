@@ -1,7 +1,10 @@
 //! Textures over host pages, in place: a 2D texture (or array) whose declared usage samples, reads,
 //! renders into or writes it, over a no-copy buffer's host pages or over a buffer the runtime
 //! placed in fresh host pages, is a linear image aliasing those pages, where the device's own check
-//! shows that the operations that may touch bytes beside the texels leave every byte alone.
+//! shows that the operations that may touch bytes beside the texels leave every byte alone. Over a
+//! copied host buffer (`copied.rs`) the image aliases the copy the GPU uses in the pages' stead,
+//! where the check passed for the copy's memory (fresh pages, or the runtime's pooled memory) and
+//! for the pages, for texels that lie in lines as they lie in each (`texture/route.rs`).
 //!
 //! - **What Vulkan says.** An image bound to imported memory starts `UNDEFINED`
 //!   (`VUID-VkImageCreateInfo-pNext-01443`: "If the pNext chain includes a

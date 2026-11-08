@@ -3,8 +3,8 @@
 //! [`Buffer::texture_placement`](crate::Buffer::texture_placement) answers it. Both call
 //! [`Device::route_over_buffer`], so the answer is the making's own decision: a tiled texture's
 //! levels past the first, texels past the buffer's length, a buffer of no host pages, a device
-//! copy, bytes detached or copied, and over host pages the in-place decision
-//! (`in_place::in_place`) against the device's check's verdicts. Where that takes the image in
+//! copy, bytes detached, and over host pages (or a copied host buffer's copy of them) the in-place
+//! decision (`in_place::in_place`) against the device's check's verdicts. Where that takes the image in
 //! place, the query also runs the image's making up to the bind (`texture/in_place_image.rs`), so
 //! a pitch, an image, a placement or rows the device refuses answer the shadow the texture then
 //! is.
@@ -132,9 +132,11 @@ impl Device {
     /// a tiled texture of more than one level, whatever holds the bytes. Over host pages (a no-copy
     /// buffer's, or a no-copy heap's buffer's, imported by their pointer or as dma-bufs; or fresh
     /// pages the runtime imported for a long buffer of its own, `fresh_pages.rs`): a device copy
-    /// where one serves; else the shadow where the bytes were detached or copied; else as the
-    /// device's policy, the texture's usage and the device's check of the pages' class for each
-    /// access take it (`in_place.rs`), asking the verdicts (a pending one starts the check). The
+    /// where one serves; else the shadow where the bytes were detached; else as the device's
+    /// policy, the texture's usage and the device's check of the pages' class for each access take
+    /// it (`in_place.rs`), asking the verdicts (a pending one starts the check): over a copied host
+    /// buffer (`copied.rs`), the class of the copy's memory (fresh pages, or the runtime's pooled
+    /// memory) and the caller's pages', each for texels that lie in lines as they lie there. The
     /// device's check's own textures take the image in place whatever the policy and the
     /// verdicts.
     pub(crate) fn route_over_buffer(
@@ -149,7 +151,15 @@ impl Device {
         if past {
             return Route::Past;
         }
+        let copied = texels.buffer.copied();
         let class = match texels.buffer.caller_memory() {
+            // A copied host buffer's bytes the GPU uses lie in a copy of the caller's pages in
+            // memory of the device's own (`copied.rs`): fresh pages the runtime imported, or
+            // memory the device allocates, whose class's verdicts the image over it takes.
+            Some(CallerMemory::HostPages) if copied => match texels.copy_in_fresh_pages() {
+                true => PagesClass::Fresh,
+                false => PagesClass::Pooled,
+            },
             Some(CallerMemory::HostPages) if texels.buffer.over_dma_buf() => PagesClass::DmaBuf,
             Some(CallerMemory::HostPages) => PagesClass::Pointer,
             None if texels.buffer.in_fresh_pages() => PagesClass::Fresh,
@@ -203,17 +213,6 @@ impl Device {
                     .to_owned(),
             )));
         }
-        if texels.buffer.copied() {
-            // A copied host buffer's bytes the GPU uses lie in memory of the device's own, no
-            // import of the pages (`copied.rs`): the shadow copies them, its copies the buffer's
-            // uses, which commits copy in and completions merge back.
-            return host(HostWay::Shadow(ShadowCause::Refused(
-                Refusal::Placement,
-                "the buffer's bytes are a copy of the caller's pages in memory of the device's \
-                 own, which no image over the pages lies in"
-                    .to_owned(),
-            )));
-        }
         // The check's own textures measure the device whatever its policy.
         let policy = match checking {
             true => HostPageTexturePolicy::InPlace,
@@ -223,11 +222,29 @@ impl Device {
             true => Verdict::Passed,
             false => self.in_place_verdict(class, access, rows),
         };
-        match in_place::in_place(policy, usage, pages, verdict) {
+        // Over a copy, an image over the copy's memory where its class's verdicts take it, and
+        // the caller's pages' too, for texels that lie in lines as they lie there: a rebind may
+        // import the pages by their pointer, the image made again over that import as an image in
+        // place over them is (`Device::rebound_in_place_images`).
+        let caller = match copied {
+            true => texels.over_caller_pages(line),
+            false => None,
+        };
+        let decided = in_place::in_place(policy, usage, pages, verdict).and_then(|()| {
+            caller.map_or(Ok(()), |(rows, padding)| {
+                let pages = (PagesClass::Pointer, rows, pages.2, padding);
+                in_place::in_place(policy, usage, pages, verdict)
+            })
+        });
+        match decided {
             // A texture that renders takes the storage usage too where the check passed for a
-            // shader's writes of its texels over the class (`in_place::storable`).
+            // shader's writes of its texels over the class (`in_place::storable`), and over a
+            // copy, over the caller's pages too.
             Ok(()) => host(HostWay::InPlace {
-                storable: in_place::storable(usage, (class, rows, pages.2), verdict),
+                storable: in_place::storable(usage, (class, rows, pages.2), verdict)
+                    && caller.is_none_or(|(rows, _)| {
+                        in_place::storable(usage, (PagesClass::Pointer, rows, pages.2), verdict)
+                    }),
             }),
             Err(cause) => host(HostWay::Shadow(cause)),
         }

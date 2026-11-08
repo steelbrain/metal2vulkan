@@ -2405,7 +2405,8 @@ impl Device {
                             if !checking {
                                 let counts = &self.shared().counts;
                                 let written = in_place::Access::Writes.takes(usage);
-                                counts.host_texture_in_place(class, pitched, written);
+                                let copied = texels.buffer.copied();
+                                counts.host_texture_in_place(class, (pitched, written, copied));
                                 let usage = image.plan().usage;
                                 if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
                                     counts.feedback_loop_alias_image();
@@ -2415,7 +2416,7 @@ impl Device {
                         }
                         Err((refusal, why)) => ShadowCause::Refused(refusal, why),
                     };
-                    let shadowed = (class, (rows, padding), cause);
+                    let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
                     self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
                 }
                 Route::Host {
@@ -2424,7 +2425,7 @@ impl Device {
                     padding,
                     way: HostWay::Shadow(cause),
                 } => {
-                    let shadowed = (class, (rows, padding), cause);
+                    let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
                     self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
                 }
                 Route::Device { holds } => {
@@ -2596,7 +2597,8 @@ impl Device {
         })
     }
 
-    /// A texture over host pages of `class`, its texels lying in the device's lines as `rows`
+    /// A texture over host pages of `class` (over a copied host buffer's copy of them where
+    /// `copied`, `class` the copy's memory's), its texels lying in the device's lines as `rows`
     /// says and its rows' padding as `padding` says (`in_place::Padding`), of `usage` and declared
     /// plan `plan` (`texture`), made with `descriptor`, is a shadow
     /// for `cause`: counted by why, and where made before its class's verdict for its access,
@@ -2605,8 +2607,8 @@ impl Device {
     /// the image in place.
     fn host_shadowed(
         &self,
-        (class, (rows, padding), cause): (
-            PagesClass,
+        ((class, copied), (rows, padding), cause): (
+            (PagesClass, bool),
             (in_place::RowEnds, in_place::Padding),
             ShadowCause,
         ),
@@ -2632,12 +2634,18 @@ impl Device {
         let renders = in_place::Access::Renders.takes(usage);
         let accesses = (renders, in_place::Access::Writes.takes(usage));
         self.shared().counts.host_texture_shadowed(&cause, accesses);
-        if class == PagesClass::Fresh {
+        if class == PagesClass::Fresh && !copied {
             self.shared().counts.shadow_over_fresh_pages();
         }
+        let bytes = match (copied, class) {
+            (true, PagesClass::Fresh) => {
+                "a copy of the caller's pages in fresh pages the runtime imported"
+            }
+            (true, _) => "a copy of the caller's pages in memory the device allocates",
+            (false, class) => class.words(),
+        };
         Ok(format!(
-            "the buffer's bytes are {}, and {}",
-            class.words(),
+            "the buffer's bytes are {bytes}, and {}",
             cause.words()
         ))
     }

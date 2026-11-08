@@ -385,6 +385,7 @@ pub(crate) struct Counters {
     device_copy_textures: AtomicU64,
     dma_buf_textures_in_place: AtomicU64,
     fresh_page_textures_in_place: AtomicU64,
+    copied_textures_in_place: AtomicU64,
     pitched_host_images: AtomicU64,
     host_texture_shadows_exact: AtomicU64,
     host_texture_shadows_render_target: AtomicU64,
@@ -3075,18 +3076,22 @@ impl Counters {
     }
 
     /// A texture over host pages of `class` was made an image in place over them (`in_place.rs`),
-    /// its rows at Metal's pitch in a `DRM_FORMAT_MOD_LINEAR` image made for host allocations
-    /// where `pitched`.
+    /// its rows at Metal's pitch in a `DRM_FORMAT_MOD_LINEAR` image where `pitched`; over a
+    /// copied host buffer's copy of them where `copied` (`copied.rs`), whose class is the copy's
+    /// memory's.
     pub(crate) fn host_texture_in_place(
         &self,
         class: crate::in_place::PagesClass,
-        pitched: bool,
-        written: bool,
+        (pitched, written, copied): (bool, bool, bool),
     ) {
         use crate::in_place::PagesClass as P;
         self.host_textures_in_place.fetch_add(1, Ordering::Relaxed);
         if written {
             (self.host_textures_in_place_written).fetch_add(1, Ordering::Relaxed);
+        }
+        if copied {
+            (self.copied_textures_in_place).fetch_add(1, Ordering::Relaxed);
+            return;
         }
         match class {
             P::Pointer => {}
@@ -6275,8 +6280,9 @@ pub struct WorkCounts {
     /// first move may write any byte bound to it.
     pub shadows_over_fresh_pages: u64,
     /// Textures over host pages (a no-copy buffer's, a no-copy heap's buffer's, or a buffer in
-    /// fresh pages it imported) that sample, read, render or are written through a shader, made
-    /// an image aliasing the pages in place, where the device's check passed for their class and
+    /// fresh pages it imported; or a copied host buffer's copy of them, `copied_textures_in_place`)
+    /// that sample, read, render or are written through a shader, made an image aliasing the pages
+    /// in place, where the device's check passed for their class and
     /// each of their accesses (`HostPageTexturePolicy::InPlace`): no shadow, and no copy in or
     /// back. One that renders whose image took feedback loop usage is also counted in
     /// `feedback_loop_alias_images`.
@@ -6298,6 +6304,12 @@ pub struct WorkCounts {
     pub dma_buf_textures_in_place: u64,
     /// Of `host_textures_in_place`, those over a buffer in fresh pages it imported.
     pub fresh_page_textures_in_place: u64,
+    /// Of `host_textures_in_place`, those over a copied host buffer (`copied.rs`): an image over
+    /// the copy of the caller's pages the GPU uses in their stead, bound in the copy's memory where
+    /// the device's check passed for that memory's class (fresh pages the runtime imported, or its
+    /// pooled memory) and for the caller's pages', for the texture's accesses. Counted in neither
+    /// `fresh_page_textures_in_place` nor `pitched_host_images`.
+    pub copied_textures_in_place: u64,
     /// Of `host_textures_in_place`, those whose rows lie at Metal's pitch in a
     /// `DRM_FORMAT_MOD_LINEAR` image made for host allocations, where the driver's own linear
     /// image lays them out otherwise.
@@ -7678,6 +7690,7 @@ impl Device {
             fresh_page_textures_in_place: counters
                 .fresh_page_textures_in_place
                 .load(Ordering::Relaxed),
+            copied_textures_in_place: counters.copied_textures_in_place.load(Ordering::Relaxed),
             pitched_host_images: counters.pitched_host_images.load(Ordering::Relaxed),
             host_texture_shadows_exact: counters.host_texture_shadows_exact.load(Ordering::Relaxed),
             host_texture_shadows_render_target: counters

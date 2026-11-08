@@ -11,6 +11,13 @@
 //!   host allocations too (counted: `WorkCounts::pitched_host_images`); else none (the shadow). An
 //!   import a device takes for such an image only as a dedicated allocation is none: the image is
 //!   bound at an offset of the buffer's import.
+//! - **Over a copied host buffer's copy of the pages** (`copied.rs`), which the GPU uses in their
+//!   stead: in fresh pages the runtime imported, the image made for host allocations, as over the
+//!   pages; in memory the device allocates, an image made for memory of its own, the driver's
+//!   linear image that starts `PREINITIALIZED` where it lays the rows out at the texture's pitch,
+//!   else a `DRM_FORMAT_MOD_LINEAR` one at that pitch made `UNDEFINED` (`Device::own_unbound`);
+//!   bound in the copy's memory at the texels' offset, as over an import of the pages, and made
+//!   again over a rebind's new pages as an image in place over the pages is.
 //! - **Over pages imported as dma-bufs** (`dma_buf.rs`): the `DRM_FORMAT_MOD_LINEAR` image at the
 //!   texture's pitches bound to a dedicated import of the one dma-buf the pages' source makes of
 //!   its own pages ([`Device::dma_buf_image`]), as a no-copy heap's texture there takes, its first
@@ -334,7 +341,7 @@ impl Device {
             return Ok(Err(refused));
         }
         let make = |plan: &ImagePlan| match self.unplaced(plan, texels, class, facts)? {
-            Ok(unplaced) => self.place(unplaced, plan, descriptor, texels, class),
+            Ok(unplaced) => self.place(unplaced, plan, descriptor, texels),
             Err(refused) => Ok(Err(refused)),
         };
         let mut made = None;
@@ -352,19 +359,18 @@ impl Device {
                 Err(refused) => return Ok(Err(refused)),
             },
         };
-        // Over a no-copy buffer's pages, noted for a rebind.
-        if class != PagesClass::Fresh {
-            if let Some(base) = texels.buffer.host_pages().map(|pages| pages.memory().1) {
-                let (_, buffer_offset, _) = texels.buffer.memory();
-                let image_any: Arc<dyn Any + Send + Sync> = image.clone();
-                texels.buffer.watch_in_place(InPlaceWatch {
-                    image: Arc::downgrade(&image_any),
-                    from_base: buffer_offset + layout.offset - base,
-                    layout,
-                    padding_owned: texels.padding_owned(),
-                    texel: texels.texel_bytes(),
-                });
-            }
+        // Over a no-copy buffer's pages (or its copy of them), noted for a rebind; a buffer's own
+        // fresh pages lie in no host pages of a no-copy buffer.
+        if let Some(base) = texels.buffer.host_pages().map(|pages| pages.memory().1) {
+            let (_, buffer_offset, _) = texels.buffer.memory();
+            let image_any: Arc<dyn Any + Send + Sync> = image.clone();
+            texels.buffer.watch_in_place(InPlaceWatch {
+                image: Arc::downgrade(&image_any),
+                from_base: buffer_offset + layout.offset - base,
+                layout,
+                padding_owned: texels.padding_owned(),
+                texel: texels.texel_bytes(),
+            });
         }
         Ok(Ok((image, pitched)))
     }
@@ -506,6 +512,9 @@ impl Device {
         class: PagesClass,
         facts: &ImageFacts<'_>,
     ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
+        if texels.buffer.copied() {
+            return self.copy_unplaced(plan, texels, facts);
+        }
         match class {
             PagesClass::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
             PagesClass::Pointer | PagesClass::Fresh => self.host_unplaced(plan, texels, facts),
@@ -515,6 +524,42 @@ impl Device {
                 "an image in place over the runtime's pooled memory",
             )),
         }
+    }
+
+    /// [`unplaced`](Self::unplaced) over a copied host buffer's copy of the caller's pages
+    /// (`copied.rs`), which the GPU uses in the stead of the pages: over a copy in fresh pages the
+    /// runtime imported (`fresh_pages.rs`), the image made for host allocations, as over the
+    /// caller's pages ([`host_unplaced`](Self::host_unplaced)); over one in memory the device
+    /// allocates, the image made for memory of its own ([`own_unbound`](Self::own_unbound)). Either
+    /// takes its place in the copy's memory, at the texels' offset ([`placed`]).
+    fn copy_unplaced(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<Unplaced, (Refusal, String)>, Error> {
+        if texels.copy_in_fresh_pages() {
+            return self.host_unplaced(plan, texels, facts);
+        }
+        let layout = texels.layout;
+        let (memory, buffer_offset, type_index) = texels.buffer.memory();
+        let at = buffer_offset + layout.offset;
+        let room = texels.buffer.memory_room().saturating_sub(layout.offset);
+        let (made, pitched) = match self.own_unbound(plan, &layout, facts)? {
+            Ok(made) => made,
+            Err(refused) => return Ok(Err(refused)),
+        };
+        if let Err(refused) = placed(&made.requirements, at, room, type_index) {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(self.shared().vk(), made.raw) };
+            return Ok(Err(refused));
+        }
+        Ok(Ok(Unplaced::Host {
+            made,
+            pitched,
+            memory,
+            at,
+        }))
     }
 
     /// [`unplaced`](Self::unplaced) over pages imported by their pointer.
@@ -602,19 +647,18 @@ impl Device {
         )))
     }
 
-    /// `unplaced`, an image in place of `plan` over `texels` (host pages of `class`), bound: over
-    /// pages imported by their pointer, in the buffer's memory where it was checked to lie, its
-    /// first move noted; over pages imported as dma-bufs, to a dedicated import of the dma-buf the
-    /// caller's source makes of its pages (called with no lock of the runtime's held), which may
-    /// still refuse it. With whether it is a `DRM_FORMAT_MOD_LINEAR` image made for host
-    /// allocations.
+    /// `unplaced`, an image in place of `plan` over `texels`, bound: over pages imported by their
+    /// pointer (or a copied host buffer's copy of them), in the buffer's memory where it was
+    /// checked to lie, its first move noted; over pages imported as dma-bufs, to a dedicated import
+    /// of the dma-buf the caller's source makes of its pages (called with no lock of the runtime's
+    /// held), which may still refuse it. With whether it is a `DRM_FORMAT_MOD_LINEAR` image at
+    /// Metal's pitch.
     fn place(
         &self,
         unplaced: Unplaced,
         plan: &ImagePlan,
         descriptor: &TextureDescriptor,
         texels: &Texels,
-        class: PagesClass,
     ) -> Result<InPlace, Error> {
         match unplaced {
             Unplaced::Host {
@@ -625,10 +669,11 @@ impl Device {
             } => {
                 let raw = made.raw;
                 let raw_device = self.shared().vk();
-                // SAFETY: the image is live and unbound, made for host allocations; the memory is
-                // the buffer's import of host pages (or its fresh pages'), which the image holds,
-                // in a type the image takes, at an offset that meets its alignment, its size inside
-                // the memory (`placed`).
+                // SAFETY: the image is live and unbound, made for host allocations where the
+                // memory is the buffer's import of host pages (or its fresh pages', or its copy's
+                // there), and for memory of its own where it is a copy the device allocated
+                // (`copy_unplaced`); the image holds the memory, in a type it takes, at an offset
+                // that meets its alignment, its size inside the memory (`placed`).
                 if let Err(error) =
                     unsafe { crate::creation::bind_image(raw_device, raw, memory, at) }
                 {
@@ -637,12 +682,10 @@ impl Device {
                     return Err(vulkan(error));
                 }
                 let image = self.in_place_of(Raw::new(raw), plan.clone(), descriptor, texels);
-                // Over a no-copy buffer's pages, its move notes them (a rebind may swap the image
-                // out of them); fresh pages are the buffer's for good.
-                let pages = match class {
-                    PagesClass::Fresh => None,
-                    _ => texels.buffer.host_pages(),
-                };
+                // Over a no-copy buffer's pages (or its copy of them), its move notes them (a
+                // rebind may swap the image out of them); a buffer's own fresh pages are its for
+                // good, no no-copy buffer's pages.
+                let pages = texels.buffer.host_pages();
                 let first = FirstMove::new(
                     raw,
                     image.plan().format,
@@ -757,6 +800,34 @@ impl Device {
         layout: &BufferLayout,
         facts: &ImageFacts<'_>,
     ) -> Result<Unbound, Error> {
+        self.unbound_in(plan, layout, facts, crate::dma_buf::ModifierMemory::Host)
+    }
+
+    /// As [`in_place_unbound`](Self::in_place_unbound), the image made for memory of the device's
+    /// own (a copied host buffer's copy there, `copied.rs`): the driver's linear image, which
+    /// starts `PREINITIALIZED` and so keeps the memory's bytes at its first move ("the transition
+    /// away from this layout will preserve that data", Image Layouts), else the
+    /// `DRM_FORMAT_MOD_LINEAR` image of no external memory, made `UNDEFINED`, whose first move the
+    /// device's check of its pooled memory covers (`in_place::PagesClass::Pooled`).
+    pub(super) fn own_unbound(
+        &self,
+        plan: &ImagePlan,
+        layout: &BufferLayout,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Unbound, Error> {
+        self.unbound_in(plan, layout, facts, crate::dma_buf::ModifierMemory::Own)
+    }
+
+    /// The unbound image of `plan` for texels laid out as `layout` in `memory` (host allocations,
+    /// or the runtime's own memory): [`in_place_unbound`](Self::in_place_unbound) and
+    /// [`own_unbound`](Self::own_unbound).
+    fn unbound_in(
+        &self,
+        plan: &ImagePlan,
+        layout: &BufferLayout,
+        facts: &ImageFacts<'_>,
+        memory: crate::dma_buf::ModifierMemory,
+    ) -> Result<Unbound, Error> {
         let lies = |report: &vk::SubresourceLayout| {
             report.offset == 0
                 && report.row_pitch == layout.row_pitch
@@ -769,7 +840,10 @@ impl Device {
                     features,
                 }))
             }
-            None => self.host_linear_image(plan)?,
+            None => match memory {
+                crate::dma_buf::ModifierMemory::Own => self.linear_image(plan)?,
+                _ => self.host_linear_image(plan)?,
+            },
         };
         // Whether the driver made its linear image and laid it out otherwise.
         let (linear, elsewhere) = match made {
@@ -778,8 +852,9 @@ impl Device {
                 // SAFETY: the image is live and unbound, and no command uses it.
                 unsafe { release::object(self.shared().vk(), made.raw) };
                 let why = format!(
-                    "its linear image for host allocations lays rows {} bytes apart (slices {}) \
-                     from offset {}, where the texels' lie {} (slices {}) apart from offset 0",
+                    "its linear image for {} lays rows {} bytes apart (slices {}) from offset {}, \
+                     where the texels' lie {} (slices {}) apart from offset 0",
+                    memory.words(),
                     made.report.row_pitch,
                     made.report.array_pitch,
                     made.report.offset,
@@ -790,8 +865,7 @@ impl Device {
             }
             Err(refusal) => (refusal.describe(plan), false),
         };
-        let host = crate::dma_buf::ModifierMemory::Host;
-        Ok(match self.pitched_image(plan, layout, facts, host)? {
+        Ok(match self.pitched_image(plan, layout, facts, memory)? {
             Ok(made) => Ok((made, true)),
             // A linear image the driver lays out otherwise is refused for its pitch; else the
             // pitched image's refusal names why.
@@ -1056,15 +1130,16 @@ impl Device {
     /// runtime imports (`Device::fresh_page_buffer`) for the images in place that `watches` note:
     /// where the device's check passed for fresh pages, each live image's accesses and how its
     /// texels lie in the device's lines of memory (`in_place::RowEnds`: a rebind keeps the bytes'
-    /// offset in their page) ([`fresh_pages_take`](Self::fresh_pages_take)), as each is then made
+    /// offset in their page) ([`class_takes`](Self::class_takes)), as each is then made
     /// over them for host allocations. Where it did not, the copy lies in memory the device allocates, and each image
     /// is a linear image of its own over it ([`in_place_over_copy`](Self::in_place_over_copy)).
     /// On RADV the check leaves fresh pages unchecked: no new buffer lies in them where each held
     /// pointer import costs every submission (`fresh_pages.rs`), so the check finds none to try.
     pub(crate) fn fresh_pages_take_images(&self, watches: &[InPlaceWatch]) -> bool {
         watches.iter().all(|watch| {
-            watched(watch)
-                .is_none_or(|image| self.fresh_pages_take(&image, self.watched_rows(watch)))
+            watched(watch).is_none_or(|image| {
+                self.class_takes(PagesClass::Fresh, &image, self.watched_rows(watch))
+            })
         })
     }
 
@@ -1082,15 +1157,16 @@ impl Device {
         )
     }
 
-    /// Whether the device's check passed for fresh pages, each of `image`'s accesses and texels
-    /// of `texel` bytes that lie in lines as `rows` says: an image of attachment usage renders,
-    /// one of storage usage is written, one of neither reads. The writes take the check of the
-    /// texels' width (`in_place::Access::written`), and of one that does not render whose rows'
-    /// padding is free the form that lets it change (`in_place::in_place`); one that renders may
-    /// hold the storage usage a render target takes where the form that keeps it passed
-    /// (`in_place::storable`), which it asks.
-    fn fresh_pages_take(
+    /// Whether the device's check passed for `class` (fresh pages, or the runtime's pooled
+    /// memory), each of `image`'s accesses and texels of `texel` bytes that lie in lines as `rows`
+    /// says: an image of attachment usage renders, one of storage usage is written, one of neither
+    /// reads. The writes take the check of the texels' width (`in_place::Access::written`), and of
+    /// one that does not render whose rows' padding is free the form that lets it change
+    /// (`in_place::in_place`); one that renders may hold the storage usage a render target takes
+    /// where the form that keeps it passed (`in_place::storable`), which it asks.
+    fn class_takes(
         &self,
+        class: PagesClass,
         image: &Image,
         (rows, padding, texel): (RowEnds, Padding, u64),
     ) -> bool {
@@ -1110,8 +1186,7 @@ impl Device {
         accesses.into_iter().all(|(access, takes)| {
             !takes
                 || access.is_some_and(|access| {
-                    self.in_place_verdict(PagesClass::Fresh, access, rows)
-                        == crate::in_place::Verdict::Passed
+                    self.in_place_verdict(class, access, rows) == crate::in_place::Verdict::Passed
                 })
         })
     }
@@ -1122,12 +1197,14 @@ impl Device {
     /// a copy in fresh pages the runtime imported (`fresh_pages.rs`), the image an import of the
     /// caller's pages takes, made for host allocations (the driver's linear image at the texels'
     /// pitches, else the `DRM_FORMAT_MOD_LINEAR` one), where the device's check passed for fresh
-    /// pages (`in_place.rs`); over one in memory the device allocates, a linear image of its own,
-    /// as a texture's over a buffer of the runtime's, which starts `PREINITIALIZED` and so keeps
-    /// the copy's bytes at its first move ("the transition away from this layout will preserve
-    /// that data", Image Layouts). Either lies at the texels' pitches from offset 0, in a type of
-    /// the copy's memory, at an offset its alignment meets, inside the copy's memory. Refused
-    /// (`NotImplemented(RebindTextures)`) where it does not.
+    /// pages (`in_place.rs`); over one in memory the device allocates, an image of its own memory
+    /// ([`own_unbound`](Self::own_unbound)): the driver's linear image, as a texture's over a
+    /// buffer of the runtime's, which starts `PREINITIALIZED` and so keeps the copy's bytes at its
+    /// first move ("the transition away from this layout will preserve that data", Image Layouts),
+    /// else the `DRM_FORMAT_MOD_LINEAR` one at the texels' pitches where the device's check passed
+    /// for its pooled memory and the image's accesses. Either lies at the texels' pitches from
+    /// offset 0, in a type of the copy's memory, at an offset its alignment meets, inside the
+    /// copy's memory. Refused (`NotImplemented(RebindTextures)`) where it does not.
     fn in_place_over_copy(
         &self,
         image: Arc<Image>,
@@ -1142,25 +1219,35 @@ impl Device {
         // pages takes, made for host allocations (`in_place_unbound`), where the device's check
         // passed for fresh pages and each of the image's accesses (an image of attachment usage
         // renders, one of storage usage is written; one of neither reads); one in memory the
-        // device allocates, a linear image of its own.
+        // device allocates, an image of its own memory (`own_unbound`).
+        let facts = self
+            .shared()
+            .textures
+            .facts(self.compile_device().profile());
         let made = match pages.over_own_pages() {
             true => {
-                if !self.fresh_pages_take(&image, self.watched_rows(watch)) {
+                if !self.class_takes(PagesClass::Fresh, &image, self.watched_rows(watch)) {
                     return Err(refused());
                 }
-                let facts = self
-                    .shared()
-                    .textures
-                    .facts(self.compile_device().profile());
                 let Ok((made, _)) = self.in_place_unbound(image.plan(), layout, &facts)? else {
                     return Err(refused());
                 };
                 made
             }
             false => {
-                let Ok(made) = self.linear_image(image.plan())? else {
+                let Ok((made, pitched)) = self.own_unbound(image.plan(), layout, &facts)? else {
                     return Err(refused());
                 };
+                // The `DRM_FORMAT_MOD_LINEAR` one starts `UNDEFINED`: where the device's check
+                // passed for its pooled memory and the image's accesses, as an image at Metal's
+                // pitch there takes it (`Device::pooled_pitched_image`).
+                if pitched
+                    && !self.class_takes(PagesClass::Pooled, &image, self.watched_rows(watch))
+                {
+                    // SAFETY: the image is live and unbound, and no command uses it.
+                    unsafe { release::object(raw_device, made.raw) };
+                    return Err(refused());
+                }
                 made
             }
         };

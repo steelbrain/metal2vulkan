@@ -1113,7 +1113,9 @@ impl Device {
             };
             match *counted {
                 MoveCount::Host(class, pitched, written) => {
-                    shared.counts.host_texture_in_place(class, pitched, written);
+                    // A copied host buffer's shadow does not move (`move_wanted`).
+                    let copied = false;
+                    (shared.counts).host_texture_in_place(class, (pitched, written, copied));
                     shared.counts.host_texture_moved_in_place();
                     let feedback = metal2vulkan::vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
                     let plan = texture.image_plan();

@@ -21,7 +21,10 @@ pub enum TexturePlacement {
     /// made it unbound and released it). Over pages imported as dma-bufs the image's making may
     /// still refuse at the bind, where the caller's source gives no one dma-buf of the pages
     /// ([`InPlaceRefusal::Source`]) or the driver refuses its import ([`InPlaceRefusal::DmaBuf`]):
-    /// the texture is then a shadow, its notice (`shadowed-texture`) naming why.
+    /// the texture is then a shadow, its notice (`shadowed-texture`) naming why. Over a copied host
+    /// buffer ([`HostBacking::Copied`](crate::HostBacking::Copied)), the image lies over the copy
+    /// the GPU uses in the pages' stead, in the copy's memory, where the check passed for that
+    /// memory's kind and the pages' (`WorkCounts::copied_textures_in_place`).
     InPlace,
     /// A shadow now, as the device's check has not answered for the pages' kind and the
     /// texture's accesses: once it does, at the commit of the device's only uncommitted command
@@ -189,8 +192,7 @@ pub enum InPlaceRefusal {
     Image,
     /// No image the device makes lays the rows (or slices) at the buffer's pitch.
     Pitch,
-    /// The image's alignment, size or memory type misses the bytes' place, or the buffer's bytes
-    /// are a copy of the caller's pages in memory of the device's own.
+    /// The image's alignment, size or memory type misses the bytes' place.
     Placement,
     /// Over pages imported as dma-bufs: the caller's source made no one dma-buf of the texture's
     /// own pages.

@@ -1616,12 +1616,39 @@ impl Texels {
         self.texel_bytes
     }
 
+    /// How the texels lie in the device's lines of memory of `line` bytes over the caller's pages
+    /// themselves, from their address (`in_place::RowEnds::of`), and whether a shader's writes may
+    /// change their rows' padding there (`in_place::Padding::of`): as [`rows`](Self::rows) and
+    /// [`padding`](Self::padding) answer them over an import of the pages, which a copied host
+    /// buffer's rebind may make (`copied.rs`), where [`rows`](Self::rows) answers them in its copy.
+    /// `None` over no caller's pages.
+    pub(super) fn over_caller_pages(&self, line: u64) -> Option<(RowEnds, Padding)> {
+        let start = self.buffer.contents()?.as_ptr().addr() as u64;
+        let padding = Padding::of(start, &self.layout, line, self.padding_owned());
+        Some((
+            RowEnds::of(start, &self.layout, line),
+            padding.declared(self.buffer.padding_unobserved()),
+        ))
+    }
+
+    /// Whether the texels' buffer is a copied host buffer (`copied.rs`) whose copy lies in fresh
+    /// pages the runtime mapped and imported by their pointer (`fresh_pages.rs`), not in memory
+    /// the device allocates.
+    pub(super) fn copy_in_fresh_pages(&self) -> bool {
+        self.buffer.copied()
+            && (self.buffer.host_pages()).is_some_and(|pages| pages.over_own_pages())
+    }
+
     /// Where the buffer's bytes start, for the device's lines of memory: their address, where the
-    /// CPU addresses them; else, in the runtime's own memory (a `Private` buffer's), their offset
-    /// in its memory object, from whose start the lines count (a `VkMappedMemoryRange`'s offset is
-    /// a multiple of `nonCoherentAtomSize` from it, and the runtime maps a block from its start);
-    /// `None` over the caller's `VkBuffer`.
+    /// CPU addresses them; else, in the runtime's own memory (a `Private` buffer's, or a copied
+    /// host buffer's copy, which the GPU uses in the stead of the caller's pages, `copied.rs`),
+    /// their offset in its memory object, from whose start the lines count (a
+    /// `VkMappedMemoryRange`'s offset is a multiple of `nonCoherentAtomSize` from it, and the
+    /// runtime maps a block from its start); `None` over the caller's `VkBuffer`.
     fn line_start(&self) -> Option<u64> {
+        if self.buffer.copied() {
+            return Some(self.buffer.memory().1);
+        }
         match self.buffer.contents() {
             Some(at) => Some(at.as_ptr().addr() as u64),
             None if self.buffer.caller_memory().is_none() => Some(self.buffer.memory().1),
