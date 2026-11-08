@@ -163,6 +163,10 @@ pub(super) struct Bound {
     push_layout: vk::PipelineLayout,
     pushes: Vec<(vk::ShaderStageFlags, u32, usize)>,
     push_bytes: Vec<u8>,
+    /// For each of `pushes`, the later writes that overlap it for a stage both name, a bit each:
+    /// what a push of it pushes again after it ([`Bound::pushes`]), a function of the writes'
+    /// stages, offsets and lengths alone.
+    push_later: Vec<u64>,
     /// `push_bytes` before the last push (builds with debug assertions: [`check_pushed`]), its
     /// storage kept from push to push, so a draw allocates as many times as without them.
     #[cfg(debug_assertions)]
@@ -533,13 +537,26 @@ impl Bound {
             && (self.pushes.iter().zip(writes)).all(|(&(stages, offset, length), write)| {
                 (stages, offset, length) == (write.0, write.1, write.2.len())
             });
+        // A later write a changed one overlaps for a stage both name, pushed again after it.
+        let overlaps = |a: &PushWrite, b: &PushWrite| {
+            let (a_end, b_end) = (a.1 as usize + a.2.len(), b.1 as usize + b.2.len());
+            a.0.intersects(b.0) && (a.1 as usize) < b_end && (b.1 as usize) < a_end
+        };
         if !same_writes {
             self.push_layout = layout;
             self.pushes.clear();
             self.push_bytes.clear();
-            for (stages, offset, bytes) in writes {
+            self.push_later.clear();
+            for (i, write) in writes.iter().enumerate() {
+                let (stages, offset, bytes) = write;
                 self.pushes.push((*stages, *offset, bytes.len()));
                 self.push_bytes.extend_from_slice(bytes);
+                let later = (writes.iter().enumerate().skip(i + 1))
+                    .filter(|(_, later)| overlaps(write, later))
+                    .fold(0u64, |bits, (j, _)| {
+                        bits | 1u64.checked_shl(j as u32).unwrap_or(0)
+                    });
+                self.push_later.push(later);
             }
             return Pushed::ALL;
         }
@@ -558,21 +575,33 @@ impl Bound {
             }
             at += write.2.len();
         }
-        // A later write a changed one overlaps for a stage both name, pushed again after it.
-        let overlaps = |a: &PushWrite, b: &PushWrite| {
-            let (a_end, b_end) = (a.1 as usize + a.2.len(), b.1 as usize + b.2.len());
-            a.0.intersects(b.0) && (a.1 as usize) < b_end && (b.1 as usize) < a_end
-        };
-        let mut pushed = changed;
-        for i in 0..writes.len() {
-            if pushed >> i & 1 == 0 {
-                continue;
-            }
-            for (j, later) in writes.iter().enumerate().skip(i + 1) {
-                if overlaps(&writes[i], later) {
-                    pushed |= 1 << j;
+        // Each pushed write's later overlapping ones, as the shapes held say, in order: a write
+        // pushed again pushes those after it again too.
+        let (mut pushed, mut rest) = (changed, changed);
+        while rest != 0 {
+            let i = rest.trailing_zeros() as usize;
+            rest &= rest - 1;
+            let again = self.push_later.get(i).copied().unwrap_or(0) & !pushed;
+            pushed |= again;
+            rest |= again;
+        }
+        #[cfg(debug_assertions)]
+        {
+            let mut every = changed;
+            for i in 0..writes.len() {
+                if every >> i & 1 == 0 {
+                    continue;
+                }
+                for (j, later) in writes.iter().enumerate().skip(i + 1) {
+                    if overlaps(&writes[i], later) {
+                        every |= 1 << j;
+                    }
                 }
             }
+            assert_eq!(
+                pushed, every,
+                "a push's held overlaps differ from its writes'"
+            );
         }
         #[cfg(debug_assertions)]
         check_pushed(writes, &self.push_before, Pushed(pushed));
