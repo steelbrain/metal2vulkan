@@ -463,7 +463,10 @@ fn a_texture_past_the_pooled_bound_is_a_shadow_of_its_linear_cost_over_private_m
             .shared()
             .in_place
             .verdict(PagesClass::Pooled, access, rows);
-        eprintln!("POOLED-BOUND: {usage:?} over the Shared buffer asks {access:?} ({rows:?}): {verdict:?}");
+        eprintln!(
+            "POOLED-BOUND: {usage:?} over the Shared buffer asks {access:?} ({rows:?}): \
+             {verdict:?}"
+        );
         if takes && verdict == Verdict::Passed {
             assert!(pitched, "{usage:?} over the Shared buffer: a pitched image");
             assert_eq!(
