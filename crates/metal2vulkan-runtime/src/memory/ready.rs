@@ -37,8 +37,10 @@
 //! - **Added where room is needed.** A creation call that finds such a pool without room for
 //!   half a block (`memory::keep_room`), and a placement that finds no room (`memory::place`),
 //!   add the pool's block made ahead once its making ended. Where the making is under way they
-//!   ask it to go at once and wait for it, rather than make a second block: no two threads make
-//!   one for the same pool, and none is made only to be freed. The host copies' pool alone is
+//!   wait for it, rather than make a second block: no two threads make one for the same pool, and
+//!   none is made only to be freed. A making still waiting for a burst's end when a call comes
+//!   allocates at once, so that the call waits for the allocation alone, never for the program's
+//!   own submissions to pause. The host copies' pool alone is
 //!   not waited for, as its making reads pages whose touch may wait behind the program's GPU
 //!   work: its placement makes its own block there. Where no block is made ahead, the call makes
 //!   its own (`WorkCounts::buffer_blocks_made_in_place`, `image_blocks_made_in_place`). The
@@ -51,7 +53,8 @@
 //!   section of the exit guard (`exit_guard.rs`): once the process exits, no block is made.
 //! - **Counted** (`WorkCounts`): the blocks made ahead and added, by kind
 //!   (`buffer_blocks_made_ahead`, `image_blocks_made_ahead`; of them the host copies' pool's,
-//!   `host_copy_blocks_readied`), those a call waited for (`blocks_ahead_waited_for`), and those
+//!   `host_copy_blocks_readied`), those a call waited for (`blocks_ahead_waited_for`; of them
+//!   those whose wait for a burst's end the call cut short, `blocks_ahead_hurried`), and those
 //!   whose wait for a burst's end reached [`QUIET_MOST`] (`blocks_ahead_past_quiet_wait`).
 //! - **Not what a suspend evicts.** Where the kernel moves a block out of device memory as the GPU
 //!   suspends and back at the next submission, the mapping's pages go with the move, and the first

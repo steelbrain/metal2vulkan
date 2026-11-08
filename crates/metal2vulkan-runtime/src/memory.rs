@@ -1527,6 +1527,9 @@ pub(super) struct AheadBlocks {
     pub(super) images_in_place: u64,
     /// Of the blocks made ahead, those a call waited for, their making under way.
     pub(super) waited_for: u64,
+    /// Of those, the blocks whose making a call's wait cut short in its wait for a burst of
+    /// submissions to end, so that the call waited for the allocation alone.
+    pub(super) hurried: u64,
     /// Of the blocks made ahead, those whose wait for a burst of submissions to end reached its
     /// bound (`ready::QUIET_MOST`).
     pub(super) past_quiet_wait: u64,
@@ -1543,6 +1546,7 @@ impl AheadBlocks {
             _ => self.buffers_ahead += 1,
         }
         self.waited_for += u64::from(waited_for);
+        self.hurried += u64::from(waited == Waited::Asked);
         self.past_quiet_wait += u64::from(waited == Waited::Bound);
     }
 

@@ -4726,6 +4726,11 @@ pub struct WorkCounts {
     /// waited for, rather than make a second block (`memory/ready.rs`): never in the pool host
     /// copies place in, whose making is not waited for.
     pub blocks_ahead_waited_for: u64,
+    /// Of those, the blocks whose making was still waiting for a burst of the device's
+    /// submissions to end as the call came: the call's wait made it allocate at once, so that the
+    /// call waited for the allocation alone, never for the program's own submissions to pause
+    /// (`memory/ready.rs`).
+    pub blocks_ahead_hurried: u64,
     /// Of the blocks made ahead, those whose wait for a burst of the device's submissions to end
     /// reached its bound (50 ms), made all the same: the device submitted with no gap of 1 ms
     /// between its bursts (`device/queue_quiet.rs`).
@@ -7564,6 +7569,7 @@ impl Device {
             image_blocks_made_ahead: ahead.images_ahead,
             image_blocks_made_in_place: ahead.images_in_place,
             blocks_ahead_waited_for: ahead.waited_for,
+            blocks_ahead_hurried: ahead.hurried,
             blocks_ahead_past_quiet_wait: ahead.past_quiet_wait,
             blocks_ahead_unused: ahead.unused,
             memory_frees: MemoryFrees {
