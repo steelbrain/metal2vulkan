@@ -881,6 +881,14 @@ impl ShadowCopies {
         Some([x, y, x + extent.width, y + extent.height])
     }
 
+    /// Whether `used` names the shadow where it holds a copy of the truth: its key, in a range
+    /// that meets [`shadow_range`](Self::shadow_range). A tiled texture's image holds every level
+    /// but copies its first alone (`Buffer::new_tiled_texture`): a use of its other levels reads
+    /// and writes the image's own texels, which no copy moves.
+    pub(super) fn holds(&self, used: &Use<ResourceKey>) -> bool {
+        used.key == self.shadow_key && used.range.overlaps(&self.shadow_range)
+    }
+
     /// Whether `used` touches the texture's truth: its bytes, or its image's levels and layers.
     pub(super) fn meets(&self, used: &Use<ResourceKey>) -> bool {
         let (key, range) = self.truth();
@@ -2451,8 +2459,8 @@ impl ResidentShadows {
     }
 }
 
-/// The shadowed textures of `shadows` a command with `uses` uses, each once, writing through it
-/// when any of its uses writes.
+/// The shadowed textures of `shadows` a command with `uses` uses where they hold a copy of their
+/// truth ([`ShadowCopies::holds`]), each once, writing through it when any of those uses writes.
 pub(super) fn copies_used<'a>(
     shadows_of: impl Iterator<Item = &'a Arc<ShadowCopies>>,
     uses: &[Use<ResourceKey>],
@@ -2465,7 +2473,7 @@ pub(super) fn copies_used<'a>(
         {
             continue;
         }
-        let mut used = uses.iter().filter(|used| used.key == copies.shadow_key);
+        let mut used = uses.iter().filter(|used| copies.holds(used));
         let Some(first) = used.next() else {
             continue;
         };

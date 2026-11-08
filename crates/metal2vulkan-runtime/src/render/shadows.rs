@@ -711,7 +711,7 @@ fn attachment_shadows(
             None => vec![&ds.target],
         };
         for target in targets.into_iter().chain(own) {
-            if let Some(copies) = target.texture.shadow() {
+            if let Some(copies) = held_shadow(target) {
                 let used = ShadowUse {
                     copies: Arc::clone(copies),
                     writes,
@@ -731,7 +731,7 @@ fn attachment_shadows(
             .flat_map(|r| r.written())
             .flat_map(|(resolve, _)| std::iter::once(&resolve.attachment).chain(&resolve.copy_to));
         for target in resolves {
-            if let Some(copies) = target.texture.shadow() {
+            if let Some(copies) = held_shadow(target) {
                 let used = ShadowUse {
                     copies: Arc::clone(copies),
                     writes: true,
@@ -759,7 +759,7 @@ fn attachment_shadows(
         } = color_take(layout, index, color, reached, drawn);
         let own = color.stand_in.as_ref().map(|s| &s.own);
         for target in std::iter::once(&color.target).chain(own) {
-            if let Some(copies) = target.texture.shadow() {
+            if let Some(copies) = held_shadow(target) {
                 if untouched && copies.left_untouched() {
                     continue;
                 }
@@ -784,7 +784,7 @@ fn attachment_shadows(
             .flat_map(|r| std::iter::once(&r.attachment).chain(&r.copy_to))
             .chain(&color.copied_resolve);
         for target in resolves {
-            if let Some(copies) = target.texture.shadow() {
+            if let Some(copies) = held_shadow(target) {
                 let used = ShadowUse {
                     copies: Arc::clone(copies),
                     writes: true,
@@ -800,6 +800,25 @@ fn attachment_shadows(
         }
     }
     shadows
+}
+
+/// The shadow of `target`'s texture, where the attachment renders a level and layers of its
+/// image that the shadow holds a copy of its truth in ([`ShadowCopies::holds`]); `None` for a
+/// texture with no shadow, and for a tiled texture's level past its first, which lies in its image
+/// alone and which no copy moves (`Buffer::new_tiled_texture`).
+fn held_shadow(target: &Target) -> Option<&Arc<ShadowCopies>> {
+    let copies = target.texture.shadow()?;
+    let (levels, layers) = (
+        target.level..target.level + 1,
+        target.layer..target.layer + target.layers,
+    );
+    match target
+        .texture
+        .image_use(levels, layers, Access::NONE, false)
+    {
+        Ok(used) if !copies.holds(&used) => None,
+        _ => Some(copies),
+    }
 }
 
 /// How a pass takes a color attachment ([`color_take`]).
@@ -882,7 +901,7 @@ fn count_colors(
     let mut tiles = None;
     let colors = layout.colors.iter().enumerate();
     for (index, color) in colors.filter_map(|(index, color)| Some((index, color.as_ref()?))) {
-        let Some(copies) = color.target.texture.shadow() else {
+        let Some(copies) = held_shadow(&color.target) else {
             continue;
         };
         let take = color_take(layout, index, color, reached, drawn);
