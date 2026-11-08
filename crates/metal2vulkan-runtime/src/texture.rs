@@ -81,7 +81,7 @@ use super::host_bytes::HostBytes;
 use super::image_plan::{
     check_image_limits, plan_image, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
 };
-use super::in_place::{self, PagesClass, ShadowCause};
+use super::in_place::{self, PagesClass, Refusal, ShadowCause};
 use super::key_hash::KeyMap;
 use super::linear_plan::{aliases, check_linear_limits, linear_lack, LinearImage, LinearLack};
 use super::memory::{MemoryClass, Placement};
@@ -2416,14 +2416,15 @@ impl Device {
                 // An aliasing image, counted where it took the feedback loop usage.
                 let alias = |image: Arc<Image>, texels: Arc<Texels>| {
                     let usage = image.plan().usage;
-                    if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+                    let feedback = usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT);
+                    if feedback && !in_place::checking() {
                         self.shared().counts.feedback_loop_alias_image();
                     }
                     Ok(Storage::Alias { image, texels })
                 };
                 // Where no image aliases the bytes, the reason the plan's attempt gives is the
                 // notice's.
-                let over = (&*texels, &holds);
+                let over = (&*texels, &holds, usage);
                 for &wider in &plans[..plans.len() - 1] {
                     let made = self.alias_image(wider.clone(), descriptor, over, &facts)?;
                     if let Ok(image) = made {
@@ -2432,6 +2433,13 @@ impl Device {
                 }
                 match self.alias_image(plan.clone(), descriptor, over, &facts)? {
                     Ok(image) => return alias(image, texels),
+                    // The device's check of its pooled memory makes no shadow: its round is
+                    // not made.
+                    Err(_) if in_place::checking() => {
+                        return Err(internal(
+                            "the in-place check's texture takes no image over its pooled memory",
+                        ))
+                    }
                     Err(why) => why,
                 }
             }
@@ -2773,6 +2781,164 @@ impl Device {
         }
     }
 
+    /// The image [`alias_image`](Self::alias_image) binds over `texels` (of a texture of Metal
+    /// `usage`) in their buffer's memory, unbound: the device's own linear image, made
+    /// `PREINITIALIZED`, where it holds exactly Metal's texels there (`linear_plan::aliases`) in
+    /// memory of the buffer's type; else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch, made
+    /// `UNDEFINED`, where the device makes one so and its check passed for its pooled memory
+    /// ([`Device::pooled_pitched_image`]). Why not: why the linear image is not, and why the
+    /// pitched image is not, its cause (a refused pitch, image or placement, or the policy and
+    /// the device's check), which the placement query answers. The device's check of its pooled
+    /// memory makes no linear image: it measures the pitched one.
+    fn alias_unbound(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        usage: TextureUsage,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<LinearMade, (String, ShadowCause)>, Error> {
+        let (_, buffer_offset, type_index) = texels.buffer.memory();
+        let memory_offset = buffer_offset + texels.layout.offset;
+        let raw_device = self.shared().vk();
+        let room = texels.buffer.padded_length() - texels.layout.offset;
+        let unobserved = texels.buffer.padding_unobserved();
+        // Why an image the device made does not hold exactly Metal's texels in the buffer's
+        // memory: `None` where it does (`aliases`) and takes memory of the buffer's type.
+        let elsewhere = |made: &LinearMade| {
+            let image = LinearImage {
+                alignment: made.requirements.alignment,
+                size: made.requirements.size,
+                offset: made.report.offset,
+                subresource: made.report.size,
+                row_pitch: made.report.row_pitch,
+                array_pitch: made.report.array_pitch,
+            };
+            let lies = aliases(&texels.layout, memory_offset, room, &image, unobserved);
+            let typed = made.requirements.memory_type_bits & (1 << type_index) != 0;
+            (!lies || !typed).then(|| {
+                format!(
+                    "it lays the texels out otherwise than Metal at their offset and row pitch, \
+                     holds other bytes than them or takes no memory of the buffer's type (rows \
+                     {} bytes apart, a subresource of {} bytes, aligned to {}, of the buffer's \
+                     type {typed})",
+                    made.report.row_pitch, made.report.size, made.requirements.alignment
+                )
+            })
+        };
+        let release_unbound = |made: LinearMade| {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(raw_device, made.raw) };
+        };
+        let linear = if in_place::checking() {
+            Err("the device's check of its pooled memory makes no linear image".to_owned())
+        } else if let Some(LinearLack { format, features }) = linear_lack(plan, facts) {
+            Err(LinearRefusal::Need(LinearNeed::Features { format, features }).describe(plan))
+        } else {
+            self.linear_image(plan)?
+                .map_err(|refusal| refusal.describe(plan))
+        };
+        let linear = match linear {
+            Ok(made) => match elsewhere(&made) {
+                None => return Ok(Ok(made)),
+                Some(why) => {
+                    release_unbound(made);
+                    format!("the device's linear image of the texture: {why}")
+                }
+            },
+            Err(why) => format!("the device makes no linear image of the texture: {why}"),
+        };
+        Ok(
+            match self.pooled_pitched_image(plan, texels, usage, facts)? {
+                Ok(made) => match elsewhere(&made) {
+                    None => Ok(made),
+                    Some(why) => {
+                        release_unbound(made);
+                        let why =
+                            format!("its DRM_FORMAT_MOD_LINEAR image at Metal's pitch: {why}");
+                        Err((linear, ShadowCause::Refused(Refusal::Pitch, why)))
+                    }
+                },
+                Err(cause) => Err((linear, cause)),
+            },
+        )
+    }
+
+    /// Whether [`alias_image`](Self::alias_image) makes an image over `texels` (of a texture of
+    /// Metal `usage` and `plan`), by its steps up to the bind ([`Device::alias_unbound`]), the
+    /// image released unbound; else the cause of the shadow the texture is.
+    pub(crate) fn alias_image_made(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        usage: TextureUsage,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<(), ShadowCause>, Error> {
+        Ok(match self.alias_unbound(plan, texels, usage, facts)? {
+            Ok(made) => {
+                // SAFETY: the image is live and unbound, and no command uses it.
+                unsafe { release::object(self.shared().vk(), made.raw) };
+                Ok(())
+            }
+            Err((_, cause)) => Err(cause),
+        })
+    }
+
+    /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` over `texels` in their buffer's pooled memory, its
+    /// one plane at Metal's pitch (`VkImageDrmFormatModifierExplicitCreateInfoEXT`), no external
+    /// memory (`dma_buf::ModifierMemory::Own`), unbound and made `UNDEFINED`
+    /// (`Device::pitched_image`), for a texture of Metal `usage` whose texels the device's own
+    /// linear image lays out otherwise: where the device makes such images, and its policy and
+    /// its check of the pooled class ([`PagesClass::Pooled`]) take each access the usage takes
+    /// for texels that lie in its lines as these do (`in_place::in_place`; a pending verdict
+    /// starts the check, and the texture is a shadow meanwhile); the check's own textures whatever
+    /// the verdicts. Why not.
+    ///
+    /// Vulkan lets such an image be bound to memory of no external handle type: an image of a DRM
+    /// format modifier's tiling names its modifier and plane layout
+    /// (`VUID-VkImageCreateInfo-tiling-02261`), and of its memory only a dedicated allocation is
+    /// asked where the driver requires one (`VUID-vkBindImageMemory-image-01445`, which the
+    /// runtime refuses); and a `DRM_FORMAT_MOD_LINEAR` image is linear (the Glossary's Linear
+    /// Resource), so in `GENERAL` its texels and the buffer's bytes alias as two host-accessible
+    /// subresources do (Memory Aliasing). But it is made `UNDEFINED`, `PREINITIALIZED` being for
+    /// linear tiling alone (`VUID-VkImageCreateInfo-initialLayout-12478`), and of its first move
+    /// the Synchronization chapter says "If the old layout is VK_IMAGE_LAYOUT_UNDEFINED, the
+    /// contents of that range may be discarded": the buffer's bytes stay only where the driver
+    /// leaves them, which the device's check of the pooled class measures, as it measures the
+    /// moves of images over host pages (`in_place.rs`, "Relying on the driver, checked").
+    fn pooled_pitched_image(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        usage: TextureUsage,
+        facts: &ImageFacts<'_>,
+    ) -> Result<Result<LinearMade, ShadowCause>, Error> {
+        if !self.makes_modifier_images() {
+            return Ok(Err(ShadowCause::Refused(
+                Refusal::Pitch,
+                "the device enables no VK_EXT_image_drm_format_modifier for an image at Metal's \
+                 row pitch"
+                    .to_owned(),
+            )));
+        }
+        if !in_place::checking() {
+            let line = self.shared().in_place.line();
+            let pages = (
+                PagesClass::Pooled,
+                texels.rows(line),
+                texels.texel_bytes(),
+                texels.padding(line),
+            );
+            let policy = self.compile_device().policy().host_page_textures;
+            let verdict = |class, access, rows| self.in_place_verdict(class, access, rows);
+            if let Err(cause) = in_place::in_place(policy, usage, pages, verdict) {
+                return Ok(Err(cause));
+            }
+        }
+        let own = crate::dma_buf::ModifierMemory::Own;
+        let made = self.pitched_image(plan, &texels.layout, facts, own)?;
+        Ok(made.map_err(|(refusal, why)| ShadowCause::Refused(refusal, why)))
+    }
+
     /// The linear image of `plan` aliasing `texels` in their buffer's memory (the runtime's own),
     /// in the `GENERAL` layout and holding the buffer's bytes, where the device makes one that
     /// lies exactly on Metal's layout there (`linear_plan::linear_lack` and `aliases`); why not
@@ -2788,7 +2954,7 @@ impl Device {
         &self,
         plan: ImagePlan,
         descriptor: &TextureDescriptor,
-        (texels, holds): (&Texels, &Result<(), String>),
+        (texels, holds, usage): (&Texels, &Result<(), String>, TextureUsage),
         facts: &ImageFacts<'_>,
     ) -> Result<Aliased, Error> {
         match texels.buffer.caller_memory() {
@@ -2807,58 +2973,18 @@ impl Device {
         if let Err(why) = holds {
             return Ok(Err(why.clone()));
         }
-        let (memory, buffer_offset, type_index) = texels.buffer.memory();
+        let (memory, buffer_offset, _) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
-        let made = if let Some(LinearLack { format, features }) = linear_lack(&plan, facts) {
-            Err(LinearRefusal::Need(LinearNeed::Features { format, features }).describe(&plan))
-        } else {
-            self.linear_image(&plan)?
-                .map_err(|refusal| refusal.describe(&plan))
-        };
-        let LinearMade {
-            raw,
-            requirements,
-            report,
-            initial,
-        } = match made {
-            Ok(made) => made,
-            Err(why) => {
-                return Ok(Err(format!(
-                    "the device makes no linear image of the texture: {why}"
-                )));
-            }
-        };
         let raw_device = self.shared().vk();
-        let room = texels.buffer.padded_length() - texels.layout.offset;
-        let image = LinearImage {
-            alignment: requirements.alignment,
-            size: requirements.size,
-            offset: report.offset,
-            subresource: report.size,
-            row_pitch: report.row_pitch,
-            array_pitch: report.array_pitch,
+        let made = match self.alias_unbound(&plan, texels, usage, facts)? {
+            Ok(made) => made,
+            Err((linear, cause)) => return Ok(Err(format!("{linear}; and {}", cause.words()))),
         };
-        let unobserved = texels.buffer.padding_unobserved();
-        let why = if !aliases(&texels.layout, memory_offset, room, &image, unobserved) {
-            Some(format!(
-                "the device's linear image of the texture lays its texels out otherwise than \
-                 Metal at the texels' offset and row pitch, or holds other bytes than its texels \
-                 (rows {} bytes apart, a subresource of {} bytes, aligned to {})",
-                report.row_pitch, report.size, requirements.alignment
-            ))
-        } else if requirements.memory_type_bits & (1 << type_index) == 0 {
-            Some(
-                "the device's linear image of the texture takes no memory of the buffer's type"
-                    .to_owned(),
-            )
-        } else {
-            None
-        };
-        if let Some(why) = why {
-            // SAFETY: the image is live and unbound, and no command uses it.
-            unsafe { release::object(raw_device, raw) };
-            return Ok(Err(why));
+        let checking = in_place::checking();
+        if made.initial == vk::ImageLayout::UNDEFINED && !checking {
+            self.shared().counts.pooled_pitched_image();
         }
+        let LinearMade { raw, initial, .. } = made;
         // SAFETY: the image is live and unbound; the memory is the buffer's, which outlives the
         // texture holding it, in a type the image takes, at an offset `aliases` checked against
         // the image's alignment and size.
@@ -2900,10 +3026,12 @@ impl Device {
             staging_copies: false,
             objects: ObjectsToken::default(),
         };
-        // Leaving `PREINITIALIZED` keeps the bytes the image holds: the buffer's.
+        // Leaving `PREINITIALIZED` keeps the bytes the image holds: the buffer's; leaving
+        // `UNDEFINED`, as a `DRM_FORMAT_MOD_LINEAR` image does, keeps them where the device's
+        // check of its pooled memory showed it (`Device::pooled_pitched_image`).
         let first = FirstMove::new(raw, image.plan().format, initial, None);
         *lock(&image.first_move) = Some(first);
-        if unobserved && texels.layout.padded() {
+        if texels.buffer.padding_unobserved() && texels.layout.padded() && !checking {
             self.shared().counts.unobserved_padding_alias();
         }
         Ok(Ok(image.shared()))

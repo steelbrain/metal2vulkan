@@ -110,12 +110,24 @@ pub(crate) enum PagesClass {
     /// A buffer of the runtime's own in fresh anonymous pages it imported by their pointer
     /// (`fresh_pages.rs`): as [`Pointer`](Self::Pointer), in the memory type of the buffer's class.
     Fresh,
+    /// A buffer of the runtime's own in a block of its pooled memory (`memory.rs`), no external
+    /// memory, where the device's linear image of the texture lays its rows out otherwise than
+    /// Metal (`texture.rs`'s `alias_image`): a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
+    /// (`VkImageDrmFormatModifierExplicitCreateInfoEXT`), bound in the buffer's memory, whose
+    /// first move leaves `UNDEFINED`, as an image of a DRM format modifier's tiling is made in
+    /// (`VUID-VkImageCreateInfo-initialLayout-12478`: `PREINITIALIZED`, whose move keeps the
+    /// bytes, is for linear tiling alone).
+    Pooled,
 }
 
 impl PagesClass {
     /// Every class, in the order the check runs them and the record holds their verdicts.
-    pub(crate) const ALL: [PagesClass; 3] =
-        [PagesClass::Pointer, PagesClass::Fresh, PagesClass::DmaBuf];
+    pub(crate) const ALL: [PagesClass; 4] = [
+        PagesClass::Pointer,
+        PagesClass::Fresh,
+        PagesClass::DmaBuf,
+        PagesClass::Pooled,
+    ];
 
     /// Its place in [`ALL`](Self::ALL).
     pub(crate) fn index(self) -> usize {
@@ -123,6 +135,7 @@ impl PagesClass {
             PagesClass::Pointer => 0,
             PagesClass::Fresh => 1,
             PagesClass::DmaBuf => 2,
+            PagesClass::Pooled => 3,
         }
     }
 
@@ -132,6 +145,7 @@ impl PagesClass {
             PagesClass::Pointer => "host pages imported by their pointer",
             PagesClass::DmaBuf => "host pages imported as dma-bufs",
             PagesClass::Fresh => "fresh host pages the runtime imported for the buffer",
+            PagesClass::Pooled => "the runtime's pooled memory at Metal's pitch",
         }
     }
 }
@@ -751,7 +765,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 10;
+pub(crate) const CHECK_VERSION: u32 = 11;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -828,7 +842,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// magic          8 bytes   "M2VINPL\0"
 /// version        u32       CHECK_VERSION
 /// identity       32 bytes  DriverIdentity::digest
-/// verdicts       36 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
+/// verdicts       48 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///

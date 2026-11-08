@@ -783,7 +783,8 @@ impl Device {
             }
             Err(refusal) => (refusal.describe(plan), false),
         };
-        Ok(match self.host_pitched_image(plan, layout, facts)? {
+        let host = crate::dma_buf::ModifierMemory::Host;
+        Ok(match self.pitched_image(plan, layout, facts, host)? {
             Ok(made) => Ok((made, true)),
             // A linear image the driver lays out otherwise is refused for its pitch; else the
             // pitched image's refusal names why.
@@ -843,26 +844,27 @@ impl Device {
         }))
     }
 
-    /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` made for host allocations, unbound, whose one
-    /// plane lies at offset 0 with rows `layout.row_pitch` apart (and slices `layout.slice_pitch`,
-    /// for a plan of several layers), its requirements and its plane's layout as the driver reports
-    /// them, made `UNDEFINED`. Why not where the device does not enable the extension, makes no
-    /// such image for host allocations (`Device::modifier_image_checks`), refuses the layout or
-    /// lays it out otherwise, or asks a dedicated allocation of it: the runtime asks the driver and
-    /// takes its answer, never a rule of its own.
+    /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` made for `memory` (host allocations, or the
+    /// runtime's own memory), unbound, whose one plane lies at offset 0 with rows
+    /// `layout.row_pitch` apart (and slices `layout.slice_pitch`, for a plan of several layers),
+    /// its requirements and its plane's layout as the driver reports them, made `UNDEFINED`
+    /// (`VUID-VkImageCreateInfo-initialLayout-12478`: `PREINITIALIZED` is for linear tiling alone).
+    /// Why not where the device does not enable the extension, makes no such image for `memory`
+    /// (`Device::modifier_image_checks`), refuses the layout or lays it out otherwise, or asks a
+    /// dedicated allocation of it: the runtime asks the driver and takes its answer, never a rule
+    /// of its own.
     #[cfg(unix)]
-    fn host_pitched_image(
+    pub(super) fn pitched_image(
         &self,
         plan: &ImagePlan,
         layout: &BufferLayout,
         facts: &ImageFacts<'_>,
+        memory: crate::dma_buf::ModifierMemory,
     ) -> Result<Result<LinearMade, (Refusal, String)>, Error> {
-        use crate::dma_buf::{memory_plane_0, ModifierMemory, DRM_FORMAT_MOD_LINEAR};
+        use crate::dma_buf::{memory_plane_0, DRM_FORMAT_MOD_LINEAR};
         let (row_pitch, slice_pitch) = (layout.row_pitch, layout.slice_pitch);
         let raw_device = self.shared().vk();
-        let enabled = (self.shared().host_import.as_ref())
-            .is_ok_and(|importer| importer.makes_dma_buf_images());
-        if !enabled {
+        if !self.makes_modifier_images() {
             return Ok(Err((
                 Refusal::Pitch,
                 "the device enables no VK_EXT_image_drm_format_modifier for an image at Metal's \
@@ -870,8 +872,7 @@ impl Device {
                     .to_owned(),
             )));
         }
-        let host = ModifierMemory::Host;
-        let view_formats = match self.modifier_image_checks(plan, facts, host)? {
+        let view_formats = match self.modifier_image_checks(plan, facts, memory)? {
             Ok(view_formats) => view_formats,
             Err(why) => return Ok(Err((Refusal::Image, why))),
         };
@@ -889,14 +890,15 @@ impl Device {
         let mut explicit = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
             .drm_format_modifier(DRM_FORMAT_MOD_LINEAR)
             .plane_layouts(&planes);
-        let raw = match self.drm_linear_image(plan, &view_formats, &mut explicit, host)? {
+        let raw = match self.drm_linear_image(plan, &view_formats, &mut explicit, memory)? {
             Ok(raw) => raw,
             Err(error) => {
                 return Ok(Err((
                     Refusal::Pitch,
                     format!(
-                        "the driver refuses a DRM_FORMAT_MOD_LINEAR image for host allocations \
-                         with rows {row_pitch} bytes apart ({error:?})"
+                        "the driver refuses a DRM_FORMAT_MOD_LINEAR image for {} with rows \
+                         {row_pitch} bytes apart ({error:?})",
+                        memory.words()
                     ),
                 )));
             }
@@ -911,8 +913,9 @@ impl Device {
                 Refusal::Image,
                 format!(
                     "it asks a dedicated allocation of a DRM_FORMAT_MOD_LINEAR image of {:?} for \
-                     host allocations, which one bound at an offset of the buffer's import is not",
-                    plan.format
+                     {}, which one bound at an offset of the buffer's memory is not",
+                    plan.format,
+                    memory.words()
                 ),
             ))
         } else if report.offset != 0
@@ -922,10 +925,13 @@ impl Device {
             Some((
                 Refusal::Pitch,
                 format!(
-                    "the driver lays a DRM_FORMAT_MOD_LINEAR plane for host allocations out at \
-                     offset {}, rows {} and slices {} bytes apart, where the texels lie at offset \
-                     0, rows {row_pitch} and slices {array_pitch} apart",
-                    report.offset, report.row_pitch, report.array_pitch
+                    "the driver lays a DRM_FORMAT_MOD_LINEAR plane for {} out at offset {}, rows \
+                     {} and slices {} bytes apart, where the texels lie at offset 0, rows \
+                     {row_pitch} and slices {array_pitch} apart",
+                    memory.words(),
+                    report.offset,
+                    report.row_pitch,
+                    report.array_pitch
                 ),
             ))
         } else {
@@ -946,11 +952,12 @@ impl Device {
 
     /// No image is laid out by DRM format modifier on this system.
     #[cfg(not(unix))]
-    fn host_pitched_image(
+    pub(super) fn pitched_image(
         &self,
         _plan: &ImagePlan,
         _layout: &BufferLayout,
         _facts: &ImageFacts<'_>,
+        _memory: crate::dma_buf::ModifierMemory,
     ) -> Result<Result<LinearMade, (Refusal, String)>, Error> {
         Ok(Err((
             Refusal::Pitch,

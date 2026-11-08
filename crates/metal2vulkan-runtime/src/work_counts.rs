@@ -481,6 +481,7 @@ pub(crate) struct Counters {
     stand_ins_after_pins: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
     unobserved_padding_aliases: AtomicU64,
+    pooled_pitched_images: AtomicU64,
     feedback_loop_shadow_images: AtomicU64,
     depth_attachments_moved: AtomicU64,
     depth_instances_held: AtomicU64,
@@ -3504,6 +3505,13 @@ impl Counters {
     pub(crate) fn unobserved_padding_alias(&self) {
         self.unobserved_padding_aliases
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device made a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch aliasing a buffer's bytes
+    /// in its pooled memory, where its own linear image lays them out otherwise
+    /// (`Device::pooled_pitched_image`).
+    pub(crate) fn pooled_pitched_image(&self) {
+        self.pooled_pitched_images.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device made the image of a texture over a buffer's bytes that the encoders copy them
@@ -6656,6 +6664,13 @@ pub struct WorkCounts {
     /// declaration the texture is a shadow (`shadowed_textures`). One per image made. A runtime
     /// extension: Metal has none.
     pub unobserved_padding_aliases: u64,
+    /// Images aliasing a buffer of the device's own memory that are `DRM_FORMAT_MOD_LINEAR` images
+    /// at Metal's row pitch (`VK_EXT_image_drm_format_modifier`), made where the device's own
+    /// linear image of the texture lays its rows out otherwise and the device's check of such
+    /// images over its pooled memory passed for the texture's accesses (docs/API.md, textures over
+    /// host pages); without one the texture is a shadow (`shadowed_textures`). One per image made.
+    /// A runtime extension: Metal has none.
+    pub pooled_pitched_images: u64,
     /// Images of textures over a buffer's bytes that the encoders copy them into and back (the
     /// texture's shadow, `shadow.rs`: a texture over host pages that renders, among others) that
     /// the device made with feedback loop usage where it cost them nothing
@@ -7562,6 +7577,7 @@ impl Device {
             stand_ins_after_pins: counters.stand_ins_after_pins.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
             unobserved_padding_aliases: counters.unobserved_padding_aliases.load(Ordering::Relaxed),
+            pooled_pitched_images: counters.pooled_pitched_images.load(Ordering::Relaxed),
             feedback_loop_shadow_images: counters
                 .feedback_loop_shadow_images
                 .load(Ordering::Relaxed),

@@ -113,6 +113,15 @@ impl Device {
                     way,
                 }
             }
+            // Over the device's own memory, whether the making's image aliases the bytes: the
+            // device's linear image, or one at Metal's pitch where its check passed for its pooled
+            // memory (`Device::alias_image_made`); else the cause of the shadow it is.
+            Route::Device { holds: Ok(()) } if texels.buffer.caller_memory().is_none() => {
+                if let Err(cause) = self.alias_image_made(&plan, texels, usage, &facts)? {
+                    return Ok(cause.placement());
+                }
+                Route::Device { holds: Ok(()) }
+            }
             route => route,
         };
         Ok(route.placement())

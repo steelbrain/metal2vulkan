@@ -402,6 +402,20 @@ impl Shape {
 /// own lies in fresh pages (`fresh_pages.rs`), and room for the largest shape's window.
 const BUFFER_BYTES: u64 = 40 << 20;
 
+/// The bytes of the pooled class's buffer: within half a pooled block, so that it lies in a
+/// block of the runtime's pooled memory as the product's buffers of that class do
+/// (`fresh_pages::FRESH_PAGES_PAST`), with room for every shape's window but the 3840x2160
+/// surface's, which such a buffer's texture takes no more than a smaller one's.
+const POOLED_BYTES: u64 = 24 << 20;
+
+/// The bytes of `class`'s buffer.
+fn class_bytes(class: PagesClass) -> u64 {
+    match class {
+        PagesClass::Pooled => POOLED_BYTES,
+        PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf => BUFFER_BYTES,
+    }
+}
+
 impl Device {
     /// Start the device's check on a thread of its own, where it has not started and its policy
     /// takes textures over host pages in place (`in_place.rs`). Where the thread cannot start,
@@ -585,7 +599,8 @@ fn check_class(
     let page = host_page();
     let line = device.shared().in_place.line();
     let unchecked = || (vec![[Verdict::Unchecked; 2]; access.answered().len()], true);
-    let Some(pages) = ClassPages::make(device, class, BUFFER_BYTES) else {
+    let length = class_bytes(class);
+    let Some(pages) = ClassPages::make(device, class, length) else {
         return Some(unchecked());
     };
     // The command queue an image that renders takes its passes on, the check's own, and the
@@ -624,7 +639,7 @@ fn check_class(
     // The texel sizes of the shapes whose texels share a line made so far (`Shape::runs`).
     let mut made_sharing = Vec::new();
     for (shape, texel) in shapes {
-        if shape.window(page) > BUFFER_BYTES || !shape.runs(line, &made_sharing) {
+        if shape.window(page) > length || !shape.runs(line, &made_sharing) {
             continue;
         }
         let rows = shape.rows(line);
@@ -1098,6 +1113,24 @@ impl ClassPages {
                 Some(ClassPages { buffer, start })
             }
             PagesClass::DmaBuf => dma_buf_pages(device, length),
+            // A buffer of the runtime's own in its pooled memory that declares the bytes between
+            // a texture's rows unobserved, as the product's buffers whose textures take such an
+            // image do (`texture.rs`'s `alias_image`): only where the device makes
+            // `DRM_FORMAT_MOD_LINEAR` images.
+            PagesClass::Pooled => {
+                if !device.makes_modifier_images() {
+                    return None;
+                }
+                let shared = ResourceOptions::shared();
+                let outside = AddressPlacement::Outside;
+                let buffer = device.new_buffer_placed(length, shared, outside).ok()?;
+                if buffer.in_fresh_pages() {
+                    return None;
+                }
+                buffer.declare_padding_unobserved();
+                let start = buffer.contents()?;
+                Some(ClassPages { buffer, start })
+            }
         }
     }
 }

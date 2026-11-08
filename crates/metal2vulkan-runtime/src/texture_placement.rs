@@ -242,7 +242,14 @@ impl Route {
                 HostWay::Shadow(cause) => cause,
             },
         };
-        let reason = match *cause {
+        cause.placement()
+    }
+}
+
+impl ShadowCause {
+    /// Where a texture shadowed for this cause lies, as the query answers it.
+    pub(crate) fn placement(&self) -> TexturePlacement {
+        let reason = match *self {
             ShadowCause::CheckPending(..) => return TexturePlacement::Pending,
             ShadowCause::Exact => TextureShadowReason::Policy,
             ShadowCause::StoreWidth(texel_bytes) => TextureShadowReason::StoreWidth { texel_bytes },

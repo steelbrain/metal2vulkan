@@ -1286,10 +1286,10 @@ impl Device {
         }))
     }
 
-    /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` for `memory` (dma-bufs, or host allocations),
-    /// viewed as `view_formats`, its plane laid out as `modifier` says (an explicit layout, or the
-    /// modifier listed for the driver to lay out), made `UNDEFINED` as Vulkan makes an image of
-    /// external memory; or the driver's refusal of it.
+    /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` for `memory` (dma-bufs, host allocations, or the
+    /// runtime's own memory), viewed as `view_formats`, its plane laid out as `modifier` says (an
+    /// explicit layout, or the modifier listed for the driver to lay out), made `UNDEFINED`; or the
+    /// driver's refusal of it.
     pub(super) fn drm_linear_image(
         &self,
         plan: &ImagePlan,
@@ -1298,18 +1298,23 @@ impl Device {
         memory: ModifierMemory,
     ) -> Result<Result<vk::Image, vk::Result>, Error> {
         let shared = self.shared();
-        let mut external =
-            vk::ExternalMemoryImageCreateInfo::default().handle_types(memory.handle_type());
+        let mut external = vk::ExternalMemoryImageCreateInfo::default();
         let mut list = vk::ImageFormatListCreateInfo::default();
-        let info = plan
+        let mut info = plan
             .create_info(shared.sharing(), view_formats, &mut list)
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
             .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut external)
             .push_next(modifier);
+        if let Some(handle) = memory.handle_type() {
+            external = external.handle_types(handle);
+            info = info.push_next(&mut external);
+        }
         // SAFETY: the device is live and enables the extension; `info` and its chain are valid
         // and within the device's limits for such an image (`modifier_image_limits`), its one
-        // plane the modifier's one (`modifier_features`), made `UNDEFINED` for external memory.
+        // plane the modifier's one (`modifier_features`), made `UNDEFINED` as Vulkan makes an
+        // image of external memory and every image of a DRM format modifier's tiling
+        // (`VUID-VkImageCreateInfo-initialLayout-12478`: `PREINITIALIZED` is for linear tiling
+        // alone).
         unsafe { crate::creation::image_or_refusal(shared.vk(), &info) }
     }
 
@@ -1407,8 +1412,7 @@ impl Device {
                 .queue_family_indices(families),
             false => modifier.sharing_mode(vk::SharingMode::EXCLUSIVE),
         };
-        let mut external =
-            vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(memory.handle_type());
+        let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default();
         let mut list = vk::ImageFormatListCreateInfo::default().view_formats(view_formats);
         let mut query = vk::PhysicalDeviceImageFormatInfo2::default()
             .format(plan.format.into())
@@ -1416,8 +1420,11 @@ impl Device {
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
             .usage(plan.usage.into())
             .flags(plan.flags.into())
-            .push_next(&mut external)
             .push_next(&mut modifier);
+        if let Some(handle) = memory.handle_type() {
+            external = external.handle_type(handle);
+            query = query.push_next(&mut external);
+        }
         if !view_formats.is_empty() {
             query = query.push_next(&mut list);
         }
@@ -1446,6 +1453,10 @@ impl Device {
             ));
         }
         let limits = properties.image_format_properties;
+        // An image of the runtime's own memory imports none.
+        if memory.handle_type().is_none() {
+            return Ok(limits);
+        }
         let features = imported.external_memory_properties.external_memory_features;
         // An image for host allocations is bound at an offset of a buffer's import, which is no
         // dedicated allocation.
@@ -1466,6 +1477,13 @@ impl Device {
 }
 
 impl Device {
+    /// Whether the device makes `DRM_FORMAT_MOD_LINEAR` images: it enables
+    /// `VK_EXT_image_drm_format_modifier`, which it does beside its dma-buf imports
+    /// (`HostImport::makes_dma_buf_images`).
+    pub(super) fn makes_modifier_images(&self) -> bool {
+        (self.shared().host_import.as_ref()).is_ok_and(|importer| importer.makes_dma_buf_images())
+    }
+
     /// Why the device makes no `DRM_FORMAT_MOD_LINEAR` image of `plan` with an explicit plane,
     /// where its driver renders such an image's rows past its height
     /// ([`RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`]) and the plan's height is no multiple
@@ -1485,28 +1503,33 @@ impl Device {
 }
 
 /// The memory a `DRM_FORMAT_MOD_LINEAR` image is made for: a dma-buf of its own pages
-/// ([`Device::dma_buf_image`]), or host pages imported by their pointer, where a texture's image in
-/// place lays its rows out at Metal's pitch (`texture/in_place_image.rs`).
+/// ([`Device::dma_buf_image`]); host pages imported by their pointer, where a texture's image in
+/// place lays its rows out at Metal's pitch (`texture/in_place_image.rs`); or a buffer's memory of
+/// the runtime's own, no external memory, where a texture over the buffer lays its rows out at
+/// Metal's pitch (`texture.rs`'s `alias_image`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ModifierMemory {
     DmaBuf,
     Host,
+    Own,
 }
 
 impl ModifierMemory {
-    /// The external memory handle type the image is made for.
-    fn handle_type(self) -> vk::ExternalMemoryHandleTypeFlags {
+    /// The external memory handle type the image is made for; none for the runtime's own memory.
+    fn handle_type(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
         match self {
-            ModifierMemory::DmaBuf => DMA_BUF,
-            ModifierMemory::Host => vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,
+            ModifierMemory::DmaBuf => Some(DMA_BUF),
+            ModifierMemory::Host => Some(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT),
+            ModifierMemory::Own => None,
         }
     }
 
     /// The memory, in words.
-    fn words(self) -> &'static str {
+    pub(super) fn words(self) -> &'static str {
         match self {
             ModifierMemory::DmaBuf => "dma-bufs",
             ModifierMemory::Host => "host allocations",
+            ModifierMemory::Own => "the runtime's own memory",
         }
     }
 }
