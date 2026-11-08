@@ -383,6 +383,18 @@ impl ImagePlacement {
         }
     }
 
+    /// This placement for an image the driver keeps uncompressed (a linear image, or one of
+    /// host-transfer usage where the driver keeps such images' bytes,
+    /// `DriverFact::HostTransferImagesKeepTheirBytes`): it has no compression data to write past
+    /// its size, so its size takes whole granularity pages alone, no aux map's chunk.
+    pub(crate) fn uncompressed(self) -> ImagePlacement {
+        ImagePlacement {
+            size_unit: self.granularity,
+            chunk: 1,
+            ..self
+        }
+    }
+
     /// The placement an image of the driver's `requirements` takes.
     pub(crate) fn place(self, requirements: vk::MemoryRequirements) -> vk::MemoryRequirements {
         vk::MemoryRequirements {

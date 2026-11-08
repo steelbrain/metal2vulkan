@@ -22,8 +22,9 @@
 //!   in and the padding would only widen the answer (`texture::ImagePlacement::in_heap`; every
 //!   NVIDIA profile in `validation/profiles` states a granularity of 1024 bytes where Metal answers
 //!   128). Where the driver answers a compressed image's size short of its compression data (ANV on
-//!   Intel's Xe-LP GPUs) the footprint still takes whole 256-byte chunks of the aux map's, so no
-//!   other resource lies in a chunk the image writes. Where the images ask more, a single-sample
+//!   Intel's Xe-LP GPUs) the footprint of an image it may compress still takes whole 256-byte
+//!   chunks of the aux map's, so no other resource lies in a chunk the image writes; a linear
+//!   image's, or one of host-transfer usage, is its own (`ImagePlacement::uncompressed`). Where the images ask more, a single-sample
 //!   colour texture takes an image that fits the answer in their place, bound there as above: its
 //!   optimal image of host-transfer usage, else its linear image (`Device::fitting_heap_image`,
 //!   announced `heap-texture-host-transfer` or `heap-texture-linear`), in place even where a
@@ -610,6 +611,18 @@ struct HeapImage {
 }
 
 impl HeapImage {
+    /// `placement` for this image ([`heap_extent`]): [`ImagePlacement::uncompressed`] where the
+    /// driver keeps it uncompressed, a linear image or one of host-transfer usage on its route
+    /// ([`AliasRoute::HostTransfer`]), which writes no compression data past its size.
+    fn placement(&self, placement: ImagePlacement) -> ImagePlacement {
+        let uncompressed =
+            self.tiling == vk::ImageTiling::LINEAR || self.route == AliasRoute::HostTransfer;
+        match uncompressed {
+            true => placement.uncompressed(),
+            false => placement,
+        }
+    }
+
     /// The refusal of an image of this tiling that does not take the heap's memory type.
     fn memory_refusal(&self) -> Error {
         if self.tiling == vk::ImageTiling::LINEAR {
@@ -1975,7 +1988,7 @@ impl Device {
         // The image's own footprint: a heap's image takes neither the granularity padding nor a
         // page of its own (`ImagePlacement::in_heap`).
         let placement = self.shared().textures.placement().in_heap();
-        let mut size_and_align = heap_extent(&image.requirements, placement);
+        let mut size_and_align = heap_extent(&image.requirements, image.placement(placement));
         if let Some(compressed) = compressed {
             let free = self.with_free_usage(compressed, layout.texture_type)?;
             let requirements =
@@ -2045,7 +2058,7 @@ impl Device {
                     self.fitting_heap_image(&image, plan, texture_type, class, metal, placement)?;
                 if let Some(fitting) = fitting {
                     refit = Some(images);
-                    images = heap_extent(&fitting.requirements, placement);
+                    images = heap_extent(&fitting.requirements, fitting.placement(placement));
                     image = fitting;
                     held = HeldToMetal::Images;
                 }
@@ -2362,6 +2375,7 @@ impl Device {
     ) -> Result<Option<HeapImage>, Error> {
         let takes = self.heap_takes(class)?;
         let fits = |candidate: &HeapImage| {
+            let placement = candidate.placement(placement);
             images_fit(heap_extent(&candidate.requirements, placement), metal)
         };
         if image.route != AliasRoute::HostTransfer {

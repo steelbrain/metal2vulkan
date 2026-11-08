@@ -422,7 +422,8 @@ fn a_heap_s_texture_buffer_takes_its_row_at_16_bytes_as_metal_s_does() {
 
 /// A heap texture takes its image's bytes of a heap, in whole granularity pages, at the image's
 /// alignment or the granularity's; on a device whose driver answers a compressed image's size short
-/// of its compression data (ANV on Xe-LP GPUs), the image also takes whole 256-byte chunks.
+/// of its compression data (ANV on Xe-LP GPUs), an image it may compress also takes whole 256-byte
+/// chunks, and one it keeps uncompressed none.
 #[test]
 fn a_heap_texture_takes_its_image_s_bytes_in_whole_pages() {
     use crate::texture::heap::heap_extent;
@@ -455,6 +456,15 @@ fn a_heap_texture_takes_its_image_s_bytes_in_whole_pages() {
     let compressed = requirements(4112, 65536);
     assert_eq!(heap_extent(&compressed, chunks(1)), answer(4352, 65536));
     assert_eq!(heap_extent(&compressed, pages(1)), answer(4112, 65536));
+    // An image the driver keeps uncompressed (a linear one, or one of host-transfer usage) writes
+    // no compression data past its size: it takes its own bytes in a heap, in no chunk, and whole
+    // granularity pages alone elsewhere.
+    let linear = requirements(64, 64);
+    assert_eq!(heap_extent(&linear, chunks(1).in_heap()), answer(256, 64));
+    let alone = chunks(1).in_heap().uncompressed();
+    assert_eq!(heap_extent(&linear, alone), answer(64, 64));
+    let paged = chunks(4096).uncompressed();
+    assert_eq!(heap_extent(&linear, paged), answer(4096, 4096));
 }
 
 /// A heap texture's footprint is Metal's answer, not the running driver's granularity. A heap's
