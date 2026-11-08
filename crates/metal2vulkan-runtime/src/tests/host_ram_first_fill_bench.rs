@@ -120,11 +120,23 @@ impl Fresh {
             fd,
         }
     }
+
+    /// A RAM over the whole mapping, and its first byte. The RAM keeps the mapping, which goes
+    /// once the RAM does, as `HostRam::new` asks: the device's thread may still be reading the
+    /// RAM's pages (`host_ram.rs`'s `fault_in`) after the bench's use of the RAM ended.
+    fn into_ram(self) -> (Arc<HostRam>, u64) {
+        let (start, length) = (self.start, self.length);
+        let at = NonNull::new(start as *mut u8).unwrap();
+        let keep: KeepAlive = Box::new(self);
+        // SAFETY: the mapping is readable and writable until `keep` goes, with the RAM.
+        let ram = unsafe { HostRam::new(&[(at, length)], Some(keep)) }.unwrap();
+        (Arc::new(ram), start)
+    }
 }
 
 impl Drop for Fresh {
     fn drop(&mut self) {
-        // SAFETY: the bench's mapping and descriptor, which nothing imports any more.
+        // SAFETY: the bench's mapping and descriptor, which nothing imports or reads any more.
         unsafe {
             libc::munmap(self.start as *mut libc::c_void, self.length as usize);
             libc::close(self.fd);
@@ -271,13 +283,10 @@ fn host_ram_first_fill_bench() {
     // The product's first fill over a fresh RAM, then the steady fills.
     let fresh = Fresh::new();
     write_runs(fresh.start, &runs);
-    let at = NonNull::new(fresh.start as *mut u8).unwrap();
-    let keep: KeepAlive = Box::new(());
-    // SAFETY: the mapping is readable and writable until `fresh` goes, after the RAM's use.
-    let ram = Arc::new(unsafe { HostRam::new(&[(at, RAM_BYTES)], Some(keep)) }.unwrap());
+    let (ram, start) = fresh.into_ram();
     let used = device.use_host_ram(&ram).unwrap();
     let host: Vec<Range<u64>> = (runs.iter())
-        .map(|run| fresh.start + run.start..fresh.start + run.end)
+        .map(|run| start + run.start..start + run.end)
         .collect();
     let before = device.work_counts();
     let (call, gpu, completion) = timed(&queue, |encoder| {
@@ -313,7 +322,6 @@ fn host_ram_first_fill_bench() {
     );
     drop(used);
     drop(ram);
-    drop(fresh);
     // Imports of the runs alone, over a second fresh mapping of the same layout.
     for gap in [0, 64 << 10, 1 << 20] {
         let fresh = Fresh::new();
@@ -503,11 +511,7 @@ fn host_ram_contended_fill_bench() {
         eprintln!("CONTENDED-FILL: the device imports no host memory here");
         return;
     }
-    let fresh = Fresh::of(CONTENDED_BYTES);
-    let at = NonNull::new(fresh.start as *mut u8).unwrap();
-    let keep: KeepAlive = Box::new(());
-    // SAFETY: the mapping is readable and writable until `fresh` goes, after the RAM's use.
-    let ram = Arc::new(unsafe { HostRam::new(&[(at, CONTENDED_BYTES)], Some(keep)) }.unwrap());
+    let (ram, start) = Fresh::of(CONTENDED_BYTES).into_ram();
     let used = device.use_host_ram(&ram).unwrap();
     // Let the device's thread import the RAM's start, as at a boot's desktop.
     std::thread::sleep(Duration::from_secs(1));
@@ -517,7 +521,7 @@ fn host_ram_contended_fill_bench() {
         let stops = Stops(&done);
         let clips: Vec<_> = (0..CLIPS)
             .map(|clip| {
-                let (device, ram, fresh) = (&device, &ram, &fresh);
+                let (device, ram) = (&device, &ram);
                 scope.spawn(move || {
                     let queue = device.new_command_queue().unwrap();
                     let mut times = Vec::new();
@@ -527,9 +531,9 @@ fn host_ram_contended_fill_bench() {
                         let first = 1 + (clip * SURFACES + surface) * 3;
                         let seed = 0x2545_f491_4f6c_dd1d ^ (clip << 32 | surface);
                         let runs = surface_pages(seed, first, count);
-                        write_runs(fresh.start, &runs);
+                        write_runs(start, &runs);
                         let host: Vec<Range<u64>> = (runs.iter())
-                            .map(|run| fresh.start + run.start..fresh.start + run.end)
+                            .map(|run| start + run.start..start + run.end)
                             .collect();
                         let cache = device
                             .new_buffer(count * PAGE, ResourceOptions::private())
@@ -625,7 +629,6 @@ fn host_ram_contended_fill_bench() {
     );
     drop(used);
     drop(ram);
-    drop(fresh);
 }
 
 /// The block-release bench's RAM: 48 chunks.
@@ -702,18 +705,10 @@ fn host_ram_block_release_bench() {
     // pointers (RADV) takes them from a dma-buf source of the RAM's pages, as a consumer's guest
     // RAM gives it there (`HostRam::with_dma_buf`, udmabufs of the RAM's file); without one it
     // refuses the copies, so where the host makes no udmabuf the bench says why and ends.
-    let (ram, start, fresh) = match device.imports_shared_host_pointers().unwrap() {
-        true => {
-            let fresh = Fresh::of(RELEASE_BYTES);
-            let at = NonNull::new(fresh.start as *mut u8).unwrap();
-            let keep: KeepAlive = Box::new(());
-            // SAFETY: the mapping is readable and writable until `fresh` goes, after the RAM's
-            // use.
-            let ram = unsafe { HostRam::new(&[(at, RELEASE_BYTES)], Some(keep)) }.unwrap();
-            (Arc::new(ram), fresh.start, Some(fresh))
-        }
+    let (ram, start) = match device.imports_shared_host_pointers().unwrap() {
+        true => Fresh::of(RELEASE_BYTES).into_ram(),
         false => match sourced_ram() {
-            Ok((ram, start)) => (ram, start, None),
+            Ok(sourced) => sourced,
             Err(why) => {
                 eprintln!(
                     "BLOCK-RELEASE SKIP: {} refuses shared host pointers and {why}",
@@ -879,5 +874,4 @@ fn host_ram_block_release_bench() {
     );
     drop(used);
     drop(ram);
-    drop(fresh);
 }
