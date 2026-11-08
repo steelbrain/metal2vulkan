@@ -273,7 +273,7 @@ fn cpu_writes_reach_the_first_level() {
         let after = rig.device.work_counts();
         let copied_in = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
         assert!(
-            copied_in > 0 && copied_in % (width * height) == 0,
+            copied_in > 0 && copied_in.is_multiple_of(width * height),
             "{case}: {copied_in} texels copied in, of a first level of {}",
             width * height
         );
