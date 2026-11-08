@@ -92,9 +92,10 @@ pub(super) struct InstanceShadows {
     /// copy, or refuse an instance that writes one image apart two ways), for the shadows of
     /// images' views of another layout (`texture/view_shadow.rs`).
     images: Vec<((ResourceKey, bool), UseRange)>,
-    /// The uses the last [`add`](InstanceShadows::add) gathered, in order: a use equal to the
-    /// one at its position there is gathered already (gathering one again changes nothing, as
-    /// each range only grows), so a draw that uses what the last one did gathers nothing new.
+    /// The uses the last [`add`](InstanceShadows::add) gathered, in order, or uses covering them
+    /// (`Use::covers`): a use equal to the one at its position there, or covered by it, is
+    /// gathered already (gathering one again changes nothing, as each range only grows), so a
+    /// draw that uses what the last one did, or bytes inside those, gathers nothing new.
     last: Vec<Use<ResourceKey>>,
     /// The identity and count of the uses of what the encoder made resident the last
     /// [`add_draw`](InstanceShadows::add_draw) began with: gathered, as what the instance
@@ -272,7 +273,7 @@ impl InstanceShadows {
         self.last.truncate(uses.len());
         for (at, used) in uses.iter().enumerate() {
             match self.last.get_mut(at) {
-                Some(kept) if *kept == *used => continue,
+                Some(kept) if *kept == *used || kept.covers(used) => continue,
                 Some(kept) => kept.clone_from(used),
                 None => self.last.push(used.clone()),
             }
@@ -290,14 +291,14 @@ impl InstanceShadows {
             return false;
         }
         for &at in at {
-            let used = &uses[at];
-            if self.last[at] != *used {
-                self.last[at].clone_from(used);
+            let (kept, used) = (&mut self.last[at], &uses[at]);
+            if *kept != *used && !kept.covers(used) {
+                kept.clone_from(used);
                 self.gather(used);
             }
         }
         debug_assert!(
-            *self.last == *uses,
+            (self.last.iter().zip(uses)).all(|(kept, used)| kept == used || kept.covers(used)),
             "an instance gathered a draw moved whose other uses differ from the last draw's"
         );
         true
@@ -1032,6 +1033,40 @@ mod tests {
         let uses = |gathered: &InstanceShadows| gathered.uses().collect::<Vec<_>>();
         assert_eq!(uses(&each), uses(&all));
         assert_eq!(each.images, all.images);
+    }
+
+    /// A draw's use that the last draw's at its place covers (`Use::covers`) is gathered already:
+    /// draws whose buffer offset moves along a buffer, each reading from a later offset to its
+    /// end, keep the first one's use as the last, and gather what one gathering of all their uses
+    /// gathers, added whole or moved (`InstanceShadows::add_moved`).
+    #[test]
+    fn an_instance_takes_a_covered_use_as_gathered() {
+        let (a, b) = (ResourceKey::new(), ResourceKey::new());
+        let draws: Vec<_> = (0..4u64)
+            .map(|at| vec![bytes(b, 0..4, true), bytes(a, 16 * at..64, false)])
+            .collect();
+        let uses = |gathered: &InstanceShadows| gathered.uses().collect::<Vec<_>>();
+        let mut all = InstanceShadows::default();
+        all.add(&[], &draws.concat());
+        let mut each = InstanceShadows::default();
+        for draw in &draws {
+            each.add(&[], draw);
+            assert_eq!(each.last, draws[0]);
+        }
+        assert_eq!(uses(&each), uses(&all));
+        let mut moved = InstanceShadows::default();
+        moved.add(&[], &draws[0]);
+        for draw in &draws[1..] {
+            assert!(moved.add_moved(draw, &[1]));
+            assert_eq!(moved.last, draws[0]);
+        }
+        assert_eq!(uses(&moved), uses(&all));
+        // A range past the kept one's is gathered, and kept.
+        let past = vec![bytes(b, 0..4, true), bytes(a, 48..128, false)];
+        assert!(moved.add_moved(&past, &[1]));
+        assert_eq!(moved.last, past);
+        all.add(&[], &past);
+        assert_eq!(uses(&moved), uses(&all));
     }
 
     /// Cleared, an instance's gathering gathers nothing, keeps its lists' room, and gathers the

@@ -1,7 +1,7 @@
 //! The last command an unordered encoder noted apart (`noted_apart.rs`).
 
 use super::super::binding::{ReachingPrefix, ResidentPrefix};
-use super::super::noted_apart::{NotedApart, NotedInto};
+use super::super::noted_apart::{Moved, NotedApart, NotedInto};
 use super::super::resource::ResourceKey;
 use super::super::tracker::{Access, Use, UseRange};
 use ash::vk;
@@ -195,4 +195,63 @@ fn a_draw_s_resident_uses_are_touched_once_by_their_identity() {
     ] {
         assert_eq!(noted.touched(prefix, state), 0);
     }
+}
+
+/// A command whose use differs from the last one's at its place only by bytes inside that one's
+/// range, of the same resource and access types, records nothing for it (`Use::covers`), its kept
+/// use the covering one, as a draw whose buffer offset moves along a buffer reads from a later
+/// offset to its end: the command noted after it compares against the covering use, and a range
+/// past it is recorded. A moved command (`NotedApart::note_moved`) takes it so too, and is noted
+/// as before only where every use is the last one's.
+#[test]
+fn a_use_inside_the_last_one_s_range_is_noted_already() {
+    let (buffer, other) = (ResourceKey::new(), ResourceKey::new());
+    let stages = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+    let into = NotedInto {
+        core: 7,
+        parts: 1,
+        held: 0,
+        rebinds: false,
+        aliases: 3,
+    };
+    let resident = BTreeSet::new();
+    let at = |offset| [read(other, 0..16), read(buffer, offset..4096)];
+    let mut noted = NotedApart::default();
+    let fresh = |noted: &mut NotedApart, uses: &[Use<ResourceKey>]| {
+        noted.note_fresh(stages, (uses, &resident), into, <[_]>::to_vec)
+    };
+    assert_eq!(fresh(&mut noted, &at(0)), at(0));
+    assert_eq!(fresh(&mut noted, &at(256)), []);
+    assert_eq!(noted.covered(), 1);
+    // Kept: the covering use, which the next command compares with.
+    assert!(noted.holds(stages, (&at(0), &resident), into));
+    assert!(!noted.holds(stages, (&at(256), &resident), into));
+    // Bytes past it, or another access of them, are recorded.
+    let wider = [read(other, 0..16), read(buffer, 0..8192)];
+    assert_eq!(fresh(&mut noted, &wider), [wider[1].clone()]);
+    assert_eq!(noted.covered(), 0);
+    let written = Use::writes(buffer, true, UseRange::Bytes(512..4096), wider[1].read);
+    let mixed = [read(other, 0..16), written];
+    assert_eq!(fresh(&mut noted, &mixed), [mixed[1].clone()]);
+    // Moved: covered, recorded past it, and as before.
+    let mut moved = NotedApart::default();
+    fresh(&mut moved, &at(0));
+    assert!(moved.moves((&at(256), &resident), into));
+    let note = |moved: &mut NotedApart, uses: &[Use<ResourceKey>]| {
+        let record = |_, fresh: &[Use<ResourceKey>]| fresh.to_vec();
+        match moved.note_moved((uses, &resident), &[1], record) {
+            Moved::Recorded(fresh, covered) => (Some(fresh), covered, false),
+            Moved::Covered(covered) => (None, covered, false),
+            Moved::AsBefore => (None, 0, true),
+        }
+    };
+    assert_eq!(note(&mut moved, &at(256)), (None, 1, false));
+    assert!(moved.holds(stages, (&at(0), &resident), into));
+    assert_eq!(note(&mut moved, &at(0)), (None, 0, true));
+    let past = [read(other, 0..16), read(buffer, 0..8192)];
+    assert_eq!(
+        note(&mut moved, &past),
+        (Some(vec![past[1].clone()]), 0, false)
+    );
+    assert!(moved.holds(stages, (&past, &resident), into));
 }

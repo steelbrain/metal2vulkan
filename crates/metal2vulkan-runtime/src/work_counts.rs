@@ -515,6 +515,7 @@ struct CommandCounters {
     stage_tables_read: AtomicU64,
     stage_tables_read_in_part: AtomicU64,
     commands_noted_as_before: AtomicU64,
+    uses_noted_covered: AtomicU64,
     provoking_last_pipeline_draws: AtomicU64,
     draw_states_recorded: AtomicU64,
     draws_pushing_set_zero: AtomicU64,
@@ -682,6 +683,12 @@ impl Counting<'_> {
     /// (`noted_apart.rs`).
     pub(crate) fn command_noted_as_before(&self) {
         self.0.add(|counts| &counts.commands_noted_as_before, 1);
+    }
+
+    /// A command's `uses` the uses its encoder noted last covered, so noted already
+    /// (`noted_apart.rs`).
+    pub(crate) fn uses_noted_covered(&self, uses: u64) {
+        self.0.add(|counts| &counts.uses_noted_covered, uses);
     }
 
     /// A draw settled its variant and plan from its bind shape (`GraphicsState::settle_shape`).
@@ -5375,6 +5382,12 @@ pub struct WorkCounts {
     /// held in their attachment layout, and none of them reached through the resident set alone
     /// (`noted_apart.rs`).
     pub commands_noted_as_before: u64,
+    /// Uses of draws noted apart that their encoder did not record: each differs from the use the
+    /// last command it noted had at its place only by a range that one holds, of the same
+    /// resource, tracking and access types, which its noting recorded into the same part
+    /// (`noted_apart.rs`), as a draw whose buffer offsets move along a buffer reads bytes its
+    /// earlier draw's read held.
+    pub uses_noted_covered: u64,
     /// Draws that settled their variant and plan from their bind shapes: none for a draw whose
     /// bind shape is one of the latest its pipeline state settled in the same buffer forms.
     pub draws_settled: u64,
@@ -7149,6 +7162,7 @@ impl Device {
             stage_tables_read_in_part: commands(|counts| &counts.stage_tables_read_in_part),
             no_copy_lies_read: commands(|counts| &counts.no_copy_lies_read),
             commands_noted_as_before: commands(|counts| &counts.commands_noted_as_before),
+            uses_noted_covered: commands(|counts| &counts.uses_noted_covered),
             draws_settled: commands(|counts| &counts.draws_settled),
             two_plane_draws: commands(|counts| &counts.two_plane_draws),
             provoking_last_pipeline_draws: commands(|counts| &counts.provoking_last_pipeline_draws),

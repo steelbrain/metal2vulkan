@@ -44,7 +44,7 @@ use super::index_rewrite::{
     IndirectGatherRequest, RewriteRunRequest,
 };
 use super::kept_commands::{Held, KeptEffects};
-use super::noted_apart::{NotedApart, NotedInto};
+use super::noted_apart::{Moved, NotedApart, NotedInto};
 use super::pass_runs::RunKeep;
 use super::pending_dispatch::PendingDispatch;
 use super::pipeline::VariantObjects;
@@ -1597,6 +1597,9 @@ impl EncoderCore {
         }
         let record = |fresh: &[Use<ResourceKey>]| self.record_aliased(stages, fresh);
         noted.note_fresh(stages, (uses, resident), into, record);
+        if noted.covered() > 0 {
+            self.counts().uses_noted_covered(noted.covered() as u64);
+        }
         self.touch_reaching(uses, resident);
         Ok(())
     }
@@ -1653,6 +1656,9 @@ impl EncoderCore {
             fresh.len()
         };
         let recorded = noted.note_draw_fresh(stages, (uses, resident, prefix), into, record);
+        if noted.covered() > 0 {
+            self.counts().uses_noted_covered(noted.covered() as u64);
+        }
         let rebinds = self.device().shared().rebinds.any();
         let touched = noted.touched(prefix.prefix, (into.core, rebinds));
         self.touch_draw((uses, resident), touched, rebinds);
@@ -1692,8 +1698,15 @@ impl EncoderCore {
         self.observe_fresh(uses, &[]);
         self.hold_resident();
         let record = |stages, fresh: &[Use<ResourceKey>]| self.record_aliased(stages, fresh);
-        if noted.note_moved((uses, resident), at, record).is_none() {
-            self.counts().command_noted_as_before();
+        let covered = match noted.note_moved((uses, resident), at, record) {
+            Moved::AsBefore => {
+                self.counts().command_noted_as_before();
+                0
+            }
+            Moved::Covered(covered) | Moved::Recorded((), covered) => covered,
+        };
+        if covered > 0 {
+            self.counts().uses_noted_covered(covered as u64);
         }
         // Touched already: each key at its position, named as touching it names it.
         #[cfg(debug_assertions)]

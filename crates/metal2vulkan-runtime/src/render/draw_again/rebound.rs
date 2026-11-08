@@ -54,7 +54,9 @@
 //!   is narrowed: its uses differ from the kept draw's only at the moved slots' uses
 //!   (`CommandUses::slot_uses_into`), which alone it checks against the attachments and the
 //!   geometry writes, adds to the pass's reads and gathers (`InstanceShadows::add_moved`), and
-//!   compares and records where the last command noted is the kept draw (`EncoderCore::note_moved`).
+//!   compares and records where the last command noted is the kept draw (`EncoderCore::note_moved`);
+//!   a moved use inside the bytes of the use kept at its place, as a vertex buffer's offset
+//!   moving along it reads, is noted and gathered already (`Use::covers`, `noted_apart.rs`).
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex

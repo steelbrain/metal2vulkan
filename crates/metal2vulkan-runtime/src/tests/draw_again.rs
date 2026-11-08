@@ -789,7 +789,7 @@ fn draws_after_offsets_alone_moved_bind_what_every_step_binds() {
     assert_eq!(rebound.commands, every.commands);
     assert_eq!(rebound.commands["cmd_draw"], DRAWS);
     assert_eq!(rebound.words, every.words, "the pixels of the draws");
-    let counts: [(&str, fn(&WorkCounts) -> u64); 3] = [
+    let counts: [(&str, fn(&WorkCounts) -> u64); 4] = [
         ("draw_states_recorded", |counts| counts.draw_states_recorded),
         ("commands_noted_as_before", |counts| {
             counts.commands_noted_as_before
@@ -797,7 +797,12 @@ fn draws_after_offsets_alone_moved_bind_what_every_step_binds() {
         ("draws_pushing_set_zero", |counts| {
             counts.draws_pushing_set_zero
         }),
+        ("uses_noted_covered", |counts| counts.uses_noted_covered),
     ];
+    // Each draw's vertex buffer use, from its offset to the buffer's end, lies inside the first
+    // draw's: noted already (`noted_apart.rs`).
+    let covered = rebound.counted(|counts| counts.uses_noted_covered);
+    assert!(covered >= DRAWS - 1, "{covered} uses noted covered");
     for (name, count) in counts {
         assert_eq!(rebound.counted(count), every.counted(count), "{name}");
     }
