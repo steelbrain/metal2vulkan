@@ -67,7 +67,7 @@ use super::texture::{Texture, TextureShared};
 use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
 use metal2vulkan::device::AllocationLimits;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 /// The alignment of every buffer a heap places, and the one `heap_buffer_size_and_align`
@@ -306,6 +306,10 @@ struct HeapShared {
     /// encoder that used the heap makes resident as it encodes each later command
     /// (`residency.rs`).
     textures: Mutex<Numbered<TextureShared>>,
+    /// How many textures `textures` numbered, stored under its lock as each is held: what an
+    /// encoder that used the heap reads at each command to see whether it made one since, at one
+    /// load.
+    textures_made: AtomicU64,
     /// A committed command buffer holds a command that used the heap: one of its resources, or
     /// the heap or a resource of it made resident by the command's encoder. Metal's `Empty`
     /// keeps a `Shared` heap's bytes from then on.
@@ -723,6 +727,7 @@ impl Device {
             heap_type,
             ranges: Mutex::new(RangeAllocator::new(0, size)),
             textures: Mutex::new(Numbered::default()),
+            textures_made: AtomicU64::new(0),
             used: AtomicBool::new(false),
             object_id: ObjectId::new(),
             placed: Mutex::new(Placed::default()),
@@ -776,6 +781,7 @@ impl Device {
             heap_type: HeapType::Sparse,
             ranges: Mutex::new(RangeAllocator::new(0, size)),
             textures: Mutex::new(Numbered::default()),
+            textures_made: AtomicU64::new(0),
             used: AtomicBool::new(false),
             object_id: ObjectId::new(),
             placed: Mutex::new(Placed::default()),
@@ -1198,12 +1204,17 @@ impl Heap {
     /// `texture`, made in the heap, is among the heap's textures while it lives, numbered after
     /// every texture the heap made before it.
     pub(super) fn hold_texture(&self, texture: &Texture) {
-        lock(&self.0.textures).hold(texture.downgrade());
+        let mut textures = lock(&self.0.textures);
+        textures.hold(texture.downgrade());
+        // Stored while the texture is held: a load that reads it, then takes the lock, finds the
+        // texture there.
+        (self.0.textures_made).store(textures.made(), Ordering::Release);
     }
 
-    /// The number the next texture the heap makes takes: how many it made.
+    /// The number the next texture the heap makes takes: how many it made, as the last texture
+    /// held stored it.
     pub(super) fn textures_made(&self) -> u64 {
-        lock(&self.0.textures).made()
+        self.0.textures_made.load(Ordering::Acquire)
     }
 
     /// The heap's live textures numbered `from` or later, in the order they were made, and the
