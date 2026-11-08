@@ -379,6 +379,25 @@ impl Bound {
         true
     }
 
+    /// Whether the record holds `sets` bound from set number `first` with `layout`, set 0 with the
+    /// dynamic offsets `offsets`: binding them again sets nothing ([`sets`](Self::sets)).
+    #[inline]
+    pub(super) fn holds_sets(
+        &self,
+        layout: vk::PipelineLayout,
+        first: u32,
+        (sets, offsets): (&[vk::DescriptorSet], &[u32]),
+    ) -> bool {
+        let first = first as usize;
+        let held = |at: usize| self.sets.get(at).copied().flatten();
+        self.sets_layout == layout
+            && sets
+                .iter()
+                .enumerate()
+                .all(|(i, &set)| held(first + i) == Some(set))
+            && (first > 0 || self.offsets == offsets)
+    }
+
     /// Whether binding `sets` from set number `first` with `layout` and the dynamic offsets
     /// `offsets` sets anything: noted as bound where it does. A set holds its dynamic offsets as
     /// it was bound with them, so set 0 bound again with other offsets sets them. Only set 0
@@ -390,17 +409,10 @@ impl Bound {
         first: u32,
         (sets, offsets): (&[vk::DescriptorSet], &[u32]),
     ) -> bool {
-        let first = first as usize;
-        let held = |at: usize| self.sets.get(at).copied().flatten();
-        if self.sets_layout == layout
-            && sets
-                .iter()
-                .enumerate()
-                .all(|(i, &set)| held(first + i) == Some(set))
-            && (first > 0 || self.offsets == offsets)
-        {
+        if self.holds_sets(layout, first, (sets, offsets)) {
             return false;
         }
+        let first = first as usize;
         if first == 0 {
             self.offsets.clear();
             self.offsets.extend_from_slice(offsets);

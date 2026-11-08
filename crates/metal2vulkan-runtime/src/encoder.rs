@@ -864,6 +864,17 @@ impl EncoderCore {
         Ok((set, written))
     }
 
+    /// The set 0 the encoder's last command took (`binding::LastSetZero`), where it is of `layout`
+    /// and holds `writes` (builds with debug assertions).
+    #[cfg(debug_assertions)]
+    pub(super) fn last_set_zero(
+        &self,
+        layout: vk::DescriptorSetLayout,
+        writes: &[Write],
+    ) -> Option<vk::DescriptorSet> {
+        self.last_set_zero.holds(layout, writes)
+    }
+
     /// Keep `written`, the set 0 a command that records allocated and wrote with `writes`
     /// ([`set_zero`](Self::set_zero)), for the encoder's next command (`binding::LastSetZero`)
     /// and the command buffer's later ones (`binding::SetCache`): kept only once the command

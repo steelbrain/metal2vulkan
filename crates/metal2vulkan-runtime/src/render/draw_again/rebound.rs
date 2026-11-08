@@ -50,10 +50,12 @@
 //!   looks at no stage's function tables, shadowed texture or detached buffer again; and where its
 //!   commands' descriptor ranges are the kept draw's, it keeps the kept draw's set-0 writes and
 //!   dynamic offsets (`binding::rebind_into` writes a buffer's descriptor of its buffer and range
-//!   alone). One whose uses were patched in place, none of them of what the encoder made resident,
-//!   is narrowed: its uses differ from the kept draw's only at the moved slots' uses
-//!   (`CommandUses::slot_uses_into`), which alone it checks against the attachments and the
-//!   geometry writes, adds to the pass's reads and gathers (`InstanceShadows::add_moved`), and
+//!   alone): where nothing recorded through the record since the kept draw, the record holds that
+//!   set 0 as pushed or bound, so the draw pushes or binds none. One whose uses were patched in
+//!   place, none of them of what the encoder made resident, is narrowed: its uses differ from the
+//!   kept draw's only at the moved slots' uses (`CommandUses::slot_uses_into`), which alone it
+//!   checks against the attachments and the geometry writes, adds to the pass's reads and gathers
+//!   (`InstanceShadows::add_moved`), and
 //!   compares and records where the last command noted is the kept draw (`EncoderCore::note_moved`);
 //!   a moved use inside the bytes of the use noted, or gathered, at its place before, as a vertex
 //!   buffer's offset moving along it reads, is noted and gathered already (`Use::covers`,
@@ -62,11 +64,11 @@
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
 //!   buffers and uses. What a draw moved skips is asserted where it skips it: its function tables
-//!   pass, it meets no shadow and no detached buffer, it pushes the kept draw's set-0 writes, its
-//!   uses are unwritten in a pass whose fragments wrote nothing, and of a draw narrowed, its other
-//!   uses share no attachment memory, meet no geometry write the moved ones do not, add nothing to
-//!   the pass's reads, are noted and touched as the last command's, and are the instance's last
-//!   gathered uses.
+//!   pass, it meets no shadow and no detached buffer, it pushes the kept draw's set-0 writes, a set
+//!   0 it pushes or binds none of is the record's, its uses are unwritten in a pass whose
+//!   fragments wrote nothing, and of a draw narrowed, its other uses share no attachment memory,
+//!   meet no geometry write the moved ones do not, add nothing to the pass's reads, are noted and
+//!   touched as the last command's, and are the instance's last gathered uses.
 
 use ash::vk;
 use metal2vulkan::bind::{DescriptorRange, DrawCall};
@@ -673,6 +675,14 @@ impl RenderLowering {
         let unsettled = || crate::error::internal("a draw rebound unsettled");
         let objects = kept.ok_or_else(unsettled)?.settled().variant.objects();
         let narrowed = rebinding.narrowed;
+        // Nothing recorded through the record since the kept draw, or the draw rebound before,
+        // set the pipeline and dynamic states this draw sets (`Kept::settled`), nor bound or
+        // pushed another set 0.
+        let records = match self.current.inline {
+            true => self.held_bound.records(),
+            false => self.current.bound.records(),
+        };
+        let settled = (self.again.kept.as_ref()).and_then(|kept| kept.settled) == Some(records);
         let (set, written) = match (objects.pushes_set_zero(), rebinding.writes_kept) {
             // Its set-0 writes the kept draw's (`rebind`): it pushes what the kept draw pushed.
             (true, true) => {
@@ -690,6 +700,30 @@ impl RenderLowering {
             (true, false) => {
                 let immutable = objects.immutable_pushes();
                 SetWrite::push_into(&live.kept.writes, immutable, &mut live.pushed);
+                (None, None)
+            }
+            // Its set-0 writes the kept draw's (`rebind`), whose set and dynamic offsets the record
+            // holds as bound: the set the encoder's last command took (`binding::LastSetZero`),
+            // reused, which nothing binds again.
+            (false, true) if settled && objects.set_zero_layout().is_some() => {
+                #[cfg(debug_assertions)]
+                {
+                    let layout = objects.set_zero_layout();
+                    let writes = &live.kept.writes;
+                    let set = layout.and_then(|layout| self.core.last_set_zero(layout, writes));
+                    let bound = match self.current.inline {
+                        true => &self.held_bound,
+                        false => &self.current.bound,
+                    };
+                    let recorded = live.kept.recording.as_ref().map(|owned| owned.layout);
+                    let holds =
+                        |(set, layout)| bound.holds_sets(layout, 0, (&[set], &live.offsets));
+                    assert!(
+                        set.zip(recorded).is_some_and(holds),
+                        "a draw moved binds a set 0 its record does not hold"
+                    );
+                }
+                self.core.counts().set_zero_set_reused();
                 (None, None)
             }
             (false, _) => self.core.set_zero_of(objects, &mut live.kept.writes)?,
@@ -785,16 +819,17 @@ impl RenderLowering {
         let owned = (live.kept.recording.as_ref())
             .ok_or_else(|| crate::error::internal("a draw rebound without its recording"))?;
         let shared = self.core.generation();
-        let settled = (self.again.kept.as_ref()).and_then(|kept| kept.settled);
         let bound = match self.current.inline {
             true => &mut self.held_bound,
             false => &mut self.current.bound,
         };
-        // Nothing recorded through the record since the kept draw, or the draw rebound before,
-        // set the pipeline and dynamic states this draw sets (`Kept::settled`); and where it
-        // pushes the kept draw's set-0 writes (`rebind`), the record holds them as pushed, so
-        // its push compares none.
-        let settled = settled == Some(bound.records());
+        // Where it pushes the kept draw's set-0 writes (`rebind`) into a record settled since the
+        // kept draw (above), the record holds them as pushed, so its push compares none.
+        debug_assert_eq!(
+            records,
+            bound.records(),
+            "a draw rebound recorded through its record before its draw"
+        );
         let pushed = match settled && rebinding.writes_kept && !pushed.is_empty() {
             true => {
                 #[cfg(debug_assertions)]
