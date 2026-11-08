@@ -71,7 +71,7 @@ fn other_queue(device: &Device) -> (Option<CommandQueue>, Vec<CommandQueue>) {
     let mut made = Vec::new();
     for _ in 0..8 {
         let queue = device.new_command_queue().unwrap();
-        if queue.vk_queue() != 0 {
+        if queue.vk_queue_sharing().0 != 0 {
             return (Some(queue), made);
         }
         made.push(queue);
@@ -159,7 +159,7 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
         return;
     };
     let shared = device.shared();
-    let busy_family = shared.queue_family_of(busy_queue.vk_queue());
+    let busy_family = shared.queue_family_of(busy_queue.vk_queue_sharing().0);
     let beside_family = busy_family != shared.queue_family_of(0);
     let staging = device.has_staging_queue();
     let target = device
@@ -242,7 +242,7 @@ fn a_hand_out_makes_its_own_first_work_without_waiting_for_another_queue_s_work(
          {busy_family}, the first's {}), {:.0} ms ({:.2} ms a fill alone), the hand-outs within \
          its first {:.0} ms; staging queue {staging} | {}",
         TARGET >> 20,
-        busy_queue.vk_queue(),
+        busy_queue.vk_queue_sharing().0,
         shared.queue_family_of(0),
         busy_took.as_secs_f64() * 1e3,
         each.as_secs_f64() * 1e3,
