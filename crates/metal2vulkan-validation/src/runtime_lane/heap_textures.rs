@@ -382,10 +382,21 @@ fn heap_textures_answer_and_place_as_metal_s_do() {
                 // (a multisample texture, a depth or stencil one, any on a driver without
                 // `DriverFact::ColorImagesLieAsMetalHeapTextures`), or for such a texture no image
                 // bound in the heap's memory serves, a shadow of Metal's tiles there
-                // (`shadowed-texture`, `texture/heap_tiled.rs`; the NVIDIA RTX 5080 Laptop's).
+                // (`shadowed-texture`, `texture/heap_tiled.rs`; the NVIDIA RTX 5080 Laptop's). A
+                // 32-bit float depth texture whose image a shadow fills from the heap's bytes, on
+                // a device that may store a depth outside `[0, 1]` copied there clamped (no
+                // `VK_EXT_depth_range_unrestricted`, not measured to keep one: ANV),
+                // `restricted-depth-upload`.
                 let facts = &device.properties().driver_facts;
                 let apart = is_depth_stencil(shape.pixel_format)
                     && facts.contains(&DriverFact::DepthStencilImagesLieApart);
+                let clamps = !device.enables_extension(ash::ext::depth_range_unrestricted::NAME)
+                    && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
+                let float_depth = matches!(
+                    shape.pixel_format,
+                    PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8
+                );
+                let upload = [Degradation::RestrictedDepthUpload];
                 let as_metal = shape.samples == 1
                     && !is_depth_stencil(shape.pixel_format)
                     && facts.contains(&DriverFact::ColorImagesLieAsMetalHeapTextures);
@@ -396,6 +407,7 @@ fn heap_textures_answer_and_place_as_metal_s_do() {
                     .chain(apart.then_some(&DEPTH_STENCIL_ROUTES[..]))
                     .chain((!as_metal).then_some(&HEAP_LAYOUTS[..]))
                     .chain((!as_metal).then_some(&TILE_SHADOW[..]))
+                    .chain((clamps && float_depth).then_some(&upload[..]))
                     .flatten();
                 let allowed: BTreeSet<Degradation> =
                     SIZE_NOTICES.iter().chain(routes).copied().collect();
