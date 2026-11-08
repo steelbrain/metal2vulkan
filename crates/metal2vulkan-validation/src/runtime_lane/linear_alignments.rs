@@ -14,10 +14,11 @@
 //!   offset of 64, over a no-copy buffer and over a buffer of the runtime's, is made on every
 //!   device, as Metal makes it: a shadow (counted `shadowed_textures`) where the answer is more
 //!   than 64, and its blit out reads its texels.
-//! - [`a_device_of_the_same_driver_reads_the_answer_again`]: the first query of a format probes
-//!   the driver (`WorkCounts::linear_alignments_probed`) and a second asks nothing; a device of
-//!   the same driver and cache reads the record and probes nothing
-//!   (`linear_alignments_recalled`), answering the same.
+//! - [`a_device_of_the_same_driver_reads_the_answer_again`]: the first query probes every format
+//!   of the driver (`WorkCounts::linear_alignments_probed`) and no later one asks anything; a
+//!   device of the same driver and cache reads the one record and probes nothing
+//!   (`linear_alignments_recalled`), answering every format alike. Printed: the first query's
+//!   time with no record and with it.
 
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::{layer_reported_nothing_at_all, read_buffer, validated_device_with};
@@ -310,81 +311,67 @@ fn a_row_under_the_answer_is_made() {
     });
 }
 
-/// Every format's answer on `device`, how long asking took, and the formats it probed and read
-/// from records meanwhile.
-fn every_answer(device: &Device) -> (BTreeMap<u32, u64>, Duration, u64, u64) {
+/// Every format's answer on `device`, and the formats it probed and read from a record meanwhile.
+fn every_answer(device: &Device) -> (BTreeMap<u32, u64>, u64, u64) {
     let before = device.work_counts();
-    let started = Instant::now();
     let answers = (PixelFormat::ALL.iter())
         .filter_map(|&pf| {
             let answer = device.minimum_linear_texture_alignment_for_pixel_format(pf);
             answer.ok().map(|answer| (pf.as_raw(), answer))
         })
         .collect();
-    let took = started.elapsed();
     let after = device.work_counts();
     let probed = after.linear_alignments_probed - before.linear_alignments_probed;
     let recalled = after.linear_alignments_recalled - before.linear_alignments_recalled;
-    (answers, took, probed, recalled)
+    (answers, probed, recalled)
 }
 
-/// A format's first query probes the driver once and a second asks nothing; a device of the same
-/// driver over the same cache reads the first device's record, probes nothing, and answers the
-/// same. Then every format is asked on each, the first probing what it had not and the second
-/// reading every record and probing nothing, each answer alike: printed (`LINEAR-ALIGNMENT`), the
-/// time every format's answers took on a device of a driver no record holds and on one whose
-/// records hold them, which a program that asks each format as it starts (the consumer's
-/// capability tables) pays once.
+/// The first query of a format (`BGRA8Unorm`) probes every format a buffer backs, once, and no
+/// later query of any asks the driver anything; a device of the same driver over the same cache
+/// reads the first device's one record at its first query, probes nothing, and answers every
+/// format alike. Printed (`LINEAR-ALIGNMENT`): how long that first query took with no record and
+/// with the record, which a program pays once as it starts.
 #[test]
 fn a_device_of_the_same_driver_reads_the_answer_again() {
     let cache = ScratchCache::new().unwrap();
-    let pf = PixelFormat::BGRA8Unorm;
-    let mut first = None;
-    let mut every = BTreeMap::new();
-    on_device_of(HostPageTexturePolicy::InPlace, &cache, |device, _| {
-        let before = device.work_counts();
-        let answer = device.minimum_linear_texture_alignment_for_pixel_format(pf);
-        let again = device.minimum_linear_texture_alignment_for_pixel_format(pf);
-        assert_eq!(answer, again, "a format's answer is the device's for good");
-        let after = device.work_counts();
-        let probed = after.linear_alignments_probed - before.linear_alignments_probed;
-        let recalled = after.linear_alignments_recalled - before.linear_alignments_recalled;
-        eprintln!(
-            "LINEAR-ALIGNMENT on {}: BGRA8Unorm {answer:?}, probed {probed}, recalled {recalled}",
-            device.name()
-        );
-        assert_eq!((probed, recalled), (1, 0), "one probe, kept");
-        first = Some(answer.unwrap());
-        let (answers, took, probed, recalled) = every_answer(device);
-        eprintln!(
-            "LINEAR-ALIGNMENT on {}: every format's answer with no record in {:.1} ms, {probed} \
-             probed, {recalled} recalled",
-            device.name(),
-            took.as_secs_f64() * 1e3
-        );
-        assert_eq!(recalled, 0);
-        every = answers;
-    });
-    on_device_of(HostPageTexturePolicy::InPlace, &cache, |device, _| {
-        let before = device.work_counts();
-        let answer = device.minimum_linear_texture_alignment_for_pixel_format(pf);
-        let after = device.work_counts();
-        let probed = after.linear_alignments_probed - before.linear_alignments_probed;
-        let recalled = after.linear_alignments_recalled - before.linear_alignments_recalled;
-        assert_eq!(
-            (probed, recalled),
-            (0, 1),
-            "the record read, nothing probed"
-        );
-        assert_eq!(answer.ok(), first, "the record's answer");
-        let (answers, took, probed, recalled) = every_answer(device);
-        eprintln!(
-            "LINEAR-ALIGNMENT on {}: every format's answer from the records in {:.1} ms, {probed} \
-             probed, {recalled} recalled",
-            device.name(),
-            took.as_secs_f64() * 1e3
-        );
-        assert_eq!(probed, 0, "every format's record read");
-        assert_eq!(answers, every, "the records' answers");
-    });
+    let mut first = BTreeMap::new();
+    for record in [false, true] {
+        on_device_of(HostPageTexturePolicy::InPlace, &cache, |device, _| {
+            let before = device.work_counts();
+            let started = Instant::now();
+            let answer = device.minimum_linear_texture_alignment_for_pixel_format(BGRA8);
+            let took = started.elapsed();
+            let after = device.work_counts();
+            let probed = after.linear_alignments_probed - before.linear_alignments_probed;
+            let recalled = after.linear_alignments_recalled - before.linear_alignments_recalled;
+            let (answers, more_probed, more_recalled) = every_answer(device);
+            eprintln!(
+                "LINEAR-ALIGNMENT on {}: the first query (BGRA8Unorm {answer:?}) with the record \
+                 {record} took {:.2} ms: {probed} probed, {recalled} recalled; every other query \
+                 {more_probed} probed, {more_recalled} recalled",
+                device.name(),
+                took.as_secs_f64() * 1e3
+            );
+            assert_eq!(answer.ok(), answers.get(&BGRA8.as_raw()).copied());
+            assert_eq!(
+                (more_probed, more_recalled),
+                (0, 0),
+                "worked out at the first query"
+            );
+            let formats = answers.len() as u64;
+            match record {
+                false => {
+                    assert_eq!((probed, recalled), (formats, 0), "every format probed");
+                    first = answers;
+                }
+                true => {
+                    assert_eq!((probed, recalled), (0, formats), "the record read");
+                    assert_eq!(answers, first, "the record's answers");
+                }
+            }
+        });
+    }
 }
+
+/// The format the record test asks first.
+const BGRA8: PixelFormat = PixelFormat::BGRA8Unorm;

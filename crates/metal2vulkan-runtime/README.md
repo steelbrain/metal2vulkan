@@ -725,8 +725,9 @@ reads at a sample is refused (`RuntimeGap::InterpolateAtSampleWithPositions`).
 (`minimumLinearTextureAlignmentForPixelFormat:`) answers, per pixel format, the alignment of a
 texture's offset and `bytesPerRow` in a buffer at which the device's images hold the texture in
 place over host pages, at least the 16 bytes Metal answers on an Apple GPU. The runtime asks the
-driver at the format's first query by making those images (none is bound), keeps that first answer
-for the device's life, and records it per driver in the shader cache's content directory. The M3
+driver for every format at the first query of any by making those images (none is bound; 22 to
+33 ms for all of them on the devices measured), keeps those answers for the device's life, and
+writes them as one record per driver in the shader cache's content directory. The M3
 Max's MoltenVK answers 16 for every format, RADV 256 and lavapipe 64. A texture at a smaller
 multiple of 16 is still made, as a shadow where the device's images do not take its layout
 (`shadowed-texture`). The private `deviceLinearTextureAlignmentBytes` and

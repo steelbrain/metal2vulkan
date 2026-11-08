@@ -2953,10 +2953,10 @@ impl Counters {
         (self.linear_alignments_probed).fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A pixel format's linear texture alignment was read from the record of an earlier probe
-    /// (`texture/linear_alignment.rs`).
-    pub(crate) fn linear_alignment_recalled(&self) {
-        (self.linear_alignments_recalled).fetch_add(1, Ordering::Relaxed);
+    /// `formats` pixel formats' linear texture alignments were read from the record of an earlier
+    /// probe (`texture/linear_alignment.rs`).
+    pub(crate) fn linear_alignments_recalled(&self, formats: u64) {
+        (self.linear_alignments_recalled).fetch_add(formats, Ordering::Relaxed);
     }
 
     /// A texture over a buffer's bytes was made a shadow of them (`shadow.rs`), its image zeroed
@@ -6001,12 +6001,12 @@ pub struct WorkCounts {
     pub modifier_feature_queries: u64,
     /// Pixel formats whose `minimumLinearTextureAlignmentForPixelFormat:` answer the device
     /// probed of its driver, by making the images a texture over host pages takes in place at
-    /// each alignment it tries: each format once at most, as the answer is kept for the device's
-    /// life, and none whose answer a record of the same driver and runtime held.
+    /// each alignment it tries: every format a buffer backs at the first query of any, once for
+    /// the device's life, and none where a record of the same driver and runtime held them.
     pub linear_alignments_probed: u64,
     /// Pixel formats whose `minimumLinearTextureAlignmentForPixelFormat:` answer the device read
-    /// from the record of an earlier probe of the same driver and runtime: it probed nothing for
-    /// them.
+    /// from the record of an earlier probe of the same driver and runtime, at the first query of
+    /// any: it probed nothing.
     pub linear_alignments_recalled: u64,
     /// Textures over a buffer's bytes (a 2D texture or array over a buffer, a no-copy buffer or an
     /// IOSurface plane, or a view of another layout of one) that no image aliases, each an image

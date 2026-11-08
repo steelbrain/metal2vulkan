@@ -25,7 +25,7 @@
 //! The fields are fixed when the device is made. An answer that changes while the device lives is
 //! a method of its object's step on `Device` instead: step 5's per-format mipmap verdict, settled
 //! by the first mipmap generation of each format. So is one the device's images decide, worked out
-//! at each format's first query and fixed from there:
+//! for every format at the first query of any and fixed from there:
 //! `Device::minimum_linear_texture_alignment_for_pixel_format`.
 
 use super::device::argument_buffers::APPLE;
