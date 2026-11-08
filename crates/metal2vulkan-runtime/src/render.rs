@@ -10392,10 +10392,12 @@ impl RenderLowering {
             };
             // A measured reader's drawing commands record inside its query, into its instance or
             // kept with its draws where the instance is kept (`render/inline_splits.rs`); not
-            // those of a pipeline still being made, which a later step records, nor a replay's
-            // (`render/coverage.rs`). A query never recorded reads as never run.
-            let covered_query =
-                covered_query.filter(|_| made_now.is_some() && self.replayed.is_none());
+            // those of a pipeline still being made, which a later step records, nor a replay's,
+            // nor in an instance of views, whose query would take a query of the pool for each
+            // view (`render/coverage.rs`). A query never recorded reads as never run.
+            let covered_query = covered_query.filter(|_| {
+                made_now.is_some() && self.replayed.is_none() && self.current.shape.view_mask == 0
+            });
             for &phase in phases {
                 let counted = covered_query.filter(|_| phase != Some(snapshot::Phase::Snapshot));
                 if let Some((pool, query)) = counted {

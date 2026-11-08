@@ -32,8 +32,9 @@
 //!   device, `gpu_time.rs`): its readers are weighed by the area rule alone. Nor while a
 //!   visibility query of the program's is active, which the rule's checks already refuse the
 //!   snapshot for (one occlusion query is active at a time); nor a reader whose pipeline was still
-//!   being made (a later step records its draw) or that a replay records, nor past [`MEASURED`]
-//!   readers of a pass. An instance recorded inline after a split keeps the query's begin and end
+//!   being made (a later step records its draw), that a replay records or that draws views (a
+//!   query in a subpass of views takes one of the pool for each), nor past [`MEASURED`] readers of
+//!   a pass. An instance recorded inline after a split keeps the query's begin and end
 //!   with its draws (`render/inline_splits.rs`), recorded once with them. A query whose commands
 //!   never ran (an instance a reroute replaced, `render/reroute.rs`) reads as unavailable and
 //!   teaches nothing. A draw that is no such reader records nothing and makes no pool.
