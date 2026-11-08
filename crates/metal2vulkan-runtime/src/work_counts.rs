@@ -3032,6 +3032,9 @@ impl Counters {
             P::Fresh => {
                 (self.fresh_page_textures_in_place).fetch_add(1, Ordering::Relaxed);
             }
+            // A texture over the runtime's pooled memory is no texture over host pages: its
+            // image at Metal's pitch is counted apart (`pooled_pitched_image`).
+            P::Pooled => {}
         }
         if pitched {
             self.pitched_host_images.fetch_add(1, Ordering::Relaxed);

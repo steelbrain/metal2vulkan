@@ -60,7 +60,7 @@ use crate::binding_view::VkView;
 use crate::buffer::{Buffer, InPlaceWatch, ReadApart};
 use crate::buffer_texture::Texels;
 use crate::device::lock;
-use crate::error::{vulkan, Error, RuntimeGap};
+use crate::error::{internal, vulkan, Error, RuntimeGap};
 use crate::framebuffer_fetch::storage_candidate;
 use crate::image_plan::{plan_image, ImageFacts, ImagePlan};
 use crate::in_place::{self, Access, Padding, PagesClass, Refusal, RowEnds, Verdict};
@@ -507,6 +507,11 @@ impl Device {
         match class {
             PagesClass::DmaBuf => self.dma_buf_unplaced(plan, texels, facts),
             PagesClass::Pointer | PagesClass::Fresh => self.host_unplaced(plan, texels, facts),
+            // A texture over the runtime's pooled memory takes its image there
+            // (`Device::alias_image`), never over host pages.
+            PagesClass::Pooled => Err(internal(
+                "an image in place over the runtime's pooled memory",
+            )),
         }
     }
 
