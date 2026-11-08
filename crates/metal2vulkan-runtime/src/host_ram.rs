@@ -106,7 +106,10 @@
 //!   starve: it holds a chunk's lock and, pinning, the process's memory map lock), yields between
 //!   chunks, and on Linux faults each chunk's pages in 2 MiB at a time before its import, so that
 //!   the import pins pages in place rather than holding the memory map lock while it faults in
-//!   64 MiB ([`pace`], [`fault_in`]). Each import is made with the device's memory lock released
+//!   64 MiB: shared memory of base pages (a VMM's `memfd`) by a read of each page, whose fault
+//!   holds its mapping's own lock, not the memory map lock, so no `mmap`, `munmap` or `mprotect`
+//!   of another thread (a driver's compiler growing its heap) waits behind it ([`pace`],
+//!   [`fault_in`]). Each import is made with the device's memory lock released
 //!   (`memory::import_host`), so the device's other placements wait for none of it.
 //! - **Short of the allocation limit.** The thread stops where one more import would leave the
 //!   device less than a quarter of its `maxMemoryAllocationCount` (`allocations.rs`), the rest
@@ -1481,32 +1484,70 @@ fn pace() {
     }
 }
 
-/// Fault in the pages of `span`, a chunk of the RAM, 2 MiB at a time, yielding between
-/// (`MADV_POPULATE_WRITE`, Linux 5.14: each page as a write would, no byte changed), so that the
-/// chunk's import pins pages in place: each step holds the process's memory map lock for one
-/// huge page's fault, where an import of fresh pages holds it while it faults in all 64 MiB.
-/// A kernel that refuses (an older one) leaves the faults to the import, as before.
+/// Fault in the pages of `span`, a chunk of the RAM, 2 MiB at a time, yielding between, so that
+/// the chunk's import pins pages in place, where an import of fresh pages holds the process's
+/// memory map lock while it faults in all 64 MiB. How ([`faults_by_reads`]):
+///
+/// - **By a read of each page**, where every mapping over the span is shared memory of base pages
+///   (a `memfd`, as a VMM's RAM is): a read fault allocates a page of shared memory and maps it
+///   writable, as a write would, and changes no byte. Where the kernel faults shared memory under
+///   the mapping's own lock (Linux 6.7 and later), the fault holds no memory map lock, so no
+///   thread's `mmap`, `munmap` or `mprotect` (a heap's growth in the driver's compiler among them)
+///   waits behind it, nor any page fault behind such a waiting writer; elsewhere it holds the
+///   memory map lock for that one page's fault. Measured with a probe (a Radeon 780M host, Linux
+///   7.3.1, a 4 GiB `memfd` under `MADV_HUGEPAGE`, while one thread called `mprotect` every 0.2 ms
+///   and two mapped, wrote and unmapped 4 MiB every 0.5 ms): the reads took 239 to 247 ms and the
+///   longest `mprotect` 0.40 to 0.52 ms (two runs); the advice below took 202 to 541 ms and the
+///   longest `mprotect` 4.8 to 10.1 ms (four runs). Of seven slow pipeline compiles in a guest's
+///   boot on a consumer's RTX 5080 laptop, whose threads waited in a convoy on the memory map lock
+///   (the guest's vCPUs, `mprotect`, `mmap` and `munmap` callers), the one kernel stack dump that
+///   caught the convoy's reader found this thread's advice; with little free memory a huge page's
+///   fault reclaims and compacts memory, and the advice over a 64 MiB chunk took 45 to 70 ms
+///   (`docs/HOWTO.md`).
+/// - **By `MADV_POPULATE_WRITE`** (Linux 5.14: each page as a write would, no byte changed)
+///   elsewhere: a private mapping, whose read fault maps no page of its own (the zero page), which
+///   the import would then replace page by page under the memory map lock; a hugetlbfs mapping,
+///   whose fault past its pool of huge pages ends the process (`SIGBUS`) where the advice answers
+///   an error; and a kernel that does not answer for its mappings (before Linux 6.11). Each step
+///   holds the memory map lock for one huge page's fault. A kernel that refuses the advice (an
+///   older one) leaves the faults to the import, as before.
 #[cfg(target_os = "linux")]
 fn fault_in(span: &Range<u64>) {
     const STEP: u64 = 2 * 1024 * 1024;
+    let reads = faults_by_reads(span);
+    let page = host_page().unwrap_or(STEP);
     let mut at = span.start;
     while at < span.end {
         let length = STEP.min(span.end - at);
-        // SAFETY: the span is pages of the RAM's ranges, mapped readable and writable while the
-        // RAM lives (`HostRam::new`), which the caller holds; the advice writes no byte.
-        let faulted = unsafe {
-            libc::madvise(
-                at as *mut libc::c_void,
-                length as usize,
-                libc::MADV_POPULATE_WRITE,
-            )
-        };
-        if faulted != 0 {
-            return;
+        if reads {
+            for byte in (at..at + length).step_by(page as usize) {
+                // SAFETY: the span is pages of the RAM's ranges, mapped readable and writable
+                // while the RAM lives (`HostRam::new`), which the caller holds.
+                unsafe { std::ptr::read_volatile(byte as *const u8) };
+            }
+        } else {
+            // SAFETY: as above; the advice writes no byte.
+            let faulted = unsafe {
+                libc::madvise(
+                    at as *mut libc::c_void,
+                    length as usize,
+                    libc::MADV_POPULATE_WRITE,
+                )
+            };
+            if faulted != 0 {
+                return;
+            }
         }
         std::thread::yield_now();
         at += length;
     }
+}
+
+/// Whether [`fault_in`] faults `span`'s pages in by reading them: every mapping over it is shared
+/// memory of the host's base pages, as the kernel answers now (`host_memory::shared_base_pages`).
+#[cfg(target_os = "linux")]
+fn faults_by_reads(span: &Range<u64>) -> bool {
+    super::host_memory::shared_base_pages(span.start, span.end)
 }
 
 /// Elsewhere the import faults the chunk's pages in itself.
@@ -2857,5 +2898,127 @@ mod tests {
         assert_eq!(place(&one(0..2 * PAGE), PAGE), Err(()), "past the window");
         let outside = one(150 * MIB..150 * MIB + PAGE);
         assert_eq!(place(&outside, PAGE), Err(()), "outside the RAM");
+    }
+
+    /// A fresh shared mapping of `length` bytes of a new `memfd`, as a VMM maps its RAM, and its
+    /// unmapping.
+    #[cfg(target_os = "linux")]
+    fn fresh_mapping(length: usize) -> (u64, impl FnOnce()) {
+        // SAFETY: a name and flags the call takes.
+        let fd = unsafe { libc::memfd_create(c"m2v-fault-in".as_ptr(), libc::MFD_CLOEXEC) };
+        assert!(fd >= 0);
+        // SAFETY: the descriptor was just made, and is closed below.
+        assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
+        // SAFETY: a fresh mapping of the file.
+        let start = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(start, libc::MAP_FAILED);
+        // SAFETY: the test's descriptor; the mapping keeps the file.
+        unsafe { libc::close(fd) };
+        // SAFETY: the test's own mapping, which nothing uses once the caller unmaps it.
+        let unmap = move || unsafe {
+            libc::munmap(start, length);
+        };
+        (start as u64, unmap)
+    }
+
+    /// Whether the kernel answers `PROCMAP_QUERY` for the mapping at `start` (Linux 6.11).
+    #[cfg(target_os = "linux")]
+    fn queries_answered(start: u64) -> bool {
+        let maps = crate::host_memory::kept_maps().expect("/proc/self/maps opens");
+        let read = crate::host_memory::Access::Read;
+        crate::host_memory::queried_permitted(&maps, start, start + 1, read, &mut 0).is_some()
+    }
+
+    /// Shared memory of base pages, a VMM's `memfd`, is faulted in by reads, whose faults hold
+    /// their mapping's own lock rather than the process's memory map lock; private memory, whose
+    /// read fault maps no page of its own, by the advice; and so is a span over both.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_memory_is_faulted_in_by_reads_and_private_memory_by_the_advice() {
+        let length = 8 * MIB as usize;
+        let (shared, unmap) = fresh_mapping(2 * length);
+        let private = shared + length as u64;
+        // SAFETY: the upper half of the test's own mapping, replaced by private anonymous memory.
+        let replaced = unsafe {
+            libc::mmap(
+                private as *mut libc::c_void,
+                length,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_FIXED,
+                -1,
+                0,
+            )
+        };
+        assert_eq!(replaced as u64, private);
+        if !queries_answered(shared) {
+            eprintln!("FAULT-IN: the kernel answers no PROCMAP_QUERY; every span takes the advice");
+            assert!(!faults_by_reads(&(shared..private)));
+        } else {
+            assert!(faults_by_reads(&(shared..private)));
+            assert!(!faults_by_reads(&(private..private + length as u64)));
+            assert!(!faults_by_reads(&(shared..private + length as u64)));
+        }
+        unmap();
+    }
+
+    /// A fault-in by reads leaves every page of the span resident and mapped writable (a write
+    /// over every page after it faults no page, as the import's pin for writing finds them), and
+    /// changes no byte: the pages written before it keep their bytes, the fresh ones read 0.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_fault_in_by_reads_maps_every_page_writable_and_changes_no_byte() {
+        let length = 8 * MIB as usize;
+        let (start, unmap) = fresh_mapping(length);
+        let span = start..start + length as u64;
+        if !faults_by_reads(&span) {
+            eprintln!("FAULT-IN: the span takes the advice here; nothing to test");
+            unmap();
+            return;
+        }
+        let page = host_page().expect("a Unix host's page size") as usize;
+        let written: Vec<usize> = (0..length / page).step_by(7).collect();
+        for &n in &written {
+            // SAFETY: the test's mapping, readable and writable.
+            unsafe { std::ptr::write_volatile((start as usize + n * page) as *mut u8, 0x5a) };
+        }
+        fault_in(&span);
+        let mut resident = vec![0u8; length / page];
+        // SAFETY: the test's mapping, and a vector of one byte per page of it.
+        let rc =
+            unsafe { libc::mincore(start as *mut libc::c_void, length, resident.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        assert!(resident.iter().all(|&r| r & 1 == 1), "a page not resident");
+        let faults = || {
+            // SAFETY: an all-zero `rusage` is a value the call overwrites.
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            // SAFETY: `getrusage` writes the struct it is given.
+            assert_eq!(
+                unsafe { libc::getrusage(libc::RUSAGE_THREAD, &mut usage) },
+                0
+            );
+            usage.ru_minflt + usage.ru_majflt
+        };
+        for n in 0..length / page {
+            // SAFETY: as above.
+            let byte = unsafe { std::ptr::read_volatile((start as usize + n * page) as *const u8) };
+            let expected = if written.contains(&n) { 0x5a } else { 0 };
+            assert_eq!(byte, expected, "page {n}");
+        }
+        let before = faults();
+        for n in 0..length / page {
+            // SAFETY: as above.
+            unsafe { std::ptr::write_volatile((start as usize + n * page + 1) as *mut u8, 1) };
+        }
+        assert_eq!(faults() - before, 0, "writes after the fault-in faulted");
+        unmap();
     }
 }

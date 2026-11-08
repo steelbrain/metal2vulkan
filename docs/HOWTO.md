@@ -587,7 +587,11 @@ submission, can give the device the guest's RAM once instead:
   paced: it runs as the system's batch work (`SCHED_BATCH` on Linux, the utility class on
   Apple's systems), never at a weight the system starves, since it holds a chunk's lock and, as
   it pins, the process's memory map lock; it yields between chunks; and on Linux it faults each
-  chunk's pages in 2 MiB at a time (`MADV_POPULATE_WRITE`) before the import pins them. Each
+  chunk's pages in 2 MiB at a time before the import pins them: shared memory of base pages (a
+  VMM's `memfd`) by a read of each page, whose fault holds its mapping's own lock rather than the
+  memory map lock, so no other thread's `mmap`, `munmap` or `mprotect` (a driver's compiler
+  growing its heap) waits behind it; private memory, hugetlbfs and kernels before 6.11 by
+  `MADV_POPULATE_WRITE`, which holds the memory map lock for each step. Each
   import is made with the device's memory lock released. The thread stops where one
   more import would leave the device less than a quarter of its `maxMemoryAllocationCount`, the
   rest left to the objects over them; once the device's allocations come within that quarter, the

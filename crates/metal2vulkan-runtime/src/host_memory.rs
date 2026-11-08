@@ -958,6 +958,64 @@ const PROCMAP_QUERY_VMA_READABLE: u64 = 0x01;
 #[cfg(target_os = "linux")]
 const PROCMAP_QUERY_VMA_WRITABLE: u64 = 0x02;
 
+/// `PROCMAP_QUERY_VMA_SHARED`: the mapping's `VM_SHARED`, the `s` of its line in the maps.
+#[cfg(target_os = "linux")]
+const PROCMAP_QUERY_VMA_SHARED: u64 = 0x08;
+
+/// The mapping covering `address`, as the kernel answers `PROCMAP_QUERY` on `maps` (this
+/// process's `/proc/self/maps`); else the call's error number (`ENOENT` where no mapping covers
+/// it, `ENOTTY` before Linux 6.11), or `None` for an answer that does not cover `address`.
+#[cfg(target_os = "linux")]
+fn mapping_at(maps: &std::fs::File, address: u64) -> Result<ProcmapQuery, Option<i32>> {
+    use std::os::fd::AsRawFd;
+    let mut query = ProcmapQuery {
+        size: std::mem::size_of::<ProcmapQuery>() as u64,
+        query_addr: address,
+        ..ProcmapQuery::default()
+    };
+    // SAFETY: `query` is a `struct procmap_query` of its stated size, which the kernel reads and
+    // writes during the call; it asks for no name or build ID (sizes 0).
+    let result = unsafe {
+        libc::ioctl(
+            maps.as_raw_fd(),
+            PROCMAP_QUERY as _,
+            std::ptr::from_mut(&mut query),
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().raw_os_error());
+    }
+    // The mapping covers `address`; an answer that does not is not taken.
+    if query.vma_start > address || query.vma_end <= address {
+        return Err(None);
+    }
+    Ok(query)
+}
+
+/// Whether every mapping over `[start, end)` is shared and of the host's base pages, as the kernel
+/// answers `PROCMAP_QUERY` now (`vma_flags`, `vma_page_size`): shared memory such as a `memfd`, a
+/// VMM's RAM, whose read fault maps a page writable, and no hugetlbfs mapping, whose fault past
+/// its pool of pages ends the process (`SIGBUS`) where `MADV_POPULATE_WRITE` answers an error
+/// (`host_ram.rs`'s `fault_in`). `false` where a page of the window is not mapped and where the
+/// kernel does not answer the query (before Linux 6.11).
+#[cfg(target_os = "linux")]
+pub(super) fn shared_base_pages(start: u64, end: u64) -> bool {
+    let (Some(maps), Some(page)) = (kept_maps(), host_page()) else {
+        return false;
+    };
+    let mut covered = start;
+    while covered < end {
+        let Ok(mapping) = mapping_at(&maps, covered) else {
+            return false;
+        };
+        if mapping.vma_flags & PROCMAP_QUERY_VMA_SHARED == 0 || mapping.vma_page_size != page {
+            return false;
+        }
+        covered = mapping.vma_end;
+    }
+    true
+}
+
 /// Whether the process maps `[start, end)` without a gap, each mapping with `access`, as the
 /// kernel answers `PROCMAP_QUERY` on `maps` (this process's `/proc/self/maps`): one query per
 /// mapping the window touches, each for the mapping covering the first address not yet covered,
@@ -972,32 +1030,13 @@ pub(super) fn queried_permitted(
     access: Access,
     asked: &mut u64,
 ) -> Option<bool> {
-    use std::os::fd::AsRawFd;
     let mut covered = start;
     while covered < end {
         *asked += 1;
-        let mut query = ProcmapQuery {
-            size: std::mem::size_of::<ProcmapQuery>() as u64,
-            query_addr: covered,
-            ..ProcmapQuery::default()
+        let query = match mapping_at(maps, covered) {
+            Ok(query) => query,
+            Err(error) => return (error == Some(libc::ENOENT)).then_some(false),
         };
-        // SAFETY: `query` is a `struct procmap_query` of its stated size, which the kernel reads
-        // and writes during the call; it asks for no name or build ID (sizes 0).
-        let result = unsafe {
-            libc::ioctl(
-                maps.as_raw_fd(),
-                PROCMAP_QUERY as _,
-                std::ptr::from_mut(&mut query),
-            )
-        };
-        if result != 0 {
-            let error = std::io::Error::last_os_error().raw_os_error();
-            return (error == Some(libc::ENOENT)).then_some(false);
-        }
-        // The mapping covers `covered`; an answer that does not is not taken.
-        if query.vma_start > covered || query.vma_end <= covered {
-            return None;
-        }
         if query.vma_flags & access.queried() == 0 || !access.pinned(covered) {
             return Some(false);
         }
