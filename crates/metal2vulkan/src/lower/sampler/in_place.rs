@@ -655,7 +655,8 @@ pub(crate) fn emit(
         (true, State::Slot { sampler }) => {
             let t = T::new(fb)?;
             let word = super::emit::sampler_word(cx, fb, Pixel::Spec(*sampler))?;
-            let linear = super::extended::word_linear(fb, &Tys::new(fb)?, word)?;
+            let tys = Tys::new(fb)?;
+            let linear = super::extended::word_linear(fb, &tys, word)?;
             let edges = edges(fb, &t, word)?;
             let takes = fb.binary(BinOp::LogicalAnd, linear, edges)?;
             let pixel = word_pixel(fb, &t, word)?;
@@ -895,7 +896,8 @@ fn model(
     let conversion = Conversion::of(fb, &t, w.conversion)?;
     let (zero, one) = (t.u(fb, 0)?, t.u(fb, 1)?);
     // Luma: its four texels, each lane `x & 1` of element `⌊x / 2⌋` of its row.
-    let last = fb.binary(BinOp::ISub, size, splat2(fb, one, t.uvec2)?)?;
+    let ones = splat2(fb, one, t.uvec2)?;
+    let last = fb.binary(BinOp::ISub, size, ones)?;
     let last = fb.convert(ConvOp::Bitcast, last, ivec2)?;
     let (luma_at, luma_k) = footprint(fb, texels, last)?;
     let mut luma = [zero; 4];
@@ -914,10 +916,9 @@ fn model(
     // Chroma: its plane's four texels around the same point, sited at their luma pairs'
     // midpoints, each pair one element.
     let chroma_at = fb.binary(BinOp::FMul, texels, half2)?;
-    let two = t.u(fb, 2)?;
-    let up = fb.binary(BinOp::IAdd, size, splat2(fb, one, t.uvec2)?)?;
-    let halves = fb.binary(BinOp::UDiv, up, splat2(fb, two, t.uvec2)?)?;
-    let last = fb.binary(BinOp::ISub, halves, splat2(fb, one, t.uvec2)?)?;
+    let up = fb.binary(BinOp::IAdd, size, ones)?;
+    let halves = fb.binary(BinOp::ShiftRightLogical, up, ones)?;
+    let last = fb.binary(BinOp::ISub, halves, ones)?;
     let last = fb.convert(ConvOp::Bitcast, last, ivec2)?;
     let (chroma_at, chroma_k) = footprint(fb, chroma_at, last)?;
     let mut pairs = [zero; 4];
