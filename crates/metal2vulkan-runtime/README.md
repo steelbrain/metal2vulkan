@@ -298,8 +298,11 @@ the record the pass is making.
   (`VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf, `VK_QUEUE_FAMILY_EXTERNAL` for an opaque
   descriptor): the device's next submission records it, of the whole `VkBuffer`, before any of its
   commands, so the call waits for no GPU work; a host-visible buffer's acquire is made at once and
-  waited for alone. Call it once after each external write, while none of the runtime's commands
-  that use the buffer is in flight. Metal has no counterpart.
+  waited for alone. A texture over the buffer that reads it through a shadow (rows no image of the
+  memory holds, such as a decoder's pitch) copies the bytes in again at its next use in a command
+  buffer committed after the call; without the call, it may keep reading what it copied in before.
+  Call it once after each external write, while none of the runtime's commands that use the buffer
+  is in flight. Metal has no counterpart.
 - `Device::new_exportable_shared_event` makes a shared event whose timeline semaphore another API
   imports (CUDA's external semaphores, another `VkDevice`), made exportable as an opaque file
   descriptor; `SharedEvent::export_semaphore_fd` answers a new descriptor each call. Its counter

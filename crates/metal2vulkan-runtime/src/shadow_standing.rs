@@ -17,7 +17,9 @@
 //! - **What lets go.** A batch's tracked write of the truth's buffer or of the shadow's image (its
 //!   key, whatever the range) lets go of the standing: another shadow's copy back over the same
 //!   bytes, a blit's or a pass's write, a copy in that a command buffer's end did not leave
-//!   standing. So does any batch of a command buffer whose commands may reach memory no use names
+//!   standing. So does another API's write of an exported buffer's bytes, which the caller says
+//!   it made (`Buffer::external_write_done`, `exported_memory.rs`), counted as that buffer's
+//!   write as the call returns: the API's writes are the device's to read only from then on. So does any batch of a command buffer whose commands may reach memory no use names
 //!   (a root table, an execution resolved from records: `State::reaches_unnamed`), for every
 //!   shadow. Every other command's tracked uses are in its encoder's summary, whether or not the
 //!   device's logs of host pages collected them (`CommandBuffer::note_dirty`). A shadow over a
@@ -85,7 +87,9 @@ pub(super) enum LetGo {
     /// A batch that may reach memory no use names was submitted since it stood.
     UnnamedSince,
     /// A batch submitted since it stood wrote its truth (or the host memory it joined): another
-    /// shadow's copy back or merge over the same bytes, a blit's, a pass's or a kernel's write.
+    /// shadow's copy back or merge over the same bytes, a blit's, a pass's or a kernel's write; or
+    /// another API wrote an exported buffer's bytes, as its caller said
+    /// (`Buffer::external_write_done`).
     TruthWritten,
     /// A batch submitted since it stood wrote its image: a copy in its standing did not leave.
     ImageWritten,
@@ -231,6 +235,18 @@ impl Standings {
             true => LetGo::ImageWritten,
             false => LetGo::TruthWritten,
         })
+    }
+
+    /// Another API wrote the bytes of the buffer `key` names, and the caller said so once those
+    /// writes completed (`Buffer::external_write_done`): every standing recorded against the key
+    /// lets go, as a batch's write of it does ([`LetGo::TruthWritten`]), so the next command
+    /// buffer's first copy in of each shadow over those bytes moves what the other API wrote. The
+    /// caller makes the call while no command of the runtime's that uses the buffer is in flight
+    /// (`exported_memory.rs`), so every batch submitted after it reads those writes.
+    pub(super) fn written_apart(&self, key: ResourceKey) {
+        if let Some(known) = self.watched().keys.get_mut(&key) {
+            known.written += 1;
+        }
     }
 
     /// A batch whose encoders' `summaries` these are was submitted: each key its tracked uses

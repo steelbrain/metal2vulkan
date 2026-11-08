@@ -1,6 +1,8 @@
 //! An exportable buffer's memory (`exported_memory.rs`) imported into a second `VkDevice` of the
 //! same physical device, as another API imports it: the second device reads what the runtime's
-//! host and GPU wrote, and the runtime's GPU reads what the second device wrote. A device the
+//! host and GPU wrote, and the runtime's GPU reads what the second device wrote. A texture over a
+//! `Private` exportable buffer whose rows no image holds reads each write of the second device
+//! that `Buffer::external_write_done` announced, its shadow's standing let go by each. A device the
 //! runtime refuses the buffer on (`RuntimeGap::ExportableMemory`) must lack the extension or the
 //! export. It prints what the device exported and what a making cost beside a plain buffer's
 //! (`EXPORTED-MEMORY:` lines).
@@ -12,6 +14,7 @@ use super::blit_holds::{device, Scratch, WAIT};
 use crate::error::{Error, Problem, RuntimeGap};
 use crate::{Buffer, Device, ResourceOptions};
 use ash::vk;
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::os::fd::IntoRawFd;
 use std::time::{Duration, Instant};
 
@@ -266,4 +269,213 @@ fn an_exportable_buffer_s_memory_crosses_to_a_second_device() {
              {exportable:?} exportable, {plain:?} plain (medians of 8)"
         );
     }
+}
+
+/// A second `VkDevice` of the runtime's physical device that writes an exportable buffer's memory
+/// through an import of its opaque descriptor, as a video decoder writes its pictures: each write
+/// a fill on its own queue, waited for, releasing the memory to `VK_QUEUE_FAMILY_EXTERNAL`.
+struct Writer {
+    device: ash::Device,
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    pool: vk::CommandPool,
+    queue: vk::Queue,
+    family: u32,
+    length: u64,
+}
+
+impl Writer {
+    /// The writer of `exported`'s `length` bytes, the memory of a buffer of `usage` of `device`.
+    fn import(
+        device: &Device,
+        exported: crate::ExportedMemory,
+        usage: vk::BufferUsageFlags,
+    ) -> Writer {
+        let device_address = device.shared().device_address;
+        let length = exported.length;
+        // SAFETY: the handles are used while the device lives; the second device is the test's own
+        // and destroyed as the writer drops.
+        let handles = unsafe { device.raw() };
+        let (instance, physical, family) = (
+            handles.instance,
+            handles.physical_device,
+            handles.queue_family,
+        );
+        let priorities = [1.0];
+        let queues = [vk::DeviceQueueCreateInfo::default()
+            .queue_family_index(family)
+            .queue_priorities(&priorities)];
+        let extensions = [ash::khr::external_memory_fd::NAME.as_ptr()];
+        let mut features12 =
+            vk::PhysicalDeviceVulkan12Features::default().buffer_device_address(device_address);
+        let info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(&queues)
+            .enabled_extension_names(&extensions)
+            .push_next(&mut features12);
+        // SAFETY: the physical device is the instance's; the extension is listed (the export ran).
+        let second = unsafe { instance.create_device(physical, &info, None) }.unwrap();
+        let mut external = vk::ExternalMemoryBufferCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+        let buffer_info = device.shared().sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(length.next_multiple_of(16))
+                .usage(usage)
+                .push_next(&mut external),
+        );
+        // SAFETY: the second device is live and `buffer_info` valid for it.
+        let buffer = unsafe { second.create_buffer(&buffer_info, None) }.unwrap();
+        let mut import = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .fd(exported.fd.into_raw_fd());
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer);
+        let mut flags =
+            vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+        let mut allocate = vk::MemoryAllocateInfo::default()
+            .allocation_size(exported.allocation_size)
+            .memory_type_index(exported.memory_type_index)
+            .push_next(&mut import);
+        if exported.dedicated {
+            allocate = allocate.push_next(&mut dedicated);
+        }
+        if device_address {
+            allocate = allocate.push_next(&mut flags);
+        }
+        // SAFETY: the descriptor is the export's of the same physical device, its size and type
+        // the allocation's; a successful import owns it.
+        let memory = unsafe { second.allocate_memory(&allocate, None) }.unwrap();
+        // SAFETY: the buffer and the memory are the second device's, the memory as long as the
+        // buffer requires (the allocation the exported buffer is bound to at its offset).
+        unsafe { second.bind_buffer_memory(buffer, memory, exported.offset) }.unwrap();
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .queue_family_index(family)
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        // SAFETY: the second device is live.
+        let pool = unsafe { second.create_command_pool(&pool_info, None) }.unwrap();
+        // SAFETY: the family's queue 0, which the device was made with.
+        let queue = unsafe { second.get_device_queue(family, 0) };
+        Writer {
+            device: second,
+            buffer,
+            memory,
+            pool,
+            queue,
+            family,
+            length,
+        }
+    }
+
+    /// Fill every byte of the buffer with `value`, and wait for it.
+    fn fill(&self, value: u8) {
+        let device = &self.device;
+        let allocate = vk::CommandBufferAllocateInfo::default()
+            .command_pool(self.pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        // SAFETY: the pool is the device's; the command buffer is recorded, submitted, waited for
+        // and freed here.
+        unsafe {
+            let command_buffer = device.allocate_command_buffers(&allocate).unwrap()[0];
+            let begin = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            device.begin_command_buffer(command_buffer, &begin).unwrap();
+            let word = u32::from_ne_bytes([value; 4]);
+            device.cmd_fill_buffer(command_buffer, self.buffer, 0, self.length, word);
+            // The writes released to the external family the runtime's device acquires them from
+            // (`Buffer::external_write_done`).
+            let release = vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .src_queue_family_index(self.family)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+                .buffer(self.buffer)
+                .offset(0)
+                .size(vk::WHOLE_SIZE);
+            device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[release],
+                &[],
+            );
+            device.end_command_buffer(command_buffer).unwrap();
+            let buffers = [command_buffer];
+            let submit = vk::SubmitInfo::default().command_buffers(&buffers);
+            device
+                .queue_submit(self.queue, &[submit], vk::Fence::null())
+                .unwrap();
+            device.queue_wait_idle(self.queue).unwrap();
+            device.free_command_buffers(self.pool, &buffers);
+        }
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        // SAFETY: the second device's objects, idle and unused now; the exported buffer outlives
+        // its memory's import.
+        unsafe {
+            self.device.destroy_command_pool(self.pool, None);
+            self.device.destroy_buffer(self.buffer, None);
+            self.device.free_memory(self.memory, None);
+            self.device.destroy_device(None);
+        }
+    }
+}
+
+/// A texture over an exportable `Private` buffer whose rows no image holds reads it through a
+/// shadow, whose image stands across command buffers (`shadow_standing.rs`): another API's write
+/// of the bytes, which `Buffer::external_write_done` announces, lets go of the standing, so the
+/// texture's next read copies in what that write left, write after write; with no write between
+/// two reads, the second copies nothing in. The writes are a second `VkDevice`'s fills through an
+/// import of the buffer's opaque descriptor, as a decoder's; each read is a kernel's
+/// (`shadow_standing_device`'s `Tools`).
+#[test]
+fn a_shadow_over_an_exported_buffer_reads_each_announced_write() {
+    use super::shadow_standing_device::{inverted, Tools, HEIGHT, LENGTH, PITCH, WIDTH};
+    let scratch = Scratch::new("exported-standing");
+    let device = device(&scratch.0);
+    let usage = crate::buffer::usage(device.shared().device_address);
+    let name = device.name().to_owned();
+    let buffer = match device.new_exportable_buffer(LENGTH, ResourceOptions::private()) {
+        Ok(buffer) => buffer,
+        Err(Error::NotImplemented(RuntimeGap::ExportableMemory)) => {
+            assert!(
+                !exports(&device, usage),
+                "{name} exports a buffer's memory as an opaque fd, and the runtime refused it"
+            );
+            eprintln!("EXPORTED-STANDING on {name}: refused, the device exports no opaque fd");
+            return;
+        }
+        Err(error) => panic!("{name}: {error:?}"),
+    };
+    let tools = Tools::new(&device);
+    let mut descriptor =
+        crate::TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, WIDTH, HEIGHT, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    let plane = crate::IoSurfacePlane::new(0, PITCH, true);
+    let texture = buffer.new_texture_with_iosurface_plane(&descriptor, plane);
+    let texture = texture.unwrap();
+    assert!(
+        texture.shadow().is_some(),
+        "{name}: padded rows make a shadow"
+    );
+    let writer = Writer::import(&device, buffer.export_memory_fd().unwrap(), usage);
+    for value in [0x2a, 0x5c, 0x93] {
+        writer.fill(value);
+        buffer.external_write_done().unwrap();
+        let (texels, first) = tools.texels(&texture);
+        assert!(
+            inverted(&texels, value),
+            "{name}: the read after the write of {value:#x} took another's bytes"
+        );
+        assert_eq!(first.skipped, 0, "{name}: the write let go of the standing");
+        let (texels, again) = tools.texels(&texture);
+        assert!(inverted(&texels, value), "{name}: the read again");
+        assert_eq!(
+            again.skipped, 1,
+            "{name}: with no write between, the image stood"
+        );
+    }
+    eprintln!("EXPORTED-STANDING on {name}: each announced write reached the shadow");
 }

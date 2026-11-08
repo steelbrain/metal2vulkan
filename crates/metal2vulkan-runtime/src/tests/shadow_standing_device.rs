@@ -39,16 +39,16 @@ use std::sync::Arc;
 
 /// The plane: `WIDTH` texels a row, `HEIGHT` rows, rows of `PITCH` bytes, 64 past each row's
 /// texels.
-const WIDTH: u64 = 64;
-const HEIGHT: u64 = 16;
+pub(super) const WIDTH: u64 = 64;
+pub(super) const HEIGHT: u64 = 16;
 const ROW: u64 = WIDTH * 4;
-const PITCH: u64 = ROW + 64;
-const LENGTH: u64 = PITCH * HEIGHT;
+pub(super) const PITCH: u64 = ROW + 64;
+pub(super) const LENGTH: u64 = PITCH * HEIGHT;
 
 /// What the texture is read and written with: the kernel that reads it, the plain texture the
 /// kernel writes, the pipeline that draws into it, and a `Shared` buffer the buffer's bytes are
 /// read into.
-struct Tools {
+pub(super) struct Tools {
     queue: CommandQueue,
     invert: ComputePipelineState,
     inverted: Texture,
@@ -57,7 +57,7 @@ struct Tools {
 }
 
 impl Tools {
-    fn new(device: &Device) -> Tools {
+    pub(super) fn new(device: &Device) -> Tools {
         let examples = library(device, "examples/runtime_examples.ll");
         let kernel = examples.new_function_with_name("invert_texels").unwrap();
         let options = PipelineOptions::default();
@@ -87,7 +87,7 @@ impl Tools {
 
     /// `texture`'s texels as the kernel reads them in a command buffer of its own, inverted, row
     /// after row, and the counts it moved.
-    fn texels(&self, texture: &Texture) -> (Vec<u8>, Stood) {
+    pub(super) fn texels(&self, texture: &Texture) -> (Vec<u8>, Stood) {
         let device = self.queue.device();
         let before = device.work_counts();
         let command_buffer = self.queue.command_buffer().unwrap();
@@ -203,9 +203,9 @@ impl Plane {
 /// decided and by what the standing held (`WorkCounts::shadow_texels_unskipped_*`); of those whose
 /// standing never stood, by what last kept a command buffer's end from leaving it standing
 /// (`WorkCounts::shadow_texels_never_stood_*`).
-struct Stood {
+pub(super) struct Stood {
     against: u64,
-    skipped: u64,
+    pub(super) skipped: u64,
     texels: u64,
     at: [u64; 6],
     standing: [u64; 5],
@@ -292,7 +292,7 @@ fn stood(before: &WorkCounts, after: &WorkCounts) -> Stood {
 
 /// Whether every texel the kernel wrote is a texel of the byte `value` inverted: its three color
 /// channels `!value`, its alpha `value`.
-fn inverted(texels: &[u8], value: u8) -> bool {
+pub(super) fn inverted(texels: &[u8], value: u8) -> bool {
     (texels.chunks(4)).all(|texel| texel == [!value, !value, !value, value])
 }
 

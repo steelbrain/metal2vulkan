@@ -53,7 +53,11 @@
 //!   (`texture/first_move.rs`'s `FirstFill::acquired`), so it waits for nothing; a host-visible
 //!   buffer, whose host may read its contents at once, has it made then and waits for it alone. A
 //!   texture over the buffer is a linear image of its memory in `GENERAL` (or a shadow of its
-//!   bytes, which copies them), a host-accessible alias that reads what the buffer holds. Nothing
+//!   bytes, which copies them), a host-accessible alias that reads what the buffer holds: the call
+//!   lets go of every shadow's standing over the bytes (`shadow_standing.rs`), so a shadow's next
+//!   copy in, in the next command buffer that uses it, moves what the other API wrote. A write the
+//!   caller does not announce so is not the device's to read: a shadow whose image a command
+//!   buffer's end left standing keeps reading what the buffer held then. Nothing
 //!   is released to the other API: it writes the memory as its own, and what the runtime wrote
 //!   there before is not its to read (Vulkan's implicit acquire makes it undefined).
 //! - **Lifetime.** The buffer must outlive every import of its memory: its release frees its
@@ -483,7 +487,9 @@ impl Buffer {
     /// its next submission, on any queue, records the acquire before any of its commands, so the
     /// call waits for no GPU work. A host-visible buffer's acquire is submitted at once and waited
     /// for, alone, so that its contents read the writes when the call returns. Textures over the
-    /// buffer read what it holds then.
+    /// buffer read what it holds then: a texture's shadow over its bytes (a texture whose rows
+    /// no image of the memory holds) copies them in again at its next use in a command buffer
+    /// committed after the call.
     ///
     /// Call it once after each of the other API's writes, while no command of the runtime's that
     /// uses the buffer is in flight: the other API writes the memory as its own (the module docs).
@@ -506,6 +512,10 @@ impl Buffer {
         // Its own fills go first: the acquire's barrier leads a submission's fills.
         self.settle_first_work(raw)?;
         self.note_acquire((export.writer_family(), device.external_acquirer()));
+        // A shadow over the bytes whose image a command buffer's end left standing holds what
+        // the buffer held then: its next copy in moves the other API's writes
+        // (`shadow_standing.rs`).
+        device.shared().standings.written_apart(self.identity().key);
         if self.contents().is_some() {
             self.settle_first_work(raw)?;
         }

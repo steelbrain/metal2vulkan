@@ -810,7 +810,10 @@ The export settles the zeros the buffer was made with first, so the decoder may 
 After each of its writes, once the consumer waited for them (`vaSyncSurface`), call
 `frame.external_write_done()`: Vulkan leaves what another API wrote undefined until the device
 acquires the memory from the queue family reserved for it, and the device's next submission records
-that acquire before its commands, so the call waits for no GPU work. The decoder writes only while
+that acquire before its commands, so the call waits for no GPU work. The call is also what tells a
+texture over the frame that its bytes changed: one whose rows no image of the memory holds reads them
+through a shadow, which copies them in again at its next use after the call, and keeps what it copied
+before where no call came. The decoder writes only while
 no command of the runtime's that uses the buffer is in flight, and the buffer outlives every import.
 A device that does not export a dma-buf refuses the making (`NotImplemented`,
 `RuntimeGap::DmaBufExport`); the consumer then decodes into its own memory and copies.
