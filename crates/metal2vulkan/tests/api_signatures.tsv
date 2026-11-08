@@ -2793,6 +2793,7 @@ field	metal2vulkan-runtime::WorkCounts.host_ram_chunks_released	pub host_ram_chu
 field	metal2vulkan-runtime::WorkCounts.host_ram_copies	pub host_ram_copies: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_bytes	pub host_ram_copy_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_copy_dispatches	pub host_ram_copy_dispatches: u64
+field	metal2vulkan-runtime::WorkCounts.host_ram_copy_regions	pub host_ram_copy_regions: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_dma_buf_imports	pub host_ram_dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.host_ram_pointer_imports_failed	pub host_ram_pointer_imports_failed: u64
 field	metal2vulkan-runtime::WorkCounts.host_range_lookups	pub host_range_lookups: u64

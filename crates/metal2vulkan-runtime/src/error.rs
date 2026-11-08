@@ -564,9 +564,10 @@ pub enum Problem {
     /// RAM: no range, or a range that is empty, starts or ends off the host page, runs past the
     /// address space's end or overlaps another (of the same RAM, or of another RAM the device
     /// uses). For an answer: runs that are not whole host pages or do not cover exactly the pages
-    /// asked for. For a copy: a RAM the device does not use, a run that is empty, starts or ends
-    /// off 4 KiB or lies outside the RAM's ranges, or bytes of the buffer that start off a 4-byte
-    /// word of its memory.
+    /// asked for. For a copy: a RAM the device does not use, a run that is empty, starts off a
+    /// 4-byte word or lies outside the RAM's ranges, bytes of the buffer that start off a 4-byte
+    /// word of its memory, or, of runs not all whole 4 KiB pages, a buffer over host pages the
+    /// runs' bytes overlap.
     ///
     /// Basis: ours (a runtime extension's own contract: Metal imports no guest RAM).
     HostRam,

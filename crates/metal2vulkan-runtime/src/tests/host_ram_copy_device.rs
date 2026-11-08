@@ -20,8 +20,14 @@
 //!   read-only view of them: a copy, never bound in the chunk, whose commit after the CPU wrote
 //!   one page compares that page alone (the RAM's log, `copied_copy_in_bytes_skipped`); the GPU's
 //!   writes to it are dropped.
-//! - **Refused**: runs off the page, empty or outside the RAM, a RAM the device does not use (or
-//!   no longer does), bytes past the buffer and an offset off a word; no runs copy nothing.
+//! - **Runs inside pages**: rows cut to their texels (2046 bytes at a 2048-byte pitch, from 16
+//!   bytes into a page), a run ending 2 bytes before a page's end, one across the first chunk's
+//!   end and one of 3 bytes, gathered into a `Shared` and a `Private` buffer and scattered back,
+//!   one region for each run's bytes in a chunk and no dispatch: every other byte of their pages
+//!   (each a pattern) stays. A scatter whose runs name bytes twice leaves the later's; a buffer
+//!   over host pages the runs' bytes overlap is refused.
+//! - **Refused**: runs off a word, empty or outside the RAM, a RAM the device does not use (or no
+//!   longer does), bytes past the buffer and an offset off a word; no runs copy nothing.
 //! - **A chunk taken as an object takes it**, on a device whose thread imports ahead: a gather
 //!   from the RAM's first chunk finds it imported ahead and opens the full window past it, and a
 //!   scatter into a chunk past the window imports its page alone while the thread imports the
@@ -307,6 +313,11 @@ fn a_gather_and_a_scatter_move_every_runs_bytes_in_order() {
         "one dispatch per chunk the runs touch"
     );
     assert_eq!(
+        after.host_ram_copy_regions - before.host_ram_copy_regions,
+        0,
+        "whole pages take no regions"
+    );
+    assert_eq!(
         after.host_ram_chunks_imported - before.host_ram_chunks_imported,
         2,
         "the copy imported the chunks no object had"
@@ -346,6 +357,158 @@ fn a_gather_and_a_scatter_move_every_runs_bytes_in_order() {
     assert!(
         bytes(start..start + RAM_BYTES) == want,
         "the scattered bytes"
+    );
+}
+
+/// A surface's rows cut to their texels, 2046 bytes at a 2048-byte pitch from 16 bytes into a
+/// page (so that one crosses a page's end), a run ending 2 bytes before a page's end, one across
+/// the first chunk's end and one of 3 bytes in the second chunk.
+fn runs_inside_pages(start: u64) -> Vec<Range<u64>> {
+    let mut runs: Vec<Range<u64>> = (0..6)
+        .map(|y| {
+            let row = start + 20 * PAGE + 16 + 2048 * y;
+            row..row + 2046
+        })
+        .collect();
+    runs.push(start + 30 * PAGE + 100..start + 31 * PAGE - 2);
+    runs.push(start + (SECOND - 1) * PAGE + 8..start + SECOND * PAGE + 1001);
+    runs.push(start + (SECOND + 5) * PAGE + 4..start + (SECOND + 5) * PAGE + 7);
+    runs
+}
+
+#[test]
+fn runs_inside_pages_move_their_bytes_alone_and_leave_the_rest_of_their_pages() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let _used = device.use_host_ram(&ram).unwrap();
+    let runs = runs_inside_pages(start);
+    // Every byte of the pages the runs touch holds a pattern: those around the runs are the
+    // sentinels, a row's padding and the bytes before and after the surface.
+    let touched = [
+        start + 20 * PAGE..start + 24 * PAGE,
+        start + 30 * PAGE..start + 31 * PAGE,
+        start + (SECOND - 1) * PAGE..start + (SECOND + 1) * PAGE,
+        start + (SECOND + 5) * PAGE..start + (SECOND + 6) * PAGE,
+    ];
+    for pages in &touched {
+        write_pattern(pages.clone(), 7);
+    }
+    let total: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    // A gather into a `Shared` buffer from byte 260: its bytes before and after stay.
+    let before = device.work_counts();
+    let out = shared(&device, 260 + total + 64, |_| 0xee);
+    blit(&device, |encoder| {
+        encoder.copy_from_host_ram(&ram, &runs, &out, 260).unwrap();
+    });
+    let got = contents(&out);
+    assert!(got[..260].iter().all(|&byte| byte == 0xee));
+    assert!(got[260 + total as usize..].iter().all(|&byte| byte == 0xee));
+    assert!(
+        got[260..260 + total as usize] == gathered(&runs)[..],
+        "the gathered bytes"
+    );
+    let after = device.work_counts();
+    assert_eq!(after.host_ram_copies - before.host_ram_copies, 1);
+    assert_eq!(
+        after.host_ram_copy_bytes - before.host_ram_copy_bytes,
+        total
+    );
+    assert_eq!(
+        after.host_ram_copy_regions - before.host_ram_copy_regions,
+        10,
+        "a region for each run's bytes in a chunk: nine runs, one across the chunks' end"
+    );
+    assert_eq!(
+        after.host_ram_copy_dispatches - before.host_ram_copy_dispatches,
+        0,
+        "no pages copy"
+    );
+    // Into a `Private` buffer, read back by a blit.
+    let private = device
+        .new_buffer(total, ResourceOptions::private())
+        .unwrap();
+    let back = shared(&device, total, |_| 0);
+    blit(&device, |encoder| {
+        encoder
+            .copy_from_host_ram(&ram, &runs, &private, 0)
+            .unwrap();
+        encoder
+            .copy_from_buffer_to_buffer(&private, 0, &back, 0, total)
+            .unwrap();
+    });
+    assert!(
+        contents(&back) == gathered(&runs),
+        "through a private buffer"
+    );
+    // A scatter back of new bytes, from byte 64 of its source: each run takes its bytes in order,
+    // and no other byte of the RAM changes, the sentinels in the runs' pages among them.
+    let source = shared(&device, 64 + total, |at| pattern(at, 2));
+    let mut want = bytes(start..start + RAM_BYTES);
+    let mut at = 64;
+    for run in &runs {
+        for address in run.clone() {
+            want[(address - start) as usize] = pattern(at, 2);
+            at += 1;
+        }
+    }
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 64, &ram, &runs).unwrap();
+    });
+    let now = bytes(start..start + RAM_BYTES);
+    for pages in &touched {
+        let (from, to) = ((pages.start - start) as usize, (pages.end - start) as usize);
+        assert!(
+            now[from..to] == want[from..to],
+            "the runs' pages {pages:x?}"
+        );
+    }
+    assert!(
+        now == want,
+        "the scattered bytes, and no other byte of the RAM"
+    );
+    // A scatter whose runs name bytes twice: the later run's bytes are the ones left.
+    let twice = [
+        start + 40 * PAGE + 16..start + 40 * PAGE + 100,
+        start + 40 * PAGE + 96..start + 40 * PAGE + 202,
+    ];
+    let length: u64 = twice.iter().map(|run| run.end - run.start).sum();
+    let source = shared(&device, length, |at| pattern(at, 3));
+    let mut want = bytes(start + 40 * PAGE..start + 41 * PAGE);
+    let mut at = 0;
+    for run in &twice {
+        for address in run.clone() {
+            want[(address - start - 40 * PAGE) as usize] = pattern(at, 3);
+            at += 1;
+        }
+    }
+    blit(&device, |encoder| {
+        encoder.copy_to_host_ram(&source, 0, &ram, &twice).unwrap();
+    });
+    assert!(
+        bytes(start + 40 * PAGE..start + 41 * PAGE) == want,
+        "the later of two runs over the same bytes"
+    );
+    // A buffer over host pages the runs' bytes overlap is refused: no region reads and writes
+    // one byte. One over other pages is not.
+    let over = over_ram(&device, start + 50 * PAGE, PAGE, itself(), true);
+    let inside = one(start + 50 * PAGE + 16..start + 50 * PAGE + 64);
+    let mut encoder_result = None;
+    run(
+        &device,
+        |command_buffer| {
+            let mut encoder = command_buffer.blit_command_encoder().unwrap();
+            encoder_result = Some(encoder.copy_from_host_ram(&ram, &inside, &over, 0));
+            let apart = one(start + 60 * PAGE + 16..start + 60 * PAGE + 64);
+            encoder.copy_from_host_ram(&ram, &apart, &over, 0).unwrap();
+            encoder.end_encoding().unwrap();
+        },
+        || {},
+    );
+    assert!(
+        refused(encoder_result.unwrap(), true),
+        "a buffer over the runs' own bytes"
     );
 }
 
@@ -683,7 +846,7 @@ fn a_private_bit_copy_over_the_pages_copies_in_only_the_pages_the_log_reports() 
 }
 
 #[test]
-fn copies_off_the_page_outside_the_ram_or_past_the_buffer_are_refused() {
+fn copies_off_a_word_outside_the_ram_or_past_the_buffer_are_refused() {
     let Some(device) = device() else {
         return;
     };
@@ -703,8 +866,8 @@ fn copies_off_the_page_outside_the_ram_or_past_the_buffer_are_refused() {
     ));
     let used = device.use_host_ram(&ram).unwrap();
     for runs in [
-        one(page(1) + 4..page(2) + 4),
-        one(page(1)..page(1) + 100),
+        one(page(1) + 2..page(2)),
+        one(page(1) + 1..page(1) + 100),
         one(page(1)..page(1)),
         one(page(2)..page(1)),
         one(start - PAGE..start),

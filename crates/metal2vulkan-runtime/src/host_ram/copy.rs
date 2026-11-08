@@ -5,10 +5,12 @@
 //! scatter of guest pages copies it with no view of the pages and, where the RAM's chunks are
 //! imported already (`host_ram.rs`), no import of its own.
 //!
-//! - **The runs** are host addresses in the RAM's ranges, each 4 KiB-aligned and whole 4 KiB
-//!   pages ([`PAGE`]), in the order the buffer's bytes take them. A run that starts where the one
-//!   before it ended is one run with it ([`merged`]); a run that starts before (a descending
-//!   neighbour) stays apart. Each run is cut where a chunk ends ([`pieces`]), and each chunk the
+//! - **The runs** are host addresses in the RAM's ranges, each starting on a 4-byte word
+//!   ([`WORD`]) and ending at any byte past it, in the order the buffer's bytes take them: a
+//!   surface's whole pages, or each of its rows' texels alone, whose last bytes the guest's CPU
+//!   may own past them. A run that starts where the one before it ended is one run with it
+//!   ([`merged`]); a run that starts before (a descending neighbour) stays apart. Each run is cut
+//!   where a chunk ends ([`pieces`]), and each chunk the
 //!   pieces touch is taken as an object over it takes it (`RamOnDevice::for_copy`): its import
 //!   where it is made; else, where an object over it would be bound in its own run's import
 //!   (`RamOnDevice::for_object`), an import of each of the copy's ranges of it alone (those less
@@ -23,14 +25,24 @@
 //!   imports the chunk, or waits for its import
 //!   under way, which is the chunk's one import (`Device::import_chunk`), made and counted as an
 //!   object's is.
-//! - **One dispatch per chunk.** The pieces become a table of 4 KiB pages, each the chunk's page
-//!   and the buffer's ([`plan`]), uploaded into the command buffer's arena, and the pages of each
-//!   chunk one dispatch of `bind::pages_copy_module` (a gather or a scatter) over the chunk's
-//!   whole `VkBuffer`, the buffer's bytes and the table: as many dispatches as chunks the runs
-//!   touch, never one region per run. A copy whose bytes pass the device's storage range, or whose
-//!   pages of one chunk pass its workgroup count, takes more (each window of the buffer's bytes,
-//!   each part of the pages). Counted: `WorkCounts::host_ram_copies`, `host_ram_copy_bytes` and
-//!   `host_ram_copy_dispatches`.
+//! - **Whole pages: one dispatch per chunk.** Where every run is whole 4 KiB pages from a
+//!   multiple of them ([`whole_pages`]), the pieces become a table of 4 KiB pages, each the
+//!   chunk's page and the buffer's ([`plan`]), uploaded into the command buffer's arena, and the
+//!   pages of each chunk one dispatch of `bind::pages_copy_module` (a gather or a scatter) over
+//!   the chunk's whole `VkBuffer`, the buffer's bytes and the table: as many dispatches as chunks
+//!   the runs touch, never one region per run. A copy whose bytes pass the device's storage
+//!   range, or whose pages of one chunk pass its workgroup count, takes more (each window of the
+//!   buffer's bytes, each part of the pages). Counted: `WorkCounts::host_ram_copies`,
+//!   `host_ram_copy_bytes` and `host_ram_copy_dispatches`.
+//! - **Other runs: regions.** Where a run starts or ends inside a page, each piece is a region of
+//!   `vkCmdCopyBuffer` between its import (the chunk's, or the pages it covers imported alone, as
+//!   above: whole pages, imported as now) and the buffer, which takes byte offsets and sizes: the
+//!   copy reads or writes the runs' bytes and no other byte of their pages, a row's padding and
+//!   the pages around a surface left as they were. The regions of one import are one command, at
+//!   most [`MOST_REGIONS`] each. A scatter whose runs name a byte twice takes a round of commands
+//!   for each ([`rounds`]), no byte written by two regions of one command; and a buffer over host
+//!   pages the runs' bytes overlap is refused, no region reading and writing one byte. Counted:
+//!   `WorkCounts::host_ram_copies`, `host_ram_copy_bytes` and `host_ram_copy_regions`.
 //! - **Ordered as a copy between the buffer and a no-copy buffer over the pages.** Each chunk a
 //!   copy uses has a key of its own, its uses' bytes those of the chunk, which hazard tracking
 //!   places over the chunk's host bytes (`host_aliases.rs`'s placements), as it places every
@@ -48,16 +60,17 @@
 //!   (`HostRam::with_dirty_pages`), the chunk's key is the log's, so a scatter's writes are
 //!   reported to it as the GPU's in place (`dirty_pages.rs`): every copy of those pages (a copied
 //!   host buffer's, a shadow's, whose logs are the RAM's where their runs are) copies them in.
-//! - **What is refused** ([`Problem::HostRam`]): a run that is empty, starts or ends off 4 KiB, or
-//!   lies outside the RAM's ranges; a RAM the device does not use; bytes of the buffer that start
-//!   off a 4-byte word of its memory. A device without `VK_EXT_external_memory_host` uses no RAM
+//! - **What is refused** ([`Problem::HostRam`]): a run that is empty, starts off a 4-byte word,
+//!   or lies outside the RAM's ranges; a RAM the device does not use; bytes of the buffer that
+//!   start off a 4-byte word of its memory; a copy of runs not all whole pages with a buffer over
+//!   host pages the runs' bytes overlap. A device without `VK_EXT_external_memory_host` uses no RAM
 //!   (`Unsupported`, naming it); the buffer's bytes past its length are a range past it
 //!   ([`Problem::RangeOutOfBounds`]). A chunk the device cannot import fails the copy with the
 //!   import's error.
 
 use super::{HostRam, RamChunk, RamOnDevice};
-use crate::blit::{bytes_in, reads_by, writes_by, BlitCommandEncoder};
-use crate::buffer::Buffer;
+use crate::blit::{bytes_in, reads_by, writes_by, BlitCommandEncoder, TRANSFER};
+use crate::buffer::{Buffer, CallerMemory};
 use crate::dirty_pages::PagesLog;
 use crate::error::{invalid, Error, Problem};
 use crate::owned_kernel::{OwnedBinds, OwnedModule, OwnedSet};
@@ -148,13 +161,20 @@ impl RamOnDevice {
     }
 }
 
-/// `runs`, each whole [`PAGE`]s from a multiple of it, with each that starts where the one before
-/// it ended joined to it; `None` where a run is empty or off the page.
+/// The unit a run starts on: a 4-byte word of host address. Its end may be any byte.
+pub(crate) const WORD: u64 = 4;
+
+/// The most regions of one `vkCmdCopyBuffer` of a copy by regions (`record_host_ram_copy`): a
+/// copy of more takes more commands, so no one command's array grows with the runs (a laid-out
+/// 4K surface's rows are 2160 runs a plane).
+pub(crate) const MOST_REGIONS: usize = 1024;
+
+/// `runs`, each starting on a [`WORD`] and holding at least a byte, with each that starts where
+/// the one before it ended joined to it; `None` where a run is empty or starts off a word.
 pub(crate) fn merged(runs: &[Range<u64>]) -> Option<Vec<Range<u64>>> {
     let mut out: Vec<Range<u64>> = Vec::with_capacity(runs.len());
     for run in runs {
-        let whole = run.start.is_multiple_of(PAGE) && run.end.is_multiple_of(PAGE);
-        if run.start >= run.end || !whole {
+        if run.start >= run.end || !run.start.is_multiple_of(WORD) {
             return None;
         }
         match out.last_mut() {
@@ -163,6 +183,38 @@ pub(crate) fn merged(runs: &[Range<u64>]) -> Option<Vec<Range<u64>>> {
         }
     }
     Some(out)
+}
+
+/// Whether every one of `runs` is whole [`PAGE`]s from a multiple of it: a copy of such runs is
+/// one dispatch of the pages copy per chunk; any other, regions of `vkCmdCopyBuffer`.
+pub(crate) fn whole_pages(runs: &[Range<u64>]) -> bool {
+    (runs.iter()).all(|run| run.start.is_multiple_of(PAGE) && run.end.is_multiple_of(PAGE))
+}
+
+/// The pieces of a copy by regions as rounds of `vkCmdCopyBuffer`s: each round the pieces (by
+/// index, in order) whose host bytes no other piece of the round's touches, so that no byte is
+/// written by two regions of one command; a later piece over bytes an earlier one of the round
+/// touched starts the next round, ordered after it as a command that writes them again is. Only a
+/// scatter's runs that name a byte twice take more than one.
+pub(crate) fn rounds(host: &[Range<u64>]) -> Vec<Vec<usize>> {
+    let mut rounds: Vec<Vec<usize>> = Vec::new();
+    // The round's host bytes so far, apart, by start.
+    let mut taken: BTreeMap<u64, u64> = BTreeMap::new();
+    for (index, range) in host.iter().enumerate() {
+        // Of the round's ranges, the one that starts last before this one ends is the only one
+        // that may overlap it: those before it end before it starts.
+        let before = taken.range(..range.end).next_back();
+        let overlaps = before.is_some_and(|(_, &end)| end > range.start);
+        match rounds.last_mut() {
+            Some(round) if !overlaps => round.push(index),
+            _ => {
+                rounds.push(vec![index]);
+                taken.clear();
+            }
+        }
+        taken.insert(range.start, range.end);
+    }
+    rounds
 }
 
 /// A run's bytes inside one chunk: `length` bytes from byte `offset` of chunk `slot`, at byte
@@ -332,10 +384,13 @@ pub(crate) struct HostRamCall {
     copy: PagesCopy,
     /// The device's use of the RAM; `None` where it uses none such.
     ram: Option<Arc<RamOnDevice>>,
-    /// The runs, merged where they are whole pages ([`merged`]), else as given.
+    /// The runs, merged where each starts on a word and holds a byte ([`merged`]), else as given.
     runs: Box<[Range<u64>]>,
-    /// Whether the runs are whole pages.
-    whole: bool,
+    /// Whether the runs each start on a word and hold a byte (merged).
+    checked: bool,
+    /// Whether they are whole pages besides ([`whole_pages`]): copied by the pages copy's
+    /// dispatches, else by regions of `vkCmdCopyBuffer`.
+    pages: bool,
     buffer: Buffer,
     offset: u64,
 }
@@ -351,15 +406,17 @@ impl HostRamCall {
     ) -> HostRamCall {
         let ram = (device.shared().host_ram.used().into_iter())
             .find(|used| std::ptr::eq(Arc::as_ptr(&used.ram), ram));
-        let (runs, whole) = match merged(runs) {
+        let (runs, checked) = match merged(runs) {
             Some(merged) => (merged.into_boxed_slice(), true),
             None => (runs.into(), false),
         };
+        let pages = checked && whole_pages(&runs);
         HostRamCall {
             copy,
             ram,
             runs,
-            whole,
+            checked,
+            pages,
             buffer: buffer.clone(),
             offset,
         }
@@ -376,8 +433,10 @@ impl BlitCommandEncoder {
     /// `destination_offset`, in the order given, by the GPU, from the device's imports of the
     /// RAM's chunks: a runtime extension, Metal has none (a program copies from a no-copy buffer
     /// over the pages, `copy_from_buffer_to_buffer`). The runs are host addresses inside the RAM's
-    /// ranges, each starting on 4 KiB and whole 4 KiB pages. Adjacent ascending runs are one;
-    /// the pages of each chunk the runs touch are one dispatch (the module docs of
+    /// ranges, each starting on a 4-byte word and ending at any byte past it. Adjacent ascending
+    /// runs are one; where every run is whole 4 KiB pages from a multiple of 4 KiB, the pages of
+    /// each chunk the runs touch are one dispatch, and otherwise each run's bytes in a chunk are
+    /// one region of a copy, which reads no other byte of their pages (the module docs of
     /// `host_ram/copy.rs`), with no view of the pages and no import of its own. It is ordered and
     /// seen as a copy from a no-copy buffer over the pages into `destination` would be: the CPU's
     /// writes to the pages before the commit are seen, hazard tracking orders it against every
@@ -393,8 +452,9 @@ impl BlitCommandEncoder {
     ///
     /// Refused: a device without `VK_EXT_external_memory_host` (`Unsupported`, naming it); a RAM
     /// the device does not use ([`Device::use_host_ram`](crate::Device::use_host_ram)), a run that
-    /// is empty, starts or ends off 4 KiB or lies outside the RAM's ranges, or bytes of
-    /// `destination` that start off a 4-byte word of its memory (`Invalid`, `Problem::HostRam`);
+    /// is empty, starts off a 4-byte word or lies outside the RAM's ranges, bytes of
+    /// `destination` that start off a 4-byte word of its memory, or, of runs not all whole pages,
+    /// a `destination` over host pages the runs' bytes overlap (`Invalid`, `Problem::HostRam`);
     /// bytes past `destination`'s length or a buffer of another device (`Invalid`); and a chunk
     /// the device cannot import (the import's error). A caller falls back to its own copy.
     pub fn copy_from_host_ram(
@@ -421,8 +481,10 @@ impl BlitCommandEncoder {
     /// would be: hazard tracking orders it against every other use of the same host bytes, the
     /// GPU's writes are in the pages once the command buffer completed, and where the RAM came
     /// with a log of its pages' writes (`HostRam::with_dirty_pages`) they are reported to it as
-    /// the GPU's writes in place, so every copy the runtime keeps of those pages takes them.
-    /// Runs that name one page twice leave it as either wrote it.
+    /// the GPU's writes in place, so every copy the runtime keeps of those pages takes them. A
+    /// run that starts or ends inside a page writes its bytes alone: the rest of the page keeps
+    /// what it held. Runs that name one page twice leave it as either wrote it, where they are
+    /// whole pages; other runs that name a byte twice leave it as the later wrote it.
     ///
     /// Refused as [`copy_from_host_ram`](Self::copy_from_host_ram), `source` in place of the
     /// destination.
@@ -468,7 +530,7 @@ impl BlitCommandEncoder {
         let ram = (call.ram.as_ref())
             .filter(|ram| shared.host_ram.uses(ram))
             .ok_or_else(refused)?;
-        if !call.whole {
+        if !call.checked {
             return Err(refused());
         }
         let spans = ram.spans();
@@ -530,6 +592,10 @@ impl BlitCommandEncoder {
         let in_imports = in_imports.ok_or_else(|| {
             crate::error::internal("a host RAM copy's piece outside the imports made for it")
         })?;
+        if !call.pages {
+            let pieces = (&pieces[..], &in_imports[..]);
+            return self.record_regions(call, ram, pieces, imports, (raw, at, bytes));
+        }
         let (table, dispatches) =
             plan(&in_imports, window_pages, most_groups).ok_or_else(refused)?;
         let kernel = device.owned_kernel(OwnedModule::PagesCopy(call.copy))?;
@@ -626,6 +692,118 @@ impl BlitCommandEncoder {
         }
         Ok(())
     }
+
+    /// Record `call`, whose runs are not all whole pages, as regions of `vkCmdCopyBuffer` between
+    /// `imports` and the buffer's bytes `bytes`, from byte `at` of its `raw` (the module docs):
+    /// `pieces` as cut by the RAM's chunks and as they lie in the imports, one region each, the
+    /// regions of one import at most [`MOST_REGIONS`] a command. A scatter whose pieces write a
+    /// byte twice takes a round of commands for each ([`rounds`]), each ordered after the one
+    /// before as a later write of the same bytes is. Refused (`Problem::HostRam`) where the buffer
+    /// lies over host pages the pieces' bytes overlap: no region may read and write one byte.
+    fn record_regions(
+        &mut self,
+        call: &HostRamCall,
+        ram: &RamOnDevice,
+        (pieces, in_imports): (&[Piece], &[Piece]),
+        imports: Vec<Arc<RamChunk>>,
+        (raw, at, bytes): (vk::Buffer, u64, Range<u64>),
+    ) -> Result<(), Error> {
+        let call_name = match call.copy {
+            PagesCopy::Gather => "copy_from_host_ram",
+            PagesCopy::Scatter => "copy_to_host_ram",
+        };
+        let device = self.core().device().clone();
+        // Each piece's host bytes.
+        let host: Vec<Range<u64>> = (in_imports.iter())
+            .map(|piece| {
+                let start = imports[piece.slot].span.start + piece.offset;
+                start..start + piece.length
+            })
+            .collect();
+        if call.buffer.caller_memory() == Some(CallerMemory::HostPages) {
+            if let Some(contents) = call.buffer.contents() {
+                let start = contents.as_ptr().addr() as u64 + call.offset;
+                let own = start..start + (bytes.end - bytes.start);
+                if (host.iter()).any(|range| range.start < own.end && own.start < range.end) {
+                    return Err(invalid(call_name, Problem::HostRam));
+                }
+            }
+        }
+        let read = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_READ);
+        let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
+        // A gather writes the buffer's bytes, each once; a scatter the pieces' host bytes.
+        let by_round = match call.copy {
+            PagesCopy::Gather => vec![(0..pieces.len()).collect()],
+            PagesCopy::Scatter => rounds(&host),
+        };
+        let mut regions_recorded = 0u64;
+        for round in &by_round {
+            // The round's regions, by import, in order.
+            let mut by_import: BTreeMap<usize, Vec<vk::BufferCopy>> = BTreeMap::new();
+            for &index in round {
+                let piece = &in_imports[index];
+                let (import_at, buffer_at) = (piece.offset, at + piece.at);
+                let (src_offset, dst_offset) = match call.copy {
+                    PagesCopy::Gather => (import_at, buffer_at),
+                    PagesCopy::Scatter => (buffer_at, import_at),
+                };
+                let region = vk::BufferCopy {
+                    src_offset,
+                    dst_offset,
+                    size: piece.length,
+                };
+                by_import.entry(piece.slot).or_default().push(region);
+            }
+            // The round's uses: the chunks' bytes it reads or writes, by their keys, and the
+            // buffer's.
+            let round_pieces: Vec<Piece> = round.iter().map(|&index| pieces[index]).collect();
+            let mut uses = Vec::new();
+            for (slot, ranges) in chunk_ranges(&round_pieces, MOST_RANGES) {
+                let key = ram.chunk_key(&device, slot);
+                for range in ranges {
+                    let range = UseRange::Bytes(range);
+                    uses.push(match call.copy {
+                        PagesCopy::Gather => Use::reads(key, true, range, read),
+                        PagesCopy::Scatter => Use::writes(key, true, range, write),
+                    });
+                }
+            }
+            uses.push(match call.copy {
+                PagesCopy::Gather => writes_by(&call.buffer, bytes.clone(), write),
+                PagesCopy::Scatter => reads_by(&call.buffer, bytes.clone(), read),
+            });
+            regions_recorded += round.len() as u64;
+            let imports = &imports;
+            self.command_in(TRANSFER, &uses, |functions, command_buffer| {
+                for (slot, regions) in &by_import {
+                    let chunk = imports[*slot].raw;
+                    let (source, destination) = match call.copy {
+                        PagesCopy::Gather => (chunk, raw),
+                        PagesCopy::Scatter => (raw, chunk),
+                    };
+                    for part in regions.chunks(MOST_REGIONS) {
+                        // SAFETY: the encoder's command buffer is recording, outside a render
+                        // pass; the imports and the buffer are live until it completes (held
+                        // below and by `blit_at`); each region lies inside its import (`pieces`,
+                        // the imports made over them) and inside the buffer's bytes (`bytes_in`),
+                        // and no byte is written by two regions of one command (`rounds`) nor
+                        // read and written by one (the buffer apart from the pieces' bytes).
+                        unsafe {
+                            functions.cmd_copy_buffer(command_buffer, source, destination, part)
+                        };
+                    }
+                }
+            })?;
+        }
+        let total = bytes.end - bytes.start;
+        device.shared().counts.host_ram_copied(total, 0);
+        device
+            .shared()
+            .counts
+            .host_ram_copy_regions(regions_recorded);
+        self.core().retain(imports);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -665,15 +843,47 @@ mod tests {
     }
 
     #[test]
-    fn runs_off_the_page_or_empty_are_refused() {
+    fn runs_off_a_word_or_empty_are_refused_and_ends_take_any_byte() {
         assert_eq!(merged(&one(PAGE..PAGE)), None, "empty");
-        assert_eq!(merged(&one(1..PAGE + 1)), None, "off the page");
-        assert_eq!(merged(&one(0..PAGE + 1)), None, "not whole pages");
+        assert_eq!(merged(&one(1..PAGE + 1)), None, "a start off a word");
+        assert_eq!(merged(&one(PAGE + 2..PAGE + 8)), None, "a start off a word");
         let backwards = Range {
             start: 2 * PAGE,
             end: PAGE,
         };
         assert_eq!(merged(&one(backwards)), None, "backwards");
+        // A start on a word, an end at any byte: an 854-texel row of R8 ends 2 bytes past one.
+        assert_eq!(merged(&one(16..16 + 854)), Some(one(16..16 + 854)));
+        assert_eq!(merged(&one(0..PAGE + 1)), Some(one(0..PAGE + 1)));
+        // Rows that touch are one run; rows apart stay apart.
+        let rows = [
+            2048 * 3..2048 * 3 + 2046,
+            2048 * 4..2048 * 4 + 2046,
+            2048 * 4 + 2046..2048 * 5,
+        ];
+        assert_eq!(
+            merged(&rows),
+            Some(vec![2048 * 3..2048 * 3 + 2046, 2048 * 4..2048 * 5])
+        );
+        assert!(whole_pages(&[0..PAGE, 3 * PAGE..5 * PAGE]));
+        assert!(!whole_pages(&[0..PAGE, 3 * PAGE..5 * PAGE - 2]));
+        assert!(!whole_pages(&[16..PAGE]));
+        assert!(whole_pages(&[]));
+    }
+
+    /// A scatter's pieces take one round where no byte is named twice, and a new round at each
+    /// piece over bytes the round took.
+    #[test]
+    fn a_round_of_regions_writes_no_byte_twice() {
+        let rows: Vec<Range<u64>> = (0..4).map(|y| y * 2048..y * 2048 + 2046).collect();
+        assert_eq!(rounds(&rows), vec![vec![0, 1, 2, 3]]);
+        // The second names the first's last two bytes; the fourth the third's whole, and the
+        // first's (an earlier round's) too.
+        let twice = [16..100, 96..200, 300..400, 0..400];
+        assert_eq!(rounds(&twice), vec![vec![0], vec![1, 2], vec![3]]);
+        // Touching ranges share no byte.
+        assert_eq!(rounds(&[0..4, 4..8, 8..12]), vec![vec![0, 1, 2]]);
+        assert_eq!(rounds(&[]), Vec::<Vec<usize>>::new());
     }
 
     #[test]

@@ -351,6 +351,7 @@ pub(crate) struct Counters {
     host_ram_copies: AtomicU64,
     host_ram_copy_bytes: AtomicU64,
     host_ram_copy_dispatches: AtomicU64,
+    host_ram_copy_regions: AtomicU64,
     host_ram_chunks_imported: AtomicU64,
     host_ram_dma_buf_imports: AtomicU64,
     host_ram_pointer_imports_failed: AtomicU64,
@@ -2914,6 +2915,12 @@ impl Counters {
         (self.host_ram_copies).fetch_add(1, Ordering::Relaxed);
         (self.host_ram_copy_bytes).fetch_add(bytes, Ordering::Relaxed);
         (self.host_ram_copy_dispatches).fetch_add(dispatches, Ordering::Relaxed);
+    }
+
+    /// A blit encoder recorded a copy between a guest RAM and a buffer whose runs are not all
+    /// whole pages as `regions` regions of `vkCmdCopyBuffer` (`host_ram/copy.rs`).
+    pub(crate) fn host_ram_copy_regions(&self, regions: u64) {
+        (self.host_ram_copy_regions).fetch_add(regions, Ordering::Relaxed);
     }
 
     /// A host import the device never releases while idle, for `because`, was made (`kept`), or
@@ -6053,8 +6060,12 @@ pub struct WorkCounts {
     /// Their bytes.
     pub host_ram_copy_bytes: u64,
     /// Their dispatches: one for each chunk a copy's runs touch (more where its bytes pass the
-    /// device's storage range or its pages of a chunk its workgroup count), never one per run.
+    /// device's storage range or its pages of a chunk its workgroup count), never one per run, of
+    /// the copies whose runs are all whole pages.
     pub host_ram_copy_dispatches: u64,
+    /// The regions of `vkCmdCopyBuffer` of the copies whose runs are not all whole pages (a run
+    /// that starts or ends inside a page): one for each run's bytes in a chunk.
+    pub host_ram_copy_regions: u64,
     /// The chunks of guest RAM the device imported (`Device::use_host_ram`): 64 MiB of a RAM's
     /// range each (its last fewer), each once, by the device's own thread ahead of the objects
     /// over it or by the first object made over it where that thread had not imported it.
@@ -7520,6 +7531,7 @@ impl Device {
             host_ram_copies: counters.host_ram_copies.load(Ordering::Relaxed),
             host_ram_copy_bytes: counters.host_ram_copy_bytes.load(Ordering::Relaxed),
             host_ram_copy_dispatches: counters.host_ram_copy_dispatches.load(Ordering::Relaxed),
+            host_ram_copy_regions: counters.host_ram_copy_regions.load(Ordering::Relaxed),
             host_ram_chunks_imported: counters.host_ram_chunks_imported.load(Ordering::Relaxed),
             host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
             host_ram_pointer_imports_failed: counters

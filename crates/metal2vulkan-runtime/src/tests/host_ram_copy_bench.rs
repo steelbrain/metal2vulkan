@@ -5,6 +5,12 @@
 //! buffer made with `HostMemory::with_runs`, so imported by its pointer) and a blit between it and
 //! the buffer.
 //!
+//! Then the same surface's pages as rows of [`ROW_BYTES`] bytes of texels at a [`PITCH`]-byte
+//! pitch, downloaded as a consumer downloads a laid-out device cache: each row's texels alone,
+//! by `copy_to_host_ram` of the surface's runs cut to the row, one call a row (and once as one
+//! call of every row's runs), each run ending inside a page, so copied by regions; and by the
+//! view, a blit a row from the buffer into it (`LAID-OUT` lines).
+//!
 //! The surface: a 3840x2054 `BGRA8Unorm` one, 31,549,440 bytes, as whole runs of `UNIT` bytes
 //! (7,703 of 4 KiB) scattered over a 1 GiB RAM: about 75% of them the page below the one before
 //! (a descending neighbour, a run of its own), 20% the page above it (merged into it), and the
@@ -31,6 +37,10 @@ const WAIT: Duration = Duration::from_secs(60);
 const SURFACE: u64 = 3840 * 2054 * 4;
 const RAM_BYTES: u64 = 1 << 30;
 const ITERATIONS: usize = 40;
+/// The laid-out surface's pitch and its rows' bytes of texels: 2054 rows of a 7677-texel-wide
+/// surface of 2-byte texels, each row ending 2 bytes past a word, 6 bytes short of the pitch.
+const PITCH: u64 = 3840 * 4;
+const ROW_BYTES: u64 = PITCH - 6;
 
 /// A small deterministic generator (xorshift).
 struct Rng(u64);
@@ -323,6 +333,135 @@ fn view_copies(
     );
 }
 
+/// The runs of `runs` (the surface's, in its order) that hold its bytes `span`, cut to them: a
+/// row's texels as the consumer hands them to `copy_to_host_ram`.
+fn runs_of(runs: &[Range<u64>], span: &Range<u64>) -> Vec<Range<u64>> {
+    let mut out = Vec::new();
+    let mut at = 0u64;
+    for run in runs {
+        let length = run.end - run.start;
+        let (from, to) = (span.start.max(at), span.end.min(at + length));
+        if from < to {
+            out.push(run.start + (from - at)..run.start + (to - at));
+        }
+        at += length;
+        if at >= span.end {
+            break;
+        }
+    }
+    out
+}
+
+/// The laid-out download (the module docs) of the surface whose pages are `runs`, from `cache`
+/// into the RAM: by runs a call a row, by runs in one call, and by the view a blit a row.
+fn laid_out_copies(
+    device: &Device,
+    queue: &CommandQueue,
+    (ram, fd, start): (&HostRam, i32, u64),
+    runs: &[Range<u64>],
+    cache: &Buffer,
+) {
+    let rows = SURFACE / PITCH;
+    let spans: Vec<Range<u64>> = (0..rows)
+        .map(|row| row * PITCH..row * PITCH + ROW_BYTES)
+        .collect();
+    let row_runs: Vec<Vec<Range<u64>>> = spans.iter().map(|span| runs_of(runs, span)).collect();
+    let every: Vec<Range<u64>> = row_runs.iter().flatten().cloned().collect();
+    let what = format!(
+        "LAID-OUT {rows} rows of {ROW_BYTES} at {PITCH} ({} runs)",
+        every.len()
+    );
+    // Warm: every chunk imported, the paths' first use made.
+    let mut warm = Figures::default();
+    timed(queue, &mut warm, |encoder| {
+        for (span, runs) in spans.iter().zip(&row_runs) {
+            encoder
+                .copy_to_host_ram(cache, span.start, ram, runs)
+                .unwrap();
+        }
+        Duration::ZERO
+    });
+    let (mut by_row, mut at_once) = (Figures::default(), Figures::default());
+    let before = device.work_counts();
+    for _ in 0..ITERATIONS {
+        timed(queue, &mut by_row, |encoder| {
+            let started = thread_cpu();
+            for (span, runs) in spans.iter().zip(&row_runs) {
+                encoder
+                    .copy_to_host_ram(cache, span.start, ram, runs)
+                    .unwrap();
+            }
+            thread_cpu() - started
+        });
+    }
+    let after = device.work_counts();
+    let calls = after.host_ram_copies - before.host_ram_copies;
+    by_row.print(&format!("{what} copy_to_host_ram a call a row"));
+    eprintln!(
+        "HOST-RAM-COPY-BENCH {what}: {calls} calls, {} regions and {} dispatches a download",
+        (after.host_ram_copy_regions - before.host_ram_copy_regions) / ITERATIONS as u64,
+        (after.host_ram_copy_dispatches - before.host_ram_copy_dispatches) / ITERATIONS as u64,
+    );
+    // The rows' runs in one call, from a buffer of the rows' texels alone.
+    let texels = device
+        .new_buffer(rows * ROW_BYTES, ResourceOptions::private())
+        .unwrap();
+    for _ in 0..ITERATIONS {
+        timed(queue, &mut at_once, |encoder| {
+            let started = thread_cpu();
+            encoder.copy_to_host_ram(&texels, 0, ram, &every).unwrap();
+            thread_cpu() - started
+        });
+    }
+    at_once.print(&format!("{what} copy_to_host_ram in one call"));
+    // The view: per download, a view of the surface's pages, a no-copy buffer over it, a blit a
+    // row from the cache into it, both let go of.
+    let length: u64 = runs.iter().map(|run| run.end - run.start).sum();
+    let mut figures = Figures::default();
+    let (mut maps, mut makes, mut releases) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..ITERATIONS {
+        let started = Instant::now();
+        let view = map_view(fd, start, runs);
+        maps.push(started.elapsed());
+        let pointer = NonNull::new(view as *mut u8).unwrap();
+        // SAFETY: the view's bytes, mapped until the bench unmaps them below, after the buffer
+        // went and its command buffer completed.
+        let memory = unsafe { HostMemory::new(pointer) }.with_runs(view_resolver(view, runs));
+        let started = Instant::now();
+        // SAFETY: as above.
+        let buffer = unsafe {
+            device.new_buffer_with_bytes_no_copy(memory, length, ResourceOptions::default(), None)
+        }
+        .unwrap();
+        makes.push(started.elapsed());
+        timed(queue, &mut figures, |encoder| {
+            let started = thread_cpu();
+            for span in &spans {
+                let size = span.end - span.start;
+                encoder
+                    .copy_from_buffer_to_buffer(cache, span.start, &buffer, span.start, size)
+                    .unwrap();
+            }
+            thread_cpu() - started
+        });
+        let started = Instant::now();
+        drop(buffer);
+        // SAFETY: the bench's view, which nothing uses any more.
+        unsafe { libc::munmap(view as *mut libc::c_void, length as usize) };
+        device.host_range_remapped(pointer, length);
+        releases.push(started.elapsed());
+    }
+    figures.print(&format!("{what} view copy_from_buffer_to_buffer a row"));
+    eprintln!(
+        "HOST-RAM-COPY-BENCH {what} view: {} mappings, map {:.3} ms, buffer made {:.3} ms, \
+         released {:.3} ms",
+        runs.len(),
+        median(&mut maps),
+        median(&mut makes),
+        median(&mut releases),
+    );
+}
+
 #[test]
 #[ignore = "a release benchmark: run with --ignored --nocapture"]
 fn host_ram_copy_bench() {
@@ -382,6 +521,9 @@ fn host_ram_copy_bench() {
         );
         if unit == host_page {
             view_copies(&device, &queue, (fd, start), &runs, &cache, &what);
+        }
+        if unit == 4096 {
+            laid_out_copies(&device, &queue, (&ram, fd, start), &runs, &cache);
         }
     }
     // An empty command buffer's commit to completion, for scale.
