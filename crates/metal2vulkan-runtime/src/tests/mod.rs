@@ -275,6 +275,8 @@ mod making;
 mod managed;
 mod memo;
 mod memory;
+#[cfg(m2v_gpu)]
+mod memory_block_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod memory_frees;
 mod memory_reads;
