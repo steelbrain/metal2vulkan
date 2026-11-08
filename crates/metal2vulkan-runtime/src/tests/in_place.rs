@@ -37,8 +37,8 @@ use crate::in_place::{
     NARROW_TEXEL_BYTES, STORED_TEXEL_BYTES, VERDICTS,
 };
 use crate::in_place_check::{
-    verdicts, Bytes, Due, Pattern, Round, Shape, Tally, Written, NARROW_STORE_SHAPES, SHAPES,
-    STORE_SHAPES,
+    carried_store_failures, verdicts, Bytes, Due, Found, Pattern, Round, Shape, Tally, Written,
+    NARROW_STORE_SHAPES, SHAPES, STORE_SHAPES,
 };
 use crate::linear_plan::BufferLayout;
 use metal2vulkan::device::HostPageTexturePolicy;
@@ -603,6 +603,74 @@ fn a_change_beside_texels_that_share_no_line_fails_both_row_ends() {
     // Row ends no round kept every byte for are unchecked.
     assert_eq!(verdicts([0, 21], None, false), [Unchecked, Passed]);
     assert_eq!(verdicts([9, 0], None, false), [Passed, Unchecked]);
+}
+
+/// The Iris Xe's verdicts of one fresh check in three (ms01, job 7688): the dma-buf class's
+/// storage-write rounds of rows that end inside lines saw no change where the pointer and
+/// fresh-pages classes' did. A store failure of a class whose reads of those row ends passed
+/// fails the others' passes of that access and row ends; a reads failure, an unchecked verdict,
+/// and a store failure of a class whose reads failed carry nowhere.
+#[test]
+fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
+    use Access::{BufferWrites, Reads, Renders, Writes};
+    use PagesClass::{DmaBuf, Fresh, Pointer};
+    use RowEnds::{InLines, OnLines};
+    use Verdict::{Failed, Passed, Unchecked};
+    let mut found: Vec<Found> = Vec::new();
+    for class in [Pointer, Fresh, DmaBuf] {
+        for rows in [InLines, OnLines] {
+            for access in [Reads, Renders, Writes, BufferWrites] {
+                found.push((class, access, rows, Passed));
+            }
+        }
+    }
+    fn set(
+        found: &mut [Found],
+        class: PagesClass,
+        access: Access,
+        rows: RowEnds,
+        verdict: Verdict,
+    ) {
+        let at = (found.iter()).position(|f| (f.0, f.1, f.2) == (class, access, rows));
+        found[at.unwrap()].3 = verdict;
+    }
+    // The Iris Xe: renders and storage writes of rows that end inside lines fail in the pointer
+    // and fresh-pages classes; the dma-buf class's storage writes passed in that check.
+    for class in [Pointer, Fresh] {
+        set(&mut found, class, Renders, InLines, Failed);
+        set(&mut found, class, Writes, InLines, Failed);
+    }
+    set(&mut found, DmaBuf, Renders, InLines, Failed);
+    // The dma-buf class's buffer writes of rows on lines: unchecked (no dispatch made).
+    set(&mut found, DmaBuf, BufferWrites, OnLines, Unchecked);
+    // The fresh-pages class's reads of rows on lines failed, and so did its buffer writes there:
+    // the first move's, which says nothing of the other classes.
+    set(&mut found, Fresh, Reads, OnLines, Failed);
+    set(&mut found, Fresh, BufferWrites, OnLines, Failed);
+    assert_eq!(
+        carried_store_failures(&found),
+        [(DmaBuf, Writes, InLines, Pointer)],
+        "the dma-buf class's pass of storage writes inside lines alone fails, as the pointer \
+         class's failure"
+    );
+    // A failure the dma-buf class's own rounds found carries to the others' passes too.
+    set(&mut found, Pointer, Writes, InLines, Passed);
+    set(&mut found, Fresh, Writes, InLines, Passed);
+    set(&mut found, DmaBuf, Writes, InLines, Failed);
+    assert_eq!(
+        carried_store_failures(&found),
+        [
+            (Pointer, Writes, InLines, DmaBuf),
+            (Fresh, Writes, InLines, DmaBuf)
+        ]
+    );
+    // No store failure: nothing carries, whatever reads did.
+    set(&mut found, DmaBuf, Writes, InLines, Passed);
+    for class in [Pointer, Fresh, DmaBuf] {
+        set(&mut found, class, Renders, InLines, Passed);
+        set(&mut found, class, Reads, InLines, Failed);
+    }
+    assert!(carried_store_failures(&found).is_empty());
 }
 
 #[test]

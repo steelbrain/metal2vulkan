@@ -92,9 +92,12 @@
 //!   On the Iris Xe, whose clear and store, and draws, write back the line that holds a row's last
 //!   texels whole, the first fail and the second pass. Of [`SHAPES`] at 64-byte lines, the five
 //!   whose rows lie one after another, the 20x9 one at a 512-byte pitch and the 3840x2160 surface
-//!   share none, and the other six share one. Each is the device's as it is known, so a class,
-//!   access and row ends that passed take textures in place while the next is checked. Counted
-//!   (`WorkCounts::in_place_checks_*`).
+//!   share none, and the other six share one. A failure under the GPU's stores (renders,
+//!   storage writes, buffer writes) whose class's reads of those row ends passed fails that
+//!   access and row ends in every class whose rounds passed them ([`carried_store_failures`]):
+//!   the line write-back belongs to the store path every class shares, and a class whose pages
+//!   the CPU maps uncached sees it less often. So the verdicts are the device's once every class
+//!   is done, all at once. Counted (`WorkCounts::in_place_checks_*`).
 //! - **Kept.** Once every class answered, the verdicts are written as one record in the shader
 //!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity (its
 //!   version and the device's UUID among it) and the check's version ([`record_name`]), not the
@@ -441,13 +444,15 @@ fn step_aside(device: &Device) {
     }
 }
 
-/// The check's thread: each class in turn, each of its accesses, each verdict given as it is
-/// known, then the record.
+/// The check's thread: each class in turn, each of its accesses; then every verdict given at
+/// once, store failures carried across classes ([`carried_store_failures`]), and the record.
 fn run(weak: crate::device::WeakDevice) {
     mark_checking();
     crate::step_aside::mark_a_check_s_thread(crate::step_aside::Counted::AsTheDevice);
     let started = Instant::now();
     let mut stopped = false;
+    // This run's verdicts, given once every class is done.
+    let mut found: Vec<Found> = Vec::new();
     for class in PagesClass::ALL {
         for access in Access::ALL {
             // The accesses this one's rounds answer: none of an access with no rounds of its own.
@@ -468,7 +473,7 @@ fn run(weak: crate::device::WeakDevice) {
             if stopped || word_overwritten(&device) {
                 stopped = true;
                 for (access, rows) in each() {
-                    checks.set(class, access, rows, Verdict::Unchecked);
+                    found.push((class, access, rows, Verdict::Unchecked));
                 }
                 continue;
             }
@@ -478,19 +483,50 @@ fn run(weak: crate::device::WeakDevice) {
             };
             for (&access, verdicts) in answered.iter().zip(verdicts) {
                 for rows in RowEnds::ALL {
-                    let verdict = verdicts[rows.index()];
-                    checks.set(class, access, rows, verdict);
-                    device.shared().counts.in_place_check_ran(verdict);
+                    found.push((class, access, rows, verdicts[rows.index()]));
                 }
             }
-            // Shadows made before their verdicts that know them now may move in place.
-            device.in_place_verdicts_given();
         }
     }
     let Some(device) = weak.hold() else {
         return;
     };
     let checks = &device.shared().in_place;
+    // Every verdict, those known before the check ran among them, of which a store failure
+    // carries to the passes of this run's other classes.
+    let known: Vec<Found> = (PagesClass::ALL.into_iter())
+        .flat_map(|class| Access::ALL.map(move |access| (class, access)))
+        .flat_map(|(class, access)| RowEnds::ALL.map(move |rows| (class, access, rows)))
+        .filter(|&(class, access, rows)| {
+            !found
+                .iter()
+                .any(|f| (f.0, f.1, f.2) == (class, access, rows))
+        })
+        .map(|(class, access, rows)| (class, access, rows, checks.verdict(class, access, rows)))
+        .filter(|known| known.3 != Verdict::Pending)
+        .chain(found.iter().copied())
+        .collect();
+    let carried = carried_store_failures(&known);
+    for (class, access, rows, verdict) in found {
+        let from = (carried.iter()).find(|c| (c.0, c.1, c.2) == (class, access, rows));
+        let verdict = match from {
+            Some(&(_, _, _, from)) => {
+                let lines = match rows {
+                    RowEnds::InLines => "",
+                    RowEnds::OnLines => ", rows on lines",
+                };
+                checks.note(format!(
+                    "{class:?} {}{lines}: failed as {from:?}'s did, a change under the GPU's \
+                     stores, which every class's images share",
+                    access.words()
+                ));
+                Verdict::Failed
+            }
+            None => verdict,
+        };
+        checks.set(class, access, rows, verdict);
+        device.shared().counts.in_place_check_ran(verdict);
+    }
     let verdicts = checks.verdicts();
     let stopped = stopped || word_overwritten(&device);
     if stopped {
@@ -657,6 +693,56 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec
         }
     }
     Some(tally.verdicts(access, None, forced))
+}
+
+/// One verdict of the check: its class, access, row ends and answer.
+pub(crate) type Found = (PagesClass, Access, RowEnds, Verdict);
+
+/// The passes of `found` a store failure fails, each with the class whose failure it is: a
+/// class's pass of an access whose rounds store (renders: a pass's clear and store, and a draw;
+/// storage writes and buffer writes: a kernel's stores) for texels whose rows end as another
+/// class's failure of that access did, where that class's reads of those row ends passed, so
+/// that its failure was the stores' and not the first move's.
+///
+/// Such a failure is a byte beside the texels changed under the GPU's stores: a line of its
+/// cache that holds a row's last texels written back whole, with what it read beside them. The
+/// write-back belongs to the store path, which every class's images share, while how often a
+/// class's rounds see it does not: the CPU's write must land between the GPU's read of the line
+/// and its write-back, and a class whose pages the CPU maps uncached sweeps them far slower. On
+/// the Iris Xe, ANV maps its exported memory so (the dma-buf class's: each byte's read about
+/// 80 ns), and the storage-write rounds of shapes whose rows end inside lines saw the padding
+/// change in 3 of 18 rounds there, against 10 and 14 of 18 of the pointer and fresh-pages
+/// classes, so that the dma-buf class passed one fresh check in three.
+///
+/// Nothing else carries: a reads failure (whether the GPU sees the CPU's bytes depends on the
+/// class's mapping and import), an unchecked verdict, or a class whose pages could not be made.
+pub(crate) fn carried_store_failures(
+    found: &[Found],
+) -> Vec<(PagesClass, Access, RowEnds, PagesClass)> {
+    let stores = |access| {
+        matches!(
+            access,
+            Access::Renders | Access::Writes | Access::BufferWrites
+        )
+    };
+    let of = |class, access, rows| {
+        (found.iter())
+            .find(|f| (f.0, f.1, f.2) == (class, access, rows))
+            .map(|f| f.3)
+    };
+    let by_stores = |&(class, access, rows, verdict): &Found| {
+        verdict == Verdict::Failed
+            && stores(access)
+            && of(class, Access::Reads, rows) == Some(Verdict::Passed)
+    };
+    (found.iter())
+        .filter(|f| f.3 == Verdict::Passed && stores(f.1))
+        .filter_map(|&(class, access, rows, _)| {
+            (found.iter())
+                .find(|f| f.0 != class && (f.1, f.2) == (access, rows) && by_stores(f))
+                .map(|f| (class, access, rows, f.0))
+        })
+        .collect()
 }
 
 /// A class's rounds for an access so far (`check_class`): those that kept every byte, by row ends
@@ -1111,6 +1197,9 @@ const STRIDE: u64 = 1_000_003;
 /// pitch, page or texel, and a byte copied from another row or page reads wrong.
 const PERIOD: usize = 4099;
 
+/// Zeros a row's cleared texels are compared against, a chunk at a time (`Bytes::compare`).
+static ZEROS: [u8; 4096] = [0; 4096];
+
 /// A round's pattern: [`PERIOD`] bytes of a hash of their place and the round, repeated over the
 /// window. A byte the writer wrote holds it changed by its last sweep's [`mark`].
 pub(crate) struct Pattern {
@@ -1384,7 +1473,12 @@ impl Bytes {
                     // SAFETY: as above; the row's texels lie in the window.
                     let read =
                         unsafe { std::slice::from_raw_parts(self.byte(start), row_bytes as usize) };
-                    let at = read.iter().position(|&read| read != 0);
+                    // Compared in wide loads first, as in `matches`.
+                    let zero =
+                        (read.chunks(ZEROS.len())).all(|chunk| chunk == &ZEROS[..chunk.len()]);
+                    let at = (!zero)
+                        .then(|| read.iter().position(|&read| read != 0))
+                        .flatten();
                     at.map(|at| (start + at as u64, 0, read[at]))
                 }
                 Due::Stored => self.matches(&pattern.stored, start, start + row_bytes),
@@ -1421,8 +1515,13 @@ impl Bytes {
             // SAFETY: as in `compare`; nothing writes the bytes while the slice is read.
             let read = unsafe { std::slice::from_raw_parts(self.byte(offset), count) };
             let due = &period[phase..phase + count];
-            if let Some(at) = read.iter().zip(due).position(|(read, due)| read != due) {
-                return Some((offset + at as u64, due[at], read[at]));
+            // Compared whole first: slice equality reads in wide loads, where a read of each byte
+            // of pages the CPU maps uncached is a bus read of its own (the dma-buf class's on the
+            // Iris Xe: 2.7 s for a 3840x2160 surface's window byte by byte).
+            if read != due {
+                if let Some(at) = read.iter().zip(due).position(|(read, due)| read != due) {
+                    return Some((offset + at as u64, due[at], read[at]));
+                }
             }
             offset += count as u64;
         }

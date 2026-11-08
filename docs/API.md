@@ -363,8 +363,13 @@ buffer's rows (no IOSurface plane's) whose rows, each to its pitch, start and en
 buffer holding the last row to its pitch, may change the rows' padding (section 10, **Kernels**):
 the same rounds give a second verdict for such textures, which a round that changed only bytes of
 its rows' padding passes, so the Iris Xe's written textures over a buffer take the image in place
-whatever their rows' ends. It runs
-on a thread of its own, which the first such texture starts; a texture made before its kind of
+whatever their rows' ends. A byte beside the texels changed under the GPU's stores (a render
+round's clear, store or draw, or a kernel's stores) in one kind of pages, whose reads of those row
+ends passed, fails that access and row ends for every kind: the line written back belongs to the
+GPU's store path, which every kind's images share, while a kind whose pages the CPU maps uncached
+(ANV maps the dma-buf kind's so) sees it in fewer rounds. Reads, and verdicts a kind could not
+check, carry to no other kind. So the verdicts are given together once every kind is checked. It
+runs on a thread of its own, which the first such texture starts; a texture made before its kind of
 pages and access has its verdict is a shadow, made without waiting for the check
 (`WorkCounts::host_texture_shadows_check_pending`), and moves in place, with no copy, at a quiet
 commit once its kind's verdicts pass (`WorkCounts::host_textures_moved_in_place`; docs/HOWTO.md
