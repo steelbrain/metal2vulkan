@@ -1089,7 +1089,9 @@ fn a_copied_rebind_where_fresh_pages_are_unchecked_takes_memory_the_device_alloc
         return;
     }
     for access in Access::ALL {
-        (device.shared().in_place).set(PagesClass::Fresh, access, Verdict::Unchecked);
+        for rows in crate::in_place::RowEnds::ALL {
+            (device.shared().in_place).set(PagesClass::Fresh, access, rows, Verdict::Unchecked);
+        }
     }
     let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
     let before = device.work_counts();
@@ -1156,14 +1158,25 @@ fn a_copied_rebind_at_another_pitch_takes_fresh_pages_where_their_check_passed()
 /// [`a_copied_rebind_at_another_pitch_takes_fresh_pages_where_their_check_passed`] at `pitch`:
 /// a texture in place over `first`, rebound to `second`.
 fn rebind_at_pitch(device: &Device, pitch: usize, (first, second): &(Host, Host)) {
-    use crate::in_place::{Access, PagesClass, Verdict};
+    use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
     let buffer = first.buffer(device, None);
     let (texture, in_place) = texture_over_at(device, &buffer, pitch);
     if !in_place {
         eprintln!("COPIED-REBIND-PITCH {pitch}: the texture is a shadow here; nothing to test");
         return;
     }
-    let passed = device.in_place_verdict(PagesClass::Fresh, Access::Reads) == Verdict::Passed;
+    // The texture's texels in the device's lines of memory, as its rebind asks the check.
+    let layout = crate::linear_plan::BufferLayout {
+        offset: 0,
+        row_pitch: pitch as u64,
+        slice_pitch: (pitch * SIDE) as u64,
+        row_bytes: (SIDE * TEXEL) as u64,
+        rows: SIDE as u64,
+        slices: 1,
+    };
+    let start = buffer.contents().map_or(0, |at| at.as_ptr().addr() as u64);
+    let rows = RowEnds::of(start, &layout, device.shared().in_place.line());
+    let passed = device.in_place_verdict(PagesClass::Fresh, Access::Reads, rows) == Verdict::Passed;
     let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
     let before = device.work_counts();
     let rebound = rebind(&buffer, second, Some(gate(&asked, false)));

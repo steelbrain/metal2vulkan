@@ -244,8 +244,10 @@ degradations! {
         /// there (`in_place.rs`): the policy keeps the exact form
         /// ([`metal2vulkan::device::HostPageTexturePolicy::Shadow`]), the texture's usage renders
         /// into it or writes it (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`), the device's
-        /// check that the move keeps every byte over that kind of pages has not answered yet,
-        /// found a byte changed or made no image, or no image in place serves the texels (its rows
+        /// check that the move keeps every byte over that kind of pages, for texels that share a
+        /// line of the device's memory (`nonCoherentAtomSize`) with bytes beside them or not as
+        /// the texture's do, has not answered yet, found a byte changed or made no image, or no
+        /// image in place serves the texels (its rows
         /// share bytes, the device lays no linear image's rows at the buffer's pitch, the image's
         /// placement or memory misses the pages, the bytes were detached, or no dma-buf of the
         /// texture's own pages serves); the notice names which; or its rows (or an array's slices) lie with the buffer's

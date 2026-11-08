@@ -10,6 +10,7 @@
 
 use super::blit_holds::{device, over_host, Host, Scratch};
 use crate::framebuffer_fetch::through_storage;
+use crate::in_place::Access;
 use crate::TextureDescriptor;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::vk::ImageUsageFlags;
@@ -31,7 +32,23 @@ fn a_render_target_in_place_takes_the_storage_usage_only_where_writes_passed() {
     };
     let settled = device.settle_in_place_checks(Duration::from_secs(120));
     let report = device.in_place_check_report();
-    let passed = |line: &str| report.iter().any(|l| l == line);
+    // Whether the check passed for `access` over the buffer's pages, for texels of rows of `row`
+    // bytes one after another from its start (`in_place::RowEnds`).
+    let passed = |access, row: u64| {
+        use crate::in_place::{PagesClass, RowEnds, Verdict};
+        let layout = crate::linear_plan::BufferLayout {
+            offset: 0,
+            row_pitch: row,
+            slice_pitch: row * SIDE,
+            row_bytes: row,
+            rows: SIDE,
+            slices: 1,
+        };
+        let start = buffer.contents().map_or(0, |at| at.as_ptr().addr() as u64);
+        let checks = &device.shared().in_place;
+        let rows = RowEnds::of(start, &layout, checks.line());
+        checks.verdict(PagesClass::Pointer, access, rows) == Verdict::Passed
+    };
     let fetches = through_storage(device.compile_device().profile());
     for (format, texel) in [
         (PixelFormat::RGBA8Unorm, 4),
@@ -53,11 +70,11 @@ fn a_render_target_in_place_takes_the_storage_usage_only_where_writes_passed() {
         );
         if in_place {
             assert!(
-                passed("Pointer renders: Passed"),
+                passed(Access::Renders, SIDE * texel),
                 "{format:?}: in place where the check did not pass for render targets"
             );
             assert!(
-                !storage || (passed("Pointer writes: Passed") && feedback && fetches),
+                !storage || (passed(Access::Writes, SIDE * texel) && feedback && fetches),
                 "{format:?}: the storage usage where the check did not pass for a shader's \
                  writes, or with no fetch to read through it"
             );

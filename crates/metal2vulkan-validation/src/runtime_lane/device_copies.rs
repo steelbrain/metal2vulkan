@@ -477,7 +477,7 @@ fn a_shared_surface_over_logged_pages_is_no_device_copy() {
     let after = device.work_counts();
     // SAFETY: the handle is only compared.
     let in_place = unsafe { texture.vk_image() }.is_some();
-    let pointer = passed(&device, "Pointer");
+    let pointer = passed(&device, "Pointer", &buffer, (w * 4, h, bpr));
     eprintln!(
         "DEVICE-COPY on {} ({:?}): a Shared surface over logged pages: device copy {}, in place \
          {in_place}, in places {}, the check passed for pointer pages {pointer}",

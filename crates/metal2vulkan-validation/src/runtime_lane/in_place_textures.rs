@@ -1,8 +1,9 @@
 //! Device tests of textures over host pages in place (`HostPageTexturePolicy::InPlace`) on the
 //! device the cfg selects: a texture over a no-copy buffer's pages or a buffer in fresh pages is an
 //! image aliasing the pages where the device's check passed for their class and each of the
-//! texture's accesses (one that reads, one that renders, one a shader writes), and a shadow
-//! elsewhere, counted by why.
+//! texture's accesses (one that reads, one that renders, one a shader writes), for texels that lie
+//! in the device's lines of memory as its own do (`in_place_rows`), and a shadow elsewhere,
+//! counted by why.
 //!
 //! - [`sampled_textures_over_host_pages_take_the_path_their_check_answered`], under the
 //!   validation layer: once the device's check answered (printed, `IN-PLACE-CHECK`, with its
@@ -80,6 +81,7 @@
 use super::degrade_notices::counts;
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
+use super::in_place_rows;
 use super::no_copy_textures::{floats, staged};
 use super::pitched_surfaces::reading;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
@@ -102,13 +104,21 @@ pub(super) fn in_place(options: &mut DeviceOptions) {
     options.policy.host_page_textures = HostPageTexturePolicy::InPlace;
 }
 
-/// Whether the device's check passed for `class` (`Pointer`, `Fresh`, `DmaBuf`).
-pub(super) fn passed(device: &Device, class: &str) -> bool {
-    device
-        .in_place_check_report()
-        .iter()
-        .any(|line| *line == format!("{class}: Passed"))
+/// Whether the device's check passed for `what` (`Pointer`, `Fresh renders`, `DmaBuf`, ...), for
+/// a 2D texture of `(w, h, bpr)` bytes (a row's texels, its rows, their pitch) at the start of
+/// `buffer` (`in_place_rows`).
+pub(super) fn passed(device: &Device, what: &str, buffer: &Buffer, (w, h, bpr): Rows) -> bool {
+    let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
+    let on_lines = in_place_rows::on_lines(device, first, w, bpr, h);
+    in_place_rows::passed(device, what, on_lines)
 }
+
+/// A 2D texture's rows: the bytes of a row's texels, its rows, and their pitch.
+pub(super) type Rows = (u64, u64, u64);
+
+/// The verdicts the device's check gives, each a line of its report before what it found
+/// changed: three classes, three accesses, two row ends.
+const VERDICTS: usize = 18;
 
 /// The devices made again where load beside the submission checks split their import tax's tries
 /// ([`answered_device`]).
@@ -369,7 +379,7 @@ fn sampled_textures_over_host_pages_take_the_path_their_check_answered() {
                      {refused})",
                     device.name()
                 );
-                let checked = passed(&device, class);
+                let checked = passed(&device, class, &buffer, (w * texel, h, bpr));
                 let right = match (checked, path) {
                     (true, "in place") => (class == "Fresh") == (fresh == 1),
                     (true, "refused") => true,
@@ -629,7 +639,6 @@ fn written_textures_over_host_pages_take_the_path_their_checks_answered() {
         })
         .unwrap();
         settled(&device);
-        let checked = passed(&device, "Pointer writes");
         let queue = device.new_command_queue().unwrap();
         let kernel = super::level_writes_by_usage::kernel(&device, "write_at_level");
         let h = 64u64;
@@ -667,6 +676,7 @@ fn written_textures_over_host_pages_take_the_path_their_checks_answered() {
                 }
                 Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
             };
+            let checked = passed(&device, "Pointer writes", &buffer, (w * 8, h, bpr));
             let before = device.work_counts();
             let texture = written(&buffer, PixelFormat::RGBA16Float, (w, h, bpr));
             let after = device.work_counts();
@@ -755,13 +765,6 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
         })
         .unwrap();
         settled(&device);
-        if !passed(&device, "Pointer") {
-            eprintln!(
-                "IN-PLACE-USAGE on {}: no image in place to write",
-                device.name()
-            );
-            return;
-        }
         let queue = device.new_command_queue().unwrap();
         let (w, h) = (64u64, 64u64);
         // Padded rows, then packed ones: a device whose linear images take no padded pitch takes
@@ -789,6 +792,13 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
                 )
             }
             .unwrap();
+            if !passed(&device, "Pointer", &buffer, (w * 8, h, bpr)) {
+                eprintln!(
+                    "IN-PLACE-USAGE on {}: {form}: no image in place to write",
+                    device.name()
+                );
+                continue;
+            }
             let texture = sampled(&buffer, PixelFormat::RGBA16Float, (w, h, bpr));
             // SAFETY: the handle is only compared, while the texture lives.
             let Some(image) = (unsafe { texture.vk_image() }) else {
@@ -882,8 +892,6 @@ fn textures_that_render_or_write_take_the_path_their_checks_answered() {
         if policy == HostPageTexturePolicy::InPlace {
             settled(&device);
         }
-        let renders_in_place = passed(&device, "Pointer renders");
-        let writes_in_place = passed(&device, "Pointer writes");
         let (w, h, bpr) = (64u64, 64u64, 256u64);
         let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
         let mapping = Mapping::anonymous(len);
@@ -904,6 +912,10 @@ fn textures_that_render_or_write_take_the_path_their_checks_answered() {
             }
             Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
         };
+        // The verdicts its `R32Uint` texels take.
+        let rows = (w * 4, h, bpr);
+        let renders_in_place = passed(&device, "Pointer renders", &buffer, rows);
+        let writes_in_place = passed(&device, "Pointer writes", &buffer, rows);
         for usage in usages {
             let mut d = TextureDescriptor::texture_2d(PixelFormat::R32Uint, w, h, false);
             d.usage = usage;
@@ -983,7 +995,10 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         settled(&device);
         let report = device.in_place_check_report();
         assert!(
-            report.iter().take(9).all(|line| !line.ends_with("Passed")),
+            report
+                .iter()
+                .take(VERDICTS)
+                .all(|line| !line.ends_with("Passed")),
             "{report:?}"
         );
         let len = (7680 * 1080usize).next_multiple_of(GUEST_PAGE);
@@ -1017,15 +1032,15 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         messages.take_notices();
     }
     // Nothing kept: the next device on the cache recalls nothing and checks. Its verdicts, one
-    // per class and access: what the check found changed where one failed follows them in the
-    // checking process's report alone, which no record keeps.
+    // per class, access and row ends: what the check found changed where one failed follows them
+    // in the checking process's report alone, which no record keeps.
     let verdicts = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         assert_eq!(device.work_counts().in_place_checks_recalled, 0);
         settled(&device);
         assert!(device.in_place_check_took().is_some());
         let mut report = device.in_place_check_report();
-        report.truncate(9);
+        report.truncate(VERDICTS);
         report
     };
     // Its record is recalled whole by the device after it, which checks nothing.
@@ -1033,8 +1048,9 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
         let counts = device.work_counts();
         // Each class's verdicts, for a texture that reads, one that renders and one a shader
-        // writes.
-        assert_eq!(counts.in_place_checks_recalled, 9);
+        // writes, each for texels that share a line with bytes beside them and for texels that
+        // share none.
+        assert_eq!(counts.in_place_checks_recalled, VERDICTS as u64);
         assert_eq!(counts.in_place_checks_run, 0);
         assert!(device.settle_in_place_checks(std::time::Duration::ZERO));
         assert_eq!(device.in_place_check_took(), None);

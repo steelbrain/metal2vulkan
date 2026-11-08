@@ -397,10 +397,22 @@ fn a_texture_over_a_long_buffer_is_its_bytes(
     let over_fresh = after.shadows_over_fresh_pages - before.shadows_over_fresh_pages;
     // SAFETY: the handle is only compared, while the texture lives.
     let in_place = unsafe { texture.vk_image() }.is_some();
-    let renders_in_place = device
-        .in_place_check_report()
-        .iter()
-        .any(|line| line == "Fresh renders: Passed");
+    // The verdict its texels take: `RGBA8Unorm` rows `pitch` apart from the buffer's start.
+    let layout = crate::linear_plan::BufferLayout {
+        offset: 0,
+        row_pitch: pitch,
+        slice_pitch: pitch * SIDE,
+        row_bytes: SIDE * 4,
+        rows: SIDE,
+        slices: 1,
+    };
+    let start = contents.as_ptr().addr() as u64;
+    let rows = crate::in_place::RowEnds::of(start, &layout, device.shared().in_place.line());
+    let renders_in_place = device.shared().in_place.verdict(
+        crate::in_place::PagesClass::Fresh,
+        crate::in_place::Access::Renders,
+        rows,
+    ) == crate::in_place::Verdict::Passed;
     // Each cause a shadow over host pages is counted under, by how many it counted now.
     let moved = |count: fn(&WorkCounts) -> u64| count(&after) - count(&before);
     let causes: [(&str, u64); 12] = [

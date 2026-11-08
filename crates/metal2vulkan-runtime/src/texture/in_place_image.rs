@@ -53,7 +53,7 @@ use crate::device::lock;
 use crate::error::{vulkan, Error, RuntimeGap};
 use crate::framebuffer_fetch::storage_candidate;
 use crate::image_plan::{ImageFacts, ImagePlan};
-use crate::in_place::{Access, PagesClass, Refusal};
+use crate::in_place::{Access, PagesClass, Refusal, RowEnds};
 use crate::linear_plan::{check_linear_limits, linear_lack, BufferLayout, LinearLack};
 use crate::shadow_copy_back::WordView;
 use crate::shadow_copy_in::CopyIn;
@@ -780,19 +780,31 @@ impl Device {
 
     /// Whether a rebind's copy of a buffer's bytes (`copied.rs`) may lie in fresh pages the
     /// runtime imports (`Device::fresh_page_buffer`) for the images in place that `watches` note:
-    /// where the device's check passed for fresh pages and each live image's accesses
-    /// ([`fresh_pages_take`](Self::fresh_pages_take)), as each is then made over them for host
-    /// allocations. Where it did not, the copy lies in memory the device allocates, and each image
+    /// where the device's check passed for fresh pages, each live image's accesses and how its
+    /// texels lie in the device's lines of memory (`in_place::RowEnds`: a rebind keeps the bytes'
+    /// offset in their page) ([`fresh_pages_take`](Self::fresh_pages_take)), as each is then made
+    /// over them for host allocations. Where it did not, the copy lies in memory the device allocates, and each image
     /// is a linear image of its own over it ([`in_place_over_copy`](Self::in_place_over_copy)).
     /// On RADV the check leaves fresh pages unchecked: no new buffer lies in them where each held
     /// pointer import costs every submission (`fresh_pages.rs`), so the check finds none to try.
     pub(crate) fn fresh_pages_take_images(&self, watches: &[InPlaceWatch]) -> bool {
-        (watches.iter().filter_map(watched)).all(|image| self.fresh_pages_take(&image))
+        watches.iter().all(|watch| {
+            watched(watch)
+                .is_none_or(|image| self.fresh_pages_take(&image, self.watched_rows(watch)))
+        })
     }
 
-    /// Whether the device's check passed for fresh pages and each of `image`'s accesses: an
-    /// image of attachment usage renders, one of storage usage is written, one of neither reads.
-    fn fresh_pages_take(&self, image: &Image) -> bool {
+    /// How the texels `watch` notes lie in the device's lines of memory (`in_place::RowEnds`):
+    /// `from_base` past the pages' first byte, which starts a page.
+    fn watched_rows(&self, watch: &InPlaceWatch) -> RowEnds {
+        let start = watch.from_base - watch.layout.offset;
+        RowEnds::of(start, &watch.layout, self.shared().in_place.line())
+    }
+
+    /// Whether the device's check passed for fresh pages, each of `image`'s accesses and texels
+    /// that lie in lines as `rows` says: an image of attachment usage renders, one of storage
+    /// usage is written, one of neither reads.
+    fn fresh_pages_take(&self, image: &Image, rows: RowEnds) -> bool {
         use metal2vulkan::vk::ImageUsageFlags;
         let usage = image.plan().usage;
         let renders = usage.contains(ImageUsageFlags::COLOR_ATTACHMENT);
@@ -804,7 +816,7 @@ impl Device {
         ];
         accesses.into_iter().all(|(access, takes)| {
             !takes
-                || self.in_place_verdict(PagesClass::Fresh, access)
+                || self.in_place_verdict(PagesClass::Fresh, access, rows)
                     == crate::in_place::Verdict::Passed
         })
     }
@@ -838,7 +850,7 @@ impl Device {
         // device allocates, a linear image of its own.
         let made = match pages.over_own_pages() {
             true => {
-                if !self.fresh_pages_take(&image) {
+                if !self.fresh_pages_take(&image, self.watched_rows(watch)) {
                     return Err(refused());
                 }
                 let facts = self

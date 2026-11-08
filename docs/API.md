@@ -348,7 +348,13 @@ their first move, their moves into the feedback loop layout and back, and a rend
 clears and stores them, while the CPU writes the bytes between their rows and after them; and for
 one a shader writes, images made with `ShaderWrite` usage, whose every texel a kernel stores
 through an unsigned-integer view of 4, 8 or 16-byte texels while the CPU writes the bytes beside
-them (a program's atomics are among no round). It runs
+them (a program's atomics are among no round). Each verdict is given apart for texels that share
+a line of the device's memory (`nonCoherentAtomSize` bytes) with bytes beside them and for texels
+that share none (their first byte, their end and, with bytes between rows, each row's start and
+end on a line): a device that writes back a texel's line whole puts an older value back over a
+CPU write in the first alone, as the Iris Xe's clear and store and draws do, so its render targets
+and written textures whose rows end on a line, a 3840x2160 `BGRA8Unorm` surface's among them,
+take the image in place where the others keep the shadow. It runs
 on a thread of its own, which the first such texture starts; a texture made before its kind of
 pages and access has its verdict is a shadow, made without waiting for the check
 (`WorkCounts::host_texture_shadows_check_pending`), and moves in place, with no copy, at a quiet
@@ -1523,7 +1529,9 @@ bound.
   (`HostPageTexturePolicy::Shadow`), a shader writes the texture's texels of 1 or 2 bytes, which
   the device's check stores none of, the device's check that the operations of an access of the
   texture (the first move; a render pass's load and store; a kernel's storage writes) keep every
-  byte over that kind of pages has not answered yet, found a byte changed or made no image, or no
+  byte over that kind of pages, for texels that share a line of the device's memory
+  (`nonCoherentAtomSize`) with bytes beside them or not as the texture's do, has not answered yet,
+  found a byte changed or made no image, or no
   image in place serves the texels (its rows share bytes, the device lays no linear image's rows at
   the buffer's pitch, the image's placement or memory misses the pages, the bytes were detached, or
   no dma-buf of the texture's own pages serves); the notice names which, and

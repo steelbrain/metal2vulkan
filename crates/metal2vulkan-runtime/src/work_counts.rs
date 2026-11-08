@@ -6172,9 +6172,10 @@ pub struct WorkCounts {
     /// modifier's features or limits, the image's memory past the pages, or the driver's import.
     pub host_texture_shadows_refused_dma_buf: u64,
     /// Classes of host pages (pointer, dma-buf, fresh), each with each access (an image that
-    /// reads, one that renders, one a shader writes), the device's check ran for in this process:
-    /// `in_place_checks_passed`, `in_place_checks_failed` and `in_place_checks_unchecked`
-    /// together.
+    /// reads, one that renders, one a shader writes) and each row ends (texels that share a line
+    /// of memory with bytes beside them, and texels that share none), the device's check ran for
+    /// in this process: `in_place_checks_passed`, `in_place_checks_failed` and
+    /// `in_place_checks_unchecked` together.
     pub in_place_checks_run: u64,
     /// Of `in_place_checks_run`, those whose every image left every byte alone: its first move,
     /// for one that renders its pass's load and store and its feedback loop moves, and for one a
@@ -6184,8 +6185,8 @@ pub struct WorkCounts {
     pub in_place_checks_failed: u64,
     /// Of `in_place_checks_run`, those that made no image of the class for the access.
     pub in_place_checks_unchecked: u64,
-    /// Classes and accesses whose verdict was read from the record of an earlier check of the
-    /// same driver, device and runtime: no check ran for them.
+    /// Classes, accesses and row ends whose verdict was read from the record of an earlier check
+    /// of the same driver, device and check: no check ran for them.
     pub in_place_checks_recalled: u64,
     /// Textures over host pages made shadows before their pages' in-place verdicts (counted in
     /// `host_texture_shadows_check_pending`) that moved in place once the verdicts passed, at

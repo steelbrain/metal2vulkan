@@ -21,6 +21,7 @@
 //!   time with no record and with it.
 
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
+use super::in_place_rows;
 use super::{layer_reported_nothing_at_all, read_buffer, validated_device_with};
 use super::{Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
@@ -201,7 +202,6 @@ fn a_texture_at_the_answered_alignment_is_in_place() {
         );
         assert!(device.settle_in_place_checks(CHECK_WAIT));
         let report = device.in_place_check_report();
-        let passed = report.iter().any(|line| line == "Pointer: Passed");
         eprintln!(
             "LINEAR-ALIGNMENT on {}: the in-place check {report:?}",
             device.name()
@@ -228,7 +228,10 @@ fn a_texture_at_the_answered_alignment_is_in_place() {
                 let counted =
                     device.work_counts().host_textures_in_place - before.host_textures_in_place;
                 assert_eq!(counted, u64::from(aliased), "{what}: its form not counted");
-                if passed {
+                // The verdict its texels take, `at.0` past the start of the pages.
+                let base = over.buffer.contents().map_or(0, |a| a.as_ptr() as u64);
+                let on_lines = in_place_rows::on_lines(device, base + at.0, w * texel, at.1, ROWS);
+                if in_place_rows::passed(device, "Pointer", on_lines) {
                     assert!(aliased, "{what}: a shadow at the answered alignment");
                 }
                 in_place += u64::from(aliased);

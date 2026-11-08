@@ -38,11 +38,15 @@
 //!   leaving every other byte alone, on a discrete GPU as on any other (a discrete Mac's GPU
 //!   writes a `Shared` texture across its bus). The check
 //!   (`in_place_check.rs`) runs once per driver and its version, per memory class
-//!   ([`PagesClass`]) and access ([`Access`]), and its verdicts are kept in the shader cache's
-//!   content records ([`record_name`]); a class and access it did not pass keep the shadow.
+//!   ([`PagesClass`]), access ([`Access`]) and how the texels lie in the device's lines of memory
+//!   ([`RowEnds`]: whether a line holds both a texel and a byte beside the texels, which a device
+//!   that writes back a texel's line whole puts back over the CPU's write), and its verdicts are
+//!   kept in the shader cache's content records ([`record_name`]); a class, access and row ends it
+//!   did not pass keep the shadow.
 //! - **Which textures** ([`in_place`]): under `HostPageTexturePolicy::InPlace`, those over a class
-//!   whose check passed for each access the texture's declared usage (as Metal reports it, an
-//!   `Unknown` one every usage) takes ([`Access::takes`]): it renders (`RenderTarget`), a shader
+//!   whose check passed, for texels that lie in lines as the texture's do ([`RowEnds::of`], from
+//!   the texels' address, offset and pitches), for each access the texture's declared usage (as
+//!   Metal reports it, an `Unknown` one every usage) takes ([`Access::takes`]): it renders (`RenderTarget`), a shader
 //!   writes it (`ShaderWrite` or `ShaderAtomic`, of texels of 4, 8 or 16 bytes, the widths the
 //!   check's kernel stores: [`STORED_TEXEL_BYTES`]), or it is sampled or read alone. Plain Metal
 //!   also writes through a texture beyond its declared usage, and renders into one made without
@@ -186,13 +190,77 @@ impl Access {
     }
 }
 
-/// The verdicts a device's check gives: one for each class and access, class by class
-/// ([`PagesClass::ALL`]), each class's accesses in [`Access::ALL`]'s order.
-pub(crate) const VERDICTS: usize = PagesClass::ALL.len() * Access::ALL.len();
+/// How a texture's texels lie in the device's lines of memory, each checked apart: a line is
+/// `nonCoherentAtomSize` bytes at a multiple of it, "the size and alignment in bytes that bounds
+/// concurrent access to host-mapped device memory" (vkspec, Limits). A device may write back a
+/// line that holds a texel whole, as the Iris Xe's clear and store, and its draws, write back the
+/// line that holds a row's last texels: a line that also holds bytes beside the texels then puts
+/// back an older value over a CPU write there, where a line of texels alone holds nothing the CPU
+/// writes beside them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum RowEnds {
+    /// A line holds a texel and a byte beside the texels: between two rows or two slices, before
+    /// the first texel or after the last.
+    InLines,
+    /// Every line holds texels alone or bytes beside them alone: the texels start and end on a
+    /// line, and so does each row (or slice) where bytes lie between rows (or slices).
+    OnLines,
+}
 
-/// The place of `class`'s verdict for `access` among the [`VERDICTS`].
-pub(crate) fn verdict_index(class: PagesClass, access: Access) -> usize {
-    class.index() * Access::ALL.len() + access.index()
+impl RowEnds {
+    /// Both, in the order the record holds their verdicts.
+    pub(crate) const ALL: [RowEnds; 2] = [RowEnds::InLines, RowEnds::OnLines];
+
+    /// Its place in [`ALL`](Self::ALL).
+    pub(crate) fn index(self) -> usize {
+        match self {
+            RowEnds::InLines => 0,
+            RowEnds::OnLines => 1,
+        }
+    }
+
+    /// How texels laid out as `layout` in a buffer whose first byte lies `start` bytes past a
+    /// multiple of `line` lie in the lines of `line` bytes.
+    pub(crate) fn of(start: u64, layout: &crate::linear_plan::BufferLayout, line: u64) -> RowEnds {
+        let on = |at: u64| at.is_multiple_of(line.max(1));
+        let first = start + layout.offset;
+        let slice = (layout.rows - 1) * layout.row_pitch + layout.row_bytes;
+        let rows_apart = layout.rows > 1 && layout.row_pitch != layout.row_bytes;
+        let slices_apart = layout.slices > 1 && layout.slice_pitch != slice;
+        let owned = on(first)
+            && on(start + layout.end())
+            && (!rows_apart || (on(layout.row_pitch) && on(first + layout.row_bytes)))
+            && (!slices_apart || (on(layout.slice_pitch) && on(first + slice)));
+        match owned {
+            true => RowEnds::OnLines,
+            false => RowEnds::InLines,
+        }
+    }
+
+    /// How the texels lie, in words, for a notice.
+    pub(crate) fn words(self) -> &'static str {
+        match self {
+            RowEnds::InLines => {
+                "an image whose texels share a line of memory (the device's nonCoherentAtomSize) \
+                 with bytes beside them"
+            }
+            RowEnds::OnLines => {
+                "an image whose texels share no line of memory (the device's \
+                 nonCoherentAtomSize) with bytes beside them"
+            }
+        }
+    }
+}
+
+/// The verdicts a device's check gives: one for each class, access and row ends, those of
+/// [`RowEnds::InLines`] first, then those of [`RowEnds::OnLines`], each class by class
+/// ([`PagesClass::ALL`]), each class's accesses in [`Access::ALL`]'s order.
+pub(crate) const VERDICTS: usize = RowEnds::ALL.len() * PagesClass::ALL.len() * Access::ALL.len();
+
+/// The place of `class`'s verdict for `access` of texels that lie as `rows` says among the
+/// [`VERDICTS`].
+pub(crate) fn verdict_index(class: PagesClass, access: Access, rows: RowEnds) -> usize {
+    (rows.index() * PagesClass::ALL.len() + class.index()) * Access::ALL.len() + access.index()
 }
 
 /// What the device's check answered for a class and access.
@@ -238,6 +306,7 @@ impl Verdict {
 #[derive(Clone)]
 pub(crate) struct PendingMove {
     pub(crate) class: PagesClass,
+    pub(crate) rows: RowEnds,
     pub(crate) usage: TextureUsage,
     pub(crate) plan: crate::image_plan::ImagePlan,
     pub(crate) descriptor: crate::texture_descriptor::TextureDescriptor,
@@ -251,12 +320,14 @@ pub(crate) enum ShadowCause {
     /// Its usage writes it through a shader, and its texels are of a width (the bytes given) the
     /// check's kernel stores none of ([`STORED_TEXEL_BYTES`]): no check covers its writes.
     StoreWidth(u64),
-    /// Its class's check for its access has not answered yet.
-    CheckPending(PagesClass, Access),
-    /// Its class's check for its access found a byte changed.
-    CheckFailed(PagesClass, Access),
-    /// Its class's check for its access made no image.
-    Unchecked(PagesClass, Access),
+    /// Its class's check for its access, of texels that lie in lines as its own do, has not
+    /// answered yet.
+    CheckPending(PagesClass, Access, RowEnds),
+    /// Its class's check for its access, of texels that lie in lines as its own do, found a byte
+    /// changed.
+    CheckFailed(PagesClass, Access, RowEnds),
+    /// Its class's check for its access, of texels that lie in lines as its own do, made no image.
+    Unchecked(PagesClass, Access, RowEnds),
     /// The device makes no image over its texels as Metal lays them out: why, and the words.
     Refused(Refusal, String),
 }
@@ -328,36 +399,41 @@ impl ShadowCause {
                  device's check of storage writes stores texels of 4, 8 and 16 bytes, not of \
                  {bytes}: no check covers a driver's writes of such texels beside them"
             ),
-            ShadowCause::CheckPending(class, access) => format!(
-                "the device's check of {} over {} has not answered yet",
+            ShadowCause::CheckPending(class, access, rows) => format!(
+                "the device's check of {} over {}, for {}, has not answered yet",
                 access.words(),
-                class.words()
-            ),
-            ShadowCause::CheckFailed(class, access) => format!(
-                "the device's check found {} over {} changing a byte the CPU wrote beside it",
-                access.words(),
-                class.words()
-            ),
-            ShadowCause::Unchecked(class, access) => format!(
-                "the device's check made no image over {} for {}",
                 class.words(),
-                access.words()
+                rows.words()
+            ),
+            ShadowCause::CheckFailed(class, access, rows) => format!(
+                "the device's check found {} over {} changing a byte the CPU wrote beside it, \
+                 for {}",
+                access.words(),
+                class.words(),
+                rows.words()
+            ),
+            ShadowCause::Unchecked(class, access, rows) => format!(
+                "the device's check made no image over {} for {}, for {}",
+                class.words(),
+                access.words(),
+                rows.words()
             ),
             ShadowCause::Refused(_, why) => why.clone(),
         }
     }
 }
 
-/// Whether a texture over host pages of `class`, of Metal `usage` (as Metal reports it) and texels
-/// of `texel` bytes, on a device of `policy`, is tried as an image in place; else why it is a
-/// shadow (the module docs). `verdict` answers the device's check for the class and each access
-/// the texture takes ([`Access::takes`]), in [`Access::ALL`]'s order, asked only of a texture the
-/// policy and texel width let through (a pending one starts the check), until one did not pass.
+/// Whether a texture over host pages of `class`, its texels lying in the device's lines as `rows`
+/// says, of Metal `usage` (as Metal reports it) and texels of `texel` bytes, on a device of
+/// `policy`, is tried as an image in place; else why it is a shadow (the module docs). `verdict`
+/// answers the device's check for the class, each access the texture takes ([`Access::takes`]),
+/// in [`Access::ALL`]'s order, and the row ends, asked only of a texture the policy and texel
+/// width let through (a pending one starts the check), until one did not pass.
 pub(crate) fn in_place(
     policy: HostPageTexturePolicy,
     usage: TextureUsage,
-    (class, texel): (PagesClass, u64),
-    mut verdict: impl FnMut(PagesClass, Access) -> Verdict,
+    (class, rows, texel): (PagesClass, RowEnds, u64),
+    mut verdict: impl FnMut(PagesClass, Access, RowEnds) -> Verdict,
 ) -> Result<(), ShadowCause> {
     if policy == HostPageTexturePolicy::Shadow {
         return Err(ShadowCause::Exact);
@@ -366,20 +442,22 @@ pub(crate) fn in_place(
         return Err(ShadowCause::StoreWidth(texel));
     }
     for access in Access::ALL.into_iter().filter(|access| access.takes(usage)) {
-        match verdict(class, access) {
+        match verdict(class, access, rows) {
             Verdict::Passed => {}
-            Verdict::Pending => return Err(ShadowCause::CheckPending(class, access)),
-            Verdict::Failed => return Err(ShadowCause::CheckFailed(class, access)),
-            Verdict::Unchecked => return Err(ShadowCause::Unchecked(class, access)),
+            Verdict::Pending => return Err(ShadowCause::CheckPending(class, access, rows)),
+            Verdict::Failed => return Err(ShadowCause::CheckFailed(class, access, rows)),
+            Verdict::Unchecked => return Err(ShadowCause::Unchecked(class, access, rows)),
         }
     }
     Ok(())
 }
 
-/// A device's check verdicts (`DeviceShared::in_place`): one per class and access
+/// A device's check verdicts (`DeviceShared::in_place`): one per class, access and row ends
 /// ([`VERDICTS`]), and whether its check started and settled.
 pub(crate) struct InPlaceChecks {
     verdicts: [AtomicU8; VERDICTS],
+    /// The device's line of memory, `nonCoherentAtomSize` bytes ([`RowEnds`]).
+    line: u64,
     /// The check was started on its thread (at most once per device).
     started: AtomicBool,
     /// Every class's verdict is known: from the record, or the check ended.
@@ -398,10 +476,12 @@ pub(crate) struct InPlaceChecks {
 }
 
 impl InPlaceChecks {
-    /// No verdict yet; `fail` as [`InPlaceChecks::fail`] says.
-    pub(crate) fn new(fail: bool) -> InPlaceChecks {
+    /// No verdict yet, on a device whose line is `line` bytes ([`RowEnds`]); `fail` as
+    /// [`InPlaceChecks::fail`] says.
+    pub(crate) fn new(fail: bool, line: u64) -> InPlaceChecks {
         InPlaceChecks {
             verdicts: [0; VERDICTS].map(AtomicU8::new),
+            line: line.max(1),
             started: AtomicBool::new(false),
             settled: Mutex::new(false),
             wake: Condvar::new(),
@@ -422,9 +502,14 @@ impl InPlaceChecks {
         lock(&self.notes).push(line);
     }
 
-    /// `class`'s verdict for `access` now.
-    pub(crate) fn verdict(&self, class: PagesClass, access: Access) -> Verdict {
-        let byte = self.verdicts[verdict_index(class, access)].load(Ordering::Acquire);
+    /// The device's line of memory, in bytes ([`RowEnds`]).
+    pub(crate) fn line(&self) -> u64 {
+        self.line
+    }
+
+    /// `class`'s verdict for `access` of texels that lie in lines as `rows` says, now.
+    pub(crate) fn verdict(&self, class: PagesClass, access: Access, rows: RowEnds) -> Verdict {
+        let byte = self.verdicts[verdict_index(class, access, rows)].load(Ordering::Acquire);
         Verdict::of_byte(byte).unwrap_or(Verdict::Pending)
     }
 
@@ -436,9 +521,10 @@ impl InPlaceChecks {
         })
     }
 
-    /// Give `class` its verdict for `access`.
-    pub(crate) fn set(&self, class: PagesClass, access: Access, verdict: Verdict) {
-        self.verdicts[verdict_index(class, access)].store(verdict.byte(), Ordering::Release);
+    /// Give `class` its verdict for `access` of texels that lie in lines as `rows` says.
+    pub(crate) fn set(&self, class: PagesClass, access: Access, rows: RowEnds, verdict: Verdict) {
+        let at = verdict_index(class, access, rows);
+        self.verdicts[at].store(verdict.byte(), Ordering::Release);
     }
 
     /// Whether the check is to fail whatever the moves did.
@@ -505,7 +591,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 5;
+pub(crate) const CHECK_VERSION: u32 = 6;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";
@@ -582,7 +668,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// magic          8 bytes   "M2VINPL\0"
 /// version        u32       CHECK_VERSION
 /// identity       32 bytes  DriverIdentity::digest
-/// verdicts       9 bytes   one per class and access, VERDICTS' order (verdict_index)
+/// verdicts       18 bytes  one per class, access and row ends, VERDICTS' order (verdict_index)
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
 ///
@@ -686,19 +772,27 @@ impl Device {
         if let Lookup::Hit(verdicts) = looked {
             for class in PagesClass::ALL {
                 for access in Access::ALL {
-                    let verdict = verdicts[verdict_index(class, access)];
-                    shared.in_place.set(class, access, verdict);
-                    shared.counts.in_place_check_recalled();
+                    for rows in RowEnds::ALL {
+                        let verdict = verdicts[verdict_index(class, access, rows)];
+                        shared.in_place.set(class, access, rows, verdict);
+                        shared.counts.in_place_check_recalled();
+                    }
                 }
             }
             shared.in_place.settle(None);
         }
     }
 
-    /// `class`'s verdict for `access` for a texture asking it as it is made: a pending one
-    /// starts the check, unless it started already. Never waits (the module docs).
-    pub(crate) fn in_place_verdict(&self, class: PagesClass, access: Access) -> Verdict {
-        let verdict = self.shared().in_place.verdict(class, access);
+    /// `class`'s verdict for `access` of texels that lie in lines as `rows` says, for a texture
+    /// asking it as it is made: a pending one starts the check, unless it started already. Never
+    /// waits (the module docs).
+    pub(crate) fn in_place_verdict(
+        &self,
+        class: PagesClass,
+        access: Access,
+        rows: RowEnds,
+    ) -> Verdict {
+        let verdict = self.shared().in_place.verdict(class, access, rows);
         if verdict == Verdict::Pending {
             self.start_in_place_checks();
         }
@@ -741,10 +835,22 @@ impl Device {
         self.shared().in_place.took()
     }
 
+    /// The bytes of the device's line of memory the check's verdicts tell apart
+    /// (`nonCoherentAtomSize`, `RowEnds`): those of texels that share a line with bytes beside
+    /// them, and those of texels that share none. A runtime extension for the lanes that read
+    /// the verdict a texture of theirs takes.
+    #[doc(hidden)]
+    pub fn in_place_check_line(&self) -> u64 {
+        self.current().shared().in_place.line()
+    }
+
     /// The device's check's verdicts now, one line per class for a texture that reads
     /// (`Pointer: Passed`), then one per class for one that renders (`Pointer renders: Passed`),
-    /// then one per class for one a shader writes (`Pointer writes: Passed`), and what it found
-    /// changed where one failed. A runtime extension for the lanes that report it.
+    /// then one per class for one a shader writes (`Pointer writes: Passed`), each for texels that
+    /// share a line with bytes beside them (`RowEnds::InLines`); then the same nine for texels
+    /// that share none (`Pointer, rows on lines: Passed`, `Pointer renders, rows on lines:
+    /// Passed`, `Pointer writes, rows on lines: Passed`); and what it found changed where one
+    /// failed. A runtime extension for the lanes that report it.
     #[doc(hidden)]
     pub fn in_place_check_report(&self) -> Vec<String> {
         self.current().in_place_check_report_now()
@@ -753,17 +859,24 @@ impl Device {
     /// [`Device::in_place_check_report`] on the generation that serves (`device/line.rs`).
     pub(crate) fn in_place_check_report_now(&self) -> Vec<String> {
         let checks = &self.shared().in_place;
-        let line = |class: PagesClass, access: Access| {
-            let verdict = checks.verdict(class, access);
+        let line = |class: PagesClass, access: Access, rows: RowEnds| {
+            let verdict = checks.verdict(class, access, rows);
+            let lines = match rows {
+                RowEnds::InLines => "",
+                RowEnds::OnLines => ", rows on lines",
+            };
             match access {
-                Access::Reads => format!("{class:?}: {verdict:?}"),
-                Access::Renders => format!("{class:?} renders: {verdict:?}"),
-                Access::Writes => format!("{class:?} writes: {verdict:?}"),
+                Access::Reads => format!("{class:?}{lines}: {verdict:?}"),
+                Access::Renders => format!("{class:?} renders{lines}: {verdict:?}"),
+                Access::Writes => format!("{class:?} writes{lines}: {verdict:?}"),
             }
         };
-        let verdicts = Access::ALL
-            .into_iter()
-            .flat_map(|access| PagesClass::ALL.map(|class| line(class, access)));
+        let line = &line;
+        let verdicts = RowEnds::ALL.into_iter().flat_map(move |rows| {
+            Access::ALL
+                .into_iter()
+                .flat_map(move |access| PagesClass::ALL.map(|class| line(class, access, rows)))
+        });
         verdicts
             .chain(lock(&checks.notes).iter().cloned())
             .collect()

@@ -29,6 +29,7 @@
 //! the texels read that differ; and the check's verdicts (`IN-PLACE-CHECK`).
 
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
+use super::in_place_rows;
 use super::no_copy_textures::{floats, staged};
 use super::pitched_surfaces::reading;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
@@ -120,10 +121,6 @@ fn first_use_writes_under(policy: HostPageTexturePolicy, lapses: &mut Vec<String
                 device.in_place_check_took()
             );
         }
-        let pointer_passed = device
-            .in_place_check_report()
-            .iter()
-            .any(|line| line == "Pointer: Passed");
         let queue = device.new_command_queue().unwrap();
         let reads = reading(&device, PixelFormat::BGRA8Unorm, "tob_read");
         let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
@@ -164,6 +161,10 @@ fn first_use_writes_under(policy: HostPageTexturePolicy, lapses: &mut Vec<String
                     }
                     Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
                 };
+                // The verdict its texels take, at the start of the pages.
+                let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
+                let on_lines = in_place_rows::on_lines(&device, first, row, bpr, h);
+                let pointer_passed = in_place_rows::passed(&device, "Pointer", on_lines);
                 let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
                 d.usage = TextureUsage::SHADER_READ;
                 d.resource_options = buffer.resource_options();

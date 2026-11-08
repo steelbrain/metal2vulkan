@@ -382,8 +382,23 @@ fn one_scratch(device_of: fn(&Path) -> Device, over: Over, (width, row): (u64, u
     // A shadow merged back at each encoder's end: one over bytes another writer may write (all
     // but a tracked `Private` buffer's, whose shadow is copied back).
     let merged = texture.shadow().is_some_and(|copies| copies.merges_back());
-    let renders_in_place =
-        (device.in_place_check_report().iter()).any(|line| line == "Pointer renders: Passed");
+    // The check's verdict for render targets over host pages, for texels that lie in lines as
+    // the target's do: `RGBA8Unorm` rows `row` bytes apart from the buffer's start.
+    let renders_in_place = {
+        use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+        let layout = crate::linear_plan::BufferLayout {
+            offset: 0,
+            row_pitch: row,
+            slice_pitch: row * H,
+            row_bytes: width * 4,
+            rows: H,
+            slices: 1,
+        };
+        let start = buffer.contents().map_or(0, |at| at.as_ptr().addr() as u64);
+        let checks = &device.shared().in_place;
+        let rows = RowEnds::of(start, &layout, checks.line());
+        checks.verdict(PagesClass::Pointer, Access::Renders, rows) == Verdict::Passed
+    };
     println!(
         "MERGE-SCRATCH {over:?} {width}x{H}, rows of {row}: linear image {linear}, shadow {shadow} \
          (merged back {merged}), the in-place check passed for render targets over host pages \

@@ -14,7 +14,7 @@
 use super::blit_holds::{device, Scratch};
 use crate::address::{PAGE, SPACE_BASE, SPACE_END};
 use crate::fresh_pages::FRESH_PAGES_PAST;
-use crate::in_place::{Access, PagesClass, Verdict as InPlaceVerdict};
+use crate::in_place::{Access, PagesClass, RowEnds, Verdict as InPlaceVerdict};
 use crate::submit_check::{encode, record_name, Check, Measured, Verdict};
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
@@ -195,7 +195,12 @@ fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
         "the recalled answers keep long buffers out of fresh pages"
     );
     assert!(device.settle_in_place_checks(WAIT), "the check answered");
-    let fresh = Access::ALL.map(|access| device.in_place_verdict(PagesClass::Fresh, access));
+    let fresh: Vec<InPlaceVerdict> = RowEnds::ALL
+        .into_iter()
+        .flat_map(|rows| {
+            Access::ALL.map(|access| device.in_place_verdict(PagesClass::Fresh, access, rows))
+        })
+        .collect();
     eprintln!(
         "IN-PLACE-CHECK-TAXED on {}: a long buffer in fresh pages where held imports cost \
          nothing {takes}; the Fresh verdicts where they cost {fresh:?}; fresh-page buffers made {}",
@@ -209,7 +214,7 @@ fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
         ),
         false => assert_eq!(
             fresh,
-            [InPlaceVerdict::Unchecked; 3],
+            [InPlaceVerdict::Unchecked; 6],
             "no fresh pages to check"
         ),
     }

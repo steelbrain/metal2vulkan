@@ -2359,12 +2359,16 @@ impl Device {
         // Texels past the buffer's length lie in no image over its memory: the shadow's copies go
         // through the texture's tail (`buffer_texture.rs`).
         let past = texels.past().is_some();
+        // How the texels lie in the device's lines of memory, each checked apart
+        // (`in_place::RowEnds`).
+        let rows = texels.rows(self.shared().in_place.line());
         let device_copy = match class {
             Some(class) if !past && !in_place::checking() && !texels.buffer.detached() => {
                 let policy = self.compile_device().policy().host_page_textures;
-                let pages = (class, texels.texel_bytes());
+                let pages = (class, rows, texels.texel_bytes());
+                let passed = |_, _, _| Verdict::Passed;
                 in_place::Access::Reads.takes(usage)
-                    && in_place::in_place(policy, usage, pages, |_, _| Verdict::Passed).is_ok()
+                    && in_place::in_place(policy, usage, pages, passed).is_ok()
                     && texels.device_copy(self)
             }
             _ => false,
@@ -2402,11 +2406,11 @@ impl Device {
                         true => HostPageTexturePolicy::InPlace,
                         false => self.compile_device().policy().host_page_textures,
                     };
-                    let verdict = |class, access| match checking {
+                    let verdict = |class, access, rows| match checking {
                         true => Verdict::Passed,
-                        false => self.in_place_verdict(class, access),
+                        false => self.in_place_verdict(class, access, rows),
                     };
-                    let pages = (class, texels.texel_bytes());
+                    let pages = (class, rows, texels.texel_bytes());
                     match in_place::in_place(policy, usage, pages, verdict) {
                         Ok(()) => {
                             // A texture that renders takes the storage usage too where the check
@@ -2417,8 +2421,9 @@ impl Device {
                             // texels in place, as the check's writes do.
                             let storable = in_place::Access::Renders.takes(usage)
                                 && !in_place::Access::Writes.takes(usage)
-                                && in_place::STORED_TEXEL_BYTES.contains(&pages.1)
-                                && verdict(class, in_place::Access::Writes) == Verdict::Passed;
+                                && in_place::STORED_TEXEL_BYTES.contains(&pages.2)
+                                && verdict(class, in_place::Access::Writes, rows)
+                                    == Verdict::Passed;
                             let made = (&*texels, class, storable);
                             match self.in_place_image(&plan, descriptor, made, &facts)? {
                                 Ok((image, pitched)) => {
@@ -2449,6 +2454,7 @@ impl Device {
                 if let ShadowCause::CheckPending(..) = cause {
                     *pending = Some(in_place::PendingMove {
                         class,
+                        rows,
                         usage,
                         plan: plan.clone(),
                         descriptor: *descriptor,

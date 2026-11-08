@@ -66,12 +66,22 @@
 //! - **Its cost** is the pattern's fill and compare of each window, at the speed of a copy and a
 //!   comparison of memory (a 3840x2160 surface's 33 MB among them), and each image's making and
 //!   first move (and pass, or kernel's stores): the writes themselves run only while those do.
-//! - **Its verdict**, per class and access: passed where every image it made kept every byte (but
-//!   the texels a pass cleared or a kernel stored), failed where one did not (or the device was
-//!   made to fail it, `DeviceOptions::fail_in_place_check`), and unchecked where it made none (the
-//!   device makes no such buffer, image, import, pass or dispatch). Each is the device's as it is
-//!   known, so a class and access that passed take textures in place while the next is checked.
-//!   Counted (`WorkCounts::in_place_checks_*`).
+//! - **Its verdict**, per class, access and row ends ([`RowEnds`]: whether a line of the device's
+//!   memory, `nonCoherentAtomSize` bytes, holds both a texel and a byte beside the texels, each
+//!   shape's from its pitch and width, [`Shape::rows`]): passed where every image it made of
+//!   shapes of the row ends kept every byte (but the texels a pass cleared or a kernel stored),
+//!   failed where one did not (or the device was made to fail it,
+//!   `DeviceOptions::fail_in_place_check`), and unchecked where it made none (the device makes no
+//!   such buffer, image, import, pass or dispatch) ([`verdicts`]). The shapes whose texels share
+//!   no line with bytes beside them run first: a byte one of them changed fails both row ends,
+//!   as a device that changes a byte beside such texels changes one beside any; a byte a shape
+//!   whose texels share a line changed fails its row ends alone, the others' rounds already run.
+//!   On the Iris Xe, whose clear and store, and draws, write back the line that holds a row's last
+//!   texels whole, the first fail and the second pass. Of [`SHAPES`] at 64-byte lines, the five
+//!   whose rows lie one after another, the 20x9 one at a 512-byte pitch and the 3840x2160 surface
+//!   share none, and the other six share one. Each is the device's as it is known, so a class,
+//!   access and row ends that passed take textures in place while the next is checked. Counted
+//!   (`WorkCounts::in_place_checks_*`).
 //! - **Kept.** Once every class answered, the verdicts are written as one record in the shader
 //!   cache's content directory (`shader_cache/store.rs`), named by the driver's identity (its
 //!   version and the device's UUID among it) and the check's version ([`record_name`]), not the
@@ -113,7 +123,8 @@ use crate::check_draw::CheckDraw;
 use crate::device::holds::Holder;
 use crate::exit_guard;
 use crate::host_memory::HostMemory;
-use crate::in_place::{encode, mark_checking, record_name, Access, PagesClass, Verdict};
+use crate::in_place::{encode, mark_checking, record_name, Access, PagesClass, RowEnds, Verdict};
+use crate::linear_plan::BufferLayout;
 use crate::values::ResourceOptions;
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,
@@ -131,9 +142,9 @@ use std::time::{Duration, Instant};
 /// catches a device that writes back the line of a cache that holds a row's last texels: on the
 /// Iris Xe a render round (its pass's clear and store, then its draw) caught it in 198 of 200
 /// rounds of a 100x50 `BGRA8Unorm` image at a 512-byte pitch and in 200 of 200 of a 33x17
-/// `RGBA16Float` one. Four of [`SHAPES`] have rows that end inside such a line, so three rounds
-/// of each are twelve chances, of which a device that escapes each as often as the Iris Xe's
-/// worst shape did (2 in 200) passes all with odds below one in 10^20.
+/// `RGBA16Float` one. Eight of [`SHAPES`] have rows that end inside such a line, so three rounds
+/// of each are twenty-four chances, of which a device that escapes each as often as the Iris Xe's
+/// worst shape did (2 in 200) passes all with odds below one in 10^40.
 pub(crate) const ROUNDS: usize = 3;
 
 /// The longest a render round waits for its pass's command buffer: a pass that clears a 3840x2160
@@ -154,10 +165,14 @@ pub(crate) struct Shape {
 /// The shapes each class is checked with: each texel size the formats a buffer backs have (1, 2,
 /// 4, 8 and 16 bytes), with rows one after another (a linear image made for the memory, which
 /// every driver lays at a 256-byte pitch) and with bytes between them (an image at an explicit
-/// pitch, where the device makes one: `texture/in_place_image.rs`), and one 3840x2160 surface of
-/// 4-byte texels, last. A shape the device makes no image of in place is skipped: the product
-/// makes none of it either.
-pub(crate) const SHAPES: [Shape; 11] = [
+/// pitch, where the device makes one: `texture/in_place_image.rs`), two of widths whose rows end
+/// inside a 16-byte line at the 16-byte pitch a driver that lays rows tight lays them at (MoltenVK
+/// makes no other image with bytes between rows, and its line, `nonCoherentAtomSize`, is 16
+/// bytes: without them no shape of its whose texels share a line would be made, [`RowEnds`]), the
+/// same two at the 64-byte pitch of a driver that lays rows at the next multiple of 64 (llvmpipe,
+/// whose line is 64 bytes: likewise), and one 3840x2160 surface of 4-byte texels, last. A shape
+/// the device makes no image of in place is skipped: the product makes none of it either.
+pub(crate) const SHAPES: [Shape; 15] = [
     shape(PixelFormat::R8Unorm, 1, 256, 16, 256),
     shape(PixelFormat::RG8Unorm, 2, 128, 16, 256),
     shape(PixelFormat::BGRA8Unorm, 4, 64, 16, 256),
@@ -168,6 +183,10 @@ pub(crate) const SHAPES: [Shape; 11] = [
     shape(PixelFormat::BGRA8Unorm, 4, 100, 50, 512),
     shape(PixelFormat::RGBA16Float, 8, 33, 17, 512),
     shape(PixelFormat::RGBA32Float, 16, 20, 9, 512),
+    shape(PixelFormat::BGRA8Unorm, 4, 101, 51, 416),
+    shape(PixelFormat::RGBA16Float, 8, 33, 17, 272),
+    shape(PixelFormat::BGRA8Unorm, 4, 101, 51, 448),
+    shape(PixelFormat::RGBA16Float, 8, 33, 17, 320),
     shape(PixelFormat::BGRA8Unorm, 4, 3840, 2160, 15360),
 ];
 
@@ -175,11 +194,11 @@ pub(crate) const SHAPES: [Shape; 11] = [
 /// kernel stores through: texels of 4, 8 and 16 bytes (`in_place::STORED_TEXEL_BYTES`, the
 /// crate-owned copy-in kernel's views), with rows one after another and with bytes between them
 /// (of widths no multiple of 4 and heights no multiple of 2 among them, so that a driver's write
-/// of a block wider than a texel past a row's or the image's end shows), at a 512-byte pitch and
-/// at the 16-byte pitch a driver that lays rows tight lays them at, and one 1920x1080 surface of
-/// 4-byte texels, last. A shape the device makes no image of in place, or no dispatch over, is
-/// skipped.
-pub(crate) const STORE_SHAPES: [(Shape, ShadowTexelView); 9] = [
+/// of a block wider than a texel past a row's or the image's end shows), at a 512-byte pitch, at
+/// the 16-byte pitch a driver that lays rows tight lays them at and at the 64-byte pitch of one
+/// that lays them at the next multiple of 64 ([`SHAPES`]), and one 1920x1080 surface of 4-byte
+/// texels, last. A shape the device makes no image of in place, or no dispatch over, is skipped.
+pub(crate) const STORE_SHAPES: [(Shape, ShadowTexelView); 11] = [
     (
         shape(PixelFormat::RGBA8Uint, 4, 64, 16, 256),
         ShadowTexelView::R8G8B8A8Uint,
@@ -213,6 +232,14 @@ pub(crate) const STORE_SHAPES: [(Shape, ShadowTexelView); 9] = [
         ShadowTexelView::R32G32Uint,
     ),
     (
+        shape(PixelFormat::RGBA8Uint, 4, 101, 51, 448),
+        ShadowTexelView::R8G8B8A8Uint,
+    ),
+    (
+        shape(PixelFormat::RG32Uint, 8, 33, 17, 320),
+        ShadowTexelView::R32G32Uint,
+    ),
+    (
         shape(PixelFormat::RGBA8Uint, 4, 1920, 1080, 7680),
         ShadowTexelView::R8G8B8A8Uint,
     ),
@@ -233,6 +260,20 @@ impl Shape {
     fn is_texel(&self, offset: u64) -> bool {
         offset < self.bytes_per_row * self.height
             && offset % self.bytes_per_row < self.width * self.texel
+    }
+
+    /// How its texels lie in lines of `line` bytes ([`RowEnds::of`]): its texture starts the
+    /// window, which starts on a page.
+    pub(crate) fn rows(&self, line: u64) -> RowEnds {
+        let layout = BufferLayout {
+            offset: 0,
+            row_pitch: self.bytes_per_row,
+            slice_pitch: self.bytes_per_row * self.height,
+            row_bytes: self.width * self.texel,
+            rows: self.height,
+            slices: 1,
+        };
+        RowEnds::of(0, &layout, line)
     }
 
     /// The bytes of the window the check fills and writes: the texture's rows, then the bytes
@@ -265,8 +306,10 @@ impl Device {
         if started.is_err() {
             for class in PagesClass::ALL {
                 for access in Access::ALL {
-                    if checks.verdict(class, access) == Verdict::Pending {
-                        checks.set(class, access, Verdict::Unchecked);
+                    for rows in RowEnds::ALL {
+                        if checks.verdict(class, access, rows) == Verdict::Pending {
+                            checks.set(class, access, rows, Verdict::Unchecked);
+                        }
                     }
                 }
             }
@@ -299,24 +342,27 @@ fn run(weak: crate::device::WeakDevice) {
             let Some(device) = weak.hold() else {
                 return;
             };
-            if device.shared().in_place.verdict(class, access) != Verdict::Pending {
+            let checks = &device.shared().in_place;
+            let pending = |rows| checks.verdict(class, access, rows) == Verdict::Pending;
+            if !RowEnds::ALL.into_iter().any(pending) {
                 continue;
             }
             if stopped || word_overwritten(&device) {
                 stopped = true;
-                device
-                    .shared()
-                    .in_place
-                    .set(class, access, Verdict::Unchecked);
+                for rows in RowEnds::ALL {
+                    checks.set(class, access, rows, Verdict::Unchecked);
+                }
                 continue;
             }
-            let Some(verdict) = check_class(&device, class, access) else {
+            let Some(verdicts) = check_class(&device, class, access) else {
                 // The process is exiting, or the program let the device go: nothing is kept.
                 return;
             };
-            let checks = &device.shared().in_place;
-            checks.set(class, access, verdict);
-            device.shared().counts.in_place_check_ran(verdict);
+            for rows in RowEnds::ALL {
+                let verdict = verdicts[rows.index()];
+                checks.set(class, access, rows, verdict);
+                device.shared().counts.in_place_check_ran(verdict);
+            }
             // Shadows made before their verdicts that know them now may move in place.
             device.in_place_verdicts_given();
         }
@@ -355,14 +401,18 @@ fn word_overwritten(device: &Device) -> bool {
     unsafe { device.shared().loader_word.overwritten() }
 }
 
-/// The verdict of `class` for `access` on `device`: every shape's rounds, until one fails, or
-/// until the device's loader word is found overwritten (unchecked then where no round ran).
-/// `None` where the process is exiting, or the program's last drop stopped the device's holds
-/// before a round (`device/holds.rs`).
-fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Verdict> {
+/// The verdicts of `class` for `access` on `device`, by row ends ([`RowEnds::ALL`]'s order):
+/// every shape's rounds, those of shapes whose texels share no line with bytes beside them first
+/// ([`Shape::rows`]), until one fails, or until the device's loader word is found overwritten
+/// (unchecked then where no round ran); [`verdicts`] gives them. `None` where the process is
+/// exiting, or the program's last drop stopped the device's holds before a round
+/// (`device/holds.rs`).
+fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<[Verdict; 2]> {
     let page = host_page();
+    let line = device.shared().in_place.line();
+    let unchecked = [Verdict::Unchecked; 2];
     let Some(pages) = ClassPages::make(device, class, BUFFER_BYTES) else {
-        return Some(Verdict::Unchecked);
+        return Some(unchecked);
     };
     // The command queue an image that renders takes its passes on, the check's own, and the
     // draw it takes after them.
@@ -375,29 +425,32 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
             });
             match made? {
                 Ok(renders) => Some(renders),
-                Err(_) => return Some(Verdict::Unchecked),
+                Err(_) => return Some(unchecked),
             }
         }
     };
-    // An image a shader writes takes the shapes its kernel stores, each with its view.
-    let shapes: Vec<(Shape, Option<ShadowTexelView>)> = match access {
+    // An image a shader writes takes the shapes its kernel stores, each with its view; those
+    // whose texels share no line with bytes beside them first.
+    let mut shapes: Vec<(Shape, Option<ShadowTexelView>)> = match access {
         Access::Writes => STORE_SHAPES
             .map(|(shape, texel)| (shape, Some(texel)))
             .to_vec(),
         Access::Reads | Access::Renders => SHAPES.map(|shape| (shape, None)).to_vec(),
     };
-    let mut made = 0;
+    shapes.sort_by_key(|(shape, _)| shape.rows(line) != RowEnds::OnLines);
+    let mut made = [0; 2];
     for (shape, texel) in shapes {
         if shape.window(page) > BUFFER_BYTES {
             continue;
         }
+        let rows = shape.rows(line);
         for round in 0..ROUNDS {
             if !device.holds_go_on(Holder::InPlaceCheck) {
                 return None;
             }
             step_aside(device);
             if word_overwritten(device) {
-                return Some(Verdict::Unchecked);
+                return Some(unchecked);
             }
             let outcome = {
                 let _busy = exit_guard::enter()?;
@@ -407,7 +460,7 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
                 }
             };
             match outcome {
-                Round::Kept => made += 1,
+                Round::Kept => made[rows.index()] += 1,
                 Round::NotMade => break,
                 Round::Changed((offset, due, read)) => {
                     let image = shape.bytes_per_row * shape.height;
@@ -419,26 +472,44 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
                     let operations = match access {
                         Access::Reads => "the first move",
                         Access::Renders => {
-                            "the first move, feedback loop moves or a pass's clear and store"
+                            "the first move, feedback loop moves, a pass's clear and store or a \
+                             draw"
                         }
                         Access::Writes => "the first move or a kernel's storage writes",
                     };
+                    let lines = match rows {
+                        RowEnds::InLines => "",
+                        RowEnds::OnLines => ", rows on lines",
+                    };
                     device.shared().in_place.note(format!(
-                        "{class:?}: {operations} of a {:?} image of {}x{} with rows {} bytes \
-                         apart changed byte {offset} ({place}) from {due:#04x} to {read:#04x} in \
-                         round {round}",
+                        "{class:?}{lines}: {operations} of a {:?} image of {}x{} with rows {} \
+                         bytes apart changed byte {offset} ({place}) from {due:#04x} to \
+                         {read:#04x} in round {round}",
                         shape.format, shape.width, shape.height, shape.bytes_per_row
                     ));
-                    return Some(Verdict::Failed);
+                    let forced = device.shared().in_place.forced_failure();
+                    return Some(verdicts(made, Some(rows), forced));
                 }
             }
         }
     }
     let forced = device.shared().in_place.forced_failure();
-    Some(match (made, forced) {
-        (0, _) => Verdict::Unchecked,
-        (_, true) => Verdict::Failed,
-        (_, false) => Verdict::Passed,
+    Some(verdicts(made, None, forced))
+}
+
+/// The verdicts, by row ends ([`RowEnds::ALL`]'s order), of a class and access whose rounds kept
+/// every byte `made` times for each, until a round of shapes of `changed` row ends changed one,
+/// where one did, on a device made to fail its check where `forced`: failed for the row ends that
+/// changed a byte, and for both where texels that share no line with bytes beside them did (a
+/// device that changes a byte beside such texels changes one beside any); else unchecked for row
+/// ends of which no round kept every byte, failed where forced, and passed.
+pub(crate) fn verdicts(made: [u32; 2], changed: Option<RowEnds>, forced: bool) -> [Verdict; 2] {
+    RowEnds::ALL.map(|rows| match (changed, made[rows.index()], forced) {
+        (Some(RowEnds::OnLines), _, _) => Verdict::Failed,
+        (Some(at), _, _) if at == rows => Verdict::Failed,
+        (_, 0, _) => Verdict::Unchecked,
+        (_, _, true) => Verdict::Failed,
+        (_, _, false) => Verdict::Passed,
     })
 }
 

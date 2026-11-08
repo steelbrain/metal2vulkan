@@ -124,7 +124,7 @@ use crate::framebuffer_fetch::storage_candidate;
 use crate::heap_sets;
 use crate::image_barrier::{image_barrier, ImageDst};
 use crate::image_plan::ImagePlan;
-use crate::in_place::{self, Access as InPlaceAccess, PagesClass, Verdict};
+use crate::in_place::{self, Access as InPlaceAccess, PagesClass, RowEnds, Verdict};
 use crate::memory::Placement;
 use crate::tracker::Access;
 use crate::values::StorageMode;
@@ -174,6 +174,8 @@ pub(crate) struct StorageForms {
 struct MoveWait {
     texture: Weak<TextureShared>,
     class: PagesClass,
+    /// How its texels lie in the device's lines of memory (`in_place::RowEnds`).
+    rows: RowEnds,
     usage: TextureUsage,
     /// The bytes of one of its texels.
     texel: u64,
@@ -185,13 +187,13 @@ impl MoveWait {
     /// they would for a texture made now.
     fn moves(&self, device: &Device) -> Option<bool> {
         let checks = &device.shared().in_place;
-        let verdict = |class, access| checks.verdict(class, access);
-        let pending = |access| verdict(self.class, access) == Verdict::Pending;
+        let verdict = |class, access, rows| checks.verdict(class, access, rows);
+        let pending = |access| verdict(self.class, access, self.rows) == Verdict::Pending;
         if InPlaceAccess::ALL.into_iter().any(pending) {
             return None;
         }
         let policy = device.compile_device().policy().host_page_textures;
-        let pages = (self.class, self.texel);
+        let pages = (self.class, self.rows, self.texel);
         Some(in_place::in_place(policy, self.usage, pages, verdict).is_ok())
     }
 }
@@ -584,9 +586,9 @@ impl Texture {
                 return None;
             }
             let checks = &image.device.shared().in_place;
-            let verdict = |class, access| checks.verdict(class, access);
+            let verdict = |class, access, rows| checks.verdict(class, access, rows);
             let policy = image.device.compile_device().policy().host_page_textures;
-            let pages = (pending.class, texels.texel_bytes());
+            let pages = (pending.class, pending.rows, texels.texel_bytes());
             if texels.buffer.detached() || texels.buffer.copied() {
                 return None;
             }
@@ -594,8 +596,8 @@ impl Texture {
             // As the texture would have taken it as it was made (`Device::storage_over_buffer`).
             let storable = InPlaceAccess::Renders.takes(pending.usage)
                 && !InPlaceAccess::Writes.takes(pending.usage)
-                && in_place::STORED_TEXEL_BYTES.contains(&pages.1)
-                && verdict(pending.class, InPlaceAccess::Writes) == Verdict::Passed;
+                && in_place::STORED_TEXEL_BYTES.contains(&pages.2)
+                && verdict(pending.class, InPlaceAccess::Writes, pending.rows) == Verdict::Passed;
             Some(Wanted::Move {
                 texels: Arc::clone(texels),
                 pending: pending.clone(),
@@ -764,6 +766,7 @@ impl Texture {
         let wait = MoveWait {
             texture: self.downgrade(),
             class: pending.class,
+            rows: pending.rows,
             usage: pending.usage,
             texel: texels.texel_bytes(),
         };

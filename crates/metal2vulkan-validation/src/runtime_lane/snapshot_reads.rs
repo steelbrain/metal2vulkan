@@ -69,6 +69,7 @@
 use super::attachment_reads::{corners, floats, function, red, SIDE};
 use super::degrade_notices::on_device_with;
 use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
+use super::in_place_rows;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
@@ -238,9 +239,10 @@ fn readers_over(
     let alias = counts.feedback_loop_alias_images > made.feedback_loop_alias_images;
     let shadow = counts.feedback_loop_shadow_images > made.feedback_loop_shadow_images;
     // An image in place over host pages takes the storage usage the snapshot's fetch reads
-    // through where the device's check passed for a shader's writes over such pages.
-    let writes =
-        (device.in_place_check_report().iter()).any(|line| line == "Pointer writes: Passed");
+    // through where the device's check passed for a shader's writes over such pages, for texels
+    // that lie in lines as the surface's do: its rows one after another from its pages' start.
+    let on_lines = in_place_rows::on_lines(device, 0, row, row, SIDE);
+    let writes = in_place_rows::passed(device, "Pointer writes", on_lines);
     let made = Made {
         feedback: alias || shadow,
         fetched: shadow || (alias && (!surface || writes)),

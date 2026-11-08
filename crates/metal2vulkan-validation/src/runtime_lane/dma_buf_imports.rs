@@ -28,6 +28,7 @@ use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{
     counting, gpu_fill, gpu_read, host_page, not_importable, on_device, run, Mapping,
 };
+use super::in_place_rows;
 use super::in_place_textures::refused;
 use super::keep_alives::eventually;
 use super::no_copy_heaps::{
@@ -1615,11 +1616,9 @@ fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_d
         assert!(device.settle_in_place_checks(CHECK_WAIT));
         let report = device.in_place_check_report();
         eprintln!("{TEST} on {}: the check: {report:?}", device.name());
-        let passed = |class: &str| {
-            report
-                .iter()
-                .any(|line| *line == format!("{class}: Passed"))
-        };
+        // Whether the check passed for a class, for texels that share no line with bytes beside
+        // them where `on_lines`, else for those that share one.
+        let passed = |class: &str, on_lines: bool| in_place_rows::passed(&device, class, on_lines);
         let imports = imports_dma_buf(&device);
         let queue = device.new_command_queue().unwrap();
         let page = host_page();
@@ -1646,6 +1645,8 @@ fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_d
         for (what, ram, view, (width, height, pitch), one) in [one_run, scattered] {
             let calls = Calls::default();
             let buffer = no_copy(&device, &view, 0, view.len, ram.source(&view, &calls)).unwrap();
+            let first = buffer.contents().map_or(0, |at| at.as_ptr() as u64);
+            let on_lines = in_place_rows::on_lines(&device, first, 4 * width, pitch as u64, height);
             let before = device.work_counts();
             let texture = buffer
                 .new_texture(
@@ -1678,7 +1679,7 @@ fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_d
             match imports {
                 Some(true) => {
                     assert_eq!(over_dma_buf, in_place, "{TEST}: {what}: over a dma-buf");
-                    if passed("DmaBuf") {
+                    if passed("DmaBuf", on_lines) {
                         assert_eq!((aliased, source), (one, u64::from(!one)), "{TEST}: {what}");
                     }
                 }
@@ -1689,7 +1690,7 @@ fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_d
                         calls.is_empty(),
                         "{TEST}: {what}: the source's calls {calls:?}"
                     );
-                    if passed("Pointer") {
+                    if passed("Pointer", on_lines) {
                         assert_eq!(
                             in_place + refused(&before, &after),
                             1,

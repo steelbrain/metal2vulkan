@@ -56,6 +56,7 @@ use super::degradation::Degradation;
 use super::device::lock;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem, RuntimeGap};
 use super::exit_guard;
+use super::in_place::RowEnds;
 use super::key_hash::KeyMap;
 use super::linear_plan::{
     apart_from_plane, is_linear, plan_buffer_texture, plane_rows_share_bytes, BufferFacts,
@@ -1406,6 +1407,17 @@ impl Texels {
     /// The bytes of one texel.
     pub(super) fn texel_bytes(&self) -> u64 {
         self.texel_bytes
+    }
+
+    /// How the texels lie in the device's lines of memory of `line` bytes
+    /// (`in_place::RowEnds::of`): from their address in the buffer's bytes and where the GPU's
+    /// commands find them (`layout`). A buffer whose bytes the CPU does not address shares a line
+    /// as far as anything shows.
+    pub(super) fn rows(&self, line: u64) -> RowEnds {
+        match self.buffer.contents() {
+            Some(at) => RowEnds::of(at.as_ptr().addr() as u64, &self.layout, line),
+            None => RowEnds::InLines,
+        }
     }
 
     /// The texture's resource options (the `options` field), its hazard tracking mode resolved.

@@ -2266,7 +2266,10 @@ impl Device {
             lost,
             textures,
             shader_cache,
-            in_place: crate::in_place::InPlaceChecks::new(fail_in_place_check),
+            in_place: crate::in_place::InPlaceChecks::new(
+                fail_in_place_check,
+                limits.non_coherent_atom_size,
+            ),
             submit_checks: Arc::new(crate::submit_check::SubmitChecks::new()),
             host_import,
             #[cfg(unix)]

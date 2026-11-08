@@ -7954,6 +7954,7 @@ method	metal2vulkan-runtime::Device::heap_buffer_size_and_align	pub fn heap_buff
 method	metal2vulkan-runtime::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
 method	metal2vulkan-runtime::Device::host_range_remapped	pub fn host_range_remapped(&self, bytes: NonNull<u8>, length: u64)
 method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports_shared_host_pointers(&self) -> Result<bool, Error>
+method	metal2vulkan-runtime::Device::in_place_check_line	pub fn in_place_check_line(&self) -> u64
 method	metal2vulkan-runtime::Device::in_place_check_report	pub fn in_place_check_report(&self) -> Vec<String>
 method	metal2vulkan-runtime::Device::in_place_check_took	pub fn in_place_check_took(&self) -> Option<Duration>
 method	metal2vulkan-runtime::Device::metal_heap_texture_size_and_align	pub fn metal_heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<Option<SizeAndAlign>, Error>

@@ -99,7 +99,7 @@
 use super::degrade_notices::{counts, on_device};
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, Seen, GUEST_PAGE};
-use super::in_place_textures::passed;
+use super::in_place_rows;
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
 use super::no_copy_textures::{blending, floats, rects_beside, staged};
 use super::rebinds::rebind;
@@ -276,7 +276,9 @@ fn renders_in_place(device: &Device) -> bool {
         device.name(),
         device.in_place_check_report()
     );
-    passed(device, "Pointer renders")
+    // The surface's rows lie one after another from the start of its pages.
+    let on_lines = in_place_rows::on_lines(device, 0, W * TEXEL, W * TEXEL, H);
+    in_place_rows::passed(device, "Pointer renders", on_lines)
 }
 
 /// Whether `texture`'s texels are its own image's: aliased, not a shadow.
