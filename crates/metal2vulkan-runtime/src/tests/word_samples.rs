@@ -91,6 +91,7 @@ fn route(
         storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
         depth_images: DepthImageFacts::of(&enabled.driver_facts()),
         linear_attachments: false,
+        any_views: &crate::image_plan::AnyViews::default(),
     };
     let sampled = Sampled::of(stem);
     let what = format!("{stem}: {pf:?} x{samples} {usage:?}");

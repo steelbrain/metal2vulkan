@@ -141,6 +141,7 @@ fn answer(
         storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
         depth_images: DepthImageFacts::of(&enabled.driver_facts()),
         linear_attachments: false,
+        any_views: &crate::image_plan::AnyViews::default(),
     };
     let sampled = Sampled::of(stem);
     let limits = |plan: &ImagePlan| stated_limits(&enabled, &sampled, plan);
@@ -307,6 +308,7 @@ fn the_answer_needs_four_samples_and_every_count_the_textures_take() {
         storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
         depth_images: DepthImageFacts::of(&enabled.driver_facts()),
         linear_attachments: false,
+        any_views: &crate::image_plan::AnyViews::default(),
     };
     let sampled = Sampled::of(&stem);
     let limits = |plan: &ImagePlan| stated_limits(&enabled, &sampled, plan);

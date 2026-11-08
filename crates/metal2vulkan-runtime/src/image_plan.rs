@@ -81,6 +81,7 @@ use metal2vulkan::vk::{
     ImageUsageFlags, NumericType, SampleCountFlags,
 };
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 /// The device facts an image plan reads beyond the profile's format tables: the raw format
 /// properties (for transfer and blit bits), whether storage images may be multisampled, and what
@@ -97,6 +98,9 @@ pub(super) struct ImageFacts<'a> {
     /// image of a format whose linear tiling has `LINEAR_COLOR_ATTACHMENT_NV` renders, where
     /// every color attachment of the render pass instance is linear (`linear_attachment.rs`).
     pub(super) linear_attachments: bool,
+    /// The formats the runtime views a texture of any pixel format as on `profile`
+    /// ([`AnyViews`]), kept for the device's life.
+    pub(super) any_views: &'a AnyViews,
 }
 
 /// What a device's driver is measured to keep in a `D32_SFLOAT` image, of the `float`s Metal's
@@ -1036,12 +1040,21 @@ fn word_samples(
     })
 }
 
+/// The Vulkan usages [`view_formats`] reads: the views it lists follow these alone.
+pub(super) const VIEWED_USAGES: [ImageUsageFlags; 4] = [
+    ImageUsageFlags::SAMPLED,
+    ImageUsageFlags::STORAGE,
+    ImageUsageFlags::COLOR_ATTACHMENT,
+    ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+];
+
 /// The formats of the views the runtime makes of a texture of `pf` for the Vulkan usages in
-/// `usage` on `profile`: its sampled representation, its storage view (the alias, or the direct
-/// format), and its attachment format (the direct format, or the view of its word where the device
-/// renders that and not the format, `WordAttachment`). A view the device cannot make for `pf`
-/// is left out: a format list naming a format the device lacks is one some drivers make no image
-/// of (ANV, for an `RG8Unorm` render target listing its twin's `R8G8_SRGB`).
+/// `usage` on `profile` (of [`VIEWED_USAGES`], the only ones it reads): its sampled
+/// representation, its storage view (the alias, or the direct format), and its attachment format
+/// (the direct format, or the view of its word where the device renders that and not the format,
+/// `WordAttachment`). A view the device cannot make for `pf` is left out: a format list naming a
+/// format the device lacks is one some drivers make no image of (ANV, for an `RG8Unorm` render
+/// target listing its twin's `R8G8_SRGB`).
 pub(super) fn view_formats(
     pf: PixelFormat,
     usage: ImageUsageFlags,
@@ -1071,6 +1084,43 @@ pub(super) fn view_formats(
         }
     }
     out
+}
+
+/// Every format the runtime views a texture of any pixel format as ([`view_formats`] of each of
+/// `PixelFormat::ALL`) on a device's profile, by the usages of [`VIEWED_USAGES`] asked for:
+/// worked out at the first ask of each set of them and kept, in `Format` order, for the device's
+/// life (its `TextureState`). An image whose views may take any compatible format (`MUTABLE_FORMAT`
+/// with no list) is checked against these at each making (`linear_plan::viewed_formats`): a
+/// `Shared` heap's texture of `allowGPUOptimizedContents` off on a device whose optimal images
+/// take no memory of such a heap asks at every making, as its linear image is checked.
+///
+/// Every ask passes the profile its device plans images from, the one `TextureState::facts` is
+/// given.
+#[derive(Debug, Default)]
+pub(super) struct AnyViews([OnceLock<Box<[Format]>>; 1 << VIEWED_USAGES.len()]);
+
+impl AnyViews {
+    /// The formats the runtime views a texture of any pixel format as, for `usage`'s bits of
+    /// [`VIEWED_USAGES`], on `profile`.
+    pub(super) fn of(&self, usage: ImageUsageFlags, profile: &DeviceProfile) -> &[Format] {
+        let index = VIEWED_USAGES
+            .iter()
+            .enumerate()
+            .filter(|&(_, &bit)| usage.contains(bit))
+            .fold(0, |index, (n, _)| index | 1 << n);
+        self.0[index].get_or_init(|| {
+            let usage = VIEWED_USAGES
+                .iter()
+                .fold(ImageUsageFlags::empty(), |asked, &bit| {
+                    asked | usage.intersection(bit)
+                });
+            let formats: BTreeSet<Format> = PixelFormat::ALL
+                .iter()
+                .flat_map(|&pf| view_formats(pf, usage, profile))
+                .collect();
+            formats.into_iter().collect()
+        })
+    }
 }
 
 /// Whether an image of `plan` takes the views the runtime makes of a texture of `pf` on

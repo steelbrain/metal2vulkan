@@ -287,7 +287,7 @@
 
 use super::chroma_pairs::is_four_two_two;
 use super::copy_plan::block_extent;
-use super::image_plan::{block_family, compatible, view_formats, ImageFacts, ImagePlan};
+use super::image_plan::{block_family, compatible, ImageFacts, ImagePlan};
 use super::pixel_format_info::pixel_format_info;
 use super::texture_descriptor::TextureLayout;
 use super::two_planes;
@@ -1184,17 +1184,16 @@ pub(super) fn tiling_lack(
 /// The formats a plan's image may be viewed as: its list, or, where its views may take any
 /// format (a texture of `pixelFormatView` usage: `MUTABLE_FORMAT` without a list), each format
 /// the runtime views a texture of a pixel format as for the plan's usages (`view_formats`) that
-/// is compatible with the image's, of every pixel format.
+/// is compatible with the image's, of every pixel format: the device's own table of those
+/// (`ImageFacts::any_views`), in `Format` order.
 pub(super) fn viewed_formats(plan: &ImagePlan, facts: &ImageFacts) -> Vec<Format> {
     if !plan.flags.contains(ImageCreateFlags::MUTABLE_FORMAT) || !plan.view_formats.is_empty() {
         return plan.view_formats.clone();
     }
-    let formats: std::collections::BTreeSet<Format> = PixelFormat::ALL
-        .iter()
-        .flat_map(|&pf| view_formats(pf, plan.usage, facts.profile))
+    (facts.any_views.of(plan.usage, facts.profile).iter())
+        .copied()
         .filter(|&format| format != plan.format && compatible(plan.format, format, true))
-        .collect();
-    formats.into_iter().collect()
+        .collect()
 }
 
 /// Whether a linear image of `plan` fits `limits`, the device's image limits for it

@@ -79,7 +79,7 @@ use super::heap::{Heap, HeapProblem, HeapType};
 use super::heap_sets;
 use super::host_bytes::HostBytes;
 use super::image_plan::{
-    check_image_limits, plan_image, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
+    check_image_limits, plan_image, AnyViews, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
 };
 use super::in_place::{self, PagesClass, Refusal, ShadowCause};
 use super::key_hash::KeyMap;
@@ -204,6 +204,8 @@ pub(super) struct TextureState {
     depth_images: DepthImageFacts,
     /// `ImageFacts::linear_attachments`.
     linear_attachments: bool,
+    /// `ImageFacts::any_views`.
+    any_views: AnyViews,
     /// How the runtime places an image in a memory block of its own.
     placement: ImagePlacement,
     /// The neutral images and samplers bindings take where nothing is bound (`neutral.rs`).
@@ -264,6 +266,7 @@ impl TextureState {
         TextureState {
             formats: description.formats.clone(),
             linear_attachments,
+            any_views: AnyViews::default(),
             storage_multisample: description.has(VkFeature::ShaderStorageImageMultisample),
             depth_images: DepthImageFacts::of(&description.driver_facts()),
             placement: ImagePlacement::new(
@@ -305,6 +308,7 @@ impl TextureState {
             storage_multisample: self.storage_multisample,
             depth_images: self.depth_images,
             linear_attachments: self.linear_attachments,
+            any_views: &self.any_views,
         }
     }
 

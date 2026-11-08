@@ -7,7 +7,8 @@ use super::super::copy_plan::{copy_unit, BlitOption, ImageRegion};
 use super::super::driver_defects;
 use super::super::image_plan::{
     block_family, check_image_limits, compatible, cube_compatible, holds_srgb_twin, plan_image,
-    sample_count, srgb_twin, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
+    sample_count, srgb_twin, view_formats, AnyViews, DepthImageFacts, ImageFacts, ImagePlan,
+    ImageRefusal, VIEWED_USAGES,
 };
 use super::super::memory::MemoryClass;
 use super::super::pvrtc::{holds_blocks, image_buffer_region, image_region, CARRIERS};
@@ -31,6 +32,7 @@ use metal2vulkan::vk::{
     DriverId, Format, FormatFeatureFlags2, ImageAspectFlags, ImageCreateFlags, ImageType,
     ImageUsageFlags, SampleCountFlags,
 };
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Every committed profile's description and compile device (`validation/profiles/`).
@@ -60,6 +62,8 @@ pub(super) fn facts<'a>(desc: &'a DeviceDescription, device: &'a Device) -> Imag
         storage_multisample: desc.has(VkFeature::ShaderStorageImageMultisample),
         depth_images: DepthImageFacts::of(&desc.driver_facts()),
         linear_attachments: false,
+        // The facts outlive the call: each call's table of `device`'s views, kept for the test.
+        any_views: Box::leak(Box::default()),
     }
 }
 
@@ -2192,5 +2196,43 @@ fn astc_hdr_textures_plan_natively_or_in_a_carrier() {
             14,
             "{profile}: {carried:?}"
         );
+    }
+}
+
+/// A device's table of every format the runtime views a texture of any pixel format as
+/// (`AnyViews`, which a plan whose views take any compatible format is checked against at each
+/// making): each set of the usages of `VIEWED_USAGES` is worked out once and kept, and lists
+/// what each pixel format's views list for it (`view_formats`), which no other usage changes.
+#[test]
+fn a_device_works_out_the_formats_of_any_view_once() {
+    let others = ImageUsageFlags::TRANSFER_SRC
+        | ImageUsageFlags::TRANSFER_DST
+        | ImageUsageFlags::INPUT_ATTACHMENT
+        | ImageUsageFlags::TRANSIENT_ATTACHMENT;
+    for (name, _, device) in committed() {
+        let profile = device.profile();
+        let table = AnyViews::default();
+        for set in 0..1usize << VIEWED_USAGES.len() {
+            let usage = (VIEWED_USAGES.iter().enumerate())
+                .filter(|&(n, _)| set & 1 << n != 0)
+                .fold(ImageUsageFlags::empty(), |usage, (_, &bit)| usage | bit);
+            let mut each = BTreeSet::new();
+            for &pf in PixelFormat::ALL {
+                let views = view_formats(pf, usage, profile);
+                assert_eq!(
+                    view_formats(pf, usage | others, profile),
+                    views,
+                    "{name}: {pf:?} for {usage:?}"
+                );
+                each.extend(views);
+            }
+            let first = table.of(usage | others, profile);
+            let each: Vec<Format> = each.into_iter().collect();
+            assert_eq!(first, each.as_slice(), "{name}: {usage:?}");
+            assert!(
+                std::ptr::eq(first, table.of(usage, profile)),
+                "{name}: the views of {usage:?} were worked out again"
+            );
+        }
     }
 }
