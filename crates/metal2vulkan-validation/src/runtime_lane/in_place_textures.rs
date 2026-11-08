@@ -1668,3 +1668,178 @@ fn pooled_pitched_costs() {
     messages.take_notices();
     layer_reported_nothing_at_all(&messages);
 }
+
+/// The device caches of [`pooled_pitched_costs`] made over buffers that declare their padding
+/// unobserved on `device`: each buffer and its texture, that renders and reads.
+fn device_caches(device: &Device) -> Vec<(Buffer, Texture)> {
+    (DEVICE_CACHES.iter())
+        .flat_map(|&(w, h, bpr, count)| (0..count).map(move |_| (w, h, bpr)))
+        .map(|(w, h, bpr)| {
+            let descriptor =
+                BufferDescriptor::new(bpr * h, ResourceOptions::private(), BufferContents::Zero)
+                    .with_padding_unobserved();
+            let buffer = device.new_buffer_with_descriptor(descriptor).unwrap();
+            let texture = rendered(&buffer, PixelFormat::BGRA8Unorm, (w, h, bpr));
+            (buffer, texture)
+        })
+        .collect()
+}
+
+/// [`DEVICE_CACHES`] over buffers that declare their padding unobserved, made as a guest's
+/// WindowServer makes them, before the device's check of its pooled memory answered (a device
+/// whose check has not run), under the validation layer: each is a shadow
+/// (`shadowed_textures`), none an image at its pitch (`pooled_pitched_images`), and one command
+/// buffer clears each to a value of its own. Once the check answered, the caches made again take
+/// the image at their pitch where the device makes it and its check passed
+/// (`pooled_pitched_images`), and the next command buffer, which blits each early cache into a
+/// buffer and is committed while no other is open, moves every early one whose shape takes it
+/// to it (`pooled_textures_moved_in_place`, one per cache made after that took it, counted at its
+/// pitch then), its shadow's image freed once that command buffer completed
+/// (`pooled_texture_shadows_freed_after_move`); every blit reads its cache's clear. Printed
+/// (`POOLED-PITCHED-MOVE`): the caches in place at their pitch and the shadows, before the check
+/// answered and after the move, and the check's time.
+#[test]
+fn device_caches_made_before_the_check_move_to_their_pitch_once_it_passes() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let mut lapses = Vec::new();
+    {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), in_place).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let start = device.work_counts();
+        let early = device_caches(&device);
+        let made = device.work_counts();
+        let pitched_early = made.pooled_pitched_images - start.pooled_pitched_images;
+        let shadows_early = made.shadowed_textures - start.shadowed_textures;
+        // Each cache cleared to a value of its own (red 2i / 255 of the i-th, read within one of
+        // 2i: the device's own conversion), before the check.
+        let command_buffer = queue.command_buffer().unwrap();
+        for (i, (_, texture)) in early.iter().enumerate() {
+            let mut pass = RenderPassDescriptor::new();
+            let color = &mut pass.color_attachments[0];
+            color.texture = Some(texture.clone());
+            color.load_action = LoadAction::Clear;
+            color.clear_color = ClearColor::new((2 * i) as f64 / 255.0, 0.0, 1.0, 1.0);
+            color.store_action = StoreAction::Store;
+            let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+            encoder.end_encoding().unwrap();
+        }
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let answered = device.in_place_check_took();
+        settled(&device);
+        let before_late = device.work_counts();
+        let late = device_caches(&device);
+        let after_late = device.work_counts();
+        let pitched_late = after_late.pooled_pitched_images - before_late.pooled_pitched_images;
+        // The next command buffer reads every early cache and takes the move.
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let reads: Vec<Buffer> = (early.iter())
+            .map(|(_, texture)| {
+                let (w, h) = (texture.width(), texture.height());
+                let out = device
+                    .new_buffer(w * h * 4, ResourceOptions::shared())
+                    .unwrap();
+                blit.copy_from_texture_to_buffer(
+                    texture,
+                    0,
+                    0,
+                    Origin::new(0, 0, 0),
+                    Size::new(w, h, 1),
+                    &out,
+                    0,
+                    w * 4,
+                    w * h * 4,
+                    BlitOption::None,
+                )
+                .unwrap();
+                out
+            })
+            .collect();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        drop(command_buffer);
+        let after = device.work_counts();
+        let moved = after.pooled_textures_moved_in_place - start.pooled_textures_moved_in_place;
+        // The moves are counted at their pitch as they move in, at whichever commit took them.
+        let counted = after.pooled_pitched_images
+            - start.pooled_pitched_images
+            - pitched_early
+            - pitched_late;
+        let started = std::time::Instant::now();
+        let freed = loop {
+            let freed = device.work_counts().pooled_texture_shadows_freed_after_move
+                - start.pooled_texture_shadows_freed_after_move;
+            if freed >= moved || started.elapsed() > WAIT {
+                break freed;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        for (i, ((_, texture), out)) in early.iter().zip(&reads).enumerate() {
+            let length = (texture.width() * texture.height() * 4) as usize;
+            // SAFETY: the buffer's mapped bytes, which no command writes any longer.
+            let read =
+                unsafe { std::slice::from_raw_parts(out.contents().unwrap().as_ptr(), length) };
+            let red = (2 * i) as u8;
+            let cleared =
+                |t: &[u8]| t[0] == 0xff && t[1] == 0 && t[2].abs_diff(red) <= 1 && t[3] == 0xff;
+            if !read.chunks(4).all(cleared) {
+                lapses.push(format!(
+                    "cache {i} ({}x{}): a blit after the check read other than its clear",
+                    texture.width(),
+                    texture.height()
+                ));
+            }
+        }
+        // In place (`vk_image` answers one): an image at its pitch, or the device's own linear
+        // image where it lays the rows out at their pitch, which takes no verdict.
+        let in_place = |caches: &[(Buffer, Texture)]| {
+            (caches.iter())
+                .filter(|(_, texture)| path_of(texture) == "in place")
+                .count()
+        };
+        let (in_place, in_place_late) = (in_place(&early), in_place(&late));
+        eprintln!(
+            "POOLED-PITCHED-MOVE on {}: {} device caches made before the check answered ({}): \
+             {pitched_early} in place at their pitch, {shadows_early} shadows; made after it: \
+             {pitched_late} in place at their pitch ({in_place_late} in place); the early ones \
+             after the next commit: {moved} moved ({counted} counted at their pitch, {freed} \
+             shadows freed), {in_place} in place, {} shadows",
+            device.name(),
+            early.len(),
+            match answered {
+                Some(took) => format!("it had answered, in {took:?}"),
+                None => format!("it took {:?}", device.in_place_check_took()),
+            },
+            early.len() - in_place,
+        );
+        if answered.is_none() && (pitched_early, shadows_early) != (0, early.len() as u64) {
+            lapses.push(format!(
+                "before the check answered: {pitched_early} at their pitch, {shadows_early} \
+                 shadows, where all {} are shadows",
+                early.len()
+            ));
+        }
+        if (moved, counted, freed) != (pitched_late - pitched_early, moved, moved) {
+            lapses.push(format!(
+                "after the next commit: {moved} moved, {counted} counted, {freed} shadows freed, \
+                 where {pitched_late} made after the check take the image at their pitch and \
+                 {pitched_early} made before it did"
+            ));
+        }
+        if in_place != in_place_late {
+            lapses.push(format!(
+                "after the move: {in_place} of the early caches in place, where {in_place_late} \
+                 made after the check are"
+            ));
+        }
+        drop((early, late, reads));
+        messages.take_notices();
+    }
+    layer_reported_nothing_at_all(&messages);
+    assert!(lapses.is_empty(), "{}", lapses.join("\n"));
+}

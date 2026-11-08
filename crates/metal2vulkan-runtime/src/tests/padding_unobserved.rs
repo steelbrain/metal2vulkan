@@ -23,6 +23,16 @@
 //!   `Shared` buffer it never answers `Shadow(LinearCost)`, and takes the pitched image where one
 //!   inside the bound took one and the device's check of its access over its pooled memory
 //!   passed.
+//! - **Made before the check answered.** Such a texture of the guests' most common cache shape
+//!   (172x67 at a 704-byte pitch), made on a device whose check has not run, is a shadow made
+//!   before its pooled verdict where the query answered `Pending`; a pass's clear before the
+//!   check reaches the buffer's rows through it. Once the check settled, the next command buffer
+//!   (a blit that reads it, committed while no other is open) moves it to the image a texture
+//!   made then takes, exactly where that one is a `DRM_FORMAT_MOD_LINEAR` image at the pitch
+//!   (`WorkCounts::pooled_textures_moved_in_place`, `pooled_pitched_images`), its shadow's image
+//!   freed once that command buffer completed (`pooled_texture_shadows_freed_after_move`); the
+//!   blit reads the clear, a later one reads it with no shadow copy, and a later clear reaches
+//!   the buffer's rows, the bytes after the last row keeping the CPU's.
 //! - **Undeclared.** The same texture over a buffer made without the declaration answers
 //!   `Shadow(BytesBetweenRows)` and is a shadow (`shadowed_textures`), at every pitch.
 //! - **Over the caller's memory**, the declaration is refused: `Invalid`
@@ -476,6 +486,198 @@ fn a_texture_past_the_pooled_bound_is_a_shadow_of_its_linear_cost_over_private_m
             );
         }
     }
+}
+
+/// The guests' most common device cache's shape, which the Iris Xe's linear image lays out
+/// tight (688 bytes of texels a row) and so takes an image at its pitch: (width, height, pitch).
+const MOVED: (u64, u64, u64) = (172, 67, 704);
+
+/// The bytes of `buffer`'s first `length`, written by the CPU and read back.
+///
+/// # Safety
+///
+/// No command uses them while the slice lives.
+unsafe fn buffer_bytes(buffer: &Buffer, length: u64) -> &mut [u8] {
+    // SAFETY: the caller's contract; the buffer is mapped and at least `length` bytes long.
+    unsafe { std::slice::from_raw_parts_mut(buffer.contents().unwrap().as_ptr(), length as usize) }
+}
+
+/// A pass that clears `texture` to `color` and stores it, committed on `queue`, completed.
+fn cleared(queue: &crate::CommandQueue, texture: &Texture, color: crate::ClearColor) {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut pass = crate::RenderPassDescriptor::new();
+    let attachment = &mut pass.color_attachments[0];
+    attachment.texture = Some(texture.clone());
+    attachment.load_action = crate::LoadAction::Clear;
+    attachment.clear_color = color;
+    attachment.store_action = crate::StoreAction::Store;
+    let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// Whether every texel of `bytes`' rows (`width` by `height` at `pitch`) is `texel`.
+fn rows_hold(bytes: &[u8], (width, height, pitch): (u64, u64, u64), texel: [u8; 4]) -> bool {
+    (0..height).all(|y| {
+        let at = (y * pitch) as usize;
+        bytes[at..at + (width * 4) as usize]
+            .chunks(4)
+            .all(|t| t == texel)
+    })
+}
+
+#[test]
+fn a_rendered_texture_made_before_the_pooled_check_moves_to_its_pitched_image_once_it_passes() {
+    let scratch = Scratch::new("padding-unobserved-move");
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let (width, height, pitch) = MOVED;
+    let row = width * 4;
+    let length = pitch * height + 4096;
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::shared();
+    let buffer = own_buffer(&device, length, true);
+    // SAFETY: no command uses the buffer's bytes while they are written or read here: each
+    // command buffer below completed before.
+    let bytes = unsafe { buffer_bytes(&buffer, length) };
+    for (at, byte) in bytes.iter_mut().enumerate() {
+        *byte = texel_byte(at as u64 % pitch, at as u64 / pitch);
+    }
+    let past = bytes[(pitch * height) as usize..].to_vec();
+    // The query starts the check, which has not run on this device: `Pending` wherever the
+    // pooled class is asked.
+    let answer = buffer.texture_placement(&descriptor, 0, pitch).unwrap();
+    let before = device.work_counts();
+    let early = buffer.new_texture(&descriptor, 0, pitch).unwrap();
+    let made = device.work_counts();
+    let shadow = early.shadow().is_some();
+    let pending = answer == TexturePlacement::Pending && shadow;
+    assert_eq!(
+        made.pooled_pitched_images, before.pooled_pitched_images,
+        "made before the check: no image at the pitch"
+    );
+    // A pass's clear before the check reaches the buffer's rows.
+    let blue = crate::ClearColor::new(0.0, 0.0, 1.0, 1.0);
+    cleared(&queue, &early, blue);
+    let blue = [0xff, 0, 0, 0xff];
+    assert!(
+        rows_hold(bytes, MOVED, blue),
+        "the clear before the check is in the rows"
+    );
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "the check settles"
+    );
+    // A texture made now of the same shape, over another buffer: the image the first moves to.
+    let other = own_buffer(&device, length, true);
+    let late_before = device.work_counts();
+    let late = other.new_texture(&descriptor, 0, pitch).unwrap();
+    let late_after = device.work_counts();
+    let late_pitched = late.aliases_buffer()
+        && late_after.pooled_pitched_images - late_before.pooled_pitched_images == 1;
+    // The next command buffer, committed while no other is open, takes the move.
+    let read = |texture: &Texture| -> Vec<u8> {
+        let out = device
+            .new_buffer(row * height, ResourceOptions::shared())
+            .unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_texture_to_buffer(
+            texture,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(width, height, 1),
+            &out,
+            0,
+            row,
+            row * height,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        // SAFETY: the read buffer's mapped bytes, which no command uses now.
+        unsafe { buffer_bytes(&out, row * height) }.to_vec()
+    };
+    let at_move = read(&early);
+    let after = device.work_counts();
+    let moved = after.pooled_textures_moved_in_place - before.pooled_textures_moved_in_place;
+    let counted = after.pooled_pitched_images - late_after.pooled_pitched_images;
+    let expected = u64::from(pending && late_pitched);
+    eprintln!(
+        "POOLED-MOVE on {}: {width}x{height} BGRA8Unorm at {pitch} rendered: answered {answer:?} \
+         before the check, a shadow {shadow}; one made after it {}; after the next commit: \
+         moved {moved}, counted at its pitch {counted}",
+        device.name(),
+        match late_pitched {
+            true => "a DRM_FORMAT_MOD_LINEAR image at the pitch",
+            false => "no image at the pitch",
+        },
+    );
+    assert_eq!(
+        (moved, counted),
+        (expected, expected),
+        "made before the check ({answer:?}): it moves exactly where one made after takes the \
+         image at the pitch ({late_pitched})"
+    );
+    // Moved, an image over the buffer; else as it was made.
+    let aliases = match pending {
+        true => expected == 1,
+        false => !shadow,
+    };
+    assert_eq!(
+        early.aliases_buffer(),
+        aliases,
+        "after the next commit: an image over the buffer"
+    );
+    assert!(
+        rows_hold(&at_move, (width, height, row), blue),
+        "the read at the move reads the clear"
+    );
+    // Its shadow's image goes once the command buffer that took the move completed, on the
+    // thread that lets that command buffer go.
+    let started = std::time::Instant::now();
+    let freed = loop {
+        let counts = device.work_counts();
+        let freed = counts.pooled_texture_shadows_freed_after_move
+            - before.pooled_texture_shadows_freed_after_move;
+        if freed >= moved || started.elapsed() > WAIT {
+            break freed;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert_eq!(freed, moved, "a moved texture's shadow image goes");
+    // After the move: a read with no shadow copy, and a clear in the buffer's rows.
+    let before = device.work_counts();
+    let later = read(&early);
+    let copies = device.work_counts().shadow_copies - before.shadow_copies;
+    assert!(
+        rows_hold(&later, (width, height, row), blue),
+        "a later read reads the clear"
+    );
+    assert!(
+        moved == 0 || copies == 0,
+        "in place, a read took {copies} shadow copies"
+    );
+    let green = crate::ClearColor::new(0.0, 1.0, 0.0, 1.0);
+    cleared(&queue, &early, green);
+    assert!(
+        rows_hold(bytes, MOVED, [0, 0xff, 0, 0xff]),
+        "a later clear is in the rows"
+    );
+    assert_eq!(
+        bytes[(pitch * height) as usize..],
+        past[..],
+        "the bytes after the last row keep the CPU's"
+    );
+    drop((early, late));
 }
 
 #[test]
