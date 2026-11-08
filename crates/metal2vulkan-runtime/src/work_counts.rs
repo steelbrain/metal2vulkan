@@ -609,6 +609,7 @@ struct CommandCounters {
     draws_unkept_other: AtomicU64,
     draws_unlike_kept: AtomicU64,
     draws_rebind_stopped: AtomicU64,
+    draws_restated: AtomicU64,
 }
 
 /// What kept a direct draw that recorded from being kept to draw again
@@ -1029,6 +1030,12 @@ impl Counting<'_> {
     /// (`WorkCounts::draws_rebind_stopped`).
     pub(crate) fn draw_rebind_stopped(&self) {
         self.0.add(|counts| &counts.draws_rebind_stopped, 1);
+    }
+
+    /// A render draw rebound after calls that set its encoder's render state
+    /// (`WorkCounts::draws_restated`).
+    pub(crate) fn draw_restated(&self) {
+        self.0.add(|counts| &counts.draws_restated, 1);
     }
 
     /// A render draw rebound that was moved (`WorkCounts::draws_moved`).
@@ -5878,6 +5885,12 @@ pub struct WorkCounts {
     /// instance's gathered uses, so the draw notes, adds and gathers none of them, comparing none
     /// (`uses_noted_covered` counts none of them).
     pub draws_moved_inside: u64,
+    /// Of `draws_rebound`, those after calls that set the encoder's render state (its viewports,
+    /// scissor rectangles, cull mode, winding, depth/stencil state, stencil references, depth
+    /// bias, depth clip mode, fill mode or blend color): each derived again what that state
+    /// decides of it, its settings and draw state, and recorded the dynamic states it sets that its
+    /// record held otherwise (`render/draw_again/restated.rs`).
+    pub draws_restated: u64,
     /// Render encoders' direct draws that recorded a Vulkan draw and kept nothing to draw again
     /// or rebind (`render/draw_again.rs`), so their encoder's next draw takes every step; with,
     /// in the counts below, what kept each from being kept, a draw counted in every group it met
@@ -7652,6 +7665,7 @@ impl Device {
             draws_rebound: commands(|counts| &counts.draws_rebound),
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
+            draws_restated: commands(|counts| &counts.draws_restated),
             draws_unkept: commands(|counts| &counts.draws_unkept),
             draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
             draws_unkept_barrier: commands(|counts| &counts.draws_unkept_barrier),

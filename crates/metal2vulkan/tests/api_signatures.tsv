@@ -2686,6 +2686,7 @@ field	metal2vulkan-runtime::WorkCounts.draws_moved_inside	pub draws_moved_inside
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped	pub draws_rebind_stopped: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebound	pub draws_rebound: u64
+field	metal2vulkan-runtime::WorkCounts.draws_restated	pub draws_restated: u64
 field	metal2vulkan-runtime::WorkCounts.draws_settled	pub draws_settled: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept	pub draws_unkept: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_barrier	pub draws_unkept_barrier: u64

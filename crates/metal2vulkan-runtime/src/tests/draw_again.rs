@@ -1429,6 +1429,7 @@ fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
     let rebound_count = |counts: &WorkCounts| counts.draws_rebound;
     let states_recorded = |counts: &WorkCounts| counts.draw_states_recorded;
     assert_eq!(rebound.counted(rebound_count), drawn_alone(DRAWS - 2));
+    assert!(rebound.counted(|counts| counts.draws_restated) > 0);
     assert_eq!(every.counted(rebound_count), 0);
     assert_eq!(rebound.commands, every.commands);
     assert_eq!(rebound.commands["cmd_draw_indexed"], DRAWS);

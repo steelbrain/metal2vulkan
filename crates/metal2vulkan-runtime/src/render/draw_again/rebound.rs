@@ -967,6 +967,9 @@ impl RenderLowering {
         if rebinding.moved {
             counts.draw_moved();
         }
+        if restated {
+            counts.draw_restated();
+        }
         recorded.count_equal_shapes(counts);
         self.current.recorded = true;
         let again = kept.again;
