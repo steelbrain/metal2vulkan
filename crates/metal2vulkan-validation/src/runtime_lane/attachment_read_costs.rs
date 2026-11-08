@@ -45,9 +45,11 @@
 //! quarter of it and three blended draws sampling other textures.
 //!
 //! `self_reads` is the consumer's guest's self-read shape (its `selfread` probe): one command
-//! buffer a frame of one render pass over a [`SELF_SIZE`] `BGRA8Unorm` target (a surface over host
-//! pages, as the guest's framebuffer is, its rows 64-byte aligned as IOSurface lays them out, on a
-//! device of each setting of `host_page_textures`; or a private texture), loaded but in the first
+//! buffer a frame of one render pass over a `BGRA8Unorm` target of each of [`SELF_SIZES`] (a
+//! surface over host pages, as the guest's framebuffer is, its rows 64-byte aligned as IOSurface
+//! lays them out, on a device of each setting of `host_page_textures`; or a private texture): the
+//! guest's 3662x2039 framebuffer, whose rows end inside a 64-byte line, and a 3840x2160 one, whose
+//! rows end on one (`in_place::RowEnds`, which a device's check tells apart), loaded but in the first
 //! frame, which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a
 //! memory barrier over the render targets and a draw over the same rectangle that reads the target
 //! at its own pixels (`tob_read`), through no scissor; each target also without the barriers and
@@ -841,8 +843,10 @@ fn pass_start_clear_read_costs() {
     );
 }
 
-/// The `self_reads` target's size: the guest's desktop framebuffer's.
-const SELF_SIZE: [u64; 2] = [3662, 2039];
+/// The `self_reads` targets' sizes: the guest's desktop framebuffer's, whose 14648 bytes of
+/// texels a row end inside a 64-byte line of its 14656-byte rows, and a 3840x2160 one's, whose
+/// 15360-byte rows are 240 lines each.
+const SELF_SIZES: [[u64; 2]; 2] = [[3662, 2039], [3840, 2160]];
 /// The fill and reader pairs of a `self_reads` pass, and the rectangle each covers.
 const SELF_PAIRS: u64 = 30;
 const SELF_RECT: [u64; 2] = [600, 400];
@@ -850,19 +854,20 @@ const SELF_RECT: [u64; 2] = [600, 400];
 const SELF_WARM: usize = 3;
 const SELF_TIMED: usize = 20;
 
-/// Pair `pair`'s rectangle in frame `frame` of `self_reads`, at a place of its own.
-fn self_rect(frame: usize, pair: u64) -> [u64; 4] {
-    let ([width, height], [w, h]) = (SELF_SIZE, SELF_RECT);
+/// Pair `pair`'s rectangle in frame `frame` of `self_reads` over a target of `size`, at a place of
+/// its own.
+fn self_rect(size: [u64; 2], frame: usize, pair: u64) -> [u64; 4] {
+    let ([width, height], [w, h]) = (size, SELF_RECT);
     let n = frame as u64 + pair;
     let (x, y) = (n * 1373 % (width - w), (n * 3 + 1) * 787 % (height - h));
     [x, y, x + w, y + h]
 }
 
-/// One `self_reads` frame (the module docs) over `target`, its `frame`th, on `queue`; with no
-/// barriers or readers where `baseline`. Its GPU time, in seconds.
+/// One `self_reads` frame (the module docs) over `target` of `size`, its `frame`th, on `queue`;
+/// with no barriers or readers where `baseline`. Its GPU time, in seconds.
 fn self_frame(
     queue: &CommandQueue,
-    target: &Texture,
+    (target, size): (&Texture, [u64; 2]),
     (fill, read): (&RenderPipelineState, &RenderPipelineState),
     frame: usize,
     baseline: bool,
@@ -875,7 +880,7 @@ fn self_frame(
         _ => LoadAction::Load,
     };
     color.store_action = StoreAction::Store;
-    let [width, height] = SELF_SIZE;
+    let [width, height] = size;
     let corners = |[x0, y0, x1, y1]: [u64; 4]| {
         let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
         let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
@@ -884,7 +889,7 @@ fn self_frame(
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
     for pair in 0..SELF_PAIRS {
-        let rect = corners(self_rect(frame, pair));
+        let rect = corners(self_rect(size, frame, pair));
         encoder.set_render_pipeline_state(fill).unwrap();
         let red = pair as f32 / SELF_PAIRS as f32;
         encoder
@@ -949,7 +954,20 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
         state(device, "tob_solid", "tob_renders.ll", bgra),
         state(device, "tob_read", "tob_renders.ll", bgra),
     );
-    let [width, height] = SELF_SIZE;
+    for size in SELF_SIZES {
+        self_reads_of(device, policy, &draws, size);
+    }
+}
+
+/// [`self_reads_on`] over targets of `size`, drawn by `draws`.
+fn self_reads_of(
+    device: &Device,
+    policy: HostPageTexturePolicy,
+    draws: &(RenderPipelineState, RenderPipelineState),
+    size: [u64; 2],
+) {
+    let bgra = PixelFormat::BGRA8Unorm;
+    let [width, height] = size;
     // A surface's rows at a multiple of 64 bytes, as IOSurface lays them out (a plane of a
     // surface without planes takes a multiple of 16 alone).
     let row = (4 * width).next_multiple_of(64);
@@ -985,14 +1003,20 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
             let mut frames = 0..;
             let mut next = || frames.next().unwrap();
             for _ in 0..SELF_WARM {
-                self_frame(&queue, target, (&draws.0, &draws.1), next(), baseline);
+                self_frame(
+                    &queue,
+                    (target, size),
+                    (&draws.0, &draws.1),
+                    next(),
+                    baseline,
+                );
             }
             let before = device.work_counts();
             let mut gpu = Vec::new();
             for _ in 0..SELF_TIMED {
                 gpu.push(self_frame(
                     &queue,
-                    target,
+                    (target, size),
                     (&draws.0, &draws.1),
                     next(),
                     baseline,
@@ -1052,7 +1076,7 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
 }
 
 /// The `snapshot_area_costs` targets' sizes.
-const AREA_SIZES: [[u64; 2]; 4] = [[1280, 720], [1920, 1080], [2560, 1440], SELF_SIZE];
+const AREA_SIZES: [[u64; 2]; 4] = [[1280, 720], [1920, 1080], [2560, 1440], SELF_SIZES[0]];
 /// The share of its target each `snapshot_area_costs` rectangle covers, in thousandths.
 const AREA_SHARES: [u64; 5] = [15, 32, 125, 500, 1000];
 
