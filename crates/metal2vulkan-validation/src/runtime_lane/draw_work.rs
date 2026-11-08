@@ -1566,10 +1566,16 @@ fn draws_switching_pipelines_keep_the_dynamic_states_set() {
 /// `WorkCounts::draw_shapes_carried` for those): the warm-up's encoder ([`make`]) drew both
 /// pipeline states, so the first draw and the first of the second state are carried; a draw of
 /// other bytes takes its encoder's, and so does one switched back to a pipeline state the encoder
-/// drew before another's, and one under a changed scissor rectangle, which no shape holds (the
-/// draw records it as a dynamic state); a draw after a change of the blend color, values no draw
-/// drew, derives its own. Each column is drawn, through either state (the second blends, storing
-/// the fragment's color), those under the half-height scissor rectangle in that half alone.
+/// drew before another's. A draw after a set of its scissor rectangle, and one after sets of the
+/// scissor rectangle and the blend color (both dynamic states of the pipeline, which no push of
+/// its reads), are the kept draw restated and rebound (`WorkCounts::draws_restated`): each
+/// derives again its settings and draw state, the scissor rectangle recorded as a dynamic state;
+/// the draw after the latter, of values whose pipeline no draw kept (a restated draw keeps the
+/// draw state it derived, not the pipeline its record binds), finds its own. Each column is
+/// drawn, through either state (the second blends, storing the fragment's color), those under
+/// the half-height scissor rectangle in that half alone. A debug build takes every second draw
+/// the encoder would draw again every step, comparing (`render/draw_again.rs`), as the counts
+/// here are of such a build's.
 #[test]
 fn draws_take_their_shape_from_their_encoder_s_draws_of_the_same_inputs() {
     on_device(|device, _| {
@@ -1579,7 +1585,7 @@ fn draws_take_their_shape_from_their_encoder_s_draws_of_the_same_inputs() {
         make(device, &scene, &pipelines, &red);
         let (command_buffer, mut encoder) = scene.encoder(device);
         encoder.set_fragment_texture(Some(&red), 0).unwrap();
-        let (mut reused, mut carried) = (Vec::new(), Vec::new());
+        let (mut reused, mut carried, mut restated) = (Vec::new(), Vec::new(), Vec::new());
         for c in 0..SIDE {
             match c {
                 2 => encoder.set_render_pipeline_state(&pipelines[1]).unwrap(),
@@ -1601,11 +1607,16 @@ fn draws_take_their_shape_from_their_encoder_s_draws_of_the_same_inputs() {
             let after = device.work_counts();
             reused.push(grew(&before, &after, |c| c.draw_shapes_reused));
             carried.push(grew(&before, &after, |c| c.draw_shapes_carried));
+            restated.push(grew(&before, &after, |c| c.draws_restated));
         }
         encoder.end_encoding().unwrap();
         assert_eq!(
-            (reused, carried),
-            (vec![1, 1, 1, 1, 1, 1, 0, 1], vec![1, 0, 1, 0, 0, 0, 0, 0])
+            (reused, carried, restated),
+            (
+                vec![1, 1, 1, 1, 0, 1, 0, 0],
+                vec![1, 0, 1, 0, 0, 0, 0, 0],
+                vec![0, 0, 0, 0, 1, 0, 1, 0]
+            )
         );
         let pixels = scene.pixels(&command_buffer);
         for (at, &pixel) in pixels.iter().enumerate() {
