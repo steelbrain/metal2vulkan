@@ -3068,9 +3068,10 @@ bound.
   (`GpuRecoveryVictim`), and every later call of the device and of its command queues goes to the
   new `VkDevice`. Announced at each recovery, by the call that made it; the reason names the hang's
   command buffer (an inference, said so, where two or more `VkQueue`s had work in flight) and how
-  long the recovery took. Announced too where a call waited past 10 seconds for a recovery under
-  way, and where the new `VkDevice` could not be made, after which the device answers as a lost
-  one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the objects made
+  long the recovery took. Announced too, at most once each per recovery whatever an earlier
+  recovery announced: where a call waited past 10 seconds for the recovery under way, where its
+  command buffers in flight took past 10 seconds to fail, and where its new `VkDevice` could not
+  be made, after which the device answers as a lost one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the objects made
   before the recovery are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it
   wait for it.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's

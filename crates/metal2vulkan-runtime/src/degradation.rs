@@ -2186,9 +2186,11 @@ degradations! {
         /// (`GpuRecoveryVictim`); every later call goes to the new `VkDevice`. Announced at each
         /// recovery, from the call that made it; the payload names the culprit (where two or more
         /// `VkQueue`s had work in flight it is an inference, and says so) and the recovery's
-        /// time. Announced as well, once per device, where a call waited past 10 seconds for a
-        /// recovery under way (it waits on), and where the new `VkDevice` could not be made (the
-        /// device then answers as a lost one).
+        /// time. Announced as well, at most once each per recovery, whatever an earlier recovery
+        /// announced: where a call waited past 10 seconds for the recovery under way (it waits
+        /// on), where its command buffers in flight took past 10 seconds to fail (it waits on),
+        /// and where its new `VkDevice` could not be made (the device then answers as a lost
+        /// one).
         DeviceRecovered = "device-recovered", Performance,
             "the objects made before the recovery are refused (`MadeBeforeRecovery`), where \
              Metal's go on; the calls during it wait for it";
@@ -3272,8 +3274,21 @@ impl Device {
     /// says, since each names its own culprit; inside the program's call that made it.
     pub(super) fn degrade_recovered(&self, describe: impl FnOnce() -> (String, String)) {
         let degradation = Degradation::DeviceRecovered;
-        self.shared().announced.now(degradation);
         let misplaced = check_announcement(degradation, true);
+        let (object, reason) = describe();
+        let message = DegradeNotice::new(degradation, object, reason).message();
+        self.deliver_placed(degradation, message, misplaced);
+    }
+
+    /// Announce a step of a recovery of the device that went past its bound or failed
+    /// (`Degradation::DeviceRecovered`, `device/line.rs`): a call's wait for the recovery past
+    /// `RECOVERY_NOTICE`, its command buffers in flight taking past it to fail, or its new
+    /// `VkDevice`'s failure. Whatever the kind's record says, as each recovery's notices are its
+    /// own, the line announcing each step at most once per recovery; met where no program call
+    /// may be (a runtime thread's call waiting for the recovery), as `degrade_once`'s kinds are.
+    pub(super) fn degrade_recovery_step(&self, describe: impl FnOnce() -> (String, String)) {
+        let degradation = Degradation::DeviceRecovered;
+        let misplaced = check_announcement(degradation, false);
         let (object, reason) = describe();
         let message = DegradeNotice::new(degradation, object, reason).message();
         self.deliver_placed(degradation, message, misplaced);

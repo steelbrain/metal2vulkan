@@ -17,9 +17,9 @@
 //!   meets the new generation (`RuntimeGap::MadeBeforeRecovery`, `error.rs`).
 //! - **The states.** [`State`]: the line serves one generation (`Live`); once it is lost, the
 //!   first call that needs the device recovers it (`Lost`, then claimed), while every other call
-//!   waits for that recovery, announcing a wait past [`RECOVERY_NOTICE`] and waiting on; a line
-//!   that cannot recover (a device the consumer made, `Device::from_raw`, or one whose new
-//!   `VkDevice` failed) answers as the lost device does (`Failed`).
+//!   waits for that recovery, the first to wait past [`RECOVERY_NOTICE`] announcing it and waiting
+//!   on; a line that cannot recover (a device the consumer made, `Device::from_raw`, or one whose
+//!   new `VkDevice` failed) answers as the lost device does (`Failed`).
 //! - **The recovery** ([`Line::recover`]), on the program's thread whose call claimed it: the lost
 //!   generation's command buffers in flight fail through its completion path, the oldest
 //!   incomplete batch's as the hang and the others as its victims (`command_buffer/completion.rs`);
@@ -29,6 +29,13 @@
 //!   records kept on disk warm. The calls waiting go on with it, the command queues made before
 //!   take a new place on it at their next command buffer (`queue.rs`), and it announces
 //!   `Degradation::DeviceRecovered`.
+//! - **Each recovery's notices are its own.** The kinds a device announced go on across its
+//!   generations, each kind announced once for the device, but a recovery's notices
+//!   (`Degradation::DeviceRecovered`) are announced at every recovery, whatever an earlier one
+//!   announced: the recovery itself, and at most one each of a call's wait for it past
+//!   [`RECOVERY_NOTICE`], its command buffers in flight taking past it to fail, and its new
+//!   `VkDevice`'s failure. So a slow second recovery says so as the first did, and repeated losses
+//!   announce a few notices each, never one per waiting call.
 //! - **What goes on across generations**: the line's handles and holds (`holds.rs`), its counts
 //!   (`WorkCounts`), the Metal address space with its reserved pools, the resource IDs and the
 //!   `uniqueIdentifier`s, so nothing made after a recovery takes an address or an identity one made
@@ -43,7 +50,7 @@ use super::create;
 use super::{holds, lock, Device, DeviceOptions, DeviceShared, InstanceShared};
 use crate::address::AddressSpace;
 use crate::capabilities::DeviceProperties;
-use crate::degradation::{Announced, Degradation};
+use crate::degradation::Announced;
 use crate::error::{invalid, Error, Problem, RuntimeGap};
 use crate::resource_ids::{PassingHolds, ResourceIds};
 use crate::shader_cache::CacheSetup;
@@ -58,7 +65,8 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 /// How long a call waits for a recovery under way before it announces the wait
-/// (`Degradation::DeviceRecovered`, once per wait); it waits on past it.
+/// (`Degradation::DeviceRecovered`, once per recovery), and how long a recovery waits for its
+/// command buffers in flight to fail before it announces that; each waits on past it.
 pub(crate) const RECOVERY_NOTICE: Duration = Duration::from_secs(10);
 
 /// What a line's every generation answers alike: they are made of the same physical device with
@@ -96,8 +104,8 @@ pub(super) struct Carried {
     /// The counts of the commit path's work (`WorkCounts`).
     pub(super) counts: Arc<Counters>,
     /// The kinds of degradation announced, so each is announced once for the device, not once per
-    /// generation (`degradation.rs`); a recovery's own notice is announced at each
-    /// (`Device::degrade_recovered`).
+    /// generation (`degradation.rs`); a recovery's notices are announced at each recovery
+    /// (`Device::degrade_recovered`, `Device::degrade_recovery_step`; the module docs).
     pub(super) announced: Arc<Announced>,
 }
 
@@ -152,11 +160,14 @@ enum State {
     /// It serves this generation.
     Live(Arc<DeviceShared>),
     /// This generation was lost; `claimed` once a call took its recovery on; `culprit` the
-    /// command buffer its completion failed as the hang, once it named one.
+    /// command buffer its completion failed as the hang, once it named one; `waited` once a call
+    /// announced its wait for this recovery past [`RECOVERY_NOTICE`], which no other call waiting
+    /// for it announces again.
     Lost {
         lost: Arc<DeviceShared>,
         claimed: bool,
         culprit: Option<Culprit>,
+        waited: bool,
     },
     /// It cannot recover (a device the consumer made, or one whose new `VkDevice` failed): this
     /// lost generation answers every call, as a lost device does.
@@ -195,6 +206,9 @@ pub(crate) struct Line {
     queues: Mutex<Vec<Weak<crate::queue::QueueLine>>>,
     /// The generation a root handle's `Device::raw` lent (`Line::lend`).
     lent: Mutex<Lent>,
+    /// What the device tests set of its recoveries ([`hooks`]), in their builds only.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) hooks: hooks::Hooks,
 }
 
 /// What a line lent a root handle's `Device::raw` ([`Line::lend`]).
@@ -232,7 +246,20 @@ impl Line {
             changed: Condvar::new(),
             queues: Mutex::default(),
             lent: Mutex::new(Lent::Nothing),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            hooks: hooks::Hooks::default(),
         })
+    }
+
+    /// How long a call waits for a recovery under way, or a recovery for its command buffers in
+    /// flight to fail, before it announces the wait: [`RECOVERY_NOTICE`], or in the device tests'
+    /// builds what a test set (`hooks::Hooks::notice_after`).
+    fn notice_after(&self) -> Duration {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if let Some(after) = *lock(&self.hooks.notice_after) {
+            return after;
+        }
+        RECOVERY_NOTICE
     }
 
     /// Whether the line makes a new `VkDevice` once one is lost: a device the runtime made.
@@ -276,6 +303,7 @@ impl Line {
                     lost: serving,
                     claimed: false,
                     culprit: None,
+                    waited: false,
                 }
             }
             false => State::Failed(serving),
@@ -289,8 +317,7 @@ impl Line {
     /// cannot recover answers with its lost generation. A handle for the call, counted as the
     /// program's.
     pub(super) fn current(self: &Arc<Self>, device: &Device) -> Device {
-        let mut waited: Option<Instant> = None;
-        let mut announced = false;
+        let mut began: Option<Instant> = None;
         let mut state = lock(&self.state);
         loop {
             match &mut *state {
@@ -319,17 +346,16 @@ impl Line {
                     drop(state);
                     return self.recover(lost);
                 }
-                State::Lost { lost, .. } => {
-                    let lost = Arc::clone(lost);
-                    let began = *waited.get_or_insert_with(Instant::now);
-                    let (next, _) = (self.changed)
-                        .wait_timeout(state, RECOVERY_NOTICE)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    state = next;
-                    if !announced && began.elapsed() >= RECOVERY_NOTICE {
-                        announced = true;
+                State::Lost { lost, waited, .. } => {
+                    let began = *began.get_or_insert_with(Instant::now);
+                    let after = self.notice_after();
+                    // The first call to wait past the bound for this recovery announces it, once
+                    // per recovery whatever an earlier recovery announced (the module docs).
+                    if !*waited && began.elapsed() >= after {
+                        *waited = true;
+                        let lost = Arc::clone(lost);
                         drop(state);
-                        holds::program(lost).degrade_once(Degradation::DeviceRecovered, || {
+                        holds::program(lost).degrade_recovery_step(|| {
                             (
                                 "a call made during the device's recovery".to_owned(),
                                 format!(
@@ -339,7 +365,16 @@ impl Line {
                             )
                         });
                         state = lock(&self.state);
+                        continue;
                     }
+                    let timeout = match *waited {
+                        true => RECOVERY_NOTICE,
+                        false => after.saturating_sub(began.elapsed()),
+                    };
+                    let (next, _) = (self.changed)
+                        .wait_timeout(state, timeout)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state = next;
                 }
                 // No handle of a line in either exists but the caller's own: it answers.
                 State::Making | State::Gone => return device.clone(),
@@ -359,6 +394,10 @@ impl Line {
         // (vkspec 5.2.3), and on one the test hook marked lost waits for the work it ran.
         old.drain_queues();
         let made = match &self.recipe {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            Some(_) if self.hooks.making_fails.swap(false, Ordering::AcqRel) => {
+                Err(Error::DeviceLost)
+            }
             Some(recipe) => create::create_on(
                 &recipe.instance,
                 recipe.physical,
@@ -373,7 +412,7 @@ impl Line {
             Err(error) => {
                 *lock(&self.state) = State::Failed(lost);
                 self.changed.notify_all();
-                old.degrade_once(Degradation::DeviceRecovered, || {
+                old.degrade_recovery_step(|| {
                     (
                         "the device".to_owned(),
                         format!(
@@ -606,12 +645,14 @@ impl Device {
         shared.completion.fail_in_flight();
         shared.scheduler.wake();
         let began = Instant::now();
+        let after = self.line().notice_after();
         let mut announced = false;
         while !shared.completion.settled() {
             std::thread::sleep(Duration::from_millis(1));
-            if !announced && began.elapsed() >= RECOVERY_NOTICE {
+            // Once per recovery: only the call that claimed it fails its command buffers.
+            if !announced && began.elapsed() >= after {
                 announced = true;
-                self.degrade_once(Degradation::DeviceRecovered, || {
+                self.degrade_recovery_step(|| {
                     (
                         "the device's recovery".to_owned(),
                         format!(
@@ -622,5 +663,26 @@ impl Device {
                 });
             }
         }
+    }
+}
+
+/// The device tests' hooks into a line's recoveries (`tests::device_recovery`), in those tests'
+/// builds only: each set on one device, so a test's settings reach no other test's device.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) mod hooks {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// What a test set of a line's recoveries.
+    #[derive(Default)]
+    pub(crate) struct Hooks {
+        /// How long a call waits for a recovery under way, or a recovery for its command buffers
+        /// in flight to fail, before it announces the wait, in place of
+        /// [`RECOVERY_NOTICE`](super::RECOVERY_NOTICE): zero announces every such wait.
+        pub(crate) notice_after: Mutex<Option<Duration>>,
+        /// The next recovery's new `VkDevice` fails to be made, as a driver's refusal fails it:
+        /// the line fails, and answers as the lost device does from then on.
+        pub(crate) making_fails: AtomicBool,
     }
 }

@@ -5,15 +5,22 @@
 //! completes with no error, as Metal's on the queue of a hang in flight, and one committed on
 //! another queue fails as the recovery's victim. Then the device and the hang's queue serve on.
 //!
+//! Each recovery announces its own notices (`Degradation::DeviceRecovered`), whatever an earlier
+//! one announced: a later recovery's wait and its new `VkDevice`'s failure reach the sink as the
+//! first's would.
+//!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked, and the work in flight
 //! completes before the failures post (`Device::drain_queues`).
 
 use crate::{
-    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device,
-    DeviceKind, DeviceOptions, ResourceOptions, ShaderCacheOptions,
+    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Degradation,
+    DegradeNotice, Device, DeviceKind, DeviceOptions, Error, MessageSink, ResourceOptions,
+    ShaderCacheOptions,
 };
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The bytes each copy of the busy command buffer moves: enough that it is still in flight as the
@@ -46,6 +53,27 @@ impl Drop for Scratch {
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
 fn device(cache: &Path) -> Device {
+    device_with(cache, None)
+}
+
+/// The degrade notices a device's sink heard, in order.
+type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
+
+/// [`device`], its degrade notices kept in `heard`.
+fn heard_device(cache: &Path, heard: &Heard) -> Device {
+    let heard = Arc::clone(heard);
+    device_with(
+        cache,
+        Some(MessageSink::new(move |message| {
+            if let Some(notice) = &message.degradation {
+                heard.lock().unwrap().push(notice.clone());
+            }
+        })),
+    )
+}
+
+/// [`device`], its messages sent to `messages` where given.
+fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -59,6 +87,7 @@ fn device(cache: &Path) -> Device {
             directory: Some(cache.to_owned()),
             ..ShaderCacheOptions::default()
         },
+        messages,
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()
@@ -242,5 +271,98 @@ fn work_that_completed_before_a_failed_wait_completes() {
     let next = filled_by(&queue, &after);
     next.commit().unwrap();
     assert_eq!(outcome(&next), (CommandBufferStatus::Completed, None));
+    assert_eq!(device.work_counts().device_recoveries, 1);
+}
+
+/// The threads that call the device while it recovers ([`each_recovery_announces_its_own_wait`]).
+const WAITERS: usize = 3;
+
+/// The recovery notices `heard` holds from `from` on whose object is `object`: a recovery's own
+/// is "the device", a call's wait for one "a call made during the device's recovery", its command
+/// buffers' failing past the bound "the device's recovery" (`device/line.rs`).
+fn recovery_notices(heard: &Heard, from: usize, object: &str) -> Vec<String> {
+    heard.lock().unwrap()[from..]
+        .iter()
+        .filter(|notice| notice.degradation == Degradation::DeviceRecovered)
+        .filter(|notice| notice.object == object)
+        .map(|notice| notice.reason.clone())
+        .collect()
+}
+
+/// A recovery's wait is announced at a later recovery as at the first, once per recovery however
+/// many calls wait: the kinds a device announced go on across its generations, a recovery's
+/// notices do not. The bound is zero here, so a call that meets the recovery under way announces
+/// its wait at once. The first recovery, which no call waits for, announces itself alone.
+#[test]
+fn each_recovery_announces_its_own_wait() {
+    let scratch = Scratch::new();
+    let heard = Heard::default();
+    let device = heard_device(&scratch.0, &heard);
+    *device.line().hooks.notice_after.lock().unwrap() = Some(Duration::ZERO);
+    device.recover_for_test().unwrap();
+    assert_eq!(recovery_notices(&heard, 0, "the device").len(), 1);
+    let queue = device.new_command_queue().unwrap();
+    for _ in 0..ATTEMPTS {
+        let from = heard.lock().unwrap().len();
+        // Work in flight, so the recovery waits for it to fail before it makes its `VkDevice`.
+        let in_flight = busy(&device, &queue);
+        let recovered = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            for _ in 0..WAITERS {
+                scope.spawn(|| {
+                    while !recovered.load(Ordering::Acquire) {
+                        drop(device.new_buffer(4096, ResourceOptions::shared()).unwrap());
+                    }
+                });
+            }
+            device.recover_for_test().unwrap();
+            recovered.store(true, Ordering::Release);
+        });
+        drop(in_flight);
+        let made = recovery_notices(&heard, from, "the device");
+        assert_eq!(made.len(), 1, "one recovery announced {made:?}");
+        let failing = recovery_notices(&heard, from, "the device's recovery");
+        assert!(failing.len() <= 1, "one recovery announced {failing:?}");
+        let waits = recovery_notices(&heard, from, "a call made during the device's recovery");
+        match waits.len() {
+            0 => continue,
+            1 => return,
+            _ => panic!(
+                "{} calls announced their wait for one recovery: {waits:?}",
+                waits.len()
+            ),
+        }
+    }
+    panic!(
+        "no call of {WAITERS} threads met any of {ATTEMPTS} recoveries after the first under way"
+    );
+}
+
+/// A recovery whose new `VkDevice` cannot be made announces it after an earlier recovery as on
+/// the first, and the device answers as a lost one from then on.
+#[test]
+fn a_later_recovery_announces_its_failure() {
+    let scratch = Scratch::new();
+    let heard = Heard::default();
+    let device = heard_device(&scratch.0, &heard);
+    device.recover_for_test().unwrap();
+    assert_eq!(recovery_notices(&heard, 0, "the device").len(), 1);
+    let from = heard.lock().unwrap().len();
+    device
+        .line()
+        .hooks
+        .making_fails
+        .store(true, Ordering::Release);
+    assert!(matches!(device.recover_for_test(), Err(Error::DeviceLost)));
+    let failed = recovery_notices(&heard, from, "the device");
+    assert_eq!(failed.len(), 1, "the failed recovery announced {failed:?}");
+    assert!(
+        failed[0].contains("its new VkDevice could not be made"),
+        "{failed:?}"
+    );
+    assert!(matches!(
+        device.new_buffer(4096, ResourceOptions::shared()),
+        Err(Error::DeviceLost)
+    ));
     assert_eq!(device.work_counts().device_recoveries, 1);
 }
