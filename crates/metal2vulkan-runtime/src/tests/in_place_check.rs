@@ -242,14 +242,14 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
         let checks = &device.shared().in_place;
         RowEnds::ALL.map(|rows| checks.verdict(PagesClass::Pointer, Access::Reads, rows))
     };
-    let (first, note) = {
+    let (first, note, first_notes) = {
         let device = answering(&scratch, &record);
         device.fail_next_host_imports(1);
         assert!(
             device.settle_in_place_checks(WAIT),
             "the first check answered"
         );
-        let report = device.in_place_check_report();
+        let mut report = device.in_place_check_report();
         let note = (report.iter())
             .find(|line| line.starts_with("Pointer reads: no pages to check: "))
             .cloned();
@@ -258,7 +258,8 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
                 .is_some_and(|note| note.ends_with("(a cause that may pass, checked again)")),
             "the refused pages' reason noted, a cause that may pass: {report:?}"
         );
-        (device.shared().in_place.verdicts(), note)
+        let notes = report.split_off(crate::in_place::VERDICTS);
+        (device.shared().in_place.verdicts(), note, notes)
     };
     let first_reads =
         RowEnds::ALL.map(|rows| first[verdict_index(PagesClass::Pointer, Access::Reads, rows)]);
@@ -306,7 +307,7 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
                 recalled[dma_buf_reads],
                 InPlaceVerdict::Unchecked,
                 "the dma-buf class's reads of rows inside lines, of which the driver makes no \
-                 image, recalled unchecked"
+                 image, recalled unchecked; the first check's notes {first_notes:#?}"
             );
         }
         assert!(
