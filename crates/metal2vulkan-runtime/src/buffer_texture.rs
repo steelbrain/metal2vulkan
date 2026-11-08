@@ -503,10 +503,17 @@ impl Buffer {
     /// at once; a view in a format the image takes no Vulkan view of, and a binding beyond the
     /// texture's usage, are refused (`Unsupported`), where a texture of one level over a buffer
     /// takes them through a shadow of the bytes; and while the buffer's bytes are detached
-    /// (`detach_backing`) every level reads the stand-in's zeros, as a one-level texture over
-    /// them does. Announced once (`shadowed-texture`, naming the levels), counted in
-    /// `WorkCounts::shadowed_textures`, its copies in `WorkCounts::shadow_texels_copied_in` and
-    /// `shadow_texels_copied_back` (its first level's texels alone).
+    /// (`detach_backing`) its first level reads their last texels, which the detach loads into
+    /// its image, where a texture over the bytes alone presents a stand-in of zeros: an unnamed
+    /// read reads them, and so does `get_bytes`, whose write of that level, `replace_region`, is
+    /// refused meanwhile (`NotImplemented(DetachedTexelAccess)`), as a one-level texture's is. Its
+    /// other levels keep their texels through the detach, read and written as before, as a Mac's
+    /// texture's own memory holds them. Announced once (`shadowed-texture`, naming the levels),
+    /// counted in `WorkCounts::shadowed_textures`, its copies in
+    /// `WorkCounts::shadow_texels_copied_in` and `shadow_texels_copied_back` (its first level's
+    /// texels alone). A command's use of its other levels alone takes no copy (a blit into or
+    /// out of one, a pass into one, `generate_mipmaps`' writes), and its copies back and merges
+    /// dispatch and fetch through views of its first level as a one-level texture's do.
     ///
     /// Refused as [`new_texture`](Self::new_texture) is, but for the levels: more levels than the
     /// extent's full chain (`Invalid`, `TextureProblem`), and a texture buffer of more than one

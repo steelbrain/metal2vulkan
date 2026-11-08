@@ -2536,8 +2536,11 @@ impl Device {
         });
         let views = (words, unorm);
         let copies = texels.shadow_copies(image.raw.get(), image.identity, aspects, views)?;
-        // Its copies keep its own image, which it presents again once the bytes lie in pages.
-        self.stand_in_while_detached(&texels.buffer, &image)?;
+        // Its copies keep its own image, which it presents again once the bytes lie in pages. A
+        // tiled texture's image keeps every level while they are detached, presenting none.
+        if levels == 1 {
+            self.stand_in_while_detached(&texels.buffer, &image)?;
+        }
         // A device copy degrades nothing: it holds the bytes wherever a command reads them.
         if device_copy {
             self.shared().counts.device_copy_texture();
@@ -4414,15 +4417,18 @@ impl Texture {
         }
         // A texture over host pages' bytes, or in a heap over them (a view of one too): a
         // detach of them makes its image present a stand-in (`stand_in.rs`).
+        // A tiled texture's image keeps every level instead, its first loaded with the bytes'
+        // last texels (`Texture::keep_first_level`).
         if let Some((bytes, image, exact)) = texture.image_over_bytes() {
             let sink = image.plan().usage.contains(ImageUsageFlags::STORAGE);
+            let keeps = texture.tiled_levels();
             let shared: Arc<dyn Any + Send + Sync> = Arc::clone(&texture.0) as _;
             let image: Arc<dyn Any + Send + Sync> = Arc::clone(image) as _;
             bytes.note_texture(NotedTexture::new(
                 Arc::downgrade(&shared),
                 Arc::downgrade(&image),
                 texture.0.object_id,
-                (exact, sink),
+                (exact, sink, keeps),
             ));
         }
         if let IdUse::Program(placement) = id_use {
@@ -4544,10 +4550,50 @@ impl Texture {
     /// copies keep its first level's texels in step with the bytes (`blit.rs`'s **Heap
     /// shadows**). `None` for a texture of an image alone.
     pub(super) fn blit_texels(&self) -> Option<&Texels> {
-        match self.storage() {
-            Storage::Shadow { image, .. } if image.plan().levels > 1 => None,
-            _ => self.buffer_texels(),
+        match self.tiled_levels() {
+            true => None,
+            false => self.buffer_texels(),
         }
+    }
+
+    /// Whether the texture is a tiled one of more than one level over a buffer's bytes, or a view
+    /// of one (`Buffer::new_tiled_texture`): one image of its own holds every level, its first a
+    /// copy of the bytes.
+    pub(super) fn tiled_levels(&self) -> bool {
+        matches!(self.storage(), Storage::Shadow { image, .. } if image.plan().levels > 1)
+    }
+
+    /// Whether the texture is a tiled one's ([`tiled_levels`](Self::tiled_levels)) whose bytes are
+    /// detached (`detach.rs`): its image's first level holds their last texels meanwhile, which its
+    /// CPU reads read ([`keep_first_level`](Self::keep_first_level)).
+    fn first_level_kept(&self) -> bool {
+        match self.storage() {
+            Storage::Shadow { texels, .. } => self.tiled_levels() && texels.buffer.detached(),
+            _ => false,
+        }
+    }
+
+    /// Load a tiled texture's first level ([`tiled_levels`](Self::tiled_levels)) into its image
+    /// as its bytes hold it now, before a detach lets go of them (`detach.rs`): while they are
+    /// detached the image presents no stand-in, its later levels its own texels and its first
+    /// level the bytes' last, which its unnamed reads and `get_bytes` read. Nothing for another
+    /// texture, or a view (its first level is its root's).
+    pub(crate) fn keep_first_level(&self) -> Result<(), Error> {
+        let Storage::Shadow { texels, .. } = self.storage() else {
+            return Ok(());
+        };
+        if !self.tiled_levels() || self.0.parent.is_some() {
+            return Ok(());
+        }
+        let unit = texels.unit();
+        let [across, down] = unit.extent.map(u64::from);
+        let (width, height) = (self.width(), self.height());
+        let row = width.div_ceil(across) * u64::from(unit.bytes);
+        let mut bytes = vec![0; (row * height.div_ceil(down)) as usize];
+        let region = Region::new_2d(0, 0, width, height);
+        self.get_bytes(&mut bytes, row, 0, region, 0, 0)?;
+        let upload = Upload::Slice(&bytes);
+        self.replace((region, 0, 0), upload, (row, 0), Writes::FirstLevelKept)
     }
 
     /// Whether the texture's image is a linear image over its buffer's bytes now: an aliasing
@@ -5414,8 +5460,15 @@ impl Texture {
 
     /// Refused (`NotImplemented(DetachedTexelAccess)`) while the bytes the texture is over (its
     /// root's, for a view) are detached (`detach.rs`): Metal's CPU access reaches the pages the
-    /// texture took as it was made, which the runtime does not keep.
-    fn refuse_detached_texels(&self) -> Result<(), Error> {
+    /// texture took as it was made, which the runtime does not keep. But a tiled texture's
+    /// ([`tiled_levels`](Self::tiled_levels)), whose image keeps every level meanwhile: a read of
+    /// any level and a write of a level past the first (its `level`, of `write`), which its image
+    /// alone holds, as a Mac's texture's own memory does.
+    fn refuse_detached_texels(&self, level: u64, write: bool) -> Result<(), Error> {
+        let first = u64::from(self.0.record.base_level) + level == 0;
+        if self.tiled_levels() && !(write && first) {
+            return Ok(());
+        }
         let root = self.root();
         let detached = match root.storage() {
             Storage::Texels(texels)
@@ -5742,7 +5795,8 @@ impl Texture {
         bytes_per_image: u64,
     ) -> Result<(), Error> {
         let upload = Upload::Slice(bytes);
-        self.replace(region, level, slice, upload, bytes_per_row, bytes_per_image)
+        let pitches = (bytes_per_row, bytes_per_image);
+        self.replace((region, level, slice), upload, pitches, Writes::Program)
     }
 
     /// [`replace_region`](Self::replace_region) from bytes at a pointer (a runtime extension,
@@ -5766,18 +5820,18 @@ impl Texture {
             bytes,
             copy: OnceCell::new(),
         };
-        self.replace(region, level, slice, upload, bytes_per_row, bytes_per_image)
+        let pitches = (bytes_per_row, bytes_per_image);
+        self.replace((region, level, slice), upload, pitches, Writes::Program)
     }
 
-    /// `replace_region` from `bytes`, whichever form (the two above).
+    /// `replace_region` from `bytes`, whichever form (the two above), of `region` of `level` and
+    /// `slice`, rows and images the `pitches` apart, as `writes` says.
     fn replace(
         &self,
-        region: Region,
-        level: u64,
-        slice: u64,
+        (region, level, slice): (Region, u64, u64),
         bytes: Upload<'_>,
-        bytes_per_row: u64,
-        bytes_per_image: u64,
+        (bytes_per_row, bytes_per_image): (u64, u64),
+        writes: Writes,
     ) -> Result<(), Error> {
         const CALL: &str = "replace_region";
         let Some(copy) =
@@ -5785,7 +5839,9 @@ impl Texture {
         else {
             return Ok(());
         };
-        self.refuse_detached_texels()?;
+        if writes == Writes::Program {
+            self.refuse_detached_texels(level, true)?;
+        }
         if copy
             .host
             .host_len()
@@ -5813,8 +5869,12 @@ impl Texture {
         let image = match self.storage() {
             Storage::Image(image) => image,
             // A tiled texture's levels past the first lie in its image alone
-            // (`Buffer::new_tiled_texture`).
-            Storage::Shadow { image, .. } if image_region.level > 0 => image,
+            // (`Buffer::new_tiled_texture`), and its first too as a detach loads it there.
+            Storage::Shadow { image, .. }
+                if image_region.level > 0 || writes == Writes::FirstLevelKept =>
+            {
+                image
+            }
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => {
@@ -5970,7 +6030,7 @@ impl Texture {
         else {
             return Ok(());
         };
-        self.refuse_detached_texels()?;
+        self.refuse_detached_texels(level, false)?;
         if copy
             .host
             .host_len()
@@ -6128,8 +6188,10 @@ impl Texture {
         let image = match self.storage() {
             Storage::Image(image) => image,
             // A tiled texture's levels past the first lie in its image alone
-            // (`Buffer::new_tiled_texture`).
-            Storage::Shadow { image, .. } if image_region.level > 0 => image,
+            // (`Buffer::new_tiled_texture`), and its first too while its bytes are detached.
+            Storage::Shadow { image, .. } if image_region.level > 0 || self.first_level_kept() => {
+                image
+            }
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => {
@@ -6423,6 +6485,17 @@ impl HostCopy {
             false => self,
         }
     }
+}
+
+/// Who writes through `Texture::replace`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Writes {
+    /// The program's `replace_region`: refused where the texture's bytes are detached but at a
+    /// tiled texture's level past its first (`Texture::refuse_detached_texels`).
+    Program,
+    /// A detach's load of a tiled texture's first level into its image
+    /// (`Texture::keep_first_level`), which the image holds while the bytes are detached.
+    FirstLevelKept,
 }
 
 /// What `replaceRegion` reads (`Texture::replace`): a slice, or bytes at a pointer

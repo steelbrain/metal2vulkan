@@ -431,7 +431,12 @@ command boundaries, not an alias, and a CPU write made while a command buffer th
 reaches it at the next copy in. Its other levels are its image's own memory, zero when made in a
 `Shared` or `Managed` texture; blits (`generate_mipmaps` among them) and functions use every level,
 and `get_bytes` and `replace_region` reach the first level in the bytes and the others in the
-image. A texture of one level is `new_texture`'s, in place where that is.
+image. A command that uses its other levels alone copies nothing. While the buffer's bytes are
+detached (`detach_backing`) it keeps its own image: its first level holds the bytes' last texels,
+which the detach loads into it and which an unnamed read and `get_bytes` read (a `replace_region`
+of that level is refused, `NotImplemented(DetachedTexelAccess)`), where a texture over the bytes
+alone presents a stand-in of zeros; its other levels keep their texels, read and written as before.
+A texture of one level is `new_texture`'s, in place where that is.
 On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface plane's)
 that only samples or reads, whose policy takes the image in place, over memory that carries a log
 of its writes (`HostMemory::with_dirty_pages`), tracked, one slice laid out as one copy, is instead

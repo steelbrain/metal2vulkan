@@ -234,15 +234,20 @@ pub(super) struct NotedTexture {
     /// Whether its image's stand-in has a sink (its plan has `STORAGE` usage): a read through a
     /// storage-class element there reads what an unnamed write left (`Device::note_stale`).
     sink: bool,
+    /// Whether its image keeps its own texels while the bytes are detached, presenting no
+    /// stand-in: a tiled texture's, whose first level a detach loads with the bytes' last texels
+    /// (`Texture::keep_first_level`).
+    keeps: bool,
 }
 
 impl NotedTexture {
-    /// `texture`, whose image is `image`, of object `id`; `exact` and `sink` as the fields say.
+    /// `texture`, whose image is `image`, of object `id`; `exact`, `sink` and `keeps` as the
+    /// fields say.
     pub(super) fn new(
         texture: Weak<dyn Any + Send + Sync>,
         image: Weak<dyn Any + Send + Sync>,
         id: ObjectId,
-        (exact, sink): (bool, bool),
+        (exact, sink, keeps): (bool, bool, bool),
     ) -> NotedTexture {
         NotedTexture {
             texture,
@@ -250,12 +255,19 @@ impl NotedTexture {
             id,
             exact,
             sink,
+            keeps,
         }
     }
 
     /// Whether its image's stand-in has a sink (`NotedTexture::sink`).
     pub(super) fn sink(&self) -> bool {
         self.sink
+    }
+
+    /// Whether its image keeps its own texels while the bytes are detached
+    /// (`NotedTexture::keeps`).
+    pub(super) fn keeps(&self) -> bool {
+        self.keeps
     }
 
     /// Whether the texture lives.
@@ -270,12 +282,13 @@ impl NotedTexture {
 }
 
 impl TexturesOver {
-    /// The images of the live textures, each once, by type erased; and whether a stand-in of
-    /// zero bytes presents each exactly (`NotedTexture::exact`).
+    /// The images of the live textures that present stand-ins while the bytes are detached (all
+    /// but those that keep their own, `NotedTexture::keeps`), each once, by type erased; and
+    /// whether a stand-in of zero bytes presents each exactly (`NotedTexture::exact`).
     pub(super) fn images(&self) -> (Vec<Arc<dyn Any + Send + Sync>>, bool) {
         let mut images: Vec<Arc<dyn Any + Send + Sync>> = Vec::new();
         let mut exact = true;
-        for noted in self.noted.iter().filter(|noted| noted.lives()) {
+        for noted in self.textures().filter(|noted| !noted.keeps) {
             let Some(image) = noted.image.upgrade() else {
                 continue;
             };
@@ -290,6 +303,13 @@ impl TexturesOver {
     /// The live textures.
     pub(super) fn textures(&self) -> impl Iterator<Item = &NotedTexture> {
         self.noted.iter().filter(|noted| noted.lives())
+    }
+
+    /// The live textures whose images keep their own texels while the bytes are detached
+    /// (`NotedTexture::keeps`), by type erased.
+    pub(super) fn keeping(&self) -> Vec<Arc<dyn Any + Send + Sync>> {
+        let keeps = self.textures().filter(|noted| noted.keeps);
+        keeps.filter_map(|noted| noted.texture.upgrade()).collect()
     }
 }
 
