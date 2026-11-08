@@ -1166,7 +1166,7 @@ fn rebind_at_pitch(device: &Device, pitch: usize, (first, second): &(Host, Host)
     let passed = device.in_place_verdict(PagesClass::Fresh, Access::Reads) == Verdict::Passed;
     let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
     let before = device.work_counts();
-    let rebound = rebind(&buffer, &second, Some(gate(&asked, false)));
+    let rebound = rebind(&buffer, second, Some(gate(&asked, false)));
     let after = device.work_counts();
     let fresh = after.fresh_page_buffers_made - before.fresh_page_buffers_made;
     let images = after.copied_rebind_images_made - before.copied_rebind_images_made;
