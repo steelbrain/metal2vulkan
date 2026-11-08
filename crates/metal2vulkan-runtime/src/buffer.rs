@@ -3226,21 +3226,19 @@ impl Buffer {
         Arc::clone(&self.0.handed_out)
     }
 
-    /// Note that its `VkBuffer` was handed out (`Buffer::vk_buffer`), and make the first work
-    /// still waiting on it ([`settle_first_work`](Self::settle_first_work)).
-    pub(super) fn hand_out(&self) -> Result<(), Error> {
+    /// Note that its `VkBuffer` was handed out (`Buffer::vk_buffer`).
+    pub(super) fn hand_out(&self) {
         self.0.handed_out.store(true, Ordering::Release);
-        self.settle_first_work()
     }
 
-    /// Make the first work still waiting on its `VkBuffer` now, by an internal submission waited
-    /// for: a new buffer's zeros or staged bytes, or a `Managed` buffer's upload (`clear_first`,
-    /// `fill_first_from`, `upload`), which the device's next submission would make before its
-    /// commands (`texture/first_move.rs`), over what the caller's own work wrote through the
-    /// handle meanwhile. Nothing is submitted where none waits: once any submission of the
-    /// device's took it.
-    pub(super) fn settle_first_work(&self) -> Result<(), Error> {
-        let (raw, _) = self.at(0);
+    /// Make the first work still waiting on its `VkBuffer` `raw` now, by an internal submission
+    /// waited for: a new buffer's zeros or staged bytes, or a `Managed` buffer's upload
+    /// (`clear_first`, `fill_first_from`, `upload`), which the device's next submission would make
+    /// before its commands (`texture/first_move.rs`), over what the caller's own work wrote
+    /// through the handle meanwhile. Nothing is submitted where none waits: once any submission of
+    /// the device's took it. `raw` is the caller's: a no-copy buffer's import counts each read of
+    /// its `VkBuffer` apart for its reason (`HostImport::note_read_apart`), so this reads none.
+    pub(super) fn settle_first_work(&self, raw: vk::Buffer) -> Result<(), Error> {
         let device = &self.0.device;
         match device.shared().textures.first_moves.fills_wait(raw) {
             true => device.submit_internal(|_, _| {}),

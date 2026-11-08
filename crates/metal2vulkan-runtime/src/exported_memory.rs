@@ -272,7 +272,7 @@ impl Buffer {
         }
         // The zeros it waits for as it was made go first (`Buffer::settle_first_work`): the
         // other API may write the memory at once.
-        self.settle_first_work()?;
+        self.settle_first_work(self.at(0).0)?;
         let shared = device.shared();
         let found = self.own_placement(|placement, offset| {
             let exported = lock(&shared.memory).exported(placement)?;

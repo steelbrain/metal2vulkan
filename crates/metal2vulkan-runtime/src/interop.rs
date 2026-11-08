@@ -222,10 +222,12 @@ impl Buffer {
     /// The `VkBuffer` stays the runtime's: the caller does not destroy it, and uses it only while
     /// the buffer lives, ordered against the runtime's work on it.
     pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64) {
+        self.hand_out();
+        let handle = self.at_for(0, ReadApart::VkBuffer);
         // A failed submission gives the work back, to the device's next submission; the caller
         // sees the failure at its next call (a lost device refuses it).
-        let _ = self.hand_out();
-        self.at_for(0, ReadApart::VkBuffer)
+        let _ = self.settle_first_work(handle.0);
+        handle
     }
 
     /// No Metal counterpart (an interop hook): where the buffer's byte 0 lies in Vulkan memory,
