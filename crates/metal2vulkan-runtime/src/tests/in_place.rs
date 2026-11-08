@@ -378,6 +378,71 @@ fn rows_of(offset: u64, row_bytes: u64, row_pitch: u64, rows: u64) -> BufferLayo
     }
 }
 
+/// The shapes at a driver's own pitch run only where no shape of their texel size whose texels
+/// share a line was made before them in the class (`Shape::runs`): none on a device that makes
+/// every shape at its pitch, and those at its own pitch on a device that lays rows at the next
+/// multiple of 16 bytes (MoltenVK, its line 16 bytes) or 64 (llvmpipe, its line 64) and makes no
+/// other image with bytes between rows; the 64-byte pair none on the first.
+#[test]
+fn shapes_at_a_driver_s_own_pitch_run_only_where_none_of_their_texel_size_was_made() {
+    // A class's walk as `check_class` takes it: the shapes whose texels share no line first, each
+    // where `Shape::runs` takes it, made where `makes` says; the shapes it tried.
+    let walk = |shapes: &[Shape], line: u64, makes: &dyn Fn(&Shape) -> bool| {
+        let mut shapes = shapes.to_vec();
+        shapes.sort_by_key(|shape| shape.rows(line) != RowEnds::OnLines);
+        let mut made = Vec::new();
+        let mut tried = Vec::new();
+        for shape in shapes {
+            if !shape.runs(line, &made) {
+                continue;
+            }
+            tried.push(shape);
+            let shares = shape.rows(line) == RowEnds::InLines;
+            if makes(&shape) && shares && !made.contains(&shape.texel) {
+                made.push(shape.texel);
+            }
+        }
+        tried
+    };
+    let pitch_of =
+        |shape: &Shape, multiple: u64| (shape.width * shape.texel).next_multiple_of(multiple);
+    let tried_at = |tried: &[Shape], multiple: u64| {
+        let at = |shape: &&Shape| shape.tight && shape.bytes_per_row == pitch_of(shape, multiple);
+        tried.iter().filter(at).count()
+    };
+    let store: Vec<Shape> = STORE_SHAPES.iter().map(|(shape, _)| *shape).collect();
+    for shapes in [SHAPES.to_vec(), store] {
+        let tight = |multiple| {
+            shapes
+                .iter()
+                .filter(|shape| shape.tight && shape.bytes_per_row == pitch_of(shape, multiple))
+                .count()
+        };
+        assert_eq!((tight(16), tight(64)), (2, 2));
+        // Every shape made at its pitch (RADV, ANV, NVIDIA): no shape at a driver's own pitch.
+        let tried = walk(&shapes, 64, &|_| true);
+        assert!(tried.iter().all(|shape| !shape.tight));
+        // Rows at the next multiple of 16 or 64 bytes alone, or one after another.
+        for (multiple, line) in [(16, 16), (64, 64)] {
+            let makes = |shape: &Shape| {
+                let row = shape.width * shape.texel;
+                shape.bytes_per_row == row || shape.bytes_per_row == row.next_multiple_of(multiple)
+            };
+            let tried = walk(&shapes, line, &makes);
+            assert_eq!(tried_at(&tried, multiple), 2, "{multiple}-byte rows");
+        }
+        let tried = walk(&shapes, 16, &|shape: &Shape| {
+            let row = shape.width * shape.texel;
+            shape.bytes_per_row == row || shape.bytes_per_row == row.next_multiple_of(16)
+        });
+        assert_eq!(
+            tried_at(&tried, 64),
+            0,
+            "the 64-byte pair after the 16-byte one"
+        );
+    }
+}
+
 #[test]
 fn texels_share_no_line_exactly_where_each_gap_starts_and_ends_on_one() {
     let (inside, on) = (RowEnds::InLines, RowEnds::OnLines);

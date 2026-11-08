@@ -142,9 +142,11 @@ use std::time::{Duration, Instant};
 /// catches a device that writes back the line of a cache that holds a row's last texels: on the
 /// Iris Xe a render round (its pass's clear and store, then its draw) caught it in 198 of 200
 /// rounds of a 100x50 `BGRA8Unorm` image at a 512-byte pitch and in 200 of 200 of a 33x17
-/// `RGBA16Float` one. Eight of [`SHAPES`] have rows that end inside such a line, so three rounds
-/// of each are twenty-four chances, of which a device that escapes each as often as the Iris Xe's
-/// worst shape did (2 in 200) passes all with odds below one in 10^40.
+/// `RGBA16Float` one. Eight of [`SHAPES`] have rows that end inside such a line, of which four
+/// run on a device that makes images at an explicit pitch (the others at a driver's own pitch,
+/// [`Shape::runs`]), so three rounds of each are twelve chances or more, of which a device that
+/// escapes each as often as the Iris Xe's worst shape did (2 in 200) passes all with odds below
+/// one in 10^20.
 pub(crate) const ROUNDS: usize = 3;
 
 /// The longest a render round waits for its pass's command buffer: a pass that clears a 3840x2160
@@ -152,7 +154,8 @@ pub(crate) const ROUNDS: usize = 3;
 const PASS_WAIT: Duration = Duration::from_secs(20);
 
 /// A shape the check makes a texture of: its format, the bytes of one texel, its width and height,
-/// and its rows' pitch.
+/// its rows' pitch, and whether that pitch is the one a driver that makes no image at an explicit
+/// pitch lays such rows at ([`Shape::runs`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Shape {
     pub(crate) format: PixelFormat,
@@ -160,6 +163,7 @@ pub(crate) struct Shape {
     pub(crate) width: u64,
     pub(crate) height: u64,
     pub(crate) bytes_per_row: u64,
+    pub(crate) tight: bool,
 }
 
 /// The shapes each class is checked with: each texel size the formats a buffer backs have (1, 2,
@@ -170,8 +174,11 @@ pub(crate) struct Shape {
 /// makes no other image with bytes between rows, and its line, `nonCoherentAtomSize`, is 16
 /// bytes: without them no shape of its whose texels share a line would be made, [`RowEnds`]), the
 /// same two at the 64-byte pitch of a driver that lays rows at the next multiple of 64 (llvmpipe,
-/// whose line is 64 bytes: likewise), and one 3840x2160 surface of 4-byte texels, last. A shape
-/// the device makes no image of in place is skipped: the product makes none of it either.
+/// whose line is 64 bytes: likewise), and one 3840x2160 surface of 4-byte texels, last. Those four
+/// at a driver's own pitch run only where no shape of their texel size whose texels share a line
+/// was made before them ([`Shape::runs`]): a device that makes images at an explicit pitch makes
+/// the 512-byte ones first. A shape the device makes no image of in place is skipped: the product
+/// makes none of it either.
 pub(crate) const SHAPES: [Shape; 15] = [
     shape(PixelFormat::R8Unorm, 1, 256, 16, 256),
     shape(PixelFormat::RG8Unorm, 2, 128, 16, 256),
@@ -183,10 +190,10 @@ pub(crate) const SHAPES: [Shape; 15] = [
     shape(PixelFormat::BGRA8Unorm, 4, 100, 50, 512),
     shape(PixelFormat::RGBA16Float, 8, 33, 17, 512),
     shape(PixelFormat::RGBA32Float, 16, 20, 9, 512),
-    shape(PixelFormat::BGRA8Unorm, 4, 101, 51, 416),
-    shape(PixelFormat::RGBA16Float, 8, 33, 17, 272),
-    shape(PixelFormat::BGRA8Unorm, 4, 101, 51, 448),
-    shape(PixelFormat::RGBA16Float, 8, 33, 17, 320),
+    tight(PixelFormat::BGRA8Unorm, 4, 101, 51, 416),
+    tight(PixelFormat::RGBA16Float, 8, 33, 17, 272),
+    tight(PixelFormat::BGRA8Unorm, 4, 101, 51, 448),
+    tight(PixelFormat::RGBA16Float, 8, 33, 17, 320),
     shape(PixelFormat::BGRA8Unorm, 4, 3840, 2160, 15360),
 ];
 
@@ -196,8 +203,9 @@ pub(crate) const SHAPES: [Shape; 15] = [
 /// (of widths no multiple of 4 and heights no multiple of 2 among them, so that a driver's write
 /// of a block wider than a texel past a row's or the image's end shows), at a 512-byte pitch, at
 /// the 16-byte pitch a driver that lays rows tight lays them at and at the 64-byte pitch of one
-/// that lays them at the next multiple of 64 ([`SHAPES`]), and one 1920x1080 surface of 4-byte
-/// texels, last. A shape the device makes no image of in place, or no dispatch over, is skipped.
+/// that lays them at the next multiple of 64 ([`SHAPES`], and run as there: [`Shape::runs`]), and
+/// one 1920x1080 surface of 4-byte texels, last. A shape the device makes no image of in place, or
+/// no dispatch over, is skipped.
 pub(crate) const STORE_SHAPES: [(Shape, ShadowTexelView); 11] = [
     (
         shape(PixelFormat::RGBA8Uint, 4, 64, 16, 256),
@@ -224,19 +232,19 @@ pub(crate) const STORE_SHAPES: [(Shape, ShadowTexelView); 11] = [
         ShadowTexelView::R32G32B32A32Uint,
     ),
     (
-        shape(PixelFormat::RGBA8Uint, 4, 101, 51, 416),
+        tight(PixelFormat::RGBA8Uint, 4, 101, 51, 416),
         ShadowTexelView::R8G8B8A8Uint,
     ),
     (
-        shape(PixelFormat::RG32Uint, 8, 33, 17, 272),
+        tight(PixelFormat::RG32Uint, 8, 33, 17, 272),
         ShadowTexelView::R32G32Uint,
     ),
     (
-        shape(PixelFormat::RGBA8Uint, 4, 101, 51, 448),
+        tight(PixelFormat::RGBA8Uint, 4, 101, 51, 448),
         ShadowTexelView::R8G8B8A8Uint,
     ),
     (
-        shape(PixelFormat::RG32Uint, 8, 33, 17, 320),
+        tight(PixelFormat::RG32Uint, 8, 33, 17, 320),
         ShadowTexelView::R32G32Uint,
     ),
     (
@@ -252,6 +260,15 @@ const fn shape(format: PixelFormat, texel: u64, width: u64, height: u64, bpr: u6
         width,
         height,
         bytes_per_row: bpr,
+        tight: false,
+    }
+}
+
+/// [`shape`], at the pitch a driver that makes no image at an explicit pitch lays its rows at.
+const fn tight(format: PixelFormat, texel: u64, width: u64, height: u64, bpr: u64) -> Shape {
+    Shape {
+        tight: true,
+        ..shape(format, texel, width, height, bpr)
     }
 }
 
@@ -274,6 +291,15 @@ impl Shape {
             slices: 1,
         };
         RowEnds::of(0, &layout, line)
+    }
+
+    /// Whether a class's rounds take it, in lines of `line` bytes, after shapes whose texels share
+    /// a line, of the texel sizes `made`, were made in the class: but for a shape at a driver's own
+    /// pitch whose texels share a line, where one of its texel size was made (a device that makes
+    /// images at an explicit pitch made it, so the shape adds rounds the class has had and
+    /// nothing a device of that pitch lacks; `made` grows as each such shape is made).
+    pub(crate) fn runs(&self, line: u64, made: &[u64]) -> bool {
+        !(self.tight && self.rows(line) == RowEnds::InLines && made.contains(&self.texel))
     }
 
     /// The bytes of the window the check fills and writes: the texture's rows, then the bytes
@@ -439,8 +465,10 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<[Ve
     };
     shapes.sort_by_key(|(shape, _)| shape.rows(line) != RowEnds::OnLines);
     let mut made = [0; 2];
+    // The texel sizes of the shapes whose texels share a line made so far (`Shape::runs`).
+    let mut made_sharing = Vec::new();
     for (shape, texel) in shapes {
-        if shape.window(page) > BUFFER_BYTES {
+        if shape.window(page) > BUFFER_BYTES || !shape.runs(line, &made_sharing) {
             continue;
         }
         let rows = shape.rows(line);
@@ -460,7 +488,12 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<[Ve
                 }
             };
             match outcome {
-                Round::Kept => made[rows.index()] += 1,
+                Round::Kept => {
+                    made[rows.index()] += 1;
+                    if rows == RowEnds::InLines && !made_sharing.contains(&shape.texel) {
+                        made_sharing.push(shape.texel);
+                    }
+                }
                 Round::NotMade => break,
                 Round::Changed((offset, due, read)) => {
                     let image = shape.bytes_per_row * shape.height;
