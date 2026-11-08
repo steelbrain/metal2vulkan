@@ -456,6 +456,8 @@ use replay::{
     DrawPatchesIndirect, Samplers,
 };
 pub(crate) use replay::{RenderCall, RenderLog, RenderRoom, Table};
+#[cfg(test)]
+pub(crate) use snapshot::snapshot_within;
 
 /// What a draw, or the render pipeline state or tessellation factors set for the draws, did
 /// wrong.

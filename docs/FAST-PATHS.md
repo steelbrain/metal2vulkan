@@ -238,14 +238,20 @@ recorded here.
   a 1920x1080 surface) 0.56 to 0.99 times the split's GPU time through scissors of 960x540 and up,
   at most 1.08 times through the whole target and 1.2 times through a 320x180 scissor it covers
   half of or more.
-  Elsewhere the rule weighs the snapshot draw at 20 bytes of the split's copy for each pixel its
-  scissors bound, against a copy of every texel of the color (an upper bound of the split's copy,
-  which is cut to the scissors or to what changed for a one-level, one-slice texture), which fits
-  the RX 7900 XTX and the RTX 5080 Laptop GPU; on the Radeon 780M the split is faster from about
-  14.5%, 17% and 42% of the target for 4-, 8- and 16-byte texels, so the rule costs up to 36% there
-  (`RGBA16Float` at 30% of a 1920x1080 target), and on the Iris Xe from an eighth of the reader's
-  scissor covered, whatever its area, so the rule costs up to 2.1 times there (a 320x180 scissor
-  covered whole over a private 1920x1080 `BGRA8Unorm` texture).
+  Elsewhere the area rule (`render/snapshot.rs`) weighs each form at the share of its scissors
+  least favourable to it, as a draw's recording cannot know what it covers: the snapshot draw at
+  20 bytes of the split's copy for each pixel its scissors bound, the split at a copy of every
+  texel of the color (an upper bound of the split's copy, which is cut to the scissors or to what
+  changed for a one-level, one-slice texture), each beside a reader's fixed cost of a mebibyte of
+  the copy; it takes the form whose cost there is the smaller multiple of the other's. A 4-byte
+  color's reader takes the snapshot through scissors of up to two fifths of the target at any
+  size, and at any area from 1024x768. Through no scissor over private `BGRA8Unorm` targets of
+  1280x720 to 3662x2039 (`runtime_lane::attachment_read_costs::snapshot_area_costs`), a reader
+  covering 1.5% of the target took 0.09 to 0.33 times the split's GPU time on the Iris Xe, 0.11 to
+  0.24 on the Radeon 780M and 0.25 to 0.43 on the RX 7900 XTX; one covering the whole target, the
+  rule's worst case, 1.04 to 1.28 times, 2.4 to 2.8 times and 1.3 to 2.1 times. Through a small
+  scissor covered whole the snapshot costs up to 2.1 times the split on the Iris Xe (a 320x180
+  scissor over a private 1920x1080 `BGRA8Unorm` texture). Other devices are not measured.
 - **A texture over a no-copy buffer's host pages, or over a host-visible buffer longer than 32
   MiB, that a shader writes of 1- or 2-byte texels (or whose class's check has not passed for an
   access of its, or whose format, usage or pitch no image takes, or under

@@ -8,9 +8,9 @@
 //! A draw's share is its scissors' pixels for each color it reads so, over the pixels of those
 //! colors' levels, in steps of 0.5% (one step at 100% and above); its texel bytes are those
 //! colors' bytes over their pixels, rounded down: a color's own format's bytes for a draw that
-//! reads one color, or colors of one width. The rule takes the snapshot where the share times
-//! the snapshot's cost per pixel is at most the texel bytes, so the line shows how many draws lie
-//! near the rule's bound for each width.
+//! reads one color, or colors of one width. The rule's bound on the share
+//! (`render/snapshot.rs`'s area rule) turns on the texel bytes and on the colors' size, so the
+//! line shows how many draws lie near it for each width.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;

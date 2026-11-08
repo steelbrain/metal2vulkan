@@ -27,11 +27,12 @@
 //!   reader in two instances (every pixel covered by two primitives of the one draw), a barrier,
 //!   the reader once more: `3 * FILL`, then `6 * FILL`. A read of the attachment itself would
 //!   race with the draw's own color writes, the second primitive reading the first's (`4 * FILL`).
-//! - [`readers_take_the_snapshot_where_it_costs_less_than_the_copy`]: the same draws through
-//!   wider scissors, whatever the snapshot's form: over `RGBA8Unorm` through the whole target's
-//!   scissor (1024 pixels of 20 bytes against 1024 texels of 4) and through [`QUARTER`]'s (256
-//!   of 20 against 1024 of 4), a split for each; over `RGBA16Float` through [`QUARTER`]'s (256
-//!   of 20 against 1024 of 8), a snapshot for each where the device takes the path.
+//! - [`readers_take_the_snapshot_by_the_area_rule`]: the same draws through wider scissors,
+//!   whatever the snapshot's form (`render/snapshot.rs`'s area rule, each form beside a reader's
+//!   fixed cost of a mebibyte): over `RGBA8Unorm` through the whole target's scissor (1024 pixels
+//!   of 20 bytes against a copy of 1024 texels of 4), a split for each; through [`QUARTER`]'s (256
+//!   pixels, within two fifths of the target), and over `RGBA16Float` through [`QUARTER`]'s, a
+//!   snapshot for each where the device takes the path.
 //! - [`a_surfaces_readers_take_the_snapshot_at_any_area`]: the same draws over a surface over
 //!   host pages, an `RGBA8Unorm` texture of an IOSurface plane over a no-copy buffer, through the
 //!   whole target's scissor: a snapshot for each where the device takes the path and the image
@@ -45,9 +46,9 @@
 //! - [`each_form_reads_what_the_split_reads`]: the first test's draws over a target of each of
 //!   `RGBA8Unorm`, `BGRA8Unorm`, `R8Unorm`, `RG8Unorm` (8-bit codes), `RGBA16Float` (half-float
 //!   codes) and `RGB10A2Unorm` (bits): the bytes the split leaves, byte for byte, with a snapshot
-//!   for each reader where the device takes the path, the rule does (not `R8Unorm`'s, whose copy
-//!   moves 1024 bytes) and the device keeps the color in place (an `RGBA8Unorm` one's on every
-//!   such device; the counts printed say which others did).
+//!   for each reader where the device takes the path, the rule does (for each of them, `R8Unorm`'s
+//!   copy of 1024 bytes too) and the device keeps the color in place (an `RGBA8Unorm` one's on
+//!   every such device; the counts printed say which others did).
 //! - [`without_a_barrier_the_readers_read_the_texels_from_before_the_pass`]: the same draws with
 //!   no barrier: every reader reads [`CLEARED`], the texel from before the pass at its own pixel,
 //!   through the copy taken before the pass: `FILL + 3 * CLEARED`, no snapshot. The M3 Max's
@@ -505,7 +506,7 @@ fn overlapping_primitives_read_what_the_draws_before_the_barrier_wrote() {
 }
 
 #[test]
-fn readers_take_the_snapshot_where_it_costs_less_than_the_copy() {
+fn readers_take_the_snapshot_by_the_area_rule() {
     on_default_policy(
         |_| {},
         |device| {
@@ -519,18 +520,18 @@ fn readers_take_the_snapshot_where_it_costs_less_than_the_copy() {
                 (0, 2),
                 "RGBA8Unorm over the target: snapshots, splits"
             );
+            let (snapshotted, splits) = if snapshots(device) { (2, 0) } else { (0, 2) };
             let (bytes, moved) = readers(device, &queue, narrow, true, Some(QUARTER));
             eprintln!("snapshot reads, quarter scissor, RGBA8Unorm: {moved:?}");
             holds("quarter scissor", &bytes, 6 * FILL);
             assert_eq!(
                 (moved.snapshotted, moved.splits),
-                (0, 2),
+                (snapshotted, splits),
                 "RGBA8Unorm over a quarter: snapshots, splits"
             );
             let wide = PixelFormat::RGBA16Float;
             let (_, moved) = readers(device, &queue, wide, true, Some(QUARTER));
             eprintln!("snapshot reads, quarter scissor, RGBA16Float: {moved:?}");
-            let (snapshotted, splits) = if snapshots(device) { (2, 0) } else { (0, 2) };
             assert_eq!(
                 (moved.snapshotted, moved.splits),
                 (snapshotted, splits),

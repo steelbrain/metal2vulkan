@@ -83,11 +83,9 @@
 //!   pins (below), no two of the colors of one image (whose
 //!   snapshot is one); the draw costs no more so than the split would
 //!   (`RenderCommandEncoder::snapshot_cheaper`: at any area where every such color is a texture
-//!   whose image lies over its buffer's bytes, `RenderCommandEncoder::over_bytes`; else its
-//!   scissors' area times [`SNAPSHOT_PIXEL_COST`] for each color against each color's level
-//!   times its texel bytes, whatever the snapshot's form, so a 4-byte color's reader,
-//!   `RGBA8Unorm`'s or `BGRA8Unorm`'s, takes the snapshot up to a fifth of the render area, an
-//!   `RGBA16Float` one's up to two fifths and an `RGBA32Float` one's up to four fifths); the binder keeps every such slot (in a pass with no depth or stencil attachment, on a device that also enabled
+//!   whose image lies over its buffer's bytes, `RenderCommandEncoder::over_bytes`; else by the
+//!   rule below); the binder keeps every such slot (in a pass with no depth or stencil
+//!   attachment, on a device that also enabled
 //!   `fragmentStoresAndAtomics`) and the variant is made; no slot takes the snapshot slot as
 //!   storage. The draw's instance holds those colors in the feedback loop layout from its render
 //!   pass instance's begin, which records in a secondary: where the current instance
@@ -98,6 +96,26 @@
 //!   (`WorkCounts::snapshot_inline_splits` counts the first cause). After it, an execution of
 //!   render commands, and a draw that binds such a color's image as a storage image, record into
 //!   another instance: the feedback loop layout serves neither.
+//! - **The area rule.** Which form costs less turns on the share of its scissors the draw covers,
+//!   which its recording cannot know: the snapshot draw runs at the pixels the draw covers, the
+//!   split copies the color whatever the draw covers. The rule weighs each form at the share least
+//!   favourable to it, in bytes of the split's copy: the snapshot at [`READER_COST`] and
+//!   [`SNAPSHOT_PIXEL_COST`] at each pixel its scissors bound, for each color (the draw covering
+//!   them whole), the split at [`READER_COST`] and its copy of each color's level, its texel bytes
+//!   each, whatever the snapshot's form (the draw covering nothing). It takes the form whose cost
+//!   there is the smaller multiple of the other form's: the snapshot where `READER_COST *
+//!   (READER_COST + pixels * SNAPSHOT_PIXEL_COST) <= (READER_COST + bytes)^2`. A reader whose
+//!   snapshot costs no more than the split's copy where it covers its scissors whole takes it, as
+//!   does a reader through scissors of a large color whatever it covers: a 4-byte color's reader,
+//!   `RGBA8Unorm`'s or `BGRA8Unorm`'s, takes the snapshot through scissors of up to two fifths of
+//!   its level at any size, and through the whole level from 786,432 pixels (1024x768), an
+//!   `RGBA16Float` one's through four fifths, and its whole level from 65,536 pixels (256x256),
+//!   and an `RGBA32Float` one's at any area. On the Iris Xe, the Radeon 780M and the RX 7900 XTX
+//!   (`runtime_lane::attachment_read_costs::snapshot_area_costs`, 30 readers a frame over private
+//!   `BGRA8Unorm` targets of 1280x720 to 3662x2039, no scissor) a reader over 1.5% of the target
+//!   took 0.09 to 0.43 times the split's GPU time, and one over the whole target 1.04 to 1.28
+//!   times on the Iris Xe, 2.4 to 2.8 times on the Radeon 780M and 1.3 to 2.1 times on the RX 7900
+//!   XTX.
 //! - **Pins.** A fetch of a color in the pixel interlock reads and writes its image as a storage
 //!   image, so a later fetch of a color whose image lacks `STORAGE` renders it through a stand-in
 //!   (`attachment_stand_in.rs`), which the pass's end puts in place for the whole pass, copied in
@@ -160,13 +178,34 @@ pub(super) fn form(plan: &BindingPlan, slot: u32) -> Option<SnapshotForm> {
     plan.variant.snapshot_textures.get(&slot).copied()
 }
 
-/// What the snapshot draw costs at each pixel a draw's scissors bound, for each color it
-/// snapshots, in bytes of the split's copy (`RenderCommandEncoder::snapshot_cheaper`): one more
-/// fragment invocation at the pixel, inside the pixel interlock, that reads the texel and stores
-/// its snapshot, and the drawing draw's read of it. The invocation's cost, not the snapshot's
-/// bytes: a snapshot of a color's codes, 4 bytes a pixel, costs about what one of the fetched
-/// lanes' bits, 16, does.
+/// What the snapshot draw costs at each pixel a draw covers, for each color it snapshots, in
+/// bytes of the split's copy (the module docs' area rule): one more fragment invocation at the
+/// pixel, inside the pixel interlock, that reads the texel and stores its snapshot, and the
+/// drawing draw's read of it. The invocation's cost, not the snapshot's bytes: a snapshot of a
+/// color's codes, 4 bytes a pixel, costs about what one of the fetched lanes' bits, 16, does.
+/// Measured at about 14 on the Iris Xe and 20 on the Radeon 780M
+/// (`runtime_lane::attachment_read_costs::snapshot_area_costs`).
 const SNAPSHOT_PIXEL_COST: u64 = 20;
+
+/// What either form costs a draw whatever it covers, in bytes of the split's copy (the module
+/// docs' area rule): the snapshot's two barriers and its second draw, or the split's end of one
+/// render pass instance and begin of the next. Measured
+/// (`runtime_lane::attachment_read_costs::snapshot_area_costs`) at 12 to 16 microseconds a
+/// snapshot on the Iris Xe and the Radeon 780M, and up to 18 a split besides its copy, which moves
+/// a byte in 9 to 12 picoseconds on the Iris Xe and 15 on the Radeon 780M: about a mebibyte of
+/// it.
+const READER_COST: u64 = 1 << 20;
+
+/// Whether a draw takes the snapshot by the module docs' area rule: its scissors bound `pixels`
+/// pixels over all the colors it reads so, of `bytes` bytes in all in the colors' levels.
+pub(crate) fn snapshot_within(pixels: u64, bytes: u64) -> bool {
+    let (fixed, pixels, bytes) = (
+        u128::from(READER_COST),
+        u128::from(pixels),
+        u128::from(bytes),
+    );
+    fixed * (fixed + pixels * u128::from(SNAPSHOT_PIXEL_COST)) <= (fixed + bytes).pow(2)
+}
 
 /// Which of a draw's two Vulkan draws one recording is (the module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -418,11 +457,12 @@ impl RenderLowering {
 
     /// Whether a draw of `pipeline` that reads the pass's `colors` through snapshots costs no
     /// more than the split would: at any area over a buffer's bytes
-    /// ([`over_bytes`](Self::over_bytes)), else by [`snapshot_weights`](Self::snapshot_weights);
-    /// counted by its size where `METAL2VULKAN_LOG_PIPELINES` is set (`reader_sizes.rs`).
+    /// ([`over_bytes`](Self::over_bytes)), else by the area rule ([`snapshot_within`]) over
+    /// [`snapshot_weights`](Self::snapshot_weights); counted by its size where
+    /// `METAL2VULKAN_LOG_PIPELINES` is set (`reader_sizes.rs`).
     fn snapshot_cheaper(&self, pipeline: &DrawingState, colors: &[usize]) -> bool {
         let (covered, pixels, bytes) = self.snapshot_weights(pipeline, colors);
-        let within = self.over_bytes(colors) || covered * SNAPSHOT_PIXEL_COST <= bytes;
+        let within = self.over_bytes(colors) || snapshot_within(covered, bytes);
         if crate::pipeline::creation_log_enabled() {
             let device = self.core.device();
             let line = crate::device::lock(&device.shared().reader_sizes)
@@ -453,18 +493,16 @@ impl RenderLowering {
     }
 
     /// What weighs whether a draw of `pipeline` that reads the pass's `colors` through snapshots
-    /// costs no more than the split would: both forms are exact, so the draw takes the cheaper. The
-    /// snapshot draw costs [`SNAPSHOT_PIXEL_COST`] for each color at each pixel the draw covers,
-    /// which its Vulkan scissors bound (`EncoderState::vk_scissors`: each viewport's pixels within
-    /// its scissor rectangle, inside the render area); the split's copy is weighed as reading and
-    /// writing each color's every texel of the rendered level, its format's bytes each, an upper
-    /// bound: a copy of a one-level, one-slice texture's image moves only the texels around the
-    /// draw's scissors, or those the instances before changed (`ShadowCopies::cuts`), which errs
-    /// toward the snapshot. The split's pass break (each attachment stored and loaded again) is
-    /// left out, which errs toward the split. The
-    /// draw's pixels for every color (the scissors' pixels times the colors), the colors' pixels,
-    /// and their bytes; it takes the snapshot where the first times [`SNAPSHOT_PIXEL_COST`] is at
-    /// most the last.
+    /// costs no more than the split would: both forms are exact, so the draw takes the cheaper by
+    /// the area rule (the module docs). The snapshot draw costs [`SNAPSHOT_PIXEL_COST`] for each
+    /// color at each pixel the draw covers, at most those its Vulkan scissors bound
+    /// (`EncoderState::vk_scissors`: each viewport's pixels within its scissor rectangle, inside
+    /// the render area); the split's copy is weighed as reading and writing each color's every
+    /// texel of the rendered level, its format's bytes each, an upper bound: a copy of a
+    /// one-level, one-slice texture's image moves only the texels around the draw's scissors, or
+    /// those the instances before changed (`ShadowCopies::cuts`), which errs toward the snapshot.
+    /// The draw's pixels for every color (the scissors' pixels times the colors), the colors'
+    /// pixels, and their bytes.
     fn snapshot_weights(&self, pipeline: &DrawingState, colors: &[usize]) -> (u64, u64, u64) {
         let selects = pipeline.base().graphics.writes_viewport_index
             || self.amplification.offsets_viewports();

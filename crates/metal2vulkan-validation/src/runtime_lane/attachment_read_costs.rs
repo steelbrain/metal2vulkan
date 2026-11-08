@@ -9,8 +9,9 @@
 //! window's rectangle through its scissor, a memory barrier over the render targets and a draw
 //! that reads the target at its own pixels over that rectangle (`tob_read`); then, in every other
 //! pass, a barrier and a draw over a window that samples the target at other pixels
-//! (`a4_fragment_select_sample`). The windows cover more than a fifth of the target, so no own-pixel
-//! read takes a snapshot (`render/snapshot.rs`). The frame waits for its last command buffer.
+//! (`a4_fragment_select_sample`). Each own-pixel read takes a snapshot where the device takes the
+//! path, as the area rule does through a window's scissor over this target (`render/snapshot.rs`),
+//! else a split. The frame waits for its last command buffer.
 //!
 //! [`WARM`] frames run untimed, then [`TIMED`] frames are printed as one `ATTACHMENT-READ-COST`
 //! line: the GPU time per frame (each command buffer's GPU end less its start, summed), the wall
@@ -58,6 +59,17 @@
 //! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the
 //! images made with feedback loop usage.
 //!
+//! `snapshot_area_costs` weighs the area rule's two forms for readers through no scissor, as the
+//! consumer's guest draws them: over a private `BGRA8Unorm` target of each of [`AREA_SIZES`], a
+//! frame is one command buffer of one pass, loaded but in the first frame, which clears it, and
+//! stored; [`SELF_PAIRS`] times a fill of a rectangle covering a share of the target
+//! ([`AREA_SHARES`]), at a place of its own, a memory barrier over the render targets and a draw
+//! over the same rectangle that reads the target at its own pixels (`tob_read`); each cell also
+//! without the barriers and readers, the baseline. On the default device each reader takes the form
+//! the rule picks, and on one that withholds `fragmentShaderPixelInterlock` the split. Printed per
+//! cell (`SNAPSHOT-AREA-COST`): the median GPU time per frame of the baseline and of the readers
+//! on each device, and per frame the readers snapshotted and split on each.
+//!
 //! Ignored by default: measurements, not checks. Run them by name with `--run-ignored all`.
 
 use super::attachment_reads::{floats, function};
@@ -66,7 +78,7 @@ use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::{open_device, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::device::HostPageTexturePolicy;
+use metal2vulkan::device::{HostPageTexturePolicy, VkFeature};
 use metal2vulkan::metal::{
     BarrierScope, BlendFactor, PixelFormat, PrimitiveType, RenderStages, TextureUsage,
 };
@@ -1037,4 +1049,146 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
     }
     drop((surface, private, buffer));
     drop(mapping);
+}
+
+/// The `snapshot_area_costs` targets' sizes.
+const AREA_SIZES: [[u64; 2]; 4] = [[1280, 720], [1920, 1080], [2560, 1440], SELF_SIZE];
+/// The share of its target each `snapshot_area_costs` rectangle covers, in thousandths.
+const AREA_SHARES: [u64; 5] = [15, 32, 125, 500, 1000];
+
+#[test]
+#[ignore = "a release-mode measurement: run by name"]
+fn snapshot_area_costs() {
+    let rule = open_device(TEST_DEVICE, DeviceOptions::default()).unwrap();
+    let mut options = DeviceOptions::default();
+    options
+        .withheld_features
+        .insert(VkFeature::FragmentShaderPixelInterlock);
+    let split = open_device(TEST_DEVICE, options).unwrap();
+    let devices = [&rule, &split].map(|device| {
+        let bgra = PixelFormat::BGRA8Unorm;
+        let draws = (
+            state(device, "tob_solid", "tob_renders.ll", bgra),
+            state(device, "tob_read", "tob_renders.ll", bgra),
+        );
+        (device, device.new_command_queue().unwrap(), draws)
+    });
+    for size in AREA_SIZES {
+        let targets = devices.each_ref().map(|(device, ..)| {
+            let mut d =
+                TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, size[0], size[1], false);
+            d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            d.resource_options = ResourceOptions::private();
+            device.new_texture(&d).unwrap()
+        });
+        for share in AREA_SHARES {
+            let side =
+                |s: u64| ((s as f64 * (share as f64 / 1000.0).sqrt()).round() as u64).clamp(1, s);
+            let rect = [side(size[0]), side(size[1])];
+            let mut cells = Vec::new();
+            for ((device, queue, draws), target) in devices.iter().zip(&targets) {
+                for baseline in [true, false] {
+                    let mut frames = 0..;
+                    let mut next = || frames.next().unwrap();
+                    let draws = (&draws.0, &draws.1);
+                    for _ in 0..SELF_WARM {
+                        area_frame(queue, target, draws, (size, rect), next(), baseline);
+                    }
+                    let before = device.work_counts();
+                    let gpu: Vec<f64> = (0..SELF_TIMED)
+                        .map(|_| area_frame(queue, target, draws, (size, rect), next(), baseline))
+                        .collect();
+                    let after = device.work_counts();
+                    let per = |a: u64, b: u64| (b - a) as f64 / SELF_TIMED as f64;
+                    cells.push((
+                        median(gpu) * 1e3,
+                        per(
+                            before.reading_draws_snapshotted,
+                            after.reading_draws_snapshotted,
+                        ),
+                        per(before.attachment_read_splits, after.attachment_read_splits),
+                    ));
+                }
+            }
+            let [rule_base, rule_read, split_base, split_read] = [0, 1, 2, 3].map(|i| cells[i]);
+            println!(
+                "SNAPSHOT-AREA-COST {} {}x{} share {share}/1000 rect {}x{}: GPU ms/frame: rule \
+                 {:.3} over {:.3} baseline (snapshotted {:.2}, splits {:.2}); split {:.3} over \
+                 {:.3} baseline (snapshotted {:.2}, splits {:.2})",
+                rule.name(),
+                size[0],
+                size[1],
+                rect[0],
+                rect[1],
+                rule_read.0,
+                rule_base.0,
+                rule_read.1,
+                rule_read.2,
+                split_read.0,
+                split_base.0,
+                split_read.1,
+                split_read.2,
+            );
+        }
+    }
+}
+
+/// One [`snapshot_area_costs`] frame over `target` of `size`, its `frame`th, on `queue`: its pairs
+/// over rectangles of `rect`; with no barriers or readers where `baseline`. Its GPU time, in
+/// seconds.
+fn area_frame(
+    queue: &CommandQueue,
+    target: &Texture,
+    (fill, read): (&RenderPipelineState, &RenderPipelineState),
+    ([width, height], [w, h]): ([u64; 2], [u64; 2]),
+    frame: usize,
+    baseline: bool,
+) -> f64 {
+    let mut d = RenderPassDescriptor::new();
+    let color = &mut d.color_attachments[0];
+    color.texture = Some(target.clone());
+    color.load_action = match frame {
+        0 => LoadAction::Clear,
+        _ => LoadAction::Load,
+    };
+    color.store_action = StoreAction::Store;
+    let corners = |[x0, y0, x1, y1]: [u64; 4]| {
+        let x = |p: u64| p as f32 / width as f32 * 2.0 - 1.0;
+        let y = |p: u64| 1.0 - p as f32 / height as f32 * 2.0;
+        floats([x(x0), y(y1), x(x1), y(y0)])
+    };
+    let place = |pair: u64| {
+        let n = frame as u64 + pair;
+        let x = (n * 1373).checked_rem(width - w).unwrap_or(0);
+        let y = ((n * 3 + 1) * 787).checked_rem(height - h).unwrap_or(0);
+        [x, y, x + w, y + h]
+    };
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.render_command_encoder(&d).unwrap();
+    for pair in 0..SELF_PAIRS {
+        let rect = corners(place(pair));
+        encoder.set_render_pipeline_state(fill).unwrap();
+        let red = pair as f32 / SELF_PAIRS as f32;
+        encoder
+            .set_fragment_bytes(&floats([red, 0.5, 0.0, 1.0]), 0)
+            .unwrap();
+        encoder.set_vertex_bytes(&rect, 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+        if baseline {
+            continue;
+        }
+        barrier(&mut encoder);
+        encoder.set_render_pipeline_state(read).unwrap();
+        encoder.set_fragment_texture(Some(target), 0).unwrap();
+        encoder
+            .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+            .unwrap();
+    }
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()
 }

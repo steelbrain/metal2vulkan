@@ -400,6 +400,7 @@ mod shared_draw_locks;
 mod shared_pointers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod short_row_kinds;
+mod snapshot_area;
 mod sorted_chunks;
 mod spares;
 mod sparse;
