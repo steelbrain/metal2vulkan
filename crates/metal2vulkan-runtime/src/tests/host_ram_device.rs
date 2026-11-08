@@ -666,7 +666,7 @@ fn settled(device: &Device, done: impl Fn(&crate::WorkCounts) -> bool) -> crate:
 /// where its barriers do not order blits through two imports of the same pages
 /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's and ANV's) and the object
 /// imports the chunk, as one that finds the device's thread stopped does.
-fn runs_alone(device: &Device) -> u64 {
+pub(super) fn runs_alone(device: &Device) -> u64 {
     let defect = metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered;
     u64::from(!device.properties().driver_defects.contains(&defect))
 }
