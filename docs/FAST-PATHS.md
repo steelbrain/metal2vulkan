@@ -950,8 +950,10 @@ driver's. Each is open work.
   (longest 8.8 to 9.4 ms); with the blocks kept they took none, in 64 to 71 ms, and no commit
   waited 1 ms (longest 0.39 to 0.67 ms), 16 empty blocks (1 GiB) kept between the clips. A first
   clip still makes its blocks: 16 allocations, against 44 when each picture had an allocation of
-  its own, with 3 to 5 commits waiting 1 ms or more (longest 10.9 to 19.6 ms). Metal's command
-  buffers wait for no allocation. Not announced.
+  its own, with 3 to 5 commits waiting 1 ms or more (longest 10.9 to 19.6 ms): its blocks'
+  `vkAllocateMemory` holds every submission, and a block made ahead of its placements, on a thread
+  of the device's own, would hold the frames it meets as long (the row above), so none is. Metal's
+  command buffers wait for no allocation. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
   `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both
