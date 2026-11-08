@@ -16,21 +16,32 @@
 //!   ([`merged`]); a run that starts before (a descending neighbour) stays apart. Hazard tracking
 //!   takes the buffer's bytes from the lowest run's first to the highest's last as the copy's; the
 //!   bytes between the runs (a row's padding) are neither read nor written. Each run is cut where a
-//!   chunk ends ([`pieces`]), and each chunk the pieces touch is taken as an object over it takes
-//!   it (`RamOnDevice::for_copy`): its import where it is made; else, where an object over it would
-//!   be bound in its own run's import (`RamOnDevice::for_object`), an import of each of the copy's
-//!   ranges of it alone (those less than 2 MiB apart one, at most [`MOST_ALONE`]:
-//!   [`alone_ranges`]), made on the encoding thread, which faults in and pins those pages and no
-//!   more, while the device's thread imports the chunk (the thread's window moved past it, or,
-//!   where each listed import costs every submission, the chunk asked for): so no copy waits for a
-//!   chunk's import. Those imports are held by the command buffer until it completed, then freed
-//!   (`WorkCounts::run_imports_live`). Elsewhere (the thread stopped, failed the chunk or is not
-//!   started, the allocation limit's margin, `RuntimeDriverDefect::AliasedImportBlitsUnordered`,
-//!   more ranges than [`MOST_ALONE`], a range that is the whole chunk, a range's import that fails)
-//!   the copy imports the chunk, or waits for its import under way, which is the chunk's one import
-//!   (`Device::import_chunk`), made and counted as an object's is
+//!   chunk ends ([`pieces`]), and each chunk the pieces touch is taken by the copy
+//!   (`RamOnDevice::for_copy`): its import where it is made; else an import of each of the copy's
+//!   ranges of it alone (those less than 2 MiB apart one: [`alone_ranges`]), made on the encoding
+//!   thread, which faults in and pins those pages and no more, held by the command buffer until it
+//!   completed, then freed (`WorkCounts::run_imports_live`). So no copy waits for a chunk's import.
+//!   Where it falls back, the copy imports the chunk, or waits for its import under way, which is
+//!   the chunk's one import (`Device::import_chunk`), made and counted as an object's is
 //!   (`WorkCounts::host_ram_copy_import_waits`, `host_ram_copy_import_wait_nanos`); but a gather
 //!   takes the CPU's path below.
+//!   - **Where each listed import costs every submission** (RADV with the RAM's source of
+//!     dma-bufs: `host_ram.rs`'s `Plan::listed`, whose chunks are long dma-bufs), a copy never
+//!     takes a chunk not imported yet for its own pages: it imports its ranges alone however
+//!     many they are, joins two only where every page between them is in memory already
+//!     (`mincore`), and asks the device's thread for nothing. A chunk's import pins every page of
+//!     it, and the source's dma-buf allocates the pages of the guest's file the guest never
+//!     touched, which stay allocated; a copy's pins its runs' pages and pages the file holds
+//!     already, so copies make none of the guest's untouched RAM resident. It falls back where
+//!     `RuntimeDriverDefect::AliasedImportBlitsUnordered` holds, at the allocation limit's
+//!     margin, for a range that is the whole chunk, or where a range's import fails.
+//!   - **Elsewhere** a chunk is taken as an object over it takes it: alone where an object over
+//!     it would be bound in its own run's import (`RamOnDevice::for_object`) and its ranges are
+//!     at most [`MOST_ALONE`], while the device's thread imports the chunk (its window moved past
+//!     it). It falls back where the thread stopped, failed the chunk or is not started, at the
+//!     allocation limit's margin, where `RuntimeDriverDefect::AliasedImportBlitsUnordered` holds,
+//!     for more ranges than [`MOST_ALONE`], a range that is the whole chunk, or a range's import
+//!     that fails.
 //! - **First touch through the CPU** ([`StagedFill`]). A gather that would wait for a chunk's
 //!   import the device's thread makes (its ranges too many, a range the whole chunk, or the
 //!   device's defect: `RamOnDevice::copy_take`), on a device whose plan is not `Plan::listed`, and
@@ -138,9 +149,10 @@ pub(crate) const PAGE: u64 = PagesCopyModule::PAGE_BYTES as u64;
 const MOST_RANGES: usize = 16;
 
 /// The most ranges of a chunk not imported yet a copy imports alone while the device imports the
-/// chunk (`RamOnDevice::for_copy`): each import is a fixed cost on the encoding thread (a 2 MiB
-/// run's took 0.75 to 0.83 ms on the Radeon 780M and RX 7900 XTX), so a copy whose pages there
-/// are more ranges than this imports the chunk, or waits for its import under way.
+/// chunk (`RamOnDevice::for_copy`), where each listed import does not cost every submission: each
+/// import is a fixed cost on the encoding thread (a 2 MiB run's took 0.75 to 0.83 ms on the Radeon
+/// 780M and RX 7900 XTX), so a copy whose pages there are more ranges than this imports the
+/// chunk, or waits for its import under way.
 pub(crate) const MOST_ALONE: usize = 16;
 
 /// The bytes between two of a chunk's ranges a copy imports alone below which they are one
@@ -511,29 +523,27 @@ pub(crate) fn chunk_ranges(pieces: &[Piece], most: usize) -> BTreeMap<usize, Vec
         .collect()
 }
 
-/// The bytes of each chunk `pieces` touch, by chunk, as a copy imports them alone where the chunk
-/// is not imported yet (`RamOnDevice::for_copy`): sorted, those less than [`JOIN_GAP`] apart as
-/// one, never joined further.
-pub(crate) fn alone_ranges(pieces: &[Piece]) -> BTreeMap<usize, Vec<Range<u64>>> {
-    let mut by_chunk: BTreeMap<usize, Vec<Range<u64>>> = BTreeMap::new();
-    for piece in pieces {
-        let bytes = piece.offset..piece.offset + piece.length;
-        by_chunk.entry(piece.slot).or_default().push(bytes);
-    }
-    for ranges in by_chunk.values_mut() {
-        ranges.sort_by_key(|range| range.start);
-        let mut out: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
-        for range in ranges.drain(..) {
-            match out.last_mut() {
-                Some(last) if range.start <= last.end.saturating_add(JOIN_GAP - 1) => {
-                    last.end = last.end.max(range.end);
-                }
-                _ => out.push(range),
+/// One chunk's bytes `ranges` (by start, those that meet or touch as one: [`chunk_ranges`]) as a
+/// copy imports them alone where the chunk is not imported yet (`RamOnDevice::for_copy`): those
+/// less than [`JOIN_GAP`] apart as one where `joins` takes the bytes between them, never joined
+/// further.
+pub(crate) fn alone_ranges(
+    ranges: &[Range<u64>],
+    mut joins: impl FnMut(Range<u64>) -> bool,
+) -> Vec<Range<u64>> {
+    let mut out: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match out.last_mut() {
+            Some(last)
+                if range.start <= last.end.saturating_add(JOIN_GAP - 1)
+                    && joins(last.end..range.start) =>
+            {
+                last.end = last.end.max(range.end);
             }
+            _ => out.push(range.clone()),
         }
-        *ranges = out;
     }
-    by_chunk
+    out
 }
 
 /// `ranges` sorted, those that meet or touch as one, then the closest joined until at most
@@ -870,7 +880,7 @@ impl BlitCommandEncoder {
         let mut imports: Vec<Arc<RamChunk>> = Vec::new();
         let mut of_chunk: BTreeMap<usize, Range<usize>> = BTreeMap::new();
         let mut waited = Duration::ZERO;
-        for (slot, ranges) in alone_ranges(&pieces) {
+        for (slot, ranges) in chunk_ranges(&pieces, usize::MAX) {
             let (made, took) = ram.for_copy(&device, importer, slot, &ranges)?;
             waited += took;
             if made
@@ -1042,7 +1052,8 @@ impl BlitCommandEncoder {
         }
         let device = self.core().device().clone();
         let mut through_cpu = false;
-        for (slot, ranges) in alone_ranges(pieces) {
+        for (slot, ranges) in chunk_ranges(pieces, usize::MAX) {
+            let ranges = alone_ranges(&ranges, |_| true);
             match ram.copy_take(&device, importer, slot, &ranges) {
                 CopyTake::Now => {}
                 CopyTake::ThroughCpu => through_cpu = true,
@@ -1575,14 +1586,31 @@ mod tests {
             piece(1, 0),
             piece(0, 3 * MIB + PAGE + 2 * MIB),
         ];
-        let ranges = alone_ranges(&pieces);
+        let ranges = chunk_ranges(&pieces, usize::MAX);
+        let mut gaps = Vec::new();
+        let first = alone_ranges(&ranges[&0], |gap| {
+            gaps.push(gap);
+            true
+        });
         assert_eq!(
-            ranges[&0],
+            first,
             vec![
                 0..3 * MIB + PAGE,
                 3 * MIB + PAGE + 2 * MIB..3 * MIB + 2 * PAGE + 2 * MIB
             ]
         );
-        assert_eq!(ranges[&1], vec![0..PAGE]);
+        // Only the bytes between ranges less than 2 MiB apart are asked about.
+        assert_eq!(gaps, vec![PAGE..MIB, MIB + PAGE..3 * MIB]);
+        assert_eq!(alone_ranges(&ranges[&1], |_| true), vec![0..PAGE]);
+        // Bytes between that may not be joined across keep the ranges apart.
+        let apart = alone_ranges(&ranges[&0], |gap| gap.start != PAGE);
+        assert_eq!(
+            apart,
+            vec![
+                0..PAGE,
+                MIB..3 * MIB + PAGE,
+                3 * MIB + PAGE + 2 * MIB..3 * MIB + 2 * PAGE + 2 * MIB
+            ]
+        );
     }
 }

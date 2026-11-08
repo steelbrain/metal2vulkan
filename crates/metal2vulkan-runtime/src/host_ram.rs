@@ -819,22 +819,37 @@ impl RamOnDevice {
         if !alone {
             return self.chunk(device, importer, slot, By::Object);
         }
-        (self.run_alone(device, importer, slot, run))
+        (self.run_alone(device, importer, slot, run, true))
             .or_else(|_| self.chunk(device, importer, slot, By::Object))
     }
 
     /// The imports a copy over chunk `slot` reads or writes its bytes `ranges` (offsets in the
-    /// chunk, by start, apart) through (`host_ram/copy.rs`), never waiting for the chunk's, as an
-    /// object over it is bound ([`RamOnDevice::for_object`]), the device's thread's window moved
-    /// to the chunk as an object's take moves it: the chunk's import where it is
-    /// made; else, where an object's run would be imported alone and the ranges are at most
-    /// `copy::MOST_ALONE`, an import of each range alone, widened to whole host pages within the
-    /// chunk ([`RamOnDevice::run_alone`]: the device's thread asked for the chunk), held by the
-    /// copy's command buffer until it completed; else the chunk's, made here or waited for
-    /// ([`RamOnDevice::chunk`]). Each import's span lies in the
-    /// chunk's and holds every range it is given for. With them, the time this thread waited for
-    /// the chunk's import (`WorkCounts::host_ram_copy_import_wait_nanos`): zero where it was made,
-    /// or the ranges were imported alone.
+    /// chunk, by start, those that meet or touch as one) through (`host_ram/copy.rs`), never
+    /// waiting for the chunk's: the chunk's import where it is made; else, where the copy's pages
+    /// may be imported alone, an import of each of its ranges alone (those less than 2 MiB apart
+    /// joined, [`copy::alone_ranges`]), widened to whole host pages within the chunk
+    /// ([`RamOnDevice::run_alone`]), held by the copy's command buffer until it completed; else
+    /// the chunk's, made here or waited for ([`RamOnDevice::chunk`]). Each import's span lies in
+    /// the chunk's and holds every range it is given for. With them, the time this thread waited
+    /// for the chunk's import (`WorkCounts::host_ram_copy_import_wait_nanos`): zero where it was
+    /// made, or the ranges were imported alone.
+    ///
+    /// - On a device whose plan is [`Plan::listed`] (each listed import costs every submission,
+    ///   the RAM's chunks its source's long dma-bufs), a copy takes the chunk only where it is
+    ///   made: else it imports its ranges alone however many they are, joined across the bytes
+    ///   between two only where every page of them is in memory already ([`resident`]), and asks
+    ///   the device's thread for nothing. So a copy pins its runs' pages and pages the RAM's file
+    ///   holds already, and no more: a chunk's import pins every page of the chunk, and the
+    ///   source's dma-buf allocates each the guest never touched, which stays allocated. The
+    ///   chunk's import where the device's barriers do not order blits through two imports of
+    ///   the same pages (`RuntimeDriverDefect::AliasedImportBlitsUnordered`), the device's
+    ///   allocations are within the margin its thread leaves (`Allocations::room_ahead`), a range
+    ///   is the whole chunk, or a range's import fails.
+    /// - Elsewhere the copy takes the chunk as an object over it is bound
+    ///   ([`RamOnDevice::for_object`]), the device's thread's window moved to the chunk as an
+    ///   object's take moves it: its ranges alone where an object's run would be imported alone
+    ///   and they are at most `copy::MOST_ALONE`, while the thread imports the chunk; else the
+    ///   chunk's import.
     pub(crate) fn for_copy(
         &self,
         device: &Device,
@@ -843,7 +858,8 @@ impl RamOnDevice {
         ranges: &[Range<u64>],
     ) -> Result<(Vec<Arc<RamChunk>>, Duration), Error> {
         let span = &self.slots[slot];
-        if !self.plan.listed && self.take(slot) {
+        let listed = self.plan.listed;
+        if !listed && self.take(slot) {
             self.wake.notify();
         }
         if let Some(chunk) = self.made(slot) {
@@ -857,10 +873,16 @@ impl RamOnDevice {
         };
         let page = importer.page.max(1);
         let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
-        let alone = self.wake.running.load(Ordering::Relaxed)
-            && !span.tried.load(Ordering::Relaxed)
-            && device.shared().allocations.allocations.room_ahead()
-            && !device.properties().driver_defects.contains(&unordered);
+        let ordered = !device.properties().driver_defects.contains(&unordered);
+        let room = device.shared().allocations.allocations.room_ahead();
+        // The whole host pages strictly between two ranges: those a join pins that neither
+        // range's own pages hold.
+        let between = |gap: Range<u64>| {
+            let start = span.span.start + gap.start.div_ceil(page) * page;
+            let end = span.span.start + gap.end / page * page;
+            start..end.max(start)
+        };
+        let ranges = copy::alone_ranges(ranges, |gap| !listed || resident(&between(gap), page));
         let runs: Vec<Range<u64>> = (ranges.iter())
             .map(|range| {
                 let start = span.span.start + range.start / page * page;
@@ -868,19 +890,24 @@ impl RamOnDevice {
                 start..end.min(span.span.end)
             })
             .collect();
-        let few = runs.len() <= copy::MOST_ALONE;
-        if !alone || !few || runs.contains(&span.span) {
+        let alone = match listed {
+            true => ordered && room,
+            false => {
+                self.wake.running.load(Ordering::Relaxed)
+                    && !span.tried.load(Ordering::Relaxed)
+                    && room
+                    && ordered
+                    && runs.len() <= copy::MOST_ALONE
+            }
+        };
+        if !alone || runs.contains(&span.span) {
             return waited();
         }
+        // The runs are by start and share no page: those a join left apart have a whole page
+        // between them.
         let mut imports: Vec<Arc<RamChunk>> = Vec::with_capacity(runs.len());
         for run in runs {
-            if imports
-                .iter()
-                .any(|import| import.span.start <= run.start && run.end <= import.span.end)
-            {
-                continue;
-            }
-            match self.run_alone(device, importer, slot, run) {
+            match self.run_alone(device, importer, slot, run, false) {
                 Ok(import) if !import.is_run() => return Ok((vec![import], Duration::ZERO)),
                 Ok(import) => imports.push(import),
                 Err(_) => return waited(),
@@ -968,14 +995,16 @@ impl RamOnDevice {
     /// Chunk `slot`'s import where it is made; else an import of `run` (host pages inside it)
     /// alone ([`Imported::Run`]), made now on this thread, with the device's thread asked for the
     /// chunk: its window moved to the chunk ([`RamOnDevice::take`]), or, on a device whose plan
-    /// is [`Plan::listed`], the chunk asked for ([`ChunkSlot::asked`]); woken either way. Never
-    /// the chunk's own import, nor a wait for one under way. Refused as the run's import is.
+    /// is [`Plan::listed`], the chunk asked for ([`ChunkSlot::asked`]) where `ask` (a copy's
+    /// imports ask for nothing there, [`RamOnDevice::for_copy`]); woken either way. Never the
+    /// chunk's own import, nor a wait for one under way. Refused as the run's import is.
     fn run_alone(
         &self,
         device: &Device,
         importer: &Importer,
         slot: usize,
         run: Range<u64>,
+        ask: bool,
     ) -> Result<Arc<RamChunk>, Error> {
         let span = &self.slots[slot];
         let listed = self.plan.listed;
@@ -989,7 +1018,10 @@ impl RamOnDevice {
                 span.untaken.store(false, Ordering::Relaxed);
                 (Some(Arc::clone(chunk)), false)
             }
-            Import::None => (None, listed && !span.asked.swap(true, Ordering::Relaxed)),
+            Import::None => (
+                None,
+                listed && ask && !span.asked.swap(true, Ordering::Relaxed),
+            ),
             Import::Making => (None, false),
         };
         if let Some(chunk) = found {
@@ -1277,6 +1309,35 @@ fn fault_in(span: &Range<u64>) {
 /// Elsewhere the import faults the chunk's pages in itself.
 #[cfg(not(target_os = "linux"))]
 fn fault_in(_: &Range<u64>) {}
+
+/// Whether every page of `span` (whole host pages of the RAM, `page` bytes each) is in memory
+/// now (`mincore`): a page of the RAM's file the guest wrote, for which a pin allocates nothing.
+/// No pages answer yes; a page swapped out, or a call the kernel refuses, no.
+#[cfg(target_os = "linux")]
+fn resident(span: &Range<u64>, page: u64) -> bool {
+    if span.start >= span.end {
+        return true;
+    }
+    let length = span.end - span.start;
+    let mut held = vec![0u8; (length / page) as usize];
+    // SAFETY: the span is pages of the RAM's ranges, mapped while the RAM lives (`HostRam::new`),
+    // which the caller holds; the call writes one byte a page into `held`, which holds as many.
+    let answered = unsafe {
+        libc::mincore(
+            span.start as *mut libc::c_void,
+            length as usize,
+            held.as_mut_ptr(),
+        )
+    };
+    answered == 0 && held.iter().all(|byte| byte & 1 != 0)
+}
+
+/// Elsewhere no RAM is imported as dma-bufs ([`Plan::listed`]): no pages answer yes, any others
+/// no.
+#[cfg(not(target_os = "linux"))]
+fn resident(span: &Range<u64>, _: u64) -> bool {
+    span.start >= span.end
+}
 
 impl Device {
     /// Give the chunks the device's thread imported ahead and no object took back once the
@@ -1764,7 +1825,7 @@ impl Device {
         })?;
         let window = &again.window;
         let span = run.start..run.start + window.size;
-        let chunk = run.ram.run_alone(self, importer, run.slot, span)?;
+        let chunk = run.ram.run_alone(self, importer, run.slot, span, true)?;
         // SAFETY: as in `ram_run_in_chunk`.
         let (buffer, placement) = unsafe { self.bind_in(&chunk, run.start, window, again.length) }
             .ok_or_else(|| internal("a buffer bound again in its guest RAM run's import"))?;
