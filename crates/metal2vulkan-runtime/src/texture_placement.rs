@@ -29,8 +29,9 @@ pub enum TexturePlacement {
     /// makes its image in place (`WorkCounts::host_textures_moved_in_place`), and stays a shadow
     /// where they do not or the device refuses the image, as one made then would be. Over the
     /// device's own memory (a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch,
-    /// [`NotHostPages`](Self::NotHostPages)) a texture made now stays a shadow for good; one made
-    /// once the check answered takes the image where its verdicts pass.
+    /// [`NotHostPages`](Self::NotHostPages)) a texture made now moves to that image the same way
+    /// (`WorkCounts::pooled_textures_moved_in_place`), where the verdicts of its pooled memory pass
+    /// and the device makes the image.
     /// [`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) starts the check
     /// and says when its verdicts are known; the same query then answers what a texture made after
     /// takes.

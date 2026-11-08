@@ -1620,7 +1620,9 @@ bound.
   does in the buffer's memory, holding no byte past them, and no `DRM_FORMAT_MOD_LINEAR` image at
   Metal's pitch serves (the device makes none, its policy is `HostPageTexturePolicy::Shadow`, or
   its check of such images over its pooled memory has not passed for the texture's accesses:
-  pending, failed or unchecked, as over host pages; for one that renders, whose rows each to its
+  pending, failed or unchecked, as over host pages, a pending one moving to the image once the
+  verdict passes, at a quiet commit, with no copy (`WorkCounts::pooled_textures_moved_in_place`);
+  for one that renders, whose rows each to its
   pitch share no line with bytes past them, the check of renders that lets the rows' padding
   change, as the declaration does, and no byte past the last row's pitch); past a bound in bytes of its rows to their
   pitch, the same on every device, such a texture over a `Private` buffer, tracked, stays a shadow

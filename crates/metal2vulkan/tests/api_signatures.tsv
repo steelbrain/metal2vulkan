@@ -2926,6 +2926,8 @@ field	metal2vulkan-runtime::WorkCounts.pooled_backings_made	pub pooled_backings_
 field	metal2vulkan-runtime::WorkCounts.pooled_memory_blocks_freed	pub pooled_memory_blocks_freed: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_memory_blocks_made	pub pooled_memory_blocks_made: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_pitched_images	pub pooled_pitched_images: u64
+field	metal2vulkan-runtime::WorkCounts.pooled_texture_shadows_freed_after_move	pub pooled_texture_shadows_freed_after_move: u64
+field	metal2vulkan-runtime::WorkCounts.pooled_textures_moved_in_place	pub pooled_textures_moved_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.predicated_loop_runs_again	pub predicated_loop_runs_again: u64
 field	metal2vulkan-runtime::WorkCounts.prefixed_starts	pub prefixed_starts: u64
 field	metal2vulkan-runtime::WorkCounts.primaries_begun_ahead	pub primaries_begun_ahead: u64

@@ -350,7 +350,9 @@ last row's pitch) and, for a tracked texture over a `Private` buffer, its rows t
 than a bound past which such an image renders and samples slower than the shadow (over a `Shared`
 or `Managed` buffer, and for an untracked texture, any size)
 (`WorkCounts::pooled_pitched_images`; `TextureShadowReason::LinearCost` past it;
-`HostPageTexturePolicy::Shadow` turns it off), its subresources holding each row's bytes after its
+`HostPageTexturePolicy::Shadow` turns it off; one made before that check answered is a shadow
+that moves to the image at a quiet commit once it passed, as one over host pages moves in place,
+`WorkCounts::pooled_textures_moved_in_place`), its subresources holding each row's bytes after its
 texels to its pitch (the last row's included) and nothing past the last row's pitch; those bytes
 and the bytes between slices may change whenever the texture is made or used, and no other byte
 does (`WorkCounts::unobserved_padding_aliases` counts such images; `Buffer::texture_placement`
