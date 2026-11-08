@@ -517,15 +517,19 @@ fn child() {
             stepping.commit().unwrap();
             exit_now(case, &messages);
         }
-        "making_exit" => {
+        "making_exit" | "first_making_exit" => {
             // Before the makings: the hook's registrations after their driver calls, and the
             // destructors the driver's compiler registers in them, run before it, and the
             // driver's and layer's handlers of the device after it.
             // SAFETY: a handler with no arguments that never unwinds.
             unsafe { libc::atexit(after_the_later_devices) };
             // A state whose creation makes its pipeline to its end on this thread: the making's
-            // driver call, the driver's compile, returns before the exit.
-            drop(configured(&device, Some(64), 0));
+            // driver call, the driver's compile, returns before the exit. `first_making_exit`
+            // makes none, so the pool's making below is the process's first of the kernel, and
+            // the driver's compiler makes its statics for it while it runs.
+            if case == "making_exit" {
+                drop(configured(&device, Some(64), 0));
+            }
             // A state whose creation makes none: its first dispatch hands its region's making to
             // the device's pool and goes on (`pipeline/dispatch_making.rs`), and the child exits
             // while the pool's thread is in the driver's compile.
