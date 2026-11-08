@@ -54,11 +54,17 @@ impl Rng {
 /// touched, unmapped by its drop.
 struct Fresh {
     start: u64,
+    length: u64,
     fd: i32,
 }
 
 impl Fresh {
     fn new() -> Fresh {
+        Fresh::of(RAM_BYTES)
+    }
+
+    /// A fresh mapping of `length` bytes.
+    fn of(length: u64) -> Fresh {
         #[cfg(target_os = "linux")]
         // SAFETY: a name and flags the call takes.
         let fd = unsafe { libc::memfd_create(c"m2v-first-fill".as_ptr(), libc::MFD_CLOEXEC) };
@@ -79,12 +85,12 @@ impl Fresh {
         };
         assert!(fd >= 0);
         // SAFETY: the descriptor was just made.
-        assert_eq!(unsafe { libc::ftruncate(fd, RAM_BYTES as libc::off_t) }, 0);
+        assert_eq!(unsafe { libc::ftruncate(fd, length as libc::off_t) }, 0);
         // SAFETY: a fresh shared mapping of the file.
         let start = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
-                RAM_BYTES as usize,
+                length as usize,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
                 fd,
@@ -94,6 +100,7 @@ impl Fresh {
         assert_ne!(start, libc::MAP_FAILED);
         Fresh {
             start: start as u64,
+            length,
             fd,
         }
     }
@@ -103,7 +110,7 @@ impl Drop for Fresh {
     fn drop(&mut self) {
         // SAFETY: the bench's mapping and descriptor, which nothing imports any more.
         unsafe {
-            libc::munmap(self.start as *mut libc::c_void, RAM_BYTES as usize);
+            libc::munmap(self.start as *mut libc::c_void, self.length as usize);
             libc::close(self.fd);
         }
     }
@@ -414,4 +421,192 @@ fn host_ram_first_fill_bench() {
         median(&mut copies),
         median(&mut gpus),
     );
+}
+
+/// The contended bench's RAM: 64 chunks.
+const CONTENDED_BYTES: u64 = 64 * CHUNK;
+/// The threads that fill new surfaces at once (three video clips), and the surfaces each fills.
+const CLIPS: u64 = 3;
+const SURFACES: u64 = 7;
+/// A new surface's pages, one run each: a 4K NV12 frame's (12 MiB) and a P010 frame's (24 MiB),
+/// as a consumer's guest decoder lays them.
+const NV12_RUNS: u64 = 3040;
+const P010_RUNS: u64 = 6080;
+
+/// `count` single pages of the three chunks from chunk `first`, distinct, in a random order, as
+/// offsets in the RAM.
+fn surface_pages(seed: u64, first: u64, count: u64) -> Vec<Range<u64>> {
+    let pages = 3 * CHUNK / PAGE;
+    let mut taken = vec![false; pages as usize];
+    let mut rng = Rng(seed | 1);
+    let mut runs = Vec::with_capacity(count as usize);
+    while (runs.len() as u64) < count {
+        let page = rng.next() % pages;
+        if std::mem::replace(&mut taken[page as usize], true) {
+            continue;
+        }
+        let at = first * CHUNK + page * PAGE;
+        runs.push(at..at + PAGE);
+    }
+    runs
+}
+
+/// A milliseconds summary of `values`: median, 90th percentile and slowest.
+fn spread(values: &mut [Duration]) -> String {
+    values.sort();
+    let ms = |at: usize| values[at.min(values.len() - 1)].as_secs_f64() * 1e3;
+    format!(
+        "median {:.3} ms, p90 {:.3} ms, slowest {:.3} ms",
+        ms(values.len() / 2),
+        ms(values.len() * 9 / 10),
+        ms(values.len() - 1)
+    )
+}
+
+/// New surfaces filled from a guest's RAM while others are: [`CLIPS`] threads each fill
+/// [`SURFACES`] new surfaces, alternately a 4K NV12 frame's [`NV12_RUNS`] pages and a P010
+/// frame's [`P010_RUNS`], each over three chunks of the RAM no surface took before (so their
+/// imports are under way), by one `copy_from_host_ram` into a new `Private` buffer, committed and
+/// waited for, as a consumer's decoder fills each new output surface; meanwhile another thread
+/// imports and frees a no-copy buffer over 32 MiB of fresh anonymous pages every 20 ms. Printed
+/// (`CONTENDED-FILL`): per surface kind, the calls' and the completions' spread, and the copies'
+/// counts over the run (staged, import waits and their time, chunk imports and their time).
+#[test]
+#[ignore = "a release benchmark: run with --ignored --nocapture"]
+fn host_ram_contended_fill_bench() {
+    let options = DeviceOptions {
+        kinds: vec![
+            DeviceKind::Discrete,
+            DeviceKind::Integrated,
+            DeviceKind::Virtual,
+        ],
+        ..DeviceOptions::default()
+    };
+    let device = Device::system_default_with(&options).unwrap();
+    if device.shared().host_import.is_err() {
+        eprintln!("CONTENDED-FILL: the device imports no host memory here");
+        return;
+    }
+    let fresh = Fresh::of(CONTENDED_BYTES);
+    let at = NonNull::new(fresh.start as *mut u8).unwrap();
+    let keep: KeepAlive = Box::new(());
+    // SAFETY: the mapping is readable and writable until `fresh` goes, after the RAM's use.
+    let ram = Arc::new(unsafe { HostRam::new(&[(at, CONTENDED_BYTES)], Some(keep)) }.unwrap());
+    let used = device.use_host_ram(&ram).unwrap();
+    // Let the device's thread import the RAM's start, as at a boot's desktop.
+    std::thread::sleep(Duration::from_secs(1));
+    let before = device.work_counts();
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let (times, churns) = std::thread::scope(|scope| {
+        let clips: Vec<_> = (0..CLIPS)
+            .map(|clip| {
+                let (device, ram, fresh) = (&device, &ram, &fresh);
+                scope.spawn(move || {
+                    let queue = device.new_command_queue().unwrap();
+                    let mut times = Vec::new();
+                    for surface in 0..SURFACES {
+                        let p010 = surface % 2 == 1;
+                        let count = if p010 { P010_RUNS } else { NV12_RUNS };
+                        let first = 1 + (clip * SURFACES + surface) * 3;
+                        let seed = 0x2545_f491_4f6c_dd1d ^ (clip << 32 | surface);
+                        let runs = surface_pages(seed, first, count);
+                        write_runs(fresh.start, &runs);
+                        let host: Vec<Range<u64>> = (runs.iter())
+                            .map(|run| fresh.start + run.start..fresh.start + run.end)
+                            .collect();
+                        let cache = device
+                            .new_buffer(count * PAGE, ResourceOptions::private())
+                            .unwrap();
+                        let (call, _, completion) = timed(&queue, |encoder| {
+                            encoder.copy_from_host_ram(ram, &host, &cache, 0).unwrap();
+                        });
+                        times.push((p010, call, completion));
+                    }
+                    times
+                })
+            })
+            .collect();
+        let churn = scope.spawn(|| {
+            const BYTES: usize = 32 << 20;
+            let mut churns = 0;
+            while !done.load(std::sync::atomic::Ordering::Acquire) {
+                // SAFETY: a fresh private anonymous mapping, unmapped below after its buffer.
+                let pointer = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        BYTES,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_PRIVATE | libc::MAP_ANON,
+                        -1,
+                        0,
+                    )
+                };
+                assert_ne!(pointer, libc::MAP_FAILED);
+                // SAFETY: the mapping's bytes, which nothing else uses.
+                unsafe { std::ptr::write_bytes(pointer.cast::<u8>(), 1, BYTES) };
+                // SAFETY: the mapping's pages, which outlive the buffer over them.
+                let memory = unsafe { HostMemory::new(NonNull::new(pointer.cast()).unwrap()) };
+                // SAFETY: the mapping outlives the buffer, dropped before it is unmapped.
+                let buffer = unsafe {
+                    device.new_buffer_with_bytes_no_copy(
+                        memory,
+                        BYTES as u64,
+                        ResourceOptions::default(),
+                        None,
+                    )
+                };
+                drop(buffer);
+                // SAFETY: the mapping made above; its import was freed in the release.
+                unsafe { libc::munmap(pointer, BYTES) };
+                churns += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            churns
+        });
+        let times: Vec<_> = clips
+            .into_iter()
+            .flat_map(|clip| clip.join().unwrap())
+            .collect();
+        done.store(true, std::sync::atomic::Ordering::Release);
+        (times, churn.join().unwrap())
+    });
+    let after = device.work_counts();
+    eprintln!(
+        "CONTENDED-FILL device: {}; {CLIPS} clips of {SURFACES} new surfaces, {churns} imports \
+         and frees beside them",
+        device.name()
+    );
+    for (p010, name) in [(false, "NV12 3040 runs"), (true, "P010 6080 runs")] {
+        let (mut calls, mut completions): (Vec<Duration>, Vec<Duration>) = (times.iter())
+            .filter(|time| time.0 == p010)
+            .map(|time| (time.1, time.2))
+            .unzip();
+        eprintln!(
+            "CONTENDED-FILL {name}: {} fills; calls {}; commit to completion {}",
+            calls.len(),
+            spread(&mut calls),
+            spread(&mut completions),
+        );
+    }
+    let ms = |a: u64, b: u64| (b - a) as f64 / 1e6;
+    eprintln!(
+        "CONTENDED-FILL counts: staged {}, import waits {} for {:.1} ms, chunks imported {} \
+         (ahead {}) in {:.1} ms, dispatches {}",
+        after.host_ram_copies_staged - before.host_ram_copies_staged,
+        after.host_ram_copy_import_waits - before.host_ram_copy_import_waits,
+        ms(
+            before.host_ram_copy_import_wait_nanos,
+            after.host_ram_copy_import_wait_nanos
+        ),
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        after.host_ram_chunks_imported_ahead - before.host_ram_chunks_imported_ahead,
+        ms(
+            before.host_ram_chunk_import_nanos,
+            after.host_ram_chunk_import_nanos
+        ),
+        after.host_ram_copy_dispatches - before.host_ram_copy_dispatches,
+    );
+    drop(used);
+    drop(ram);
+    drop(fresh);
 }
