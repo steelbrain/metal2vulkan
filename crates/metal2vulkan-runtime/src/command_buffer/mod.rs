@@ -4417,7 +4417,7 @@ impl CommandBufferShared {
             .find(|(_, work, inputs)| {
                 work.gpu_written()
                     && (!matches!(inputs, Some(StepInputs::Rerecord(_))) || work.outgrown())
-                    && !matches!(inputs, Some(StepInputs::Loop | StepInputs::Scatter))
+                    && !matches!(inputs, Some(StepInputs::Loop | StepInputs::Staged))
             })
             .map(|(_, work, _)| work.clone());
         let buffer = CommandBuffer(Arc::clone(self));
