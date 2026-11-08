@@ -773,73 +773,26 @@ fn parts(device: &Device, forms: &[Form], reads: metal2vulkan::device::YCbCrInPl
 /// 1920x1080, rows 3840 bytes apart) and 10-bit `x420` planes (`R16Unorm` and `RG16Unorm`, rows
 /// 7680 apart), each at 0, 32 (CoreVideo's), 64, 128 and 256 bytes into its page, sampled alone
 /// (`ShaderRead`) and written too (`ShaderRead | ShaderWrite`), over anonymous pages and, on Linux,
-/// guest RAM's dma-buf pages: the placement the runtime answers before the making, and what the
-/// making took. Then the words of every distinct `shadowed-texture` notice, which name the
-/// driver's refusal.
+/// a `memfd`'s pages with a dma-buf source and a guest RAM's (`HostRam` over a `memfd`, its source
+/// asked for chunks as long as `udmabuf` takes, as the consumer's is), two buffers over it: the
+/// placement the runtime answers before the making, and what the making took. Then the words of
+/// every distinct `shadowed-texture` notice, which name the driver's refusal.
 #[test]
 #[ignore = "a measurement: run by name"]
 fn video_plane_placements() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = consumer_device(&messages, &cache);
-    let planes = [
-        (PixelFormat::R8Unorm, W, H, W),
-        (PixelFormat::RG8Unorm, W / 2, H / 2, W),
-        (PixelFormat::R16Unorm, W, H, ROW),
-        (PixelFormat::RG16Unorm, W / 2, H / 2, ROW),
-    ];
-    let usages = [
-        TextureUsage::SHADER_READ,
-        TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
-    ];
-    let pages_kinds = [
-        Pages::Anonymous,
-        #[cfg(target_os = "linux")]
-        Pages::GuestRam,
-    ];
-    for pages in pages_kinds {
-        #[cfg(target_os = "linux")]
-        let memfd = match pages {
-            Pages::GuestRam if !udmabuf_openable("video_plane_placements") => continue,
-            Pages::GuestRam => Some(std::rc::Rc::new(Memfd::new(LEN))),
-            Pages::Anonymous => None,
-        };
-        #[cfg(not(target_os = "linux"))]
-        let memfd = None;
-        let surface = Surface::new(pages, memfd.as_ref(), 0);
-        let buffer = surface.buffer(&device);
-        for (pf, w, h, row) in planes {
-            for at in [0, 32, 64, 128, 256] {
-                for usage in usages {
-                    let mut d = TextureDescriptor::texture_2d(pf, w, h, false);
-                    d.usage = usage;
-                    d.resource_options = buffer.resource_options();
-                    let plane = IoSurfacePlane::new(at, row, true);
-                    let placement = buffer.texture_placement_with_iosurface_plane(&d, plane);
-                    let before = device.work_counts();
-                    let made = buffer.new_texture_with_iosurface_plane(&d, plane);
-                    let after = device.work_counts();
-                    let took = match &made {
-                        Ok(_) if after.host_textures_in_place > before.host_textures_in_place => {
-                            "in place".to_owned()
-                        }
-                        Ok(_) => format!(
-                            "a shadow ({} refused for the pitch)",
-                            after.host_texture_shadows_refused_pitch
-                                - before.host_texture_shadows_refused_pitch
-                        ),
-                        Err(error) => format!("refused: {error}"),
-                    };
-                    println!(
-                        "VIDEO-PLACEMENT on {}: {pages:?} pages, {pf:?} {w}x{h}, rows {row}, at {at}, {usage:?}: answered {placement:?}, took {took}",
-                        device.name()
-                    );
-                    drop(made);
-                }
-            }
-        }
-        drop(buffer);
+    let anonymous = Surface::new(Pages::Anonymous, None, 0);
+    probe_planes(&device, "anonymous pages", &anonymous.buffer(&device));
+    drop(anonymous);
+    #[cfg(target_os = "linux")]
+    if udmabuf_openable("video_plane_placements") {
+        let memfd = std::rc::Rc::new(Memfd::new(LEN));
+        let surface = Surface::new(Pages::GuestRam, Some(&memfd), 0);
+        probe_planes(&device, "dma-buf pages", &surface.buffer(&device));
         drop(surface);
+        ram_planes(&device);
     }
     let mut words: Vec<String> = messages
         .take_notices()
@@ -852,4 +805,112 @@ fn video_plane_placements() {
     for text in words {
         println!("VIDEO-PLACEMENT-NOTICE on {}: {text}", device.name());
     }
+}
+
+/// [`video_plane_placements`] over a guest RAM: two buffers of [`LEN`] bytes, the first object
+/// over the RAM's chunk and the one after it.
+#[cfg(target_os = "linux")]
+fn ram_planes(device: &Device) {
+    use super::dma_buf_imports::udmabuf_size_limit;
+    use metal2vulkan_runtime::{HostRam, RunResolver};
+    use std::sync::Arc;
+    let memfd = Memfd::new(2 * LEN);
+    let calls = Calls::default();
+    let source = memfd.source(&memfd.whole, &calls);
+    // SAFETY: the file's whole mapping, readable and writable while `memfd` lives, which outlives
+    // the device's use of the RAM and every object over it.
+    let ram = unsafe { HostRam::new(&[(memfd.whole.pointer(0), 2 * LEN as u64)], None) }
+        .unwrap()
+        .with_dma_buf(source)
+        .with_largest_dma_buf(udmabuf_size_limit());
+    let ram = Arc::new(ram);
+    let used = device.use_host_ram(&ram).unwrap();
+    // The view is the RAM's own mapping: each object's pages are the run of its own addresses.
+    let resolver: RunResolver =
+        Arc::new(|at: u64, length: u64| Some(std::iter::once(at..at + length).collect()));
+    for (index, what) in [
+        (0, "a guest RAM's first object"),
+        (1, "a guest RAM's second object"),
+    ] {
+        let before = device.work_counts();
+        // SAFETY: the RAM's pages, mapped while `memfd` lives, which outlives the buffer.
+        let memory = unsafe { HostMemory::new(memfd.whole.pointer(index * LEN)) }
+            .with_runs(Arc::clone(&resolver));
+        // SAFETY: as above.
+        let buffer = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                memory,
+                LEN as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        }
+        .unwrap();
+        let after = device.work_counts();
+        println!(
+            "VIDEO-PLACEMENT on {}: {what}: buffers made in a run's import {}, in a chunk's {}",
+            device.name(),
+            after.run_bound_buffers_made - before.run_bound_buffers_made,
+            after.chunk_bound_buffers_made - before.chunk_bound_buffers_made,
+        );
+        probe_planes(device, what, &buffer);
+        drop(buffer);
+    }
+    drop(used);
+    drop(ram);
+}
+
+/// [`video_plane_placements`]' planes over `buffer`, of pages `what` names.
+fn probe_planes(device: &Device, what: &str, buffer: &Buffer) {
+    let planes = [
+        (PixelFormat::R8Unorm, W, H, W),
+        (PixelFormat::RG8Unorm, W / 2, H / 2, W),
+        (PixelFormat::R16Unorm, W, H, ROW),
+        (PixelFormat::RG16Unorm, W / 2, H / 2, ROW),
+    ];
+    let usages = [
+        TextureUsage::SHADER_READ,
+        TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+    ];
+    let first = device.work_counts();
+    for (pf, w, h, row) in planes {
+        for at in [0, 32, 64, 128, 256] {
+            for usage in usages {
+                let mut d = TextureDescriptor::texture_2d(pf, w, h, false);
+                d.usage = usage;
+                d.resource_options = buffer.resource_options();
+                let plane = IoSurfacePlane::new(at, row, true);
+                let placement = buffer.texture_placement_with_iosurface_plane(&d, plane);
+                let before = device.work_counts();
+                let made = buffer.new_texture_with_iosurface_plane(&d, plane);
+                let after = device.work_counts();
+                let took = match &made {
+                    Ok(_) if after.host_textures_in_place > before.host_textures_in_place => {
+                        "in place".to_owned()
+                    }
+                    Ok(_) => format!(
+                        "a shadow ({} refused for the pitch)",
+                        after.host_texture_shadows_refused_pitch
+                            - before.host_texture_shadows_refused_pitch
+                    ),
+                    Err(error) => format!("refused: {error}"),
+                };
+                println!(
+                    "VIDEO-PLACEMENT on {}: {what}, {pf:?} {w}x{h}, rows {row}, at {at}, \
+                     {usage:?}: answered {placement:?}, took {took}",
+                    device.name()
+                );
+                drop(made);
+            }
+        }
+    }
+    let last = device.work_counts();
+    println!(
+        "VIDEO-PLACEMENT on {}: {what}: imports read apart for a texture {}, dma-buf images {}, \
+         dma-buf imports {}",
+        device.name(),
+        last.host_imports_read_apart_texture - first.host_imports_read_apart_texture,
+        last.dma_buf_images - first.dma_buf_images,
+        last.dma_buf_imports - first.dma_buf_imports,
+    );
 }
