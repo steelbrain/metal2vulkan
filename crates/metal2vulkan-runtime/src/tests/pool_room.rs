@@ -63,7 +63,10 @@ fn pool(pooled: usize, holes: u64, dedicated: usize) -> Pool<usize> {
     let now = Instant::now();
     for &block in &blocks {
         for hole in 0..holes {
-            assert_eq!(pool.release(block, 2 * UNIT * hole, UNIT, now), None);
+            assert_eq!(
+                pool.release(block, (2 * UNIT * hole, UNIT), now, 0, |_| false),
+                None
+            );
         }
     }
     for index in 0..dedicated {
@@ -202,19 +205,25 @@ fn the_held_room_is_the_room_derived_now() {
     check(&mut pool, "a unit placed at a larger alignment");
     assert_eq!(pool.place(4 * UNIT, 1), None, "the block holds no more");
     check(&mut pool, "a placement that fails");
-    assert_eq!(pool.release(first, 0, UNIT, now), None);
+    assert_eq!(pool.release(first, (0, UNIT), now, 0, |_| false), None);
     check(&mut pool, "a unit returned");
     let second = pool.add(8 * UNIT, false, 1, 0);
     check(&mut pool, "a second block added");
     let dedicated = pool.add(1 << 20, true, 2, 1 << 20);
     check(&mut pool, "a dedicated block added");
-    assert_eq!(pool.release(dedicated, 0, 1 << 20, now), Some((2, true)));
+    assert_eq!(
+        pool.release(dedicated, (0, 1 << 20), now, 0, |_| false),
+        Some((2, true))
+    );
     check(&mut pool, "the dedicated block freed");
     assert_eq!(pool.place(8 * UNIT, 1), Some((second, 0)));
     check(&mut pool, "the second block filled");
-    assert_eq!(pool.release(second, 0, 8 * UNIT, now), None);
+    assert_eq!(pool.release(second, (0, 8 * UNIT), now, 0, |_| false), None);
     check(&mut pool, "the second block emptied and kept");
-    assert_eq!(pool.release(first, 2 * UNIT, UNIT, now), None);
+    assert_eq!(
+        pool.release(first, (2 * UNIT, UNIT), now, 0, |_| false),
+        None
+    );
     check(&mut pool, "the first block emptied and kept");
     assert_eq!(pool.take_kept().len(), 2, "both kept blocks go");
     check(&mut pool, "every block freed");

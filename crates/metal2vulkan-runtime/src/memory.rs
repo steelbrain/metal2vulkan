@@ -6,12 +6,20 @@
 //!   at offsets).
 //! - **Pooling.** Resources share blocks of [`BLOCK_BYTES`], so `maxMemoryAllocationCount` (4096
 //!   on many devices) stays out of reach. A request larger than half a block takes a dedicated
-//!   block of its own size, freed with it. A pooled block that empties is kept for the next
-//!   placements while fewer than [`KEPT_EMPTY_BLOCKS`] empty ones are kept in its pool, else freed:
-//!   a working set that dips by a block and comes back a frame later (a frame's buffers, returned
-//!   as its command buffer completes) makes and frees no block for it. Every kept empty block but
-//!   one goes once it stayed empty for [`KEPT_EMPTY_FOR`] ([`Pool::stale`]), and every one of a
-//!   memory type goes before a block of that type fails to be made ([`place`]).
+//!   block of its own size.
+//! - **Kept for reuse.** A block that empties is kept for the next placements rather than freed:
+//!   a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] empty ones are kept in its pool, and
+//!   past that, as a dedicated one of the runtime's own memory, while the empty blocks kept in its
+//!   heap stay within the heap's budget ([`kept_budget`]: an eighth of the heap, at most
+//!   [`KEPT_EMPTY_BYTES`]); else it is freed. A kept dedicated block takes the next dedicated
+//!   placement of its pool that its size fits ([`Pool::place_dedicated`]). So a working set that
+//!   dips and comes back makes and frees no block for it: a frame's buffers, returned as its
+//!   command buffer completes, and a video clip's buffers, textures and decoded pictures, released
+//!   at its end and made again at the next clip's start. On NVIDIA's driver each
+//!   `vkAllocateMemory` and `vkFreeMemory` holds every submission until it returns. Every kept
+//!   block goes once it stayed empty for [`KEPT_EMPTY_FOR`], but one pooled block per pool
+//!   ([`Pool::stale`]), and every one of a memory type goes before a block of that type fails to
+//!   be made ([`place`]).
 //! - **Entry point.** [`allocate`] with the resource's memory requirements and its
 //!   [`MemoryClass`]; [`Memory::free`] with the placement it gave. Buffers use it in step 1;
 //!   textures and heaps add their classes and callers in their own steps. Imported host memory
@@ -82,17 +90,32 @@ mod ready;
 /// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 
-/// The most empty pooled blocks a pool keeps for its next placements ([`Pool::release`]), at
-/// most 128 MiB of empty memory a pool. In a pool the encodings place in, one of them is mostly
+/// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget
+/// ([`Pool::release`], [`kept_budget`]). In a pool the encodings place in, one of them is mostly
 /// the block [`keep_room`] made for room: with one kept, every other block that emptied was freed,
 /// and a block made again as the next placements filled that one, so a frame's buffers, returned
 /// each frame, made and freed a block a frame. With two they make and free none
 /// (`runtime_lane::pool_churn`).
 pub(super) const KEPT_EMPTY_BLOCKS: usize = 2;
 
-/// How long a kept empty pooled block beyond its pool's one stays empty before it is freed
-/// ([`Pool::stale`]): a frame's dip comes back well within it.
-pub(super) const KEPT_EMPTY_FOR: Duration = Duration::from_secs(1);
+/// The most bytes of empty blocks a heap keeps past its pools' [`KEPT_EMPTY_BLOCKS`]
+/// ([`kept_budget`]): 2 GiB, the eighth of an RTX 5080 Laptop GPU's 16 GiB. There a guest's page
+/// of two 4K HEVC clips made 12 pooled blocks and 66 decoded pictures of about 15 MiB each in
+/// exportable buffers (`exported_memory.rs`), 1.8 GB in all, and the clips' ends freed them.
+pub(super) const KEPT_EMPTY_BYTES: u64 = 2 << 30;
+
+/// The share of its heap's size a heap keeps of empty blocks, at most [`KEPT_EMPTY_BYTES`]: an
+/// eighth ([`kept_budget`]).
+const KEPT_EMPTY_SHARE: u64 = 8;
+
+/// How long a kept empty block stays empty before it is freed, but its pool's last pooled one
+/// ([`Pool::stale`]): a frame's dip comes back well within it, and a guest's next video clip
+/// started 1 s after the last one ended.
+pub(super) const KEPT_EMPTY_FOR: Duration = Duration::from_secs(10);
+
+/// How much longer than a dedicated placement a kept dedicated block may be and still take it
+/// ([`Pool::place_dedicated`]): a quarter of the placement.
+const DEDICATED_SLACK: u64 = 4;
 
 /// The least bytes of a pooled placement the memory log names as it is placed and returned
 /// (`memory_log.rs`): a few such placements fill a block, so their comings and goings are what
@@ -134,11 +157,26 @@ pub(super) enum MemoryClass {
 /// `vkBindImageMemory` for that work to end (493 ms and 502 ms behind a 0.5 s kernel), where images
 /// bound into a block of images, or a new one, took microseconds. So images take blocks
 /// of their own, one pool per memory type beside the buffers'.
+///
+/// A third kind holds buffers whose memory another API imports (`exported_memory.rs`): its blocks
+/// are allocated exportable ([`EXPORT_HANDLE`]), which a buffer made without that handle type may
+/// not be bound to (`VUID-vkBindBufferMemory-memory-02726`), and such buffers share them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Holds {
     Buffers,
     Images,
+    Exports,
 }
+
+impl Holds {
+    /// The kinds, in the order of the device's pools ([`Memory::pool`]).
+    const ALL: [Holds; 3] = [Holds::Buffers, Holds::Images, Holds::Exports];
+}
+
+/// The handle type the runtime exports a buffer's memory as (`exported_memory.rs`): an opaque file
+/// descriptor. The blocks of exportable buffers are allocated exportable as it ([`Holds::Exports`]).
+pub(super) const EXPORT_HANDLE: vk::ExternalMemoryHandleTypeFlags =
+    vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
 
 /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` (`VK_EXT_zero_initialize_device_memory`), which
 /// `ash 0.38` predates.
@@ -392,12 +430,17 @@ pub(super) struct Pool<T> {
     /// The pooled blocks added and freed so far ([`Pool::turnover`]).
     made: u64,
     freed: u64,
+    /// The bytes of its live blocks with nothing placed in them: the empty blocks it keeps
+    /// ([`Pool::kept_bytes`]).
+    kept_bytes: u64,
 }
 
 #[derive(Debug)]
 struct PoolBlock<T> {
     ranges: RangeAllocator,
     dedicated: bool,
+    /// Its bytes.
+    size: u64,
     payload: T,
     /// When it emptied, while it is empty and kept ([`Pool::release`]); `None` for a block
     /// added with nothing placed in it, kept as long as it stays empty.
@@ -420,6 +463,11 @@ impl<T> PoolBlock<T> {
     fn kept(&self) -> bool {
         !self.dedicated && self.ranges.is_empty()
     }
+
+    /// Whether nothing is placed in it: a kept block, pooled or dedicated.
+    fn empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
 }
 
 impl<T> Default for Pool<T> {
@@ -432,6 +480,7 @@ impl<T> Default for Pool<T> {
             visited: 0,
             made: 0,
             freed: 0,
+            kept_bytes: 0,
         }
     }
 }
@@ -459,17 +508,41 @@ impl<T> Pool<T> {
             .enumerate()
             .find_map(|(index, block)| {
                 let block = block.as_mut().filter(|block| !block.dedicated)?;
+                let was_empty = block.empty();
                 let offset = block.ranges.allocate(size, align)?;
                 block.emptied = None;
                 block.longest = None;
                 let fresh = block.zeroed && offset >= block.placed_to;
                 block.placed_to = block.placed_to.max(offset + size);
-                Some((index, offset, fresh))
+                Some((index, offset, fresh, was_empty.then_some(block.size)))
             });
-        if placed.is_some() {
-            self.room = None;
-        }
-        placed
+        let (index, offset, fresh, was_kept) = placed?;
+        self.room = None;
+        self.kept_bytes -= was_kept.unwrap_or(0);
+        Some((index, offset, fresh))
+    }
+
+    /// A kept dedicated block for a dedicated placement of `size` bytes: the shortest kept one at
+    /// least `size` long and at most a [`DEDICATED_SLACK`]th longer, its first `size` bytes placed
+    /// (at offset 0, which meets every alignment): its index.
+    pub(super) fn place_dedicated(&mut self, size: u64) -> Option<usize> {
+        let most = size.saturating_add(size / DEDICATED_SLACK);
+        let (index, _) = (self.blocks.iter().enumerate())
+            .filter_map(|(index, block)| {
+                let block = block
+                    .as_ref()
+                    .filter(|block| block.dedicated && block.empty())?;
+                (block.size >= size && block.size <= most).then_some((index, block.size))
+            })
+            .min_by_key(|&(_, bytes)| bytes)?;
+        let block = self.blocks[index].as_mut()?;
+        let offset = block.ranges.allocate(size, 1)?;
+        debug_assert_eq!(offset, 0);
+        block.emptied = None;
+        block.longest = None;
+        block.placed_to = block.placed_to.max(size);
+        self.kept_bytes -= block.size;
+        Some(index)
     }
 
     /// Forget every longest free range held, which the pool's alignment growing can move.
@@ -504,6 +577,7 @@ impl<T> Pool<T> {
         let block = Some(PoolBlock {
             ranges,
             dedicated,
+            size,
             payload,
             emptied: None,
             longest: None,
@@ -511,6 +585,9 @@ impl<T> Pool<T> {
             placed_to: used,
         });
         self.made += u64::from(!dedicated);
+        if used == 0 {
+            self.kept_bytes += size;
+        }
         self.room = None;
         match self.blocks.iter().position(Option::is_none) {
             Some(index) => {
@@ -621,30 +698,43 @@ impl<T> Pool<T> {
             .map(|block| &mut block.payload)
     }
 
-    /// Return `[offset, offset + size)` of block `index`, at `now`. The block's payload when the
-    /// block must now be freed, with whether it was a dedicated block rather than a pooled one
-    /// that emptied while [`KEPT_EMPTY_BLOCKS`] other empty pooled blocks are kept: the two
-    /// reasons a release frees a block, which its caller counts apart ([`FreeCause`]).
+    /// Return `[offset, offset + size)` of block `index`, at `now`, where the empty blocks kept in
+    /// the pool's heap may grow by `spare` bytes more ([`kept_budget`]). A block that empties is
+    /// kept: a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] other empty pooled blocks are, or
+    /// its bytes fit in `spare`; a dedicated one where its bytes fit in `spare` and `reusable`
+    /// says another placement may take its memory ([`Pool::place_dedicated`]). Else the block's
+    /// payload, to be freed now, with whether it was a dedicated block rather than a pooled one:
+    /// the two reasons a release frees a block, which its caller counts apart ([`FreeCause`]).
     pub(super) fn release(
         &mut self,
         index: usize,
-        offset: u64,
-        size: u64,
+        (offset, size): (u64, u64),
         now: Instant,
+        spare: u64,
+        reusable: impl FnOnce(&T) -> bool,
     ) -> Option<(T, bool)> {
         let block = self.blocks.get_mut(index)?.as_mut()?;
         block.ranges.free(offset, size);
         block.longest = None;
         self.room = None;
         let block = self.blocks[index].as_ref().expect("the block is live");
-        if !block.ranges.is_empty() {
+        if !block.empty() {
             return None;
         }
-        let dedicated = block.dedicated;
-        let kept = (self.blocks.iter().enumerate())
-            .filter(|&(other, block)| other != index && block.as_ref().is_some_and(PoolBlock::kept))
-            .count();
-        if !dedicated && kept < KEPT_EMPTY_BLOCKS {
+        let (dedicated, bytes) = (block.dedicated, block.size);
+        self.kept_bytes += bytes;
+        let keep = match dedicated {
+            false => {
+                let kept = (self.blocks.iter().enumerate())
+                    .filter(|&(other, block)| {
+                        other != index && block.as_ref().is_some_and(PoolBlock::kept)
+                    })
+                    .count();
+                kept < KEPT_EMPTY_BLOCKS || bytes <= spare
+            }
+            true => bytes <= spare && reusable(&block.payload),
+        };
+        if keep {
             if let Some(block) = self.blocks[index].as_mut() {
                 block.emptied = Some(now);
             }
@@ -653,30 +743,27 @@ impl<T> Pool<T> {
         Some((self.take(index)?, dedicated))
     }
 
-    /// At `now`, the payload of the kept empty pooled block that emptied earliest, where it
-    /// stayed empty for [`KEPT_EMPTY_FOR`], taken out to be freed, while another empty pooled
-    /// block stays kept.
+    /// At `now`, the payload of the kept empty block that emptied earliest, where it stayed empty
+    /// for [`KEPT_EMPTY_FOR`], taken out to be freed: a dedicated one, or a pooled one while
+    /// another empty pooled block stays kept.
     pub(super) fn stale(&mut self, now: Instant) -> Option<T> {
-        let kept = (self.blocks.iter().flatten())
+        let pooled = (self.blocks.iter().flatten())
             .filter(|block| block.kept())
             .count();
-        if kept < 2 {
-            return None;
-        }
         let (index, _) = (self.blocks.iter().enumerate())
             .filter_map(|(index, block)| {
-                let block = block.as_ref().filter(|block| block.kept())?;
-                Some((index, block.emptied?))
+                let block = block.as_ref().filter(|block| block.empty())?;
+                (block.dedicated || pooled >= 2).then_some((index, block.emptied?))
             })
             .filter(|&(_, at)| now.saturating_duration_since(at) >= KEPT_EMPTY_FOR)
             .min_by_key(|&(_, at)| at)?;
         self.take(index)
     }
 
-    /// Every kept empty pooled block's payload, taken out to be freed.
+    /// Every kept empty block's payload, pooled and dedicated, taken out to be freed.
     pub(super) fn take_kept(&mut self) -> Vec<T> {
         let kept: Vec<usize> = (self.blocks.iter().enumerate())
-            .filter(|(_, block)| block.as_ref().is_some_and(PoolBlock::kept))
+            .filter(|(_, block)| block.as_ref().is_some_and(PoolBlock::empty))
             .map(|(index, _)| index)
             .collect();
         kept.into_iter()
@@ -684,10 +771,18 @@ impl<T> Pool<T> {
             .collect()
     }
 
+    /// The bytes of the empty blocks it keeps, pooled and dedicated.
+    pub(super) fn kept_bytes(&self) -> u64 {
+        self.kept_bytes
+    }
+
     /// Block `index`'s payload, its slot emptied.
     fn take(&mut self, index: usize) -> Option<T> {
         let block = self.blocks.get_mut(index)?.take()?;
         self.freed += u64::from(!block.dedicated);
+        if block.empty() {
+            self.kept_bytes -= block.size;
+        }
         self.room = None;
         Some(block.payload)
     }
@@ -700,6 +795,7 @@ impl<T> Pool<T> {
     /// Every block's payload, emptying the pool.
     pub(super) fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
         self.room = None;
+        self.kept_bytes = 0;
         self.blocks.drain(..).flatten().map(|block| block.payload)
     }
 
@@ -715,8 +811,8 @@ impl<T> Pool<T> {
         for block in self.blocks.iter().flatten() {
             let count = match (imported(&block.payload), block.dedicated) {
                 (true, _) => &mut census.imported,
+                (false, _) if block.empty() => &mut census.empty,
                 (false, true) => &mut census.dedicated,
-                (false, false) if block.ranges.is_empty() => &mut census.empty,
                 (false, false) => &mut census.pooled,
             };
             *count += 1;
@@ -764,9 +860,10 @@ impl FreeCause {
 pub(super) struct Census {
     /// Pooled blocks with a placement in them.
     pub(super) pooled: u64,
-    /// Pooled blocks with none, kept for the next placement ([`Pool::release`]).
+    /// Blocks with none, pooled or dedicated, kept for the next placements ([`Pool::release`]).
     pub(super) empty: u64,
-    /// Dedicated blocks: a placement larger than half a block, or one placed apart.
+    /// Dedicated blocks with their placement: a placement larger than half a block, or one placed
+    /// apart.
     pub(super) dedicated: u64,
     /// The caller's host memory imported ([`import_host`]), a block each.
     pub(super) imported: u64,
@@ -822,8 +919,9 @@ pub(super) struct Block {
     zeroed: bool,
 }
 
-/// What a block's memory was allocated exportable as (`VkExportMemoryAllocateInfo`), for the one
-/// buffer placed in it (`exported_memory.rs`).
+/// What a block's memory was allocated exportable as (`VkExportMemoryAllocateInfo`), for the
+/// buffers placed in it (`exported_memory.rs`): one, where it is that buffer's dedicated
+/// allocation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Exported {
     /// The handle type it exports.
@@ -855,6 +953,16 @@ struct BlockAddresses {
 }
 
 impl Block {
+    /// Whether another placement may take its memory once its own went: memory the runtime
+    /// allocated for itself, neither an import nor a buffer's dedicated allocation
+    /// (`VkMemoryDedicatedAllocateInfo`, which binds that buffer alone).
+    fn reusable(&self) -> bool {
+        !self.imported
+            && self.pages.is_none()
+            && self.view.is_none()
+            && !self.exported.is_some_and(|exported| exported.dedicated)
+    }
+
     /// The cause its `vkFreeMemory` is counted under. A block freed as the one placement in it
     /// went ([`FreeCause::Dedicated`]) that is an import of its own is counted as that import
     /// instead: the caller's host memory ([`import_host`]) or a buffer's fresh pages
@@ -1306,7 +1414,7 @@ impl Memory {
             .map(|heap| (heap.size, 0))
             .collect();
         Memory {
-            pools: (types.iter().chain(&types))
+            pools: (Holds::ALL.iter().flat_map(|_| &types))
                 .map(|_| Pool::default())
                 .collect(),
             types,
@@ -1393,6 +1501,23 @@ impl Memory {
             self.overflows += 1;
         }
         placement
+    }
+
+    /// The most bytes of empty blocks heap `heap` keeps for reuse ([`Pool::release`]): an eighth
+    /// of the heap, at most [`KEPT_EMPTY_BYTES`]. Its pools' first [`KEPT_EMPTY_BLOCKS`] empty
+    /// pooled blocks are kept whatever it says, and count against it.
+    fn kept_budget(&self, heap: usize) -> u64 {
+        let size = self.heaps.get(heap).map_or(0, |&(size, _)| size);
+        (size / KEPT_EMPTY_SHARE).min(KEPT_EMPTY_BYTES)
+    }
+
+    /// The bytes of the empty blocks heap `heap`'s pools keep.
+    fn kept_in_heap(&self, heap: usize) -> u64 {
+        let count = self.types.len();
+        (self.pools.iter().enumerate())
+            .filter(|&(at, _)| self.types[at % count].heap_index as usize == heap)
+            .map(|(_, pool)| pool.kept_bytes())
+            .sum()
     }
 
     /// A block of `size` bytes of memory type `type_index` left the heap's live blocks.
@@ -1599,7 +1724,7 @@ impl Memory {
 
     /// The index in `pools` of the pool of blocks of memory type `type_index` that hold `holds`.
     fn pool_at(&self, holds: Holds, type_index: u32) -> usize {
-        type_index as usize + usize::from(holds == Holds::Images) * self.types.len()
+        type_index as usize + holds as usize * self.types.len()
     }
 
     /// The pool of blocks of memory type `type_index` that hold `holds`.
@@ -1654,6 +1779,31 @@ impl Memory {
         Ok(Some(placement))
     }
 
+    /// [`Memory::place_pooled`] for a dedicated placement of `size` bytes: in a kept dedicated
+    /// block of the pool that its size fits ([`Pool::place_dedicated`]), given a buffer of
+    /// addresses where `addressed` and it has none. `None` where the pool keeps no such block.
+    fn place_kept_dedicated(
+        &mut self,
+        device: &ash::Device,
+        (holds, type_index): (Holds, u32),
+        size: u64,
+        addressed: Option<&Counters>,
+        class: MemoryClass,
+    ) -> Result<Option<Placement>, Error> {
+        let Some(block) = self.pool(holds, type_index).place_dedicated(size) else {
+            return Ok(None);
+        };
+        if let Some(counts) = addressed {
+            if let Err(error) = self.address_block(device, type_index, block, counts) {
+                drop(self.release_range(device, (holds, type_index), block, 0, size, None));
+                return Err(error);
+            }
+        }
+        let placement = self.placement((holds, type_index), block, 0, size, addressed.is_some());
+        self.say_placement("placed", &placement, Some(class));
+        Ok(Some(placement))
+    }
+
     /// Block `block` of `size` bytes, just made, added to the pool of memory type `type_index`
     /// that holds `holds`, dedicated or pooled, with `used` bytes at its start placed: its index.
     fn add_block(
@@ -1668,8 +1818,10 @@ impl Memory {
             let what = match (dedicated, holds) {
                 (false, Holds::Buffers) => "made a pooled block of buffers",
                 (false, Holds::Images) => "made a pooled block of images",
+                (false, Holds::Exports) => "made a pooled block of exportable buffers",
                 (true, Holds::Buffers) => "made a dedicated block of a buffer",
                 (true, Holds::Images) => "made a dedicated block of an image",
+                (true, Holds::Exports) => "made a dedicated block of an exportable buffer",
             };
             self.say_block(what, &block);
         }
@@ -1813,9 +1965,10 @@ impl Memory {
     }
 
     /// Return `[offset, offset + size)` of block `block` of memory type `type_index`, freeing the
-    /// block when it empties ([`Pool::release`]); `after` goes once it is freed. `after`, given
-    /// back for the caller to let go of with no lock held, unless the block waits with it. A kept
-    /// empty block of the pool that stayed empty too long goes too ([`Pool::stale`]).
+    /// block when it empties and is not kept ([`Pool::release`], within its heap's
+    /// [`kept_budget`]); `after` goes once it is freed. `after`, given back for the caller to let
+    /// go of with no lock held, unless the block waits with it. A kept empty block of the pool
+    /// that stayed empty too long goes too ([`Pool::stale`]).
     fn release_range(
         &mut self,
         device: &ash::Device,
@@ -1826,8 +1979,15 @@ impl Memory {
         after: Option<Box<dyn Send>>,
     ) -> Option<Box<dyn Send>> {
         let now = Instant::now();
+        let heap = self.heap_of(type_index);
+        let spare = self
+            .kept_budget(heap)
+            .saturating_sub(self.kept_in_heap(heap));
+        let half = self.block_bytes / 2;
+        let reusable = |block: &Block| block.reusable() && block.size > half;
         let pool = self.pool(holds, type_index);
-        let (freed, stale) = (pool.release(block, offset, size, now), pool.stale(now));
+        let freed = pool.release(block, (offset, size), now, spare, reusable);
+        let stale = pool.stale(now);
         if let Some(stale) = stale {
             // SAFETY: nothing is placed in a kept empty block, and no command reads it.
             drop(unsafe { self.let_go(device, stale, FreeCause::KeptStale, None) });
@@ -1845,11 +2005,10 @@ impl Memory {
         }
     }
 
-    /// Release every kept empty pooled block of memory type `type_index`, of buffers and of
-    /// images, as a block of that type fails to be made ([`place`]): how many went.
+    /// Release every kept empty block of memory type `type_index`, pooled and dedicated, of every
+    /// kind ([`Holds`]), as a block of that type fails to be made ([`place`]): how many went.
     fn release_kept(&mut self, device: &ash::Device, type_index: u32) -> usize {
-        let blocks: Vec<Block> = [Holds::Buffers, Holds::Images]
-            .into_iter()
+        let blocks: Vec<Block> = (Holds::ALL.into_iter())
             .flat_map(|holds| self.pool(holds, type_index).take_kept())
             .collect();
         let count = blocks.len();
@@ -2106,7 +2265,8 @@ impl BlockMaker {
     /// A new block of `size` bytes of memory type `type_index` that holds `holds`, with a buffer
     /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
     /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
-    /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]).
+    /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]), and exportable as
+    /// [`EXPORT_HANDLE`] where it holds exportable buffers ([`Holds::Exports`]).
     fn make(
         &self,
         device: &ash::Device,
@@ -2115,7 +2275,12 @@ impl BlockMaker {
         addressed: Option<&Counters>,
     ) -> Result<Block, Error> {
         let zeroed = holds == Holds::Images && self.zero_images;
-        self.make_as(device, type_index, size, addressed, None, zeroed)
+        let exported = Exported {
+            handle: EXPORT_HANDLE,
+            dedicated: false,
+        };
+        let export = (holds == Holds::Exports).then_some((vk::Buffer::null(), exported));
+        self.make_as(device, type_index, size, addressed, export, zeroed)
     }
 
     /// [`make`](Self::make), its memory allocated exportable as `export` says where given, for its
@@ -2637,15 +2802,17 @@ pub(super) fn allocate_addressed(
 }
 
 /// Memory meeting `buffer`'s `requirements` of `class`, allocated exportable as `exported` says
-/// (`exported_memory.rs`), in a block of its own that holds `buffer` alone, and its placement at
-/// offset 0: the buffer's dedicated allocation where `exported.dedicated`, mapped whole where it
-/// is host-visible, with no buffer of addresses (a dedicated allocation binds its buffer alone;
-/// the buffer has the device-address usage of its own). The class's memory types are tried best
+/// (`exported_memory.rs`). Where `exported.dedicated`, the buffer's dedicated allocation: a block
+/// of its own that holds `buffer` alone, and its placement at offset 0, mapped whole where it is
+/// host-visible, with no buffer of addresses (a dedicated allocation binds its buffer alone; the
+/// buffer has the device-address usage of its own). The class's memory types are tried best
 /// first, then those it overflows into, as [`place`] tries them, and the block is made with
-/// `memory`'s lock released; refused with the failure of the last type tried.
+/// `memory`'s lock released; refused with the failure of the last type tried. Else, as
+/// [`allocate`] places a buffer, in the blocks of exportable buffers ([`Holds::Exports`]): pooled,
+/// or of its own where it is larger than half a block, and kept for reuse as any block.
 ///
 /// `buffer` was made with `VkExternalMemoryBufferCreateInfo` naming `exported.handle`, which the
-/// device exports a buffer's memory as, and `requirements` are its own.
+/// device exports a buffer's memory as ([`EXPORT_HANDLE`]), and `requirements` are its own.
 pub(super) fn allocate_exported(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -2653,6 +2820,10 @@ pub(super) fn allocate_exported(
     class: MemoryClass,
     (buffer, exported): (vk::Buffer, Exported),
 ) -> Result<Placement, Error> {
+    if !exported.dedicated {
+        let (holds, fit) = (Holds::Exports, Fit::Pooled);
+        return place(memory, device, requirements, class, None, holds, fit);
+    }
     let size = requirements.size.max(1);
     let (candidates, overflow, maker) = {
         let memory = lock(memory);
@@ -2739,6 +2910,14 @@ fn place(
                 guard.place_pooled(device, pool, (size, align), addressed, class)?
             {
                 return Ok(guard.mark_overflowed(placement, overflowing));
+            }
+            // A dedicated placement takes a kept dedicated block its size fits.
+            if dedicated {
+                if let Some(placement) =
+                    guard.place_kept_dedicated(device, pool, size, addressed, class)?
+                {
+                    return Ok(guard.mark_overflowed(placement, overflowing));
+                }
             }
             // The pool host copies place in, without room: the block made ready for it, where
             // its making ended, rather than one of the placement's own, whose first touch may

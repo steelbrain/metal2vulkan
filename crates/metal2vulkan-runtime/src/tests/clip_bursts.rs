@@ -16,6 +16,10 @@
 //! and 34 decoded 4K NV12 pictures in `Private` exportable buffers (`exported_memory.rs`), as many
 //! as a guest's decoder pool grew by over a clip.
 //!
+//! The check: the clips after the first allocate no `VkDeviceMemory`, the first one's blocks kept
+//! for them as it ended (`memory.rs`). Before, each made 38 to 42 allocations again on lavapipe:
+//! the pooled blocks freed past the two a pool kept, and an allocation of its own per picture.
+//!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::blit_holds::{device, Scratch, WAIT};
@@ -50,12 +54,8 @@ const PAUSE: Duration = Duration::from_secs(3);
 const FRAME_GAP: Duration = Duration::from_millis(2);
 const HELD: Duration = Duration::from_millis(1);
 
-/// One clip's resources.
-struct Clip {
-    buffers: Vec<Buffer>,
-    textures: Vec<Texture>,
-    pictures: Vec<Buffer>,
-}
+/// One clip's resources, held until it ends: its buffers, textures and pictures.
+type Clip = (Vec<Buffer>, Vec<Texture>, Vec<Buffer>);
 
 /// The makings' times of one kind.
 #[derive(Default)]
@@ -95,7 +95,7 @@ fn ms(duration: Duration) -> f64 {
 /// exports no buffer's memory.
 fn make_clip(device: &Device, exports: bool) -> (Clip, [Times; 3]) {
     let mut times: [Times; 3] = Default::default();
-    let buffers = (0..BUFFERS)
+    let buffers: Vec<Buffer> = (0..BUFFERS)
         .map(|index| {
             let length = BUFFER_LENGTHS[index % BUFFER_LENGTHS.len()];
             let options = match index % 2 {
@@ -105,7 +105,7 @@ fn make_clip(device: &Device, exports: bool) -> (Clip, [Times; 3]) {
             times[0].timed(|| device.new_buffer(length, options).unwrap())
         })
         .collect();
-    let textures = (0..TEXTURES)
+    let textures: Vec<Texture> = (0..TEXTURES)
         .map(|index| {
             let side = TEXTURE_SIDES[index % TEXTURE_SIDES.len()];
             let mut descriptor =
@@ -115,7 +115,7 @@ fn make_clip(device: &Device, exports: bool) -> (Clip, [Times; 3]) {
             times[1].timed(|| device.new_texture(&descriptor).unwrap())
         })
         .collect();
-    let pictures = match exports {
+    let pictures: Vec<Buffer> = match exports {
         true => (0..PICTURES)
             .map(|_| {
                 times[2].timed(|| {
@@ -125,12 +125,7 @@ fn make_clip(device: &Device, exports: bool) -> (Clip, [Times; 3]) {
             .collect(),
         false => Vec::new(),
     };
-    let clip = Clip {
-        buffers,
-        textures,
-        pictures,
-    };
-    (clip, times)
+    ((buffers, textures, pictures), times)
 }
 
 /// The compositor's command buffers: when each was committed, from the test's start, and how
@@ -203,10 +198,11 @@ fn churn(before: &WorkCounts, after: &WorkCounts) -> String {
     )
 }
 
-/// The clips, made, held and released [`PAUSE`] apart while the compositor runs; each clip's
-/// burst and release printed with the compositor's held frames.
+/// The clips, made, held and released [`PAUSE`] apart while the compositor runs, each clip's
+/// burst and release printed with the compositor's held frames: the clips after the first
+/// allocate no memory.
 #[test]
-fn a_clip_start_s_makings_beside_a_compositor() {
+fn later_clips_allocate_no_memory_beside_a_compositor() {
     let scratch = Scratch::new("clip-bursts");
     let device = device(&scratch.0);
     let name = device.name().to_owned();
@@ -269,4 +265,9 @@ fn a_clip_start_s_makings_beside_a_compositor() {
         made_again
     });
     eprintln!("CLIP-BURSTS on {name}: allocations of the clips after the first: {made_again:?}");
+    // The first clip's blocks, kept as it ended, hold every later one (`memory.rs`).
+    assert!(
+        made_again.iter().all(|&allocated| allocated == 0),
+        "{name}: the clips after the first allocated {made_again:?}"
+    );
 }

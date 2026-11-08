@@ -4,8 +4,8 @@
 //! pictures through CUDA's `cuImportExternalMemory`, a second `VkDevice`) asks for the buffer at
 //! its making ([`Device::new_exportable_buffer`]) and takes its memory as an opaque file
 //! descriptor ([`Buffer::export_memory_fd`], `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT`). No
-//! other buffer pays for it: only such a buffer lies in an allocation of its own, made
-//! exportable; every other keeps the device's pooled blocks (`memory.rs`).
+//! other buffer pays for it: such buffers lie in blocks of their own kind, allocated exportable,
+//! and every other keeps the device's other pooled blocks (`memory.rs`).
 //!
 //! - **What the device must have.** `VK_KHR_external_memory_fd`, which the runtime enables
 //!   wherever the device lists it (an adopted device: wherever its consumer enabled it), and an
@@ -14,18 +14,27 @@
 //!   without them refuses the making (`NotImplemented(RuntimeGap::ExportableMemory)`).
 //! - **The allocation.** The `VkBuffer` names the handle type
 //!   (`VkExternalMemoryBufferCreateInfo`) and has the device-address usage of its own; its memory
-//!   (`VkExportMemoryAllocateInfo`) is a block of its own, of the memory type its storage mode
-//!   takes as any buffer's does, and its dedicated allocation
-//!   (`VkMemoryDedicatedAllocateInfo`) where the device exports such memory only so
-//!   (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`) or the driver prefers it
-//!   (`VkMemoryDedicatedRequirements`). It is never parked for reuse by another buffer.
+//!   is of the memory type its storage mode takes as any buffer's does. Where the device exports
+//!   such memory only from a dedicated allocation (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`)
+//!   or the driver prefers or requires one (`VkMemoryDedicatedRequirements`), it is the buffer's
+//!   dedicated allocation (`VkMemoryDedicatedAllocateInfo`, `VkExportMemoryAllocateInfo`), freed
+//!   with it. Else it lies in a block that exportable buffers share, allocated exportable
+//!   (`memory.rs`'s `Holds::Exports`), as other buffers lie in pooled blocks: a block holds a 4K
+//!   NV12 picture's 12.4 MB five times, and one that empties is kept for the next such buffers
+//!   (`memory.rs`). On an RTX 5080 Laptop GPU a `Private` exportable buffer of such a picture, an
+//!   allocation of its own, took 0.25 ms to make in one run and 39.9 ms in another, where a plain
+//!   one took 2.5 us and 2.9 us (medians of 8); NVIDIA's `vkAllocateMemory` holds every
+//!   submission until it returns. The buffer is never parked for reuse by another buffer.
 //! - **The descriptor.** Each call of [`Buffer::export_memory_fd`] is a new one
 //!   (`vkGetMemoryFdKHR`), the caller's to close; with it the allocation's size, the buffer's
 //!   offset and length in it, whether it is a dedicated allocation (CUDA's
 //!   `cudaExternalMemoryDedicated`), and its memory type, which an import into another
 //!   `VkDevice` of the same physical device names again.
-//! - **Lifetime.** The buffer must outlive every import of its memory: its release frees the
-//!   allocation, and what another API reads or writes through its import after that is undefined.
+//! - **Lifetime.** The buffer must outlive every import of its memory: its release frees its
+//!   dedicated allocation, or gives its bytes of a shared block to the next exportable buffer,
+//!   and what another API reads or writes through its import after that is undefined. An import
+//!   of a shared block reaches the whole block: the other API is to read and write the buffer's
+//!   `offset` and `length` alone.
 //! - **Device loss.** On a device loss the memory's contents are lost for every import of it too.
 //!   The device recovers from the loss with a new `VkDevice` (`device/line.rs`): the buffer, made
 //!   before, is refused (`NotImplemented(MadeBeforeRecovery)`), and the device makes new buffers
@@ -35,7 +44,7 @@
 use super::buffer::{buffer_class, usage, BufferParts, Modes, Owner};
 use super::device::lock;
 use super::error::{nil, vulkan, Error, Problem, RuntimeGap};
-use super::memory::{allocate_exported, Exported};
+use super::memory::{allocate_exported, Exported, EXPORT_HANDLE};
 use super::values::ResourceOptions;
 use super::{Buffer, Device};
 use crate::address::AddressPlacement;
@@ -44,7 +53,7 @@ use ash::vk;
 use std::os::fd::{FromRawFd, OwnedFd};
 
 /// The handle type the buffers export their memory as.
-const HANDLE: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+const HANDLE: vk::ExternalMemoryHandleTypeFlags = EXPORT_HANDLE;
 
 /// How the device exports a buffer's memory as an opaque file descriptor, asked once as the
 /// device is made.
@@ -105,9 +114,11 @@ pub struct ExportedMemory {
     /// A new descriptor of the memory, the caller's: an import that succeeds takes it (Vulkan's
     /// and CUDA's), else the caller closes it, by dropping it.
     pub fd: OwnedFd,
-    /// The bytes of the allocation, as `vkAllocateMemory` made it.
+    /// The bytes of the allocation, as `vkAllocateMemory` made it: the buffer's own where it is
+    /// `dedicated`, else those of a block other exportable buffers may lie in too.
     pub allocation_size: u64,
-    /// The buffer's first byte in the allocation.
+    /// The buffer's first byte in the allocation: 0 where it is `dedicated`, else wherever the
+    /// block placed it, at the alignment its memory requirements ask.
     pub offset: u64,
     /// The buffer's length, as made.
     pub length: u64,
@@ -121,11 +132,12 @@ pub struct ExportedMemory {
 impl Device {
     /// No Metal counterpart (a runtime extension): [`Device::new_buffer`] of `length` bytes with
     /// `options`, all zero, whose memory another API imports ([`Buffer::export_memory_fd`]): a
-    /// buffer of its own allocation, made exportable as an opaque file descriptor, where any other
-    /// buffer lies in the device's pooled blocks (`exported_memory.rs`). It is a buffer as any
-    /// other in every call; a `Managed` one on a device without unified memory exports the GPU's
-    /// copy, which the host's reaches as Metal's managed copies do (`didModifyRange:`,
-    /// `synchronizeResource:`).
+    /// buffer in memory allocated exportable as an opaque file descriptor, its dedicated
+    /// allocation where the device needs or prefers one, else a block such buffers share, where
+    /// any other buffer lies in the device's other pooled blocks (`exported_memory.rs`). It is a
+    /// buffer as any other in every call; a `Managed` one on a device without unified memory
+    /// exports the GPU's copy, which the host's reaches as Metal's managed copies do
+    /// (`didModifyRange:`, `synchronizeResource:`).
     ///
     /// The buffer must outlive every import of its memory. On a device loss the memory's contents
     /// are lost, for every import too, and a device made again makes new allocations, each
@@ -256,9 +268,10 @@ impl Buffer {
     /// to close; the allocation, its size and the buffer's offset in it stay the buffer's for
     /// its life.
     ///
-    /// The buffer must outlive every import of its memory: its release frees the allocation. On a
-    /// device loss the memory's contents are lost for every import too, and the call answers as
-    /// the module docs say.
+    /// The buffer must outlive every import of its memory: its release frees its dedicated
+    /// allocation, or gives its bytes of a shared block to the next exportable buffer. On a device
+    /// loss the memory's contents are lost for every import too, and the call answers as the
+    /// module docs say.
     ///
     /// Refused: a buffer not made by [`Device::new_exportable_buffer`] (`Invalid`,
     /// `Problem::NotExportable`), one made before its device's recovery
