@@ -29,9 +29,15 @@
 //! - **What it costs.** A check's verdicts come later while the device's work goes on: until then
 //!   the device takes the forms a device without them takes (each check's module docs). Counted:
 //!   `WorkCounts::device_checks` (`steps_aside`, `aside_nanos`).
-//! - **The checks' work is theirs.** A check's thread's makings, releases and submissions are
-//!   counted among its checks' (`WorkCounts::device_checks`), never the program's, so a program
-//!   or a case that meets a device first does not carry them.
+//! - **The checks' work is theirs.** The makings, releases and submissions of a thread whose every
+//!   Vulkan call is its check's own (the submission checks' and the queue-switch check's, which
+//!   reach the device's functions directly: [`Counted::Apart`]) are counted among the checks'
+//!   (`WorkCounts::device_checks`), never the program's, so a program or a case that meets a
+//!   device first does not carry them. The in-place check's are the device's
+//!   ([`Counted::AsTheDevice`]): it makes its buffers, textures and command buffers through the
+//!   program's paths, and a pass of the scheduler its waits take on its thread submits and
+//!   releases the program's batches beside its own (`freed_memory.rs`'s in-place check test: the
+//!   program's fills, submitted there, were never counted among `queue_submissions`).
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -52,17 +58,37 @@ thread_local! {
     /// This thread is one of the device's checks' threads, whose own allocations and frees count
     /// for nothing here.
     static CHECKS: Cell<bool> = const { Cell::new(false) };
+    /// Its makings, releases and submissions are counted as the checks' ([`Counted::Apart`]).
+    static APART: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Mark this thread as a check's, for good: it is a thread of its own.
-pub(crate) fn mark_a_check_s_thread() {
+/// Whose counts a check's thread's makings, releases and submissions are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Counted {
+    /// The checks' (`WorkCounts::device_checks`): every Vulkan call of the thread is its check's
+    /// own.
+    Apart,
+    /// The device's: the thread makes its check's objects through the program's paths, which may
+    /// carry the program's work on it too.
+    AsTheDevice,
+}
+
+/// Mark this thread as a check's, for good: it is a thread of its own, its work counted as
+/// `counted` says.
+pub(crate) fn mark_a_check_s_thread(counted: Counted) {
     CHECKS.with(|checks| checks.set(true));
+    APART.with(|apart| apart.set(counted == Counted::Apart));
 }
 
-/// Whether this thread is a check's ([`mark_a_check_s_thread`]): its makings, releases and
-/// submissions are counted as the checks' (`WorkCounts::device_checks`).
-pub(crate) fn on_a_check_s_thread() -> bool {
+/// Whether this thread is a check's ([`mark_a_check_s_thread`]).
+fn on_a_check_s_thread() -> bool {
     CHECKS.with(Cell::get)
+}
+
+/// Whether this thread's makings, releases and submissions are counted as the checks'
+/// ([`Counted::Apart`]).
+pub(crate) fn counted_apart() -> bool {
+    APART.with(Cell::get)
 }
 
 /// One device's allocations and frees in progress on threads not its checks', and when the last
@@ -178,7 +204,7 @@ mod tests {
     #[test]
     fn a_check_s_own_allocations_count_for_nothing() {
         let activity = Activity::new();
-        mark_a_check_s_thread();
+        mark_a_check_s_thread(Counted::Apart);
         assert!(!activity.begin());
         assert_eq!(activity.left(), Duration::ZERO);
     }

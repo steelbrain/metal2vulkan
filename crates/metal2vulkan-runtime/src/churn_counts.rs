@@ -20,7 +20,7 @@
 //!   planned them (a render pass's attachments, a compute dispatch's bindings, a blit), cut to a
 //!   rectangle or of every texel, and the texels they copy.
 
-use crate::step_aside::on_a_check_s_thread;
+use crate::step_aside::counted_apart;
 use crate::work_counts::{CopySite, CopySites, COPY_SITES};
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -71,7 +71,7 @@ pub(crate) enum VkMaking {
 /// A release of `what` (`release::object`), called `at`: a check's where a device's check made
 /// it ([`CHECK_RELEASES`]).
 pub(crate) fn vk_released(what: VkRelease, at: &Location<'static>) {
-    if on_a_check_s_thread() {
+    if counted_apart() {
         CHECK_RELEASES[what as usize].fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -88,7 +88,7 @@ pub(crate) fn vk_released(what: VkRelease, at: &Location<'static>) {
 /// A making of `what` (`creation.rs`), called `at`: a check's where a device's check made it
 /// ([`CHECK_MAKINGS`]).
 pub(crate) fn vk_made(what: VkMaking, at: &Location<'static>) {
-    if on_a_check_s_thread() {
+    if counted_apart() {
         CHECK_MAKINGS[what as usize].fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -394,7 +394,7 @@ mod tests {
             )
         };
         let (before, before_checks) = (process(), checks());
-        crate::step_aside::mark_a_check_s_thread();
+        crate::step_aside::mark_a_check_s_thread(crate::step_aside::Counted::Apart);
         vk_made(VkMaking::Memory, Location::caller());
         vk_released(VkRelease::Memory, Location::caller());
         assert_eq!(
@@ -403,5 +403,31 @@ mod tests {
             "the process's counts took a check's work"
         );
         assert_eq!(checks(), (before_checks.0 + 1, before_checks.1 + 1));
+    }
+
+    /// The in-place check's thread, whose paths carry the program's work too, counts its makings
+    /// and releases as the process's (`step_aside::Counted::AsTheDevice`).
+    #[test]
+    fn a_check_s_makings_through_the_program_s_paths_are_the_process_s() {
+        let process = || {
+            let churn = ChurnCounters::default().snapshot().0;
+            (churn.vk_memory_allocations, churn.vk_memory_freed)
+        };
+        let checks = || {
+            (
+                checks_made(VkMaking::Memory),
+                checks_released(VkRelease::Memory),
+            )
+        };
+        let (before, before_checks) = (process(), checks());
+        crate::step_aside::mark_a_check_s_thread(crate::step_aside::Counted::AsTheDevice);
+        vk_made(VkMaking::Memory, Location::caller());
+        vk_released(VkRelease::Memory, Location::caller());
+        assert_eq!(process(), (before.0 + 1, before.1 + 1));
+        assert_eq!(
+            checks(),
+            before_checks,
+            "the checks' counts took the device's work"
+        );
     }
 }

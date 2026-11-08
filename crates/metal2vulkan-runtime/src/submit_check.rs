@@ -687,7 +687,7 @@ impl Device {
             let _ends = Ends(Arc::clone(&parts.checks));
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             crate::loader_word::on_a_check_s_thread();
-            crate::step_aside::mark_a_check_s_thread();
+            crate::step_aside::mark_a_check_s_thread(crate::step_aside::Counted::Apart);
             let parts = parts;
             run(&parts, made);
         });

@@ -123,7 +123,7 @@ pub(crate) fn start(device: &Device) -> bool {
         let switch = Arc::clone(&parts.switch);
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         crate::loader_word::on_a_check_s_thread();
-        crate::step_aside::mark_a_check_s_thread();
+        crate::step_aside::mark_a_check_s_thread(crate::step_aside::Counted::Apart);
         run(&parts, made);
         // Its shares go before the teardown that waits for it goes on.
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

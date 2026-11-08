@@ -1909,10 +1909,10 @@ impl Counters {
 
     /// A `vkQueueSubmit` or `vkQueueBindSparse` call was made with `infos` `VkSubmitInfo`s
     /// (none for a sparse bind) and `command_buffers` `VkCommandBuffer`s among them.
-    /// Made on a thread of the device's checks (`step_aside.rs`), it is the checks' work and
-    /// counted as theirs alone ([`DeviceCheckWork::queue_submissions`]).
+    /// Made on a thread whose every call is its check's (`step_aside::Counted::Apart`), it is the
+    /// checks' work and counted as theirs alone ([`DeviceCheckWork::queue_submissions`]).
     pub(crate) fn queue_submitted(&self, infos: usize, command_buffers: usize) {
-        if crate::step_aside::on_a_check_s_thread() {
+        if crate::step_aside::counted_apart() {
             self.check_queue_submissions.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -3770,18 +3770,19 @@ pub struct MemoryFrees {
     pub blocks: u64,
 }
 
-/// The Vulkan work of the device's own checks (its submission, queue-switch and in-place checks:
-/// `submit_check.rs`, `queue_switch_check.rs`, `in_place_check.rs`), made on their threads
-/// (`step_aside.rs`) and counted here alone: the makings and releases of the whole process's
-/// checks, as `ObjectChurn`'s are the whole process's, and the device's checks' submissions. A
-/// check runs once per driver and release with no record of its verdicts, beside whatever the
-/// program does then, so none of this is the program's. A field of `WorkCounts`, for the lanes:
-/// no Metal counterpart, not part of the API.
+/// The Vulkan work of the device's submission and queue-switch checks (`submit_check.rs`,
+/// `queue_switch_check.rs`), made on their threads, which reach the device's functions directly
+/// and make no call but their check's (`step_aside::Counted::Apart`), and counted here alone: the
+/// makings and releases of the whole process's such checks, as `ObjectChurn`'s are the whole
+/// process's, and the device's queue-switch check's submissions. A check runs once per driver and
+/// release with no record of its verdicts, beside whatever the program does then, so none of this
+/// is the program's. A field of `WorkCounts`, for the lanes: no Metal counterpart, not part of
+/// the API.
 ///
-/// The in-place check makes its buffers, textures and command buffers through the program's
-/// paths, which count them as they count the program's (`buffers_made`, `commands_recorded` and
-/// the like); its `vkAllocateMemory`, release and submission calls on its thread are here, and a
-/// free the device's free thread makes for it is the device's.
+/// The in-place check's work is the device's, counted as the program's paths count it
+/// (`step_aside::Counted::AsTheDevice`): it makes its buffers, textures and command buffers
+/// through those paths, and a pass of the scheduler its waits take on its thread submits and
+/// releases the program's batches beside its own.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DeviceCheckWork {
     /// `vkAllocateMemory` calls (`ObjectChurn::vk_memory_allocations` leaves them out).
@@ -3804,10 +3805,9 @@ pub struct DeviceCheckWork {
     pub vk_image_bindings: u64,
     /// `vkBindBufferMemory` calls.
     pub vk_buffer_bindings: u64,
-    /// `vkQueueSubmit` and `vkQueueBindSparse` calls the device's queue-switch and in-place
-    /// checks made, and the relay's marks after their uses of a queue
-    /// (`WorkCounts::queue_submissions` leaves them out); the submission checks' are
-    /// `WorkCounts::submit_check_calls`.
+    /// `vkQueueSubmit` calls the device's queue-switch check made, and the relay's marks after its
+    /// uses of a queue (`WorkCounts::queue_submissions` leaves them out); the submission checks'
+    /// are `WorkCounts::submit_check_calls`.
     pub queue_submissions: u64,
     /// Steps of the device's checks that waited for the device's allocations and frees on other
     /// threads before they went on (`step_aside.rs`).
