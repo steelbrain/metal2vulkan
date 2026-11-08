@@ -95,10 +95,11 @@ use crate::tracker::{Use, UseRange};
 use metal2vulkan::metal::RenderStages;
 
 /// The encoder's last direct draw, where it is kept (the module docs).
+#[derive(Default)]
 pub(super) struct DrawAgain {
     kept: Option<Kept>,
-    /// What the encoder's kept draws were kept under: drawn afresh as every kept draw is
-    /// forgotten, the one of the last direct draw and those its bind state set aside with the
+    /// What the encoder's kept draws were kept under (a fresh stamp, its default): drawn afresh
+    /// as every kept draw is forgotten, the one of the last direct draw and those its bind state set aside with the
     /// states of other pipeline states (`LiveBind::select`), so a draw set aside is kept still
     /// where it holds this.
     epoch: Stamp,
@@ -106,17 +107,6 @@ pub(super) struct DrawAgain {
     /// second one after it take every step instead (the module docs).
     #[cfg(debug_assertions)]
     hits: u64,
-}
-
-impl Default for DrawAgain {
-    fn default() -> DrawAgain {
-        DrawAgain {
-            kept: None,
-            epoch: Stamp::fresh(),
-            #[cfg(debug_assertions)]
-            hits: 0,
-        }
-    }
 }
 
 /// What a kept draw was, what it read, and what a draw again repeats of it (the module docs).
