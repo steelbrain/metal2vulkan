@@ -1134,12 +1134,13 @@ fn a_copied_rebind_where_fresh_pages_are_unchecked_takes_memory_the_device_alloc
 
 /// A rebind's copy under an image in place whose rows lie at another pitch than the driver's own
 /// linear image's: tight rows (64 bytes apart) and wide ones (512 bytes apart; RADV lays a linear
-/// image of its own 256 bytes a row, and makes no image in place at tight rows). Where the device's
-/// check passed fresh pages for the texture's access, the copy lies in fresh pages, its image made
-/// over them at the texels' pitch for host allocations, so the rebind is taken and the texture
-/// follows the copy; elsewhere the copy lies in memory the device allocates, and the rebind is
-/// refused where the driver's linear image lies at another pitch (`docs/FAST-PATHS.md`'s known
-/// gaps). A pitch whose texture is a shadow tests nothing.
+/// image of its own 256 bytes a row, and makes no image in place at either, so there neither tests
+/// anything; lavapipe takes both). Where the device's check passed fresh pages for the texture's
+/// access, the copy lies in fresh pages, its image made over them at the texels' pitch for host
+/// allocations, so the rebind is taken and the texture follows the copy; elsewhere the copy lies in
+/// memory the device allocates, and the rebind is refused where the driver's linear image lies at
+/// another pitch (`docs/FAST-PATHS.md`'s known gaps). A pitch whose texture is a shadow tests
+/// nothing.
 #[test]
 fn a_copied_rebind_at_another_pitch_takes_fresh_pages_where_their_check_passed() {
     let tight = (Host::new(28), Host::new(29));
