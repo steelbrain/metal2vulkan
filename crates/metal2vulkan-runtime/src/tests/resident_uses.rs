@@ -334,6 +334,61 @@ fn draws_keep_the_uses_of_what_their_encoder_made_resident_until_it_or_their_pla
     }
 }
 
+/// Draws of the entry shape, which read through a root table and a handle table, under a residency
+/// that holds a buffer made resident for writing: each keeps nothing to draw again, counted for its
+/// tables (a heap's set) and for a write among the uses of what its encoder made resident, both
+/// at once (`WorkCounts::draws_unkept_tables_writing`). The same draws with every resource
+/// resident for reading are counted for their tables alone.
+#[test]
+fn draws_through_tables_beside_a_resident_write_keep_nothing_for_both_at_once() {
+    let scratch = Scratch::new("resident-writes");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let scene = Scene::new(&device);
+    let resources = Resources::new(&scene, -0.9);
+    for usage in [
+        ResourceUsage::READ | ResourceUsage::WRITE,
+        ResourceUsage::READ,
+    ] {
+        let queue = device.new_command_queue().unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer
+            .render_command_encoder(&pass(&scene.target))
+            .unwrap();
+        resources.resident(&scene, &mut encoder);
+        let later = resources.later.as_resource();
+        let both = RenderStages::VERTEX | RenderStages::FRAGMENT;
+        (encoder.use_resource(later, usage, both)).unwrap();
+        encoder.set_render_pipeline_state(&scene.entry).unwrap();
+        let before = device.work_counts();
+        for at in 0..POSITIONS {
+            let table = &resources.tables[(at % 2) as usize];
+            let offset = ENTRY * (1 + at % POSITIONS);
+            (encoder.set_vertex_buffer(Some(table), offset, 0)).unwrap();
+            (encoder.set_fragment_buffer(Some(table), offset, 0)).unwrap();
+            (encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
+        }
+        let after = device.work_counts();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        let counted = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+        let unkept = [
+            counted(|counts| counts.draws_unkept),
+            counted(|counts| counts.draws_unkept_tables),
+            counted(|counts| counts.draws_unkept_tables_heap),
+            counted(|counts| counts.draws_unkept_writing),
+            counted(|counts| counts.draws_unkept_writing_resident),
+            counted(|counts| counts.draws_unkept_tables_writing),
+        ];
+        let writes = usage.contains(ResourceUsage::WRITE);
+        let written = if writes { POSITIONS } else { 0 };
+        let expected = [POSITIONS, POSITIONS, POSITIONS, written, written, written];
+        assert_eq!(unkept, expected, "made resident {usage:?}");
+    }
+    assert!(scene.covered() > 0, "the draws drew nothing");
+}
+
 /// The two encoders of the test above: within each, a draw works out its heap part (its plan's
 /// heap tables, where its heap writes go and its writes past the heap's entries:
 /// `render/heap_part.rs`) at the encoder's first draw and after the encoder made another
