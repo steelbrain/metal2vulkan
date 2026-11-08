@@ -111,8 +111,10 @@
 //!   (`WorkCounts::submit_check_calls`), not among the device's, with the relay's mark after each
 //!   of its uses of the queue where the device relays its queues' failures (`device/relay.rs`,
 //!   `By::Checks`); the commands it records go through the driver's own entry points, counted
-//!   among none of the device's (`WorkCounts::commands_recorded`, `recorder::unrouted`). Its
-//!   submission calls hold the device's loader word (`loader_word.rs`).
+//!   among none of the device's (`WorkCounts::commands_recorded`, `recorder::unrouted`); its
+//!   allocations, buffers, bindings and releases are counted as the checks'
+//!   (`WorkCounts::device_checks`), not among the process's (`object_churn`). Its submission calls
+//!   hold the device's loader word (`loader_word.rs`).
 
 use crate::allocations::Allocations;
 use crate::command_buffer::fences::Fences;

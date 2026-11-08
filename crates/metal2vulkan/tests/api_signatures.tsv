@@ -2029,6 +2029,19 @@ field	metal2vulkan-runtime::DegradeNotice.misplaced	pub misplaced: Option<Mispla
 field	metal2vulkan-runtime::DegradeNotice.object	pub object: String
 field	metal2vulkan-runtime::DegradeNotice.object_id	pub object_id: Option<ObjectId>
 field	metal2vulkan-runtime::DegradeNotice.reason	pub reason: String
+field	metal2vulkan-runtime::DeviceCheckWork.aside_nanos	pub aside_nanos: u64
+field	metal2vulkan-runtime::DeviceCheckWork.queue_submissions	pub queue_submissions: u64
+field	metal2vulkan-runtime::DeviceCheckWork.steps_aside	pub steps_aside: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_buffer_bindings	pub vk_buffer_bindings: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_buffer_views_destroyed	pub vk_buffer_views_destroyed: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_buffers_destroyed	pub vk_buffers_destroyed: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_buffers_made	pub vk_buffers_made: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_image_bindings	pub vk_image_bindings: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_image_views_made	pub vk_image_views_made: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_images_destroyed	pub vk_images_destroyed: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_images_made	pub vk_images_made: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_memory_allocations	pub vk_memory_allocations: u64
+field	metal2vulkan-runtime::DeviceCheckWork.vk_memory_freed	pub vk_memory_freed: u64
 field	metal2vulkan-runtime::DeviceHandles.device	pub device: &'a ash::Device
 field	metal2vulkan-runtime::DeviceHandles.entry	pub entry: &'a ash::Entry
 field	metal2vulkan-runtime::DeviceHandles.extra_queues	pub extra_queues: &'a [ExtraQueue]
@@ -2612,6 +2625,7 @@ field	metal2vulkan-runtime::WorkCounts.depth_attachments_moved	pub depth_attachm
 field	metal2vulkan-runtime::WorkCounts.depth_instances_held	pub depth_instances_held: u64
 field	metal2vulkan-runtime::WorkCounts.descriptor_keys_built	pub descriptor_keys_built: u64
 field	metal2vulkan-runtime::WorkCounts.detached_storage_reaches	pub detached_storage_reaches: u64
+field	metal2vulkan-runtime::WorkCounts.device_checks	pub device_checks: DeviceCheckWork
 field	metal2vulkan-runtime::WorkCounts.device_copy_textures	pub device_copy_textures: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_allocated	pub device_memory_allocated: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_overflows	pub device_memory_overflows: u64
@@ -9604,6 +9618,7 @@ struct	metal2vulkan-runtime::DebugMessage	#[derive(Clone, Debug, PartialEq, Eq)]
 struct	metal2vulkan-runtime::DegradeNotice	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DegradeNotice
 struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct DepthStencilState(Arc<Shared>)
 struct	metal2vulkan-runtime::Device	pub struct Device(Arc<DeviceShared>, holds::Share)
+struct	metal2vulkan-runtime::DeviceCheckWork	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct DeviceCheckWork
 struct	metal2vulkan-runtime::DeviceHandles	#[derive(Clone, Copy)] #[non_exhaustive] pub struct DeviceHandles<'a>
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties

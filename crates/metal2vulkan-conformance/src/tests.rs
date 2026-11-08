@@ -4419,6 +4419,13 @@ fn the_cost_half_reads_every_count_the_runtime_keeps() {
         !counts.iter().any(|(name, _)| name.contains("copy_sites")),
         "a site table was read as a count"
     );
+    // Nor is the device's checks' work, which is never a case's.
+    assert!(
+        !counts
+            .iter()
+            .any(|(name, _)| name.starts_with("device_checks")),
+        "the device's checks' work was read as a case's"
+    );
     assert!(crate::cost::excluded("copy_sites").is_some());
     assert!(crate::cost::excluded("row_copy_regions_most").is_some());
     assert!(crate::cost::excluded("batch_submit_nanos").is_some());
@@ -4427,6 +4434,8 @@ fn the_cost_half_reads_every_count_the_runtime_keeps() {
         "submit_check_calls",
         "submit_checks_run",
         "submit_checks_recalled",
+        "device_checks",
+        "device_checks.vk_memory_allocations",
     ] {
         assert!(crate::cost::excluded(checks).is_some(), "{checks}");
     }

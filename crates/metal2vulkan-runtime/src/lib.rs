@@ -381,6 +381,6 @@ pub use values::{
 pub use view_plan::ViewProblem;
 pub use visibility::{VisibilityProblem, VisibilityResultMode, VisibilityResultType};
 pub use warm::{PipelineRecord, WarmStatistics};
-pub use work_counts::{CopySite, MemoryFrees, WorkCounts};
+pub use work_counts::{CopySite, DeviceCheckWork, MemoryFrees, WorkCounts};
 pub use wrapped_buffer::{VkBufferMemory, WrappedBufferProblem};
 pub use ycbcr::{IoSurfaceYCbCr, SurfaceYCbCrMatrix};

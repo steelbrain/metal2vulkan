@@ -6,6 +6,7 @@
 //! holds to none. Not part of the API.
 
 use super::buffer::{KeptBecause, ReadApart};
+use super::churn_counts::{VkMaking, VkRelease};
 use super::command_buffer::GroupEnd;
 use super::degradation::Degradation;
 use super::device::lock;
@@ -234,6 +235,7 @@ pub(crate) struct Counters {
     submit_check_calls: AtomicU64,
     check_steps_aside: AtomicU64,
     check_aside_nanos: AtomicU64,
+    check_queue_submissions: AtomicU64,
     queue_sharing_untimed: AtomicU64,
     slot_wait_nanos: AtomicU64,
     completed_waits: AtomicU64,
@@ -1906,7 +1908,13 @@ impl Counters {
 
     /// A `vkQueueSubmit` or `vkQueueBindSparse` call was made with `infos` `VkSubmitInfo`s
     /// (none for a sparse bind) and `command_buffers` `VkCommandBuffer`s among them.
+    /// Made on a thread of the device's checks (`step_aside.rs`), it is the checks' work and
+    /// counted as theirs alone ([`DeviceCheckWork::queue_submissions`]).
     pub(crate) fn queue_submitted(&self, infos: usize, command_buffers: usize) {
+        if crate::step_aside::on_a_check_s_thread() {
+            self.check_queue_submissions.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         self.queue_submissions.fetch_add(1, Ordering::Relaxed);
         self.submit_infos.fetch_add(infos as u64, Ordering::Relaxed);
         (self.command_buffers_submitted).fetch_add(command_buffers as u64, Ordering::Relaxed);
@@ -3750,8 +3758,55 @@ pub struct MemoryFrees {
     /// no block of the allocator's is freed without naming one, and so `blocks` stays its whole
     /// share of `vk_memory_freed` over the device's whole life.
     pub teardown: u64,
-    /// The blocks counted above: the allocator's whole share of `vk_memory_freed`.
+    /// The blocks counted above: the allocator's whole share of `vk_memory_freed` and of the
+    /// device's checks' (`DeviceCheckWork::vk_memory_freed`).
     pub blocks: u64,
+}
+
+/// The Vulkan work of the device's own checks (its submission, queue-switch and in-place checks:
+/// `submit_check.rs`, `queue_switch_check.rs`, `in_place_check.rs`), made on their threads
+/// (`step_aside.rs`) and counted here alone: the makings and releases of the whole process's
+/// checks, as `ObjectChurn`'s are the whole process's, and the device's checks' submissions. A
+/// check runs once per driver and release with no record of its verdicts, beside whatever the
+/// program does then, so none of this is the program's. A field of `WorkCounts`, for the lanes:
+/// no Metal counterpart, not part of the API.
+///
+/// The in-place check makes its buffers, textures and command buffers through the program's
+/// paths, which count them as they count the program's (`buffers_made`, `commands_recorded` and
+/// the like); its `vkAllocateMemory`, release and submission calls on its thread are here, and a
+/// free the device's free thread makes for it is the device's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeviceCheckWork {
+    /// `vkAllocateMemory` calls (`ObjectChurn::vk_memory_allocations` leaves them out).
+    pub vk_memory_allocations: u64,
+    /// `vkFreeMemory` calls (`ObjectChurn::vk_memory_freed` leaves them out).
+    pub vk_memory_freed: u64,
+    /// `vkCreateBuffer` calls.
+    pub vk_buffers_made: u64,
+    /// `vkDestroyBuffer` calls.
+    pub vk_buffers_destroyed: u64,
+    /// `vkCreateImage` calls.
+    pub vk_images_made: u64,
+    /// `vkDestroyImage` calls.
+    pub vk_images_destroyed: u64,
+    /// `vkCreateImageView` calls.
+    pub vk_image_views_made: u64,
+    /// `vkDestroyBufferView` calls.
+    pub vk_buffer_views_destroyed: u64,
+    /// `vkBindImageMemory` calls.
+    pub vk_image_bindings: u64,
+    /// `vkBindBufferMemory` calls.
+    pub vk_buffer_bindings: u64,
+    /// `vkQueueSubmit` and `vkQueueBindSparse` calls the device's queue-switch and in-place
+    /// checks made, and the relay's marks after their uses of a queue
+    /// (`WorkCounts::queue_submissions` leaves them out); the submission checks' are
+    /// `WorkCounts::submit_check_calls`.
+    pub queue_submissions: u64,
+    /// Steps of the device's checks that waited for the device's allocations and frees on other
+    /// threads before they went on (`step_aside.rs`).
+    pub steps_aside: u64,
+    /// The nanoseconds those steps waited, in all.
+    pub aside_nanos: u64,
 }
 
 /// What a device's commit path did so far (`Device::work_counts`), for the lanes: not part of the
@@ -4886,12 +4941,9 @@ pub struct WorkCounts {
     /// theirs, and on a device that relays its queues' failures the relay's mark after each of
     /// their uses of a queue.
     pub submit_check_calls: u64,
-    /// Steps of the device's checks (its submission, queue-switch and in-place checks) that
-    /// waited for the device's allocations and frees on other threads before they went on
-    /// (`step_aside.rs`).
-    pub check_steps_aside: u64,
-    /// The nanoseconds those steps waited, in all.
-    pub check_aside_nanos: u64,
+    /// The device's own checks' work, on their threads, which the counts above and
+    /// `object_churn` leave out (`DeviceCheckWork`).
+    pub device_checks: DeviceCheckWork,
     /// Devices of `QueueSharingPolicy::Adaptive` with two `VkQueue`s of one family to share that
     /// do not share, because their command buffers write no calibrated GPU timestamps the host
     /// reads (`gpu_times_from_host`, a driver whose timestamps wait for every queue's, or none):
@@ -6913,8 +6965,25 @@ impl Device {
             submit_checks_run: counters.submit_checks_run.load(Ordering::Relaxed),
             submit_checks_recalled: counters.submit_checks_recalled.load(Ordering::Relaxed),
             submit_check_calls: counters.submit_check_calls.load(Ordering::Relaxed),
-            check_steps_aside: counters.check_steps_aside.load(Ordering::Relaxed),
-            check_aside_nanos: counters.check_aside_nanos.load(Ordering::Relaxed),
+            device_checks: {
+                let made = super::churn_counts::checks_made;
+                let released = super::churn_counts::checks_released;
+                DeviceCheckWork {
+                    vk_memory_allocations: made(VkMaking::Memory),
+                    vk_memory_freed: released(VkRelease::Memory),
+                    vk_buffers_made: made(VkMaking::Buffer),
+                    vk_buffers_destroyed: released(VkRelease::Buffer),
+                    vk_images_made: made(VkMaking::Image),
+                    vk_images_destroyed: released(VkRelease::Image),
+                    vk_image_views_made: made(VkMaking::ImageView),
+                    vk_buffer_views_destroyed: released(VkRelease::BufferView),
+                    vk_image_bindings: made(VkMaking::ImageBinding),
+                    vk_buffer_bindings: made(VkMaking::BufferBinding),
+                    queue_submissions: counters.check_queue_submissions.load(Ordering::Relaxed),
+                    steps_aside: counters.check_steps_aside.load(Ordering::Relaxed),
+                    aside_nanos: counters.check_aside_nanos.load(Ordering::Relaxed),
+                }
+            },
             queue_sharing_untimed: counters.queue_sharing_untimed.load(Ordering::Relaxed),
             completed_waits: counters.completed_waits.load(Ordering::Relaxed),
             event_waits_met: counters.event_waits_met.load(Ordering::Relaxed),

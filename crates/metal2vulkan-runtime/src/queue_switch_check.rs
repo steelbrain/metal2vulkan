@@ -34,7 +34,8 @@
 //! - **Out of the device's way.** Before each round the thread steps aside for the device's
 //!   allocations and frees on other threads (`step_aside.rs`): it goes on once none is in
 //!   progress and none ended for `step_aside::QUIET`, at once while a call waits for its verdict
-//!   (`Device::settle_queue_switch_check`).
+//!   (`Device::settle_queue_switch_check`). Its submissions are counted as the checks'
+//!   (`WorkCounts::device_checks`), not among the device's (`queue_submissions`).
 //! - **Its thread.** Each reach of the device runs inside a section of the exit guard
 //!   (`exit_guard.rs`), as every runtime thread's does: the objects' making, the submissions, each
 //!   wait of at most [`WAIT_SLICE`], and the releases. Once the process is exiting it ends,

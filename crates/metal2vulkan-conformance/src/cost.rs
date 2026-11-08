@@ -74,17 +74,26 @@ const NOT_SUBTRACTABLE: [(&str, &str); 3] = [
     ("_nanos", "an accumulated time, which no count gate holds"),
 ];
 
-/// A prefix of the fields that count the device's own checks of its submissions (the runtime's
-/// `submit_check.rs`), with why the cost half does not read them. The checks run once per driver,
-/// release, kernel and runtime, on a thread of their own, as the first device of a run with no
-/// stored verdict is made, so inside whichever case met that device: seen on the M3 Max in a
-/// fresh workspace, `pass-bytes-srgb-decode-all-bytes` read 162 of their calls and their one run.
-/// Their work is counted apart from the device's, and none of it is a case's.
-const DEVICE_CHECKS: [(&str, &str); 1] = [(
-    "submit_check",
-    "the device's own submission checks' work, once per driver and release on a thread of its \
-     own, counted apart from the device's: never a case's",
-)];
+/// A prefix of the fields that count the device's own checks (the runtime's `submit_check.rs`,
+/// `queue_switch_check.rs`, `in_place_check.rs`), with why the cost half does not read them. A
+/// check runs once per driver and release with no stored verdict, on a thread of its own, as the
+/// first device of a run is made or first asks, so inside whichever case met that device: seen on
+/// the M3 Max in a fresh workspace, `pass-bytes-srgb-decode-all-bytes` read 162 of the submission
+/// checks' calls and their one run, and their allocations among its own. Their work is counted
+/// apart from the device's (`submit_check_*`, and `device_checks` for their makings, releases and
+/// other submissions), and none of it is a case's.
+const DEVICE_CHECKS: [(&str, &str); 2] = [
+    (
+        "submit_check",
+        "the device's own submission checks' work, once per driver and release on a thread of \
+         its own, counted apart from the device's: never a case's",
+    ),
+    (
+        "device_checks",
+        "the device's own checks' makings, releases and submissions, once per driver and release \
+         on threads of their own, counted apart from the device's: never a case's",
+    ),
+];
 
 /// Whether `name` is a field the cost half reads, or why it is not.
 pub fn excluded(name: &str) -> Option<&'static str> {

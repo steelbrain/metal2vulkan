@@ -447,20 +447,25 @@ fn pipeline_work(from: &crate::WorkCounts, to: &crate::WorkCounts) -> String {
 }
 
 /// Which of `device`'s checks ran in this process and which it read from a record, from its
-/// counts `to` (`WorkCounts`), how often and how long their steps stepped aside for its other
-/// work (`step_aside.rs`), and its submission checks' report.
+/// counts `to` (`WorkCounts`), the process's checks' allocations and frees, how often and how
+/// long their steps stepped aside for its other work (`step_aside.rs`), and its submission
+/// checks' report.
 fn checks_line(device: &Device, to: &crate::WorkCounts) -> String {
+    let checks = &to.device_checks;
     format!(
         "submission checks run {} recalled {}, queue-switch checks run {} recalled {}, in-place \
-         checks run {} recalled {}, their steps aside {} for {:.1} ms; {}",
+         checks run {} recalled {}, their allocations {} frees {}, their steps aside {} for \
+         {:.1} ms; {}",
         to.submit_checks_run,
         to.submit_checks_recalled,
         to.queue_switch_checks_run,
         to.queue_switch_checks_recalled,
         to.in_place_checks_run,
         to.in_place_checks_recalled,
-        to.check_steps_aside,
-        to.check_aside_nanos as f64 / 1e6,
+        checks.vk_memory_allocations,
+        checks.vk_memory_freed,
+        checks.steps_aside,
+        checks.aside_nanos as f64 / 1e6,
         device.submit_check_report(),
     )
 }

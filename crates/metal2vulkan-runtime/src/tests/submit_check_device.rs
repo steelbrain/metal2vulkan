@@ -5,7 +5,8 @@
 //! - **They answer.** A device made over a fresh shader cache runs its checks once
 //!   (`WorkCounts::submit_checks_run`), each verdict an answer (never pending once settled; the
 //!   follows check answered on Linux where the device imports host pointers), their calls counted
-//!   apart (`WorkCounts::submit_check_calls`) and their commands among none of the device's
+//!   apart (`WorkCounts::submit_check_calls`), their allocations too (`device_checks`), and their
+//!   commands among none of the device's
 //!   (`commands_recorded`: a device that ran them recorded the copies one that recalled them did,
 //!   the follows check's three among neither); a later device over the same cache recalls them
 //!   (`submit_checks_recalled`), runs none, and holds the verdicts of the last device that ran
@@ -100,6 +101,10 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     assert!(
         counts.submit_check_calls > 0,
         "the checks' calls were not counted"
+    );
+    assert!(
+        counts.device_checks.vk_memory_allocations > 0,
+        "the checks' allocations were not counted apart"
     );
     // A live device with equal options is what `system_default_with` returns again: the first
     // goes before the second is made, its cache thread writing what it queued (the record among

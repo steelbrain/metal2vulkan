@@ -76,7 +76,8 @@
 //!   allocations and frees on other threads (`step_aside.rs`): it goes on once none is in
 //!   progress and none ended for `step_aside::QUIET`, at once while a call waits for its verdicts
 //!   (`Device::settle_in_place_checks`). Its own buffers and textures, made through the product's
-//!   paths on its thread, count for nothing there.
+//!   paths on its thread, count for nothing there, and their allocations, releases and
+//!   submissions on its thread are counted as the checks' (`WorkCounts::device_checks`).
 //! - **Its thread.** Each round's Vulkan work (the buffer, the texture, the submission and its
 //!   wait, the releases) runs inside a section of the exit guard (`exit_guard.rs`), as every
 //!   runtime thread's does. It holds its device through the registry of the runtime's own holds

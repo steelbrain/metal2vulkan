@@ -20,6 +20,7 @@
 //!   planned them (a render pass's attachments, a compute dispatch's bindings, a blit), cut to a
 //!   rectangle or of every texel, and the texels they copy.
 
+use crate::step_aside::on_a_check_s_thread;
 use crate::work_counts::{CopySite, CopySites, COPY_SITES};
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,6 +37,15 @@ static VK_MAKINGS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 
 /// The places in the runtime that made those, the first [`COPY_SITES`] met.
 static MAKING_SITES: LazyLock<CopySites> = LazyLock::new(CopySites::default);
+
+/// The releases of [`VK_RELEASES`]'s entry points made on a thread of a device's checks
+/// (`step_aside.rs`), which it leaves out: the checks' work, never the program's
+/// (`WorkCounts::device_checks`).
+static CHECK_RELEASES: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+/// The makings of [`VK_MAKINGS`]'s entry points made on a thread of a device's checks, which it
+/// leaves out.
+static CHECK_MAKINGS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 
 /// An entry point [`VK_RELEASES`] counts.
 #[derive(Clone, Copy)]
@@ -58,8 +68,13 @@ pub(crate) enum VkMaking {
     BufferBinding = 5,
 }
 
-/// A release of `what` (`release::object`), called `at`.
+/// A release of `what` (`release::object`), called `at`: a check's where a device's check made
+/// it ([`CHECK_RELEASES`]).
 pub(crate) fn vk_released(what: VkRelease, at: &Location<'static>) {
+    if on_a_check_s_thread() {
+        CHECK_RELEASES[what as usize].fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     VK_RELEASES[what as usize].fetch_add(1, Ordering::Relaxed);
     let command = match what {
         VkRelease::Image => "vkDestroyImage",
@@ -70,10 +85,25 @@ pub(crate) fn vk_released(what: VkRelease, at: &Location<'static>) {
     RELEASE_SITES.count(command, at, 0);
 }
 
-/// A making of `what` (`creation.rs`), called `at`.
+/// A making of `what` (`creation.rs`), called `at`: a check's where a device's check made it
+/// ([`CHECK_MAKINGS`]).
 pub(crate) fn vk_made(what: VkMaking, at: &Location<'static>) {
+    if on_a_check_s_thread() {
+        CHECK_MAKINGS[what as usize].fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     VK_MAKINGS[what as usize].fetch_add(1, Ordering::Relaxed);
     MAKING_SITES.count(what.command(), at, 0);
+}
+
+/// The process's devices' checks' makings of `what` so far.
+pub(crate) fn checks_made(what: VkMaking) -> u64 {
+    CHECK_MAKINGS[what as usize].load(Ordering::Relaxed)
+}
+
+/// The process's devices' checks' releases of `what` so far.
+pub(crate) fn checks_released(what: VkRelease) -> u64 {
+    CHECK_RELEASES[what as usize].load(Ordering::Relaxed)
 }
 
 impl VkMaking {
@@ -342,4 +372,36 @@ pub struct ShadowKeeps {
     pub blit_whole: u64,
     /// Their texels.
     pub blit_whole_texels: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A device check's makings and releases, on its thread, are counted as the checks' alone, so
+    /// the process's counts (`ObjectChurn`), which a program's or a case's cost reads, carry none
+    /// of them. The test's own thread is marked: each test has a thread of its own.
+    #[test]
+    fn a_check_s_makings_and_releases_are_its_alone() {
+        let process = || {
+            let churn = ChurnCounters::default().snapshot().0;
+            (churn.vk_memory_allocations, churn.vk_memory_freed)
+        };
+        let checks = || {
+            (
+                checks_made(VkMaking::Memory),
+                checks_released(VkRelease::Memory),
+            )
+        };
+        let (before, before_checks) = (process(), checks());
+        crate::step_aside::mark_a_check_s_thread();
+        vk_made(VkMaking::Memory, Location::caller());
+        vk_released(VkRelease::Memory, Location::caller());
+        assert_eq!(
+            process(),
+            before,
+            "the process's counts took a check's work"
+        );
+        assert_eq!(checks(), (before_checks.0 + 1, before_checks.1 + 1));
+    }
 }

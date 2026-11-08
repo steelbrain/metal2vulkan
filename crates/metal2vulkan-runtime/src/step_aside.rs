@@ -24,7 +24,10 @@
 //!   own run alone.
 //! - **What it costs.** A check's verdicts come later while the device's work goes on: until then
 //!   the device takes the forms a device without them takes (each check's module docs). Counted:
-//!   `WorkCounts::check_steps_aside`, `check_aside_nanos`.
+//!   `WorkCounts::device_checks` (`steps_aside`, `aside_nanos`).
+//! - **The checks' work is theirs.** A check's thread's makings, releases and submissions are
+//!   counted among its checks' (`WorkCounts::device_checks`), never the program's, so a program
+//!   or a case that meets a device first does not carry them.
 
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -49,8 +52,9 @@ pub(crate) fn mark_a_check_s_thread() {
     CHECKS.with(|checks| checks.set(true));
 }
 
-/// Whether this thread is a check's ([`mark_a_check_s_thread`]).
-fn on_a_check_s_thread() -> bool {
+/// Whether this thread is a check's ([`mark_a_check_s_thread`]): its makings, releases and
+/// submissions are counted as the checks' (`WorkCounts::device_checks`).
+pub(crate) fn on_a_check_s_thread() -> bool {
     CHECKS.with(Cell::get)
 }
 
