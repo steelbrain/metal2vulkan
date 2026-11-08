@@ -11,7 +11,9 @@
 //! nearest sample at a texel's centre reads the texel: Metal's, or where the device converts the
 //! texture's planes itself (`ycbcr_device_reads`), the device's conversion of them. Where the planes
 //! are read in place a linear sample at a texel's centre reads Metal's texel and one between
-//! texels Metal's filter of them; a texture that keeps its image is filtered by the device's own
+//! texels Metal's filter of them under `YCbCrInPlacePolicy::Exact` (the lane's
+//! `DevicePolicy::exact_answers`), and Vulkan's model of the codes under the default
+//! (`YCbCrInPlacePolicy::Model`); a texture that keeps its image is filtered by the device's own
 //! filter, which this module does not sample. A `read()` takes the image on every device.
 //!
 //! Each surface is a buffer standing for the IOSurface: the luma plane at byte 0, rows padded past
@@ -207,6 +209,67 @@ impl Surface {
                 vulkan_read(self.codes(), self.conversion, [f64::from(luma), cb, cr])
             })
             .collect()
+    }
+
+    /// The red, green and blue of a linear sample at `(x, y)` (in texels) of a texture of the
+    /// surface over `bytes` whose planes are read in place under `YCbCrInPlacePolicy::Model`, the
+    /// runtime's default (`metal2vulkan::lower::sampler`): the four luma codes around the point and
+    /// the four chroma pairs around half of it blended bilinearly, each index clamped to its
+    /// plane, then Vulkan's conversion of them ([`vulkan_read`]), each channel clamped into
+    /// `[0, 1]`.
+    fn linear_model(&self, bytes: &[u8], (x, y): (f64, f64)) -> [f64; 3] {
+        let blend = |(x, y): (f64, f64), [w, h]: [u64; 2], at: &dyn Fn(u64, u64) -> f64| -> f64 {
+            let (px, py) = (x - 0.5, y - 0.5);
+            let (fx, fy) = (px.floor(), py.floor());
+            let (kx, ky) = (px - fx, py - fy);
+            let edge = |i: f64, n: u64| (i as i64).clamp(0, n as i64 - 1) as u64;
+            let (x0, x1) = (edge(fx, w), edge(fx + 1.0, w));
+            let (y0, y1) = (edge(fy, h), edge(fy + 1.0, h));
+            let low = at(x0, y0) * (1.0 - kx) + at(x1, y0) * kx;
+            let high = at(x0, y1) * (1.0 - kx) + at(x1, y1) * kx;
+            low * (1.0 - ky) + high * ky
+        };
+        let unit = self.unit();
+        let luma = blend((x, y), self.size, &|i, j| {
+            f64::from(self.code(bytes, j * self.row + i * unit))
+        });
+        let chroma = |lane: u64| {
+            blend((x / 2.0, y / 2.0), self.chroma_size(), &|i, j| {
+                let at = self.chroma_at + j * self.row + (2 * i + lane) * unit;
+                f64::from(self.code(bytes, at))
+            })
+        };
+        let rgb = vulkan_read(self.codes(), self.conversion, [luma, chroma(0), chroma(1)]);
+        rgb.map(|v| v.clamp(0.0, 1.0))
+    }
+
+    /// Asserts that the `float4`s `raw` (one a texel, row by row, of a texture of the surface
+    /// over `bytes`) are linear samples at each texel's corner plus `past` texels, by the model
+    /// ([`Surface::linear_model`]): each channel within `within`, alpha 1.
+    fn assert_linear_model(
+        &self,
+        raw: &[u8],
+        bytes: &[u8],
+        past: (f64, f64),
+        within: f64,
+        case: &str,
+    ) {
+        let [w, _] = self.size;
+        for (i, t) in (0u64..).zip(raw.as_chunks::<16>().0) {
+            let c =
+                |k: usize| f64::from(f32::from_le_bytes(t[4 * k..4 * k + 4].try_into().unwrap()));
+            assert_eq!(c(3), 1.0, "{case}: alpha 1");
+            let (x, y) = (i % w, i / w);
+            let want = self.linear_model(bytes, (x as f64 + past.0, y as f64 + past.1));
+            for (k, want) in want.into_iter().enumerate() {
+                assert!(
+                    (c(k) - want).abs() <= within,
+                    "{case}: texel {:?} channel {k}: {} against the model's {want}",
+                    (x, y),
+                    c(k)
+                );
+            }
+        }
     }
 
     /// Asserts that the `float4`s `raw` (a `read()` of every texel, or a nearest sample at each
@@ -432,10 +495,11 @@ pub(super) fn reads_in_place(device: &Device) -> bool {
 /// of the planes, [`Surface::assert_texels`]), and on a device whose memory is the host's the
 /// samples read the planes in place, converting nothing, where any other device converts the
 /// image. Where the planes are read in place a linear sample at a texel's centre and between
-/// texels is Metal's texel and Metal's filter of them; a device that keeps the image filters it as
+/// texels is Metal's texel and Metal's filter of them where `exact`
+/// (`YCbCrInPlacePolicy::Exact`), else the model's ([`Surface::linear_model`]); a device that keeps the image filters it as
 /// the device does under every policy (`PrecisionNote::DeviceSampling`), which this module does not
 /// sample. The textures the device converted itself are counted.
-fn samples_read_the_planes(device: &Device) -> u64 {
+fn samples_read_the_planes(device: &Device, exact: bool) -> u64 {
     let in_place = reads_in_place(device);
     eprintln!(
         "YCBCR-IN-PLACE {} ({:?}): in place {in_place}",
@@ -469,7 +533,7 @@ fn samples_read_the_planes(device: &Device) -> u64 {
             surface.assert_texels(&centres, &bytes, by_device && !in_place, &case);
             // A device that keeps the image filters it as the device does, off Metal's grid: its
             // linear samples are another row's (docs/FAST-PATHS.md).
-            if in_place {
+            if in_place && exact {
                 let half = texels(
                     device,
                     &kernels.sample_half,
@@ -483,6 +547,23 @@ fn samples_read_the_planes(device: &Device) -> u64 {
                     let want: [u16; 3] = std::array::from_fn(|c| filtered(&model, size, at, c));
                     assert_eq!(*got, want, "{what} round {round}: texel {at:?}");
                 }
+            }
+            // Under the model a linear sample is Vulkan's model of the codes, within the
+            // coefficients' difference from Metal's (up to 1.6e-6 a code) and the arithmetic's
+            // rounding, and a `half` result's.
+            if in_place && !exact {
+                let half = raw_texels(
+                    device,
+                    &kernels.sample_half,
+                    (&texture, size),
+                    Some(&linear),
+                );
+                let case = format!("{what} round {round}: half linear samples");
+                surface.assert_linear_model(&half, &bytes, (0.5, 0.5), 2.5e-3, &case);
+                let between = raw_texels(device, &kernels.between, (&texture, size), Some(&linear));
+                let [a, b] = ycbcr_textures::BETWEEN.map(|k| 0.5 + f64::from(k) / 256.0);
+                let case = format!("{what} round {round}: linear samples between texels");
+                surface.assert_linear_model(&between, &bytes, (a, b), 2e-3, &case);
             }
             let work = ycbcr_work(&before, &device.work_counts());
             eprintln!("YCBCR-IN-PLACE {what} round {round}: work {work:?}");
@@ -518,7 +599,7 @@ fn samples_read_the_planes(device: &Device) -> u64 {
 #[test]
 fn a_ycbcr_texture_s_samples_read_its_planes_in_place_where_the_memory_is_the_host_s() {
     on_device(|device, messages| {
-        let by_device = samples_read_the_planes(device);
+        let by_device = samples_read_the_planes(device, true);
         let notices = counts(&messages.take_notices());
         for kind in [
             Degradation::FloatSampleFilter,
@@ -535,24 +616,30 @@ fn a_ycbcr_texture_s_samples_read_its_planes_in_place_where_the_memory_is_the_ho
 }
 
 /// Under the runtime's defaults the device takes the same form: in place on a device whose memory
-/// is the host's, where the samples are Metal's exactly, unannounced; elsewhere the image, sampled
-/// through the device's filter under the defaults.
+/// is the host's, where a nearest sample is Metal's texel and a linear one the model's
+/// (`YCbCrInPlacePolicy::Model`), announced once as `ycbcr-filter-not-exact` and never as the
+/// generic filter notices; elsewhere the image, sampled through the device's filter under the
+/// defaults.
 #[test]
 fn a_ycbcr_texture_reads_its_planes_in_place_under_the_defaults() {
     let defaults = |options: &mut metal2vulkan_runtime::DeviceOptions| {
         options.policy = DevicePolicy::default();
     };
     on_device_with(defaults, |device, messages| {
-        samples_read_the_planes(device);
+        samples_read_the_planes(device, false);
         let notices = counts(&messages.take_notices());
         if reads_in_place(device) {
             for kind in [
                 Degradation::FloatSampleFilter,
                 Degradation::HalfSampleFilter,
-                Degradation::YCbCrFilterNotExact,
             ] {
                 assert_eq!(notices.get(&kind), None, "{notices:?}");
             }
+            assert_eq!(
+                notices.get(&Degradation::YCbCrFilterNotExact),
+                Some(&1),
+                "{notices:?}"
+            );
         }
     });
 }
