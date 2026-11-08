@@ -54,7 +54,8 @@
 //!   `VkQueue` completed what was submitted before it, as a host step that reads what the GPU
 //!   writes waits (`scheduler/mod.rs`), and reads after. A copy over bytes some use in its own
 //!   command buffer may write takes the imports' path, since that work is not submitted before
-//!   its step; so does a copy encoded again (`replay.rs`). Counted:
+//!   its step; so does a copy encoded again (`replay.rs`), and one whose staging the device has
+//!   no memory for. Counted:
 //!   `WorkCounts::host_ram_copies_staged`, `host_ram_staged_fills_gated`,
 //!   `host_ram_staged_fill_nanos`.
 //! - **Runs of words: one dispatch per chunk.** Where every run also ends on a word, and lies at a
@@ -853,7 +854,13 @@ impl BlitCommandEncoder {
             }
         }
         if call.copy == PagesCopy::Gather && self.stages(ram, importer, &pieces, &spans) {
-            return self.record_staged(call, ram, (&pieces, &spans), (raw, at, span, total));
+            // Its staging, unless the device has no memory for it: the imports' path then.
+            let staging = (self.core().command_buffer().state().uploads)
+                .unset(&device, span.end - span.start);
+            if let Ok(region) = staging {
+                let bytes = (raw, at, span, total);
+                return self.record_staged(call, ram, (&pieces, &spans), region, bytes);
+            }
         }
         // The bytes of each chunk the pieces touch, and the imports they are read or written
         // through, held until the command buffer completes: the chunk's, or, where it is not
@@ -1046,8 +1053,8 @@ impl BlitCommandEncoder {
     }
 
     /// Record `call`, a gather staged through the CPU ([`stages`](Self::stages)), into the
-    /// buffer's bytes `span`, from byte `at` of its `raw`: a region of the command buffer's
-    /// arena as long as `span`, each piece's bytes at its byte there, which its batch's host step
+    /// buffer's bytes `span`, from byte `at` of its `raw`: `region` of the command buffer's
+    /// arena, as long as `span`, each piece's bytes at its byte there, which its batch's host step
     /// copies from the pages (`State::staged`, [`StagedFill`]), and a `vkCmdCopyBuffer` of the
     /// bytes the pieces cover from it into the buffer, at most [`MOST_REGIONS`] regions a
     /// command, its uses the chunks' bytes it reads, by their keys, and the buffer's. Each chunk
@@ -1058,11 +1065,10 @@ impl BlitCommandEncoder {
         call: &HostRamCall,
         ram: &Arc<RamOnDevice>,
         (pieces, spans): (&[Piece], &[Range<u64>]),
+        region: Upload,
         (raw, at, span, total): (vk::Buffer, u64, Range<u64>, u64),
     ) -> Result<(), Error> {
         let device = self.core().device().clone();
-        let region =
-            (self.core().command_buffer().state().uploads).unset(&device, span.end - span.start)?;
         let regions: Vec<vk::BufferCopy> = (covered(pieces).into_iter())
             .map(|bytes| vk::BufferCopy {
                 src_offset: region.offset() + bytes.start,
