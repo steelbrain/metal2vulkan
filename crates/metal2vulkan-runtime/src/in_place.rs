@@ -548,17 +548,23 @@ pub(crate) enum ShadowCause {
 /// bytes and the device's check judges the image's first move, so both forms give the same
 /// answer, and the bound chooses between two speeds: a shadow's copy per command buffer that
 /// writes the texture costs a fixed few microseconds, which a small texture's linear image saves,
-/// and a large texture's linear image renders and samples slower than the shadow's optimal one.
-/// Measured on an Iris Xe (ANV, Mesa 26.2.6), each frame a pass that clears and stores each of
-/// four `BGRA8Unorm` textures and a draw that reads each whole, a frame's GPU time as shadows
-/// against in place: 172x67 at 704-byte rows (47 KB) 111.5 us against 98.8; 250x125 at 1024
-/// (128 KB) 143.5 against 136.8; 200x200 at 832 (166 KB) 165.9 against 153.0; 250x250 at 1024
-/// (256 KB) 190.8 against 191.6; 360x360 at 1472 (530 KB) 288.7 against 302.4; 540x270 at 2176
-/// (588 KB) 309.0 against 320.4; 820x410 at 3328 (1.36 MB) 561.7 against 610.1. The crossover
-/// lies at the 256 KB textures, which run alike either way. A Radeon 780M (RADV) makes no such
-/// image at a pitch off a multiple of 256 bytes, at which its own linear image lays rows, so no
-/// texture there takes one. The same bound on every device.
-pub(crate) const POOLED_PITCHED_BYTES: u64 = 256 << 10;
+/// and every draw into a linear image costs more than into the shadow's optimal one, about 270
+/// picoseconds a pixel against 74 on an Iris Xe whatever the texture's size, so the crossover
+/// falls as a frame draws more into the texture. Measured on an Iris Xe (ANV, Mesa 26.2.6;
+/// `runtime_lane::pooled_draw_costs`), each frame a pass that clears and stores each of four
+/// `BGRA8Unorm` textures over `Private` buffers, drawing 0, 1, 4 or 16 blended rectangles over the
+/// whole texture, then a draw that reads each whole, a frame's GPU time in microseconds as shadows
+/// against in place: 104x52 at 448-byte rows (23 KB) 98.6/83.2, 110.4/99.2, 112.4/114.9,
+/// 124.1/177.2; 136x68 at 576 (39 KB) 107.9/92.7, 119.8/112.4, 123.2/139.3, 143.2/246.1; 172x67 at
+/// 704 (47 KB) 110.3/97.1, 123.3/119.0, 127.7/152.1, 152.9/285.5; 250x125 at 1024 (128 KB)
+/// 138.1/132.0, 153.7/172.4, 169.4/260.1, 239.0/608.7; 200x200 at 832 (166 KB) 160.8/150.0,
+/// 177.7/197.6, 198.3/306.7, 290.5/743.3; 250x250 at 1024 (256 KB) 187.8/190.1, 208.2/258.9,
+/// 242.0/430.8, 388.3/1114.9. A texture of up to 47 KB drawn at most once a frame runs faster in
+/// place; past that one draw a frame runs faster as a shadow, and four or more draws a frame do at
+/// every size measured. A Radeon 780M (RADV) makes no such image at a pitch off a multiple of 256
+/// bytes, at which its own linear image lays rows, so no texture there takes one. The same bound
+/// on every device.
+pub(crate) const POOLED_PITCHED_BYTES: u64 = 48 << 10;
 
 /// Why the device makes no image in place over a texture's texels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -217,8 +217,9 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
 }
 
 /// The guests' device caches' shapes: `BGRA8Unorm`, rows at a 64-aligned pitch that end inside a
-/// 64-byte line: (width, height, pitch).
-const CACHES: [(u64, u64, u64); 3] = [(61, 37, 256), (250, 25, 1024), (3662, 9, 14656)];
+/// 64-byte line, each inside the pooled bound (`in_place::POOLED_PITCHED_BYTES`): (width, height,
+/// pitch).
+const CACHES: [(u64, u64, u64); 3] = [(61, 37, 256), (250, 25, 1024), (3662, 3, 14656)];
 
 #[test]
 fn a_rendered_texture_at_a_pitch_the_linear_image_misses_takes_a_pitched_image_where_the_pooled_check_passed(
@@ -364,6 +365,55 @@ fn a_rendered_texture_at_a_pitch_the_linear_image_misses_takes_a_pitched_image_w
                 (false, _) => "a shadow",
             },
         );
+    }
+}
+
+/// The guests' most common device cache, 172x67 `BGRA8Unorm` at 704-byte rows (47,168 bytes),
+/// inside the pooled bound, and one of 164x82 at the same pitch (57,728 bytes), past it.
+const BOUNDED: [(u64, u64, u64); 2] = [(172, 67, 704), (164, 82, 704)];
+
+#[test]
+fn a_rendered_texture_past_the_pooled_bound_stays_a_shadow_of_its_linear_cost() {
+    use crate::in_place::POOLED_PITCHED_BYTES;
+    let scratch = Scratch::new("padding-unobserved-bound");
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "the check settles"
+    );
+    let [inside, past] = BOUNDED.map(|(width, height, pitch)| {
+        let bytes = pitch * height;
+        let buffer = own_buffer(&device, bytes, true);
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        descriptor.resource_options = ResourceOptions::shared();
+        let answer = buffer.texture_placement(&descriptor, 0, pitch).unwrap();
+        let before = device.work_counts();
+        let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
+        let after = device.work_counts();
+        let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
+        let shadows = after.shadowed_textures - before.shadowed_textures;
+        eprintln!(
+            "POOLED-BOUND on {}: {width}x{height} BGRA8Unorm at {pitch} ({bytes} bytes, the bound \
+             {POOLED_PITCHED_BYTES}) rendered: answer {answer:?}; pitched {pitched}, shadows \
+             {shadows}, aliases {}",
+            device.name(),
+            texture.aliases_buffer(),
+        );
+        (bytes, answer, pitched, shadows)
+    });
+    assert!(inside.0 <= POOLED_PITCHED_BYTES && past.0 > POOLED_PITCHED_BYTES);
+    assert_eq!(past.2, 0, "past the bound: no pitched image");
+    // Where the texture inside the bound took a pitched image, the one past it is a shadow of
+    // its linear cost and answers so.
+    if inside.2 == 1 {
+        assert_eq!(
+            past.1,
+            TexturePlacement::Shadow(TextureShadowReason::LinearCost { bytes: past.0 }),
+            "past the bound: the answer"
+        );
+        assert_eq!(past.3, 1, "past the bound: counted as a shadow");
     }
 }
 
