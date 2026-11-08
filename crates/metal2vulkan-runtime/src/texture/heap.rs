@@ -24,16 +24,21 @@
 //!   128). Where the driver answers a compressed image's size short of its compression data (ANV on
 //!   Intel's Xe-LP GPUs) the footprint of an image it may compress still takes whole 256-byte
 //!   chunks of the aux map's, so no other resource lies in a chunk the image writes; a linear
-//!   image's, or one of host-transfer usage, is its own (`ImagePlacement::uncompressed`). Where the images ask more, a single-sample
-//!   colour texture takes an image that fits the answer in their place, bound there as above: its
-//!   optimal image of host-transfer usage, else its linear image (`Device::fitting_heap_image`,
-//!   announced `heap-texture-host-transfer` or `heap-texture-linear`), in place even where a
-//!   shadow would be faster, as a shadow is a correctness fallback. Where none fits, the texture is
-//!   a shadow of its bytes with its image in memory of its own (Metal's tiles where they serve,
-//!   else rows) and takes Metal's answer all the same; where no shadow serves, the answer is the
-//!   larger
-//!   of the two and the device announces `heap-texture-larger-than-metal` once (a measured route's
-//!   answer is refused instead, `NotImplemented(HeapTextureMemory)`: its bytes are no layout the
+//!   image's, or one of host-transfer usage, is its own (`ImagePlacement::uncompressed`). Where
+//!   the images ask more, a single-sample colour texture takes an image that fits the answer in
+//!   their place, bound there as above: its optimal image of host-transfer usage, else its linear
+//!   image (`Device::fitting_heap_image`, announced `heap-texture-host-transfer` or
+//!   `heap-texture-linear`), in place even where a shadow would be faster, as a shadow is a
+//!   correctness fallback. That holds where Metal compresses the texture, whose bytes are no
+//!   layout of its texels, and where Metal's layout is not modelled. Where Metal keeps it
+//!   uncompressed its bytes are Metal's tiles, which a shadow holds: only a linear image whose
+//!   every element lies where those tiles place it takes their place (`lies_in_metal_tiles`; a
+//!   one-element or one-row level, announced with no layout), and every other such texture keeps
+//!   the shadow (`docs/FAST-PATHS.md`). Where none fits, the texture is a shadow of its bytes
+//!   with its image in memory of its own (Metal's tiles where they serve, else rows) and takes
+//!   Metal's answer all the same; where no shadow serves, the answer is the larger of the two
+//!   and the device announces `heap-texture-larger-than-metal` once (a measured route's answer is
+//!   refused instead, `NotImplemented(HeapTextureMemory)`: its bytes are no layout the
 //!   device's image holds). The usage changes Metal's answer only through whether Metal compresses
 //!   the texture (`heap_tiled::metal_keeps_uncompressed`, a colour texture of `ShaderWrite`,
 //!   `PixelFormatView` or `ShaderAtomic` usage stays uncompressed, a depth or stencil texture of no
@@ -210,7 +215,7 @@
 use super::first_move::FirstMove;
 use super::heap_tiled::{
     footprint_size, metal_compresses_layout, metal_heap_layout, modelled_size, own_heap_layout,
-    shadow_tiles, HeapLayout, HeapTiledCopies, TiledTexture, Untiled,
+    shadow_tiles, HeapLayout, HeapTiledCopies, TiledPart, TiledTexture, Untiled,
 };
 use super::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::stand_in::StandIn;
@@ -689,6 +694,9 @@ struct HeapPlan {
     /// Metal's answer and an image that fits it lies in the heap's bytes in its place
     /// (`Device::fitting_heap_image`), which `images` then holds.
     refit: Option<SizeAndAlign>,
+    /// Whether that image in its place is a linear one whose every element lies where Metal's
+    /// tiles place it (`Device::lies_in_metal_tiles`): the heap's bytes are then Metal's layout.
+    in_metal_tiles: bool,
     /// Metal's own answer for the descriptor where the runtime knows it
     /// (`heap_tiled::metal_heap_layout`, `Device::metal_heap_answer`), whatever this device
     /// answers: what a placement offset is held to where the image lies in memory of its own
@@ -1063,6 +1071,42 @@ fn copies_every_aspect(regions: &[vk::BufferImageCopy], format: Format) -> bool 
 
 /// The initial layout of a heap texture's image of `tiling`: `PREINITIALIZED` for a linear one,
 /// whose move to `GENERAL` then keeps the bytes it holds, the heap's.
+/// Whether rows laid out as `layouts` say (a linear image's subresources, each level's `layers`
+/// layers in turn) put every element of the texture where Metal's tiles of `part` place it from
+/// the texture's first byte (`TiledLayout::element`): each element of each level, slice and depth
+/// slice at its subresource's offset, its depth slice's pitch, its row's pitch and its column's
+/// element. The first element out of place answers: for a level two rows high and more than two
+/// elements wide, its first row's second element or its second row's first.
+pub(crate) fn rows_lie_in_metal_tiles(
+    part: &TiledPart,
+    layouts: &[vk::SubresourceLayout],
+    layers: u32,
+) -> bool {
+    let tiled = &part.layout;
+    let layers = u64::from(layers);
+    for (level, metal) in tiled.levels.iter().enumerate() {
+        let [across, down] = metal.extent;
+        for layer in 0..layers {
+            let at = (level as u64) * layers + layer;
+            let Some(ours) = usize::try_from(at).ok().and_then(|at| layouts.get(at)) else {
+                return false;
+            };
+            for z in 0..metal.depth {
+                let chain = layer * metal.depth + z;
+                for y in 0..down {
+                    for x in 0..across {
+                        let row = ours.offset + z * ours.depth_pitch + y * ours.row_pitch;
+                        if part.at + tiled.element(chain, level, x, y) != row + x * tiled.unit {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
 fn initial_layout(tiling: vk::ImageTiling) -> vk::ImageLayout {
     if tiling == vk::ImageTiling::LINEAR {
         vk::ImageLayout::PREINITIALIZED
@@ -2019,8 +2063,10 @@ impl Device {
         // to Metal's answer takes those bytes of memory of its own instead.
         let mut images = size_and_align;
         // What the image the device's route first took takes of the heap, where it did not fit
-        // Metal's answer and an image that fits it replaced it in place (below).
+        // Metal's answer and an image that fits it replaced it in place (below), and whether that
+        // image lays every element where Metal's tiles do.
         let mut first = None;
+        let mut in_metal_tiles = false;
         // Metal's answer where it is not the answer the runtime models for every descriptor
         // (`metal_heap_answer`): a 4:2:2, one-plane YCbCr or two-plane extended-range texture's
         // planes, an `X32_Stencil8` or `BlockWritesOnly` texture as the descriptor Metal sizes it
@@ -2066,14 +2112,28 @@ impl Device {
                 held_to_metal(images, metal, shape, || shadowable(&image.plan, metal.size));
             // A single-sample colour image bound in the heap's memory that does not fit Metal's
             // answer gives way to one that does, in place, before any shadow of the heap's bytes
-            // (`fitting_heap_image`).
+            // (`fitting_heap_image`). Where Metal keeps the texture uncompressed, its bytes are
+            // Metal's tiles, which the shadow holds: only an image that lays every element there
+            // takes its place. Where Metal compresses it, its bytes are no layout of its texels
+            // (the shadow holds its uncompressed tiles), and where Metal's layout is not modelled
+            // the shadow holds none: any image that fits does.
             let in_place = held == HeldToMetal::Shadow && !shape.rows && !shape.multisample;
             if refit && in_place && colour(&image.plan) && !image.route.in_own_memory() {
+                let tiles = match &metal_layout {
+                    HeapLayout::Tiled(tiles) => Some(tiles),
+                    _ => None,
+                };
                 let texture_type = layout.texture_type;
-                let fitting =
-                    self.fitting_heap_image(&image, plan, texture_type, class, metal, placement)?;
+                let fitting = self.fitting_heap_image(
+                    &image,
+                    plan,
+                    (texture_type, class, placement),
+                    metal,
+                    tiles,
+                )?;
                 if let Some(fitting) = fitting {
                     first = Some(images);
+                    in_metal_tiles = tiles.is_some();
                     images = heap_extent(&fitting.requirements, fitting.placement(placement));
                     image = fitting;
                     held = HeldToMetal::Images;
@@ -2158,6 +2218,7 @@ impl Device {
             size_and_align,
             images,
             refit: first,
+            in_metal_tiles,
             metal_answer,
             metal_layout,
         })
@@ -2380,21 +2441,27 @@ impl Device {
     /// memory or neither fits: a shadow of the heap's bytes then holds the texture to Metal's
     /// answer ([`held_to_metal`]). The texture lies in place where in place is possible, even
     /// where a shadow would be faster: a shadow is a correctness fallback.
+    ///
+    /// Of a texture Metal keeps uncompressed, laid out in Metal's `tiles` (`HeapLayout::Tiled`),
+    /// whose bytes a shadow holds as Metal's, only a linear image whose every element lies where
+    /// those tiles place it ([`Device::lies_in_metal_tiles`]): a host-transfer image's optimal
+    /// layout is the driver's own, which Vulkan does not state. A level's rows lie as Metal's
+    /// tiles only where it is one row high, or at most two elements wide with rows that far
+    /// apart, so nearly every other such texture keeps the shadow.
     fn fitting_heap_image(
         &self,
         image: &HeapImage,
         linear: ImagePlan,
-        texture_type: TextureType,
-        class: MemoryClass,
+        (texture_type, class, placement): (TextureType, MemoryClass, ImagePlacement),
         metal: SizeAndAlign,
-        placement: ImagePlacement,
+        tiles: Option<&TiledTexture>,
     ) -> Result<Option<HeapImage>, Error> {
         let takes = self.heap_takes(class)?;
         let fits = |candidate: &HeapImage| {
             let placement = candidate.placement(placement);
             images_fit(heap_extent(&candidate.requirements, placement), metal)
         };
-        if image.route != AliasRoute::HostTransfer {
+        if image.route != AliasRoute::HostTransfer && tiles.is_none() {
             let transfer = self.host_transfer_image(&image.plan, texture_type, &takes)?;
             if let Some(transfer) = transfer.filter(|transfer| fits(transfer)) {
                 return Ok(Some(transfer));
@@ -2403,11 +2470,54 @@ impl Device {
         if image.tiling == vk::ImageTiling::LINEAR {
             return Ok(None);
         }
-        match self.linear_heap_image(linear, texture_type, &takes, AliasRoute::Linear) {
-            Ok(linear) => Ok(Some(linear).filter(|linear| fits(linear))),
-            Err(error) if linear_refusal(&error) => Ok(None),
-            Err(error) => Err(error),
+        let linear = match self.linear_heap_image(linear, texture_type, &takes, AliasRoute::Linear)
+        {
+            Ok(linear) if fits(&linear) => linear,
+            Ok(_) => return Ok(None),
+            Err(error) if linear_refusal(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        match tiles {
+            Some(tiles) if !self.lies_in_metal_tiles(&linear.plan, tiles)? => Ok(None),
+            _ => Ok(Some(linear)),
         }
+    }
+
+    /// Whether a linear image of `plan` lays every element of the texture where Metal's `tiles`
+    /// place it ([`rows_lie_in_metal_tiles`]), as the device lays out an image made for the
+    /// query and destroyed right after (`vkGetImageSubresourceLayout` of each level and layer).
+    /// A texture of more than one part (two aspects) lies otherwise.
+    fn lies_in_metal_tiles(&self, plan: &ImagePlan, tiles: &TiledTexture) -> Result<bool, Error> {
+        let [part] = tiles.parts.as_slice() else {
+            return Ok(false);
+        };
+        let raw_device = self.shared().vk();
+        let view_formats = plan.ash_view_formats();
+        let mut list = vk::ImageFormatListCreateInfo::default();
+        let info = plan
+            .create_info(self.shared().sharing(), &view_formats, &mut list)
+            .tiling(vk::ImageTiling::LINEAR)
+            .initial_layout(initial_layout(vk::ImageTiling::LINEAR));
+        // SAFETY: the device is live and `info` (with its format list) valid and within the
+        // device's limits for it: the same image's requirements were asked of it
+        // (`planned_requirements`).
+        let raw = unsafe { crate::creation::image(raw_device, &info) }?;
+        let mut layouts = Vec::new();
+        for level in 0..plan.levels {
+            for layer in 0..plan.layers {
+                let subresource = vk::ImageSubresource {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: level,
+                    array_layer: layer,
+                };
+                // SAFETY: `raw` is a live linear image of this device of a colour format, and the
+                // subresource one of its levels and layers.
+                layouts.push(unsafe { raw_device.get_image_subresource_layout(raw, subresource) });
+            }
+        }
+        // SAFETY: `raw` is live, has no memory bound and nothing else uses it.
+        unsafe { release::object(raw_device, raw) };
+        Ok(rows_lie_in_metal_tiles(part, &layouts, plan.layers))
     }
 
     /// `optimal` with host-transfer usage, on the alias route of [`AliasRoute::HostTransfer`],
@@ -3542,6 +3652,7 @@ impl Device {
         };
         let route = p.image.route;
         let linear = p.image.tiling == vk::ImageTiling::LINEAR;
+        let in_metal_tiles = p.in_metal_tiles;
         let host = binding.host;
         let metal_layout = p.metal_layout;
         let tiles = metal_layout.tiles().filter(|_| route == AliasRoute::Tiled);
@@ -3677,10 +3788,11 @@ impl Device {
         // the program's call that made it, with its ID; and in any heap a multisample texture whose
         // image lies in memory of its own, and a shadow of the uncompressed tiles of a texture
         // Metal keeps compressed. In any other heap, a texture whose bytes there are not Metal's
-        // layout (`device_heap_layout`).
+        // layout (`device_heap_layout`): not a linear image whose every element lies where
+        // Metal's tiles place it, whose bytes are Metal's layout (`lies_in_metal_tiles`).
         if !host && !matches!(route, AliasRoute::Lossless | AliasRoute::Tiled) {
-            if let Some(untiled) = self.device_heap_layout(&p.layout, route, linear, &metal_layout)
-            {
+            let untiled = self.device_heap_layout(&p.layout, route, linear, &metal_layout);
+            if let Some(untiled) = untiled.filter(|_| !in_metal_tiles) {
                 self.degrade_heap_layout(untiled, texture.object_id());
             }
         } else {

@@ -6,10 +6,11 @@
 //! second probe's answers.
 
 use crate::copy_plan::block_bytes;
+use crate::texture::heap::rows_lie_in_metal_tiles;
 use crate::texture::heap_tiled::{
     fresh_pattern, level_bytes, lossless_answer, metal_compresses, metal_heap_layout,
     own_heap_layout, pattern_levels, sample_grid, shadow_tiles, BlockPlacement, Elements,
-    FreshDepth, FreshPattern, HeapLayout, TiledLayout, Untiled,
+    FreshDepth, FreshPattern, HeapLayout, TiledLayout, TiledPart, Untiled,
 };
 use crate::texture_descriptor::TextureLayout;
 use metal2vulkan::metal::format::byte_format;
@@ -1473,4 +1474,81 @@ fn a_multisample_heap_texture_apart_from_metal_s_tiles_is_announced_untiled() {
         // planes) lays the texture out as Metal does: nothing to announce.
         assert_eq!(own_heap_layout(&HeapLayout::Measured, 4, apart), None);
     }
+}
+
+/// Rows lie as Metal's tiles (`texture/heap.rs`'s `rows_lie_in_metal_tiles`, which decides whether
+/// a linear image takes the place of a shadow of a texture Metal keeps uncompressed) only where
+/// every element's byte is the same: a one-element level at any pitch, a one-row level, a level
+/// at most two elements wide with rows that far apart, and slices at Metal's chain stride; not a
+/// 64 x 64 or 4 x 4 level's rows, a two-wide level's rows further apart, slices elsewhere, or a
+/// subresource the layouts lack.
+#[test]
+fn rows_lie_as_metal_s_tiles_only_where_every_element_does() {
+    let part = |unit, ty, [w, h]: [u64; 2], slices| TiledPart {
+        aspect: None,
+        at: 0,
+        layout: TiledLayout::of(unit, Elements::Texels, ty, [w, h, 1], 1, slices).unwrap(),
+    };
+    let rows = |offset, row_pitch| ash::vk::SubresourceLayout {
+        offset,
+        size: 0,
+        row_pitch,
+        array_pitch: 0,
+        depth_pitch: 0,
+    };
+    for pitch in [8, 64, 256] {
+        assert!(rows_lie_in_metal_tiles(
+            &part(8, T::Type2D, [1, 1], 1),
+            &[rows(0, pitch)],
+            1
+        ));
+    }
+    assert!(rows_lie_in_metal_tiles(
+        &part(4, T::Type2D, [256, 1], 1),
+        &[rows(0, 1024)],
+        1
+    ));
+    assert!(rows_lie_in_metal_tiles(
+        &part(4, T::Type1D, [100, 1], 1),
+        &[rows(0, 400)],
+        1
+    ));
+    assert!(rows_lie_in_metal_tiles(
+        &part(4, T::Type2D, [2, 8], 1),
+        &[rows(0, 8)],
+        1
+    ));
+    assert!(!rows_lie_in_metal_tiles(
+        &part(4, T::Type2D, [2, 8], 1),
+        &[rows(0, 16)],
+        1
+    ));
+    assert!(!rows_lie_in_metal_tiles(
+        &part(4, T::Type2D, [64, 64], 1),
+        &[rows(0, 256)],
+        1
+    ));
+    assert!(!rows_lie_in_metal_tiles(
+        &part(8, T::Type2D, [4, 4], 1),
+        &[rows(0, 32)],
+        1
+    ));
+    assert!(!rows_lie_in_metal_tiles(
+        &part(8, T::Type2D, [4, 4], 1),
+        &[],
+        1
+    ));
+    let array = part(8, T::Type2DArray, [1, 1], 2);
+    let stride = array.layout.stride;
+    assert!(rows_lie_in_metal_tiles(
+        &array,
+        &[rows(0, 8), rows(stride, 8)],
+        2
+    ));
+    assert!(!rows_lie_in_metal_tiles(
+        &array,
+        &[rows(0, 8), rows(stride + 64, 8)],
+        2
+    ));
+    assert!(!rows_lie_in_metal_tiles(&array, &[rows(0, 8)], 2));
 }
