@@ -610,17 +610,25 @@ struct HeapImage {
     route: AliasRoute,
 }
 
+/// `placement` for a heap's image of `tiling` on `route` ([`heap_extent`]):
+/// [`ImagePlacement::uncompressed`] where the driver keeps it uncompressed, a linear image or one
+/// of host-transfer usage ([`AliasRoute::HostTransfer`]), which writes no compression data past
+/// its size; `placement` for any other, which the driver may compress.
+pub(crate) fn image_placement(
+    placement: ImagePlacement,
+    tiling: vk::ImageTiling,
+    route: AliasRoute,
+) -> ImagePlacement {
+    match tiling == vk::ImageTiling::LINEAR || route == AliasRoute::HostTransfer {
+        true => placement.uncompressed(),
+        false => placement,
+    }
+}
+
 impl HeapImage {
-    /// `placement` for this image ([`heap_extent`]): [`ImagePlacement::uncompressed`] where the
-    /// driver keeps it uncompressed, a linear image or one of host-transfer usage on its route
-    /// ([`AliasRoute::HostTransfer`]), which writes no compression data past its size.
+    /// [`image_placement`] for this image.
     fn placement(&self, placement: ImagePlacement) -> ImagePlacement {
-        let uncompressed =
-            self.tiling == vk::ImageTiling::LINEAR || self.route == AliasRoute::HostTransfer;
-        match uncompressed {
-            true => placement.uncompressed(),
-            false => placement,
-        }
+        image_placement(placement, self.tiling, self.route)
     }
 
     /// The refusal of an image of this tiling that does not take the heap's memory type.

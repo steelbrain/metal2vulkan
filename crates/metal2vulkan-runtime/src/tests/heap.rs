@@ -467,6 +467,48 @@ fn a_heap_texture_takes_its_image_s_bytes_in_whole_pages() {
     assert_eq!(heap_extent(&linear, paged), answer(4096, 4096));
 }
 
+/// A heap's image takes the aux map's chunks by its tiling and route
+/// (`texture::heap::image_placement`): on ANV's Xe-LP placement a linear image, and an optimal one
+/// of host-transfer usage, which the driver keeps uncompressed, take their own size; an optimal
+/// image of any other route, which the driver may compress, still takes whole 256-byte chunks.
+#[test]
+fn a_heap_s_uncompressed_image_takes_no_aux_map_chunk() {
+    use crate::texture::heap::{heap_extent, image_placement, AliasRoute};
+    use crate::texture::ImagePlacement;
+    use crate::SizeAndAlign;
+    use ash::vk::{ImageTiling, MemoryRequirements};
+    use metal2vulkan::error::RuntimeDriverDefect;
+    use std::collections::BTreeSet;
+    let short = RuntimeDriverDefect::ImageSizeShortOfCompressionData;
+    let anv = ImagePlacement::new(64, &BTreeSet::from([short])).in_heap();
+    let image = MemoryRequirements {
+        size: 64,
+        alignment: 64,
+        memory_type_bits: 1,
+    };
+    let extent = |tiling, route| heap_extent(&image, image_placement(anv, tiling, route));
+    let own = SizeAndAlign {
+        size: 64,
+        align: 64,
+    };
+    let chunked = SizeAndAlign {
+        size: 256,
+        align: 64,
+    };
+    for route in [AliasRoute::Direct, AliasRoute::Linear] {
+        assert_eq!(extent(ImageTiling::LINEAR, route), own, "linear, {route:?}");
+    }
+    let optimal = ImageTiling::OPTIMAL;
+    assert_eq!(extent(optimal, AliasRoute::HostTransfer), own);
+    for route in [
+        AliasRoute::Direct,
+        AliasRoute::Compressed,
+        AliasRoute::Hidden,
+    ] {
+        assert_eq!(extent(optimal, route), chunked, "optimal, {route:?}");
+    }
+}
+
 /// A heap texture's footprint is Metal's answer, not the running driver's granularity. A heap's
 /// own buffer covers its memory from end to end, so no `bufferImageGranularity` padding can put a
 /// heap's image in a granularity page no buffer lies in: the padding separates nothing there and
