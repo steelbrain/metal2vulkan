@@ -66,7 +66,9 @@
 //! depth or stencil aspect moves between images without colour copies through the draws of
 //! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`], and resolves where
 //! the device's resolve modes do not state Metal's filter through the draws of
-//! [`depth_stencil_resolve_modules`]. The mipmaps of a format the device's blits cannot filter are
+//! [`depth_stencil_resolve_modules`]. The runtime's check of render targets in place over host
+//! pages draws into one through [`check_draw_modules`]. The mipmaps of a format the device's
+//! blits cannot filter are
 //! a bilinear filter in `float` through the
 //! [`MipmapFilterChain`] dispatches of [`mipmap_filter_module`]. Compute commands
 //! a kernel encodes into an indirect command buffer replay on the device where it has device
@@ -132,6 +134,7 @@ pub(crate) mod acceleration;
 pub(crate) mod argument_buffer;
 pub(crate) mod astc_decode;
 pub(crate) mod block_decode;
+pub(crate) mod check_draw;
 pub(crate) mod chroma_decode;
 pub(crate) mod color_resolve;
 pub(crate) mod depth_stencil_copy;
@@ -193,6 +196,7 @@ pub use argument_buffer::{
 };
 pub use astc_decode::{astc_decode_module, AstcDecode, AstcTexels};
 pub use block_decode::BlockDecodeModule;
+pub use check_draw::{check_draw_modules, CheckDrawModules};
 pub use chroma_decode::{
     chroma_decode_module, chroma_sample_module, ChromaDecode, ChromaSampleModule,
 };

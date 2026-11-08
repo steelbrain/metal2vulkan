@@ -505,7 +505,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 4;
+pub(crate) const CHECK_VERSION: u32 = 5;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";

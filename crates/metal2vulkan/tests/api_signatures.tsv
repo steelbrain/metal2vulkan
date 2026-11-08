@@ -3285,6 +3285,9 @@ field	metal2vulkan::bind::BufferRange.offset	pub offset: u64
 field	metal2vulkan::bind::BufferRange.range	pub range: u64
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
+field	metal2vulkan::bind::CheckDrawModules.fragment	pub fragment: Arc<[u32]>
+field	metal2vulkan::bind::CheckDrawModules.requirements	pub requirements: Requirements
+field	metal2vulkan::bind::CheckDrawModules.vertex	pub vertex: Arc<[u32]>
 field	metal2vulkan::bind::ChromaSampleModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::ChromaSampleModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ColorResolveModules.fragment	pub fragment: Arc<[u32]>
@@ -4791,6 +4794,7 @@ fn	metal2vulkan-runtime::process_exiting	pub fn process_exiting() -> bool
 fn	metal2vulkan-runtime::sampler_border_color	pub fn sampler_border_color(raw: u64) -> SamplerBorderColor
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::astc_decode_module	pub fn astc_decode_module(device: &Device, decode: AstcDecode, texels: AstcTexels) -> Result<BlockDecodeModule, Error>
+fn	metal2vulkan::bind::check_draw_modules	pub fn check_draw_modules(device: &Device) -> Result<CheckDrawModules, Error>
 fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: &Device, decode: ChromaDecode) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::chroma_sample_module	pub fn chroma_sample_module(device: &Device) -> Result<ChromaSampleModule, Error>
 fn	metal2vulkan::bind::color_resolve_modules	pub fn color_resolve_modules(device: &Device, format: ColorResolveFormat, samples: u32, source: ResolveSource, feature: Feature) -> Result<ColorResolveModules, Error>
@@ -9764,6 +9768,7 @@ struct	metal2vulkan::bind::BoundsRunDraw	#[derive(Clone, Copy, Debug, PartialEq,
 struct	metal2vulkan::bind::BufferExtent	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferExtent
 struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRange
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
+struct	metal2vulkan::bind::CheckDrawModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct CheckDrawModules
 struct	metal2vulkan::bind::ChromaSampleModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaSampleModule
 struct	metal2vulkan::bind::ColorResolveFormat	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ColorResolveFormat
 struct	metal2vulkan::bind::ColorResolveModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ColorResolveModules

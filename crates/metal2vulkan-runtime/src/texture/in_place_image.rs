@@ -118,6 +118,39 @@ impl Texture {
         }))
     }
 
+    /// Draw zero into the texture's image in place through a scissor of its last column, in a
+    /// render pass that loads and stores the image (`check_draw.rs`), by an internal submission
+    /// the call waits for, after its first move: the device's check's round of an image that
+    /// renders (`in_place_check.rs`), which checks that a draw leaves every byte bound to the
+    /// image beside its texels alone. `None` where the texture is no image aliasing its bytes, or
+    /// its image has no color attachment usage.
+    pub(crate) fn draw_in_place_column(
+        &self,
+        draw: &mut crate::check_draw::CheckDraw,
+    ) -> Option<Result<(), Error>> {
+        let Storage::Alias { image, .. } = self.storage() else {
+            return None;
+        };
+        let plan = image.plan();
+        let attachment = metal2vulkan::vk::ImageUsageFlags::COLOR_ATTACHMENT;
+        if !plan.usage.contains(attachment) {
+            return None;
+        }
+        let [width, height, _] = plan.extent;
+        let target = match draw.target(image.raw.get(), plan.format.into(), [width, height]) {
+            Ok(target) => target,
+            Err(error) => return Some(Err(error)),
+        };
+        Some(image.submit_copy(|commands, command_buffer| {
+            // SAFETY: the internal command buffer of the device's first `VkQueue` is recording,
+            // outside a render pass; the image is live until the submission, waited for,
+            // completed, with color attachment usage, and rests in `GENERAL` after its first move,
+            // which the submission makes first; the target's objects live until it is dropped,
+            // after the wait.
+            unsafe { target.record(commands, command_buffer) };
+        }))
+    }
+
     /// For the device's check of storage writes (`in_place_check.rs`): where the texture is an
     /// image in place of storage usage, a kernel's storage writes of its `width` by `height`
     /// texels, each `texel`'s words, from the words of `source` laid row after row (one dispatch

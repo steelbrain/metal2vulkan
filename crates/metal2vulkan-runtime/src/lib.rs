@@ -53,6 +53,7 @@ mod buffer;
 mod buffer_descriptor;
 mod buffer_texture;
 mod capabilities;
+mod check_draw;
 mod chroma_pairs;
 mod churn_counts;
 mod clear_reach;
