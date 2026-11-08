@@ -485,6 +485,11 @@ impl Device {
     /// `maxBufferSize` (`NotImplemented(HeapPastMaxBufferSize)`); a pinned address whose range
     /// meets another resource's bytes or leaves the space (`PlacementConflict`).
     pub fn new_heap(&self, descriptor: &HeapDescriptor) -> Result<Heap, Error> {
+        self.current().new_heap_now(descriptor)
+    }
+
+    /// [`Device::new_heap`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_heap_now(&self, descriptor: &HeapDescriptor) -> Result<Heap, Error> {
         self.heap_with_token(descriptor, None)
     }
 
@@ -496,6 +501,16 @@ impl Device {
     /// A sparse heap's drops once the runtime frees the heap: after the heap, every texture made
     /// from it, and the command buffers that hold any of them are gone.
     pub fn new_heap_with_range_token(
+        &self,
+        descriptor: &HeapDescriptor,
+        token: RangeToken,
+    ) -> Result<Heap, Error> {
+        self.current()
+            .new_heap_with_range_token_now(descriptor, token)
+    }
+
+    /// [`Device::new_heap_with_range_token`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_heap_with_range_token_now(
         &self,
         descriptor: &HeapDescriptor,
         token: RangeToken,
@@ -589,6 +604,25 @@ impl Device {
         deallocator: Option<Deallocator>,
         keep_alive: Option<KeepAlive>,
     ) -> Result<Heap, Error> {
+        // SAFETY: the caller's contract.
+        unsafe {
+            self.current().new_heap_with_bytes_no_copy_now(
+                memory,
+                descriptor,
+                deallocator,
+                keep_alive,
+            )
+        }
+    }
+
+    /// [`Device::new_heap_with_bytes_no_copy`] on the generation that serves (`device/line.rs`).
+    pub(crate) unsafe fn new_heap_with_bytes_no_copy_now(
+        &self,
+        memory: HostMemory,
+        descriptor: &HeapDescriptor,
+        deallocator: Option<Deallocator>,
+        keep_alive: Option<KeepAlive>,
+    ) -> Result<Heap, Error> {
         let release = HostRelease::new(deallocator, keep_alive);
         // SAFETY: the caller's contract.
         unsafe { self.no_copy_heap_with_token(memory, descriptor, release, None) }
@@ -602,6 +636,29 @@ impl Device {
     ///
     /// As [`Device::new_heap_with_bytes_no_copy`]'s.
     pub unsafe fn new_heap_with_bytes_no_copy_and_range_token(
+        &self,
+        memory: HostMemory,
+        descriptor: &HeapDescriptor,
+        deallocator: Option<Deallocator>,
+        keep_alive: Option<KeepAlive>,
+        token: RangeToken,
+    ) -> Result<Heap, Error> {
+        // SAFETY: the caller's contract.
+        unsafe {
+            self.current()
+                .new_heap_with_bytes_no_copy_and_range_token_now(
+                    memory,
+                    descriptor,
+                    deallocator,
+                    keep_alive,
+                    token,
+                )
+        }
+    }
+
+    /// [`Device::new_heap_with_bytes_no_copy_and_range_token`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) unsafe fn new_heap_with_bytes_no_copy_and_range_token_now(
         &self,
         memory: HostMemory,
         descriptor: &HeapDescriptor,
@@ -703,7 +760,7 @@ impl Device {
             .checked_next_multiple_of(page.bytes())
             .ok_or(Error::OutOfMemory(MemoryKind::Device))?;
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let hazard = match modes.hazard {
             HazardTrackingMode::Default => HazardTrackingMode::Untracked,
@@ -728,6 +785,16 @@ impl Device {
     /// `heapBufferSizeAndAlignWithLength:options:`: `length` bytes at a multiple of 256, for every
     /// length and options, as Metal answers (measured).
     pub fn heap_buffer_size_and_align(
+        &self,
+        length: u64,
+        _options: ResourceOptions,
+    ) -> SizeAndAlign {
+        self.current()
+            .heap_buffer_size_and_align_now(length, _options)
+    }
+
+    /// [`Device::heap_buffer_size_and_align`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn heap_buffer_size_and_align_now(
         &self,
         length: u64,
         _options: ResourceOptions,
@@ -996,7 +1063,7 @@ impl Heap {
             return Err(nil(CALL, self.past_end(0, length)));
         }
         if self.device().is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.device().lost_refusal());
         }
         let offset = self
             .allocate(length, PLACEMENT_ALIGNMENT)
@@ -1036,7 +1103,7 @@ impl Heap {
             return Err(nil(CALL, self.past_end(offset, length)));
         }
         if self.device().is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.device().lost_refusal());
         }
         Ok(self.program_buffer(bytes, offset, length, options))
     }

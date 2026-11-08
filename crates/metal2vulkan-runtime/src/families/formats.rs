@@ -1742,6 +1742,11 @@ impl Device {
     /// [`Device::pixel_format_capabilities`] gives each of these formats `Msaa`, and each float
     /// format `Resolve`, wherever this answers yes.
     pub fn supports_32bit_msaa(&self) -> bool {
+        self.current().supports_32bit_msaa_now()
+    }
+
+    /// [`Device::supports_32bit_msaa`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn supports_32bit_msaa_now(&self) -> bool {
         let facts = self
             .shared()
             .textures

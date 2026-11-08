@@ -65,8 +65,8 @@ use super::copied::CopiesReached;
 use super::deferred::{Deferred, Prepared, StepInputs};
 use super::degradation::Degradation;
 use super::descriptor_arena::DescriptorArena;
-use super::device::lock;
 use super::device::relay::Relayed;
+use super::device::{lock, DeviceShared};
 use super::dirty_pages::DirtyCommit;
 use super::encoder::{Recorded, Segment};
 use super::error::{
@@ -91,7 +91,7 @@ use super::pipeline::budget::Urgency;
 use super::pipeline::kept::StepNumbers;
 use super::predication::{Event, Predication};
 use super::program_objects;
-use super::queue::Slot;
+use super::queue::{QueueGen, Slot};
 use super::rebind::{Holds, SubmittedHolds, Taken};
 use super::render::EndInFlight;
 use super::replay::Replay;
@@ -221,8 +221,15 @@ impl WeakCommandBuffer {
 }
 
 pub(super) struct CommandBufferShared {
+    /// The generation of its device it was made on (`device/line.rs`), taken once at its making:
+    /// its encoders' commands reach the device's state through it, at one load, with no kind of
+    /// handle to tell apart. Declared before `device`, so it goes first.
+    generation: Arc<DeviceShared>,
     device: Device,
-    queue: CommandQueue,
+    /// Its queue's place on the generation it was made on (`queue.rs`).
+    queue: QueueGen,
+    /// Its queue (`commandQueue`).
+    root: CommandQueue,
     state: Mutex<State>,
     /// Signaled when the command buffer's status changes (`wait_until_scheduled` waits on it).
     changed: Condvar,
@@ -790,6 +797,10 @@ pub(super) struct State {
     /// It was committed with an event wait while a hang of its queue was in flight: the verdict
     /// its first batch's submission applies (`hang.rs`, `checks.rs`).
     behind_hang: Option<hang::Verdict>,
+    /// It was committed on the queue of the hang a loss of its device named, before the
+    /// recovery (`Line::holds_hang_queue`, `device/line.rs`): it runs nothing and completes with
+    /// no error, as Metal's command buffers committed on a hang's queue in flight do.
+    held_by_lost_hang: bool,
     /// The ended encoders Metal's GPU faults, each with the error it fails the command buffer
     /// with (an execution of commands that inherit a pipeline state made without
     /// `supportIndirectCommandBuffers`, `CommandBufferError::PageFault`; an indexed or indirect
@@ -2088,12 +2099,14 @@ fn write_fields(upload: &Upload, table: u64, set: u64, count: u64) -> Result<(),
 }
 
 impl CommandBuffer {
-    /// A new command buffer of `queue`, holding `slot` of it.
-    pub(super) fn new(queue: &CommandQueue, slot: Slot) -> CommandBuffer {
+    /// A new command buffer of `root`, on its place `queue`, holding `slot` of it.
+    pub(super) fn new(queue: &QueueGen, root: &CommandQueue, slot: Slot) -> CommandBuffer {
         let footprints = Footprints::default();
         CommandBuffer(Arc::new(CommandBufferShared {
+            generation: Arc::clone(queue.device().shared_arc()),
             device: queue.device().clone(),
             queue: queue.clone(),
+            root: root.clone(),
             state: Mutex::new(State {
                 status: CommandBufferStatus::NotEnqueued,
                 error: None,
@@ -2140,6 +2153,7 @@ impl CommandBuffer {
                 hang: None,
                 hang_scheduling: None,
                 behind_hang: None,
+                held_by_lost_hang: false,
                 shadow_attachments: Vec::new(),
                 shadows_copied_in: Vec::new(),
                 shadow_carry: Some(ShadowCarry::default()),
@@ -2222,6 +2236,13 @@ impl CommandBuffer {
         &self.0.device
     }
 
+    /// The state of the generation of its device it was made on, its device's
+    /// ([`CommandBufferShared::generation`]): what its encoders' commands reach, at one load.
+    #[inline]
+    pub(crate) fn generation(&self) -> &DeviceShared {
+        &self.0.generation
+    }
+
     /// The color fill slot (`fill_slot`), after a color fill packed `packed` (`None` for one
     /// that packs nothing): its first bytes become the texel's.
     pub(super) fn fill_slot(&self, packed: Option<&[u8]>) -> [u8; 16] {
@@ -2246,6 +2267,12 @@ impl CommandBuffer {
 
     /// `commandQueue`.
     pub fn command_queue(&self) -> &CommandQueue {
+        &self.0.root
+    }
+
+    /// Its queue's place on the generation it was made on, which its commands' pools and kept
+    /// images are of (`queue.rs`).
+    pub(crate) fn queue_place(&self) -> &QueueGen {
         &self.0.queue
     }
 
@@ -2277,7 +2304,7 @@ impl CommandBuffer {
     /// copied host buffers, where any lives, whose merges back compare those its writes reach
     /// (`copied.rs`).
     pub(super) fn note_dirty(&self, uses: &[Use<ResourceKey>]) {
-        let shared = self.0.device.shared();
+        let shared = self.generation();
         match shared.dirty.collects() || shared.copied.any() {
             true => lock(&self.0.dirty).note(uses, &shared.dirty),
             false => self.0.unnoted.store(true, Ordering::Relaxed),
@@ -2630,7 +2657,7 @@ impl CommandBuffer {
         let event = EventRef::Shared(event);
         let event = event.shared();
         if !event.device().same(&self.0.device) {
-            return Err(invalid(CALL, Problem::ForeignObject));
+            return Err(event.device().foreign(CALL, &self.0.device));
         }
         self.settle_end();
         let mut state = self.state();
@@ -2741,7 +2768,7 @@ impl CommandBuffer {
     ) -> Result<(), Error> {
         let event = event.shared();
         if !event.device().same(&self.0.device) {
-            return Err(invalid(call, Problem::ForeignObject));
+            return Err(event.device().foreign(call, &self.0.device));
         }
         self.settle_end();
         let mut state = self.state();
@@ -3169,6 +3196,14 @@ impl CommandBuffer {
             // One committed on a queue Metal revoked runs nothing and completes at once, its
             // signals dropped (`revocation.rs`).
             let revoked = run != CommitRun::Refused && self.0.queue.errors().revoked();
+            // One committed on the queue of the hang a loss of its device named, before the
+            // recovery, runs nothing and completes with no error, as on Metal's hang's queue: its
+            // batches meet the lost device, which fails them, and its completion answers it
+            // (`complete_seen`).
+            state.held_by_lost_hang = run != CommitRun::Refused
+                && !revoked
+                && device.is_lost()
+                && device.line().holds_hang_queue(self.0.queue.common());
             let event_waits = state.batches.events().0;
             let discarded = match failure {
                 None if run != CommitRun::Refused && !revoked => {
@@ -5153,6 +5188,10 @@ impl CommandBufferShared {
             // opened before its batches went, so before now: its waiters wait for those to close
             // (`trails.rs`).
             state.trail_mark = self.device.shared().trails.mark();
+            // The hang a loss of the device named, by the recovery's answers
+            // (`completion.rs`): counted against its queue as Metal counts a hang
+            // (`revocation.rs`).
+            let lost_hang = result == Err(CommandBufferError::GpuHang);
             // A failure the driver relayed for one of its batches is Metal's answer for its work
             // (`device/relay.rs`).
             let result = match (state.failure, self.relayed.failure()) {
@@ -5260,15 +5299,32 @@ impl CommandBufferShared {
                     }
                     state.report = Some(report);
                 }
+                // One committed on the queue of the hang a loss named, before the recovery, ran
+                // nothing and completes with no error (`held_by_lost_hang`).
+                Err(_) if state.held_by_lost_hang => {
+                    state.status = CommandBufferStatus::Completed;
+                }
                 Err(error) => {
                     state.status = CommandBufferStatus::Error;
-                    state.error = Some(error);
+                    // Its device lost, where the device's line recovers past it, it fails as a
+                    // victim of the GPU's recovery, as Metal's command buffers in flight there do
+                    // (`device/line.rs`).
+                    let victim = error == CommandBufferError::DeviceLost
+                        && (self.device.line()).recovers_past(self.device.shared().generation);
+                    state.error = Some(match victim {
+                        true => CommandBufferError::GpuRecoveryVictim,
+                        false => error,
+                    });
                 }
             }
             // A GPU error the command buffer caused counts against its queue, which Metal revokes
             // at the second, from before its status reads final (`revocation.rs`); a relayed one
             // is the driver's queue's.
-            self.queue.errors().completed(state.failure);
+            let caused = match lost_hang {
+                true => Some(CommandBufferError::GpuHang),
+                false => state.failure,
+            };
+            self.queue.errors().completed(caused);
             // An injected page fault or hang stands for it: the GPU recovers from it now, which
             // ends a predicated loop running meanwhile (`recovery.rs`).
             if let Some(recovered) = state.failure.and_then(recovery::injected) {

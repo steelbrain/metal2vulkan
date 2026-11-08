@@ -207,7 +207,7 @@ pub(super) struct LiveBind {
     shape: Option<Arc<BindShape>>,
     /// The shapes the state took since it last listed other used resources ([`RecentShapes`]).
     pub(super) recent: RecentShapes,
-    /// The count of the device's sampler IDs' slots' changes (`Device::sampler_slots_changed`)
+    /// The count of the device's sampler IDs' slots' changes (`DeviceShared::sampler_slots_changed`)
     /// at which the state's argument samplers are every live sampler state: while the count
     /// holds, a draw lists them as they are, without taking the states again
     /// (`sampler::ArgumentSamplers`). `None` where they are not (none listed yet, or those a

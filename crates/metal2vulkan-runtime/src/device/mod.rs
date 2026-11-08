@@ -25,6 +25,7 @@ pub(crate) mod handles;
 pub(crate) mod holds;
 pub(super) mod instance_requirements;
 pub(super) mod keeper;
+pub(crate) mod line;
 pub(super) mod prime;
 pub(super) mod properties;
 pub(crate) mod relay;
@@ -106,10 +107,49 @@ use submit::{Internal, OwnTimeline};
 /// making ([`Device::warm`]). So the device is torn down on that thread before the drop returns,
 /// and a consumer that adopted the `VkDevice` ([`Device::from_raw`]) may destroy it then.
 pub struct Device(
-    Arc<DeviceShared>,
+    Pin,
     /// The handle's place in the registry of the runtime's own holds (`holds.rs`).
     holds::Share,
 );
+
+/// What a device handle holds (`line.rs`): one generation, or the device's line alone.
+pub(crate) enum Pin {
+    /// A generation's handle: the device of the objects made on it, whose Vulkan calls reach that
+    /// generation's `VkDevice` alone.
+    Generation(Arc<DeviceShared>),
+    /// A root handle: the program's device, whose calls go to the generation that serves.
+    Root(Arc<RootCell>),
+}
+
+impl Pin {
+    /// The address of the cell it holds, a generation's or a root's: two handles of one cell
+    /// hold the same address, and no generation's is a root's.
+    #[inline(always)]
+    fn address(&self) -> *const () {
+        match self {
+            Pin::Generation(shared) => Arc::as_ptr(shared).cast(),
+            Pin::Root(root) => Arc::as_ptr(root).cast(),
+        }
+    }
+}
+
+/// What a root handle holds, its clones sharing it: the device's line, and the generation a reach
+/// of the handle's state pinned, for the cell's life ([`Device::shared`]). The public calls never
+/// reach it; a test's may.
+pub(crate) struct RootCell {
+    pub(super) line: Arc<line::Line>,
+    pinned: std::sync::OnceLock<Arc<DeviceShared>>,
+}
+
+impl RootCell {
+    /// A root handle's cell of `line`, pinning nothing.
+    pub(super) fn new(line: Arc<line::Line>) -> Arc<RootCell> {
+        Arc::new(RootCell {
+            line,
+            pinned: std::sync::OnceLock::new(),
+        })
+    }
+}
 
 /// A handle on a device that does not keep it ([`Device::downgrade`]), with the registry of its
 /// holds (`holds.rs`).
@@ -121,17 +161,12 @@ impl WeakDevice {
     pub(crate) fn upgrade(&self) -> Option<Device> {
         holds::upgrade(self)
     }
-
-    /// Whether the device lives.
-    pub(super) fn lives(&self) -> bool {
-        self.0.strong_count() > 0
-    }
 }
 
 impl std::fmt::Debug for Device {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Device")
-            .field("name", &self.0.properties.name)
+            .field("name", &self.name())
             .field("registry_id", &self.registry_id())
             .finish()
     }
@@ -197,8 +232,16 @@ impl Drop for InstanceShared {
     }
 }
 
-/// Everything one device's objects share.
+/// Everything one device's objects share: one generation of the device's line, over its own
+/// `VkDevice` (`line.rs`).
 pub(super) struct DeviceShared {
+    /// The line the generation is of. Its state holds the generation it serves, a cycle the
+    /// program's last drop of its handles breaks (`holds.rs`, `Line::release`).
+    pub(crate) line: Arc<line::Line>,
+    /// The line's counts of its generations, read without the line (`line::Lineage`).
+    pub(crate) lineage: Arc<line::Lineage>,
+    /// The generation's number on its line: 0 for the first `VkDevice`.
+    pub(crate) generation: u64,
     /// The instance outlives the device.
     pub(super) instance: Arc<InstanceShared>,
     pub(super) physical: vk::PhysicalDevice,
@@ -227,18 +270,15 @@ pub(super) struct DeviceShared {
     /// (`queue_share.rs`). Shared with the check's thread, which holds no device handle
     /// (`queue_switch_check.rs`).
     pub(crate) queue_switch: Arc<crate::queue_share::QueueSwitch>,
-    /// The compile-and-plan device: the description restricted to what is enabled.
-    compile: metal2vulkan::device::Device,
-    /// What `compile`'s profile takes of viewport depth ranges past `[0, 1]`, which draws read
+    /// What the compile device's profile takes of viewport depth ranges past `[0, 1]`, which draws read
     /// (`render_state::native_depth_range`).
     pub(super) depth_ranges: DepthRanges,
-    /// What the `VkDevice` enabled, in the compile layer's vocabulary.
-    enabled: EnableSet,
-    /// The names of the device extensions it enabled ([`Device::enables_extension`]).
-    extensions: Vec<std::ffi::CString>,
-    properties: DeviceProperties,
-    /// The kinds of degradation the device announced (`degradation.rs`).
-    pub(super) announced: Announced,
+    /// What every generation of its line answers alike, its own copy: a generation handle reads
+    /// it here, at one hop as it reads the rest (`line.rs`).
+    invariant: line::Invariant,
+    /// The kinds of degradation the device announced (`degradation.rs`): its line's, so a kind is
+    /// announced once across its recoveries (`line.rs`).
+    pub(super) announced: Arc<Announced>,
     /// The kinds that refuse a render encoder's call met while lowering it after it returned
     /// (`DeviceOptions::lowering_refuses`, `render/deferral.rs`).
     lowering_refuses: BTreeSet<Degradation>,
@@ -257,15 +297,18 @@ pub(super) struct DeviceShared {
     /// Shared with the releases of freed memory posted to the handler threads, which hold
     /// nothing of the device (`freed_memory.rs`).
     pub(super) memory: Arc<Mutex<Memory>>,
-    pub(super) addresses: Mutex<AddressSpace>,
+    /// The Metal address space, the line's: every generation's buffers take their addresses from
+    /// it, so none made after a recovery takes one an object made before holds (`line.rs`).
+    pub(super) addresses: Arc<Mutex<AddressSpace>>,
     /// Parked buffers of the runtime's own memory, and the makings of the live recyclable ones
     /// (`recycle.rs`).
     pub(super) recycled_buffers: Mutex<Recycler<vk::Buffer, BufferMaking>>,
     /// The resource IDs of textures and sampler states (`resource_ids.rs`).
     pub(super) resource_ids: Arc<Mutex<ResourceIds>>,
     /// The runtime's passing holds of the program's textures and sampler states, which a
-    /// program's making waits out before it takes its ID (`resource_ids.rs`).
-    pub(super) passing_holds: PassingHolds,
+    /// program's making waits out before it takes its ID (`resource_ids.rs`): the line's, as the
+    /// IDs are.
+    pub(super) passing_holds: Arc<PassingHolds>,
     /// The buffers whose records the GPU may write, which keep the programs of the pipeline
     /// states the program releases (`released_programs.rs`).
     pub(super) keepers: Keepers,
@@ -611,6 +654,11 @@ pub(super) struct DeviceShared {
 }
 
 impl DeviceShared {
+    /// Whether the generation's `VkDevice` was lost.
+    pub(crate) fn lost(&self) -> bool {
+        self.lost.load(Ordering::Acquire)
+    }
+
     /// Whether `kind`, met while lowering a render encoder's call after it returned, refuses the
     /// call (`DeviceOptions::lowering_refuses`).
     pub(crate) fn lowering_refuses(&self, kind: Degradation) -> bool {
@@ -641,7 +689,7 @@ impl DeviceShared {
     ) -> Result<T, E> {
         // What every making is measured to report, withheld inside it (`driver_facts.rs`); a
         // render pipeline's making expects them with its own.
-        let expected = crate::driver_facts::making_diagnostics(&self.properties);
+        let expected = crate::driver_facts::making_diagnostics(&self.invariant.properties);
         crate::driver_facts::expecting_where_unset(expected, || {
             crate::exit_guard::driver_making(|| {
                 self.shader_cache.make_pipelines(self.vk(), making, create)
@@ -926,6 +974,7 @@ impl Drop for DeviceShared {
                 })
             }
         }
+        self.lineage.destroyed();
     }
 }
 
@@ -1098,33 +1147,78 @@ impl Device {
 impl Device {
     /// `registryID`: an identifier of the physical device, from its `deviceUUID`.
     pub fn registry_id(&self) -> u64 {
-        properties::registry_id(&self.0.properties.device_uuid)
+        properties::registry_id(&self.properties().device_uuid)
     }
 
     /// `name`.
     pub fn name(&self) -> &str {
-        &self.0.properties.name
+        &self.properties().name
     }
 
     /// The device's identity and Metal's public device queries, with the documented facts a
-    /// consumer computes Apple's private ones from.
+    /// consumer computes Apple's private ones from: the same through a recovery of its GPU
+    /// ([`Device::recover_for_test`]), which makes the new `VkDevice` of the same physical device.
     pub fn properties(&self) -> &DeviceProperties {
-        &self.0.properties
+        &self.invariant().properties
     }
 
-    /// A handle on the device that does not keep it.
+    /// What every generation of the device answers alike (`line.rs`): a generation handle's own
+    /// copy, a root handle's line's.
+    #[inline(always)]
+    fn invariant(&self) -> &line::Invariant {
+        match &self.0 {
+            Pin::Generation(shared) => &shared.invariant,
+            Pin::Root(root) => &root.line.invariant,
+        }
+    }
+
+    /// The device's line (`line.rs`).
+    #[inline(always)]
+    pub(crate) fn line(&self) -> &Arc<line::Line> {
+        match &self.0 {
+            Pin::Generation(shared) => &shared.line,
+            Pin::Root(root) => &root.line,
+        }
+    }
+
+    /// A root handle of the device (`line.rs`): one whose calls go to the generation that serves.
+    pub(crate) fn root(&self) -> Device {
+        holds::root(Arc::clone(self.line()))
+    }
+
+    /// The generation of a generation handle (`line.rs`); of a root handle, the one its first
+    /// such reach pinned ([`Device::shared`]).
+    pub(super) fn shared_arc(&self) -> &Arc<DeviceShared> {
+        match &self.0 {
+            Pin::Generation(shared) => shared,
+            Pin::Root(root) => root.pinned.get_or_init(|| self.pin_root(&root.line)),
+        }
+    }
+
+    /// The generation a root handle pins at its first reach of a generation's state: the one
+    /// that serves then. The runtime's own code holds generation handles alone, and every public
+    /// call of a root handle goes to the generation that serves ([`Device::current`]); only a
+    /// test reaches a root's state, and keeps that generation while the root's cell lives.
+    #[cold]
+    #[inline(never)]
+    fn pin_root(&self, line: &Arc<line::Line>) -> Arc<DeviceShared> {
+        Arc::clone(line.current(self).shared_arc())
+    }
+
+    /// A handle on the device that does not keep it: a generation handle's, of its generation.
     pub(crate) fn downgrade(&self) -> WeakDevice {
-        WeakDevice(Arc::downgrade(&self.0), Arc::clone(&self.0.holds))
+        let shared = self.shared_arc();
+        WeakDevice(Arc::downgrade(shared), Arc::clone(&shared.holds))
     }
 
     /// The compile-and-plan device this device compiles and plans for. No Metal counterpart.
     pub fn compile_device(&self) -> &metal2vulkan::device::Device {
-        &self.0.compile
+        &self.invariant().compile
     }
 
     /// What the Vulkan device enabled, in the compile layer's vocabulary. No Metal counterpart.
     pub fn enabled(&self) -> &EnableSet {
-        &self.0.enabled
+        &self.invariant().enabled
     }
 
     /// Whether the Vulkan device enabled the device extension `name`: one the options asked for
@@ -1133,14 +1227,26 @@ impl Device {
     /// device listed). An adopted device answers for its `RawDevice::device_extensions`. No Metal
     /// counterpart.
     pub fn enables_extension(&self, name: &std::ffi::CStr) -> bool {
-        self.0
-            .extensions
-            .iter()
-            .any(|enabled| enabled.as_c_str() == name)
+        (self.invariant().extensions.iter()).any(|enabled| enabled.as_c_str() == name)
     }
 
+    /// The generation a generation handle holds (`line.rs`). The runtime reaches a device's
+    /// generation through generation handles: every public call of a root handle goes to the
+    /// generation that serves first ([`Device::current`]). A root handle answers with the one
+    /// it pinned ([`shared_arc`](Self::shared_arc)).
+    #[inline(always)]
     pub(super) fn shared(&self) -> &DeviceShared {
-        &self.0
+        match &self.0 {
+            Pin::Generation(shared) => shared,
+            Pin::Root(..) => self.root_shared(),
+        }
+    }
+
+    /// [`shared`](Self::shared) of a root handle: out of line, as only a test reaches it.
+    #[cold]
+    #[inline(never)]
+    fn root_shared(&self) -> &DeviceShared {
+        self.shared_arc()
     }
 
     /// Keep room in the memory pools the runtime's encodings and commits place their own
@@ -1157,19 +1263,42 @@ impl Device {
         crate::memory::keep_room(&shared.memory, shared.vk(), &shared.counts);
     }
 
-    /// Whether `other` is this device (the same handle, not merely the same physical device).
+    /// Whether `other` is this device (the same generation, not merely the same physical
+    /// device); of two handles one of which is a root, whether they are of the same line.
+    #[inline(always)]
     pub(super) fn same(&self, other: &Device) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        // The common answer, a bind's, at one compare: the same generation (or root cell).
+        self.0.address() == other.0.address() || self.same_apart(other)
+    }
+
+    /// [`same`](Self::same) of two handles that hold different cells: of one line where one is a
+    /// root; two generations are two devices.
+    #[cold]
+    #[inline(never)]
+    fn same_apart(&self, other: &Device) -> bool {
+        match (&self.0, &other.0) {
+            (Pin::Generation(_), Pin::Generation(_)) => false,
+            _ => self.same_line(other),
+        }
+    }
+
+    /// Whether `other` is of this device's line: this device, or one generation of it made before
+    /// or after a recovery (`line.rs`).
+    pub(super) fn same_line(&self, other: &Device) -> bool {
+        Arc::ptr_eq(self.line(), other.line())
     }
 
     /// Whether the device was lost.
     pub(super) fn is_lost(&self) -> bool {
-        self.0.lost.load(Ordering::Acquire)
+        self.shared().lost()
     }
 
-    /// Record that the device was lost.
+    /// Record that the device was lost: its line recovers at the next call that needs the device,
+    /// where it recovers (`line.rs`).
     pub(super) fn mark_lost(&self) {
-        self.0.lost.store(true, Ordering::Release);
+        let shared = self.shared();
+        shared.lost.store(true, Ordering::Release);
+        shared.line.lose(shared);
     }
 
     /// Wait for the work submitted to each of the device's queues to end, each queue under its
@@ -1192,7 +1321,7 @@ impl Device {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        let shared = &self.0;
+        let shared = self.shared();
         let raw = shared.vk();
         for slot in shared.queues.iter() {
             // SAFETY: the queue is the device's, used under its lock, inside a section. Its
@@ -1217,7 +1346,10 @@ impl Device {
     /// and a context of its own. The handle of the pool holds nothing of the device, so what holds
     /// the device can be posted with no handle of it taken here.
     pub(crate) fn elsewhere(&self) -> (Contexts<Item>, u64) {
-        (self.0.contexts.clone(), self.0.contexts.fresh())
+        (
+            self.shared().contexts.clone(),
+            self.shared().contexts.fresh(),
+        )
     }
 
     /// A new logical queue's identity, and the index of the `VkQueue` it submits to: round
@@ -1228,30 +1360,39 @@ impl Device {
     /// (`device/create.rs`'s `ROUND_ROBIN_CEILING`): counted,
     /// `WorkCounts::queues_sharing_a_vk_queue`.
     pub(super) fn next_queue(&self) -> (u64, usize) {
-        let id = self.0.contexts.fresh();
-        let made = self.0.round_robin_made.fetch_add(1, Ordering::Relaxed);
-        if made >= self.0.round_robin as u64 {
-            self.0.counts.queue_shared_a_vk_queue();
+        let id = self.shared().contexts.fresh();
+        let made = self
+            .shared()
+            .round_robin_made
+            .fetch_add(1, Ordering::Relaxed);
+        if made >= self.shared().round_robin as u64 {
+            self.shared().counts.queue_shared_a_vk_queue();
         }
-        (id, (made % self.0.round_robin as u64) as usize)
+        (id, (made % self.shared().round_robin as u64) as usize)
     }
 
     /// A new logical queue's identity alone, for one whose `VkQueue` is chosen otherwise
     /// (`Device::place_unshared`).
     pub(super) fn new_queue_id(&self) -> u64 {
-        self.0.contexts.fresh()
+        self.shared().contexts.fresh()
     }
 
     /// A new presenting queue's identity, and the index of the `VkQueue` it submits to: the
     /// queues reserved for presenting, in turn. `None` where the device reserved none.
     pub(super) fn next_presenting_queue(&self) -> Option<(u64, usize)> {
-        let reserved = self.0.queues.len() - self.0.round_robin;
+        let reserved = self.shared().queues.len() - self.shared().round_robin;
         if reserved == 0 {
             return None;
         }
-        let id = self.0.contexts.fresh();
-        let made = self.0.presenting_made.fetch_add(1, Ordering::Relaxed);
-        Some((id, self.0.round_robin + (made % reserved as u64) as usize))
+        let id = self.shared().contexts.fresh();
+        let made = self
+            .shared()
+            .presenting_made
+            .fetch_add(1, Ordering::Relaxed);
+        Some((
+            id,
+            self.shared().round_robin + (made % reserved as u64) as usize,
+        ))
     }
 
     /// `vkAllocateCommandBuffers` of `info` (`DeviceShared::allocate_command_buffers`).
@@ -1259,7 +1400,7 @@ impl Device {
         &self,
         info: &vk::CommandBufferAllocateInfo<'_>,
     ) -> Result<Vec<vk::CommandBuffer>, Error> {
-        self.0.allocate_command_buffers(info)
+        self.shared().allocate_command_buffers(info)
     }
 }
 
@@ -1362,10 +1503,17 @@ pub(super) struct Parts {
     pub(super) owned: bool,
     /// The shader cache, its directory opened before any Vulkan object was made.
     pub(super) cache: CacheSetup,
+    /// The line a recovery makes this generation of (`line.rs`); `None` for a device made now.
+    pub(super) line: Option<Arc<line::Line>>,
+    /// How a device made now makes its next `VkDevice` once one is lost (`create.rs`); `None`
+    /// for one the consumer made, and for a recovery's, whose line has it.
+    pub(super) recipe: Option<line::Recipe>,
 }
 
 impl Device {
-    /// The device of `parts`: create is built on adopt, so both end here.
+    /// The device of `parts`: create is built on adopt, so both end here, and so does a
+    /// recovery's new generation (`line.rs`). A generation handle of it, which the program's
+    /// calls that made a device turn into a root handle ([`Device::root`]).
     ///
     /// # Safety
     ///
@@ -1419,6 +1567,8 @@ impl Device {
             memory_reads,
             owned,
             cache,
+            line: recovering,
+            recipe,
         } = parts;
         // Every pipeline made on the device from here on is made at the user-initiated class.
         // SAFETY: the device is live (the caller's contract), and its functions are its own.
@@ -2010,10 +2160,41 @@ impl Device {
         let frees = Arc::new(crate::free_thread::FreeThread::new(Arc::clone(&functions)));
         memory.post_frees_to(Arc::clone(&frees));
         (allocations.allocations).wait_for_frees_on(Arc::clone(&frees));
-        let resource_ids: Arc<Mutex<ResourceIds>> = Arc::default();
+        // The device's line: a new one for a device made now, else the line this generation
+        // recovers, whose address space, resource IDs, identifiers and counts it goes on with
+        // (`line.rs`).
+        let invariant = line::Invariant {
+            properties,
+            compile,
+            enabled,
+            extensions,
+            cache_directory: shader_cache.directory_root(),
+        };
+        let line = match recovering {
+            Some(line) => line,
+            None => line::Line::new(
+                holds::holds(),
+                invariant.clone(),
+                Announced::new(&announce_each),
+                recipe,
+            ),
+        };
+        let carried = &line.carried;
+        let announced = Arc::clone(&carried.announced);
+        let resource_ids = Arc::clone(&carried.resource_ids);
+        let passing_holds = Arc::clone(&carried.passing_holds);
         let sampler_ids = lock(&resource_ids).sampler_id_reads();
-        let depth_ranges = DepthRanges::of(compile.profile());
+        let depth_ranges = DepthRanges::of(invariant.compile.profile());
+        let lineage = Arc::clone(&line.lineage);
+        let generation = lineage.made();
         let shared = Arc::new(DeviceShared {
+            addresses: Arc::clone(&carried.addresses),
+            identifiers: Arc::clone(&carried.identifiers),
+            counts: Arc::clone(&carried.counts),
+            holds: Arc::clone(&line.holds),
+            line,
+            lineage,
+            generation,
             instance,
             physical,
             functions,
@@ -2024,21 +2205,17 @@ impl Device {
             round_robin_made: AtomicU64::new(0),
             presenting_made: AtomicU64::new(0),
             queue_switch: Arc::new(crate::queue_share::QueueSwitch::new(
-                compile.policy().queue_sharing,
+                invariant.compile.policy().queue_sharing,
             )),
-            compile,
             depth_ranges,
-            enabled,
-            extensions,
-            properties,
-            announced: Announced::new(&announce_each),
+            invariant,
+            announced,
             lowering_refuses,
             deferred: crate::render::DeferredEncoders::default(),
             record_executions,
             views_epoch: AtomicU64::new(0),
             pipeline_recording: crate::warm::Recording::new(pipeline_records),
             warmer: crate::warm::Warmer::default(),
-            holds: holds::holds(),
             device_address,
             upload_alignment,
             dynamic_buffers: [
@@ -2046,12 +2223,10 @@ impl Device {
                 limits.max_descriptor_set_storage_buffers_dynamic,
             ],
             memory: Arc::new(Mutex::new(memory)),
-            addresses: Mutex::new(AddressSpace::new()),
             recycled_buffers: Mutex::new(Recycler::new(recycle::BUFFERS)),
             resource_ids,
-            passing_holds: PassingHolds::default(),
+            passing_holds,
             keepers: Keepers::default(),
-            identifiers: Arc::default(),
             sampler_ids,
             samplers: Mutex::default(),
             sampler_count: SamplerCount::new(sampler_limit),
@@ -2161,7 +2336,6 @@ impl Device {
             cores: Default::default(),
             draw_rooms: Default::default(),
             kept_rooms: Default::default(),
-            counts: Default::default(),
             parking: parking.map_or_else(OnceLock::new, OnceLock::from),
             uncommitted: Arc::default(),
             pipeline_pool: Default::default(),
@@ -2188,7 +2362,7 @@ impl Device {
         // stalls while idle, each queue's empty submissions signalling a semaphore of its own
         // (`submit_stalls.rs`); a device that cannot make the semaphores takes none.
         let stalls = metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024;
-        if shared.properties.driver_facts.contains(&stalls) {
+        if shared.invariant.properties.driver_facts.contains(&stalls) {
             if let Some(semaphores) = submit_stalls::semaphores(shared.vk(), shared.queues.len()) {
                 let functions = Functions::clone(&shared.functions);
                 let queues = Arc::clone(&shared.queues);
@@ -2196,7 +2370,9 @@ impl Device {
                 shared.scheduler.take_stalls_idle(idle);
             }
         }
-        let device = holds::first(shared);
+        // The line serves its first generation; a recovery's serves it once it is made.
+        shared.line.first(&shared);
+        let device = holds::program(shared);
         // What the device allocated ahead goes back once its allocations come near the limit.
         device.give_back_ahead_near_the_limit();
         // The verdicts of its check of textures over host pages, where a record holds them.

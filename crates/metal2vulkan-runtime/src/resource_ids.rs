@@ -1313,6 +1313,15 @@ impl Device {
         kind: ResourceIdKind,
         ids: &[ResourceId],
     ) -> Result<(), Error> {
+        self.current().reserve_resource_ids_now(kind, ids)
+    }
+
+    /// [`Device::reserve_resource_ids`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn reserve_resource_ids_now(
+        &self,
+        kind: ResourceIdKind,
+        ids: &[ResourceId],
+    ) -> Result<(), Error> {
         const CALL: &str = "reserve_resource_ids";
         // Metal ignores a late call before it looks at what the call holds (an M3 Max, macOS
         // 27.0.1: after a buffer or a reservation, 2^31, 2^31 + 5, 2^32 - 1, 2^32 + 5 and 0 alone
@@ -1407,6 +1416,11 @@ impl Device {
     /// A runtime extension, with no Metal counterpart: Metal keeps a descriptor in its sampler
     /// heap for each of these IDs, so a caller that models that heap's placement counts them.
     pub fn sampler_ids_live(&self) -> u64 {
+        self.current().sampler_ids_live_now()
+    }
+
+    /// [`Device::sampler_ids_live`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn sampler_ids_live_now(&self) -> u64 {
         self.shared().sampler_ids.live.load(Ordering::Acquire)
     }
 
@@ -1428,6 +1442,11 @@ impl Device {
     /// Read as [`Device::sampler_ids_live`] is: changed inside the call that grows the pool, a
     /// plain atomic read with no lock. A runtime extension, with no Metal counterpart.
     pub fn sampler_id_pool_size(&self) -> u64 {
+        self.current().sampler_id_pool_size_now()
+    }
+
+    /// [`Device::sampler_id_pool_size`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn sampler_id_pool_size_now(&self) -> u64 {
         self.shared().sampler_ids.pool_size.load(Ordering::Acquire)
     }
 

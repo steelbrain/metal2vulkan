@@ -3070,7 +3070,7 @@ impl CommandUses {
 
     /// How many uses at its start, of what the encoder made resident, were found to share no
     /// memory with an attachment of a render pass of the layout of `version`
-    /// (`Device::degrade_attachment_reads`): its count of them where they are those of the
+    /// (`EncoderCore::degrade_attachment_reads`): its count of them where they are those of the
     /// identity found ([`prefix`](Self::prefix)), else 0.
     pub(super) fn apart(&self, version: u64) -> usize {
         match (self.prefix(), self.apart) {

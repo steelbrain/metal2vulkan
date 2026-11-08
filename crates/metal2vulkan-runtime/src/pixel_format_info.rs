@@ -106,6 +106,11 @@ impl Device {
     /// answers [`PixelFormatInfo::INVALID`]. The flags are those of Apple's GPU, not this
     /// device's.
     pub fn pixel_format_info(&self, raw: u64) -> PixelFormatInfo {
+        self.current().pixel_format_info_now(raw)
+    }
+
+    /// [`Device::pixel_format_info`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn pixel_format_info_now(&self, raw: u64) -> PixelFormatInfo {
         pixel_format_info(raw)
     }
 
@@ -131,6 +136,11 @@ impl Device {
     ///   images times its depth, and the size the blocks cover the blocks times the block, all
     ///   in 64-bit arithmetic that wraps.
     pub fn texture_level_info(&self, query: &TextureLevelQuery) -> TextureLevelInfo {
+        self.current().texture_level_info_now(query)
+    }
+
+    /// [`Device::texture_level_info`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn texture_level_info_now(&self, query: &TextureLevelQuery) -> TextureLevelInfo {
         texture_level_info(query)
     }
 }

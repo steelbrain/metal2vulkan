@@ -95,7 +95,7 @@ impl Ahead {
                 Some(runs)
             })
             .collect();
-        let queue = command_buffer.command_queue().id();
+        let queue = command_buffer.queue_place().id();
         let backed = backed(command_buffer, pass, queue, &mut held)
             .ok()
             .flatten();

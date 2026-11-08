@@ -234,7 +234,7 @@ impl RenderLowering {
             moved: crate::buffer::host_cells_moved(),
             residency: self.residency.generation(),
             into: self.core.noted_into(),
-            samplers: self.core.device().sampler_slots_changed(),
+            samplers: self.core.generation().sampler_slots_changed(),
         }
     }
 

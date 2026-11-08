@@ -2335,7 +2335,7 @@ fn target_use(target: &Target) -> Result<Use<ResourceKey>, Error> {
 
 /// [`shares_attachment`]'s answers for a render encoder's layout, its attachments' memory worked
 /// out once for each version of the layout (`versioned.rs`), whose targets change only with it, and
-/// kept: every draw asks while the notice is pending (`Device::degrade_attachment_reads`), and
+/// kept: every draw asks while the notice is pending (`EncoderCore::degrade_attachment_reads`), and
 /// working each attachment's use out again (its texture's image and aspects) was about a
 /// twentieth of a draw rebound's time. Checked against the layout's answer in builds with debug
 /// assertions.

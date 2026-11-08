@@ -107,7 +107,8 @@
 use super::super::event::{EventShared, SharedEvent};
 use super::super::exit_guard;
 use super::super::gpu_time;
-use super::super::{CommandQueue, Device, Error};
+use super::super::queue::QueueGen;
+use super::super::{Device, Error};
 use super::recovery::Recovery;
 use super::{lock, CommandBufferShared, CommitFailure, FailedEncoders, Item, State};
 use std::collections::VecDeque;
@@ -182,7 +183,7 @@ impl Verdict {
 
     /// Whether the command buffer runs nothing, as its first batch is about to be submitted on
     /// `queue`: as decided, or where undecided, whether a hang of the queue is in flight now.
-    pub(super) fn discards(&self, queue: &CommandQueue) -> bool {
+    pub(super) fn discards(&self, queue: &QueueGen) -> bool {
         match self.0.load(Ordering::SeqCst) {
             Verdict::DISCARDED => true,
             Verdict::RUNS => false,
@@ -363,7 +364,7 @@ impl Hang {
         held: Held,
     ) -> Result<Hang, Error> {
         Ok(Hang {
-            event: device.new_shared_event()?,
+            event: device.new_shared_event_now()?,
             batch,
             encoder,
             held,
@@ -635,20 +636,20 @@ pub(super) fn join(
 }
 
 /// Whether a hang of `queue` is in flight (the module docs).
-pub(super) fn in_flight(queue: &CommandQueue) -> bool {
+pub(super) fn in_flight(queue: &QueueGen) -> bool {
     queue.hangs().in_flight.load(Ordering::SeqCst) > 0
 }
 
 /// Whether a fault's hold of `queue` is in flight (the module docs): a command buffer committed
 /// on it now reads `Scheduled` early, and runs.
-pub(super) fn holding(queue: &CommandQueue) -> bool {
+pub(super) fn holding(queue: &QueueGen) -> bool {
     queue.hangs().holding.load(Ordering::SeqCst) > 0
 }
 
 /// The verdict of a command buffer committed on `queue` with the event waits `waits` gives,
 /// listed for the hang's decision where a hang of the queue is in flight; `None` where none is
 /// (the module docs).
-pub(super) fn behind(queue: &CommandQueue, waits: &[(Arc<EventShared>, u64)]) -> Option<Verdict> {
+pub(super) fn behind(queue: &QueueGen, waits: &[(Arc<EventShared>, u64)]) -> Option<Verdict> {
     if !in_flight(queue) {
         return None;
     }
@@ -664,7 +665,7 @@ pub(super) fn behind(queue: &CommandQueue, waits: &[(Arc<EventShared>, u64)]) ->
 /// where a hang of the queue is in flight: it runs nothing and completes with no error, its
 /// signals firing (the module docs). `None` where none is, or where it waits for an event, which
 /// its first batch's submission decides.
-pub(super) fn discarded(queue: &CommandQueue, event_waits: usize) -> Option<CommitFailure> {
+pub(super) fn discarded(queue: &QueueGen, event_waits: usize) -> Option<CommitFailure> {
     (in_flight(queue) && event_waits == 0).then_some(CommitFailure {
         code: 0,
         encoders: FailedEncoders::From(0),

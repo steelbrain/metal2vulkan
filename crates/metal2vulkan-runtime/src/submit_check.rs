@@ -705,6 +705,11 @@ impl Device {
     /// that hold a device to the path it chooses.
     #[doc(hidden)]
     pub fn submissions_merge(&self) -> bool {
+        self.current().submissions_merge_now()
+    }
+
+    /// [`Device::submissions_merge`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn submissions_merge_now(&self) -> bool {
         self.shared().submit_checks.holds(Check::Merge)
     }
 
@@ -714,6 +719,11 @@ impl Device {
     /// chooses.
     #[doc(hidden)]
     pub fn fresh_pages_pay(&self) -> bool {
+        self.current().fresh_pages_pay_now()
+    }
+
+    /// [`Device::fresh_pages_pay`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn fresh_pages_pay_now(&self) -> bool {
         self.shared().submit_checks.fails(Check::ImportTax)
     }
 
@@ -733,6 +743,12 @@ impl Device {
     /// where it is `true`, pages mapped over a live no-copy buffer's addresses are what its later
     /// command buffers read and write.
     pub fn pointer_imports_follow_their_address(&self) -> bool {
+        self.current().pointer_imports_follow_their_address_now()
+    }
+
+    /// [`Device::pointer_imports_follow_their_address`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn pointer_imports_follow_their_address_now(&self) -> bool {
         self.shared().submit_checks.holds(Check::Follows)
     }
 
@@ -741,6 +757,11 @@ impl Device {
     /// verdicts choose.
     #[doc(hidden)]
     pub fn settle_submit_checks(&self, timeout: Duration) -> bool {
+        self.current().settle_submit_checks_now(timeout)
+    }
+
+    /// [`Device::settle_submit_checks`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn settle_submit_checks_now(&self, timeout: Duration) -> bool {
         self.shared().submit_checks.wait(timeout)
     }
 
@@ -748,6 +769,11 @@ impl Device {
     /// process, in words. A runtime extension for the lanes and benchmarks that report them.
     #[doc(hidden)]
     pub fn submit_check_report(&self) -> String {
+        self.current().submit_check_report_now()
+    }
+
+    /// [`Device::submit_check_report`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn submit_check_report_now(&self) -> String {
         let checks = &self.shared().submit_checks;
         let m = checks.measured();
         let us = |nanos: i64| nanos as f64 / 1e3;

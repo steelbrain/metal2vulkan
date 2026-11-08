@@ -1561,9 +1561,14 @@ impl Device {
     /// whose ranges meet those of a RAM the device uses already, itself among them (`Invalid`,
     /// `Problem::HostRam`); a lost device.
     pub fn use_host_ram(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error> {
+        self.current().use_host_ram_now(ram)
+    }
+
+    /// [`Device::use_host_ram`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn use_host_ram_now(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error> {
         const CALL: &str = "use_host_ram";
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         if let Err(unsupported) = &shared.host_import {
@@ -1573,7 +1578,7 @@ impl Device {
         // device's submission checks answer first (`submit_check.rs`), waited for at most
         // `ANSWER_WAIT`: they take milliseconds.
         if ram.dma_buf.is_some() {
-            self.settle_submit_checks(crate::submit_check::ANSWER_WAIT);
+            self.settle_submit_checks_now(crate::submit_check::ANSWER_WAIT);
         }
         let plan = self.ram_plan(ram);
         let used =
@@ -1638,7 +1643,7 @@ impl Device {
         again: &Again,
     ) -> Result<Pages, Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let importer = (self.shared().host_import.as_ref()).map_err(|_| {
             internal("a guest RAM's run imported again on a device that imports none")

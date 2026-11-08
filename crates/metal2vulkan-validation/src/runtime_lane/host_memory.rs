@@ -1702,7 +1702,9 @@ fn a_lost_device_s_command_buffers_let_go_of_their_pools_after_the_driver_s_comp
             command_buffer.wait_until_completed_for(WAIT).unwrap();
         }
         assert_eq!(faulting.status(), CommandBufferStatus::Error);
-        assert_eq!(faulting.error(), Some(CommandBufferError::DeviceLost));
+        // The device recovers from the loss (`device/line.rs`): the oldest incomplete command
+        // buffer fails as the hang.
+        assert_eq!(faulting.error(), Some(CommandBufferError::GpuHang));
         let drains = device.work_counts().queue_drains - before.queue_drains;
         eprintln!(
             "LOST-DEVICE-POOLS round {round}: {} committed beside the fault, {drains} drains",
@@ -1734,8 +1736,10 @@ fn a_lost_device_s_command_buffers_let_go_of_their_pools_after_the_driver_s_comp
 /// answer: completed, or, as Metal's victim of the recovery, `Execution(1)` or `PageFault`, never
 /// the failed one's error. Under the program's own MoltenVK setting that loses the device after a
 /// failure (`MVK_CONFIG_RESUME_LOST_DEVICE` off, which wins over the runtime's), MoltenVK marks the
-/// device lost before it reports, so no batch's fence can be read: the failed command buffer and
-/// every later one fail `DeviceLost`, and the device refuses new buffers `DeviceLost`;
+/// device lost before it reports, so no batch's fence can be read: the device recovers from the
+/// loss (`device/line.rs`), the failed command buffer fails as the hang (`GpuHang`) and one
+/// committed beside it as its victim (`GpuRecoveryVictim`) or completed, and the next buffer and
+/// command buffer are made on the new `VkDevice` and complete;
 /// no runtime thread reaches the lost device outside a section of the exit
 /// guard on the way (a debug build once ended the process there). MoltenVK's reports of the failure
 /// are the only messages. On MoltenVK alone: on Linux the buffer is a copy whose GPU writes are
@@ -1850,20 +1854,23 @@ fn a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on() {
                 ),
             }
         } else {
-            assert_eq!(failed, Some(CommandBufferError::DeviceLost), "{resume:?}");
-            // Committed before or after the loss: refused at its commit, or failed with it.
+            assert_eq!(failed, Some(CommandBufferError::GpuHang), "{resume:?}");
+            // Committed before the loss: failed with it as the hang's victim, or completed.
+            assert_eq!(committed, Ok(()));
             assert!(
-                committed == Err(Error::DeviceLost)
-                    || (beside_status, beside_error)
-                        == (
+                matches!(
+                    (beside_status, beside_error),
+                    (CommandBufferStatus::Completed, None)
+                        | (
                             CommandBufferStatus::Error,
-                            Some(CommandBufferError::DeviceLost)
-                        ),
-                "{committed:?} {beside_status:?} {beside_error:?}"
+                            Some(CommandBufferError::GpuRecoveryVictim)
+                        )
+                ),
+                "{beside_status:?} {beside_error:?}"
             );
         }
         // The next command buffer, committed once the failed one completed, over a buffer made
-        // then: on a lost device the buffer's making may be refused too.
+        // then: after a loss, on the device's new `VkDevice`.
         let after = device.new_buffer(256, ResourceOptions::shared());
         let next = after.clone().and_then(|after| {
             let next = queue.command_buffer()?;
@@ -1875,25 +1882,11 @@ fn a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on() {
             Ok((next.status(), next.error()))
         });
         eprintln!("runtime GPU fault, resume {resume:?}, the next: {next:?}");
-        if resume.is_none() {
-            assert_eq!(next, Ok((CommandBufferStatus::Completed, None)));
-            assert_eq!(
-                read_buffer(after.as_ref().unwrap(), 0, 256).unwrap(),
-                vec![0xd4; 256]
-            );
-        } else {
-            assert!(
-                matches!(
-                    next,
-                    Err(Error::DeviceLost)
-                        | Ok((
-                            CommandBufferStatus::Error,
-                            Some(CommandBufferError::DeviceLost)
-                        ))
-                ),
-                "{next:?}"
-            );
-        }
+        assert_eq!(next, Ok((CommandBufferStatus::Completed, None)));
+        assert_eq!(
+            read_buffer(after.as_ref().unwrap(), 0, 256).unwrap(),
+            vec![0xd4; 256]
+        );
         let reported = messages.take();
         assert!(
             !reported.is_empty()

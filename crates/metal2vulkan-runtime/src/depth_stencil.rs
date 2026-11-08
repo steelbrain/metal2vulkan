@@ -56,6 +56,14 @@ impl Device {
         &self,
         descriptor: &DepthStencilDescriptor,
     ) -> Result<DepthStencilState, Error> {
+        self.current().new_depth_stencil_state_now(descriptor)
+    }
+
+    /// [`Device::new_depth_stencil_state`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_depth_stencil_state_now(
+        &self,
+        descriptor: &DepthStencilDescriptor,
+    ) -> Result<DepthStencilState, Error> {
         Ok(DepthStencilState(Arc::new(Shared {
             device: self.clone(),
             descriptor: *descriptor,
@@ -80,7 +88,7 @@ impl DepthStencilState {
     /// `NotImplemented(IndirectRenderCommands)` on a device that claims Apple10: indirect render
     /// commands that set a depth/stencil state are not built.
     pub fn gpu_resource_id(&self) -> Result<ResourceId, Error> {
-        if self.0.device.supports_family(GpuFamily::Apple10.raw()) {
+        if self.0.device.supports_family_now(GpuFamily::Apple10.raw()) {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
         }
         Ok(DEPTH_STENCIL_RESOURCE_ID)

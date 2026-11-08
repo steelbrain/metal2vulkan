@@ -364,12 +364,39 @@ impl Device {
         pixel_format: PixelFormat,
         sample_count: u64,
     ) -> Size {
-        self.sparse_tile_size_for_page(texture_type, pixel_format, sample_count, DEFAULT_PAGE)
+        self.current()
+            .sparse_tile_size_now(texture_type, pixel_format, sample_count)
+    }
+
+    /// [`Device::sparse_tile_size`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn sparse_tile_size_now(
+        &self,
+        texture_type: TextureType,
+        pixel_format: PixelFormat,
+        sample_count: u64,
+    ) -> Size {
+        self.sparse_tile_size_for_page_now(texture_type, pixel_format, sample_count, DEFAULT_PAGE)
     }
 
     /// `sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:`: as
     /// [`sparse_tile_size`](Self::sparse_tile_size), in pages of `page`.
     pub fn sparse_tile_size_for_page(
+        &self,
+        _texture_type: TextureType,
+        pixel_format: PixelFormat,
+        sample_count: u64,
+        page: SparsePageSize,
+    ) -> Size {
+        self.current().sparse_tile_size_for_page_now(
+            _texture_type,
+            pixel_format,
+            sample_count,
+            page,
+        )
+    }
+
+    /// [`Device::sparse_tile_size_for_page`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn sparse_tile_size_for_page_now(
         &self,
         _texture_type: TextureType,
         pixel_format: PixelFormat,
@@ -382,11 +409,22 @@ impl Device {
 
     /// `sparseTileSizeInBytes`: 16384, the bytes of a 16-KiB page's tile.
     pub fn sparse_tile_size_in_bytes(&self) -> u64 {
+        self.current().sparse_tile_size_in_bytes_now()
+    }
+
+    /// [`Device::sparse_tile_size_in_bytes`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn sparse_tile_size_in_bytes_now(&self) -> u64 {
         DEFAULT_PAGE.bytes()
     }
 
     /// `sparseTileSizeInBytesForSparsePageSize:`: the page's bytes.
     pub fn sparse_tile_size_in_bytes_for_page(&self, page: SparsePageSize) -> u64 {
+        self.current().sparse_tile_size_in_bytes_for_page_now(page)
+    }
+
+    /// [`Device::sparse_tile_size_in_bytes_for_page`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn sparse_tile_size_in_bytes_for_page_now(&self, page: SparsePageSize) -> u64 {
         page.bytes()
     }
 
@@ -407,6 +445,22 @@ impl Device {
         tile_size: Size,
         mode: SparseTextureRegionAlignmentMode,
     ) -> Result<(), Error> {
+        self.current().convert_sparse_pixel_regions_now(
+            pixel_regions,
+            tile_regions,
+            tile_size,
+            mode,
+        )
+    }
+
+    /// [`Device::convert_sparse_pixel_regions`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn convert_sparse_pixel_regions_now(
+        &self,
+        pixel_regions: &[Region],
+        tile_regions: &mut [Region],
+        tile_size: Size,
+        mode: SparseTextureRegionAlignmentMode,
+    ) -> Result<(), Error> {
         if pixel_regions.len() != tile_regions.len() {
             return Err(invalid(
                 "convert_sparse_pixel_regions",
@@ -421,6 +475,16 @@ impl Device {
     /// `convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:`: each region of tiles
     /// of `tile_size` as texels.
     pub fn convert_sparse_tile_regions(
+        &self,
+        tile_regions: &[Region],
+        tile_size: Size,
+    ) -> Vec<Region> {
+        self.current()
+            .convert_sparse_tile_regions_now(tile_regions, tile_size)
+    }
+
+    /// [`Device::convert_sparse_tile_regions`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn convert_sparse_tile_regions_now(
         &self,
         tile_regions: &[Region],
         tile_size: Size,

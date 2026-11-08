@@ -1513,7 +1513,7 @@ fn refused_text(
             if inside { "" } else { "not " }
         )
     };
-    let answer = match device.heap_texture_size_and_align(d) {
+    let answer = match device.heap_texture_size_and_align_now(d) {
         Ok(answer) => against(answer),
         Err(e) => format!("no size: {e}"),
     };
@@ -1647,6 +1647,14 @@ impl Device {
         &self,
         descriptor: &TextureDescriptor,
     ) -> Result<SizeAndAlign, Error> {
+        self.current().heap_texture_size_and_align_now(descriptor)
+    }
+
+    /// [`Device::heap_texture_size_and_align`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn heap_texture_size_and_align_now(
+        &self,
+        descriptor: &TextureDescriptor,
+    ) -> Result<SizeAndAlign, Error> {
         const CALL: &str = "heap_texture_size_and_align";
         let layout = match self.heap_layout(CALL, descriptor, Creator::SizeQuery) {
             // A texture plain Metal makes none of answers 0 bytes, at the alignment
@@ -1715,6 +1723,16 @@ impl Device {
     /// [`Device::heap_texture_size_and_align`] refuses the descriptor before it plans an image:
     /// `Invalid` for a descriptor Metal stops.
     pub fn metal_heap_texture_size_and_align(
+        &self,
+        descriptor: &TextureDescriptor,
+    ) -> Result<Option<SizeAndAlign>, Error> {
+        self.current()
+            .metal_heap_texture_size_and_align_now(descriptor)
+    }
+
+    /// [`Device::metal_heap_texture_size_and_align`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn metal_heap_texture_size_and_align_now(
         &self,
         descriptor: &TextureDescriptor,
     ) -> Result<Option<SizeAndAlign>, Error> {
@@ -1788,7 +1806,7 @@ impl Device {
             return Err(invalid(call, Problem::StorageMode));
         }
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         Ok(layout)
     }

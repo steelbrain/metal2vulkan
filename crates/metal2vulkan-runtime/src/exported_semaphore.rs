@@ -95,6 +95,11 @@ impl Device {
     /// `VK_KHR_external_semaphore_fd` or that exports no timeline semaphore as an opaque file
     /// descriptor.
     pub fn new_exportable_shared_event(&self) -> Result<SharedEvent, Error> {
+        self.current().new_exportable_shared_event_now()
+    }
+
+    /// [`Device::new_exportable_shared_event`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_exportable_shared_event_now(&self) -> Result<SharedEvent, Error> {
         if self.shared().opaque_fd_semaphores.is_none() {
             return Err(Error::NotImplemented(RuntimeGap::ExportableSemaphore));
         }
@@ -112,18 +117,19 @@ impl SharedEvent {
     /// value [`vk_wait`](Self::vk_wait) answers, and signals only the one
     /// [`reserve_vk_signal`](Self::reserve_vk_signal) reserved, under that call's contract. The
     /// event must outlive every import and every signal and wait an importer submitted. On a
-    /// device loss the semaphore's state is lost for every import too, and the call answers
-    /// `DeviceLost`.
+    /// device loss the semaphore's state is lost for every import too.
     ///
     /// Refused: an event not made by [`Device::new_exportable_shared_event`] (`Invalid`,
-    /// `Problem::NotExportable`), `DeviceLost`, and the driver's failure.
+    /// `Problem::NotExportable`), one made before its device's recovery
+    /// (`NotImplemented(MadeBeforeRecovery)`) or on a lost device (`DeviceLost`), and the driver's
+    /// failure.
     pub fn export_semaphore_fd(&self) -> Result<OwnedFd, Error> {
         const CALL: &str = "export_semaphore_fd";
         let event = EventRef::from(self);
         let event = event.shared();
         let device = event.device();
         if device.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(device.lost_refusal());
         }
         let export = device.shared().opaque_fd_semaphores.as_ref();
         let Some(export) = export.filter(|_| event.exportable()) else {

@@ -161,7 +161,7 @@ pub(super) struct RenderKey {
     /// not inherit them.
     tables: [TableBuffers; 4],
     resident: ResidentKey,
-    /// The count of the device's sampler IDs' slots' changes (`Device::sampler_slots_changed`),
+    /// The count of the device's sampler IDs' slots' changes (`DeviceShared::sampler_slots_changed`),
     /// at which a draw that reads the heap lists the argument samplers its heap part is made of
     /// (`render/heap_part.rs`): a change records the chunks again.
     samplers: u64,
@@ -489,7 +489,7 @@ impl RenderExecution {
         };
         // Read before the chunks are recorded: a sampler state made meanwhile leaves a key no later
         // execution's equals.
-        let samplers = command_buffer.device().sampler_slots_changed();
+        let samplers = command_buffer.generation().sampler_slots_changed();
         let resident = ResidentKey::new(residency.kept_key());
         // An attachment is among them as a texture made resident, or in a heap or over a buffer
         // made resident.

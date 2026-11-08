@@ -3813,6 +3813,17 @@ pub struct DeviceCheckWork {
 /// API.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WorkCounts {
+    /// The device's `VkDevice`s alive (`device/line.rs`): its first, and after a recovery from
+    /// the loss of one the new one, with the lost one until the objects made on it went and, where
+    /// `Device::raw` answered its handles, a later `raw` call answered the new one's. Two while a
+    /// recovery's lost `VkDevice` is kept so, one once it goes; a second recovery while objects
+    /// made before the first live keeps those, a third.
+    pub vk_devices_live: u64,
+    /// The `VkDevice`s the device made: its first, and one per recovery.
+    pub vk_devices_made: u64,
+    /// The device's recoveries from the loss of its `VkDevice` that made a new one
+    /// (`Degradation::DeviceRecovered`).
+    pub device_recoveries: u64,
     /// `VkCommandPool`s made for command buffers, where no spare one was free.
     pub command_pools_made: u64,
     /// Released objects MoltenVK commits its residency set for, by kind (`churn_counts.rs`).
@@ -6554,6 +6565,11 @@ impl Device {
     /// Metal counterpart; not part of the API.
     #[doc(hidden)]
     pub fn work_counts(&self) -> WorkCounts {
+        self.current().work_counts_now()
+    }
+
+    /// [`Device::work_counts`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn work_counts_now(&self) -> WorkCounts {
         // What the calls of the device's render encoders logged and not yet lowered will count
         // (`render/deferral.rs`).
         self.shared().deferred.lower_all();
@@ -6611,7 +6627,11 @@ impl Device {
         };
         let (frees_posted, frees_queue_full, free_waits) = self.shared().frees.counts();
         let dirty = self.shared().dirty.tally();
+        let (vk_devices_live, vk_devices_made, device_recoveries) = self.shared().lineage.counts();
         WorkCounts {
+            vk_devices_live,
+            vk_devices_made,
+            device_recoveries,
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
             commands_recorded: self.shared().commands_recorded(),
             object_churn: churn.0,

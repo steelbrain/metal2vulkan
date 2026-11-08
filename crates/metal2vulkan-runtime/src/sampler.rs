@@ -600,6 +600,14 @@ impl Device {
     /// pixel-coordinate one's included). A minimum or maximum reduction reads the weighted
     /// average.
     pub fn new_sampler_state(&self, descriptor: &SamplerDescriptor) -> Result<SamplerState, Error> {
+        self.current().new_sampler_state_now(descriptor)
+    }
+
+    /// [`Device::new_sampler_state`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_sampler_state_now(
+        &self,
+        descriptor: &SamplerDescriptor,
+    ) -> Result<SamplerState, Error> {
         self.sampler_state(
             "new_sampler_state",
             descriptor,
@@ -617,6 +625,16 @@ impl Device {
     /// [`new_sampler_state`](Self::new_sampler_state) is, and a placement at an ID of 16381 or
     /// more (`Invalid`, `Problem::ResourceId`), which Metal ends the process for.
     pub fn new_sampler_state_with_options(
+        &self,
+        descriptor: &SamplerDescriptor,
+        options: SamplerStateOptions,
+    ) -> Result<SamplerState, Error> {
+        self.current()
+            .new_sampler_state_with_options_now(descriptor, options)
+    }
+
+    /// [`Device::new_sampler_state_with_options`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_sampler_state_with_options_now(
         &self,
         descriptor: &SamplerDescriptor,
         options: SamplerStateOptions,
@@ -744,7 +762,7 @@ impl Device {
     }
 
     /// [`argument_samplers`](Self::argument_samplers), with the count of the sampler IDs' slots'
-    /// changes they are live at ([`sampler_slots_changed`](Self::sampler_slots_changed)).
+    /// changes they are live at (`DeviceShared::sampler_slots_changed`).
     pub(super) fn argument_samplers_at(&self) -> (u64, Vec<SamplerState>) {
         let (changed, states) = lock(&self.shared().resource_ids).samplers();
         (changed, states.into_iter().map(SamplerState).collect())
@@ -756,15 +774,15 @@ impl Device {
         self.shared().counts.argument_samplers_taken();
         self.argument_samplers_at()
     }
+}
 
+impl crate::device::DeviceShared {
     /// The count of the changes of the sampler IDs' slots so far, a listing that found a state
     /// going among them (`ResourceIds::samplers`): while it holds,
-    /// [`argument_samplers`](Self::argument_samplers) answers the states it answered at it.
-    pub(super) fn sampler_slots_changed(&self) -> u64 {
-        self.shared()
-            .sampler_ids
-            .slots_changed
-            .load(Ordering::Acquire)
+    /// `Device::argument_samplers` answers the states it answered at it. Read at each draw, so
+    /// of the generation its command buffer holds (`CommandBuffer::generation`).
+    pub(crate) fn sampler_slots_changed(&self) -> u64 {
+        self.sampler_ids.slots_changed.load(Ordering::Acquire)
     }
 }
 

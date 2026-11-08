@@ -31,8 +31,9 @@
 
 use super::instance_requirements::instance_requirements_met;
 use super::keeper::keep_drivers_loaded;
+use super::line::{Line, Recipe};
 use super::properties::{DeviceKind, PhysicalDeviceIdentity};
-use super::{device_error, lock, Device, InstanceShared, Parts, WeakDevice};
+use super::{device_error, holds, lock, Device, InstanceShared, Parts};
 use crate::degradation::{Degradation, DegradeNotice};
 use crate::enables::{host_image_copy_names, listed_reported, listed_structures, Enables};
 use crate::error::{vulkan, Error, InstanceApiVersion, LoaderNotFound};
@@ -1576,11 +1577,15 @@ pub(super) fn argument_buffers_kept(description: &DeviceDescription) -> Result<(
 }
 
 /// A device on `physical`, made from `instance`.
-fn create_on(
+/// A device of `physical` made with `options`, a generation handle of it: the first generation of
+/// a new line, or with `recovering`, the next generation of that line (`line.rs`), made the same
+/// way.
+pub(super) fn create_on(
     instance: &Arc<InstanceShared>,
     physical: vk::PhysicalDevice,
     options: &DeviceOptions,
     cache: &CacheSetup,
+    recovering: Option<&Arc<Line>>,
 ) -> Result<Device, Error> {
     // SAFETY: `physical` was enumerated from the instance, created at `api_version`.
     let mut description =
@@ -1866,6 +1871,16 @@ fn create_on(
         memory_reads,
         owned: true,
         cache: cache.clone(),
+        line: recovering.cloned(),
+        recipe: match recovering {
+            Some(_) => None,
+            None => Some(Recipe {
+                instance: Arc::clone(instance),
+                physical,
+                options: options.clone(),
+                cache: cache.clone(),
+            }),
+        },
     };
     // SAFETY: the device was made from these parts just now.
     let device = unsafe { Device::assemble(parts) }?;
@@ -1930,7 +1945,7 @@ struct Made {
     /// The options' pipeline records' hook, which each of the group's devices holds.
     records: Option<std::sync::Weak<dyn Fn(crate::PipelineRecord) + Send + Sync>>,
     instance: Weak<InstanceShared>,
-    devices: Vec<(vk::PhysicalDevice, WeakDevice)>,
+    devices: Vec<(vk::PhysicalDevice, Weak<Line>)>,
 }
 
 impl Made {
@@ -1950,12 +1965,13 @@ impl Made {
         (sinks && records && same_options(&self.options, options)).then_some(instance)
     }
 
-    /// The live device of `physical`, if the group has one.
+    /// The live device of `physical`, if the group has one: a root handle of its line.
     fn device(&self, physical: vk::PhysicalDevice) -> Option<Device> {
         self.devices
             .iter()
             .find(|(of, _)| *of == physical)
-            .and_then(|(_, device)| device.revive())
+            .and_then(|(_, line)| line.upgrade())
+            .and_then(holds::revive_root)
     }
 }
 
@@ -1969,7 +1985,7 @@ pub(crate) fn live_devices_with(options: &DeviceOptions) -> usize {
         .find(|group| group.instance_for(options).is_some());
     of.map_or(0, |group| {
         let devices = group.devices.iter();
-        devices.filter(|(_, device)| device.lives()).count()
+        devices.filter(|(_, line)| line.strong_count() > 0).count()
     })
 }
 
@@ -2067,9 +2083,11 @@ fn device_of(
     if let Some(device) = group.device(physical) {
         return Ok(device);
     }
-    let device = create_on(instance, physical, options, cache)?;
-    group.devices.retain(|(_, weak)| weak.lives());
-    group.devices.push((physical, device.downgrade()));
+    let device = create_on(instance, physical, options, cache, None)?.root();
+    group.devices.retain(|(_, line)| line.strong_count() > 0);
+    group
+        .devices
+        .push((physical, Arc::downgrade(device.line())));
     Ok(device)
 }
 

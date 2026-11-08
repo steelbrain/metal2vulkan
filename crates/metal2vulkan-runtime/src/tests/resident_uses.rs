@@ -5,7 +5,7 @@
 //! instance (`WorkCounts::resident_uses_gathered`, `render/shadows.rs`) or checks them against
 //! what its pass's fragment stages wrote and read (`WorkCounts::resident_uses_against_fragments`,
 //! `render/pass_start_reads.rs`) or its attachments
-//! (`WorkCounts::resident_uses_against_attachments`, `Device::degrade_attachment_reads`), or
+//! (`WorkCounts::resident_uses_against_attachments`, `EncoderCore::degrade_attachment_reads`), or
 //! notes them for hazard tracking (`WorkCounts::resident_uses_noted`, `noted_apart.rs`), nor
 //! works out again the keys it reaches through what the encoder made resident alone but those
 //! its bound buffers name and the last draw's named (`WorkCounts::resident_keys_settled`), and
@@ -499,7 +499,7 @@ fn draws_announce_each_read_of_what_their_encoder_made_resident_their_pass_s_fra
 
 /// Draws of the entry shape whose encoder made their pass's attachment resident: each reads, in
 /// its fragment stage through what the encoder made resident, memory the attachment renders
-/// (`Device::degrade_attachment_reads`), and announces it at each occurrence, where the device
+/// (`EncoderCore::degrade_attachment_reads`), and announces it at each occurrence, where the device
 /// announces each, though those after the first keep the uses of what the encoder made resident:
 /// those found to share memory with an attachment are checked at each draw.
 #[test]

@@ -308,7 +308,12 @@ def fn_spans(text):
         semi = text.find(";", k)
         if b < 0 or (0 <= semi < b):
             continue
-        spans.append((b, close_of(text, b, "{", "}"), m.group(1)))
+        name = m.group(1)
+        # A public `Device` method's body on the generation that serves is `<name>_now`, beside
+        # the method that forwards to it (`device/line.rs`): its sites are the method's.
+        if name.endswith("_now") and re.search(r"self\.current\(\)\s*\." + name + r"\(", text):
+            name = name[: -len("_now")]
+        spans.append((b, close_of(text, b, "{", "}"), name))
     return spans
 
 

@@ -361,8 +361,12 @@ impl Device {
             memory_reads,
             owned: false,
             cache,
+            // The consumer made the `VkDevice`: the runtime cannot make it again once it is
+            // lost (`line.rs`).
+            line: None,
+            recipe: None,
         };
         // SAFETY: the caller's contract.
-        unsafe { Device::assemble(parts) }
+        unsafe { Device::assemble(parts) }.map(|device| device.root())
     }
 }

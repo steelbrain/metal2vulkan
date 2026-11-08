@@ -231,7 +231,7 @@ impl Again {
         pointer: NonNull<u8>,
         (length, window, class): (u64, ImportWindow, MemoryClass),
     ) -> Option<Again> {
-        let follows = device.pointer_imports_follow_their_address();
+        let follows = device.pointer_imports_follow_their_address_now();
         follows.then(|| Again {
             device: device.clone(),
             from: AgainFrom::Pointer(ImportedAt(pointer)),

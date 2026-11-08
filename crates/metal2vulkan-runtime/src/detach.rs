@@ -17,8 +17,10 @@
 //!   completed and answers `false`, detaching nothing; a heap's answers `false` at once. A later
 //!   submission of a command buffer, behind an event wait, holds nothing until it is submitted: a
 //!   detach while it waits detaches at once, whatever the command buffer's earlier submissions
-//!   held, which keep their pages until they complete. A lost device ends the wait
-//!   (`Err(DeviceLost)`). The wait holds no lock of the runtime's: a completion turn lets each
+//!   held, which keep their pages until they complete. A lost device ends the wait: where the
+//!   device recovers from the loss, refused as made before the recovery
+//!   (`NotImplemented(MadeBeforeRecovery)`, `device/line.rs`), else `Err(DeviceLost)`. The wait
+//!   holds no lock of the runtime's: a completion turn lets each
 //!   submission's hold go without one.
 //! - **A detach in a completed handler is a race on Metal, whose deterministic side is `true`.**
 //!   Metal releases what a command buffer used as it processes the completion, and that release
@@ -160,7 +162,7 @@ impl Device {
         heap: Option<&Heap>,
     ) -> Result<bool, Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         // The render encoders' calls and ends that their calls left to the device's lowering

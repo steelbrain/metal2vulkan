@@ -934,7 +934,7 @@ impl MeshWork {
     /// and buffers are.
     pub(crate) fn new(core: &EncoderCore, dispatch: &MeshDispatch) -> Result<MeshWork, Error> {
         let device = core.device().clone();
-        let queue = core.command_buffer().command_queue().id();
+        let queue = core.command_buffer().queue_place().id();
         let mut state = core.command_buffer().state();
         let mut words = dispatch.work.clone();
         let mut set = |at: usize, value: u32| match words.get_mut(at) {

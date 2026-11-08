@@ -507,17 +507,21 @@ impl CommandQueue {
     /// waits for nothing that needs a later submission of the runtime's (the scheduler submits
     /// only under this lock).
     pub unsafe fn with_vk_queue<R>(&self, f: impl FnOnce(vk::Queue, u32) -> R) -> R {
-        let shared = self.device().shared();
+        // The queue's place on the generation that serves, which keeps its `VkQueue`
+        // (`queue.rs`); a recovery that retires it has the queue take a new place, of its own.
+        let place = self.serving();
+        let device = place.device();
+        let shared = device.shared();
         // The caller's own submissions are GPU work of the program's: textures' host shadows are
         // read against the device's count of it (`texture/host_shadow.rs`).
         shared.program_gave_gpu_work();
         // The copies queued for the staging queue are made first, waited for: the caller's
         // submissions may read what they wrote (`texture/staging_copy.rs`). A failure there is a
         // lost device, which the caller's own submissions then meet.
-        let _ = self.device().flush_staging_waited();
+        let _ = device.flush_staging_waited();
         // The queue keeps this `VkQueue` for good from here on, so the caller's submissions there
         // stay in its order (`queue_share.rs`).
-        let vk_queue = self.pinned_vk_queue();
+        let vk_queue = place.pinned_vk_queue();
         let family = shared.queue_family_of(vk_queue);
         // Where the queue's failures are relayed, a mark after `f`'s submissions keeps a failure
         // of theirs the caller's (`device/relay.rs`); where freed memory waits for the work in
@@ -526,7 +530,7 @@ impl CommandQueue {
             f(queue, family)
         });
         if let Some(parking) = shared.parking.get() {
-            parking.watch(self.device());
+            parking.watch(device);
         }
         used
     }

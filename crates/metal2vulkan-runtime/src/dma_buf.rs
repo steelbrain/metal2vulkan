@@ -540,7 +540,7 @@ impl Device {
         again: &Again,
     ) -> Result<Pages, Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let refused = |_| Error::OutOfMemory(MemoryKind::Device);
         let shared = self.shared();

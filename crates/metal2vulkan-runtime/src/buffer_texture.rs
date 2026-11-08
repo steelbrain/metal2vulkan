@@ -836,7 +836,7 @@ impl Buffer {
         };
         if let Some((rotation, stored)) = rotation {
             if self.device().is_lost() {
-                return Err(Error::DeviceLost);
+                return Err(self.device().lost_refusal());
             }
             let rows = Texels::new(
                 self.clone(),
@@ -869,7 +869,7 @@ impl Buffer {
         let placed = plan_buffer_texture(&texture, &buffer)
             .map_err(|refusal| refusal_error(call, refusal))?;
         if self.device().is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.device().lost_refusal());
         }
         if let Some(alpha) = alpha_plane {
             let texels = Texels::placed(self.clone(), placed, texel_bytes, descriptor)

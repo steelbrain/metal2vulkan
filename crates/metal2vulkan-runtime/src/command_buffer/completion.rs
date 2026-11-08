@@ -176,6 +176,7 @@
 use super::gate::Hold;
 use super::CommandBufferShared;
 use crate::copied::CopiesReached;
+use crate::device::line::Culprit;
 use crate::device::lock;
 use crate::error::{CommandBufferError, Error, MemoryKind, VkResultCode};
 use crate::event::EventShared;
@@ -263,6 +264,9 @@ struct Pending {
     waiting: Vec<bool>,
     /// A waiter's failed wait or read, which every pending batch finishes with.
     failed: Option<CommandBufferError>,
+    /// A failure of the device's loss, which its line recovers from, named the loss's hang
+    /// ([`fail`]): every later failure's command buffers are that hang's victims.
+    hung: bool,
     /// The pending batches are being taken (`take_pending`): no waiter arms.
     holding: bool,
     /// A waiter makes a turn ([`turns`]): another leaves what it saw to that turn.
@@ -330,6 +334,7 @@ impl Completion {
                 taken: vec![0; queues],
                 waiting: vec![false; queues],
                 failed: None,
+                hung: false,
                 holding: false,
                 turning: false,
                 exiting: false,
@@ -382,10 +387,14 @@ impl Completion {
         });
         let parked = {
             let mut pending = lock(&self.watch.pending);
+            let lost = failed_with_loss(&mut pending, &batch);
             pending.queues[queue].push_back(batch);
-            pending.parked[queue]
+            (!lost).then_some(pending.parked[queue])
         };
-        self.watch.notify(&self.watch.wakes[queue], parked);
+        match parked {
+            Some(parked) => self.watch.notify(&self.watch.wakes[queue], parked),
+            None => self.watch.wake_all(),
+        }
     }
 
     /// Wait for `batch`, of a command buffer that needs no GPU work, taken with no submission and
@@ -401,7 +410,13 @@ impl Completion {
         );
         let parked = {
             let mut pending = lock(&self.watch.pending);
+            let lost = failed_with_loss(&mut pending, &batch);
             pending.queues[queue].push_back(batch);
+            if lost {
+                drop(pending);
+                self.watch.wake_all();
+                return;
+            }
             let owed = !pending.turning
                 && !pending.holding
                 && !pending.exiting
@@ -463,6 +478,27 @@ impl Completion {
             self.watch.woke.load(Ordering::Relaxed),
             self.watch.spared.load(Ordering::Relaxed),
         )
+    }
+
+    /// Every pending batch fails as on a lost device, the oldest incomplete one as the hang and
+    /// the rest as its victims ([`fail`]), at the next turn, where no failure is pending already:
+    /// a recovery's first step (`device/line.rs`), whose device a waiter's failed wait may not
+    /// have found lost (the test hook's, `Device::recover_for_test`).
+    pub(crate) fn fail_in_flight(&self) {
+        lock(&self.watch.pending)
+            .failed
+            .get_or_insert(CommandBufferError::DeviceLost);
+        self.watch.wake_all();
+    }
+
+    /// Whether nothing is pending, no failure waits for its turn and no turn is under way: a
+    /// recovery's wait for its lost device's command buffers to fail (`device/line.rs`).
+    pub(crate) fn settled(&self) -> bool {
+        let pending = lock(&self.watch.pending);
+        pending.failed.is_none()
+            && !pending.turning
+            && !pending.holding
+            && pending.queues.iter().all(VecDeque::is_empty)
     }
 
     /// Ask the waiters to end once nothing is pending, and wait for each but this one (the
@@ -735,15 +771,35 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
 /// First the device's queues are drained (`Device::drain_queues`): a failed command buffer lets go
 /// of its pools as it finishes, and a driver may still read them after the failed wait returned
 /// (MoltenVK 1.4.1, from its later completed handlers), until its own completion of the work ran.
+///
+/// A lost device its line recovers (`device/line.rs`) answers as Metal's GPU recovery does
+/// ([`Answers`]): the command buffer of the oldest incomplete batch fails as the hang
+/// (`GpuHang`), counted against its queue (`revocation.rs`), and every other as its victim
+/// (`GpuRecoveryVictim`), those of a later failure of the same loss too: a batch on its way to
+/// the driver as the device was lost, watched once this failure took the pending ones
+/// (`failed_with_loss`).
 fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBufferError) {
     let failed = take_pending(watch);
     let held = (ending.first().map(|buffer| buffer.device()))
         .or_else(|| failed.first().map(|(_, batch)| batch.buffer.device()));
+    let mut answers = Answers::Error(error);
     if let Some(device) = held {
         // Their writes into copied host buffers are merged back by the next turn, which compares
         // every copy (`copied.rs`).
         device.shared().copied.owe();
         device.drain_queues();
+        if error == CommandBufferError::DeviceLost && device.line().recovers() {
+            // One loss, one hang: a later failure of the lost device's batches (one watched
+            // after the first took the pending ones, `failed_with_loss`) answers victims alone.
+            let hung = lock(&watch.pending).hung;
+            answers = match hung {
+                true => Answers::Recovered(None),
+                false => Answers::recovered(device, &failed, ending.len()),
+            };
+            if matches!(answers, Answers::Recovered(Some(_))) {
+                lock(&watch.pending).hung = true;
+            }
+        }
     }
     let failed = failed.into_iter().filter_map(|(queue, batch)| {
         let Submitted {
@@ -767,7 +823,64 @@ fn fail(watch: &Watch, ending: Vec<Hold<CommandBufferShared>>, error: CommandBuf
         last.then_some(buffer)
     });
     for buffer in ending.into_iter().chain(failed) {
+        let error = answers.of(&buffer);
         CommandBufferShared::post_finished(buffer, Err(error));
+    }
+}
+
+/// How the command buffers a failed wait finishes fail ([`fail`]).
+enum Answers {
+    /// Each with the wait's error.
+    Error(CommandBufferError),
+    /// A lost device its line recovers: the culprit's command buffer as the hang, the rest as its
+    /// victims.
+    Recovered(Option<*const CommandBufferShared>),
+}
+
+impl Answers {
+    /// The answers of a loss of `device` its line recovers from, `failed` the pending batches in
+    /// each queue's order and `ending` more command buffers that fail with them. The culprit is
+    /// the command buffer of the oldest incomplete batch: on one `VkQueue` with work in flight,
+    /// its first pending batch, exactly (an in-order queue); on two or more, an inference, the
+    /// first pending batch of the queue whose command buffer was submitted first. Named on the
+    /// device's line, for its notice and the hold of its queue (`device/line.rs`).
+    fn recovered(device: &Device, failed: &[(usize, Submitted)], ending: usize) -> Answers {
+        // Each queue's first pending batch, of a command buffer that was submitted.
+        let mut fronts: Vec<&Submitted> = Vec::new();
+        let mut queue = None;
+        for (at, batch) in failed {
+            if queue != Some(*at) && batch.buffer.kernel.start() > 0 {
+                queue = Some(*at);
+                fronts.push(batch);
+            }
+        }
+        let culprit = fronts
+            .iter()
+            .min_by_key(|batch| batch.buffer.kernel.start());
+        let Some(culprit) = culprit else {
+            return Answers::Recovered(None);
+        };
+        let buffer = &culprit.buffer;
+        let failing = failed.iter().filter(|(_, batch)| batch.last).count() + ending;
+        device.line().named(Culprit {
+            queue: Arc::downgrade(buffer.queue.common()),
+            label: buffer.queue.label(),
+            inferred: fronts.len() > 1,
+            victims: failing.saturating_sub(1),
+        });
+        let culprit: &CommandBufferShared = buffer;
+        Answers::Recovered(Some(std::ptr::from_ref(culprit)))
+    }
+
+    /// The error `buffer` fails with.
+    fn of(&self, buffer: &CommandBufferShared) -> CommandBufferError {
+        match self {
+            Answers::Error(error) => *error,
+            Answers::Recovered(Some(culprit)) if std::ptr::eq(buffer, *culprit) => {
+                CommandBufferError::GpuHang
+            }
+            Answers::Recovered(_) => CommandBufferError::GpuRecoveryVictim,
+        }
     }
 }
 
@@ -925,6 +1038,20 @@ fn reached(pending: &mut Pending) -> Vec<(usize, Submitted)> {
             return finished;
         }
     }
+}
+
+/// Whether `batch`, watched under `pending`'s lock, is of a device lost already: it then fails with
+/// the loss at the next turn ([`fail`]), as one taken by the loss's failure does, though its
+/// submission went to the driver before the loss and its watch comes after that failure took the
+/// pending batches. Its own wait need not fail: the test hook's lost `VkDevice` runs it
+/// (`Device::recover_for_test`). Read under the lock, after the loss's failure was set under it
+/// (`Device::mark_lost`, then `Completion::fail_in_flight`), so one of the two sees the other.
+fn failed_with_loss(pending: &mut Pending, batch: &Submitted) -> bool {
+    let lost = batch.buffer.device().is_lost();
+    if lost {
+        pending.failed.get_or_insert(CommandBufferError::DeviceLost);
+    }
+    lost
 }
 
 /// Every pending batch, taken once no waiter is in a wait: a waiter may wait for a pending

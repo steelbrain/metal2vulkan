@@ -1977,6 +1977,20 @@ pub enum RuntimeGap {
     /// bytes it may reach through a root table), and a resolve target set on a texture a draw of
     /// the pass read.
     ColorAttachmentGroups,
+    /// An object made before its device's recovery from the loss of its `VkDevice` (the runtime
+    /// made a new `VkDevice` behind the device, announced as `Degradation::DeviceRecovered`;
+    /// `Device::recover_for_test` runs the same recovery). The object's Vulkan objects are the
+    /// lost `VkDevice`'s, which serves nothing more, and the runtime does not make them again on
+    /// the new one: a call that meets it with the new generation (an encoder's bind, a pipeline's
+    /// making from its functions, a buffer or texture placed in its heap) or that needs its own
+    /// lost `VkDevice` (its placements, its imports again, its event signals) is refused, where
+    /// Metal's object goes on. The same object made again on the device serves; a command
+    /// buffer made before the recovery fails as its victim (`GpuRecoveryVictim`).
+    MadeBeforeRecovery,
+    /// `Device::recover_for_test` on a device the consumer made (`Device::from_raw`): the runtime
+    /// cannot make a new `VkDevice` of the consumer's, so it recovers none, and the device is
+    /// left as it was. A real loss of such a device answers as a lost device does.
+    AdoptedDeviceRecovery,
 }
 
 /// The kind of memory that ran out.

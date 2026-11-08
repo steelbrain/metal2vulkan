@@ -31,7 +31,8 @@
 //! - **A stopped device is gone.** Once stopped, no holder takes the device, and a device made on
 //!   the same physical device makes a new one (`create.rs`) rather than revive it.
 
-use super::{lock, Device, DeviceShared, WeakDevice};
+use super::line::Line;
+use super::{lock, Device, DeviceShared, Pin, WeakDevice};
 use crate::exit_guard;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -115,16 +116,31 @@ impl Holds {
     }
 }
 
-/// The program's handle of `shared`, counted.
+/// The program's generation handle of `shared`, counted (`line.rs`).
 #[inline]
-fn program(shared: Arc<DeviceShared>) -> Device {
+pub(super) fn program(shared: Arc<DeviceShared>) -> Device {
     shared.holds.program.fetch_add(1, Ordering::SeqCst);
-    Device(shared, Share(None))
+    Device(Pin::Generation(shared), Share(None))
 }
 
-/// A new device's first handle, the program's.
-pub(super) fn first(shared: Arc<DeviceShared>) -> Device {
-    program(shared)
+/// The program's root handle of `line`, counted (`line.rs`): a new device's first handle, and
+/// each clone of a root.
+#[inline]
+pub(super) fn root(line: Arc<Line>) -> Device {
+    line.holds.program.fetch_add(1, Ordering::SeqCst);
+    Device(Pin::Root(super::RootCell::new(line)), Share(None))
+}
+
+/// A root handle of `line` for the program, a live device's again (`create.rs`): `None` where its
+/// holds were stopped, so that it goes, and a device made on the same physical device is a new
+/// one.
+pub(super) fn revive_root(line: Arc<Line>) -> Option<Device> {
+    let state = lock(&line.holds.state);
+    if state.stopped {
+        return None;
+    }
+    drop(state);
+    Some(root(line))
 }
 
 /// The registry a new device's handles share.
@@ -148,19 +164,10 @@ impl WeakDevice {
         }
         let shared = self.0.upgrade()?;
         state.holders += 1;
-        Some(Device(shared, Share(Some(Arc::clone(&self.1)))))
-    }
-
-    /// The device for the program, as [`WeakDevice::upgrade`]: `None` where it went, or its
-    /// holds were stopped, so that it goes.
-    pub(super) fn revive(&self) -> Option<Device> {
-        let state = lock(&self.1.state);
-        if state.stopped {
-            return None;
-        }
-        let shared = self.0.upgrade()?;
-        drop(state);
-        Some(program(shared))
+        Some(Device(
+            Pin::Generation(shared),
+            Share(Some(Arc::clone(&self.1))),
+        ))
     }
 }
 
@@ -168,11 +175,13 @@ impl Device {
     /// Whether `holder`, which holds the device through [`WeakDevice::hold`], goes on with its
     /// next step: `false` once the program's last drop stopped the holds.
     pub(crate) fn holds_go_on(&self, holder: Holder) -> bool {
-        let holds = &self.0.holds;
+        let shared = self.shared();
+        let holds = &shared.holds;
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         holds.held(holder).pass();
         let _ = holder;
-        !holds.stopping()
+        // A lost generation's holders stop too: the generation serves nothing more (`line.rs`).
+        !holds.stopping() && !shared.lost()
     }
 }
 
@@ -180,9 +189,13 @@ impl Clone for Device {
     // Inlined where it is the program's, as every handle but the holders' is: its count alone.
     #[inline]
     fn clone(&self) -> Device {
-        match &(self.1).0 {
-            Some(holds) => holder_clone(self, holds),
-            None => program(Arc::clone(&self.0)),
+        match (&self.0, &(self.1).0) {
+            (_, Some(holds)) => holder_clone(self, holds),
+            (Pin::Generation(shared), None) => program(Arc::clone(shared)),
+            (Pin::Root(cell), None) => {
+                cell.line.holds.program.fetch_add(1, Ordering::SeqCst);
+                Device(Pin::Root(Arc::clone(cell)), Share(None))
+            }
         }
     }
 }
@@ -193,7 +206,10 @@ impl Clone for Device {
 fn holder_clone(device: &Device, holds: &Arc<Holds>) -> Device {
     let mut state = lock(&holds.state);
     state.holders += 1;
-    Device(Arc::clone(&device.0), Share(Some(Arc::clone(holds))))
+    Device(
+        Pin::Generation(Arc::clone(device.shared_arc())),
+        Share(Some(Arc::clone(holds))),
+    )
 }
 
 impl Drop for Device {
@@ -205,10 +221,19 @@ impl Drop for Device {
         if (self.1).0.is_some() {
             return;
         }
-        if self.0.holds.program.fetch_sub(1, Ordering::SeqCst) > 1 {
+        // The line's holds, which each generation holds too: a generation handle reads them at
+        // its own generation, as it reads the rest.
+        let holds = match &self.0 {
+            Pin::Generation(shared) => &shared.holds,
+            Pin::Root(root) => &root.line.holds,
+        };
+        if holds.program.fetch_sub(1, Ordering::SeqCst) > 1 {
             return;
         }
-        last_drop(&self.0.holds);
+        last_drop(holds);
+        // The line lets go of the generation it serves, which goes once nothing else holds it:
+        // there, or as this handle's own share goes (`line.rs`).
+        self.line().release();
     }
 }
 

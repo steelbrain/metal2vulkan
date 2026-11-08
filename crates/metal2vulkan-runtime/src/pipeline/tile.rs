@@ -67,6 +67,16 @@ impl Device {
         descriptor: &TileRenderPipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<RenderPipelineState, Error> {
+        self.current()
+            .new_tile_render_pipeline_state_now(descriptor, options)
+    }
+
+    /// [`Device::new_tile_render_pipeline_state`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_tile_render_pipeline_state_now(
+        &self,
+        descriptor: &TileRenderPipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<RenderPipelineState, Error> {
         TileState::create(self, descriptor, options, None).map(RenderPipelineState::of_tile)
     }
 
@@ -77,6 +87,17 @@ impl Device {
     /// [`TileRenderPipelineDescriptor::reflection`]'s (its tile bindings), under the creation's
     /// budget; what it refuses refuses the call (`Unsupported`, `Compile`).
     pub fn new_tile_render_pipeline_state_with_reflection(
+        &self,
+        descriptor: &TileRenderPipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error> {
+        self.current()
+            .new_tile_render_pipeline_state_with_reflection_now(descriptor, options)
+    }
+
+    /// [`Device::new_tile_render_pipeline_state_with_reflection`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn new_tile_render_pipeline_state_with_reflection_now(
         &self,
         descriptor: &TileRenderPipelineDescriptor,
         options: &PipelineOptions,

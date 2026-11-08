@@ -114,7 +114,7 @@ impl BoundsPass {
         .ok_or_else(refused)?;
         let plan = device.owned_kernel(OwnedModule::IndexBoundsPlan)?;
         let fill = device.owned_kernel(OwnedModule::IndexBoundsFill)?;
-        let queue = core.command_buffer().command_queue().id();
+        let queue = core.command_buffer().queue_place().id();
         let (words, pool, status) = {
             let mut state = core.command_buffer().state();
             let words =

@@ -432,12 +432,25 @@ impl Device {
     /// no family. The module docs say how each family's rows are chosen and judged;
     /// [`family_blockers`](Device::family_blockers) names what keeps a family false.
     pub fn supports_family(&self, family: i64) -> bool {
-        GpuFamily::from_raw(family)
-            .is_some_and(|family| self.family_rows(family).iter().all(|r| !r.state.blocks()))
+        self.current().supports_family_now(family)
+    }
+
+    /// [`Device::supports_family`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn supports_family_now(&self, family: i64) -> bool {
+        GpuFamily::from_raw(family).is_some_and(|family| {
+            self.family_rows_now(family)
+                .iter()
+                .all(|r| !r.state.blocks())
+        })
     }
 
     /// Every row `family` lists, with its state on this device.
     pub fn family_rows(&self, family: GpuFamily) -> Vec<RowAudit> {
+        self.current().family_rows_now(family)
+    }
+
+    /// [`Device::family_rows`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn family_rows_now(&self, family: GpuFamily) -> Vec<RowAudit> {
         let compile = self.compile_device();
         let format = |pf: PixelFormat| self.format_answers(pf);
         audit(
@@ -455,7 +468,12 @@ impl Device {
     /// their states: the family's burn-down. Empty exactly where
     /// [`supports_family`](Device::supports_family) is true.
     pub fn family_blockers(&self, family: GpuFamily) -> Vec<RowAudit> {
-        let mut rows = self.family_rows(family);
+        self.current().family_blockers_now(family)
+    }
+
+    /// [`Device::family_blockers`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn family_blockers_now(&self, family: GpuFamily) -> Vec<RowAudit> {
+        let mut rows = self.family_rows_now(family);
         rows.retain(|r| r.state.blocks());
         rows
     }
@@ -463,6 +481,11 @@ impl Device {
     /// The texture capabilities of Apple's tables the runtime gives `format` on this device:
     /// the answer each format row is judged by ([`FormatCapability`] says how each is decided).
     pub fn pixel_format_capabilities(&self, format: PixelFormat) -> FormatCapabilities {
+        self.current().pixel_format_capabilities_now(format)
+    }
+
+    /// [`Device::pixel_format_capabilities`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn pixel_format_capabilities_now(&self, format: PixelFormat) -> FormatCapabilities {
         self.format_answers(format).capabilities()
     }
 }

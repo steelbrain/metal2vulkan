@@ -36,6 +36,11 @@ impl Device {
     /// Fails only where the answer cannot be found: out of host memory for the page, or the
     /// device lost. The device's refusal of the pointer is no failure but the answer, false.
     pub fn imports_shared_host_pointers(&self) -> Result<bool, Error> {
+        self.current().imports_shared_host_pointers_now()
+    }
+
+    /// [`Device::imports_shared_host_pointers`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn imports_shared_host_pointers_now(&self) -> Result<bool, Error> {
         let shared = self.shared();
         if let Some(&answer) = shared.shared_pointer_imports.get() {
             return Ok(answer);
@@ -44,7 +49,7 @@ impl Device {
             return Ok(false);
         };
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let unit = importer.page.max(importer.alignment);
         let memory = SharedPages::new(2 * unit).ok_or(Error::OutOfMemory(MemoryKind::Host))?;

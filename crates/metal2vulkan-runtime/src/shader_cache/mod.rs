@@ -717,6 +717,12 @@ impl ShaderCache {
         length
     }
 
+    /// The directory's root, which every generation of the device's line shares
+    /// (`device/line.rs`, `Device::shader_cache_directory`).
+    pub(super) fn directory_root(&self) -> std::path::PathBuf {
+        self.store.directory().root().to_owned()
+    }
+
     /// What the directory cost this device: its time, the asking threads' apart from the cache
     /// thread's, and the entries an asking thread wrote itself
     /// (`WorkCounts::shader_cache_read_nanos` and its fellows).
@@ -768,11 +774,17 @@ impl ShaderCache {
 impl Device {
     /// The device's shader cache counts since it was made. No Metal counterpart.
     pub fn shader_cache_statistics(&self) -> ShaderCacheStatistics {
+        self.current().shader_cache_statistics_now()
+    }
+
+    /// [`Device::shader_cache_statistics`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn shader_cache_statistics_now(&self) -> ShaderCacheStatistics {
         self.shared().shader_cache.statistics()
     }
 
-    /// The device's shader cache directory. No Metal counterpart.
+    /// The device's shader cache directory, the same through its GPU's recoveries. No Metal
+    /// counterpart.
     pub fn shader_cache_directory(&self) -> &Path {
-        self.shared().shader_cache.store.directory().root()
+        &self.line().invariant.cache_directory
     }
 }

@@ -2072,6 +2072,15 @@ impl Device {
     /// answers nil, its validation stopping it), `Memoryless` storage
     /// (`Invalid`).
     pub fn new_buffer(&self, length: u64, options: ResourceOptions) -> Result<Buffer, Error> {
+        self.current().new_buffer_now(length, options)
+    }
+
+    /// [`Device::new_buffer`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_buffer_now(
+        &self,
+        length: u64,
+        options: ResourceOptions,
+    ) -> Result<Buffer, Error> {
         self.new_buffer_placed(length, options, AddressPlacement::Any)
     }
 
@@ -2319,7 +2328,7 @@ impl Device {
             NewBufferOf::Runtime(fresh) => (false, fresh),
         };
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         let raw_device = shared.vk();
@@ -2349,7 +2358,7 @@ impl Device {
         let wants_fresh = !of_heap
             && fresh_pages::takes_fresh_pages(size, class)
             && shared.host_import.is_ok()
-            && (fresh == FreshPages::Wherever || self.fresh_pages_pay());
+            && (fresh == FreshPages::Wherever || self.fresh_pages_pay_now());
         let making = (!of_heap && fresh == FreshPages::WherePaid).then_some(BufferMaking {
             size,
             class,
@@ -2530,7 +2539,7 @@ impl Device {
         required: vk::MemoryRequirements,
     ) -> Result<Buffer, Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let modes = Modes::of(ResourceOptions::private())?;
         let shared = self.shared();

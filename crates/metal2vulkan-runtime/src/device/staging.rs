@@ -185,7 +185,7 @@ impl StagingLock<'_> {
     ) -> Result<u64, Error> {
         let device = self.device;
         if device.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(device.lost_refusal());
         }
         let shared = device.shared();
         let raw = shared.vk();
@@ -321,7 +321,7 @@ fn wait_for(device: &Device, timeline: vk::Semaphore, value: u64) -> Result<(), 
     let slice = WAIT_SLICE.as_nanos() as u64;
     while !reached(device, timeline, value, slice)? {
         if device.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(device.lost_refusal());
         }
     }
     Ok(())

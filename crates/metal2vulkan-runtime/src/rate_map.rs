@@ -368,6 +368,14 @@ impl Device {
         &self,
         descriptor: &RateMapDescriptor,
     ) -> Result<RasterizationRateMap, Error> {
+        self.current().new_rasterization_rate_map_now(descriptor)
+    }
+
+    /// [`Device::new_rasterization_rate_map`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_rasterization_rate_map_now(
+        &self,
+        descriptor: &RateMapDescriptor,
+    ) -> Result<RasterizationRateMap, Error> {
         let released = self
             .shared()
             .layered_rate_map_released
@@ -605,7 +613,7 @@ impl RasterizationRateMap {
     pub fn copy_parameter_data_to_buffer(&self, buffer: &Buffer, offset: u64) -> Result<(), Error> {
         const CALL: &str = "copy_parameter_data_to_buffer";
         if !buffer.device().same(&self.0.device) {
-            return Err(invalid(CALL, Problem::ForeignObject));
+            return Err(buffer.device().foreign(CALL, &self.0.device));
         }
         let Some(contents) = buffer.contents() else {
             return Err(invalid(CALL, Problem::StorageMode));

@@ -19,7 +19,7 @@
 
 use super::binary_archive::container::{write_file, WriteFailure};
 use super::device::{device_error, lock};
-use super::error::{invalid, DynamicLibraryError, Error, Problem};
+use super::error::{DynamicLibraryError, Error};
 use super::library::Library;
 use super::Device;
 use metal2vulkan::pipeline::StageSource;
@@ -45,8 +45,16 @@ impl Device {
     /// code reads a function constant is refused (`Compile(InvalidDescriptor(DynamicLibrary))`),
     /// as Metal refuses each. A library of another device is refused (`Invalid(ForeignObject)`).
     pub fn new_dynamic_library(&self, library: &Library) -> Result<DynamicLibrary, Error> {
+        self.current().new_dynamic_library_now(library)
+    }
+
+    /// [`Device::new_dynamic_library`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_dynamic_library_now(
+        &self,
+        library: &Library,
+    ) -> Result<DynamicLibrary, Error> {
         if !library.device().same(self) {
-            return Err(invalid("new_dynamic_library", Problem::ForeignObject));
+            return Err(library.device().foreign("new_dynamic_library", self));
         }
         self.dynamic_library(library.compile_library().clone())
     }
@@ -61,6 +69,14 @@ impl Device {
     /// `new_dynamic_library` takes is refused as it refuses it, where Metal's answer for a file is
     /// not measured.
     pub fn new_dynamic_library_with_url(&self, url: &Path) -> Result<DynamicLibrary, Error> {
+        self.current().new_dynamic_library_with_url_now(url)
+    }
+
+    /// [`Device::new_dynamic_library_with_url`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_dynamic_library_with_url_now(
+        &self,
+        url: &Path,
+    ) -> Result<DynamicLibrary, Error> {
         let bytes = std::fs::read(url).map_err(|error| {
             Error::DynamicLibrary(DynamicLibraryError::Read {
                 path: url.to_path_buf(),

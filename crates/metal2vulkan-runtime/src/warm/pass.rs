@@ -233,6 +233,11 @@ impl Device {
     ///   render pipeline's record is counted and not made (its creation keeps nothing past the
     ///   state); a layout that bakes an immutable sampler is translated only.
     pub fn warm(&self, records: Vec<PipelineRecord>, byte_budget: u64) {
+        self.current().warm_now(records, byte_budget)
+    }
+
+    /// [`Device::warm`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn warm_now(&self, records: Vec<PipelineRecord>, byte_budget: u64) {
         let warmer = &self.shared().warmer;
         let mut queue = lock(&warmer.queue);
         queue.calls.push_back(Call {

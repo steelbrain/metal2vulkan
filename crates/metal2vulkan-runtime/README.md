@@ -603,6 +603,35 @@ names the first with the error `VK_TIMEOUT`, counted: `WorkCounts::draws_dropped
 `dispatches_dropped_still_making`, announced `draw-dropped-still-making` and
 `dispatch-dropped-still-making`. `PipelineWaitPolicy::Exact` waits until the pipeline is made.
 
+## A lost device
+
+A device the runtime made survives the loss of its `VkDevice` (`VK_ERROR_DEVICE_LOST`), as Metal's
+device survives a GPU recovery. The first call that needs the device after the loss makes a new
+`VkDevice` of the same physical device, options, queue families and extensions; the calls made
+meanwhile wait for it.
+
+- The command buffers in flight fail: the oldest incomplete one with `GpuHang`, the rest with
+  `GpuRecoveryVictim`. Until the recovery, a command buffer committed on the hang's queue runs
+  nothing and completes with no error, as on Metal's hang's queue. One made before the recovery
+  and committed after fails with `GpuRecoveryVictim`. A queue's second hang revokes it
+  (`AccessRevoked`), as Metal's does.
+- The `Device` and its `CommandQueue`s go on: what they make from then on is made on the new
+  `VkDevice`.
+- An object made before the recovery is refused where it meets the new `VkDevice` (an encoder's
+  bind, a pipeline made from its functions) and in its own calls that need its lost one:
+  `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. Make it again. Metal's objects go on.
+- The lost `VkDevice` is destroyed once the objects made on it went and, where `Device::raw`
+  answered its handles, a later `raw` call answered the new one's: `WorkCounts::vk_devices_live`
+  reads 2 until then. `vk_devices_made` and `device_recoveries` count the rest.
+- Each recovery is announced (`device-recovered`), naming the hang's command buffer.
+- `Device::raw` answers the new `VkDevice`'s handles once a later call asks; the handles it
+  answered before stay valid until then.
+- A device the consumer made (`Device::from_raw`) is not made again: it answers `DeviceLost` from
+  the loss on.
+
+`Device::recover_for_test` runs the same recovery with no GPU fault, for tests of what survives
+one.
+
 ## Degrade notices
 
 Where the runtime gives Metal's answer only at a cost Metal does not pay (a copy, a scratch

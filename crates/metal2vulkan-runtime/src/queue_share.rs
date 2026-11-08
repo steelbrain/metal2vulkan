@@ -784,6 +784,11 @@ impl Device {
     /// benchmarks that hold a device's command queues to the mapping they measure.
     #[doc(hidden)]
     pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool {
+        self.current().settle_queue_switch_check_now(timeout)
+    }
+
+    /// [`Device::settle_queue_switch_check`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn settle_queue_switch_check_now(&self, timeout: Duration) -> bool {
         self.start_queue_switch_check();
         self.shared().queue_switch.wait(timeout)
     }
@@ -793,6 +798,11 @@ impl Device {
     /// assert a queue joined another's `VkQueue` where the device shares.
     #[doc(hidden)]
     pub fn shares_vk_queues(&self) -> bool {
+        self.current().shares_vk_queues_now()
+    }
+
+    /// [`Device::shares_vk_queues`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn shares_vk_queues_now(&self) -> bool {
         self.shares_queues()
     }
 
@@ -801,6 +811,11 @@ impl Device {
     /// for the lanes and benchmarks that report it.
     #[doc(hidden)]
     pub fn queue_switch_check_report(&self) -> String {
+        self.current().queue_switch_check_report_now()
+    }
+
+    /// [`Device::queue_switch_check_report`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn queue_switch_check_report_now(&self) -> String {
         let switch = &self.shared().queue_switch;
         let took = match switch.took.load(Ordering::Acquire) {
             0 => "not run here".to_owned(),

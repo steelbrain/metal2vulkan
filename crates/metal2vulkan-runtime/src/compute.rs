@@ -2093,7 +2093,7 @@ fn planned_as_before(
 ///   what a used resource states of it beyond that, its buffers' addresses, which only a no-copy
 ///   buffer's move changes, and whether each indirect command buffer holds its ID's slot, which a
 ///   buffer made later with the ID takes: `Residency::holds_slots_as`), of the device's live
-///   sampler states (`Device::sampler_slots_changed`), of the state's visible-function tables
+///   sampler states (`DeviceShared::sampler_slots_changed`), of the state's visible-function tables
 ///   (none: a dispatch of a state that made one takes no memo), and of the sampler maps, which
 ///   are the table's and the residency's. The kept state is this entry's: a dispatch that brings
 ///   it in place keeps its own entry or none (`LiveDispatch::let_go`).
@@ -2120,7 +2120,7 @@ pub(super) struct KeptDispatch {
     forms: BufferForms,
     /// The residency's generation (`Residency::generation`).
     residency: u64,
-    /// `buffer::host_cells_moved` and `Device::sampler_slots_changed` as it was settled.
+    /// `buffer::host_cells_moved` and `DeviceShared::sampler_slots_changed` as it was settled.
     counted: (u64, u64),
     settled: SettledDispatch,
     commands: OnceLock<DispatchCommands>,
@@ -2216,7 +2216,7 @@ fn record(
             let memo = direct.filter(|_| function_tables.is_empty());
             let moved = super::buffer::host_cells_moved();
             let held = memo.is_some_and(|dispatch| {
-                let counted = (moved, core.device().sampler_slots_changed());
+                let counted = (moved, core.generation().sampler_slots_changed());
                 live.memo.holds(&live.state, tables, &dispatch, counted)
             });
             if held {

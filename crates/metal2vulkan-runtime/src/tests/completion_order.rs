@@ -288,7 +288,7 @@ fn a_handler_thread_held_off_the_cpu_after_a_wait_returned_keeps_the_order() {
     let word = device.new_buffer(256, ResourceOptions::private()).unwrap();
     let event = device.new_event().unwrap();
     let contexts = &device.shared().contexts;
-    contexts.pause_after_items(first.id(), PAUSE);
+    contexts.pause_after_items(first.serving().id(), PAUSE);
     let before = device.work_counts();
     let mut broken = Broken::default();
     for value in 1..=u64::from(PAUSED_ROUNDS) {

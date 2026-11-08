@@ -1,14 +1,16 @@
 //! A detach waiting for submitted work settles when the device is lost (`detach.rs`): a no-copy
 //! buffer a submitted kernel names, spinning until the host raises a word, is detached on another
 //! thread, which blocks; the device is then marked lost (as `device/relay.rs` marks it), the word
-//! not yet raised, and the detach answers `Err(DeviceLost)` within its poll.
+//! not yet raised, and the detach answers within its poll: the device recovers from the loss
+//! (`device/line.rs`), and the buffer, made before, is refused
+//! (`NotImplemented(MadeBeforeRecovery)`).
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects, and on a GPU only with `m2v_gpu_hazards` too (docs/VALIDATION.md). It is a GPU
 //! hazard: one dispatch spins up to 2^25 loads (about 4.5 s on the M3 Max, 2 s on RADV) where the
 //! GPU does not see the host raise the word while the kernel runs, past what Metal ends as a hang.
 
-use crate::error::Error;
+use crate::error::{Error, RuntimeGap};
 use crate::{
     ComputePipelineState, Device, DeviceKind, DeviceOptions, HostMemory, PipelineOptions,
     ResourceOptions, ShaderCacheOptions, Size,
@@ -102,8 +104,8 @@ fn spin(device: &Device) -> ComputePipelineState {
         .unwrap()
 }
 
-/// A buffer's detach blocked on submitted work that took it answers `Err(DeviceLost)` once the
-/// device is lost, the work not yet complete.
+/// A buffer's detach blocked on submitted work that took it answers once the device is lost, the
+/// work not yet complete: refused as made before the device's recovery.
 #[test]
 fn a_detach_waiting_for_submitted_work_settles_on_a_lost_device() {
     let host = Host::new();
@@ -163,6 +165,9 @@ fn a_detach_waiting_for_submitted_work_settles_on_a_lost_device() {
         // The GPU is never left spinning.
         raise();
         assert!(waited, "the detach did not wait for the submitted work");
-        assert_eq!(answer, Err(Error::DeviceLost));
+        assert_eq!(
+            answer,
+            Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery))
+        );
     });
 }

@@ -330,7 +330,7 @@ fn through_backing(
     reason: impl FnOnce() -> String,
 ) -> Result<(), Error> {
     attachment_stand_in::check_copies(&color.target)?;
-    let queue = maker.command_queue().id();
+    let queue = maker.queue_place().id();
     let own = color.target.clone();
     color.target = attachment_stand_in::kept_backing(maker, &own, queue, true)?;
     let format = own.texture.pixel_format();

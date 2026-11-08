@@ -396,6 +396,13 @@ driver's. Each is open work.
   `extended range, wide attached` 10.7 to 12.4 ms against 2.5 to 2.7 ms; every other case keeps
   its instances and its time.
 
+- **A make whose own submission is the first to meet a lost `VkDevice` is refused
+  `DeviceLost`** (`device/line.rs`): where a call's own work on the device (a staging upload of a
+  buffer's or texture's bytes, an internal submission) finds the `VkDevice` lost before any wait
+  did, that call answers `DeviceLost`, and the next call makes the new `VkDevice`; Metal's object
+  creation never fails because of a hang. Where a wait found the loss first, the call waits for
+  the recovery and goes on.
+
 - **A copied host buffer costs O(its size) at every batch's completion that may have written
   it, and at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`): each
   compares every byte of the copy with the bytes the copy and the pages last agreed on, a page at

@@ -71,6 +71,11 @@ pub struct WarmStatistics {
 impl Device {
     /// No Metal counterpart: the device's pipeline records and warm passes since it was made.
     pub fn warm_statistics(&self) -> WarmStatistics {
+        self.current().warm_statistics_now()
+    }
+
+    /// [`Device::warm_statistics`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn warm_statistics_now(&self) -> WarmStatistics {
         let shared = self.shared();
         let read = |counter: &std::sync::atomic::AtomicU64| counter.load(Ordering::Relaxed);
         let mut statistics = WarmStatistics {

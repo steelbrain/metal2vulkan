@@ -233,7 +233,7 @@ impl ResourceStateCommandEncoder {
             .device()
             .same(self.open.command_buffer.device())
         {
-            return Err(invalid(CALL, Problem::ForeignObject));
+            return Err((indirect_buffer.device()).foreign(CALL, self.open.command_buffer.device()));
         }
         let Some(sparse) = self.sparse(CALL, texture)? else {
             return Ok(());
@@ -366,7 +366,9 @@ impl ResourceStateCommandEncoder {
     /// Refused (`Invalid`): a fence of another device.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
         if !fence.device().same(self.open.command_buffer.device()) {
-            return Err(invalid("update_fence", Problem::ForeignObject));
+            return Err(fence
+                .device()
+                .foreign("update_fence", self.open.command_buffer.device()));
         }
         let key = fence.key();
         if !self.fence_updates.contains(&key) {
@@ -385,7 +387,9 @@ impl ResourceStateCommandEncoder {
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
         const CALL: &str = "wait_for_fence";
         if !fence.device().same(self.open.command_buffer.device()) {
-            return Err(invalid(CALL, Problem::ForeignObject));
+            return Err(fence
+                .device()
+                .foreign(CALL, self.open.command_buffer.device()));
         }
         let key = fence.key();
         if !self.waits.contains(&key) {
@@ -455,7 +459,9 @@ impl ResourceStateCommandEncoder {
         texture: &'a Texture,
     ) -> Result<Option<&'a SparseImage>, Error> {
         if !texture.device().same(self.open.command_buffer.device()) {
-            return Err(invalid(call, Problem::ForeignObject));
+            return Err(texture
+                .device()
+                .foreign(call, self.open.command_buffer.device()));
         }
         Ok(texture.sparse_image())
     }

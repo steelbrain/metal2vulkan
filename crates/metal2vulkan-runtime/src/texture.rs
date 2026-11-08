@@ -1648,6 +1648,11 @@ impl Device {
     /// holds no slot, and counts in no plain allocation or reservation, otherwise made as here (a
     /// runtime extension, for a caller's helper texture).
     pub fn new_texture(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error> {
+        self.current().new_texture_now(descriptor)
+    }
+
+    /// [`Device::new_texture`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_texture_now(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error> {
         const CALL: &str = "new_texture";
         self.keep_room();
         let descriptor = &self.texture_options(CALL, descriptor)?;
@@ -1676,7 +1681,17 @@ impl Device {
         descriptor: &TextureDescriptor,
         token: RangeToken,
     ) -> Result<Texture, Error> {
-        let texture = self.new_texture(descriptor)?;
+        self.current()
+            .new_texture_with_range_token_now(descriptor, token)
+    }
+
+    /// [`Device::new_texture_with_range_token`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_texture_with_range_token_now(
+        &self,
+        descriptor: &TextureDescriptor,
+        token: RangeToken,
+    ) -> Result<Texture, Error> {
+        let texture = self.new_texture_now(descriptor)?;
         texture.keep_range_token(token)?;
         Ok(texture)
     }
@@ -1736,7 +1751,7 @@ impl Device {
         }
         self.check_texture_placement(call, descriptor.placement, descriptor.usage, texture_type)?;
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let facts = self
             .shared()
@@ -2162,7 +2177,7 @@ impl Device {
             ));
         }
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         if layout.texture_type == TextureType::TextureBuffer {
             return self.new_texture_buffer(descriptor, &layout, id_use, TexelsHome::Buffer);

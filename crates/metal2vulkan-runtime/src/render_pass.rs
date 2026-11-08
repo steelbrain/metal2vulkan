@@ -1492,7 +1492,7 @@ pub(super) fn layout(
     descriptor: &RenderPassDescriptor,
 ) -> Result<PassLayout, Error> {
     let device = maker.device();
-    let foreign = || invalid(call, Problem::ForeignObject);
+    let foreign = |other: &Device| other.foreign(call, device);
     let not_yet = || Error::NotImplemented(RuntimeGap::Render);
     // Each attachment's load and store actions as the pass takes them ([`taken_actions`]): a
     // depth attachment's `CustomSampleDepthStore` as `Store` (a color or stencil attachment's is
@@ -1548,7 +1548,7 @@ pub(super) fn layout(
         let unresolved = color.resolve_texture.is_none() && !color.store_action.resolves();
         if unresolved && AstcDecode::of(texture.pixel_format()).is_some() {
             if !texture.device().same(device) {
-                return Err(foreign());
+                return Err(foreign(texture.device()));
             }
             let facts = Facts::of(texture.record());
             let sub = check_target(
@@ -1752,7 +1752,7 @@ pub(super) fn layout(
     let extents = &extents[..attached];
     if let Some(buffer) = &descriptor.visibility_result_buffer {
         if !buffer.device().same(device) {
-            return Err(foreign());
+            return Err(foreign(buffer.device()));
         }
     }
     let (extent, samples) = area(
@@ -1863,7 +1863,7 @@ fn target(
     length: u64,
 ) -> Result<Target, Error> {
     if !texture.device().same(device) {
-        return Err(invalid(call, Problem::ForeignObject));
+        return Err(texture.device().foreign(call, device));
     }
     let facts = Facts::of(texture.record());
     let sub = check_target(call, which, &facts, subresource, length)?;

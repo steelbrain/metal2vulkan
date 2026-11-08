@@ -192,7 +192,7 @@ pub(super) fn check_descriptor(
         return Ok(());
     };
     if !map.device().same(device) {
-        return Err(invalid(call, Problem::ForeignObject));
+        return Err(map.device().foreign(call, device));
     }
     let state = map.state();
     let layers = state.layer_count();

@@ -2629,6 +2629,7 @@ field	metal2vulkan-runtime::WorkCounts.device_checks	pub device_checks: DeviceCh
 field	metal2vulkan-runtime::WorkCounts.device_copy_textures	pub device_copy_textures: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_allocated	pub device_memory_allocated: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_overflows	pub device_memory_overflows: u64
+field	metal2vulkan-runtime::WorkCounts.device_recoveries	pub device_recoveries: u64
 field	metal2vulkan-runtime::WorkCounts.device_wide_line_draws	pub device_wide_line_draws: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_gated	pub dirty_copies_in_gated: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_skipped	pub dirty_copies_in_skipped: u64
@@ -3122,6 +3123,8 @@ field	metal2vulkan-runtime::WorkCounts.variants_taken_back	pub variants_taken_ba
 field	metal2vulkan-runtime::WorkCounts.view_shadows	pub view_shadows: u64
 field	metal2vulkan-runtime::WorkCounts.views_through_swizzle	pub views_through_swizzle: u64
 field	metal2vulkan-runtime::WorkCounts.visibility_queries_begun	pub visibility_queries_begun: u64
+field	metal2vulkan-runtime::WorkCounts.vk_devices_live	pub vk_devices_live: u64
+field	metal2vulkan-runtime::WorkCounts.vk_devices_made	pub vk_devices_made: u64
 field	metal2vulkan-runtime::WorkCounts.wait_behind_idle_stall_longest_nanos	pub wait_behind_idle_stall_longest_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_command_buffer_waiters	pub wakes_command_buffer_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_completion_waiters	pub wakes_completion_waiters: u64
@@ -5198,6 +5201,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncod
 macro-member	metal2vulkan-runtime::Degradation::DevicePackConversion	DevicePackConversion = "device-pack-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DevicePointSize	DevicePointSize = "device-point-size";
 macro-member	metal2vulkan-runtime::Degradation::DeviceRayIntersection	DeviceRayIntersection = "device-ray-intersection";
+macro-member	metal2vulkan-runtime::Degradation::DeviceRecovered	DeviceRecovered = "device-recovered", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DeviceRoundedResolve	DeviceRoundedResolve = "device-rounded-resolve", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceSampleLevel	DeviceSampleLevel = "device-sample-level";
 macro-member	metal2vulkan-runtime::Degradation::DeviceSampling	DeviceSampling = "device-sampling";
@@ -7996,6 +8000,7 @@ method	metal2vulkan-runtime::Device::private_properties	pub fn private_propertie
 method	metal2vulkan-runtime::Device::properties	pub fn properties(&self) -> &DeviceProperties
 method	metal2vulkan-runtime::Device::queue_switch_check_report	pub fn queue_switch_check_report(&self) -> String
 method	metal2vulkan-runtime::Device::raw	pub unsafe fn raw(&self) -> DeviceHandles<'_>
+method	metal2vulkan-runtime::Device::recover_for_test	pub fn recover_for_test(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::Device::registry_id	pub fn registry_id(&self) -> u64
 method	metal2vulkan-runtime::Device::registry_ids_with	pub fn registry_ids_with(options: &DeviceOptions) -> Result<Vec<u64>, Error>
 method	metal2vulkan-runtime::Device::reserve_address_pool	pub fn reserve_address_pool(&self, placement: AddressPlacement, length: u64) -> Result<AddressPool, Error>
@@ -9608,7 +9613,7 @@ struct	metal2vulkan-runtime::Buffer	#[derive(Clone)] pub struct Buffer(Arc<Buffe
 struct	metal2vulkan-runtime::BufferDescriptor	#[derive(Debug, Default)] #[non_exhaustive] pub struct BufferDescriptor<'a>
 struct	metal2vulkan-runtime::ClearColor	#[derive(Clone, Copy, Debug, PartialEq)] pub struct ClearColor
 struct	metal2vulkan-runtime::CommandBuffer	#[derive(Clone)] pub struct CommandBuffer(Arc<CommandBufferShared>)
-struct	metal2vulkan-runtime::CommandQueue	#[derive(Clone)] pub struct CommandQueue(Arc<QueueShared>)
+struct	metal2vulkan-runtime::CommandQueue	#[derive(Clone)] pub struct CommandQueue(Arc<QueueLine>)
 struct	metal2vulkan-runtime::CommitFailure	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct CommitFailure
 struct	metal2vulkan-runtime::ComputeCommandEncoder	pub struct ComputeCommandEncoder
 struct	metal2vulkan-runtime::ComputePipelineState	#[derive(Clone)] pub struct ComputePipelineState(Arc<StateShared>)
@@ -9617,7 +9622,7 @@ struct	metal2vulkan-runtime::CopySite	#[derive(Clone, Copy, Debug, Default, Part
 struct	metal2vulkan-runtime::DebugMessage	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DebugMessage
 struct	metal2vulkan-runtime::DegradeNotice	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DegradeNotice
 struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct DepthStencilState(Arc<Shared>)
-struct	metal2vulkan-runtime::Device	pub struct Device(Arc<DeviceShared>, holds::Share)
+struct	metal2vulkan-runtime::Device	pub struct Device(Pin, holds::Share)
 struct	metal2vulkan-runtime::DeviceCheckWork	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct DeviceCheckWork
 struct	metal2vulkan-runtime::DeviceHandles	#[derive(Clone, Copy)] #[non_exhaustive] pub struct DeviceHandles<'a>
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
@@ -12196,6 +12201,7 @@ variant	metal2vulkan-runtime::RowState::Gap	Gap(RuntimeGap)
 variant	metal2vulkan-runtime::RowState::NotADeviceFeature	NotADeviceFeature(Framework)
 variant	metal2vulkan-runtime::RowState::Refused	Refused(Refusal)
 variant	metal2vulkan-runtime::RuntimeGap::AccelerationStructures	AccelerationStructures
+variant	metal2vulkan-runtime::RuntimeGap::AdoptedDeviceRecovery	AdoptedDeviceRecovery
 variant	metal2vulkan-runtime::RuntimeGap::ColorAttachmentGroups	ColorAttachmentGroups
 variant	metal2vulkan-runtime::RuntimeGap::ColorAttachmentMapping	ColorAttachmentMapping
 variant	metal2vulkan-runtime::RuntimeGap::CommandReplay	CommandReplay
@@ -12229,6 +12235,7 @@ variant	metal2vulkan-runtime::RuntimeGap::IoCommandQueues	IoCommandQueues
 variant	metal2vulkan-runtime::RuntimeGap::LayeredPass	LayeredPass
 variant	metal2vulkan-runtime::RuntimeGap::LibrarySource	LibrarySource
 variant	metal2vulkan-runtime::RuntimeGap::LossyTextureCompression	LossyTextureCompression
+variant	metal2vulkan-runtime::RuntimeGap::MadeBeforeRecovery	MadeBeforeRecovery
 variant	metal2vulkan-runtime::RuntimeGap::MappedTextureSampling	MappedTextureSampling { map: AddressModeMap, through: MappedSampling }
 variant	metal2vulkan-runtime::RuntimeGap::MemorylessSurfacePlane	MemorylessSurfacePlane
 variant	metal2vulkan-runtime::RuntimeGap::Metal4Api	Metal4Api

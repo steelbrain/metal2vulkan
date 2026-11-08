@@ -353,7 +353,7 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Ver
     let queue = match access {
         Access::Reads | Access::Writes => None,
         Access::Renders => {
-            let made = exit_guard::enter().map(|_busy| device.new_command_queue());
+            let made = exit_guard::enter().map(|_busy| device.new_command_queue_now());
             match made? {
                 Ok(queue) => Some(queue),
                 Err(_) => return Some(Verdict::Unchecked),
@@ -684,7 +684,7 @@ fn no_copy_kept(
     };
     let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents)
         .with_placement(AddressPlacement::Outside);
-    device.new_buffer_with_descriptor(descriptor).ok()
+    device.new_buffer_with_descriptor_now(descriptor).ok()
 }
 
 /// Anonymous pages [`map_anonymous`] mapped, unmapped as this goes: a check buffer's keep-alive.

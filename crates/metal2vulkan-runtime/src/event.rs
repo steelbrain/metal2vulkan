@@ -183,7 +183,7 @@ impl EventShared {
         export: Option<vk::ExternalSemaphoreHandleTypeFlags>,
     ) -> Result<Arc<EventShared>, Error> {
         if device.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(device.lost_refusal());
         }
         let mut kind = vk::SemaphoreTypeCreateInfo::default()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -311,7 +311,7 @@ impl EventShared {
     /// nothing is reserved.
     pub(super) fn reserve_signal(self: &Arc<Self>, value: u64) -> Result<Signal, Error> {
         if self.device.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.device.lost_refusal());
         }
         let shared = self.device.shared();
         let watcher = &shared.interop.caller_signals;
@@ -596,11 +596,21 @@ fn due(state: &mut EventState) -> Vec<Notification> {
 impl Device {
     /// `newEvent`.
     pub fn new_event(&self) -> Result<Event, Error> {
+        self.current().new_event_now()
+    }
+
+    /// [`Device::new_event`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_event_now(&self) -> Result<Event, Error> {
         Ok(Event(EventShared::new(self, false, None)?))
     }
 
     /// `newSharedEvent`.
     pub fn new_shared_event(&self) -> Result<SharedEvent, Error> {
+        self.current().new_shared_event_now()
+    }
+
+    /// [`Device::new_shared_event`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_shared_event_now(&self) -> Result<SharedEvent, Error> {
         Ok(SharedEvent(EventShared::new(self, true, None)?))
     }
 
@@ -619,6 +629,14 @@ impl Device {
     /// device's event (another physical device's, or one made with other options or adopted) is
     /// refused (`NotImplemented`, `SharedEventAcrossDevices`).
     pub fn new_shared_event_with_handle(
+        &self,
+        handle: &SharedEventHandle,
+    ) -> Result<SharedEvent, Error> {
+        self.current().new_shared_event_with_handle_now(handle)
+    }
+
+    /// [`Device::new_shared_event_with_handle`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_shared_event_with_handle_now(
         &self,
         handle: &SharedEventHandle,
     ) -> Result<SharedEvent, Error> {

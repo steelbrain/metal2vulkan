@@ -641,13 +641,13 @@ impl FreshUnwritten {
         uses: &[Use<ResourceKey>],
         reads: &[FreshRead],
     ) {
-        if !maker.device().shared().fresh.any() {
+        if !maker.generation().fresh.any() {
             return;
         }
         let attachment = vk::AccessFlags2::COLOR_ATTACHMENT_READ
             | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ;
         let reading = |used: &&Use<ResourceKey>| !(used.read.access & !attachment).is_empty();
-        let (fresh, log) = (&maker.device().shared().fresh, maker.fresh_log());
+        let (fresh, log) = (&maker.generation().fresh, maker.fresh_log());
         for used in uses.iter().filter(reading) {
             let UseRange::Image {
                 aspects,

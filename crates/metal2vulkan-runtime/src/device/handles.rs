@@ -159,8 +159,16 @@ impl Device {
     /// [`Device::with_loader_word`] lists them) then fault, even through
     /// [`DeviceHandles::device`], so the caller loads its commands through
     /// [`Device::device_proc_addr`] and makes those calls inside [`Device::with_loader_word`].
+    ///
+    /// A root handle's (the device the program made, and its clones) are of the `VkDevice` that
+    /// serves at the call. Once a recovery made a new one (`Degradation::DeviceRecovered`,
+    /// [`Device::recover_for_test`]), they stay valid until a later call of a root handle's
+    /// returns the new one's; after that the caller uses them no more.
     pub unsafe fn raw(&self) -> DeviceHandles<'_> {
-        let shared = self.shared();
+        let shared = match &self.0 {
+            super::Pin::Generation(shared) => &**shared,
+            super::Pin::Root(root) => root.line.lend(&self.current()),
+        };
         let instance = &shared.instance;
         DeviceHandles {
             entry: &instance.entry,
@@ -192,9 +200,14 @@ impl Device {
     /// loader's own and read it at every call; the caller makes those inside
     /// [`Device::with_loader_word`], which lists them.
     pub fn device_proc_addr(&self, name: &CStr) -> vk::PFN_vkVoidFunction {
+        self.current().device_proc_addr_now(name)
+    }
+
+    /// [`Device::device_proc_addr`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn device_proc_addr_now(&self, name: &CStr) -> vk::PFN_vkVoidFunction {
         let shared = self.shared();
         let handle = shared.vk().handle();
-        self.with_loader_word(|| {
+        self.with_loader_word_now(|| {
             // SAFETY: the device is live while `self` is, made from this instance, and its first
             // word is the loader's again; `name` is NUL-terminated.
             unsafe {
@@ -243,6 +256,11 @@ impl Device {
     /// from MoltenVK's completion handlers) is not guarded against. On every other driver the
     /// word never changes, and the restore writes nothing.
     pub fn with_loader_word<R>(&self, call: impl FnOnce() -> R) -> R {
+        self.current().with_loader_word_now(call)
+    }
+
+    /// [`Device::with_loader_word`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn with_loader_word_now<R>(&self, call: impl FnOnce() -> R) -> R {
         // SAFETY: the device is live while `self` is.
         unsafe { self.shared().loader_word.restored(call) }
     }

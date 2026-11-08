@@ -201,6 +201,14 @@ impl Device {
         &self,
         descriptor: BufferDescriptor<'_>,
     ) -> Result<Buffer, Error> {
+        self.current().new_buffer_with_descriptor_now(descriptor)
+    }
+
+    /// [`Device::new_buffer_with_descriptor`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_buffer_with_descriptor_now(
+        &self,
+        descriptor: BufferDescriptor<'_>,
+    ) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer_with_descriptor";
         self.keep_room();
         let BufferDescriptor {
@@ -219,7 +227,7 @@ impl Device {
             }
             (None, Some((pool, offset))) => {
                 if !pool.device().same(self) {
-                    return Err(invalid(CALL, Problem::ForeignObject));
+                    return Err(pool.device().foreign(CALL, self));
                 }
                 Place::InPool {
                     pool: pool.gpu_address().0,
@@ -277,6 +285,15 @@ impl Device {
     ///
     /// Refused as [`Device::new_buffer`] is (an empty `bytes` is a length of 0).
     pub fn new_buffer_with_bytes(
+        &self,
+        bytes: &[u8],
+        options: ResourceOptions,
+    ) -> Result<Buffer, Error> {
+        self.current().new_buffer_with_bytes_now(bytes, options)
+    }
+
+    /// [`Device::new_buffer_with_bytes`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_buffer_with_bytes_now(
         &self,
         bytes: &[u8],
         options: ResourceOptions,
@@ -342,6 +359,21 @@ impl Device {
         options: ResourceOptions,
         deallocator: Option<Deallocator>,
     ) -> Result<Buffer, Error> {
+        // SAFETY: the caller's contract.
+        unsafe {
+            self.current()
+                .new_buffer_with_bytes_no_copy_now(memory, length, options, deallocator)
+        }
+    }
+
+    /// [`Device::new_buffer_with_bytes_no_copy`] on the generation that serves (`device/line.rs`).
+    pub(crate) unsafe fn new_buffer_with_bytes_no_copy_now(
+        &self,
+        memory: HostMemory,
+        length: u64,
+        options: ResourceOptions,
+        deallocator: Option<Deallocator>,
+    ) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer_with_bytes_no_copy";
         let (options, drops_writes) = no_copy_options(options);
         // SAFETY: the caller's contract.
@@ -384,6 +416,11 @@ impl Device {
     /// once, and otherwise it finds the buffers over the range by address, whether the range
     /// covers none of them or many, never reading them all.
     pub fn host_range_remapped(&self, bytes: NonNull<u8>, length: u64) {
+        self.current().host_range_remapped_now(bytes, length)
+    }
+
+    /// [`Device::host_range_remapped`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn host_range_remapped_now(&self, bytes: NonNull<u8>, length: u64) {
         let start = bytes.as_ptr() as u64;
         let shared = self.shared();
         // The unit an import's pages round out to: an import by pointer over a page the call
@@ -483,7 +520,7 @@ impl Device {
             return Err(nil(call, Problem::BufferLength { length }));
         }
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         let importer = shared
@@ -774,7 +811,7 @@ impl Device {
         };
         let length = buffer.length();
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         // The render encoders' calls and ends that their calls left to the device's lowering
         // thread, as the rebind finds them where each call lowers itself (`render/deferral.rs`).
@@ -1361,7 +1398,7 @@ impl Device {
         again: &Again,
     ) -> Result<Pages, Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         let importer = shared
@@ -1815,7 +1852,7 @@ impl Device {
         in_pool: bool,
     ) -> Result<Place, Error> {
         if !other.device().same(self) {
-            return Err(invalid(call, Problem::ForeignObject));
+            return Err(other.device().foreign(call, self));
         }
         let unshared = || {
             let address = other.exposed_address(ReadApart::SecondBuffer);

@@ -251,7 +251,7 @@ impl RewritePass {
         let output = match owned {
             Some((_, bytes)) => Output::Owned(device.scratch_buffer(bytes)?),
             None => {
-                let queue = core.command_buffer().command_queue().id();
+                let queue = core.command_buffer().queue_place().id();
                 Output::Pooled(core.command_buffer().state().index_pool(&device, queue)?)
             }
         };

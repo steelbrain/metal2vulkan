@@ -3208,7 +3208,7 @@ impl DeferredPass {
             layout: self.layout.clone(),
             bare: self.bare.clone(),
             backed: Vec::new(),
-            queue: command_buffer.command_queue().id(),
+            queue: command_buffer.queue_place().id(),
         };
         for (at, execution) in self.executions.iter().enumerate() {
             let gpu = forms.get(at).and_then(Option::as_ref);

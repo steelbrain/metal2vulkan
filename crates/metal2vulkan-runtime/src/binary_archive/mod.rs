@@ -33,9 +33,7 @@ pub(super) mod container;
 pub(super) mod metal_key;
 
 use super::device::lock;
-use super::error::{
-    invalid, ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, Error, Problem,
-};
+use super::error::{ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, Error};
 use super::pipeline::{
     ComputePipelineState, GraphicsState, PipelineOption, PipelineOptions, TileState,
 };
@@ -109,6 +107,14 @@ impl Device {
     /// `FAIL_ON_BINARY_ARCHIVE_MISS`, is refused, and without the bit it is created (measured on
     /// an M3 Max under macOS 27.0.1, `binary-archive-sources`).
     pub fn new_binary_archive(
+        &self,
+        descriptor: &BinaryArchiveDescriptor,
+    ) -> Result<BinaryArchive, Error> {
+        self.current().new_binary_archive_now(descriptor)
+    }
+
+    /// [`Device::new_binary_archive`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_binary_archive_now(
         &self,
         descriptor: &BinaryArchiveDescriptor,
     ) -> Result<BinaryArchive, Error> {
@@ -358,11 +364,11 @@ pub(crate) fn check<'a>(
     missing: impl FnOnce(&Hash256, &dyn Fn(&Hash256) -> bool) -> Option<&'a StageSource>,
 ) -> Result<(), Error> {
     let archives = &options.binary_archives;
-    if archives
+    if let Some(archive) = archives
         .iter()
-        .any(|archive| !archive.device().same(device))
+        .find(|archive| !archive.device().same(device))
     {
-        return Err(invalid(call, Problem::ForeignObject));
+        return Err(archive.device().foreign(call, device));
     }
     if archives.is_empty()
         || !options

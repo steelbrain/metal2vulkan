@@ -170,6 +170,7 @@ use super::compressed_decode::BLOCK_DECODES;
 use super::cross_class_reads::CROSS_CLASS;
 use super::depth_denormals::{DEPTH_DENORMALS, SIGNED_DEPTH_TESTS};
 use super::detach_textures::DETACHED_REACHES;
+use super::device_recovery::RECOVERED;
 use super::extended_range_blends::{EXTENDED_RANGE_BITS, STORED_CODES};
 use super::extended_range_resolve::XR_RESOLVE;
 use super::extended_range_two_planes::HEAP_PLANES;
@@ -599,6 +600,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &YCBCR_PASSES,
         &MEMORYLESS_TEXEL_BUFFERS,
         &UNWRITTEN_ENTRY,
+        &RECOVERED,
     ];
     for kind in lists.into_iter().flatten().copied().chain(stage_kinds) {
         assert!(listed.insert(kind), "{kind:?} is listed twice");

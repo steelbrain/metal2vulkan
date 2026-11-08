@@ -418,13 +418,13 @@ impl Rebinds {
 
     /// Wait until no submitted work holds the buffer of `key` any longer (`SubmittedHolds`), with
     /// no other lock of the runtime's held: the completion path lets each hold go without this
-    /// one's caller. Settles on a lost device (`Err(DeviceLost)`), whose command buffers may never
-    /// complete.
+    /// one's caller. Settles on a lost device, whose command buffers may never complete, with its
+    /// refusal (`Device::lost_refusal`).
     pub(super) fn wait_ran(&self, device: &Device, key: ResourceKey) -> Result<(), Error> {
         let mut buffers = lock(&self.buffers);
         while buffers.get(&key).is_some_and(|entry| entry.submitted > 0) {
             if device.is_lost() {
-                return Err(Error::DeviceLost);
+                return Err(device.lost_refusal());
             }
             buffers = match self.completed.wait_timeout(buffers, LOST_POLL) {
                 Ok((buffers, _)) => buffers,

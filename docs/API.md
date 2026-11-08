@@ -3056,6 +3056,18 @@ bound.
   which the extension requires. Cost: the driver keeps its own cache of the device's pipelines
   beside the shader cache's records, with whatever it writes to disk and holds in memory for it; the
   pipelines made are the same.
+- `metal2vulkan-degrade-device-recovered` (performance). `DeviceRecovered`: A device whose
+  `VkDevice` was lost made a new one behind it, as Metal's device survives its GPU's recovery: its
+  command buffers in flight failed, the oldest incomplete one as the hang (`GpuHang`, counted
+  against its queue, so a queue's second revokes it) and the rest as its victims
+  (`GpuRecoveryVictim`), and every later call of the device and of its command queues goes to the
+  new `VkDevice`. Announced at each recovery, by the call that made it; the reason names the hang's
+  command buffer (an inference, said so, where two or more `VkQueue`s had work in flight) and how
+  long the recovery took. Announced too where a call waited past 10 seconds for a recovery under
+  way, and where the new `VkDevice` could not be made, after which the device answers as a lost
+  one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the objects made
+  before the recovery are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it
+  wait for it.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
   private device properties the device has no answer for: no document describes them and nothing the
   device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is

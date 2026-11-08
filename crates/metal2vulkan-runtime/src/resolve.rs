@@ -708,7 +708,7 @@ pub(super) fn keep_samples(
     if executes {
         return Ok(());
     }
-    let queue = maker.command_queue().id();
+    let queue = maker.queue_place().id();
     for (index, color) in colors.iter_mut().enumerate() {
         let Some(color) = color else {
             continue;
@@ -1310,7 +1310,7 @@ fn destination(
     wanted: &Wanted<'_>,
 ) -> Result<Option<Destination>, Error> {
     if !texture.device().same(device) {
-        return Err(invalid(call, Problem::ForeignObject));
+        return Err(texture.device().foreign(call, device));
     }
     if texture.storage_mode() == StorageMode::Memoryless {
         return Err(problem(call, RenderPassProblem::MemorylessResolve(which)));

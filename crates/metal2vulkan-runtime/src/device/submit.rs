@@ -171,7 +171,7 @@ impl Device {
         record: impl FnOnce(&Vk, vk::CommandBuffer),
     ) -> Result<(), Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         let raw = shared.vk();
@@ -325,7 +325,7 @@ impl Device {
         binds: &[vk::SparseMemoryBind],
     ) -> Result<(vk::Semaphore, u64), Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         let raw = shared.vk();

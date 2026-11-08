@@ -773,6 +773,21 @@ impl Device {
         info: &vk::ImageCreateInfo<'_>,
         layouts: VkImageLayouts,
     ) -> Result<Texture, Error> {
+        // SAFETY: the caller's contract.
+        unsafe {
+            self.current()
+                .new_texture_with_vk_image_now(descriptor, image, info, layouts)
+        }
+    }
+
+    /// [`Device::new_texture_with_vk_image`] on the generation that serves (`device/line.rs`).
+    pub(crate) unsafe fn new_texture_with_vk_image_now(
+        &self,
+        descriptor: &TextureDescriptor,
+        image: vk::Image,
+        info: &vk::ImageCreateInfo<'_>,
+        layouts: VkImageLayouts,
+    ) -> Result<Texture, Error> {
         const CALL: &str = "new_texture_with_vk_image";
         let descriptor = &self.texture_options(CALL, descriptor)?;
         // An `Outside` texture takes no ID, so no ID's limit applies.
@@ -804,7 +819,7 @@ impl Device {
             }));
         }
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let facts = self
             .shared()
@@ -950,6 +965,22 @@ impl Device {
         info: &vk::ImageCreateInfo<'_>,
         plane: u32,
     ) -> Result<Texture, Error> {
+        // SAFETY: the caller's contract.
+        unsafe {
+            self.current()
+                .new_texture_with_vk_image_plane_now(descriptor, image, info, plane)
+        }
+    }
+
+    /// [`Device::new_texture_with_vk_image_plane`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) unsafe fn new_texture_with_vk_image_plane_now(
+        &self,
+        descriptor: &TextureDescriptor,
+        image: vk::Image,
+        info: &vk::ImageCreateInfo<'_>,
+        plane: u32,
+    ) -> Result<Texture, Error> {
         const CALL: &str = "new_texture_with_vk_image_plane";
         let descriptor = &self.texture_options(CALL, descriptor)?;
         if descriptor.placement != IdPlacement::Outside {
@@ -986,7 +1017,7 @@ impl Device {
             return Err(Error::NotImplemented(RuntimeGap::VkImagePlaneCopy));
         }
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let facts = self
             .shared()

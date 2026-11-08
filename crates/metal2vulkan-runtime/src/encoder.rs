@@ -33,7 +33,7 @@ use super::churn_counts::KeepBy;
 use super::command_buffer::rebound_use::Unlogged;
 use super::command_buffer::{recording_error, CommandBuffer};
 use super::deferred::{Deferred, StepInputs};
-use super::error::{internal, invalid, vulkan, CommandBufferError, Error, Problem};
+use super::error::{internal, invalid, vulkan, CommandBufferError, Error};
 use super::execution::Execution;
 use super::fresh_unwritten::{FreshRead, FreshUnwritten};
 use super::heap::Heap;
@@ -67,7 +67,7 @@ use super::used_resources::EncoderKind;
 use super::write_routes::Routes;
 use super::Device;
 use crate::device::functions::Vk;
-use crate::device::lock;
+use crate::device::{lock, DeviceShared};
 use crate::shards::Tally;
 use crate::work_counts::{Begun, Counters, Counting};
 use ash::vk;
@@ -524,7 +524,9 @@ impl Drop for OpenGuard {
 
 /// Refuse an object of `other` in Metal's `call` of an encoder of `device` unless `other` is
 /// `device`: an encoder's check ([`EncoderCore::check_device`]), and a render encoder's at the call
-/// (`render/call_checks.rs`).
+/// (`render/call_checks.rs`). Inlined, its refusal out of line (`Device::foreign`): a bind
+/// makes it.
+#[inline(always)]
 pub(super) fn check_device(
     device: &Device,
     call: &'static str,
@@ -532,7 +534,7 @@ pub(super) fn check_device(
 ) -> Result<(), Error> {
     match device.same(other) {
         true => Ok(()),
-        false => Err(invalid(call, Problem::ForeignObject)),
+        false => Err(other.foreign(call, device)),
     }
 }
 
@@ -797,10 +799,17 @@ impl EncoderCore {
         self.open.command_buffer.device()
     }
 
+    /// The state of its device's generation (`CommandBuffer::generation`): what its commands
+    /// reach, at one load.
+    #[inline]
+    pub(super) fn generation(&self) -> &DeviceShared {
+        self.open.command_buffer.generation()
+    }
+
     /// The counts its commands add, into its tally (`work_counts::CommandCounters`).
     #[inline]
     pub(super) fn counts(&self) -> Counting<'_> {
-        self.device().shared().counts.of(&self.tally)
+        self.generation().counts.of(&self.tally)
     }
 
     /// Set 0 of a command of `objects`'s variant that writes `writes` (set 0's), and `offsets`, the
@@ -866,7 +875,7 @@ impl EncoderCore {
 
     /// The queue flags of the family its command buffer records for: its queue's `VkQueue`'s.
     pub(super) fn queue_flags(&self) -> vk::QueueFlags {
-        let queue = self.open.command_buffer.command_queue().vk_queue();
+        let queue = self.open.command_buffer.queue_place().vk_queue();
         self.device().shared().queue_flags_of(queue)
     }
 
@@ -882,6 +891,7 @@ impl EncoderCore {
     }
 
     /// Refuse an object of `device` in Metal's `call` unless `device` is the encoder's.
+    #[inline(always)]
     pub(super) fn check_device(&self, call: &'static str, device: &Device) -> Result<(), Error> {
         check_device(self.device(), call, device)
     }
@@ -988,7 +998,7 @@ impl EncoderCore {
             self.flush_gathers();
         }
         let device = self.device().clone();
-        let queue = self.open.command_buffer.command_queue().id();
+        let queue = self.open.command_buffer.queue_place().id();
         let joined = {
             let mut state = self.open.command_buffer.state();
             let pool = state.index_pool(&device, queue)?;
@@ -1046,7 +1056,7 @@ impl EncoderCore {
             self.flush_gathers();
         }
         let device = self.device().clone();
-        let queue = self.open.command_buffer.command_queue().id();
+        let queue = self.open.command_buffer.queue_place().id();
         let joined = {
             let mut state = self.open.command_buffer.state();
             let pool = state.index_pool(&device, queue)?;
@@ -1372,7 +1382,7 @@ impl EncoderCore {
     /// a buffer over host pages.
     fn touch_reaching(&mut self, uses: &[Use<ResourceKey>], resident: &BTreeSet<ResourceKey>) {
         self.hold_resident();
-        let rebinds = self.device().shared().rebinds.any();
+        let rebinds = self.generation().rebinds.any();
         for (at, used) in uses.iter().enumerate() {
             let key = used.key;
             let named = rebinds && !resident.contains(&key);
@@ -1524,7 +1534,7 @@ impl EncoderCore {
         if self.taken.dead() {
             return true;
         }
-        !self.unattached_as_called && self.device().shared().rebinds.any_detached(keys)
+        !self.unattached_as_called && self.generation().rebinds.any_detached(keys)
     }
 
     /// The keys its commands named so far, their uses' and their bindings' (`touch`).
@@ -1703,7 +1713,7 @@ impl EncoderCore {
 
     /// The encoder's state a command noted apart now is noted into (`NotedInto`).
     pub(super) fn noted_into(&self) -> NotedInto {
-        let shared = self.device().shared();
+        let shared = self.generation();
         NotedInto {
             core: self.id,
             parts: self.uses.parts(),
@@ -1750,7 +1760,7 @@ impl EncoderCore {
     /// memory beside them ([`aliased`](Self::aliased)), worked out into the vector the encoder
     /// keeps for them.
     fn record_aliased(&mut self, stages: vk::PipelineStageFlags2, uses: &[Use<ResourceKey>]) {
-        let aliases = &self.open.command_buffer.device().shared().aliases;
+        let aliases = &self.open.command_buffer.generation().aliases;
         let quiet = Some(&mut self.aliases_quiet);
         let all = match aliases.augment_into(uses, &mut self.aliased_uses, quiet) {
             true => &self.aliased_uses[..],
@@ -1777,7 +1787,7 @@ impl EncoderCore {
         // The kept images its merges take are held to the encoder's end, those of a refused
         // command let go of here. An encoder encoded again borrows none, nor its command buffer's
         // scratch: its place may lie inside a run of passes that holds one (`pass_runs.rs`).
-        let images = self.open.command_buffer.command_queue().kept_images();
+        let images = self.open.command_buffer.queue_place().kept_images();
         let pool = self.open.command_buffer.merge_scratch();
         let lent = !self.replaying && !crate::replay::is_replaying();
         let held = self.kept_leases.len();
@@ -1838,7 +1848,7 @@ impl EncoderCore {
         let mut planned = Vec::new();
         let mut failed = None;
         {
-            let images = self.open.command_buffer.command_queue().copy_images();
+            let images = self.open.command_buffer.queue_place().copy_images();
             let maker = images.maker(&device);
             for copy in &mut copies {
                 match copy.plan_moves(&maker) {

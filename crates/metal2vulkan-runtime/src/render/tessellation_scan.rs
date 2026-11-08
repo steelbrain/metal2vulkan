@@ -69,7 +69,7 @@ impl TessellationWork {
         dispatch: &TessellationDispatch,
     ) -> Result<TessellationWork, Error> {
         let device = core.device().clone();
-        let queue = core.command_buffer().command_queue().id();
+        let queue = core.command_buffer().queue_place().id();
         let mut state = core.command_buffer().state();
         let (records, pool) = match dispatch.records {
             TessellationRecords::Exact { .. } => {

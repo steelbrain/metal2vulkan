@@ -283,7 +283,7 @@ impl RenderLowering {
         #[cfg(not(debug_assertions))]
         let _: &mut Option<super::Checked> = checked;
         // The attachments' reads: its last check, refused here, as it may have announced.
-        let device = self.core.device();
+        let core = &self.core;
         let version = self.layout.version();
         let (memo, layout) = (&mut self.attached, &*self.layout);
         let mut shares = |uses: &[_]| memo.shares((layout, version), uses);
@@ -292,12 +292,12 @@ impl RenderLowering {
         let attached = match (rebinding.narrowed, live.uses.prefix()) {
             (true, _) => {
                 let moved = (&live.kept.moved[..], &live.uses[..]);
-                device.degrade_moved_attachment_reads(call, shares, moved)
+                core.degrade_moved_attachment_reads(call, shares, moved)
             }
-            (false, None) => device.degrade_attachment_reads(call, shares, &live.uses),
+            (false, None) => core.degrade_attachment_reads(call, shares, &live.uses),
             (false, Some(prefix)) => {
                 let shares = (&mut shares, Some(version));
-                device.degrade_resident_attachment_reads(call, shares, (&mut live.uses, prefix))
+                core.degrade_resident_attachment_reads(call, shares, (&mut live.uses, prefix))
             }
         };
         if let Err(refused) = attached {
@@ -778,7 +778,7 @@ impl RenderLowering {
         }
         let owned = (live.kept.recording.as_ref())
             .ok_or_else(|| crate::error::internal("a draw rebound without its recording"))?;
-        let shared = self.core.device().shared();
+        let shared = self.core.generation();
         let settled = (self.again.kept.as_ref()).and_then(|kept| kept.settled);
         let bound = match self.current.inline {
             true => &mut self.held_bound,

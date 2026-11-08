@@ -594,6 +594,16 @@ impl Device {
         descriptor: &RenderPipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<RenderPipelineState, Error> {
+        self.current()
+            .new_render_pipeline_state_now(descriptor, options)
+    }
+
+    /// [`Device::new_render_pipeline_state`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_render_pipeline_state_now(
+        &self,
+        descriptor: &RenderPipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<RenderPipelineState, Error> {
         GraphicsState::create(self, descriptor, options, None)
             .map(|state| RenderPipelineState(Kind::Graphics(state)))
     }
@@ -605,6 +615,17 @@ impl Device {
     /// [`RenderPipelineDescriptor::reflection`]'s, under the creation's budget; what it refuses
     /// refuses the call (`Unsupported`, `Compile`).
     pub fn new_render_pipeline_state_with_reflection(
+        &self,
+        descriptor: &RenderPipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error> {
+        self.current()
+            .new_render_pipeline_state_with_reflection_now(descriptor, options)
+    }
+
+    /// [`Device::new_render_pipeline_state_with_reflection`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn new_render_pipeline_state_with_reflection_now(
         &self,
         descriptor: &RenderPipelineDescriptor,
         options: &PipelineOptions,
@@ -673,6 +694,16 @@ impl Device {
         descriptor: &MeshPipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<RenderPipelineState, Error> {
+        self.current()
+            .new_mesh_render_pipeline_state_now(descriptor, options)
+    }
+
+    /// [`Device::new_mesh_render_pipeline_state`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_mesh_render_pipeline_state_now(
+        &self,
+        descriptor: &MeshPipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<RenderPipelineState, Error> {
         GraphicsState::create_mesh(self, descriptor, options)
             .map(|state| RenderPipelineState(Kind::Graphics(state)))
     }
@@ -688,6 +719,17 @@ impl Device {
     /// (`Device::mesh_descriptor_key`), so every state of one descriptor shares one answer rather
     /// than decoding the three stages' AIR again.
     pub fn new_mesh_render_pipeline_state_with_reflection(
+        &self,
+        descriptor: &MeshPipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error> {
+        self.current()
+            .new_mesh_render_pipeline_state_with_reflection_now(descriptor, options)
+    }
+
+    /// [`Device::new_mesh_render_pipeline_state_with_reflection`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn new_mesh_render_pipeline_state_with_reflection_now(
         &self,
         descriptor: &MeshPipelineDescriptor,
         options: &PipelineOptions,

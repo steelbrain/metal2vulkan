@@ -110,7 +110,7 @@ const MOST_INFOS: usize = GROUP_BATCHES * BATCH_INFOS + 1 + BATCH_INFOS;
 /// the queue's failures are not relayed (each relayed batch takes a fence, `device/relay.rs`).
 pub(crate) fn groups(device: &Device, queue: usize) -> bool {
     device.compile_device().policy().completion == CompletionPolicy::Grouped
-        && device.submissions_merge()
+        && device.submissions_merge_now()
         && device.shared().flights(queue).is_none()
 }
 

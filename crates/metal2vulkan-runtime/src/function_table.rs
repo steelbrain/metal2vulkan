@@ -196,7 +196,7 @@ impl Maker {
     /// (`Invalid(ForeignObject)`).
     fn function_handle(self, function: &Function) -> Result<Option<FunctionHandle>, Error> {
         if !function.device().same(self.device()) {
-            return Err(invalid("function_handle", Problem::ForeignObject));
+            return Err(function.device().foreign("function_handle", self.device()));
         }
         let handle = self
             .linked_functions()

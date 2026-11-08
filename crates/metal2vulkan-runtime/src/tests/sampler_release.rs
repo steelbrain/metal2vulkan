@@ -67,7 +67,7 @@ fn a_sampler_state_going_meanwhile_leaves_no_listing_at_a_kept_count() {
     at_start.recv_timeout(WAIT).unwrap();
     assert_eq!(weak.strong_count(), 0, "the state is going");
     assert_eq!(
-        device.sampler_slots_changed(),
+        device.shared().sampler_slots_changed(),
         before,
         "no slot change is counted while the state still holds its slot"
     );

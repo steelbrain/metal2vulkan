@@ -505,12 +505,17 @@ impl Device {
     /// runtime answers them on this device (the module docs). It judges the
     /// device by the GPU-family rows, so read it once.
     pub fn private_properties(&self) -> PrivateProperties {
+        self.current().private_properties_now()
+    }
+
+    /// [`Device::private_properties`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn private_properties_now(&self) -> PrivateProperties {
         let compile = self.compile_device();
         let answers = PrivateProperties::of(
             self.properties(),
             compile.metal_properties(),
-            &self.family_rows(MEASURED_FAMILY),
-            &|pf| self.pixel_format_capabilities(pf),
+            &self.family_rows_now(MEASURED_FAMILY),
+            &|pf| self.pixel_format_capabilities_now(pf),
         );
         // The properties the device has no answer for, announced once.
         let unknown = answers.unknown();

@@ -559,13 +559,23 @@ impl Device {
         function: &Function,
         options: &PipelineOptions,
     ) -> Result<ComputePipelineState, Error> {
+        self.current()
+            .new_compute_pipeline_state_with_function_now(function, options)
+    }
+
+    /// [`Device::new_compute_pipeline_state_with_function`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn new_compute_pipeline_state_with_function_now(
+        &self,
+        function: &Function,
+        options: &PipelineOptions,
+    ) -> Result<ComputePipelineState, Error> {
         if !function.device().same(self) {
-            return Err(invalid(
-                "new_compute_pipeline_state_with_function",
-                Problem::ForeignObject,
-            ));
+            return Err(function
+                .device()
+                .foreign("new_compute_pipeline_state_with_function", self));
         }
-        self.new_compute_pipeline_state(
+        self.new_compute_pipeline_state_now(
             &ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor())),
             options,
         )
@@ -612,6 +622,16 @@ impl Device {
         descriptor: &ComputePipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<ComputePipelineState, Error> {
+        self.current()
+            .new_compute_pipeline_state_now(descriptor, options)
+    }
+
+    /// [`Device::new_compute_pipeline_state`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_compute_pipeline_state_now(
+        &self,
+        descriptor: &ComputePipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<ComputePipelineState, Error> {
         ComputePipelineState::create(self, descriptor, options, None)
     }
 
@@ -626,7 +646,18 @@ impl Device {
         descriptor: &ComputePipelineDescriptor,
         options: &PipelineOptions,
     ) -> Result<(ComputePipelineState, Option<ComputePipelineReflection>), Error> {
-        let state = self.new_compute_pipeline_state(descriptor, options)?;
+        self.current()
+            .new_compute_pipeline_state_with_reflection_now(descriptor, options)
+    }
+
+    /// [`Device::new_compute_pipeline_state_with_reflection`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn new_compute_pipeline_state_with_reflection_now(
+        &self,
+        descriptor: &ComputePipelineDescriptor,
+        options: &PipelineOptions,
+    ) -> Result<(ComputePipelineState, Option<ComputePipelineReflection>), Error> {
+        let state = self.new_compute_pipeline_state_now(descriptor, options)?;
         // The descriptor the state was made from, with the dynamic libraries its creation loaded
         // (`dynamic_library.rs`).
         let made = match &state.0.descriptor {
@@ -649,13 +680,24 @@ impl Device {
         function: &Function,
         options: &PipelineOptions,
     ) -> Result<(ComputePipelineState, Option<ComputePipelineReflection>), Error> {
+        self.current()
+            .new_compute_pipeline_state_with_function_and_reflection_now(function, options)
+    }
+
+    /// [`Device::new_compute_pipeline_state_with_function_and_reflection`] on the generation
+    /// that serves (`device/line.rs`).
+    pub(crate) fn new_compute_pipeline_state_with_function_and_reflection_now(
+        &self,
+        function: &Function,
+        options: &PipelineOptions,
+    ) -> Result<(ComputePipelineState, Option<ComputePipelineReflection>), Error> {
         if !function.device().same(self) {
-            return Err(invalid(
+            return Err(function.device().foreign(
                 "new_compute_pipeline_state_with_function_and_reflection",
-                Problem::ForeignObject,
+                self,
             ));
         }
-        self.new_compute_pipeline_state_with_reflection(
+        self.new_compute_pipeline_state_with_reflection_now(
             &ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor())),
             options,
         )
@@ -1918,7 +1960,7 @@ fn compile_error(device: &Device, error: metal2vulkan::error::Error) -> Error {
             if unsupported.feature == Feature::IndirectRenderState =>
         {
             let apple10 = GpuFamily::Apple10.raw();
-            if device.supports_family(apple10) {
+            if device.supports_family_now(apple10) {
                 return Error::NotImplemented(RuntimeGap::IndirectRenderCommands);
             }
             unsupported.needs = Needs::MetalGpuFamily(apple10);
@@ -1926,7 +1968,7 @@ fn compile_error(device: &Device, error: metal2vulkan::error::Error) -> Error {
         }
         metal2vulkan::error::Error::Unsupported(mut unsupported)
             if unsupported.feature == Feature::GlobalBuiltinInFragment
-                && !device.supports_family(GpuFamily::Apple10.raw()) =>
+                && !device.supports_family_now(GpuFamily::Apple10.raw()) =>
         {
             unsupported.needs = Needs::MetalRefuses(GLOBAL_BUILTIN_IN_FRAGMENT_REFUSED_ON);
             Error::Unsupported(unsupported)

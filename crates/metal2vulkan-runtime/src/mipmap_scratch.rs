@@ -211,7 +211,7 @@ impl Device {
         addressed: bool,
     ) -> Result<Block, Error> {
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         let raw_device = shared.vk();

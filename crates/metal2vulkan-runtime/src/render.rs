@@ -4375,7 +4375,7 @@ impl RenderLowering {
         // pass renders it into a backing its texture keeps for the queue, cleared and resolved
         // there, from which nothing is copied back (`attachment_stand_in::kept_backing`).
         if !called {
-            let queue = core.command_buffer().command_queue().id();
+            let queue = core.command_buffer().queue_place().id();
             for color in layout.colors.iter_mut().flatten() {
                 let across = color.clears_and_resolves_across_formats();
                 if across && color.stand_in.is_none() && !color.memoryless {
@@ -6315,7 +6315,7 @@ impl RenderLowering {
         // holds; else they are taken and compared state by state.
         let device = self.core.device();
         let current = argument_samplers.states().is_none()
-            && live.listed_at == Some(device.sampler_slots_changed());
+            && live.listed_at == Some(self.core.generation().sampler_slots_changed());
         if !current {
             let states = argument_samplers.take(device);
             if !heap_sets::lists(&state.argument_samplers, states) {
@@ -9039,10 +9039,12 @@ impl RenderLowering {
                 None => render_target::shares_attachment(layout, uses),
             };
             match uses.prefix() {
-                None => device.degrade_attachment_reads(call, shares, uses)?,
+                None => self.core.degrade_attachment_reads(call, shares, uses)?,
                 Some(prefix) => {
                     let uses = (&mut *uses, prefix);
-                    device.degrade_resident_attachment_reads(call, (&mut shares, version), uses)?;
+                    let shares = (&mut shares, version);
+                    self.core
+                        .degrade_resident_attachment_reads(call, shares, uses)?;
                 }
             }
         }

@@ -713,6 +713,11 @@ impl Device {
     /// waits for nothing), as a texture made before its verdict is a shadow (the module docs).
     #[doc(hidden)]
     pub fn settle_in_place_checks(&self, timeout: Duration) -> bool {
+        self.current().settle_in_place_checks_now(timeout)
+    }
+
+    /// [`Device::settle_in_place_checks`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn settle_in_place_checks_now(&self, timeout: Duration) -> bool {
         if self.compile_device().policy().host_page_textures != HostPageTexturePolicy::InPlace {
             return false;
         }
@@ -728,6 +733,11 @@ impl Device {
     /// that measure it.
     #[doc(hidden)]
     pub fn in_place_check_took(&self) -> Option<Duration> {
+        self.current().in_place_check_took_now()
+    }
+
+    /// [`Device::in_place_check_took`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn in_place_check_took_now(&self) -> Option<Duration> {
         self.shared().in_place.took()
     }
 
@@ -737,6 +747,11 @@ impl Device {
     /// changed where one failed. A runtime extension for the lanes that report it.
     #[doc(hidden)]
     pub fn in_place_check_report(&self) -> Vec<String> {
+        self.current().in_place_check_report_now()
+    }
+
+    /// [`Device::in_place_check_report`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn in_place_check_report_now(&self) -> Vec<String> {
         let checks = &self.shared().in_place;
         let line = |class: PagesClass, access: Access| {
             let verdict = checks.verdict(class, access);

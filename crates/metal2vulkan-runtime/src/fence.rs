@@ -120,6 +120,11 @@ impl std::hash::Hash for Fence {
 impl Device {
     /// `newFence`.
     pub fn new_fence(&self) -> Fence {
+        self.current().new_fence_now()
+    }
+
+    /// [`Device::new_fence`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_fence_now(&self) -> Fence {
         Fence(Arc::new(FenceShared {
             device: self.clone(),
             key: ResourceKey::new(),

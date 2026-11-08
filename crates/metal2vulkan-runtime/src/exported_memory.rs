@@ -26,10 +26,11 @@
 //!   `VkDevice` of the same physical device names again.
 //! - **Lifetime.** The buffer must outlive every import of its memory: its release frees the
 //!   allocation, and what another API reads or writes through its import after that is undefined.
-//! - **Device loss.** On a device loss the memory's contents are lost for every import of it too,
-//!   and the buffer answers `DeviceLost`. A device made again after the loss makes new buffers in
-//!   new allocations: each is exported anew, with a new descriptor, and the old imports are to be
-//!   let go of.
+//! - **Device loss.** On a device loss the memory's contents are lost for every import of it too.
+//!   The device recovers from the loss with a new `VkDevice` (`device/line.rs`): the buffer, made
+//!   before, is refused (`NotImplemented(MadeBeforeRecovery)`), and the device makes new buffers
+//!   in new allocations, each exported anew, with a new descriptor; the old imports are to be let
+//!   go of. A device the consumer made answers `DeviceLost`.
 
 use super::buffer::{buffer_class, usage, BufferParts, Modes, Owner};
 use super::device::lock;
@@ -138,6 +139,15 @@ impl Device {
         length: u64,
         options: ResourceOptions,
     ) -> Result<Buffer, Error> {
+        self.current().new_exportable_buffer_now(length, options)
+    }
+
+    /// [`Device::new_exportable_buffer`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_exportable_buffer_now(
+        &self,
+        length: u64,
+        options: ResourceOptions,
+    ) -> Result<Buffer, Error> {
         const CALL: &str = "new_exportable_buffer";
         self.keep_room();
         let options = self.own_memory_options(CALL, options)?;
@@ -147,7 +157,7 @@ impl Device {
             return Err(nil(CALL, Problem::BufferLength { length }));
         }
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let shared = self.shared();
         let Some(export) = shared.opaque_fd.as_ref() else {
@@ -245,16 +255,18 @@ impl Buffer {
     /// its life.
     ///
     /// The buffer must outlive every import of its memory: its release frees the allocation. On a
-    /// device loss the memory's contents are lost for every import too, and the call answers
-    /// `DeviceLost`.
+    /// device loss the memory's contents are lost for every import too, and the call answers as
+    /// the module docs say.
     ///
     /// Refused: a buffer not made by [`Device::new_exportable_buffer`] (`Invalid`,
-    /// `Problem::NotExportable`), `DeviceLost`, and the driver's failure.
+    /// `Problem::NotExportable`), one made before its device's recovery
+    /// (`NotImplemented(MadeBeforeRecovery)`) or on a lost device (`DeviceLost`), and the driver's
+    /// failure.
     pub fn export_memory_fd(&self) -> Result<ExportedMemory, Error> {
         const CALL: &str = "export_memory_fd";
         let device = self.device();
         if device.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(device.lost_refusal());
         }
         let shared = device.shared();
         let found = self.own_placement(|placement, offset| {

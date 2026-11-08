@@ -435,7 +435,7 @@ fn added(
     let mut descriptor = descriptor.clone();
     for function in functions {
         if !function.device().same(device) {
-            return Err(invalid(call, Problem::ForeignObject));
+            return Err(function.device().foreign(call, device));
         }
         let linked = function.linked_function();
         if !linked.precompiled {
@@ -496,7 +496,7 @@ fn added_counting(
 fn ignored(device: &Device, call: &'static str, functions: &[Function]) -> Result<(), Error> {
     for function in functions {
         if !function.device().same(device) {
-            return Err(invalid(call, Problem::ForeignObject));
+            return Err(function.device().foreign(call, device));
         }
     }
     Ok(())

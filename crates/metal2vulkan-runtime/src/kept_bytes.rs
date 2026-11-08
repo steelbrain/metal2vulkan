@@ -156,7 +156,7 @@ pub(super) fn settle(
             held.push(index);
         }
     }
-    let queue = maker.command_queue().id();
+    let queue = maker.queue_place().id();
     let policy = device.compile_device().policy().dont_care_colors;
     let (mut kept, mut kept_texels) = (false, false);
     for index in 0..colors.len() {

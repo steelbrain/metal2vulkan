@@ -19,7 +19,8 @@ fn a_queue_keeps_its_kept_images_for_its_next_keeps() {
     let scratch = Scratch::new("kept-images");
     let device = device(&scratch.0);
     let queue = device.new_command_queue().unwrap();
-    let images = queue.kept_images();
+    let place = queue.serving();
+    let images = place.kept_images();
     let live = || device.work_counts().shadow_merge_kept_images_live;
     let make = || device.new_kept_image(TEXEL, EXTENT).unwrap();
     // None kept: a keep makes one, held by its lease; held, the next keep makes another.

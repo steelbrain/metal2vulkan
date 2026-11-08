@@ -23,7 +23,7 @@
 
 use super::super::address::RangeToken;
 use super::super::buffer_texture::TexelsHome;
-use super::super::error::{invalid, nil, Error, Problem};
+use super::super::error::{nil, Error, Problem};
 use super::super::image_plan::plan_image;
 use super::super::resource_ids::IdPlacement;
 use super::super::texture_descriptor::TextureDescriptor;
@@ -68,6 +68,14 @@ impl Device {
     /// multisample sample count's rule; a swizzle with writes under `write_swizzle_enabled` too
     /// (`Invalid`, `SwizzleWithWrites`), which Metal's validation stops here alone.
     pub fn new_shared_texture(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error> {
+        self.current().new_shared_texture_now(descriptor)
+    }
+
+    /// [`Device::new_shared_texture`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_shared_texture_now(
+        &self,
+        descriptor: &TextureDescriptor,
+    ) -> Result<Texture, Error> {
         const CALL: &str = "new_shared_texture";
         // Plain Metal makes a shareable texture without `framebufferOnly`, whatever the
         // descriptor says, so a rotated one asserts as one without it does.
@@ -97,7 +105,7 @@ impl Device {
             .check_shared(self.properties().texture_rules())
             .map_err(|refused| refused.error(CALL))?;
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let id_use = IdUse::Program(descriptor.placement);
         if layout.texture_type == TextureType::TextureBuffer {
@@ -140,7 +148,18 @@ impl Device {
         descriptor: &TextureDescriptor,
         token: RangeToken,
     ) -> Result<Texture, Error> {
-        let texture = self.new_shared_texture(descriptor)?;
+        self.current()
+            .new_shared_texture_with_range_token_now(descriptor, token)
+    }
+
+    /// [`Device::new_shared_texture_with_range_token`] on the generation that serves
+    /// (`device/line.rs`).
+    pub(crate) fn new_shared_texture_with_range_token_now(
+        &self,
+        descriptor: &TextureDescriptor,
+        token: RangeToken,
+    ) -> Result<Texture, Error> {
+        let texture = self.new_shared_texture_now(descriptor)?;
         texture.keep_range_token(token)?;
         Ok(texture)
     }
@@ -159,10 +178,20 @@ impl Device {
         handle: &SharedTextureHandle,
         placement: IdPlacement,
     ) -> Result<Texture, Error> {
+        self.current()
+            .new_shared_texture_with_handle_now(handle, placement)
+    }
+
+    /// [`Device::new_shared_texture_with_handle`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn new_shared_texture_with_handle_now(
+        &self,
+        handle: &SharedTextureHandle,
+        placement: IdPlacement,
+    ) -> Result<Texture, Error> {
         const CALL: &str = "new_shared_texture_with_handle";
         let texture = &handle.0;
         if !texture.device().same(self) {
-            return Err(invalid(CALL, Problem::ForeignObject));
+            return Err(texture.device().foreign(CALL, self));
         }
         let record = &texture.0.record;
         self.check_texture_placement(CALL, placement, record.usage, record.texture_type)?;

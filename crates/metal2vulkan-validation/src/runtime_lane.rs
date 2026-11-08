@@ -374,6 +374,8 @@ mod device_copies;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod device_lockstep;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod device_recovery;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod discard_counts;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod discard_hoist;

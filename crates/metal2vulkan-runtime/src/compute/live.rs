@@ -73,7 +73,7 @@ pub(in crate::compute) struct LiveDispatch {
     pub(in crate::compute) state: BindState,
     /// The state's shape, `None` where a change may have changed it.
     shape: Option<Arc<BindShape>>,
-    /// The count of the device's sampler IDs' slots' changes (`Device::sampler_slots_changed`)
+    /// The count of the device's sampler IDs' slots' changes (`DeviceShared::sampler_slots_changed`)
     /// at which the state's argument samplers are every live sampler state, `None` where they are
     /// not (none listed yet, or those a variant's set-1 arrays hold alone).
     listed_at: Option<u64>,

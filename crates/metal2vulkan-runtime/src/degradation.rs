@@ -2180,6 +2180,18 @@ degradations! {
             "the driver keeps its own cache of the device's pipelines beside the shader cache's \
              records, with whatever it writes to disk and holds in memory for it; the pipelines \
              made are the same";
+        /// A device whose `VkDevice` was lost made a new one behind it, as Metal's device
+        /// survives its GPU's recovery (`device/line.rs`): its command buffers in flight failed,
+        /// the oldest incomplete one as the hang (`GpuHang`) and the rest as its victims
+        /// (`GpuRecoveryVictim`); every later call goes to the new `VkDevice`. Announced at each
+        /// recovery, from the call that made it; the payload names the culprit (where two or more
+        /// `VkQueue`s had work in flight it is an inference, and says so) and the recovery's
+        /// time. Announced as well, once per device, where a call waited past 10 seconds for a
+        /// recovery under way (it waits on), and where the new `VkDevice` could not be made (the
+        /// device then answers as a lost one).
+        DeviceRecovered = "device-recovered", Performance,
+            "the objects made before the recovery are refused (`MadeBeforeRecovery`), where \
+             Metal's go on; the calls during it wait for it";
         /// Apple's private device properties the device has no answer for
         /// (`private_properties.rs`): no document describes them and nothing the device reports
         /// maps to them. Announced once, when `Device::private_properties` is first read; the
@@ -3118,7 +3130,9 @@ fn attachment_read_notice(call: &'static str) -> (String, String) {
     )
 }
 
-impl Device {
+impl super::encoder::EncoderCore {
+    // A draw's checks, of the generation its command buffer holds (`CommandBuffer::generation`).
+
     /// Announce `AttachmentReadInPlace` where `uses`, what a draw of `call` binds or reaches,
     /// share memory with an attachment of its render pass instance, as `shares` answers
     /// (`render_target::shares_attachment`, or a render encoder's `AttachedMemo` of it). The check
@@ -3131,10 +3145,10 @@ impl Device {
         uses: &[Use<ResourceKey>],
     ) -> Result<(), Error> {
         let kind = Degradation::AttachmentReadInPlace;
-        if !self.shared().announced.pending(kind) || !shares(uses)? {
+        if !self.generation().announced.pending(kind) || !shares(uses)? {
             return Ok(());
         }
-        self.degrade(kind, || attachment_read_notice(call));
+        self.device().degrade(kind, || attachment_read_notice(call));
         Ok(())
     }
 
@@ -3150,7 +3164,7 @@ impl Device {
         (moved, uses): (&[Use<ResourceKey>], &[Use<ResourceKey>]),
     ) -> Result<(), Error> {
         let kind = Degradation::AttachmentReadInPlace;
-        if !self.shared().announced.pending(kind) {
+        if !self.generation().announced.pending(kind) {
             return Ok(());
         }
         let shared = shares(moved)?;
@@ -3163,7 +3177,7 @@ impl Device {
         #[cfg(not(debug_assertions))]
         let _ = uses;
         if shared {
-            self.degrade(kind, || attachment_read_notice(call));
+            self.device().degrade(kind, || attachment_read_notice(call));
         }
         Ok(())
     }
@@ -3183,7 +3197,7 @@ impl Device {
         (uses, prefix): (&mut CommandUses, ResidentPrefix),
     ) -> Result<(), Error> {
         let kind = Degradation::AttachmentReadInPlace;
-        if !self.shared().announced.pending(kind) {
+        if !self.generation().announced.pending(kind) {
             return Ok(());
         }
         let past = version.map_or(0, |version| uses.apart(version));
@@ -3195,18 +3209,20 @@ impl Device {
             "a draw's uses checked against the attachments by their identity less than its uses"
         );
         if past == 0 {
-            let counts = self.shared().counts.thread();
+            let counts = self.generation().counts.thread();
             counts.resident_uses_against_attachments(prefix.len as u64);
             if let Some(version) = version.filter(|_| !shared) {
                 uses.apart_from(version);
             }
         }
         if shared {
-            self.degrade(kind, || attachment_read_notice(call));
+            self.device().degrade(kind, || attachment_read_notice(call));
         }
         Ok(())
     }
+}
 
+impl Device {
     /// Announce `degradation` unless the device announced it before (but a kind its options ask
     /// for at each occurrence, `DeviceOptions::announce_each`), `describe` giving the object and
     /// the reason: through the device's message sink, else on stderr, on the calling thread (the
@@ -3246,6 +3262,18 @@ impl Device {
         // other thread of the runtime's, would do out of the program's order (the owner's HITCH
         // rule 1), and a sink keeping what it heard in its thread's state would miss it.
         let misplaced = check_announcement(degradation, shared.announced.each(degradation));
+        let (object, reason) = describe();
+        let message = DegradeNotice::new(degradation, object, reason).message();
+        self.deliver_placed(degradation, message, misplaced);
+    }
+
+    /// Announce a recovery of the device from the loss of its `VkDevice`
+    /// (`Degradation::DeviceRecovered`, `device/line.rs`): at each, whatever the kind's record
+    /// says, since each names its own culprit; inside the program's call that made it.
+    pub(super) fn degrade_recovered(&self, describe: impl FnOnce() -> (String, String)) {
+        let degradation = Degradation::DeviceRecovered;
+        self.shared().announced.now(degradation);
+        let misplaced = check_announcement(degradation, true);
         let (object, reason) = describe();
         let message = DegradeNotice::new(degradation, object, reason).message();
         self.deliver_placed(degradation, message, misplaced);
@@ -3372,6 +3400,11 @@ impl Device {
     /// announces once without counting. Counted whether or not the device's options ask for
     /// each occurrence (`DeviceOptions::announce_each`). No Metal counterpart.
     pub fn degraded_objects(&self, kind: Degradation) -> Option<u64> {
+        self.current().degraded_objects_now(kind)
+    }
+
+    /// [`Device::degraded_objects`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn degraded_objects_now(&self, kind: Degradation) -> Option<u64> {
         self.shared().counts.degraded_objects(kind)
     }
 

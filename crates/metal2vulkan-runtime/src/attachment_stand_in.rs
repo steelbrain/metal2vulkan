@@ -343,7 +343,7 @@ pub(super) fn pooled_backing(
     taken: &[Texture],
     copies: bool,
 ) -> Result<Target, Error> {
-    let queue = maker.command_queue();
+    let queue = maker.queue_place();
     let free = |k: &PooledBacking| k.backs(own, copies) && !taken.contains(&k.backing.texture);
     {
         let mut pool = lock(queue.memoryless_backings());

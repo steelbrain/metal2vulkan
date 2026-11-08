@@ -189,6 +189,11 @@ impl Device {
     /// `bufferDeviceAddress`, since the runtime asks such a buffer for its own address (the
     /// buffers it places in its own memory take theirs from their memory blocks instead).
     pub fn vk_buffer_usage(&self) -> BufferUsageFlags {
+        self.current().vk_buffer_usage_now()
+    }
+
+    /// [`Device::vk_buffer_usage`] on the generation that serves (`device/line.rs`).
+    pub(crate) fn vk_buffer_usage_now(&self) -> BufferUsageFlags {
         usage(self.shared().device_address).into()
     }
 
@@ -222,6 +227,22 @@ impl Device {
     ///   [`encode_signal_vk_semaphore`](super::CommandBuffer::encode_signal_vk_semaphore), or by
     ///   waiting for their completion).
     pub unsafe fn new_buffer_with_vk_buffer(
+        &self,
+        buffer: vk::Buffer,
+        info: &vk::BufferCreateInfo<'_>,
+        memory: VkBufferMemory,
+        length: u64,
+        options: ResourceOptions,
+    ) -> Result<Buffer, Error> {
+        // SAFETY: the caller's contract.
+        unsafe {
+            self.current()
+                .new_buffer_with_vk_buffer_now(buffer, info, memory, length, options)
+        }
+    }
+
+    /// [`Device::new_buffer_with_vk_buffer`] on the generation that serves (`device/line.rs`).
+    pub(crate) unsafe fn new_buffer_with_vk_buffer_now(
         &self,
         buffer: vk::Buffer,
         info: &vk::BufferCreateInfo<'_>,
@@ -274,7 +295,7 @@ impl Device {
             return Err(invalid(CALL, Problem::WrappedBuffer(problem)));
         }
         if self.is_lost() {
-            return Err(Error::DeviceLost);
+            return Err(self.lost_refusal());
         }
         let placement = Placement::caller(
             memory.memory,

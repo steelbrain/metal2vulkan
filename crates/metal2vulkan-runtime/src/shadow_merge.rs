@@ -334,9 +334,11 @@ struct Cut {
 enum Changed {
     /// Copied into the changed part (by the copy back's dispatch where the device runs one faster
     /// and the shadow takes it, `shadow_copy_back.rs`), which `bind::shadow_merge_module` reads.
+    /// The dispatch is boxed: it holds its kernel's and binds' device handles, and the other
+    /// variant holds nothing.
     Copied {
         part: Part,
-        dispatch: Option<CopyBack>,
+        dispatch: Option<Box<CopyBack>>,
     },
     /// Fetched from the shadow through its unsigned-integer view, or its own 8-bit unsigned
     /// normalized view, by `bind::shadow_merge_image_module`: no copy.
@@ -811,7 +813,7 @@ impl ShadowMerge {
         let changed = match changed {
             Some(part) => Changed::Copied {
                 part,
-                dispatch: dispatched_out(device, copies, part, cut.as_ref()),
+                dispatch: dispatched_out(device, copies, part, cut.as_ref()).map(Box::new),
             },
             None => {
                 device.shared().counts.shadow_merge_fetched();

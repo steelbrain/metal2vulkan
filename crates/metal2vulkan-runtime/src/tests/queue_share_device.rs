@@ -149,7 +149,7 @@ fn a_queue_s_command_buffers_run_in_commit_order_across_its_moves() {
                 kept.extend(burst(&busy[step / 4 % 2], &scratch, 24));
             }
             let command_buffer = queue.command_buffer().unwrap();
-            seen.push(queue.vk_queue());
+            seen.push(queue.vk_queue_sharing().0);
             let mut blit = command_buffer.blit_command_encoder().unwrap();
             let at = 4 * step as u64;
             match step {
@@ -204,7 +204,7 @@ fn a_shared_event_wait_on_a_shared_vk_queue_committed_before_its_signal_complete
         for round in 1..=8u64 {
             let busy = burst(&signaller, &scratch, 24);
             let waiting = waiter.command_buffer().unwrap();
-            joined |= waiter.vk_queue() == signaller.vk_queue();
+            joined |= waiter.vk_queue_sharing().0 == signaller.vk_queue_sharing().0;
             waiting
                 .encode_wait_for_event((&event).into(), round)
                 .unwrap();
@@ -242,20 +242,25 @@ fn pinned_and_presenting_queues_never_move_where_an_unpinned_one_does() {
         unsafe { pinned.with_vk_queue(|_, _| {}) };
         let presenting = device.new_command_queue_for_presenting().unwrap();
         let free = device.new_command_queue().unwrap();
-        let (pinned_at, presenting_at) = (pinned.vk_queue(), presenting.vk_queue());
+        let (pinned_at, presenting_at) =
+            (pinned.vk_queue_sharing().0, presenting.vk_queue_sharing().0);
         let mut free_moved = false;
         for _ in 0..8 {
             for queue in [&pinned, &presenting, &free] {
                 let kept = burst(&busy, &scratch, 24);
-                let before = queue.vk_queue();
+                let before = queue.vk_queue_sharing().0;
                 wait_all(burst(queue, &scratch, 1));
-                free_moved |= std::ptr::eq(queue, &free) && queue.vk_queue() != before;
+                free_moved |= std::ptr::eq(queue, &free) && queue.vk_queue_sharing().0 != before;
                 wait_all(kept);
             }
         }
-        assert_eq!(pinned.vk_queue(), pinned_at, "a pinned queue moved");
         assert_eq!(
-            presenting.vk_queue(),
+            pinned.vk_queue_sharing().0,
+            pinned_at,
+            "a pinned queue moved"
+        );
+        assert_eq!(
+            presenting.vk_queue_sharing().0,
             presenting_at,
             "a presenting queue moved"
         );
@@ -275,7 +280,7 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
             .new_buffer(1 << 20, ResourceOptions::private())
             .unwrap();
         let unshared = device.new_command_queue_unshared(64).unwrap();
-        let home = unshared.vk_queue();
+        let home = unshared.vk_queue_sharing().0;
         let others: Vec<CommandQueue> = (0..3)
             .map(|_| device.new_command_queue().unwrap())
             .collect();
@@ -289,7 +294,7 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
                 let made = queue.command_buffer().unwrap();
                 let wrapped = !shares && (after + 1) % round_robin == 0;
                 assert_eq!(
-                    queue.vk_queue() == home,
+                    queue.vk_queue_sharing().0 == home,
                     wrapped,
                     "queue {after} after the unshared one, of a round robin of {round_robin} \
                      VkQueues (shares: {shares}): on the unshared queue's VkQueue"
@@ -298,7 +303,11 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
             }
             wait_all(kept);
         }
-        assert_eq!(unshared.vk_queue(), home, "the unshared queue moved");
+        assert_eq!(
+            unshared.vk_queue_sharing().0,
+            home,
+            "the unshared queue moved"
+        );
         if shares {
             assert!(device.work_counts().joins_withheld_from_unshared > 0);
             // Every round robin's `VkQueue` holds a queue, so the next unshared queue shares
@@ -308,7 +317,7 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
                 .collect();
             let second = device.new_command_queue_unshared(64).unwrap();
             let there: Vec<&CommandQueue> = (filled.iter().chain(&others))
-                .filter(|queue| queue.vk_queue() == second.vk_queue())
+                .filter(|queue| queue.vk_queue_sharing().0 == second.vk_queue_sharing().0)
                 .collect();
             assert!(
                 !there.is_empty(),
@@ -317,7 +326,7 @@ fn no_queue_joins_an_unshared_queue_s_vk_queue_and_one_placed_there_leaves() {
             let before = device.work_counts().queue_moves_off_unshared;
             for queue in &there {
                 drop(queue.command_buffer().unwrap());
-                assert_ne!(queue.vk_queue(), second.vk_queue());
+                assert_ne!(queue.vk_queue_sharing().0, second.vk_queue_sharing().0);
             }
             assert_eq!(
                 device.work_counts().queue_moves_off_unshared - before,
@@ -339,7 +348,11 @@ fn under_per_queue_an_unshared_queue_takes_the_round_robin_s_next_vk_queue() {
         })
         .collect();
     for (made, queue) in queues.iter().enumerate() {
-        assert_eq!(queue.vk_queue(), made % round_robin, "queue {made}");
+        assert_eq!(
+            queue.vk_queue_sharing().0,
+            made % round_robin,
+            "queue {made}"
+        );
     }
     assert_eq!(
         device.work_counts().queues_sharing_a_vk_queue,
