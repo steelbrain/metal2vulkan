@@ -21,8 +21,8 @@
 //!   no linear image of it, or lays its rows at no power of two's pitch); and where a probe failed
 //!   (a Vulkan error).
 //! - **Every format at once, fixed for the device's life.** The first query of any format works
-//!   out every format a buffer backs (a probe of all 175 took 22 to 33 ms on an M3 Max, a Radeon
-//!   780M and lavapipe), and those answers are the device's for good
+//!   out every format a buffer backs (a probe of all 175 took 17 to 23 ms on an M3 Max, a Radeon
+//!   780M and lavapipe, and reading them again from the record 0.3 ms), and those answers are the device's for good
 //!   (`TextureState::linear_alignments`): a program lays its buffers out by the first answer it
 //!   gets, and two threads asking at once take the one set.
 //! - **Kept per driver.** The answers are written as one record in the shader cache's content
@@ -175,10 +175,10 @@ impl Device {
     /// buffer can back: it makes the images a 2D texture over host pages takes in place, at each
     /// power of two from 16 bytes to 4096 and at widths of 1 to 1920 texels, and answers the first
     /// at which every width's image lies at the texture's pitch and its memory alignment divides
-    /// the answer. None is bound; every format took 22 to 33 ms on an Apple M3 Max, a Radeon 780M
+    /// the answer. None is bound; every format took 17 to 23 ms on an Apple M3 Max, a Radeon 780M
     /// and lavapipe. Those answers stay the device's for its life, and a device of the same driver
     /// and runtime release reads them again from one record in the shader cache's content
-    /// directory.
+    /// directory (0.3 ms there).
     ///
     /// It differs from Metal's where the device's images need more than 16 bytes: Mesa's RADV
     /// lays a linear image's rows at multiples of 256 bytes and aligns its memory to 256, and
