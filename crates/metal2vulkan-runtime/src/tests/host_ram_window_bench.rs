@@ -232,6 +232,8 @@ struct Parts {
     queues: bool,
     /// The video-decode extensions where the device has them.
     video_extensions: bool,
+    /// A shader cache directory of the device's own, as a consumer's is, not the per-user one.
+    own_cache: bool,
 }
 
 impl Parts {
@@ -241,19 +243,21 @@ impl Parts {
         gpu_times_from_host: true,
         queues: true,
         video_extensions: true,
+        own_cache: true,
     };
-    /// None of them.
+    /// None of them: the default options, whose shader cache is the per-user directory.
     const NONE: Parts = Parts {
         sink: false,
         gpu_times_from_host: false,
         queues: false,
         video_extensions: false,
+        own_cache: false,
     };
 }
 
 /// A device of the cfg's kind made with the options a consumer (a VMM) makes its device with, of
-/// them those `parts` names, its shader cache in `cache` (the default options keep one on disk
-/// too, in the per-user cache); `None` where it imports no host memory. The options: a message
+/// them those `parts` names; `None` where it imports no host memory. The options: a shader cache
+/// in `cache` (the default options keep one on disk too, in the per-user directory); a message
 /// sink at `Info`, which turns on `VK_EXT_debug_utils` (whose messenger asks the driver for its
 /// warnings and errors; the sink's severity filters the runtime's own messages) and keeps each
 /// message it hears in `heard` ([`hearing`]); GPU times from the host's clock; a video-decode queue
@@ -281,7 +285,10 @@ fn consumer_device(cache: &Path, heard: &Heard, parts: Parts) -> Option<Device> 
         },
         messages: (parts.sink).then(|| sink.with_least_severity(MessageSeverity::Info)),
         gpu_times_from_host: parts.gpu_times_from_host,
-        shader_cache: ShaderCacheOptions::in_directory(cache),
+        shader_cache: match parts.own_cache {
+            true => ShaderCacheOptions::in_directory(cache),
+            false => ShaderCacheOptions::default(),
+        },
         extra_queues: match parts.queues {
             true => vec![ash::vk::QueueFlags::VIDEO_DECODE_KHR],
             false => Vec::new(),
@@ -357,7 +364,7 @@ fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
             slow_lines.push(format!(
                 "take {take} (chunk {}, heap {} in it): {:.2} ms, the heap {:.2} ms; bound in its \
                  run's import {}, in the chunk's {}; chunks imported by the making {}, ahead by \
-                 the thread meanwhile {ahead}; run imports live {}{}",
+                 the thread meanwhile {ahead}; run imports live {}; meanwhile {}{}",
                 offset / CHUNK,
                 offset % CHUNK / HEAP,
                 took.as_secs_f64() * 1e3,
@@ -366,6 +373,7 @@ fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
                 delta(|counts| counts.chunk_bound_buffers_made),
                 delta(|counts| counts.host_ram_chunks_imported) - ahead,
                 now.run_imports_live,
+                pipeline_work(&counts, &now),
                 heard.map_or(String::new(), |heard| {
                     format!(
                         "; messages meanwhile: {}",
@@ -390,7 +398,7 @@ fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
          slowest {:.2} ms, median {:.3} ms, all {:.1} ms; chunks imported ahead {ahead}, by the \
          makings {}; heaps bound in a chunk {bound}, in their run's import {run_bound}; the gate \
          asked {} times; the CPU's writes before them {:.1} ms; shared memory in huge pages {:?} \
-         kB",
+         kB; while it ran {}",
         order.name,
         device.name(),
         times.len(),
@@ -401,6 +409,7 @@ fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
         gates.lock().unwrap().len(),
         ms(writes),
         shmem_huge_kb(),
+        pipeline_work(&before, &after),
     );
     if let Some(heard) = heard {
         eprintln!(
@@ -416,6 +425,23 @@ fn run(device: &Device, order: &Order, pages: RamPages, heard: Option<&Heard>) {
         );
     }
     drop((buffers, heaps, used, ram));
+}
+
+/// The device's pipeline and shader-cache work between `from` and `to`, its counts then: the time
+/// its pipeline creations took, and its shader cache's reads and writes on the creating threads
+/// and off them.
+fn pipeline_work(from: &crate::WorkCounts, to: &crate::WorkCounts) -> String {
+    let ms = |field: fn(&crate::WorkCounts) -> u64| (field(to) - field(from)) as f64 / 1e6;
+    format!(
+        "pipeline creations {:.2} ms (render {:.2}, compute {:.2}), the shader cache's reads \
+         {:.2} ms, writes {:.2} ms, off the creating thread {:.2} ms",
+        ms(|counts| counts.render_pipeline_create_nanos + counts.compute_pipeline_create_nanos),
+        ms(|counts| counts.render_pipeline_create_nanos),
+        ms(|counts| counts.compute_pipeline_create_nanos),
+        ms(|counts| counts.shader_cache_read_nanos),
+        ms(|counts| counts.shader_cache_write_nanos),
+        ms(|counts| counts.shader_cache_off_thread_nanos),
+    )
 }
 
 /// The system's shared memory in huge pages, in kB, where it says (Linux).
@@ -483,10 +509,13 @@ fn host_ram_window_bench_with_a_consumer_s_options() {
 }
 
 /// The consumer's orders over RAM in 2 MiB pages, [`REPEATS`] times each, on a device made with
-/// none of a consumer's options, with each alone ([`Parts`]; the video-decode queues and the
-/// video-decode extensions apart), and with all of them, each device dropped before the next is
-/// made, in the build it is compiled in: which option the takes that wait at a chunk's first
-/// import follow.
+/// none of a consumer's options (its shader cache the per-user directory, as the default options
+/// keep it), with each alone ([`Parts`]; the video-decode queues and the video-decode extensions
+/// apart), and with all of them, each device dropped before the next is made, in the build it is
+/// compiled in: which option the takes that wait at a chunk's first import follow. The shader
+/// cache directory of the device's own is a fresh one, as a new build's is, then the same one
+/// again (holding what the first device wrote), then a fresh one with [`SETTLE`] between the
+/// device's making and its first order.
 #[test]
 #[ignore = "a benchmark"]
 fn host_ram_window_bench_by_consumer_option() {
@@ -495,30 +524,60 @@ fn host_ram_window_bench_by_consumer_option() {
         set(&mut parts);
         parts
     };
+    let own = alone(|parts| parts.own_cache = true);
     let variants = [
-        ("none", Parts::NONE),
-        ("sink", alone(|parts| parts.sink = true)),
+        ("none", Parts::NONE, Cache::Fresh, Duration::ZERO),
+        ("own cache directory", own, Cache::Fresh, Duration::ZERO),
+        (
+            "own cache directory again",
+            own,
+            Cache::Again,
+            Duration::ZERO,
+        ),
+        ("own cache directory, settled", own, Cache::Fresh, SETTLE),
+        (
+            "sink",
+            alone(|parts| parts.sink = true),
+            Cache::Fresh,
+            Duration::ZERO,
+        ),
         (
             "gpu times from host",
             alone(|parts| parts.gpu_times_from_host = true),
+            Cache::Fresh,
+            Duration::ZERO,
         ),
-        ("video queues", alone(|parts| parts.queues = true)),
+        (
+            "video queues",
+            alone(|parts| parts.queues = true),
+            Cache::Fresh,
+            Duration::ZERO,
+        ),
         (
             "video extensions",
             alone(|parts| parts.video_extensions = true),
+            Cache::Fresh,
+            Duration::ZERO,
         ),
-        ("all", Parts::ALL),
+        ("all", Parts::ALL, Cache::Fresh, Duration::ZERO),
     ];
-    for (name, parts) in variants {
-        let scratch = Scratch::new("window-bench-option");
+    let mut kept: Option<Scratch> = None;
+    for (index, (name, parts, cache, settle)) in variants.into_iter().enumerate() {
+        let scratch = match (cache, kept.take()) {
+            (Cache::Again, Some(scratch)) => scratch,
+            _ => Scratch::new(&format!("window-bench-option-{index}")),
+        };
         let heard = Heard::default();
         let Some(device) = consumer_device(&scratch.0, &heard, parts) else {
             return;
         };
+        std::thread::sleep(settle);
         eprintln!(
-            "HOST-RAM-WINDOW-OPTION {name}: {parts:?} on {}, debug assertions {}",
+            "HOST-RAM-WINDOW-OPTION {name}: {parts:?} on {}, debug assertions {}; its making's \
+             {}",
             device.name(),
-            cfg!(debug_assertions)
+            cfg!(debug_assertions),
+            pipeline_work(&crate::WorkCounts::default(), &device.work_counts()),
         );
         for repeat in 0..REPEATS {
             for order in orders().into_iter().filter(|order| order.consumer) {
@@ -531,5 +590,18 @@ fn host_ram_window_bench_by_consumer_option() {
             }
         }
         drop(device);
+        kept = Some(scratch);
     }
 }
+
+/// Where a device of [`host_ram_window_bench_by_consumer_option`] keeps its own shader cache.
+#[derive(Clone, Copy)]
+enum Cache {
+    /// A directory no device wrote.
+    Fresh,
+    /// The directory of the variant before.
+    Again,
+}
+
+/// The wait between a settled variant's device's making and its first order.
+const SETTLE: Duration = Duration::from_secs(2);
