@@ -245,8 +245,11 @@ impl Default for Stamp {
 
 /// The slots of its last calls' changes a table keeps at least, once it noted as many, and the
 /// most slots a call notes ([`Changes`]): it keeps at most twice as many, and a reader that read it
-/// before those it keeps reads it whole.
-const CHANGES_KEPT: usize = 16;
+/// before those it keeps reads it whole. Enough for the binds between a pipeline state's draws
+/// where draws of a few others come between, each binding a few slots: the state's bind state,
+/// set aside meanwhile (`live_bind.rs`), and its kept draw, rebound (`render/draw_again.rs`),
+/// bring in only what changed, found by a scan back from the newest change to their stamp.
+const CHANGES_KEPT: usize = 64;
 
 /// The slots a table's last calls changed (or may have: a refused call's too), each with the
 /// stamp the table took at that call, oldest first, and the stamp before the oldest: a reader that
