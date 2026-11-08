@@ -468,17 +468,7 @@ fn child() {
         unsafe { libc::atexit(read_the_marker) };
     }
     let messages = Messages::default();
-    // Probe: a case named with `@bare` runs without the validation layer.
-    let (case, bare) = match case.strip_suffix("@bare") {
-        Some(case) => (case.to_owned(), true),
-        None => (case, false),
-    };
-    let device = super::validated_device_with(TEST_DEVICE, &messages, &cache, |options| {
-        if bare {
-            options.layers.clear();
-        }
-    })
-    .unwrap();
+    let device = validated_device(TEST_DEVICE, &messages, &cache).unwrap();
     // Right after the device: the hook's later registrations, and every handler a case registers,
     // run before it, and the device's driver's and layer's handlers after it.
     // SAFETY: a handler with no arguments that never unwinds.
