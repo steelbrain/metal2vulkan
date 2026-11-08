@@ -2053,6 +2053,8 @@ impl Gpu for Runtime {
             ("attachment_read_clears", c.attachment_read_clears),
             ("reading_draws_snapshotted", c.reading_draws_snapshotted),
             ("snapshot_inline_splits", c.snapshot_inline_splits),
+            ("reading_draws_pinned", c.reading_draws_pinned),
+            ("stand_ins_after_pins", c.stand_ins_after_pins),
             ("feedback_loop_alias_images", c.feedback_loop_alias_images),
             ("feedback_loop_shadow_images", c.feedback_loop_shadow_images),
             ("depth_attachments_moved", c.depth_attachments_moved),

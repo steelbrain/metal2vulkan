@@ -39,6 +39,7 @@ use crate::attachment_stand_in::StandInCopies;
 use crate::depth_stand_in::StandInCopies as DepthStandInCopies;
 use crate::device::functions::Vk;
 use crate::device::lock;
+use crate::linear_merge::LinearMerge;
 use crate::owned_kernel::OwnedSets;
 use crate::pipeline::RawPipeline;
 use crate::render_target::{self, ClearValues, FramebufferObject, MovedImage, RenderPassObject};
@@ -133,6 +134,19 @@ pub(super) struct PassSteps {
     pub(super) clear_values: ClearValues,
     pub(super) render_area: vk::Rect2D,
     pub(super) staged_rows: StagedRows,
+    /// Where a draw pinned the pass's colors to their own images and stand-ins arrived after
+    /// it (`render/snapshot.rs`): what goes after the last pinned instance.
+    pub(super) after_pins: Option<AfterPins>,
+}
+
+/// The steps after a pass's last pinned instance (`render/snapshot.rs`): the stand-ins' copies
+/// of their attachments' texels, which the pinned instances rendered, and then the keeps of those
+/// merged back into a buffer's bytes (`linear_merge.rs`).
+pub(super) struct AfterPins {
+    /// The last pinned instance.
+    pub(super) at: usize,
+    pub(super) copies: Option<StandInCopies>,
+    pub(super) keeps: Vec<Arc<LinearMerge>>,
 }
 
 impl PassSteps {
@@ -294,6 +308,14 @@ impl PassSteps {
             let tests = self.instances.get(index).is_some_and(|i| i.shader_tests);
             if let Some(copies) = self.stand_in_copies.as_ref().filter(|_| tests) {
                 copies.record_out(raw, command_buffer);
+            }
+            if let Some(pins) = self.after_pins.as_ref().filter(|pins| pins.at == index) {
+                if let Some(copies) = &pins.copies {
+                    copies.record_in(raw, command_buffer);
+                }
+                for merge in &pins.keeps {
+                    merge.keep_in_pass(raw, command_buffer);
+                }
             }
         }
     }

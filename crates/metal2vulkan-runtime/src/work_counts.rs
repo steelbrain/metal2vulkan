@@ -470,6 +470,8 @@ pub(crate) struct Counters {
     attachment_read_clears: AtomicU64,
     reading_draws_snapshotted: AtomicU64,
     snapshot_inline_splits: AtomicU64,
+    reading_draws_pinned: AtomicU64,
+    stand_ins_after_pins: AtomicU64,
     feedback_loop_alias_images: AtomicU64,
     feedback_loop_shadow_images: AtomicU64,
     depth_attachments_moved: AtomicU64,
@@ -3430,6 +3432,18 @@ impl Counters {
     /// inline (`render/snapshot.rs`).
     pub(crate) fn snapshot_inline_split(&self) {
         self.snapshot_inline_splits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw read through a snapshot a color whose image a later fetch would render through a
+    /// stand-in, its instance pinned to the color's own image (`render/snapshot.rs`).
+    pub(crate) fn reading_draw_pinned(&self) {
+        self.reading_draws_pinned.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pass's stand-ins arrived after its pinned instances, and took the attachments' texels
+    /// after the last of them (`render/snapshot.rs`).
+    pub(crate) fn stand_ins_after_pin(&self) {
+        self.stand_ins_after_pins.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device made a linear image aliasing a buffer's bytes with feedback loop usage
@@ -6515,6 +6529,16 @@ pub struct WorkCounts {
     /// was recorded inline, its render pass instance begun without the feedback loop layout the
     /// snapshot needs (`render/snapshot.rs`, `render/inline_first.rs`).
     pub snapshot_inline_splits: u64,
+    /// Of `reading_draws_snapshotted`, the draws that read a color whose image lacks the
+    /// `STORAGE` a later framebuffer fetch of it in the interlock would need, so that a fetch would
+    /// render it through a stand-in for the whole pass: each pins its instance, and those before
+    /// it, to the color's own image (`render/snapshot.rs`).
+    pub reading_draws_pinned: u64,
+    /// Passes whose stand-ins arrived after a pinned instance (`reading_draws_pinned`): the
+    /// instances through the last pinned one rendered the attachments themselves, and each
+    /// stand-in took its attachment's texels after them, not before the pass
+    /// (`render/snapshot.rs`).
+    pub stand_ins_after_pins: u64,
     /// Linear images aliasing a buffer's bytes (a texture over a buffer, a no-copy buffer or an
     /// IOSurface plane) that the device made with feedback loop usage
     /// (`texture::feedback_candidate`), so a draw may read the texture through a snapshot while
@@ -7410,6 +7434,8 @@ impl Device {
             attachment_read_clears: counters.attachment_read_clears.load(Ordering::Relaxed),
             reading_draws_snapshotted: counters.reading_draws_snapshotted.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
+            reading_draws_pinned: counters.reading_draws_pinned.load(Ordering::Relaxed),
+            stand_ins_after_pins: counters.stand_ins_after_pins.load(Ordering::Relaxed),
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
             feedback_loop_shadow_images: counters
                 .feedback_loop_shadow_images

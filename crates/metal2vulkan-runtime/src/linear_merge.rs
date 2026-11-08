@@ -461,6 +461,34 @@ impl LinearMerge {
         }
     }
 
+    /// Record into `command_buffer`, between two render pass instances of the pass, the keep
+    /// that follows its stand-in's copy in there, where the instances before rendered the
+    /// attachment itself (`render/snapshot.rs`'s pins), as [`record_keep`](Self::record_keep)
+    /// records it before the pass: first, where it has one, the scratch's fill with zero; each
+    /// between barriers. The pass's uses hold the keep's ([`keep_uses`](Self::keep_uses)).
+    ///
+    /// # Safety
+    ///
+    /// As for [`LinearMerge::reload_in`].
+    pub(super) unsafe fn keep_in_pass(&self, device: &Vk, command_buffer: vk::CommandBuffer) {
+        // SAFETY: the caller's contract; the scratch is the merge's, a transfer destination, and
+        // the filled range is its two parts, whole words.
+        unsafe {
+            Barrier::everything().record(device, command_buffer);
+            if let Some((offset, size)) = self.padding {
+                device.cmd_fill_buffer(command_buffer, self.scratch, offset, size, 0);
+                Barrier::everything().record(device, command_buffer);
+            }
+            self.keep_in(device, command_buffer);
+            Barrier::everything().record(device, command_buffer);
+        }
+    }
+
+    /// The keep's uses: the kept image's read.
+    pub(super) fn keep_uses(&self) -> &[Use<ResourceKey>] {
+        &self.keep_uses
+    }
+
     /// The keep's copy.
     ///
     /// # Safety

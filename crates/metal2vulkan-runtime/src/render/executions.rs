@@ -2573,6 +2573,10 @@ impl RenderExecution {
             // No pass of several color groups executes render commands
             // (`render/color_groups.rs`).
             grouped: None,
+            // The commands' draws pin no color: no instance of theirs records inline
+            // (`render/snapshot.rs`).
+            pinned_through: 0,
+            pins_frozen: false,
         }
     }
 

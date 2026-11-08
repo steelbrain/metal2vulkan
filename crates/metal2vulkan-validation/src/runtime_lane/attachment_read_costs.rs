@@ -51,8 +51,9 @@
 //! memory barrier over the render targets and a draw over the same rectangle that reads the target
 //! at its own pixels (`tob_read`), through no scissor; each target also without the barriers and
 //! readers, the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per
-//! frame the splits, snapshots, render pass instances begun, shadow copies, texels copied in
-//! (and of them those of a surface's shadow copied in again), keeps and their texels, merges, the
+//! frame the splits, snapshots (and of them those pinned to the target's own image,
+//! `WorkCounts::reading_draws_pinned`), render pass instances begun, shadow copies, texels copied
+//! in (and of them those of a surface's shadow copied in again), keeps and their texels, merges, the
 //! shadows made of render targets over host pages and the textures in place over them (once the
 //! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the
 //! images made with feedback loop usage.
@@ -994,8 +995,9 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
             println!(
                 "SELF-READ-COST {name} {kind} {width}x{height} rows of {row} bytes {} pairs {} \
                  {}x{}: GPU {:.3} ms/frame (median); per frame: splits {:.2}, snapshotted \
-                 {:.2}, instances {:.2}, shadow copies {:.2}, bounded {:.2}, texels copied in \
-                 {:.0}, of a surface again {:.0}, keeps {:.2}, texels kept {:.0}, merges {:.2}; \
+                 {:.2}, pinned {:.2}, instances {:.2}, shadow copies {:.2}, bounded {:.2}, texels \
+                 copied in {:.0}, of a surface again {:.0}, keeps {:.2}, texels kept {:.0}, \
+                 merges {:.2}; \
                  render-target shadows over host pages {}, textures in place over host pages \
                  {}, images made with feedback loop usage: shadows {}, aliases {}",
                 SELF_PAIRS,
@@ -1008,6 +1010,7 @@ fn self_reads_on(device: &Device, policy: HostPageTexturePolicy) {
                     before.reading_draws_snapshotted,
                     after.reading_draws_snapshotted
                 ),
+                per(before.reading_draws_pinned, after.reading_draws_pinned),
                 per(
                     before.render_passes_begun_instances,
                     after.render_passes_begun_instances

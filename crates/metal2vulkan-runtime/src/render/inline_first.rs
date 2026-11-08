@@ -109,7 +109,8 @@
 //! - **A stand-in that arrives later** (a fetched attachment whose image lacks the usage the
 //!   fetch needs) stands in from the next instance on: the end copies each attachment into its
 //!   stand-in right after the inline instance, which rendered the attachment itself, not before
-//!   the pass, and back after the last as before.
+//!   the pass, and back after the last as before; after the last instance a draw pinned to the
+//!   attachments' own images, where one did (`render/snapshot.rs`).
 //! - **Counted**: `WorkCounts::inline_passes` (passes whose first instance recorded inline) and
 //!   `WorkCounts::inline_passes_split` (those of more than one instance), and
 //!   `WorkCounts::inline_split_instances` (`render/inline_splits.rs`); the passes whose first

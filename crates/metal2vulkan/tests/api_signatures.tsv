@@ -2926,6 +2926,7 @@ field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_recalled	pub queue_sw
 field	metal2vulkan-runtime::WorkCounts.queue_switch_checks_run	pub queue_switch_checks_run: u64
 field	metal2vulkan-runtime::WorkCounts.queues_gone_long	pub queues_gone_long: u64
 field	metal2vulkan-runtime::WorkCounts.queues_sharing_a_vk_queue	pub queues_sharing_a_vk_queue: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_pinned	pub reading_draws_pinned: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_snapshotted	pub reading_draws_snapshotted: u64
 field	metal2vulkan-runtime::WorkCounts.reencodes_refused	pub reencodes_refused: u64
 field	metal2vulkan-runtime::WorkCounts.registrations_waited	pub registrations_waited: u64
@@ -3093,6 +3094,7 @@ field	metal2vulkan-runtime::WorkCounts.stamped_buffers_reused	pub stamped_buffer
 field	metal2vulkan-runtime::WorkCounts.stand_in_bytes	pub stand_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.stand_in_copies_made	pub stand_in_copies_made: u64
 field	metal2vulkan-runtime::WorkCounts.stand_in_copies_made_at_draws	pub stand_in_copies_made_at_draws: u64
+field	metal2vulkan-runtime::WorkCounts.stand_ins_after_pins	pub stand_ins_after_pins: u64
 field	metal2vulkan-runtime::WorkCounts.stand_ins_made	pub stand_ins_made: u64
 field	metal2vulkan-runtime::WorkCounts.storage_forms_taken	pub storage_forms_taken: u64
 field	metal2vulkan-runtime::WorkCounts.storage_placeholder_attachments	pub storage_placeholder_attachments: u64

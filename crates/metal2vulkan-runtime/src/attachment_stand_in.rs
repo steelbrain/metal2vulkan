@@ -10,7 +10,10 @@
 //!   ([`pooled_backing`]).
 //! - **A fetched texture's scratch.** One rule for both forms of framebuffer fetch: a color
 //!   texture whose image lacks the usage its fetch form needs renders, in a pass that fetches
-//!   it, into a scratch image that has it, as its attachment in every instance too. In the
+//!   it, into a scratch image that has it, as its attachment in every instance too, but those
+//!   that render the texture itself before it arrives (recorded inline, or pinned by a draw that
+//!   reads it through a snapshot: `render/inline_first.rs`, `render/snapshot.rs`), after which it
+//!   is copied in. In the
 //!   pixel interlock that usage is `STORAGE`, which a texture the runtime makes holds only where
 //!   it costs the image nothing (`framebuffer_fetch::Answers`); through input attachments it is
 //!   input attachment usage, which every color render target the runtime makes holds and a

@@ -79,8 +79,8 @@
 //!   through a view of another format, and which no later fetch can render through a stand-in
 //!   (`RenderCommandEncoder::keeps_own_attachment`: its image has `STORAGE`, which a texture of
 //!   the runtime's own without it, its device laying it out otherwise with it, takes at a later
-//!   commit where it may, noted at its reader's split, `texture/storage_form.rs`, so its later
-//!   passes' readers take the snapshot), no two of the colors of one image (whose
+//!   commit where it may, noted at its reader's draw, `texture/storage_form.rs`) or which the draw
+//!   pins (below), no two of the colors of one image (whose
 //!   snapshot is one); the draw costs no more so than the split would
 //!   (`RenderCommandEncoder::snapshot_cheaper`: at any area where every such color is a texture
 //!   whose image lies over its buffer's bytes, `RenderCommandEncoder::over_bytes`; else its
@@ -98,19 +98,40 @@
 //!   (`WorkCounts::snapshot_inline_splits` counts the first cause). After it, an execution of
 //!   render commands, and a draw that binds such a color's image as a storage image, record into
 //!   another instance: the feedback loop layout serves neither.
+//! - **Pins.** A fetch of a color in the pixel interlock reads and writes its image as a storage
+//!   image, so a later fetch of a color whose image lacks `STORAGE` renders it through a stand-in
+//!   (`attachment_stand_in.rs`), which the pass's end puts in place for the whole pass, copied in
+//!   before it: a snapshot draw before the fetch would have read the texture's own image, which
+//!   the pass no longer rendered. A draw reads such a color through a snapshot all the same where
+//!   it can pin it (`RenderCommandEncoder::pins_own_attachment`): where nothing the pass's end
+//!   decides from the whole pass changes what its instances so far render, and nothing arrives
+//!   with the draw (the pass's first instance recorded inline, which ran its load actions itself,
+//!   `render/inline_first.rs`; no stand-in, memoryless color or depth/stencil attachment, every
+//!   color stored `Store`, no tile dispatch, execution, color groups or extended-range shadow; a
+//!   draw that fetches nothing and needs no hidden depth or stencil). Its instance and those
+//!   before it render each color's own image (`RenderLowering::pinned_through`), and a stand-in
+//!   arriving after them takes its attachment's texels after the last of them, as after an
+//!   instance recorded inline: the pass's end renders those instances through the colors' own
+//!   images, records each stand-in's copy in after them, the keep of one merged back into a
+//!   buffer's bytes after that (`linear_merge.rs`), and the reloads after a barrier after them
+//!   alone, and no run of passes takes the pass (`pass_runs.rs`). Once a stand-in or the hidden
+//!   depth and stencil arrived after a pin, no later draw pins (`RenderLowering::pins_frozen`):
+//!   its reader splits.
 //! - **Counted**: `WorkCounts::reading_draws_snapshotted`, and of them
-//!   `WorkCounts::snapshot_inline_splits`. With `METAL2VULKAN_LOG_PIPELINES` set,
+//!   `WorkCounts::snapshot_inline_splits` and `WorkCounts::reading_draws_pinned`; the passes whose
+//!   stand-ins arrived after a pin, `WorkCounts::stand_ins_after_pins`. With `METAL2VULKAN_LOG_PIPELINES` set,
 //!   the first draw of each reason a draw took the split says so, once per device
 //!   (`metal2vulkan-snapshot-fallback`), and the draws the area rule weighed are counted by their
 //!   share of their colors' pixels and texel bytes, a line at 64 of them, each power of two
 //!   after, and as the device ends (`metal2vulkan-snapshot-readers`, `reader_sizes.rs`).
 
-use super::{PlanFacts, Reformat, RenderLowering};
+use super::{inline_first, PlanFacts, Reformat, RenderLowering};
 use crate::copy_plan::block_bytes;
 use crate::dynamic_state::ColorWriteMasks;
 use crate::pipeline::{GraphicsState as DrawingState, Settled};
 use crate::render_state::MAX_VIEWPORTS;
 use crate::render_target::{self, Feedback};
+use crate::render_values::StoreAction;
 use crate::texture::Texture;
 use ash::vk;
 use metal2vulkan::bind::{BindingPlan, ImageSource, PushHole, WriteSource};
@@ -123,6 +144,9 @@ use std::collections::BTreeSet;
 pub(super) struct Wanted {
     pub(super) slots: BTreeSet<u32>,
     pub(super) feedback: Feedback,
+    /// The colors among them that no later fetch would keep in their own images, which the
+    /// draw pins to them ([`RenderLowering::pins_own_attachment`]).
+    pub(super) pins: u32,
 }
 
 /// The form `plan` keeps fragment texture slot `slot`'s snapshot in
@@ -316,17 +340,21 @@ impl RenderLowering {
             .filter(|&i| wanted.feedback.has(i))
             .collect();
         for &index in &colors {
-            if !self.keeps_own_attachment(index) {
-                // A texture of the runtime's own whose image lacks `STORAGE` (the device lays it
-                // out otherwise with it) takes its storage form at a later commit, where it may
-                // (`texture/storage_form.rs`): its later passes' readers take the snapshot.
-                if let Some(color) = self.layout.colors.get(index).and_then(Option::as_ref) {
-                    color.target.texture.want_storage_form();
-                }
+            if self.keeps_own_attachment(index) {
+                continue;
+            }
+            // A texture of the runtime's own whose image lacks `STORAGE` (the device lays it
+            // out otherwise with it) takes its storage form at a later commit, where it may
+            // (`texture/storage_form.rs`): its later passes' readers need no pin.
+            if let Some(color) = self.layout.colors.get(index).and_then(Option::as_ref) {
+                color.target.texture.want_storage_form();
+            }
+            if !self.pins_own_attachment(pipeline, index) {
                 return self.snapshot_fallback(
                     "a framebuffer fetch of the attachment would render it through a stand-in",
                 );
             }
+            wanted.pins |= 1 << index;
         }
         // A texture's snapshot is its image's (`Texture::snapshot_texels`): two colors of one
         // image would copy their texels into one snapshot.
@@ -348,6 +376,44 @@ impl RenderLowering {
             );
         }
         Some(wanted)
+    }
+
+    /// Whether the draw of `pipeline` reads the pass's color `index`, whose own image a later
+    /// fetch would not keep (`keeps_own_attachment`), through a snapshot of that image all the
+    /// same, pinning it (the module docs): where nothing the pass's end decides from the whole
+    /// pass changes what its instances through the draw's render, and nothing arrives with the
+    /// draw. So: the pass's first instance recorded inline, which ran the pass's load actions
+    /// itself (`render/inline_first.rs`); nothing arrived since an earlier pin
+    /// (`pins_frozen`); no stand-in, memoryless color or depth/stencil attachment in the pass,
+    /// hidden or not, every color stored `Store` (which no later call changes: so no texture over
+    /// a buffer renders through an image it keeps, `kept_bytes.rs`), and no tile dispatch,
+    /// execution of render commands, color groups or extended-range shadow that records an
+    /// instance's draws again; a draw that fetches no color and whose state needs no hidden
+    /// depth or stencil; and the color a 2D one.
+    pub(super) fn pins_own_attachment(&self, pipeline: &DrawingState, index: usize) -> bool {
+        let Some(color) = self.layout.colors.get(index).and_then(Option::as_ref) else {
+            return false;
+        };
+        let graphics = &pipeline.base().graphics;
+        let (depth, stencil) = self.layout.aspects();
+        let plain = |c: &crate::render_pass::ColorTarget| {
+            c.stand_in.is_none()
+                && !c.memoryless
+                && !super::memoryless(&c.target)
+                && c.store == StoreAction::Store
+        };
+        matches!(self.inline, inline_first::Inline::Begun(_))
+            && !self.pins_frozen
+            && self.grouped.is_none()
+            && self.dispatches.is_empty()
+            && self.executions.is_empty()
+            && !self.extended.keeps_draws()
+            && self.layout.depth_stencil.is_none()
+            && self.layout.colors.iter().flatten().all(plain)
+            && graphics.storage_attachments.is_empty()
+            && graphics.input_attachments.is_empty()
+            && !self.state.needs_hidden(depth, stencil)
+            && !crate::render_pass::not_2d(&color.target)
     }
 
     /// Whether a draw of `pipeline` that reads the pass's `colors` through snapshots costs no

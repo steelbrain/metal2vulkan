@@ -107,7 +107,9 @@
 //!   leaves out, bound as storage views of their level and layer, whose fragment shader reads
 //!   and writes join the draw's uses. Either way a fetched attachment whose image lacks the
 //!   usage its form needs (input attachment usage, or `STORAGE`) renders, from the draw on and
-//!   for the whole pass, into a stand-in that has it (`attachment_stand_in.rs`). In a
+//!   for the whole pass, into a stand-in that has it (`attachment_stand_in.rs`): but for the
+//!   instances recorded inline and those a draw pinned to the attachments' own images
+//!   (`render/inline_first.rs`, `render/snapshot.rs`), after which it takes their texels. In a
 //!   multisampled pass the interlock form reads and writes the attachment's sample planes on a
 //!   device without multisampled storage images (`sample_planes.rs`): made at the first draw that
 //!   fetches the attachment, bound to every such draw as a storage view of every layer, and moved
@@ -383,7 +385,7 @@ use metal2vulkan::pipeline::{
     StorageAttachmentUse, StorageAttachmentView,
 };
 use pass_start_reads::{PassStartReads, PassStartTables};
-use pass_steps::{InstanceSteps, PassSteps, StagedDispatch, StagedRows};
+use pass_steps::{AfterPins, InstanceSteps, PassSteps, StagedDispatch, StagedRows};
 use pending::{OwnedRecording, PendingDraw};
 use provoking::ProvokingForms;
 use shadows::InstanceShadows;
@@ -1693,6 +1695,14 @@ pub(crate) struct RenderLowering {
     /// The pass's color group, where the device draws its colors in groups: the encoder draws
     /// that group's (`render/color_groups.rs`).
     grouped: Option<Box<color_groups::Grouped>>,
+    /// The count of the pass's instances through the last that a draw pinned to its colors' own
+    /// images, reading one through a snapshot of it that a later fetch would otherwise render
+    /// through a stand-in (`render/snapshot.rs`): a stand-in arriving after them takes its
+    /// attachment's texels after the last of them. 0 where no draw pinned one.
+    pinned_through: usize,
+    /// A stand-in or the hidden depth and stencil arrived after a pin: no later draw pins
+    /// (`render/snapshot.rs`).
+    pins_frozen: bool,
 }
 
 /// What a render encoder's draws retained of their own (their pipeline states, their variants'
@@ -2246,6 +2256,8 @@ impl RenderLowering {
                 held_bound: Bound::default(),
                 again: draw_again::DrawAgain::default(),
                 grouped,
+                pinned_through: 0,
+                pins_frozen: false,
             },
         )
     }
@@ -4239,7 +4251,7 @@ impl RenderLowering {
             inputs_read,
             residency,
             extended,
-            reload_at,
+            mut reload_at,
             log,
             depth_writes,
             drew_depth_writes,
@@ -4248,6 +4260,7 @@ impl RenderLowering {
             live,
             bind_memo,
             pass_start,
+            pinned_through,
             ..
         } = *self;
         // The views and sampler descriptions its binds made or found, which the device's next
@@ -4827,10 +4840,24 @@ impl RenderLowering {
         // again.
         let mut runs: Vec<RunColor> = Vec::new();
         let mut shadow_runs: Vec<ShadowRunColor> = Vec::new();
-        let run_point = match core.encodes_again() || crate::replay::is_replaying() {
-            true => None,
-            false => Some(core.command_buffer().state().run_point()),
-        };
+        // Where a draw pinned the pass's colors to their own images and stand-ins arrived after
+        // it (`render/snapshot.rs`): the count of the instances through the last pinned one, which
+        // render the attachments themselves. Every stand-in arrived after them, as the pass held
+        // none at a pin: each takes its attachment's texels after the last of them, as after the
+        // instances recorded inline (`render/inline_first.rs`), and is merged back, reloaded or
+        // copied back after them alone; and no run of passes takes the pass (`pass_runs.rs`).
+        let pinned = (inline && pinned_through > inlined)
+            .then_some(pinned_through)
+            .filter(|_| layout.colors.iter().flatten().any(|c| c.stand_in.is_some()));
+        if let Some(through) = pinned {
+            reload_at.retain(|&at| at >= through);
+            core.device().shared().counts.stand_ins_after_pin();
+        }
+        let run_point =
+            match core.encodes_again() || crate::replay::is_replaying() || pinned.is_some() {
+                true => None,
+                false => Some(core.command_buffer().state().run_point()),
+            };
         if let Some(now) = run_point {
             // A quiet pass touches nothing but what its commands name and its attachments: no
             // command reaches memory it does not name, nor a heap; no draw or tile dispatch
@@ -5133,11 +5160,14 @@ impl RenderLowering {
         };
         copied_in.extend(depth_stencil_copies(false));
         let stand_ins_in = StandInCopies::plan_aspects(&copied_in, true)?;
-        let (stand_ins_in, stand_ins_after_first) = match inline {
-            true => (None, stand_ins_in),
-            false => (stand_ins_in, None),
+        // Where a draw pinned the colors, after the last pinned instance (`pinned`), the merged
+        // colors' keeps after their copies.
+        let (stand_ins_in, stand_ins_after_first, stand_ins_after_pins) = match (inline, pinned) {
+            (true, Some(_)) => (None, None, stand_ins_in),
+            (true, None) => (None, stand_ins_in, None),
+            (false, _) => (stand_ins_in, None, None),
         };
-        if let Some(copies) = &stand_ins_after_first {
+        for copies in stand_ins_after_first.iter().chain(&stand_ins_after_pins) {
             uses.extend(copies.uses().iter().cloned());
         }
         // A memoryless color's backing, arriving later, where the first instance recorded inline
@@ -5258,6 +5288,21 @@ impl RenderLowering {
                 depth_stencil: None,
                 ..layout.clone()
             });
+        // The instances through the last pinned one render each color's own image, and no hidden
+        // depth or stencil, which arrived after them where it did (`pinned`).
+        let fixed = pinned.map(|_| {
+            let mut fixed = PassLayout {
+                depth_stencil: None,
+                ..layout.clone()
+            };
+            for color in fixed.colors.iter_mut().flatten() {
+                if let Some(own) = color.stand_in.as_ref().map(|s| s.own.clone()) {
+                    color.target = own;
+                    color.stand_in = None;
+                }
+            }
+            fixed
+        });
         // The layout of the instances that resolve: the scratch image as the depth/stencil
         // attachment where its copy stands for it.
         let resolving_layout = resolve_source
@@ -5555,10 +5600,17 @@ impl RenderLowering {
             copies.record(&mut core);
         }
         // What the merged colors hold once copied in, before any step writes them: kept by a
-        // run's first pass alone.
+        // run's first pass alone; where a draw pinned the colors, after their copies in after the
+        // last pinned instance.
+        let mut kept_after_pins = Vec::new();
         for (index, merge) in &merged {
-            if !goes_on(*index) {
-                merge.record_keep(&mut core);
+            match (goes_on(*index), pinned) {
+                (true, _) => {}
+                (false, Some(_)) => {
+                    uses.extend(merge.keep_uses().iter().cloned());
+                    kept_after_pins.push(Arc::clone(merge));
+                }
+                (false, None) => merge.record_keep(&mut core),
             }
         }
         if let Some(clears) = reach_clears {
@@ -5639,7 +5691,11 @@ impl RenderLowering {
                 first: index == 0,
                 last: index + 1 == count && !resolve_after,
             };
-            let own = instance_layout(&layout, bare.as_ref(), &instance.shape);
+            // An instance through the last pinned one renders the attachments themselves.
+            let own = match (&fixed, pinned) {
+                (Some(fixed), Some(through)) if index < through => fixed,
+                _ => instance_layout(&layout, bare.as_ref(), &instance.shape),
+            };
             let feedback = instance.feedback;
             // Its framebuffer holds the views its draws render colors through.
             let viewed = reformatted(own, &instance.reformats);
@@ -5778,6 +5834,11 @@ impl RenderLowering {
                 device: device.clone(),
                 sets: Default::default(),
             },
+            after_pins: pinned.map(|through| AfterPins {
+                at: through - 1,
+                copies: stand_ins_after_pins,
+                keeps: kept_after_pins,
+            }),
         };
         // An inline first instance's steps before it go before the pass, into the command buffer
         // before the pass's, as the end records them before the pass's first instance; the
@@ -6482,7 +6543,7 @@ impl RenderLowering {
     /// not fetch input attachments renders it in place where its texture is not memoryless and its
     /// image has `STORAGE` and takes the storage view, and through a stand-in for the whole pass
     /// otherwise (`next_instance`), which a draw read through a snapshot of the texture would not
-    /// see (`render/snapshot.rs`).
+    /// see but where it pins the color (`render/snapshot.rs`).
     fn keeps_own_attachment(&self, index: usize) -> bool {
         let Some(color) = self.layout.colors.get(index).and_then(Option::as_ref) else {
             return false;
@@ -6941,6 +7002,9 @@ impl RenderLowering {
         cause: Split,
     ) {
         if let Some(layout) = stood {
+            // What a stand-in brings after a pin, a later draw cannot pin past
+            // (`render/snapshot.rs`).
+            self.pins_frozen |= self.pinned_through > 0;
             *self.layout = *layout;
             self.kept_attachments = None;
         }
@@ -10075,7 +10139,19 @@ impl RenderLowering {
         } else {
             Split::Shape
         };
+        // A draw that pins its colors to their own images brings nothing to the pass's layout
+        // (`snapshot_wanted`): its instance and those before it render them.
+        let pins = snapshot.as_ref().is_some_and(|wanted| wanted.pins != 0);
+        if pins && stood.is_some() {
+            return Err(internal(
+                "a stand-in arriving with a draw that pins its colors",
+            ));
+        }
         self.install(next, stood, continuation, cause);
+        if pins {
+            self.pinned_through = self.earlier.len() + 1;
+            device.shared().counts.reading_draw_pinned();
+        }
         self.current.feedback.0 |= feedback.0;
         self.current.storage_colors |= storage_colors;
         if let Some(begin) = inline {
