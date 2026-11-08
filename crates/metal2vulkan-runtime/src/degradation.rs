@@ -978,9 +978,10 @@ degradations! {
         /// ([`metal2vulkan::device::DriverFact::CompressedImagesHideAliasedWrites`]), whose image
         /// takes host-transfer usage, which the driver keeps uncompressed in the heap's bytes
         /// ([`metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes`]). Also, on any
-        /// device, a single-sample colour texture whose image of the route it first took takes
-        /// more bytes or a coarser alignment than Metal's answer, where this one fits the answer:
-        /// it lies in the heap's bytes in place of a shadow of them (`texture/heap.rs`).
+        /// device, a single-sample colour texture Metal keeps compressed, or whose layout Metal's
+        /// model does not state, whose image of the route it first took takes more bytes or a
+        /// coarser alignment than Metal's answer, where this one fits the answer: it lies in the
+        /// heap's bytes in place of a shadow of them (`texture/heap.rs`).
         HeapTextureHostTransfer = "heap-texture-host-transfer", Performance,
             "the texture's image is kept uncompressed, so writes through the heap's buffers and \
              textures over its bytes show in it as Metal's do: a clear of it loses the driver's \
@@ -993,7 +994,9 @@ degradations! {
         /// texture whose image of the route it first took takes more bytes or a coarser
         /// alignment than Metal's answer, where no image of host-transfer usage fits the answer
         /// and a linear one does: it lies in the heap's bytes in place of a shadow of them
-        /// (`texture/heap.rs`).
+        /// (`texture/heap.rs`). Of a texture Metal keeps uncompressed, whose bytes are Metal's
+        /// tiles, only a linear image whose every element lies where those tiles place it (a
+        /// level of one element or one row), and no image of host-transfer usage.
         HeapTextureLinear = "heap-texture-linear", Performance,
             "the texture's image is linear, so writes through the heap's buffers and textures \
              over its bytes show in it as Metal's do: its reads and writes go without the \

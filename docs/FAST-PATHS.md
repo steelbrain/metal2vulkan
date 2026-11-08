@@ -348,6 +348,22 @@ recorded here.
   theirs on every device. On MoltenVK on Apple's GPUs, which drops the barrier and whose such
   draws race under load (`DriverFact::InterlockedDrawsRaceUnderLoad`), the later draw begins a
   render pass instance of its own instead (a known gap below).
+- **A heap texture Metal keeps uncompressed is a shadow of Metal's tiles where no image in place
+  lays its elements there.** Metal lays such a texture's bytes out in its tiles
+  (`texture/heap_tiled.rs`). Where the device's image of it takes more of the heap than Metal's
+  answer, an image that fits takes its place in the heap's bytes where Metal compresses the
+  texture (its bytes are no layout of its texels) or its layout is not modelled
+  (`heap-texture-host-transfer`, `heap-texture-linear`); of a texture Metal keeps uncompressed,
+  only a linear image whose every element lies where Metal's tiles place it does, announced with
+  no layout (a level of one element or one row: a 1x1 texture, a one-level 1D one;
+  `texture/heap.rs`, `rows_lie_in_metal_tiles`). Every other such texture is a shadow of Metal's
+  tiles (`shadowed-texture`). On ANV (Iris Xe of RPL-P, Mesa 26.2.6), of the shapes a guest's
+  compositor made in its heaps (`runtime_lane::heap_shadow_costs`), those are the `RGBA16Float`
+  arrays of 3x3 to 10x10; the ones Metal compresses and the 1x1 lie in place. A 1x1 one
+  measured as a shadow there took 35.9 µs of GPU time a frame that clears it in a pass and
+  blits it, against 8.1 µs in place and 12.1 µs outside a heap, and 16.9 µs a frame that only
+  blits it, against 3.7 and 3.9 (`heap_shadow_costs`); the shapes from 3x3 to 10x10 are not
+  measured apart.
 - **A shadow over bytes another writer may write is merged back, not copied back.** Metal writes
   only the texels a command writes, and another writer writing bytes no command touches while a
   command buffer runs is valid under its contract. On an M3 Max under macOS 27.0.1, a CPU write to

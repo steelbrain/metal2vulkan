@@ -2293,9 +2293,10 @@ bound.
   alias (`DriverFact::CompressedImagesHideAliasedWrites`), whose image takes host-transfer usage,
   which the driver keeps uncompressed in the heap's bytes
   (`metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes`). Also, on any device, a
-  single-sample colour texture whose first image takes more bytes or a coarser alignment of the
-  heap than Metal's answer, where this one fits the answer: it lies in the heap's bytes in place of
-  a shadow of them. Cost: the texture's image
+  single-sample colour texture Metal keeps compressed, or whose layout Metal's model does not state,
+  whose first image takes more bytes or a coarser alignment of the heap than Metal's answer, where
+  this one fits the answer: it lies in the heap's bytes in place of a shadow of them. Cost: the
+  texture's image
   is kept uncompressed, so writes through the heap's buffers and textures over its bytes show
   in it as Metal's do: a clear of it loses the driver's fast clear (334.5 us where a compressed
   2048x2048 RGBA8Unorm image's took 4.1 us on an RPL-S), while its copies, sampling and blending
@@ -2307,7 +2308,9 @@ bound.
   optimal image does for the texture. Also, on any device, a single-sample colour texture whose
   first image takes more bytes or a coarser alignment of the heap than Metal's answer, where no
   image of host-transfer usage fits the answer and a linear one does: it lies in the heap's bytes
-  in place of a shadow of them. Cost: the texture's image is linear, so writes through the
+  in place of a shadow of them. Of a texture Metal keeps uncompressed, whose bytes are Metal's
+  tiles, only a linear image whose every element lies where those tiles place it (a level of one
+  element or one row), and no image of host-transfer usage. Cost: the texture's image is linear, so writes through the
   heap's buffers and textures over its bytes show in it as Metal's do: its reads and writes go
   without the optimal tiling's locality and compression (3.9 to 9.6 times the host-transfer image's
   time for copies, clears and draws of a 2048x2048 RGBA8Unorm texture on an RPL-S).
