@@ -20,8 +20,9 @@
 //!   (`host_imports_kept_for_fds`);
 //! - that a placement and an import of a pointer made while a no-copy buffer's dma-buf import is
 //!   held where the driver's import runs (the memory's test stand-in, `Memory::import_hold`) wait
-//!   for none of it, and how long placements wait beside real imports of 256 MiB of dma-bufs
-//!   (`memory::import_dma_buf` makes them with the device's memory lock released).
+//!   for none of it, and how long the device's memory lock and placements wait beside real
+//!   imports of 256 MiB of dma-bufs (`memory::import_dma_buf` makes them with the device's memory
+//!   lock released).
 //!
 //! A device that imports the pointer (NVIDIA, lavapipe, ANV) runs none of it: each test says so
 //! and passes, and `tests/pointer_residency.rs` checks the residency of pointer imports. Where
@@ -961,21 +962,25 @@ fn makings_beside_a_dma_buf_import_in_the_driver_wait_for_none_of_it() {
     });
 }
 
-/// How long placements wait beside real imports of dma-bufs: a thread places buffers of the
-/// device's own memory one after another (each `new_buffer`, which takes the device's memory lock
-/// to place it) while another makes no-copy buffers over [`TIMED_BYTES`] of a file's pages,
-/// imported as dma-bufs of udmabuf, each dropped before the next. Printed (`DMA-BUF-IMPORT-TIMED`):
-/// each import's making, and the placements' count, median, slowest and those past 10 ms: the
-/// driver's import holds no lock a placement takes, so the slowest stays far below an import's
-/// time. No bound is asserted: the figure is the evidence for the memory lock released across the
-/// import (`memory::import_dma_buf`). Where the device makes no import of dma-bufs, the test says
-/// so and passes.
+/// How long the device's memory lock and placements wait beside real imports of dma-bufs: a
+/// thread takes the device's memory lock again and again, timing each wait for it, and places
+/// buffers of the device's own memory (each `new_buffer`, kept, so none is taken from the parked
+/// and each placement takes the lock) while another makes no-copy buffers over [`TIMED_BYTES`] of
+/// a file's pages, imported as dma-bufs of udmabuf, each dropped before the next. Printed
+/// (`DMA-BUF-IMPORT-TIMED`): each import's making, the lock's waits (count, median, slowest, those
+/// past 1 ms) and the placements' (count, median, slowest, those past 10 ms): the driver's import
+/// holds no lock a placement takes, so the slowest stays far below an import's time. No bound is
+/// asserted: the figures are the evidence for the memory lock released across the import
+/// (`memory::import_dma_buf`), against the same run with it held. Where the device makes no import
+/// of dma-bufs, the test says so and passes.
 #[test]
 fn placements_beside_dma_buf_imports_are_timed() {
     const TEST: &str = "placements beside dma-buf imports";
     /// The bytes of each no-copy buffer: a guest's surface view or more.
     const TIMED_BYTES: usize = 256 << 20;
     const IMPORTS: usize = 3;
+    /// The most buffers the thread places and keeps; past them it times the lock alone.
+    const PLACED_MOST: usize = 4096;
     on_device(TEST, |device| {
         let ram = Ram::new(TIMED_BYTES, 0, TIMED_BYTES);
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -983,14 +988,21 @@ fn placements_beside_dma_buf_imports_are_timed() {
             let device = device.clone();
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                let mut took = Vec::new();
+                let (mut waits, mut placings, mut placed) = (Vec::new(), Vec::new(), Vec::new());
                 while !stop.load(Ordering::Acquire) {
                     let began = Instant::now();
-                    let placed = device.new_buffer(4096, ResourceOptions::shared());
-                    took.push(began.elapsed());
-                    drop(placed);
+                    drop(crate::device::lock(&device.shared().memory));
+                    waits.push(began.elapsed());
+                    if placed.len() < PLACED_MOST {
+                        let began = Instant::now();
+                        let buffer = device.new_buffer(4096, ResourceOptions::shared());
+                        placings.push(began.elapsed());
+                        placed.push(buffer);
+                    }
+                    std::thread::yield_now();
                 }
-                took
+                drop(placed);
+                (waits, placings)
             })
         };
         let mut imports = Vec::new();
@@ -1009,7 +1021,7 @@ fn placements_beside_dma_buf_imports_are_timed() {
             }
         }
         stop.store(true, Ordering::Release);
-        let mut took = placing.join().unwrap();
+        let (mut waits, mut placings) = placing.join().unwrap();
         if let Some(error) = refused {
             eprintln!(
                 "{TEST}: on {}: no import of dma-bufs here ({error:?}): nothing to time",
@@ -1017,28 +1029,33 @@ fn placements_beside_dma_buf_imports_are_timed() {
             );
             return;
         }
-        if took.is_empty() {
+        if waits.is_empty() || placings.is_empty() {
             eprintln!(
                 "{TEST}: on {}: no placement beside the imports",
                 device.name()
             );
             return;
         }
-        took.sort();
         let ms = |duration: Duration| duration.as_secs_f64() * 1e3;
-        let past = took
-            .iter()
-            .filter(|took| **took > Duration::from_millis(10))
-            .count();
+        let summary = |took: &mut Vec<Duration>, past: Duration| {
+            took.sort();
+            let over = took.iter().filter(|took| **took > past).count();
+            format!(
+                "{} of them: median {:.3} ms, slowest {:.3} ms, {over} past {} ms",
+                took.len(),
+                ms(took[took.len() / 2]),
+                ms(took[took.len() - 1]),
+                past.as_millis()
+            )
+        };
         eprintln!(
             "DMA-BUF-IMPORT-TIMED {}: {IMPORTS} makings of {} MiB over dma-bufs in {:?} ms; \
-             {} placements beside them: median {:.3} ms, slowest {:.3} ms, {past} past 10 ms",
+             waits for the memory lock beside them, {}; placements, {}",
             device.name(),
             TIMED_BYTES >> 20,
             imports.iter().map(|took| ms(*took)).collect::<Vec<f64>>(),
-            took.len(),
-            ms(took[took.len() / 2]),
-            ms(took[took.len() - 1]),
+            summary(&mut waits, Duration::from_millis(1)),
+            summary(&mut placings, Duration::from_millis(10)),
         );
     });
 }
