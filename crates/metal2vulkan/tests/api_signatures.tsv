@@ -2561,6 +2561,7 @@ field	metal2vulkan-runtime::WorkCounts.batches_with_one_pending	pub batches_with
 field	metal2vulkan-runtime::WorkCounts.batches_with_two_or_three_pending	pub batches_with_two_or_three_pending: u64
 field	metal2vulkan-runtime::WorkCounts.bind_views_worked_out	pub bind_views_worked_out: u64
 field	metal2vulkan-runtime::WorkCounts.block_decode_passes	pub block_decode_passes: u64
+field	metal2vulkan-runtime::WorkCounts.blocks_ahead_hurried	pub blocks_ahead_hurried: u64
 field	metal2vulkan-runtime::WorkCounts.blocks_ahead_past_quiet_wait	pub blocks_ahead_past_quiet_wait: u64
 field	metal2vulkan-runtime::WorkCounts.blocks_ahead_unused	pub blocks_ahead_unused: u64
 field	metal2vulkan-runtime::WorkCounts.blocks_ahead_waited_for	pub blocks_ahead_waited_for: u64
