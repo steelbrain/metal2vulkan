@@ -70,7 +70,7 @@
 //!   depth or stencil first and leave the drawing draw nothing (`FILL`). Under a `Less` depth
 //!   without writes both instances draw (`3 * FILL`).
 
-use super::attachment_reads::{floats, function, red};
+use super::attachment_reads::{floats, function};
 use super::degrade_notices::on_device_with;
 use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::in_place_rows;
@@ -111,6 +111,11 @@ fn corners([x0, y0, x1, y1]: [u64; 4]) -> Vec<u8> {
     let x = |p: u64| p as f32 / SIDE as f32 * 2.0 - 1.0;
     let y = |p: u64| 1.0 - p as f32 / SIDE as f32 * 2.0;
     floats([x(x0), y(y1), x(x1), y(y0)])
+}
+
+/// The red of pixel `(x, y)` of `bytes`, tight `RGBA8Unorm` rows of [`SIDE`] pixels.
+fn red(bytes: &[u8], x: u64, y: u64) -> u8 {
+    bytes[((y * SIDE + x) * 4) as usize]
 }
 
 /// The features the snapshot path takes.
