@@ -279,6 +279,8 @@ mod memory;
 mod memory_block_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod memory_frees;
+#[cfg(m2v_gpu)]
+mod memory_make_hold_bench;
 mod memory_reads;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod merge_scratch;
