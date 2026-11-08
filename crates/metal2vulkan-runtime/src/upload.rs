@@ -42,8 +42,10 @@
 //!   and the storage and uniform buffer offset alignments), so it can be bound at its offset and
 //!   its device address is 16-aligned. A root table and the resident set it searches start at a
 //!   device address that is a multiple of 32 too (`upload_aligned`). A region's bytes past the data
-//!   are zero: [`Uploads::upload`] sets them, since the chunk holds no value as it is made. The
-//!   bytes an alignment leaves between two regions belong to no region, and nothing reads them.
+//!   are zero: [`Uploads::upload`] sets them, since the chunk holds no value as it is made; but an
+//!   unset region's ([`Uploads::unset`]: a staged copy's pages, which a host step writes before
+//!   its batch is submitted, every byte its command reads among them). The bytes an alignment
+//!   leaves between two regions belong to no region, and nothing reads them.
 
 use super::buffer::{Buffer, NewBytes};
 use super::device::lock;
@@ -144,8 +146,27 @@ impl Uploads {
         len: u64,
         address_alignment: u64,
     ) -> Result<Upload, Error> {
+        self.place(device, bytes, (len, address_alignment), true)
+    }
+
+    /// A region of `len` bytes whose bytes hold no value until written ([`Upload::write_at`]):
+    /// the caller writes every byte a command reads before the batch that reads them is
+    /// submitted (a host step's, a staged copy's pages, `host_ram/copy.rs`).
+    pub(super) fn unset(&mut self, device: &Device, len: u64) -> Result<Upload, Error> {
+        self.place(device, &[], (len, 1), false)
+    }
+
+    /// A region of `len` bytes (at least `bytes.len()`) holding `bytes`, at a device address
+    /// that is a multiple of `address_alignment`, its bytes past them zero where `clear` says.
+    fn place(
+        &mut self,
+        device: &Device,
+        bytes: &[u8],
+        (len, address_alignment): (u64, u64),
+        clear: bool,
+    ) -> Result<Upload, Error> {
         if let Some(lent) = &self.lent {
-            return lock(lent).upload_aligned(device, bytes, len, address_alignment);
+            return lock(lent).place(device, bytes, (len, address_alignment), clear);
         }
         let len = len.max(bytes.len() as u64);
         let alignment = device.shared().upload_alignment;
@@ -245,7 +266,7 @@ impl Uploads {
         // scratch of tens of MiB, whose head alone is uploaded and whose rest the GPU writes,
         // would pay a memset its creation never paid (`fresh_pages.rs`).
         let tail = len - bytes.len() as u64;
-        if tail > 0 && !chunk.zero_unwritten {
+        if clear && tail > 0 && !chunk.zero_unwritten {
             let at = offset + bytes.len() as u64;
             // SAFETY: `[at, at + tail)` is the rest of the region, inside the chunk's mapping as
             // above, and no region overlaps it.
@@ -326,6 +347,32 @@ impl Upload {
         unsafe {
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
+                mapped.as_ptr().add((self.offset + at) as usize),
+                len,
+            );
+        }
+    }
+
+    /// Copy the `len` bytes at `from` into the region from its byte `at`, before any batch that
+    /// reads the region is submitted: a staged copy's pages, by a host step (`host_ram/copy.rs`).
+    /// A copy past the region is cut to it.
+    ///
+    /// # Safety
+    ///
+    /// The `len` bytes at `from` stay mapped and readable while the call runs, and lie outside
+    /// the region.
+    pub(super) unsafe fn copy_in(&self, at: u64, from: *const u8, len: u64) {
+        let Some(mapped) = self.buffer.contents() else {
+            unreachable!("upload chunks are Shared buffers")
+        };
+        let len = len.min(self.len.saturating_sub(at)) as usize;
+        // SAFETY: `[offset + at, offset + at + len)` is inside the region, which no other region
+        // overlaps and no submitted command reads (the caller writes it before the batches that
+        // read it are submitted); the bytes at `from` are readable and apart from it (the
+        // caller's contract). A raw copy, as another thread may write those bytes meanwhile.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                from,
                 mapped.as_ptr().add((self.offset + at) as usize),
                 len,
             );

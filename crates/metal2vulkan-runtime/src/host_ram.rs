@@ -69,8 +69,11 @@
 //!   object (a 2 MiB heap in 32 over consecutive fresh RAM), so such a run finds its next chunks
 //!   imported while it stays inside the window. The thread faults in no more than the window
 //!   past the objects, and never goes back: the RAM the objects never reach stays as the guest
-//!   left it, not resident nor pinned for the device. Counted:
-//!   `WorkCounts::host_ram_chunks_imported_ahead`.
+//!   left it, not resident nor pinned for the device. Before the window's next chunk it imports
+//!   each chunk a gather staged through the CPU took while it was not imported asked for
+//!   ([`RamOnDevice::ask_for_copy`], `copy.rs`), wherever it lies: so a copy over scattered
+//!   chunks, which moves the window to each in turn, finds them all imported by its next turn.
+//!   Counted: `WorkCounts::host_ram_chunks_imported_ahead`.
 //! - **No object waits for a chunk.** An object over a chunk not imported yet (outside the
 //!   window, or the one the thread is importing, [`Import::Making`]) is bound in an import of its
 //!   own run alone, made on the thread making the object, which faults in and pins the run's
@@ -474,12 +477,17 @@ struct ChunkSlot {
     /// again, and the first object over it imports it, as it would have.
     tried: AtomicBool,
     /// An object over the chunk found it not imported and was bound in its own run's import, on
-    /// a device whose plan is [`Plan::listed`]: the device's thread imports it next
-    /// ([`RamOnDevice::next_asked`]). Changed inside [`ChunkSlot::import`]'s lock.
+    /// a device whose plan is [`Plan::listed`], or a gather was staged through the CPU while it
+    /// was not imported ([`RamOnDevice::ask_for_copy`], any other plan): the device's thread
+    /// imports it next ([`RamOnDevice::next_asked`]). Changed inside [`ChunkSlot::import`]'s lock.
     asked: AtomicBool,
     /// The device's thread imported the chunk and no object took it since: given back once the
     /// device's allocations come near its limit ([`Device::give_back_ahead_near_the_limit`]).
     untaken: AtomicBool,
+    /// A copy into the chunk's bytes was recorded (`host_ram/copy.rs`): its key may have been
+    /// written, so a gather of them is no longer staged by the CPU without the work before it
+    /// done ([`RamOnDevice::copy_wrote`]).
+    scattered: AtomicBool,
     /// Since when only the slot holds the chunk, and how long it may stay so before it is
     /// released, on a device that releases them ([`Plan::listed`], [`RamOnDevice::idle`]).
     /// Taken inside [`ChunkSlot::import`]'s lock.
@@ -493,6 +501,17 @@ struct Idle {
     /// How long it may stay so: `host_residency::IDLE` at first, doubled at each release, up to
     /// `host_residency::IDLE_MOST`, as a no-copy buffer's idle import's window is.
     window: Duration,
+}
+
+/// How a gather takes a chunk not imported yet ([`RamOnDevice::copy_take`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyTake {
+    /// With no wait: the chunk's import is made, or the copy's ranges are imported alone.
+    Now,
+    /// By waiting for the chunk's import, which the device's thread makes.
+    ThroughCpu,
+    /// By waiting for the chunk's import, which the copy makes or another object is making.
+    Waits,
 }
 
 /// Where a chunk's import stands ([`ChunkSlot::import`]).
@@ -678,6 +697,7 @@ impl RamOnDevice {
                 tried: AtomicBool::new(false),
                 asked: AtomicBool::new(false),
                 untaken: AtomicBool::new(false),
+                scattered: AtomicBool::new(false),
                 idle: Mutex::new(Idle {
                     since: None,
                     window: host_residency::IDLE,
@@ -869,6 +889,82 @@ impl RamOnDevice {
         Ok((imports, Duration::ZERO))
     }
 
+    /// How a gather of chunk `slot`'s bytes `ranges` (offsets in the chunk, by start, apart) takes
+    /// the chunk, as [`RamOnDevice::for_copy`] would: at once ([`CopyTake::Now`]: its import made,
+    /// or the ranges imported alone); else by waiting for the chunk's import, which the device's
+    /// thread makes ([`CopyTake::ThroughCpu`]: a copy that may be staged through the CPU meanwhile,
+    /// `host_ram/copy.rs`) or no one else does ([`CopyTake::Waits`]: the thread stopped, failed
+    /// it or holds back for the allocation limit's margin, or the plan is [`Plan::listed`]). The
+    /// device's thread's window is not moved: [`RamOnDevice::take_for_copy`] moves it.
+    pub(crate) fn copy_take(
+        &self,
+        device: &Device,
+        importer: &Importer,
+        slot: usize,
+        ranges: &[Range<u64>],
+    ) -> CopyTake {
+        let span = &self.slots[slot];
+        if self.made(slot).is_some() {
+            return CopyTake::Now;
+        }
+        let running = self.wake.running.load(Ordering::Relaxed)
+            && !span.tried.load(Ordering::Relaxed)
+            && device.shared().allocations.allocations.room_ahead();
+        // As `for_copy` takes ranges alone.
+        let page = importer.page.max(1);
+        let unordered = RuntimeDriverDefect::AliasedImportBlitsUnordered;
+        let mut runs = (ranges.iter()).map(|range| {
+            let start = span.span.start + range.start / page * page;
+            let end = span.span.start + range.end.div_ceil(page) * page;
+            start..end.min(span.span.end)
+        });
+        let alone = running
+            && !device.properties().driver_defects.contains(&unordered)
+            && ranges.len() <= copy::MOST_ALONE
+            && !runs.any(|run| run == span.span);
+        // The thread that imports ahead imports the chunk next: the window moves to it.
+        let thread = running && !self.plan.listed;
+        match (alone, thread) {
+            (true, _) => CopyTake::Now,
+            (false, true) => CopyTake::ThroughCpu,
+            (false, false) => CopyTake::Waits,
+        }
+    }
+
+    /// A copy takes chunk `slot` as [`RamOnDevice::for_copy`] takes it, without its import: the
+    /// device's thread's window moves to it (its thread woken where that moved it), on a device
+    /// whose plan is not [`Plan::listed`].
+    pub(crate) fn take_for_copy(&self, slot: usize) {
+        if !self.plan.listed && self.take(slot) {
+            self.wake.notify();
+        }
+    }
+
+    /// A gather staged through the CPU took chunk `slot` while it was not imported
+    /// ([`CopyTake::ThroughCpu`]): the device's thread imports it before its window's next
+    /// ([`RamOnDevice::next_ahead`]), woken for it, so that the copies after it read the chunk's
+    /// import, wherever it lies.
+    pub(crate) fn ask_for_copy(&self, slot: usize) {
+        let span = &self.slots[slot];
+        let ask = {
+            let import = lock(&span.import);
+            matches!(*import, Import::None) && !span.asked.swap(true, Ordering::Relaxed)
+        };
+        if ask {
+            self.wake.notify();
+        }
+    }
+
+    /// A copy into chunk `slot`'s bytes was recorded.
+    pub(crate) fn copy_wrote(&self, slot: usize) {
+        self.slots[slot].scattered.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether a copy into chunk `slot`'s bytes was ever recorded ([`RamOnDevice::copy_wrote`]).
+    pub(crate) fn copies_wrote(&self, slot: usize) -> bool {
+        self.slots[slot].scattered.load(Ordering::Relaxed)
+    }
+
     /// Chunk `slot`'s import where it is made; else an import of `run` (host pages inside it)
     /// alone ([`Imported::Run`]), made now on this thread, with the device's thread asked for the
     /// chunk: its window moved to the chunk ([`RamOnDevice::take`]), or, on a device whose plan
@@ -985,11 +1081,16 @@ impl RamOnDevice {
         true
     }
 
-    /// The chunk the device's thread imports next: the first of the window ([`Window::slots`]),
-    /// within the RAM, that is neither imported nor failed by that thread, nor being imported
-    /// now ([`Import::Making`]: by an object, which imports it itself); `None` while there is
-    /// none.
+    /// The chunk the device's thread imports next: the first a staged gather asked for
+    /// ([`RamOnDevice::ask_for_copy`], as [`RamOnDevice::next_asked`] finds it), so that every
+    /// chunk such a copy took is imported, however far apart they lie; else the first of the
+    /// window ([`Window::slots`]), within the RAM, that is neither imported nor failed by that
+    /// thread, nor being imported now ([`Import::Making`]: by an object, which imports it
+    /// itself); `None` while there is none.
     fn next_ahead(&self) -> Option<usize> {
+        if let Some(asked) = self.next_asked() {
+            return Some(asked);
+        }
         let count = self.slots.len();
         let window = *lock(&self.window);
         (window.slots().filter(|&index| index < count)).find(|&index| {
@@ -999,7 +1100,8 @@ impl RamOnDevice {
     }
 
     /// The chunk the device's thread imports next on a device whose plan is [`Plan::listed`]
-    /// ([`listed_chunks`]): the first an object asked for ([`ChunkSlot::asked`]) that is neither
+    /// ([`listed_chunks`]), and before its window's on any other ([`RamOnDevice::next_ahead`]):
+    /// the first an object or a staged gather asked for ([`ChunkSlot::asked`]) that is neither
     /// imported, nor being imported now, nor failed by that thread; `None` while there is none.
     /// Each ask it passes is answered: cleared.
     fn next_asked(&self) -> Option<usize> {
@@ -2360,7 +2462,19 @@ mod tests {
         assert_eq!(last.next_ahead(), Some(full + 2), "the chunk taken");
         done(&last, full + 2);
         assert_eq!(last.next_ahead(), None, "nothing past the RAM's end");
-        drop((on, fresh, last, ram));
+        // A staged gather's asks come first, each once, wherever the window lies.
+        let asked = RamOnDevice::new(&ram, Plan::AHEAD);
+        assert!(asked.take(full + 2));
+        asked.ask_for_copy(1);
+        asked.ask_for_copy(3);
+        assert_eq!(asked.next_ahead(), Some(1), "the first asked for");
+        done(&asked, 1);
+        assert_eq!(asked.next_ahead(), Some(3));
+        done(&asked, 3);
+        assert_eq!(asked.next_ahead(), Some(full + 2), "then the window");
+        done(&asked, full + 2);
+        assert_eq!(asked.next_ahead(), None);
+        drop((on, fresh, last, asked, ram));
         // SAFETY: the test's mapping, which nothing uses any more.
         unsafe { libc::munmap(start, length as usize) };
     }

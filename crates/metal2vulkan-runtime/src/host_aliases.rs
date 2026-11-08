@@ -498,6 +498,31 @@ impl<I> HostAliases<I> {
         })
     }
 
+    /// Whether some key lies over a byte of the host bytes `start..end` now ([`Placements`]: a
+    /// buffer over host pages, made or rebound there, a heap's own buffer, a guest RAM chunk's
+    /// copies' key), but a range only one key lies over, its first, which `quiet` answers true
+    /// of: what a staged copy's host step reads by the CPU, ordered after no GPU work, where no
+    /// other key may be written (`host_ram/copy.rs`). A key lies over its bytes until its buffer
+    /// went, after every command buffer that used it.
+    pub(super) fn others_over(
+        &self,
+        start: u64,
+        end: u64,
+        quiet: impl Fn(ResourceKey) -> bool,
+    ) -> bool {
+        if start >= end || self.placed.load(Ordering::Relaxed) == 0 {
+            return false;
+        }
+        let inner = lock(&self.inner);
+        let ranges = &inner.placements.ranges;
+        let mut found = ranges.overlapping(start, end);
+        found.any(|at| {
+            ranges
+                .get(at)
+                .is_none_or(|placed| placed.keys != 1 || !placed.first || !quiet(placed.key))
+        })
+    }
+
     /// The buffer of `key` is gone.
     pub(super) fn forget(&self, key: ResourceKey) {
         let mut inner = lock(&self.inner);

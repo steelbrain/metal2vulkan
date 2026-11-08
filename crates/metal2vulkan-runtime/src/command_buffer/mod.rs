@@ -112,6 +112,7 @@ use super::values::CommandBufferStatus;
 use super::work_counts::Counters;
 use super::write_routes::{AtCommit, Routes};
 use super::{Buffer, CommandQueue, Device};
+use crate::host_ram::copy::StagedFill;
 use crate::release;
 use ash::vk;
 use batches::Batches;
@@ -778,6 +779,10 @@ pub(super) struct State {
     pub(super) executions: Vec<Execution>,
     /// The commands' own data, released when the command buffer completes.
     pub(super) uploads: Uploads,
+    /// Its gathers from a guest RAM staged through the CPU (`host_ram/copy.rs`), each copied
+    /// into its region of `uploads` by the host step of the batch its encoder is in, released
+    /// with them.
+    pub(super) staged: Vec<Arc<StagedFill>>,
     /// The device's heap sets its commands bound (`heap_sets.rs`), released with the uploads.
     pub(super) heaps: HeapUse,
     /// Its commands' function-table snapshots, written again as it commits.
@@ -1712,6 +1717,21 @@ impl State {
         }
     }
 
+    /// The place the encoder open now takes among the ended encoders as it ends
+    /// ([`encoder_ended`](Self::encoder_ended)).
+    pub(super) fn next_encoder(&self) -> usize {
+        self.ended.len()
+    }
+
+    /// The staged gathers of batch `index` its host step has not copied yet: those its encoders
+    /// recorded ([`State::staged`]).
+    fn staged_unfilled(&self, index: usize) -> impl Iterator<Item = &Arc<StagedFill>> {
+        let parts = &self.recorded[self.batch_range(index)];
+        (self.staged.iter()).filter(move |fill| {
+            !fill.filled() && parts.iter().any(|part| part.encoder == fill.encoder)
+        })
+    }
+
     /// The encoders (or parts of them) of batch `index`.
     pub(super) fn batch_range(&self, index: usize) -> Range<usize> {
         let batches = self.batches.all();
@@ -2149,6 +2169,7 @@ impl CommandBuffer {
                 routes: Routes::default(),
                 executions: Vec::new(),
                 uploads: Uploads::new(),
+                staged: Vec::new(),
                 heaps: HeapUse::default(),
                 table_snapshots: Vec::new(),
                 unlisted_argument_samplers: false,
@@ -3536,7 +3557,8 @@ impl CommandBuffer {
                                 || encoder.sparse.iter().any(SparseUpdate::needs_step)
                                 || (state.ended.get(encoder.encoder))
                                     .is_some_and(|record| record.replay.is_some())
-                        }),
+                        })
+                        || state.staged_unfilled(index).next().is_some(),
                     checked: state.checks.is_some(),
                 })
                 .collect();
@@ -4159,7 +4181,8 @@ impl CommandBufferShared {
 
     /// Whether batch `index` waits for a host step: a segment of it executes commands the GPU may
     /// write, not recorded since, or an indirect sparse update of it reads regions the GPU may
-    /// write, not read since.
+    /// write, not read since, or a gather of it staged through the CPU was not copied yet
+    /// (`host_ram/copy.rs`).
     pub(crate) fn needs_host_step(&self, index: usize) -> bool {
         if self.stepping(index) {
             return true;
@@ -4179,6 +4202,7 @@ impl CommandBufferShared {
                 .iter()
                 .flat_map(|encoder| &encoder.sparse)
                 .any(SparseUpdate::needs_step)
+            || state.staged_unfilled(index).next().is_some()
     }
 
     /// The scheduler handed batch `index`'s host step to its steps' thread (`scheduler/steps.rs`):
@@ -4199,8 +4223,10 @@ impl CommandBufferShared {
 
     /// What the host step of batch `index` waits for ([`needs_host_step`](Self::needs_host_step)):
     /// the work submitted before it, where the GPU may write what a segment or an indirect
-    /// sparse update of it reads, its own `VkQueue`'s alone where those are loops' checks; and the
-    /// pipelines its segments record, while one is being made, and what a loop's check runs again.
+    /// sparse update of it reads, or the host bytes a gather of it staged through the CPU reads
+    /// (`StagedFill::waits_for_the_gpu`), its own `VkQueue`'s alone where those are loops'
+    /// checks; and the pipelines its segments record, while one is being made, and what a loop's
+    /// check runs again.
     pub(crate) fn step_waits(&self, index: usize) -> StepWaits {
         let state = lock(&self.state);
         let recorded = &state.recorded[state.batch_range(index)];
@@ -4209,8 +4235,11 @@ impl CommandBufferShared {
             .iter()
             .flat_map(|encoder| &encoder.sparse)
             .any(SparseUpdate::needs_step);
+        let staged =
+            (state.staged_unfilled(index)).any(|fill| fill.waits_for_the_gpu(&self.device));
         // A loop's check reads only what its laying, on its own `VkQueue`, wrote (`rerun.rs`).
         let checks_alone = !sparse
+            && !staged
             && segments()
                 .filter(|segment| segment.steps_after_the_gpu())
                 .all(|segment| matches!(segment.work, Deferred::Loop(_)));
@@ -4224,7 +4253,7 @@ impl CommandBufferShared {
             true => segments().any(Segment::holds),
         };
         StepWaits {
-            gpu: segments().any(Segment::steps_after_the_gpu) || sparse,
+            gpu: segments().any(Segment::steps_after_the_gpu) || sparse || staged,
             queue_alone: checks_alone.then(|| self.queue.vk_queue()),
             pipelines,
             until: deadline.filter(|_| pipelines && !late),
@@ -4393,6 +4422,7 @@ impl CommandBufferShared {
                 })
                 .collect()
         };
+        self.fill_staged(index);
         self.read_mappings(index);
         if steps.is_empty() {
             return;
@@ -4456,6 +4486,22 @@ impl CommandBufferShared {
         drop(buffer);
         if let Some(announced) = announced {
             announced.degrade(device);
+        }
+    }
+
+    /// The host step's copies of batch `index`'s gathers staged through the CPU, before its
+    /// segments' steps (`host_ram/copy.rs`): each copies its runs' host bytes into its region of
+    /// the arena, without the command buffer's lock.
+    fn fill_staged(&self, index: usize) {
+        let staged: Vec<Arc<StagedFill>> = {
+            let state = lock(&self.state);
+            if state.step_failure.is_some() {
+                return;
+            }
+            state.staged_unfilled(index).cloned().collect()
+        };
+        for fill in staged {
+            fill.fill(&self.device);
         }
     }
 
@@ -5514,17 +5560,18 @@ impl CommandBufferShared {
             // `vkBindBufferMemory` holds across a commit that took 24 to 39 ms for a 1 GiB block
             // on the M3 Max, `gpu_pools.rs`), so they go after the completed handlers, which wait
             // for none of them, and after what the program's commands used.
-            let (uploads, index_pool, mesh_pool, mut descriptors, completed) = {
+            let (uploads, staged, index_pool, mesh_pool, mut descriptors, completed) = {
                 let mut state = lock(&self.state);
                 (
                     state.uploads.take(),
+                    state.staged.drain(..).collect::<Vec<_>>(),
                     state.index_pool.take(),
                     state.mesh_pool.take(),
                     state.descriptors.take(),
                     state.status == CommandBufferStatus::Completed,
                 )
             };
-            drop((uploads, index_pool, mesh_pool, released_versions));
+            drop((uploads, staged, index_pool, mesh_pool, released_versions));
             // A command buffer that completed gives its descriptor pools back to the device's
             // spares; one that failed releases them.
             if completed {

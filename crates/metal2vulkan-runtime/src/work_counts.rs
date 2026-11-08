@@ -356,6 +356,9 @@ pub(crate) struct Counters {
     host_ram_chunk_import_nanos: AtomicU64,
     host_ram_copy_import_waits: AtomicU64,
     host_ram_copy_import_wait_nanos: AtomicU64,
+    host_ram_copies_staged: AtomicU64,
+    host_ram_staged_fills_gated: AtomicU64,
+    host_ram_staged_fill_nanos: AtomicU64,
     host_ram_dma_buf_imports: AtomicU64,
     host_ram_pointer_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
@@ -2825,6 +2828,20 @@ impl Counters {
     pub(crate) fn host_ram_copy_waited(&self, nanos: u64) {
         (self.host_ram_copy_import_waits).fetch_add(1, Ordering::Relaxed);
         (self.host_ram_copy_import_wait_nanos).fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// A gather from a guest RAM was staged through the CPU (`host_ram/copy.rs`).
+    pub(crate) fn host_ram_copy_staged(&self) {
+        (self.host_ram_copies_staged).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A staged gather's host step copied its pages into its staging in `nanos` nanoseconds,
+    /// after the work submitted before it completed where `gated` (`host_ram/copy.rs`).
+    pub(crate) fn host_ram_staged_filled(&self, nanos: u64, gated: bool) {
+        (self.host_ram_staged_fill_nanos).fetch_add(nanos, Ordering::Relaxed);
+        if gated {
+            (self.host_ram_staged_fills_gated).fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// The device imported a chunk of a guest RAM, or an object's run inside one, as a dma-buf
@@ -6096,6 +6113,18 @@ pub struct WorkCounts {
     pub host_ram_copy_import_waits: u64,
     /// The nanoseconds those copies' encodings waited so.
     pub host_ram_copy_import_wait_nanos: u64,
+    /// Gathers from a guest RAM (`BlitCommandEncoder::copy_from_host_ram` and
+    /// `copy_runs_from_host_ram`) staged through the CPU: over a chunk the device's thread was
+    /// to import, which the copy would have waited for, its runs were copied by the CPU into the
+    /// command buffer's memory before its batch was submitted, and from there by the GPU into
+    /// the buffer, with no import made or waited for.
+    pub host_ram_copies_staged: u64,
+    /// Of those, the ones whose CPU copy waited for every batch submitted before it to complete:
+    /// a buffer over host pages, or a copy into the RAM, lay over the runs' bytes, so the GPU may
+    /// have been writing them.
+    pub host_ram_staged_fills_gated: u64,
+    /// The nanoseconds the CPU copies of those gathers took, on the device's threads.
+    pub host_ram_staged_fill_nanos: u64,
     /// The imports of guest RAM, chunks and objects' runs alike, made as one dma-buf each of the
     /// RAM's source (`HostRam::with_dma_buf`), not by their pointer: where the device's held
     /// pointer imports add to every submission's cost, or it refused the pointer.
@@ -7568,6 +7597,11 @@ impl Device {
             host_ram_copy_import_wait_nanos: counters
                 .host_ram_copy_import_wait_nanos
                 .load(Ordering::Relaxed),
+            host_ram_copies_staged: counters.host_ram_copies_staged.load(Ordering::Relaxed),
+            host_ram_staged_fills_gated: counters
+                .host_ram_staged_fills_gated
+                .load(Ordering::Relaxed),
+            host_ram_staged_fill_nanos: counters.host_ram_staged_fill_nanos.load(Ordering::Relaxed),
             host_ram_dma_buf_imports: counters.host_ram_dma_buf_imports.load(Ordering::Relaxed),
             host_ram_pointer_imports_failed: counters
                 .host_ram_pointer_imports_failed
