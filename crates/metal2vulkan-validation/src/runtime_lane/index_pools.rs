@@ -18,17 +18,18 @@
 //!   and pools go after its handlers. Before, its uploads went first, and on MoltenVK their
 //!   `vkDestroyBuffer` waited for the lock that making holds, so the handler ran as the making
 //!   ended, 20 to 27 ms after the command buffer completed.
-//! - The handler's time counts from the later of its command buffer's GPU end and its last
-//!   submission's return (`kernel_end_time`): the runtime watches a batch for its completion from
-//!   its `vkQueueSubmit`'s return on, and a driver may hold that return for the making. On the
+//! - The command buffer returns from its submission before the making begins
+//!   (`wait_until_scheduled`), and its draw's instances take a few milliseconds of GPU time, so it
+//!   completes during the making: the runtime watches a batch for its completion from its
+//!   `vkQueueSubmit`'s return on, and a driver may hold that return for the making. On the
 //!   RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux) a `vkQueueSubmit` the scheduler's thread
 //!   called while the making's `vkAllocateMemory` ran returned 0.01 to 0.25 ms after that did, in
 //!   25 of 40 rounds of a probe (allocations of a 254.7 MiB block, 3.1 to 35.7 ms, beside another
 //!   process's GPU work), twice after the GPU had ended the batch (23.9 ms into a 29.4 ms making,
 //!   and 0.3 ms into a 3.7 ms one); another thread's `vkWaitSemaphores`, semaphore reads and fence
-//!   reads took at most 0.03 ms during raw allocations of that size (1.9 to 213.6 ms). In the other 15 rounds the submission
-//!   returned before the allocation began and the handler ran during it; in all 40 the handler
-//!   ran 0.07 to 1.44 ms after the later of the two.
+//!   reads took at most 0.03 ms during raw allocations of that size (1.9 to 213.6 ms). In the
+//!   other 15 rounds the submission returned before the allocation began and the handler ran
+//!   during it; in all 40 the handler ran 0.07 to 1.44 ms after the later of the two.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
@@ -54,14 +55,27 @@ const ROUNDS: usize = 6;
 const QUIET: Duration = Duration::from_secs(2);
 
 /// The rounds of a command buffer completing while another queue makes its block. A round tells
-/// only where its submission returned before the making's allocation took the driver (the module
-/// docs): about one round in four on the RTX 5080 under the validation layer.
+/// only where the making took `MAKING_TELLS` or more and the command buffer completed in its first
+/// half: on the RTX 5080 Laptop GPU a block's making took 4.9 to 189.5 ms in 240 rounds beside
+/// another process's GPU work.
 const MAKING_ROUNDS: usize = 12;
 
 /// The shortest making of a block that tells a handler that waited for it from one that did not
 /// (on the M3 Max a block took 24 to 39 ms; a handler that waits for nothing runs within a
 /// millisecond of its command buffer's completion).
 const MAKING_TELLS: f64 = 0.010;
+
+/// The GPU time of a round's first command buffer, about: it completes this long into the making,
+/// in its first half where the making takes `MAKING_TELLS` or more.
+const WORK: f64 = 0.003;
+
+/// The most instances of the draw that measure its GPU time.
+const MOST_INSTANCES: u32 = 1 << 24;
+
+/// The words' bytes.
+fn words(words: &[u32]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
 
 /// The device, opened without the robustness features, the fixture's vertex-only pipeline state
 /// and the draw's buffers.
@@ -88,9 +102,6 @@ impl Lane {
         let pipeline = device
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
             .unwrap();
-        let words = |words: &[u32]| -> Vec<u8> {
-            words.iter().flat_map(|word| word.to_le_bytes()).collect()
-        };
         // Two positions, both inside the buffer's two indices: a valid draw, which reserves
         // nothing of the pool its pass leases.
         let indices = buffer_with(&device, &words(&[1, 2])).unwrap();
@@ -111,6 +122,11 @@ impl Lane {
 
     /// A command buffer of `queue` with the draw, encoded: its pass leased the queue's block.
     fn encoded(&self, queue: &CommandQueue) -> CommandBuffer {
+        self.encoded_with(queue, &self.arguments)
+    }
+
+    /// A command buffer of `queue` with the draw of `arguments`, encoded.
+    fn encoded_with(&self, queue: &CommandQueue, arguments: &Buffer) -> CommandBuffer {
         let mut pass = RenderPassDescriptor::new();
         pass.render_target_width = 1;
         pass.render_target_height = 1;
@@ -125,7 +141,7 @@ impl Lane {
                 IndexType::UInt32,
                 &self.indices,
                 0,
-                &self.arguments,
+                arguments,
                 0,
             )
             .unwrap();
@@ -138,6 +154,28 @@ impl Lane {
         let command_buffer = self.encoded(queue);
         command_buffer.commit().unwrap();
         completed(&command_buffer);
+    }
+
+    /// The arguments of a draw whose command buffer of `queue` took `WORK` of GPU time or more:
+    /// its instances doubled from one until one did, or reached `MOST_INSTANCES`.
+    fn working(&self, queue: &CommandQueue) -> Buffer {
+        let mut instances = 1;
+        loop {
+            let arguments = buffer_with(&self.device, &words(&[2, instances, 0, 0, 0])).unwrap();
+            let command_buffer = self.encoded_with(queue, &arguments);
+            command_buffer.commit().unwrap();
+            completed(&command_buffer);
+            let took =
+                command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
+            if took >= WORK || instances == MOST_INSTANCES {
+                eprintln!(
+                    "{instances} instances took {:.3} ms of GPU time",
+                    took * 1e3
+                );
+                return arguments;
+            }
+            instances *= 2;
+        }
     }
 
     /// The blocks of the device's GPU pools made and released so far.
@@ -245,11 +283,11 @@ fn a_pool_block_no_command_buffer_held_goes_after_the_quiet_period() {
 }
 
 /// A command buffer's completed handler runs while another queue's first command buffer makes
-/// that queue's block on this thread, round after round, each with a queue of its own: where the
-/// making took long enough to tell and the command buffer both completed and returned from its
-/// submission in its first half, the handler ran less than half the making after the later of the
-/// two (the module docs). A submission the driver holds to the making's end tells nothing of the
-/// handler.
+/// that queue's block on this thread, round after round, each with a queue of its own. The
+/// command buffer returned from its submission before the making began, and draws for about
+/// `WORK` of GPU time: where the making took long enough to tell and the command buffer completed
+/// in its first half, the handler ran less than half the making after the later of its completion
+/// and its submission's return (the module docs).
 #[test]
 fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
     let cache = ScratchCache::new().unwrap();
@@ -259,10 +297,11 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
         let queue = lane.queue();
         // The pipeline's first draw, which makes the first queue's block.
         lane.drawn(&queue);
+        let working = lane.working(&queue);
         let mut told = 0;
         for round in 0..MAKING_ROUNDS {
             let other = lane.queue();
-            let first = lane.encoded(&queue);
+            let first = lane.encoded_with(&queue, &working);
             let ran: Arc<Mutex<Option<f64>>> = Arc::default();
             let log = Arc::clone(&ran);
             first
@@ -272,6 +311,8 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
                 .unwrap();
             let (made, _) = lane.blocks();
             first.commit().unwrap();
+            // Its submission returned: the making's allocation holds none of it.
+            first.wait_until_scheduled().unwrap();
             let start = host_time();
             let second = lane.encoded(&other);
             let encoded = host_time();
@@ -291,7 +332,7 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
             let reached = seen.max(submitted);
             let making = encoded - start;
             let lag = handled - reached;
-            let tells = making >= MAKING_TELLS && reached < start + making / 2.0;
+            let tells = making >= MAKING_TELLS && (start..start + making / 2.0).contains(&reached);
             told += usize::from(tells);
             eprintln!(
                 "round {round}: making {:.3} ms, completion {:+.3} ms and submission's return \
