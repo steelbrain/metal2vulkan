@@ -402,7 +402,9 @@ where the verdict passes; a shadow and why (`TextureShadowReason`: the policy, t
 check's failed or unchecked verdict with its access and row ends, a refusal, a tiled texture's
 levels, texels past the buffer's length, a device copy, and over the device's own memory rows with
 bytes between them the buffer does not declare unobserved, `BytesBetweenRows`); no host pages (an
-image aliasing the buffer's memory where the device lays one out as Metal does); or a shape no
+image aliasing the buffer's memory: the device's linear image where it lays one out as Metal does,
+else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch where the device's check passed for its pooled
+memory; a texture over that memory that takes neither answers its shadow's cause); or a shape no
 image in place takes; `Buffer::tiled_texture_placement` answers it for `new_tiled_texture`'s. The
 making's own route answers it (`texture/route.rs`), after every check the making runs before it
 makes anything, so the same arguments are refused with the same errors; where the route is the image in
@@ -1605,7 +1607,10 @@ bound.
   them as the program writes them, unless the buffer, of the runtime's own memory, declares them
   unobserved (`BufferDescriptor::padding_unobserved`, a runtime extension: they may then change,
   and no other byte does); or no linear image of the device lays its texels out as Metal
-  does in the buffer's memory, holding no byte past them; or the buffer is over the caller's
+  does in the buffer's memory, holding no byte past them, and no `DRM_FORMAT_MOD_LINEAR` image at
+  Metal's pitch serves (the device makes none, its policy is `HostPageTexturePolicy::Shadow`, or
+  its check of such images over its pooled memory has not passed for the texture's accesses:
+  pending, failed or unchecked, as over host pages); or the buffer is over the caller's
   `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
   one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
   levels past the first, so one image of its own holds every level, its first level's texels

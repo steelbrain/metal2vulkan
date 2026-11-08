@@ -508,8 +508,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   the runtime's own memory declares that nothing reads the bytes between a texture's rows over it
   (each row's after its texels to its pitch, the last row's included) or between its slices, so
   such a texture is a linear image aliasing the buffer where the device lays one out at its
-  pitches, not a shadow, and those bytes may change whenever it is made or used; no other byte
-  does (`WorkCounts::unobserved_padding_aliases`). No Metal counterpart; refused
+  pitches, or else a `DRM_FORMAT_MOD_LINEAR` image at them where the device's in-place check
+  passed for its pooled memory (`WorkCounts::pooled_pitched_images`), not a shadow, and those
+  bytes may change whenever it is made or used; no other byte does
+  (`WorkCounts::unobserved_padding_aliases`). No Metal counterpart; refused
   (`PaddingUnobservedNoCopy`) with `NoCopy` contents.
 - `Buffer::texture_placement` and `texture_placement_with_iosurface_plane` (with
   `TexturePlacement` and `TextureShadowReason`): where a texture `new_texture` or

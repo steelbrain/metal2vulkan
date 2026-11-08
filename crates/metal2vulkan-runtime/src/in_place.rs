@@ -63,6 +63,17 @@
 //!   copies of both touch texels alone.
 //!   Elsewhere the texture is a shadow (`shadow.rs`), its notice naming why ([`ShadowCause`]) and
 //!   counted by cause (`WorkCounts::host_texture_shadows_*`, and those that render apart).
+//! - **The runtime's pooled memory.** A texture over a buffer of the runtime's own in its pooled
+//!   memory whose rows the device's own linear image lays out otherwise (a pitch the driver does
+//!   not take: ANV lays linear rows tight, RADV at multiples of 256 bytes) takes a
+//!   `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch bound in the buffer's memory, no external
+//!   memory, where the device makes one ([`PagesClass::Pooled`], `texture.rs`'s
+//!   `pooled_pitched_image`): Vulkan lets such an image be bound to memory of no external handle
+//!   type (`VUID-VkImageCreateInfo-tiling-02261`, `VUID-vkBindImageMemory-image-01445`), but it
+//!   starts `UNDEFINED` (`VUID-VkImageCreateInfo-initialLayout-12478`), so its first move may
+//!   discard the bytes as an image over host pages' may, and the same rule takes it: where the
+//!   device's policy and its check of that class pass for the texture's accesses. A texture made
+//!   there before the class's verdicts are known stays a shadow.
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
 //!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart), and the
 //!   first such texture starts the check on a thread of its own. Once its class's verdicts are

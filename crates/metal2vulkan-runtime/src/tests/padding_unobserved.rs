@@ -3,11 +3,19 @@
 //!
 //! - **Declared.** A `BGRA8Unorm` texture of 101x48 texels (404 bytes a row) over it at pitches
 //!   past its rows (416, 448 and 512 bytes, the next multiples of 16, 64 and 256 that drivers lay
-//!   linear rows at: MoltenVK, llvmpipe and ANV, RADV and NVIDIA) answers `NotHostPages`, and its
-//!   making takes a linear image aliasing the buffer wherever the device lays one at the pitch,
-//!   counted in `WorkCounts::unobserved_padding_aliases` and not in `shadowed_textures`, else a
-//!   shadow; at least one pitch takes the image. Through such an image, a blit of the texture into
+//!   linear rows at: MoltenVK, llvmpipe and ANV, RADV and NVIDIA), once the device's check
+//!   settled, takes a linear image aliasing the buffer wherever the device lays one at the pitch,
+//!   or a `DRM_FORMAT_MOD_LINEAR` image at the pitch where its check passed for its pooled memory
+//!   (`WorkCounts::pooled_pitched_images`), counted in `WorkCounts::unobserved_padding_aliases`
+//!   and not in `shadowed_textures`, and answers `NotHostPages`; else a shadow, which answers its
+//!   cause; at least one pitch takes the image. Through such an image, a blit of the texture into
 //!   a buffer reads the texels the CPU wrote into the declared buffer's rows, at its pitch.
+//! - **Rendered at a pitch the linear image misses.** A texture that renders, over such a buffer
+//!   at a 64-aligned pitch whose rows end inside a 64-byte line (the guests' device caches), is an
+//!   aliasing image exactly where the device makes `DRM_FORMAT_MOD_LINEAR` images and its check
+//!   of its pooled memory passed for renders, else a shadow; through the image, the texels the CPU
+//!   wrote read back, a pass's clear reaches the buffer's rows, and the bytes after the last row
+//!   keep the CPU's.
 //! - **Undeclared.** The same texture over a buffer made without the declaration answers
 //!   `Shadow(BytesBetweenRows)` and is a shadow (`shadowed_textures`), at every pitch.
 //! - **Over the caller's memory**, the declaration is refused: `Invalid`
@@ -25,6 +33,9 @@ use crate::{
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::Duration;
+
+/// The longest the device's check may take to settle.
+const CHECK_WAIT: Duration = Duration::from_secs(120);
 
 /// The texture's texels a row, and its rows.
 const WIDTH: u64 = 101;
@@ -104,6 +115,10 @@ fn blitted(device: &Device, texture: &Texture) -> Vec<u8> {
 fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_padding_is_a_shadow() {
     let scratch = Scratch::new("padding-unobserved");
     let device = device(&scratch.0);
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "the check settles"
+    );
     let length = PITCHES[2] * HEIGHT;
     let descriptor = texture_descriptor();
     let mut aliased = Vec::new();
@@ -132,11 +147,6 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
             "a short buffer lies in no fresh pages"
         );
         let answer = declared.texture_placement(&descriptor, 0, pitch).unwrap();
-        assert_eq!(
-            answer,
-            TexturePlacement::NotHostPages,
-            "declared at {pitch}: the answer"
-        );
         // SAFETY: the declared buffer's mapped bytes, which no command uses yet.
         let bytes = unsafe {
             std::slice::from_raw_parts_mut(declared.contents().unwrap().as_ptr(), length as usize)
@@ -152,6 +162,15 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
             aliases,
             texture.shadow().is_none(),
             "declared at {pitch}: an aliasing image or a shadow"
+        );
+        assert_eq!(
+            answer == TexturePlacement::NotHostPages,
+            aliases,
+            "declared at {pitch}: the answer {answer:?} is the making's"
+        );
+        assert!(
+            aliases || matches!(answer, TexturePlacement::Shadow(_)),
+            "declared at {pitch}: a shadow's answer names its cause, not {answer:?}"
         );
         assert_eq!(
             after.unobserved_padding_aliases - before.unobserved_padding_aliases,
@@ -176,16 +195,17 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
         if aliases {
             aliased.push(pitch);
         }
+        let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
         eprintln!(
             "UNOBSERVED-PADDING on {}: {WIDTH}x{HEIGHT} BGRA8Unorm at {pitch}: undeclared a \
-             shadow ({:?}); declared {} ({:?})",
+             shadow ({:?}); declared {} ({answer:?})",
             device.name(),
             TexturePlacement::Shadow(TextureShadowReason::BytesBetweenRows),
-            match aliases {
-                true => "an aliasing image",
-                false => "a shadow (the device lays no linear image at the pitch)",
+            match (aliases, pitched) {
+                (true, 0) => "the device's linear image",
+                (true, _) => "a DRM_FORMAT_MOD_LINEAR image at the pitch",
+                (false, _) => "a shadow",
             },
-            TexturePlacement::NotHostPages,
         );
     }
     assert!(
@@ -193,6 +213,147 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
         "no pitch of {PITCHES:?} took an aliasing image on {}",
         device.name()
     );
+}
+
+/// The guests' device caches' shapes: `BGRA8Unorm`, rows at a 64-aligned pitch that end inside a
+/// 64-byte line: (width, height, pitch).
+const CACHES: [(u64, u64, u64); 3] = [(61, 37, 256), (250, 25, 1024), (3662, 9, 14656)];
+
+#[test]
+fn a_rendered_texture_at_a_pitch_the_linear_image_misses_takes_a_pitched_image_where_the_pooled_check_passed(
+) {
+    use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
+    let scratch = Scratch::new("padding-unobserved-pitched");
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_in_place_checks(CHECK_WAIT),
+        "the check settles"
+    );
+    let queue = device.new_command_queue().unwrap();
+    for (width, height, pitch) in CACHES {
+        let row = width * 4;
+        let length = pitch * height + 4096;
+        let buffer = own_buffer(&device, length, true);
+        // SAFETY: the buffer's mapped bytes, which no command uses yet.
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(buffer.contents().unwrap().as_ptr(), length as usize)
+        };
+        for (at, byte) in bytes.iter_mut().enumerate() {
+            *byte = texel_byte(at as u64 % pitch, at as u64 / pitch);
+        }
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        descriptor.resource_options = ResourceOptions::shared();
+        let answer = buffer.texture_placement(&descriptor, 0, pitch).unwrap();
+        let before = device.work_counts();
+        let texture = buffer.new_texture(&descriptor, 0, pitch).unwrap();
+        let after = device.work_counts();
+        let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
+        let aliases = texture.aliases_buffer();
+        let layout = crate::linear_plan::BufferLayout {
+            offset: 0,
+            row_pitch: pitch,
+            slice_pitch: pitch * height,
+            row_bytes: row,
+            rows: height,
+            slices: 1,
+        };
+        let rows = RowEnds::of(0, &layout, device.shared().in_place.line());
+        let verdicts = [Access::Reads, Access::Renders].map(|access| {
+            device
+                .shared()
+                .in_place
+                .verdict(PagesClass::Pooled, access, rows)
+        });
+        let passed = verdicts == [Verdict::Passed; 2];
+        assert_eq!(
+            answer == TexturePlacement::NotHostPages,
+            aliases,
+            "{width}x{height} at {pitch}: the answer {answer:?} is the making's"
+        );
+        assert!(
+            pitched == 0 || (aliases && passed),
+            "{width}x{height} at {pitch}: a pitched image only where the pooled check passed \
+             ({verdicts:?})"
+        );
+        // Through the image (or the shadow), the CPU's texels.
+        let read = device
+            .new_buffer(row * height, ResourceOptions::shared())
+            .unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_texture_to_buffer(
+            &texture,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(width, height, 1),
+            &read,
+            0,
+            row,
+            row * height,
+            BlitOption::None,
+        )
+        .unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        // SAFETY: the read buffer's mapped bytes, which no command uses now.
+        let read = unsafe {
+            std::slice::from_raw_parts(read.contents().unwrap().as_ptr(), (row * height) as usize)
+        };
+        for y in 0..height {
+            for x in 0..row {
+                assert_eq!(
+                    read[(y * row + x) as usize],
+                    texel_byte(x, y),
+                    "{width}x{height} at {pitch}: byte {x} of row {y} read through the texture"
+                );
+            }
+        }
+        // A pass's clear reaches the buffer's rows; the bytes after the last row keep the CPU's.
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut pass = crate::RenderPassDescriptor::new();
+        let color = &mut pass.color_attachments[0];
+        color.texture = Some(texture.clone());
+        color.load_action = crate::LoadAction::Clear;
+        color.clear_color = crate::ClearColor::new(0.0, 0.0, 1.0, 1.0);
+        color.store_action = crate::StoreAction::Store;
+        let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        for y in 0..height {
+            for x in 0..width {
+                let at = (y * pitch + x * 4) as usize;
+                assert_eq!(
+                    bytes[at..at + 4],
+                    [0xff, 0, 0, 0xff],
+                    "{width}x{height} at {pitch}: texel {x} of row {y} after the clear"
+                );
+            }
+        }
+        for at in pitch * height..length {
+            assert_eq!(
+                bytes[at as usize],
+                texel_byte(at % pitch, at / pitch),
+                "{width}x{height} at {pitch}: byte {at} after the last row"
+            );
+        }
+        eprintln!(
+            "POOLED-PITCHED on {}: {width}x{height} BGRA8Unorm at {pitch} rendered: pooled \
+             verdicts {verdicts:?} ({rows:?}); answer {answer:?}; {}",
+            device.name(),
+            match (aliases, pitched) {
+                (true, 0) => "the device's linear image",
+                (true, _) => "a DRM_FORMAT_MOD_LINEAR image at the pitch",
+                (false, _) => "a shadow",
+            },
+        );
+    }
 }
 
 #[test]

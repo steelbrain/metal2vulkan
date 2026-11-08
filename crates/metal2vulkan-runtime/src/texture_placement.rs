@@ -27,7 +27,10 @@ pub enum TexturePlacement {
     /// texture's accesses: once it does, at the commit of the device's only uncommitted command
     /// buffer, the texture moves in place with no copy where the verdicts pass and the device
     /// makes its image in place (`WorkCounts::host_textures_moved_in_place`), and stays a shadow
-    /// where they do not or the device refuses the image, as one made then would be.
+    /// where they do not or the device refuses the image, as one made then would be. Over the
+    /// device's own memory (a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch,
+    /// [`NotHostPages`](Self::NotHostPages)) a texture made now stays a shadow for good; one made
+    /// once the check answered takes the image where its verdicts pass.
     /// [`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks) starts the check
     /// and says when its verdicts are known; the same query then answers what a texture made after
     /// takes.
@@ -37,9 +40,13 @@ pub enum TexturePlacement {
     /// (`shadowed-texture`) but for a device copy. Why.
     Shadow(TextureShadowReason),
     /// The buffer's bytes are no host pages (a buffer of the device's own memory, or the caller's
-    /// `VkBuffer`): the texture is a linear image aliasing the buffer's memory where the device
-    /// lays one out as Metal does, else a shadow. The device's check does not decide it. Its rows
-    /// (and slices) lie one after another, or the buffer declares the bytes between them
+    /// `VkBuffer`): the texture is a linear image aliasing the buffer's memory, the device's own
+    /// where it lays one out as Metal does, else, over the device's own memory, a
+    /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch where the device makes one and its check of
+    /// such images over its pooled memory passed for the texture's accesses (the query made it
+    /// unbound and released it); a texture over the device's own memory that takes neither answers
+    /// its shadow's cause ([`TexturePlacement::Pending`] while that check has not answered). Its
+    /// rows (and slices) lie one after another, or the buffer declares the bytes between them
     /// unobserved ([`BufferDescriptor::padding_unobserved`](crate::BufferDescriptor::padding_unobserved)),
     /// which the image then holds; else the answer is
     /// [`TextureShadowReason::BytesBetweenRows`].

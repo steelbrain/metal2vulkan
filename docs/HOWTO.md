@@ -342,11 +342,14 @@ past a row, a signaling NaN's bits quieted) may write, where Metal leaves them a
 them. A consumer that owns every read of such a buffer's bytes (a cache it fills and reads back by
 rows of texels, say) may make it with `BufferDescriptor::with_padding_unobserved()`: a runtime
 extension, no Metal counterpart, refused over the caller's memory (`NoCopy` contents). A texture
-over it is then a linear image at its pitch wherever the device lays one out so, its subresources
-holding each row's bytes after its texels to its pitch (the last row's included) and nothing past
-the last row's pitch; those bytes and the bytes between slices may change whenever the texture is
-made or used, and no other byte does (`WorkCounts::unobserved_padding_aliases` counts such images;
-`Buffer::texture_placement` answers `NotHostPages` for it, and
+over it is then a linear image at its pitch wherever the device lays one out so, or else, where
+the device makes `DRM_FORMAT_MOD_LINEAR` images (`VK_EXT_image_drm_format_modifier`), one at the
+pitch where its in-place check passed for its pooled memory (`WorkCounts::pooled_pitched_images`;
+`HostPageTexturePolicy::Shadow` turns it off), its subresources holding each row's bytes after its
+texels to its pitch (the last row's included) and nothing past the last row's pitch; those bytes
+and the bytes between slices may change whenever the texture is made or used, and no other byte
+does (`WorkCounts::unobserved_padding_aliases` counts such images; `Buffer::texture_placement`
+answers `NotHostPages` for such a texture, else the shadow's cause, and
 `Shadow(TextureShadowReason::BytesBetweenRows)` without the declaration).
 
 A blit that names a texture over a buffer runs on the buffers' bytes, a region per row where its

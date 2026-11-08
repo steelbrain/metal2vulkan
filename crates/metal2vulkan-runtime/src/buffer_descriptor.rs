@@ -128,7 +128,9 @@ pub struct BufferDescriptor<'a> {
     /// last row's included, and the bytes from a slice's last row's pitch to the next slice. A
     /// texture over the buffer whose rows (or slices) lie apart is then a linear image aliasing
     /// the buffer's memory where the device lays one out at its pitches, as one whose rows lie one
-    /// after another is, not a shadow: its image holds those bytes, and Vulkan lets the image's
+    /// after another is, or else a `DRM_FORMAT_MOD_LINEAR` image at them where the device makes
+    /// such images and its in-place check passed for its pooled memory
+    /// (`WorkCounts::pooled_pitched_images`), not a shadow: its image holds those bytes, and Vulkan lets the image's
     /// layout moves and a render pass's load and store operations write them, so they may change
     /// to any value whenever the texture is made or used. No other byte changes: one past the
     /// image's subresources is reached by no operation on it, and a texel's bytes are the

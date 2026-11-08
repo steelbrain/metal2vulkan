@@ -6,7 +6,11 @@
 //! - **What it does.** For each class it makes a buffer as the product makes one there (a no-copy
 //!   buffer over anonymous pages it maps, imported by their pointer; a buffer of the runtime's own
 //!   longer than half a pooled block, in fresh pages; a no-copy buffer over pages the device
-//!   refuses by their pointer, imported as dma-bufs), fills a window of it with a pattern, and
+//!   refuses by their pointer, imported as dma-bufs; a buffer of the runtime's own in its pooled
+//!   memory, under half a block, that declares the bytes between a texture's rows unobserved, where
+//!   the device makes `DRM_FORMAT_MOD_LINEAR` images, its textures taking such an image at Metal's
+//!   pitch alone, `texture.rs`'s `alias_image`; a shape whose window passes that buffer, the
+//!   3840x2160 surface's, is skipped there), fills a window of it with a pattern, and
 //!   makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture takes
 //!   the image in place exactly as the product's would ([`checking`](crate::in_place::checking)
 //!   lets it whatever the verdict); the fresh-pages class's buffer in fresh pages wherever the
