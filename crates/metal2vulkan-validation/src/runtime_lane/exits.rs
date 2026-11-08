@@ -807,9 +807,9 @@ const ID_READER: &str =
     "sample-an-unsigned-texture-through-a-sampler-held-beside-it-in-an-argument-buffer";
 
 /// How long the released-import cases' fills keep the GPU busy, as one fill's time predicts.
-const HELD: Duration = Duration::from_millis(60);
+const BUSY: Duration = Duration::from_millis(60);
 
-/// The fills that keep the device busy for about [`HELD`]: a buffer's length and how many fills
+/// The fills that keep the device busy for about [`BUSY`]: a buffer's length and how many fills
 /// of it, as 16 fills' time measured on `queue` predicts on a GPU (16 to 1024 of them); on a CPU
 /// device [`in_flight`]'s.
 fn held_fills(device: &Device, queue: &CommandQueue) -> (u64, usize) {
@@ -826,7 +826,7 @@ fn held_fills(device: &Device, queue: &CommandQueue) -> (u64, usize) {
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     let each = (start.elapsed() / 16).as_nanos().max(1);
-    let fills = usize::try_from(HELD.as_nanos() / each)
+    let fills = usize::try_from(BUSY.as_nanos() / each)
         .unwrap_or(1024)
         .clamp(16, 1024);
     (length, fills)
@@ -844,7 +844,7 @@ fn fills_of(command_buffer: &CommandBuffer, buffer: &Buffer, length: u64, fills:
 /// The released-import cases, in reims-vgpu's shape (a texture over a surface released with the
 /// surface while a command buffer that binds the device's heap set runs): twice, a texture over a
 /// no-copy buffer of fresh host pages, whose deallocator unmaps them; a command buffer of fills
-/// that keep the device busy for about [`HELD`], then a dispatch that reads another texture
+/// that keep the device busy for about [`BUSY`], then a dispatch that reads another texture
 /// through its ID ([`ID_READER`]); the texture and its buffer released once the command buffer is
 /// scheduled, while the fills run.
 ///
