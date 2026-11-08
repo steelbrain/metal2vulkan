@@ -996,17 +996,19 @@ fn sorted_runs(runs: &[std::ops::Range<u64>]) -> u64 {
 }
 
 /// The lists a copy of `runs` takes over the chunks `spans` not imported, at most `most` runs a
-/// list: each chunk's runs by address, those that meet one ([`sorted_runs`]), `most` a list.
+/// list: each chunk's runs by address, those that meet one ([`sorted_runs`]), every chunk's
+/// together, `most` a list.
 fn lists_of(runs: &[std::ops::Range<u64>], spans: &[std::ops::Range<u64>], most: usize) -> u64 {
-    (spans.iter())
+    let sorted: u64 = (spans.iter())
         .map(|span| {
             let inside: Vec<std::ops::Range<u64>> = (runs.iter())
                 .filter(|run| span.contains(&run.start))
                 .cloned()
                 .collect();
-            sorted_runs(&inside).div_ceil(most as u64)
+            sorted_runs(&inside)
         })
-        .sum()
+        .sum();
+    sorted.div_ceil(most as u64)
 }
 
 /// The chunks of `spans` any of `runs` lies in.
@@ -1363,8 +1365,9 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
 /// A tile copied both ways over a RAM of which the guest wrote the tile's pages alone, the rest
 /// of its file never touched, with a source of run lists: where copies take lists (RADV,
 /// [`copies_by_lists`]), the copies make no page of the file resident but the tile's own
-/// (`mincore` over the RAM's mapping), however its pages lie: lists of its runs, no chunk
-/// imported, none asked for. A chunk's import would make all of the chunk resident. Elsewhere the
+/// (`mincore` over the RAM's mapping), however its pages lie: lists of its runs, by address
+/// across the RAM's two chunks (90 clusters in both, one list), no chunk imported, none asked
+/// for. A chunk's import would make all of the chunk resident. Elsewhere the
 /// copies' bytes are checked and the resident bytes printed. Printed: `HOST-RAM-TILE` per copy,
 /// `HOST-RAM-RESIDENT` per tile.
 #[test]
@@ -1386,7 +1389,9 @@ fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
     for tile in [Tile::Clusters, Tile::Near] {
         let (ram, start, view, _asked, _dropped) = listed_ram(true, Some(LIST_RUNS));
         let ram = Arc::into_inner(ram).expect("the test's RAM");
-        let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
+        // Two chunks of 64 MiB where each listed import costs every submission: the clusters lie
+        // in both, and are one list.
+        let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit().min(64 * MIB)));
         let runs = tile_runs(start, tile);
         // The guest's writes: the tile's pages alone.
         for run in &runs {

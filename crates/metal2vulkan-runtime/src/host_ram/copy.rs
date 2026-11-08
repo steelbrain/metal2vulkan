@@ -61,18 +61,20 @@
 //! - **Lists of runs.** Where each listed import costs every submission and the RAM's chunks are
 //!   the device's dma-bufs of the RAM's source (RADV's: `host_ram.rs`'s `Plan::listed`), and the
 //!   RAM came with a source of run lists (`HostRam::with_dma_buf_of_runs`), a copy neither
-//!   imports a chunk not imported yet nor asks for it: its ranges of the chunk, widened to whole
-//!   host pages, those that then share or touch a page one ([`page_runs`]), are imported as one
-//!   dma-buf of that source for each list of at most the source's count of runs and one
-//!   dma-buf's bytes ([`run_lists`]), made on the encoding thread, each run's bytes in the
-//!   list's `VkBuffer` from where the runs before it end (`RamChunk::offset_of`), held by the
-//!   command buffer until it completed, then freed (`WorkCounts::host_ram_run_list_imports`,
-//!   `run_imports_live`). So a copy pins its own pages while it runs, and none of the chunk's
-//!   others, where the chunk's import pins every page of it and the source's dma-buf allocates
-//!   the pages of the guest's file the guest never touched, for good. Where that cannot be (the
-//!   allocation limit's margin, `RuntimeDriverDefect::AliasedImportBlitsUnordered`, a run that is
-//!   the whole chunk or passes one dma-buf's bytes, a list's import that fails) the copy takes
-//!   the chunk as above.
+//!   imports a chunk not imported yet nor asks for it (`RamOnDevice::copy_imports`): its ranges of
+//!   every such chunk, widened to whole host pages, those that then share or touch a page one
+//!   ([`page_runs`]), are taken by address across the chunks and imported as one dma-buf of that
+//!   source for each list of at most the source's count of runs and one chunk's bytes
+//!   ([`run_lists`]), made on the encoding thread, each run's bytes in the list's `VkBuffer`
+//!   from where the runs before it end (`RamChunk::offset_of`), held by the command buffer until
+//!   it completed, then freed (`WorkCounts::host_ram_run_list_imports`, `run_imports_live`): a
+//!   tile of 1,800 pages anywhere in the RAM is one list or two. So a copy pins its own pages
+//!   while it runs, and none of the chunks' others, where a chunk's import pins every page of it
+//!   and the source's dma-buf allocates the pages of the guest's file the guest never touched,
+//!   for good. The chunks already imported take their own imports. Where that cannot be (the
+//!   allocation limit's margin, `RuntimeDriverDefect::AliasedImportBlitsUnordered`, a run that
+//!   is the whole chunk or passes a list's bytes, a list's import that fails) the copy takes the
+//!   chunks as above.
 //! - **Runs of words: one dispatch per chunk.** Where every run also ends on a word, and lies at a
 //!   word of the buffer's memory ([`in_words`]: a surface's whole pages, or the rows of one of
 //!   4-byte texels), the pieces become a table of runs of at most a 4 KiB page each, each its first
@@ -125,7 +127,7 @@
 //!   own, the first run's past it). A chunk the device cannot import fails the copy with the
 //!   import's error.
 
-use super::{CopyTake, HostRam, RamChunk, RamOnDevice};
+use super::{CopyImports, CopyTake, HostRam, RamChunk, RamOnDevice};
 use crate::blit::{bytes_in, reads_by, writes_by, BlitCommandEncoder, TRANSFER};
 use crate::buffer::{Buffer, CallerMemory};
 use crate::dirty_pages::PagesLog;
@@ -545,8 +547,8 @@ pub(crate) fn alone_ranges(ranges: &[Range<u64>]) -> Vec<Range<u64>> {
 }
 
 /// One chunk's bytes `ranges` (offsets in the chunk `span`, by start, apart) as the host pages
-/// they lie in, `page` bytes each, for a list of them (`RamOnDevice::run_lists`): each widened
-/// to whole pages within the span, those that then share or touch a page one.
+/// they lie in, `page` bytes each, for lists of them (`RamOnDevice::run_lists`): each widened to
+/// whole pages within the span, those that then share or touch a page one.
 pub(crate) fn page_runs(ranges: &[Range<u64>], span: &Range<u64>, page: u64) -> Vec<Range<u64>> {
     let mut out: Vec<Range<u64>> = Vec::with_capacity(ranges.len());
     for range in ranges {
@@ -560,10 +562,10 @@ pub(crate) fn page_runs(ranges: &[Range<u64>], span: &Range<u64>, page: u64) -> 
     out
 }
 
-/// `runs` (host pages, by start, apart) as the lists a copy imports them in, each one dma-buf of
-/// the RAM's source of run lists (`RamOnDevice::run_lists`): the runs in order, at most
-/// `most_runs` and `most_bytes` bytes a list, each list the indices of its runs. `None` where a
-/// run alone passes `most_bytes`.
+/// `runs` (host pages, by start, apart, of every chunk a copy takes lists of) as the lists a copy
+/// imports them in, each one dma-buf of the RAM's source of run lists (`RamOnDevice::run_lists`):
+/// the runs in order, at most `most_runs` and `most_bytes` bytes a list, each list the indices of
+/// its runs. `None` where a run alone passes `most_bytes`.
 pub(crate) fn run_lists(
     runs: &[Range<u64>],
     most_runs: usize,
@@ -926,24 +928,19 @@ impl BlitCommandEncoder {
         }
         // The bytes of each chunk the pieces touch, and the imports they are read or written
         // through, held until the command buffer completes: the chunk's, or, where it is not
-        // imported yet, lists of those bytes' pages, or one of each of those bytes alone while
-        // the device's thread imports it (`RamOnDevice::for_copy`). Each piece is then counted
-        // in its import.
+        // imported yet, lists of the copy's pages, or one of each of those bytes alone while
+        // the device's thread imports it (`RamOnDevice::copy_imports`). Each piece is then
+        // counted in its import.
         let touched = chunk_ranges(&pieces, MOST_RANGES);
-        let mut imports: Vec<Arc<RamChunk>> = Vec::new();
-        let mut of_chunk: BTreeMap<usize, Range<usize>> = BTreeMap::new();
-        let mut waited = Duration::ZERO;
-        for (slot, ranges) in chunk_ranges(&pieces, usize::MAX) {
-            let (made, took) = ram.for_copy(&device, importer, slot, &ranges)?;
-            waited += took;
-            if made.iter().any(|import| import.bytes() > range) {
-                return Err(crate::error::internal(
-                    "a chunk of host RAM past the device's storage range",
-                ));
-            }
-            let first = imports.len();
-            imports.extend(made);
-            of_chunk.insert(slot, first..imports.len());
+        let CopyImports {
+            imports,
+            of_chunk,
+            waited,
+        } = ram.copy_imports(&device, importer, &chunk_ranges(&pieces, usize::MAX))?;
+        if imports.iter().any(|import| import.bytes() > range) {
+            return Err(crate::error::internal(
+                "an import of host RAM past the device's storage range",
+            ));
         }
         if !waited.is_zero() {
             let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
@@ -953,8 +950,8 @@ impl BlitCommandEncoder {
             .map(|piece| {
                 let start = spans[piece.slot].start + piece.offset;
                 let host = start..start + piece.length;
-                let mut found = (of_chunk.get(&piece.slot)?.clone())
-                    .filter_map(|index| Some((index, imports[index].offset_of(&host)?)));
+                let mut found = (of_chunk.get(&piece.slot)?.iter())
+                    .filter_map(|&index| Some((index, imports[index].offset_of(&host)?)));
                 let (index, offset) = found.next()?;
                 Some(Piece {
                     slot: index,

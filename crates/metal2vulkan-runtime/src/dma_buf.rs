@@ -159,7 +159,8 @@ unsafe impl Sync for DmaBufRequest {}
 ///
 /// Each request of the list is whole host pages ([`DmaBufRequest`]: `start` and `length`
 /// multiples of the host page, its `granule` its `length`); the requests are by start and share
-/// no page, all inside one chunk of the RAM, and at most as many as the RAM was given. It returns
+/// no page, each inside one chunk of the RAM (they may lie in several chunks, and in several of
+/// its ranges), and at most as many as the RAM was given. It returns
 /// one [`DmaBufChunk`]: a dma-buf whose bytes are the requests' pages one after another, in
 /// order, its `length` their total. The descriptor is the runtime's from then on: Vulkan's once
 /// imported, closed otherwise. An `Err`, or a chunk of another length or no dma-buf, leaves the
@@ -560,11 +561,12 @@ impl Device {
         Ok((buffer.raw, placement))
     }
 
-    /// `runs`, host pages of a guest RAM (`host_ram.rs`: by start, sharing no page, inside one
-    /// chunk), imported as the one dma-buf of them, their pages one after another, that the RAM's
-    /// `source` of run lists makes (`HostRam::with_dma_buf_of_runs`): the `VkBuffer` over all
-    /// their bytes, made for dma-bufs and bound to the import at its start, and its placement,
-    /// which keeps the import. Only a copy's commands name the buffer: no object is placed in it.
+    /// `runs`, host pages of a guest RAM (`host_ram.rs`: by start, sharing no page, each inside
+    /// one chunk), imported as the one dma-buf of them, their pages one after another, that the
+    /// RAM's `source` of run lists makes (`HostRam::with_dma_buf_of_runs`): the `VkBuffer` over
+    /// all their bytes, made for dma-bufs and bound to the import at its start, and its
+    /// placement, which keeps the import. Only a copy's commands name the buffer: no object is
+    /// placed in it.
     /// Refused, everything made released, as [`Device::ram_span_as_dma_buf`] is, where the device
     /// makes no such buffer, the source fails or answers a chunk of another length, or the driver
     /// refuses the dma-buf.
