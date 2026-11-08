@@ -515,6 +515,8 @@ mod heap_one_plane;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod heap_sample_moves;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod heap_shadow_costs;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod heap_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod heaps;

@@ -507,7 +507,7 @@ fn count_fields(counts: &WorkCounts) -> Vec<(String, u64)> {
 }
 
 /// Every work count that moved from `before` to `after`, per frame of `frames`.
-fn moved_per_frame(before: &WorkCounts, after: &WorkCounts, frames: usize) -> String {
+pub(super) fn moved_per_frame(before: &WorkCounts, after: &WorkCounts, frames: usize) -> String {
     let before = count_fields(before);
     let after = count_fields(after);
     if before.len() != after.len() {

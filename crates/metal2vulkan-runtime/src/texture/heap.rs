@@ -630,11 +630,33 @@ struct HeapBinding {
     pages: Option<Arc<HostPages>>,
 }
 
+/// A resource option's mode as its notice names it: the mode, or that its bits name none.
+fn mode<M: std::fmt::Debug>(mode: Result<M, Error>) -> String {
+    mode.map_or_else(|_| "an undefined".to_owned(), |m| format!("{m:?}"))
+}
+
+/// Where a heap texture is made, for its route's notice: the Metal call, the heap's type, the
+/// texture's options and usage, and what its images take of the heap beside its answer.
+struct Making {
+    call: &'static str,
+    heap: HeapType,
+    options: ResourceOptions,
+    usage: TextureUsage,
+    /// [`HeapPlan::images`].
+    images: SizeAndAlign,
+    /// [`HeapPlan::size_and_align`].
+    answer: SizeAndAlign,
+}
+
 /// What a texture of a descriptor takes of a heap.
 struct HeapPlan {
     layout: TextureLayout,
     image: HeapImage,
     size_and_align: SizeAndAlign,
+    /// What the device's images take of the heap ([`heap_extent`]: a compressed image's too, where
+    /// the texture's image is made uncompressed), apart from the answer: a texture held to Metal's
+    /// answer takes these bytes of memory of its own instead, which its shadow's notice names.
+    images: SizeAndAlign,
     /// Metal's own answer for the descriptor where the runtime knows it
     /// (`heap_tiled::metal_heap_layout`, `Device::metal_heap_answer`), whatever this device
     /// answers: what a placement offset is held to where the image lies in memory of its own
@@ -2073,6 +2095,7 @@ impl Device {
             layout,
             image,
             size_and_align,
+            images,
             metal_answer,
             metal_layout,
         })
@@ -3478,7 +3501,15 @@ impl Device {
         if let Some(stand_in) = stand_in {
             drop(image.present_stand_in(stand_in));
         }
-        self.degrade_alias_route(route, &p.layout);
+        let making = Making {
+            call,
+            heap: heap.heap_type(),
+            options,
+            usage: descriptor.usage,
+            images: p.images,
+            answer: p.size_and_align,
+        };
+        self.degrade_alias_route(route, &p.layout, &making);
         let image = match twinned {
             true => self.with_decoded_twin(image, &p.layout, descriptor, false)?,
             false => {
@@ -3828,7 +3859,32 @@ impl Device {
     /// Announces, once per device, the alias route a heap texture of `layout` took where it is
     /// other than [`AliasRoute::Direct`], and a one-plane YCbCr texture laid out otherwise than
     /// Metal lays it (`Degradation::HeapOnePlaneLayout`, [`one_plane_layout_difference`]).
-    fn degrade_alias_route(&self, route: AliasRoute, layout: &TextureLayout) {
+    fn degrade_alias_route(&self, route: AliasRoute, layout: &TextureLayout, making: &Making) {
+        // A shadow's object: the texture as made, and what its images take of the heap beside
+        // the answer it is held to.
+        let shadowed = || {
+            let [width, height, depth] = layout.extent;
+            format!(
+                "a {} {:?} texture of {width}x{height}x{depth}, {} levels, {} slices, usage {:?}, \
+                 {} storage, {} CPU cache mode, {} hazard tracking, in a {:?} heap ({}); \
+                 its images take {} bytes at an alignment of {} of the heap, where the texture \
+                 answers {} at {}",
+                layout.pixel_format.name(),
+                layout.texture_type,
+                layout.levels,
+                layout.layers,
+                making.usage,
+                mode(making.options.storage_mode()),
+                mode(making.options.cpu_cache_mode()),
+                mode(making.options.hazard_tracking_mode()),
+                making.heap,
+                making.call,
+                making.images.size,
+                making.images.align,
+                making.answer.size,
+                making.answer.align,
+            )
+        };
         if let Some(why) = one_plane_layout_difference(layout) {
             self.degrade(Degradation::HeapOnePlaneLayout, || {
                 let [width, height, depth] = layout.extent;
@@ -3846,11 +3902,7 @@ impl Device {
             AliasRoute::Direct | AliasRoute::Lossless => return,
             AliasRoute::Shadow => {
                 return self.degrade(Degradation::ShadowedTexture, || {
-                    let [width, height, depth] = layout.extent;
-                    let object = format!(
-                        "a {:?} {:?} texture of {width}x{height}x{depth} in a heap",
-                        layout.pixel_format, layout.texture_type
-                    );
+                    let object = shadowed();
                     let why = "the device's driver lays depth and stencil images apart from the \
                                memory they are bound to \
                                (DriverFact::DepthStencilImagesLieApart): its image is a shadow \
@@ -3861,11 +3913,7 @@ impl Device {
             }
             AliasRoute::MemoryShadow => {
                 return self.degrade(Degradation::ShadowedTexture, || {
-                    let [width, height, depth] = layout.extent;
-                    let object = format!(
-                        "a {:?} {:?} texture of {width}x{height}x{depth} in a heap",
-                        layout.pixel_format, layout.texture_type
-                    );
+                    let object = shadowed();
                     let why = "the device binds no image of the texture to the heap's memory \
                                where the heap places it: its image is a shadow of the heap's bytes"
                         .to_owned();
@@ -3874,12 +3922,7 @@ impl Device {
             }
             AliasRoute::Tiled => {
                 return self.degrade(Degradation::ShadowedTexture, || {
-                    let [width, height, depth] = layout.extent;
-                    let object = format!(
-                        "a {} {:?} texture of {width}x{height}x{depth} in a heap",
-                        layout.pixel_format.name(),
-                        layout.texture_type
-                    );
+                    let object = shadowed();
                     let why = "Metal tiles its elements in the heap's bytes, which no image of \
                                the device bound there lays out: its image is a shadow of them"
                         .to_owned();
