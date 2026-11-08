@@ -5,7 +5,8 @@
 //! own image, which a later fetch would otherwise render through a stand-in the snapshot does not
 //! see, and the target takes its storage form at that pass's commit where the device makes one
 //! (`texture/storage_form.rs`), so every later pass's reader takes the snapshot unpinned. Elsewhere
-//! every reader splits and nothing swaps. Each pass, a command buffer of its own over the
+//! every reader splits, and the target swaps only where a pass fetches it through the pixel
+//! interlock into a scratch for want of `STORAGE` (MoltenVK's fetch). Each pass, a command buffer of its own over the
 //! `BGRA8Unorm` target, fills the block [`BLOCK`] with a red of its own, then after a barrier draws
 //! the block through its scissor with `tob_read`, each fragment writing the texel it read: the
 //! pass's own red at every pixel of the block, as Metal orders the barrier, where a read of the
@@ -350,12 +351,18 @@ fn a_fetch_after_a_pinned_reader_renders_through_a_stand_in_from_the_fetch_on() 
     settled(&device);
     let target = target(&device, true);
     let (snapshots, forms) = snapshots(&device, &target);
+    // The fetch notes the target for its storage form wherever it renders it into a scratch for
+    // want of `STORAGE`, a device without the snapshot path included (`render.rs`, the fetch's
+    // stand-in): where the device's fetch reads the image through the pixel interlock, which is
+    // where the plan has a storage candidate.
+    let plan = target.image_plan().unwrap().clone();
+    let fetch_forms = storage_candidate(&plan, device.compile_device().profile()).is_some();
     let mut before = device.work_counts();
     for pass in 0..2 {
         let (reds, after) = pass_over(&queue, &target, states, pass);
         let moved = counts_moved(&before, &after);
         eprintln!(
-            "SELF-READ-PINNED-FETCH pass {pass}: (splits, snapshotted, pinned, stand-ins after \
+            "SELF-READ-PINNED-FETCH pass {pass} (fetch forms {fetch_forms}): (splits, snapshotted, pinned, stand-ins after \
              pins, storage forms) {moved:?}, inline passes {}",
             after.inline_passes - before.inline_passes
         );
@@ -369,7 +376,8 @@ fn a_fetch_after_a_pinned_reader_renders_through_a_stand_in_from_the_fetch_on() 
         }
         // The first pass's reader pins the target and its fetch takes the stand-in after the
         // reader's instance; a later pass's fetch renders the target in place where it took its
-        // storage form.
+        // storage form. Without the snapshot path every reader splits, and the first pass's fetch
+        // still takes the storage form where the device fetches through the interlock.
         let pinned = pass == 0 || !forms;
         let want = match snapshots {
             true => [
@@ -379,7 +387,7 @@ fn a_fetch_after_a_pinned_reader_renders_through_a_stand_in_from_the_fetch_on() 
                 u64::from(pinned),
                 u64::from(pass == 0 && forms),
             ],
-            false => [1, 0, 0, 0, 0],
+            false => [1, 0, 0, 0, u64::from(pass == 0 && fetch_forms)],
         };
         assert_eq!(
             moved,
