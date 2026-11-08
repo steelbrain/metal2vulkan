@@ -2,7 +2,7 @@
 //! submission (RADV, the RAM with a source of dma-bufs: `host_ram.rs`'s `Plan::listed`): each
 //! copy's time, and what the copies make resident of the guest's RAM.
 //!
-//! The RAM is an 8 GiB and then a 16 GiB `memfd` mapped shared, as QEMU's
+//! The RAM is an 8 GiB and then a 16 GiB `memfd`, sealed and mapped shared, as QEMU's
 //! `memory-backend-memfd,share=on` makes it, its source of dma-bufs udmabufs of its pages. The
 //! guest's desktop wrote half of it ([`TOUCHED_PERCENT`]), in 2 MiB extents picked at random (a
 //! model: a consumer measured 7.9 to 8.0 GiB of a 16 GiB guest resident at its desktop with views
@@ -22,7 +22,8 @@
 //! over the scroll, each way's median, 90th percentile and slowest copy: the encoding thread's
 //! CPU time for the call, its wall time, the GPU's (`gpu_end_time - gpu_start_time`) and the
 //! commit's return to the completion seen, and the dma-buf imports and chunk imports per copy.
-//! Then a 5 MiB device cache's fill and download, [`ITERATIONS`] times each, the medians.
+//! Then a 5 MiB device cache's fill and download, [`ITERATIONS`] times each; and first the same
+//! over a RAM of one 512 MiB chunk an object had imported, where a copy imports nothing.
 //!
 //! Ignored: run it in release under `--cfg m2v_gpu` on Linux, on a host with `/dev/udmabuf`
 //! (`cargo nextest run --release -p metal2vulkan-runtime --lib --run-ignored all
@@ -31,7 +32,7 @@
 use super::host_residency::{device, udmabuf, Scratch};
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, Device, DmaBufChunk, DmaBufRequest, DmaBufSource,
-    HostRam, KeepAlive, ResourceOptions,
+    HostMemory, HostRam, KeepAlive, ResourceOptions, RunResolver,
 };
 use std::ops::Range;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -51,9 +52,10 @@ const TILE_PAGES: u64 = 1800;
 const STEPS: usize = 240;
 const VISIBLE: usize = 24;
 const REPORT_EVERY: usize = 60;
-/// A 5 MiB device cache's copies.
+/// A 5 MiB device cache's copies, and the RAM of one chunk they are copied over once imported.
 const CACHE_PAGES: u64 = 1280;
 const ITERATIONS: usize = 40;
+const CHUNK_RAM: u64 = 512 << 20;
 
 /// A small deterministic generator (xorshift).
 struct Rng(u64);
@@ -82,20 +84,25 @@ impl Drop for Mapping {
     }
 }
 
-/// A RAM of `length` bytes over a new `memfd`, its source udmabufs of its pages at the RAM's
-/// addresses, as long as the host's udmabuf limit allows; its first byte.
+/// A RAM of `length` bytes over a new `memfd` sealed against growing and shrinking (as QEMU's
+/// `memory-backend-memfd` seals it, and as udmabuf requires), its source udmabufs of its pages at
+/// the RAM's addresses, as long as the host's udmabuf limit allows; its first byte.
 fn ram(length: u64) -> (Arc<HostRam>, u64) {
-    // SAFETY: a new anonymous file, owned at once, then sized.
+    // SAFETY: a new anonymous file, owned at once, then sized and sealed.
     let fd = unsafe {
-        let fd = libc::memfd_create(c"m2v-listed-bench".as_ptr(), libc::MFD_CLOEXEC);
+        let fd = libc::memfd_create(
+            c"m2v-listed-bench".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        );
         assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
         OwnedFd::from_raw_fd(fd)
     };
     // SAFETY: the descriptor is the bench's.
-    assert_eq!(
-        unsafe { libc::ftruncate(fd.as_raw_fd(), length as libc::off_t) },
-        0
-    );
+    unsafe {
+        assert_eq!(libc::ftruncate(fd.as_raw_fd(), length as libc::off_t), 0);
+        let seals = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+        assert_eq!(libc::fcntl(fd.as_raw_fd(), libc::F_ADD_SEALS, seals), 0);
+    }
     // SAFETY: a new shared mapping of the whole file.
     let start = unsafe {
         libc::mmap(
@@ -414,6 +421,62 @@ fn scroll(device: &Device, length: u64) {
     drop((cache, queue, used, ram));
 }
 
+/// The 5 MiB cache's copies over a RAM of one chunk ([`CHUNK_RAM`]) that an object over it had
+/// imported: what each copy costs with no import of its own, as a copy over a RAM's imported
+/// chunks does.
+fn over_an_imported_chunk(device: &Device) {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let (ram, start) = ram(CHUNK_RAM);
+    let written = vec![true; (CHUNK_RAM / PAGE) as usize];
+    for page in 0..CHUNK_RAM / PAGE {
+        // SAFETY: the RAM's mapping, which no device uses yet.
+        unsafe { *((start + page * PAGE) as *mut u8) = (page % 251) as u8 };
+    }
+    let used = device.use_host_ram(&ram).unwrap();
+    let before = device.work_counts();
+    // A buffer of the RAM's first page over its own addresses: bound in its run's import, the
+    // chunk asked for, which the device's thread imports.
+    let runs: RunResolver = Arc::new(|at, length| Some(std::iter::once(at..at + length).collect()));
+    // SAFETY: the RAM's own bytes, mapped until its keep-alive goes, after the buffer.
+    let memory =
+        unsafe { HostMemory::new(NonNull::new(start as *mut u8).unwrap()) }.with_runs(runs);
+    // SAFETY: as above.
+    let object = unsafe {
+        device.new_buffer_with_bytes_no_copy(memory, PAGE, ResourceOptions::default(), None)
+    }
+    .unwrap();
+    let began = Instant::now();
+    while device.work_counts().host_ram_chunks_imported == before.host_ram_chunks_imported {
+        assert!(
+            began.elapsed() < WAIT,
+            "the object's chunk was never imported"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let queue = device.new_command_queue().unwrap();
+    let cache = device
+        .new_buffer(CACHE_PAGES * PAGE, ResourceOptions::private())
+        .unwrap();
+    let mut taken = vec![false; written.len()];
+    let tile = tile(start, &written, &mut taken, CACHE_PAGES, &mut rng);
+    let (mut fill, mut download) = (Way::default(), Way::default());
+    for _ in 0..ITERATIONS {
+        copy(device, &queue, (&*ram, &tile[..]), &cache, true, &mut fill);
+        copy(
+            device,
+            &queue,
+            (&*ram, &tile[..]),
+            &cache,
+            false,
+            &mut download,
+        );
+    }
+    let what = |way: &str| format!("a 5 MiB cache's {way} over an imported chunk");
+    fill.print(device, &what("fill"));
+    download.print(device, &what("download"));
+    drop((cache, queue, object, used, ram));
+}
+
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
 fn listed_copies_over_8_and_16_gib_guests() {
@@ -432,6 +495,7 @@ fn listed_copies_over_8_and_16_gib_guests() {
         eprintln!("HOST-RAM-LISTED-BENCH: the device imports no host memory here: not run");
         return;
     }
+    over_an_imported_chunk(&device);
     for length in [8 * GIB, 16 * GIB] {
         scroll(&device, length);
     }
