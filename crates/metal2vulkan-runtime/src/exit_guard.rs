@@ -101,7 +101,17 @@
 //!   making of the process's life, and a making takes milliseconds to seconds, beside which one
 //!   more entry in the C library's list of exit handlers costs nothing. So every destructor a
 //!   making that returned registered runs after the hook, which waits for the makings in progress
-//!   before it. Seen before: on an RTX 5080 (NVIDIA's driver), a consumer's test process ended
+//!   before it. While a making is in progress in a section (a pool's piece's, a host step's), a
+//!   thread of the runtime's ([`register_while_making`], started at the process's first such
+//!   making and parked while none is in progress) registers the hook again every
+//!   [`MAKING_INTERVAL`] (2 ms), at most [`MAKING_REGISTRATIONS`] (16384, 512 KiB of the C
+//!   library's list) times in the process, so a destructor the compiler registered in a making
+//!   still in progress runs after the hook too once the interval passed: the hook runs first and
+//!   waits for the making. Measured on lavapipe (Mesa 26.2.4, LLVM 23): with a pool's making in
+//!   progress, three destructors LLVM registered on a thread of the driver's 1 to 2 ms before the
+//!   exit ran before the hook, that thread still compiling (it registered three more once the exit
+//!   began), in 1 of 3 exits. Seen before: on an RTX 5080 (NVIDIA's driver), a consumer's test
+//!   process ended
 //!   with `SIGSEGV` at `0x18` inside `libnvidia-glvkspirv.so`, the driver's SPIR-V compiler, on a
 //!   thread the test's had started, during its exit after its test passed: one test of a whole
 //!   run under load, which passed alone. A load is where the first call counts
@@ -125,9 +135,11 @@
 //!   program makes once it learned of a section's work (from a handler, a wait, a status) comes
 //!   after that section's registration. Measured: while the scheduler posted a command buffer's
 //!   scheduling inside its section, an exit from a scheduled handler crashed the completion's poll
-//!   on MoltenVK in 10 runs of 10. The hole left: a static first made by a making in progress as
-//!   the exit begins, or by another call (not a making) after the hook's last registration, when
-//!   the process exits before the next registration. The program's own calls but its makings
+//!   on MoltenVK in 10 runs of 10. The hole left: a static first made by a making in progress in
+//!   the last interval before the exit, or once the registrar reached its bound, or by a making on
+//!   the program's own thread (in no section, which the hook does not wait for), or by another call
+//!   (not a making) after the hook's last registration, when the process exits before the next
+//!   registration. The program's own calls but its makings
 //!   register nothing, so one of those may make it
 //!   too: on the M3 Max (the validation layer 1.4.357.0 from Homebrew), the layer's descriptor set
 //!   layouts' empty lists
@@ -298,6 +310,26 @@ static REGISTERED: AtomicU32 = AtomicU32::new(0);
 
 /// The hook's registrations after makings ([`driver_making`]).
 static AT_MAKINGS: AtomicU64 = AtomicU64::new(0);
+
+/// How often the registrar registers the hook again while a driver's making is in progress in a
+/// section ([`register_while_making`]): a destructor the making's compiler registers runs after the
+/// hook once this much time passed, so the exit's wait for the making comes first.
+pub(crate) const MAKING_INTERVAL: Duration = Duration::from_millis(2);
+
+/// The most registrations the registrar makes in a process: 512 KiB of the C library's list of
+/// exit handlers (32 bytes each), and 33 s of makings at [`MAKING_INTERVAL`]. A process's first
+/// makings are those whose compilers make their statics.
+pub(crate) const MAKING_REGISTRATIONS: u64 = 16_384;
+
+/// The hook's registrations while makings were in progress ([`register_while_making`]).
+static DURING_MAKINGS: AtomicU64 = AtomicU64::new(0);
+
+/// The process whose registrar ([`register_while_making`]) was started; 0 before.
+static REGISTRAR_PID: AtomicU32 = AtomicU32::new(0);
+
+/// The registrar's thread, to wake as a making begins: set by the thread itself as it starts, in
+/// the process [`REGISTRAR_PID`] names; null before (and in a forked child, until its own starts).
+static REGISTRAR: AtomicPtr<std::thread::Thread> = AtomicPtr::new(std::ptr::null_mut());
 
 /// The sections of the process's guard that ended: the hook is registered again when it reaches
 /// a power of two.
@@ -920,11 +952,70 @@ pub(crate) fn enter() -> Option<Busy<'static>> {
 /// inside one runs even once the guard closed, so the making is always counted.
 #[track_caller]
 pub(crate) fn driver_making<T>(make: impl FnOnce() -> T) -> T {
-    let _making = match in_section() {
+    // Held until `make` returned.
+    let making = match in_section() {
         true => GUARD.enter_making(),
         false => None,
     };
+    if making.is_some() {
+        making_began();
+    }
     make()
+}
+
+/// A making in a section began ([`driver_making`]): wake the registrar where the hook is
+/// registered in this process, starting it at the process's first making.
+fn making_began() {
+    let pid = std::process::id();
+    if REGISTERED.load(Ordering::SeqCst) != pid {
+        return;
+    }
+    let started = REGISTRAR_PID.load(Ordering::SeqCst);
+    if started != pid {
+        // The thread looks at the makings in progress as it starts, so no wake is due.
+        let builder = std::thread::Builder::new().name("metal2vulkan-exit-registrar".into());
+        if REGISTRAR_PID
+            .compare_exchange(started, pid, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            // A forked child's: the parent's thread is not in this process.
+            REGISTRAR.store(std::ptr::null_mut(), Ordering::SeqCst);
+            // Where no thread starts, the makings register the hook as they return alone.
+            let _ = spawn(builder, register_while_making);
+        }
+        return;
+    }
+    let thread = REGISTRAR.load(Ordering::SeqCst);
+    if !thread.is_null() {
+        // SAFETY: the registrar's own handle, leaked as it started in this process, never freed.
+        unsafe { (*thread).unpark() };
+    }
+}
+
+/// The registrar, one thread of the runtime's in a process: while a driver's making is in
+/// progress in a section, register the hook again every [`MAKING_INTERVAL`], at most
+/// [`MAKING_REGISTRATIONS`] times in the process, until the guard closes; parked while none is.
+/// A destructor the making's compiler registered (a static made at its first use of a path, or the
+/// constructors of a compiler it loaded only then) then runs after the hook, which waits for the
+/// making, once the interval passed. It makes no Vulkan call.
+fn register_while_making() {
+    let current = Box::into_raw(Box::new(std::thread::current()));
+    REGISTRAR.store(current, Ordering::SeqCst);
+    let open =
+        || !GUARD.is_closed() && DURING_MAKINGS.load(Ordering::Relaxed) < MAKING_REGISTRATIONS;
+    while open() {
+        if GUARD.making.load(Ordering::SeqCst) == 0 {
+            // A making begun since the load unparks it, and then the park returns at once.
+            std::thread::park();
+            continue;
+        }
+        std::thread::sleep(MAKING_INTERVAL);
+        if GUARD.making.load(Ordering::SeqCst) > 0 && open() {
+            install();
+            // Counted once registered: a count read higher follows the registration.
+            DURING_MAKINGS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }
 
 /// A driver's `vkCreate*Pipelines` returned, on this thread, whichever it is (`device/compiles.rs`,
@@ -1478,8 +1569,12 @@ pub struct Registrations {
     pub at_instances: u64,
     /// After makings of `VkPipeline`s, one per making.
     pub at_makings: u64,
-    /// In all: at devices, after instances, after makings, and at the end of sections (after the
-    /// first call of an entry point of the table, and at powers of two of the sections' count).
+    /// While makings in sections were in progress, one every `MAKING_INTERVAL` (2 ms), at most
+    /// `MAKING_REGISTRATIONS` (16384) in the process.
+    pub during_makings: u64,
+    /// In all: at devices, after instances, after makings, while makings were in progress, and at
+    /// the end of sections (after the first call of an entry point of the table, and at powers of
+    /// two of the sections' count).
     pub total: u64,
     /// The most the sections can make: one per entry point of the table at each load a device
     /// was made after, the process's first device's included (It was one per entry point), and 64.
@@ -1492,6 +1587,7 @@ pub fn registrations() -> Registrations {
         at_devices: AT_DEVICES.load(Ordering::Relaxed),
         at_instances: AT_INSTANCES.load(Ordering::Relaxed),
         at_makings: AT_MAKINGS.load(Ordering::Relaxed),
+        during_makings: DURING_MAKINGS.load(Ordering::Relaxed),
         total: INSTALLED.load(Ordering::Relaxed),
         section_bound: Call::ALL.len() as u64 * LOADS.load(Ordering::Relaxed).max(1) + 64,
     }

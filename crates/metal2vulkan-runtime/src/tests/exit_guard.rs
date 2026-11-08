@@ -855,6 +855,63 @@ fn an_exit_mid_making_waits_for_it_before_an_earlier_making_s_destructor() {
     );
 }
 
+/// The exit of a child whose pool's piece, in its section, registers a destructor of the driver's
+/// compiler in its making (a static made at its first use of a path) and is still in the compiler
+/// as the child exits, once the registrar registered the hook again: the hook runs before the
+/// destructor and waits for the making, and the destructor runs once it ended. The destructor ends
+/// the child with 42 when the making had ended, 43 when it ran beside it. Without the registrar no
+/// registration follows the destructor before the exit, and it runs first: measured on lavapipe
+/// (`exit_guard.rs`, "Registered again").
+#[cfg(unix)]
+#[test]
+fn an_exit_mid_making_waits_for_it_before_a_destructor_the_making_registered() {
+    static ENDED: AtomicBool = AtomicBool::new(false);
+    extern "C" fn compiler_static() {
+        let code = if ENDED.load(Ordering::SeqCst) { 42 } else { 43 };
+        // SAFETY: ends the child at once, from its exit handlers.
+        unsafe { libc::_exit(code) };
+    }
+    // SAFETY: the child registers its hook, runs a making on a thread of its own (atomics, sleeps
+    // and the C library's `atexit`), and exits.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        exit_guard::register();
+        // The making outlasts the child's wait for a registration after its destructor, so that
+        // without one the child exits mid-making all the same.
+        let (registered, learn) = mpsc::channel();
+        let piece = exit_guard::spawn(std::thread::Builder::new(), move || {
+            let _busy = exit_guard::enter().expect("the guard is open");
+            exit_guard::driver_making(|| {
+                // SAFETY: `compiler_static` is a function with no arguments that never unwinds.
+                unsafe { libc::atexit(compiler_static) };
+                registered.send(()).unwrap();
+                std::thread::sleep(Duration::from_secs(3));
+                ENDED.store(true, Ordering::SeqCst);
+            });
+        });
+        assert!(piece.is_ok(), "the piece's thread started");
+        learn.recv_timeout(Duration::from_secs(10)).unwrap();
+        let before = exit_guard::registrations().during_makings;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while exit_guard::registrations().during_makings == before && Instant::now() < deadline {
+            std::thread::sleep(exit_guard::MAKING_INTERVAL / 2);
+        }
+        // SAFETY: exits the child; its exit handlers end it.
+        unsafe { libc::exit(0) };
+    }
+    assert!(child > 0, "fork");
+    let mut status = 0;
+    // SAFETY: `child` is this process's child.
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    assert_eq!(reaped, child);
+    assert!(libc::WIFEXITED(status), "the child did not exit: {status}");
+    assert_eq!(
+        libc::WEXITSTATUS(status),
+        42,
+        "the compiler's destructor ran beside the making"
+    );
+}
+
 /// The exit of a child that registers an end (which ends it with 42), its hook (its first
 /// device), a destructor (a layer's static first made by a call on the program's thread, which
 /// registers no hook), and its hook again (a section after an entry point's first call), with a

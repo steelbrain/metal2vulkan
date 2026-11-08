@@ -1533,7 +1533,11 @@ fn devices_made_again_register_the_exit_hook_no_more() {
             "each instance made registers the hook once after it"
         );
         assert!(
-            after.total - after.at_devices - after.at_instances - after.at_makings
+            after.total
+                - after.at_devices
+                - after.at_instances
+                - after.at_makings
+                - after.during_makings
                 <= after.section_bound,
             "the sections registered past their bound: {after:?}"
         );
