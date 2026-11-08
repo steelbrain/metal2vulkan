@@ -1132,24 +1132,34 @@ fn a_copied_rebind_where_fresh_pages_are_unchecked_takes_memory_the_device_alloc
     drop((texture, buffer));
 }
 
-/// A rebind's copy under an image in place of tight rows (64 bytes apart, where RADV lays a
-/// linear image of its own 256 bytes a row): where the device's check passed fresh pages for the
-/// texture's access, the copy lies in fresh pages, its image made over them at the texels' pitch
-/// for host allocations, so the rebind is taken and the texture follows the copy; elsewhere the
-/// copy lies in memory the device allocates, and the rebind is refused where the driver's linear
-/// image lies at another pitch (`docs/FAST-PATHS.md`'s known gaps).
+/// A rebind's copy under an image in place whose rows lie at another pitch than the driver's own
+/// linear image's: tight rows (64 bytes apart) and wide ones (512 bytes apart; RADV lays a linear
+/// image of its own 256 bytes a row, and makes no image in place at tight rows). Where the device's
+/// check passed fresh pages for the texture's access, the copy lies in fresh pages, its image made
+/// over them at the texels' pitch for host allocations, so the rebind is taken and the texture
+/// follows the copy; elsewhere the copy lies in memory the device allocates, and the rebind is
+/// refused where the driver's linear image lies at another pitch (`docs/FAST-PATHS.md`'s known
+/// gaps). A pitch whose texture is a shadow tests nothing.
 #[test]
-fn a_copied_rebind_under_tight_rows_takes_fresh_pages_where_their_check_passed() {
-    use crate::in_place::{Access, PagesClass, Verdict};
-    let (first, second) = (Host::new(28), Host::new(29));
+fn a_copied_rebind_at_another_pitch_takes_fresh_pages_where_their_check_passed() {
+    let tight = (Host::new(28), Host::new(29));
+    let wide = (Host::new(30), Host::new(31));
     let Some((device, _heard)) = device() else {
         return;
     };
     device.settle_in_place_checks(Duration::from_secs(120));
-    let buffer = first.buffer(&device, None);
-    let (texture, in_place) = texture_over_at(&device, &buffer, TIGHT);
+    rebind_at_pitch(&device, TIGHT, &tight);
+    rebind_at_pitch(&device, 2 * PITCH, &wide);
+}
+
+/// [`a_copied_rebind_at_another_pitch_takes_fresh_pages_where_their_check_passed`] at `pitch`:
+/// a texture in place over `first`, rebound to `second`.
+fn rebind_at_pitch(device: &Device, pitch: usize, (first, second): &(Host, Host)) {
+    use crate::in_place::{Access, PagesClass, Verdict};
+    let buffer = first.buffer(device, None);
+    let (texture, in_place) = texture_over_at(device, &buffer, pitch);
     if !in_place {
-        eprintln!("COPIED-REBIND-TIGHT: the texture is a shadow here; nothing to test");
+        eprintln!("COPIED-REBIND-PITCH {pitch}: the texture is a shadow here; nothing to test");
         return;
     }
     let passed = device.in_place_verdict(PagesClass::Fresh, Access::Reads) == Verdict::Passed;
@@ -1160,8 +1170,8 @@ fn a_copied_rebind_under_tight_rows_takes_fresh_pages_where_their_check_passed()
     let fresh = after.fresh_page_buffers_made - before.fresh_page_buffers_made;
     let images = after.copied_rebind_images_made - before.copied_rebind_images_made;
     eprintln!(
-        "COPIED-REBIND-TIGHT on {}: fresh pages passed for reads {passed}; the rebind {rebound:?}, \
-         its copy in fresh pages {fresh}, images made over it {images}",
+        "COPIED-REBIND-PITCH {pitch} on {}: fresh pages passed for reads {passed}; the rebind \
+         {rebound:?}, its copy in fresh pages {fresh}, images made over it {images}",
         device.name()
     );
     match (passed, rebound) {
@@ -1173,20 +1183,20 @@ fn a_copied_rebind_under_tight_rows_takes_fresh_pages_where_their_check_passed()
                 "the copy in fresh pages, its image over it"
             );
             texture_follows_the_copy_at(
-                &device,
+                device,
                 (&buffer, &texture),
                 second.pointer,
                 &second.pattern(),
-                TIGHT,
+                pitch,
             );
         }
         (false, Ok(())) => assert_eq!((fresh, images), (0, 1), "the copy in device memory"),
         (false, Err(crate::Error::NotImplemented(crate::RuntimeGap::RebindTextures))) => {
             assert_eq!((fresh, images), (0, 0));
-            let old = rows_at(&first.pattern(), TIGHT);
-            assert_eq!(texels(&device, &texture), old, "the old texels");
+            let old = rows_at(&first.pattern(), pitch);
+            assert_eq!(texels(device, &texture), old, "the old texels");
         }
-        (false, Err(error)) => panic!("the rebind: {error:?}"),
+        (false, Err(error)) => panic!("the rebind at {pitch}: {error:?}"),
     }
     drop((texture, buffer));
 }
