@@ -48,22 +48,22 @@
 //! buffer a frame of one render pass over a `BGRA8Unorm` target of each of [`SELF_SIZES`] (a
 //! surface over host pages, as the guest's framebuffer is, its rows 64-byte aligned as IOSurface
 //! lays them out, on a device of each setting of `host_page_textures`, its pages' memory carrying
-//! no log of their writes or one that keeps writers apart, which nothing but the runtime writes,
-//! so a shadow's copies in after its first take no page (`HostMemory::with_dirty_pages`); or a
-//! private texture): the
-//! guest's 3662x2039 framebuffer, whose rows end inside a 64-byte line, and a 3840x2160 one, whose
-//! rows end on one (`in_place::RowEnds`, which a device's check tells apart), loaded but in the first
-//! frame, which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a
-//! memory barrier over the render targets and a draw over the same rectangle that reads the target
-//! at its own pixels (`tob_read`), through no scissor; each target also without the barriers and
-//! readers, the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per
-//! frame the splits, snapshots (and of them those pinned to the target's own image,
+//! no log of their writes or one that keeps writers apart, which nothing but the runtime writes, so
+//! a shadow's copies in after its first take no page (`HostMemory::with_dirty_pages`); or a private
+//! texture): the guest's 3662x2039 framebuffer, whose rows end inside a 64-byte line, the 3664x2039
+//! one of a guest whose modes are a multiple of 16 pixels wide, and a 3840x2160 one, whose rows end
+//! on one (`in_place::RowEnds`, which a device's check tells apart), loaded but in the first frame,
+//! which clears it, and stored; [`SELF_PAIRS`] times a fill of a [`SELF_RECT`] rectangle, a memory
+//! barrier over the render targets and a draw over the same rectangle that reads the target at its
+//! own pixels (`tob_read`), through no scissor; each target also without the barriers and readers,
+//! the baseline. Printed per case (`SELF-READ-COST`): the GPU time per frame, and per frame the
+//! splits, snapshots (and of them those pinned to the target's own image,
 //! `WorkCounts::reading_draws_pinned`), render pass instances begun, shadow copies, texels copied
 //! in (and of them those of a surface's shadow copied in again), keeps and their texels, merges,
-//! the copies in the log gated (those it skipped, and the bytes they copied), the
-//! shadows made of render targets over host pages and the textures in place over them (once the
-//! device's in-place check answered, each line and its time printed, `SELF-READ-CHECK`), and the
-//! images made with feedback loop usage.
+//! the copies in the log gated (those it skipped, and the bytes they copied), the shadows made of
+//! render targets over host pages and the textures in place over them (once the device's in-place
+//! check answered, each line and its time printed, `SELF-READ-CHECK`), and the images made with
+//! feedback loop usage.
 //!
 //! `keep_copy_costs` times one copy of a private `BGRA8Unorm` texture of each of [`SELF_SIZES`]
 //! whole into another, as a merged shadow's keep copies its texels into its kept image
@@ -854,9 +854,10 @@ fn pass_start_clear_read_costs() {
 }
 
 /// The `self_reads` targets' sizes: the guest's desktop framebuffer's, whose 14648 bytes of
-/// texels a row end inside a 64-byte line of its 14656-byte rows, and a 3840x2160 one's, whose
-/// 15360-byte rows are 240 lines each.
-const SELF_SIZES: [[u64; 2]; 2] = [[3662, 2039], [3840, 2160]];
+/// texels a row end inside a 64-byte line of its 14656-byte rows; the same 16 pixels wider at
+/// most, as a guest whose modes are a multiple of 16 pixels wide makes it, whose 14656-byte rows
+/// are 229 lines each; and a 3840x2160 one's, whose 15360-byte rows are 240 lines each.
+const SELF_SIZES: [[u64; 2]; 3] = [[3662, 2039], [3664, 2039], [3840, 2160]];
 /// The fill and reader pairs of a `self_reads` pass, and the rectangle each covers.
 const SELF_PAIRS: u64 = 30;
 const SELF_RECT: [u64; 2] = [600, 400];
