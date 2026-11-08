@@ -1830,7 +1830,7 @@ impl Device {
         window: &ImportWindow,
         length: u64,
     ) -> Result<(GpuAddress, Held), Error> {
-        let mut addresses = lock(&self.shared().addresses);
+        let mut addresses = self.address_space_for(address);
         match address {
             Place::At(AddressPlacement::Any | AddressPlacement::Outside) => addresses
                 .place(address, window.size)

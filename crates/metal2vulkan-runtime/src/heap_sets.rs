@@ -1790,11 +1790,8 @@ pub(crate) fn heap_set(
             ),
         }
     };
-    match &passing {
-        Some(passing) => passing.let_go(held),
-        None => drop(held),
-    }
-    drop(held_samplers);
+    // The holders go inside the passing hold, if it took one.
+    drop((held, held_samplers));
     drop(passing);
     notes.announce(device);
     set
@@ -1827,7 +1824,7 @@ fn sync(device: &Device, slots: Slots) {
     // The slots' holders it takes, on whichever thread asked: a passing hold (`resource_ids.rs`).
     let passing = device.passing_hold();
     let (held, written) = write(device, slots);
-    passing.let_go(held);
+    drop(held);
     drop(passing);
     written.announce(device);
 }
@@ -1914,7 +1911,7 @@ impl Drop for HeldSlots {
         if let Some(pause) = lock(&device.shared().heaps).pause_holding.clone() {
             pause();
         }
-        passing.let_go(held);
+        drop(held);
         drop(passing);
         notes.announce(device);
         for (id, error) in failed {

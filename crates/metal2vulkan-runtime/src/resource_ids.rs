@@ -166,33 +166,41 @@
 //!   it held their writes (`heap_sets::HeldSlots`), a scheduler's thread ends a storage-form
 //!   switch (`texture/storage_form.rs`), and a heap set made or written again takes every live
 //!   holder. Where the program released its last handle meanwhile, that thread's is the last,
-//!   and the resource and its ID go only as it lets go: a texture the program made next would
-//!   take the next ID, one past Metal's, where Metal's release of the texture had given the ID
-//!   back (`tests::in_place_check`, at the in-place check's submissions, on lavapipe). So each
-//!   such hold lasts a passing hold, from before its first handle is taken until its last is let
-//!   go, and a program's texture or sampler state waits for every passing hold of the device to
-//!   end before it takes its ID: the ID a released resource held is back by then, whichever
-//!   thread let go of it last. Where a hold lets go of a texture's last handle
-//!   ([`PassingHold::let_go`]), the texture leaves its slot and gives its ID back inside the
-//!   hold, and the rest of its going (its image, its memory, its buffer and what the program gave
-//!   with it, a deallocator among them) waits for the thread's outermost hold to end, on a
-//!   handler thread where the thread is one command buffers' completion depends on
-//!   (`Device::let_go_elsewhere`). A message for the device's message sink raised inside one
-//!   waits likewise ([`held_past_passing_hold`]). So a passing hold runs none of the program's
-//!   code (in builds with debug assertions, `exit_guard::program` ends the process where it
-//!   would), and makes no image and takes no device memory (`Switch::prepare` makes its images
-//!   between two): it takes the heap sets' lock, the IDs' lock, the storage forms' and the held
-//!   resources' own, writes descriptors and makes descriptor sets and views, and waits for no
-//!   command buffer, no making and nothing but those locks, which no thread holds while it
-//!   waits; so a making waits for a bounded run of the runtime's own work. A making on a thread
-//!   inside one does not wait for it, and a making waits holding none of the runtime's locks.
+//!   and the resource goes only as it lets go, with what only it held: a texture the program
+//!   made next would take the next ID, one past Metal's, where Metal's release of the texture had
+//!   given the ID back (`tests::in_place_check`, at the in-place check's submissions, on
+//!   lavapipe), and a buffer pinned where the buffer a released texture was made over lay was
+//!   refused, its range still held (`tests::passing_holds`), where Metal's release had freed it.
+//!   So each such hold lasts a passing hold, from before its first handle is taken until its last
+//!   is let go, and its handles go inside it: a texture whose last handle one is goes there, and
+//!   with it what it alone held (the buffer it was made over, its heap, the texture a view was
+//!   made of), each giving back its ID and slot, its range of the address space or its pool's
+//!   slot (`address.rs`), and its range of an automatic heap (`heap.rs`). A making that takes
+//!   any of those -- a program's texture or sampler state its ID, a buffer, heap or pool its
+//!   bytes of the Metal address space (`Device::address_space_for`), a resource of an automatic
+//!   heap its range of the heap (`Heap::allocate`) -- waits for every passing hold of the device
+//!   to end first: what a released resource held is back by then, whichever thread let go of it
+//!   last. Only the program's code in such a going waits for the thread's outermost hold to end:
+//!   a release of the program's (a deallocator, a keep-alive, a range token, a dma-buf source,
+//!   `exit_guard::program_release`, [`released_past_passing_hold`]) and a message for the
+//!   device's message sink ([`held_past_passing_hold`]) run then, in order, on a handler thread
+//!   where the thread is one command buffers' completion depends on
+//!   (`Device::let_go_elsewhere`). So a passing hold runs none of the program's code (in builds
+//!   with debug assertions, `exit_guard::program` ends the process where it would), and makes no
+//!   image and takes no device memory (`Switch::prepare` makes its images between two): it takes
+//!   the heap sets' lock, the IDs' lock, the storage forms' and the held resources' own, writes
+//!   descriptors and makes descriptor sets and views, and destroys and frees what a going
+//!   resource held under their own locks, and waits for no command buffer, no making and nothing
+//!   but those locks, which no thread holds while it waits; so a making waits for a bounded run
+//!   of the runtime's own work. A making on a thread inside one does not wait for it, and a
+//!   making waits holding none of the runtime's locks.
 
 use super::device::{lock, DebugMessage, Device, MessageKind, MessageSeverity, MessageSink};
 use super::error::{invalid, Error, Problem};
 use super::exit_guard;
 use super::pipeline::{RenderShared, StateShared};
 use super::sampler::SamplerShared;
-use super::texture::{Texture, TextureShared};
+use super::texture::TextureShared;
 use metal2vulkan::bind::HANDLE_TABLE_CAPACITY;
 use metal2vulkan::device::{DeviceProfile, VkLimit};
 use metal2vulkan::error::{Capability, Feature, Unsupported};
@@ -1081,15 +1089,6 @@ impl IdHold {
 }
 
 impl IdHold {
-    /// Give the ID back now, its holder going before the hold does (a texture whose last handle
-    /// a passing hold let go of, `Texture::id_back_if_last`): the hold then gives nothing back as
-    /// it goes.
-    pub(super) fn give_back(&mut self) {
-        self.release();
-        self.id = 0;
-        self.plain = false;
-    }
-
     /// Give the ID back, and its slot where this hold's holder still holds it.
     fn release(&mut self) {
         let mut all = lock(&self.ids);
@@ -1144,23 +1143,43 @@ thread_local! {
     /// What the thread's passing holds left for once the outermost ended (the module docs).
     static LEFT: RefCell<Left> = const {
         RefCell::new(Left {
-            gone: Vec::new(),
+            releases: Vec::new(),
             messages: Vec::new(),
         })
     };
 }
 
-/// What a thread's passing holds left for once the outermost ended: the rest of the going of
-/// the textures whose last handle they let go of, and the messages for a device's message sink
-/// raised inside them, in order.
+/// What a thread's passing holds left for once the outermost ended: the releases of the
+/// program's raised inside them, and the messages for a device's message sink, each in order.
 struct Left {
-    gone: Vec<Box<dyn Send>>,
+    releases: Vec<ProgramRelease>,
     messages: Vec<(MessageSink, DebugMessage)>,
+}
+
+/// A release of the program's (`exit_guard::program_release`).
+type ProgramRelease = Box<dyn FnOnce() + Send>;
+
+/// Releases of the program's a thread's passing holds left (the module docs): run in order as
+/// they drop, each as `exit_guard::program_release` runs it, outside every passing hold; none
+/// once the process is exiting, as the resources they release are left to its end.
+struct Releases(Vec<ProgramRelease>);
+
+impl Drop for Releases {
+    fn drop(&mut self) {
+        let exiting = exit_guard::closed();
+        for release in self.0.drain(..) {
+            match exiting {
+                true => std::mem::forget(release),
+                false => exit_guard::program_release(release),
+            }
+        }
+    }
 }
 
 impl PassingHolds {
     /// Wait until no passing hold is under way, as a program's resource is about to take its
-    /// ID: one load where none is; at once on a thread inside one.
+    /// ID, or a range a released resource may have held (the module docs): one load where none
+    /// is; at once on a thread inside one.
     pub(super) fn wait(&self) {
         if self.under_way.load(Ordering::SeqCst) == 0 || inside_passing_hold() {
             return;
@@ -1175,7 +1194,7 @@ impl PassingHolds {
 impl Device {
     /// A passing hold of the device's (the module docs), under way until the guard goes: taken
     /// before the first handle it takes of a program's resource, and let go of after the last of
-    /// those went ([`PassingHold::let_go`]).
+    /// those went, inside it.
     pub(super) fn passing_hold(&self) -> PassingHold<'_> {
         (self.shared().passing_holds.under_way).fetch_add(1, Ordering::SeqCst);
         INSIDE.with(|inside| inside.set(inside.get() + 1));
@@ -1199,22 +1218,20 @@ pub(crate) fn held_past_passing_hold(sink: &MessageSink, message: &DebugMessage)
     true
 }
 
-/// A passing hold under way ([`Device::passing_hold`]).
-pub(super) struct PassingHold<'a>(&'a Device);
-
-impl PassingHold<'_> {
-    /// Let go of `textures`, the handles of the program's textures the hold took: a texture
-    /// whose last handle one is leaves its slot and gives its ID back now, and the rest of its
-    /// going waits for the thread's outermost passing hold to end (the module docs).
-    pub(super) fn let_go(&self, textures: impl IntoIterator<Item = Texture>) {
-        let gone: Vec<Box<dyn Send>> = (textures.into_iter())
-            .filter_map(Texture::id_back_if_last)
-            .collect();
-        if !gone.is_empty() {
-            LEFT.with(|left| left.borrow_mut().gone.extend(gone));
-        }
+/// Whether `release`, a release of the program's (`exit_guard::program_release`), waits for this
+/// thread's outermost passing hold to end, to run then (the module docs): given back to run now
+/// where the thread is inside none.
+pub(crate) fn released_past_passing_hold<F: FnOnce() + Send + 'static>(release: F) -> Option<F> {
+    if !inside_passing_hold() {
+        return Some(release);
     }
+    LEFT.with(|left| (left.borrow_mut().releases).push(Box::new(release)));
+    None
 }
+
+/// A passing hold under way ([`Device::passing_hold`]). The handles it took go before it does,
+/// inside it (the module docs).
+pub(super) struct PassingHold<'a>(&'a Device);
 
 impl Drop for PassingHold<'_> {
     fn drop(&mut self) {
@@ -1231,21 +1248,21 @@ impl Drop for PassingHold<'_> {
         if inside > 0 {
             return;
         }
-        // The outermost ended: what the holds left goes, outside every one.
-        let (gone, messages) = LEFT.with(|left| {
+        // The outermost ended: what the holds left runs, outside every one.
+        let (releases, messages) = LEFT.with(|left| {
             let mut left = left.borrow_mut();
             (
-                std::mem::take(&mut left.gone),
+                Releases(std::mem::take(&mut left.releases)),
                 std::mem::take(&mut left.messages),
             )
         });
-        if !gone.is_empty() {
+        if !releases.0.is_empty() {
             // A thread command buffers' completion depends on runs none of the program's
             // releases (`exit_guard::program_release`).
             if exit_guard::serving_completion() {
-                self.0.let_go_elsewhere(Box::new(gone));
+                self.0.let_go_elsewhere(Box::new(releases));
             } else {
-                drop(gone);
+                drop(releases);
             }
         }
         for (sink, message) in messages {

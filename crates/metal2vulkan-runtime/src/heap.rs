@@ -1187,8 +1187,11 @@ impl Heap {
     }
 
     /// An automatic heap's lowest free range of `length` bytes at a multiple of `alignment`, now
-    /// taken; `None` where none has room.
+    /// taken; `None` where none has room. Once every passing hold of the device ended
+    /// (`resource_ids.rs`, **Passing holds**): the range a resource the program released held is
+    /// back by then, whichever thread let go of it last, as Metal's release gave it back.
     pub(super) fn allocate(&self, length: u64, alignment: u64) -> Option<u64> {
+        self.device().shared().passing_holds.wait();
         lock(&self.0.ranges).allocate(length, alignment)
     }
 

@@ -1494,18 +1494,24 @@ fn a_runtime_thread_reaching_the_device_outside_a_section_aborts() {
 #[cfg(all(unix, debug_assertions))]
 #[test]
 fn a_release_of_the_program_s_on_a_thread_completion_depends_on_aborts() {
-    let mut ran = 0;
-    exit_guard::program_release(|| ran += 1);
+    let ran = Arc::new(AtomicUsize::new(0));
+    let runs = Arc::clone(&ran);
+    exit_guard::program_release(move || {
+        runs.fetch_add(1, Ordering::SeqCst);
+    });
     let in_program = exit_guard::spawn(std::thread::Builder::new(), || {
         exit_guard::serves_completion();
-        let mut ran = false;
-        exit_guard::program(|| exit_guard::program_release(|| ran = true));
-        ran
+        let ran = Arc::new(AtomicBool::new(false));
+        let runs = Arc::clone(&ran);
+        exit_guard::program(|| {
+            exit_guard::program_release(move || runs.store(true, Ordering::SeqCst));
+        });
+        ran.load(Ordering::SeqCst)
     })
     .unwrap()
     .join()
     .unwrap();
-    assert_eq!((ran, in_program), (1, true));
+    assert_eq!((ran.load(Ordering::SeqCst), in_program), (1, true));
     // SAFETY: the child starts one thread, which releases and aborts, and otherwise exits.
     let child = unsafe { libc::fork() };
     if child == 0 {

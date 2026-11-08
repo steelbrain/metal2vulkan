@@ -1282,10 +1282,12 @@ impl Release {
         }
         let deallocator = lock(&self.deallocator).take();
         if let Some(deallocator) = deallocator {
-            let (pointer, length) = (self.pointer, self.length);
-            exit_guard::program_release(move || {
-                deallocator.run(|deallocator| deallocator(pointer, length));
-            });
+            let deallocation = Deallocation {
+                deallocator,
+                pointer: self.pointer,
+                length: self.length,
+            };
+            exit_guard::program_release(move || deallocation.run());
         }
     }
 
@@ -1340,6 +1342,30 @@ unsafe impl Send for HeldBack {}
 // SAFETY: as above.
 unsafe impl Sync for HeldBack {}
 
+/// A deallocator and the caller's range it is handed ([`Release::run`], [`HeldBack`]), to run
+/// where a release of the program's runs (`exit_guard::program_release`), which may be another
+/// thread.
+struct Deallocation {
+    deallocator: ProgramObject<Deallocator>,
+    pointer: NonNull<u8>,
+    length: u64,
+}
+
+// SAFETY: the pointer is only handed to the deallocator, which is `Send`.
+unsafe impl Send for Deallocation {}
+
+impl Deallocation {
+    /// Run the deallocator with the caller's range; a panic inside it is caught where it runs.
+    fn run(self) {
+        let Deallocation {
+            deallocator,
+            pointer,
+            length,
+        } = self;
+        deallocator.run(|deallocator| deallocator(pointer, length));
+    }
+}
+
 /// What a [`HeldBack`] runs and drops now, taken under its lock.
 type Ready = (
     Option<ProgramObject<Deallocator>>,
@@ -1370,10 +1396,14 @@ impl HeldBack {
             return;
         };
         drop(busy);
-        let (pointer, length) = (self.pointer, self.length);
+        let deallocation = deallocator.map(|deallocator| Deallocation {
+            deallocator,
+            pointer: self.pointer,
+            length: self.length,
+        });
         exit_guard::program_release(move || {
-            if let Some(deallocator) = deallocator {
-                deallocator.run(|deallocator| deallocator(pointer, length));
+            if let Some(deallocation) = deallocation {
+                deallocation.run();
             }
             drop(keep_alive);
         });

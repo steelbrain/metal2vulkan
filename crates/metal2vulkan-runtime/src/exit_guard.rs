@@ -1195,15 +1195,20 @@ pub(crate) fn serving_completion() -> bool {
 }
 
 /// Run `f`, the program's code a release runs (a no-copy buffer's deallocator, the drop of its
-/// keep-alive, of a range token or of a dma-buf source), as [`program`] runs it. In builds with
-/// debug assertions (every test run), end the process where this thread is one command buffers'
-/// completion depends on ([`serves_completion`]) and runs none of the program's code already (a
-/// submission handler's own drops are the program's): `f` may wait for such a command buffer,
-/// which would then never complete or never open its gate. What a command buffer's commands and
-/// encoders took goes in its release, on its queue's handler thread
-/// (`CommandBufferShared::complete`); what the scheduler's thread lets go of before then, on a
-/// handler thread in a context of its own (`Device::let_go_elsewhere`).
-pub(crate) fn program_release(f: impl FnOnce()) {
+/// keep-alive, of a range token or of a dma-buf source), as [`program`] runs it. Inside a passing
+/// hold of a device's resources it runs once the thread's outermost hold ended instead, on a
+/// handler thread where this thread is one command buffers' completion depends on
+/// (`resource_ids.rs`, **Passing holds**): a making on another thread may wait for the hold. In
+/// builds with debug assertions (every test run), end the process where this thread is one
+/// command buffers' completion depends on ([`serves_completion`]) and runs none of the program's
+/// code already (a submission handler's own drops are the program's): `f` may wait for such a
+/// command buffer, which would then never complete or never open its gate. What a command
+/// buffer's commands and encoders took goes in its release, on its queue's handler thread
+/// (`CommandBufferShared::complete`).
+pub(crate) fn program_release(f: impl FnOnce() + Send + 'static) {
+    let Some(f) = crate::resource_ids::released_past_passing_hold(f) else {
+        return;
+    };
     if cfg!(debug_assertions) && SERVES_COMPLETION.with(Cell::get) && PROGRAM.with(Cell::get) == 0 {
         let name = std::thread::current().name().map(str::to_owned);
         eprintln!(

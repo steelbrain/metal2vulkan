@@ -494,8 +494,7 @@ impl Drop for TextureShared {
 impl TextureShared {
     /// Leave the texture's slot as it goes: the device's texture table no longer names it, and its
     /// image waits for the command buffers that may still read it through its ID
-    /// (`heap_sets::gone`). Nothing where it holds no ID, or gave it back already
-    /// ([`Texture::id_back_if_last`]).
+    /// (`heap_sets::gone`). Nothing where it holds no ID.
     fn leave_slot(&self) {
         let id = self.id.id().0;
         if id == 0 {
@@ -4432,17 +4431,6 @@ impl Texture {
     /// The texture object, held while something else keeps it (a heap's, `heap.rs`).
     pub(super) fn downgrade(&self) -> Weak<TextureShared> {
         Arc::downgrade(&self.0)
-    }
-
-    /// Let go of this handle inside a passing hold (`resource_ids.rs`): where it is the
-    /// texture's last, the texture leaves its slot and gives its ID back now, and the rest of its
-    /// going (its image, its memory, its buffer and what the program gave with it) is handed
-    /// back, to go once the hold ended.
-    pub(super) fn id_back_if_last(self) -> Option<Box<dyn Send>> {
-        let mut shared = Arc::into_inner(self.0)?;
-        shared.leave_slot();
-        shared.id.give_back();
-        Some(Box::new(shared))
     }
 
     /// The memoryless backings it keeps (`attachment_stand_in::kept_backing`).

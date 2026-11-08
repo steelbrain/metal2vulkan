@@ -79,7 +79,7 @@ impl Device {
         placement: AddressPlacement,
         length: u64,
     ) -> Result<AddressPool, Error> {
-        let address = lock(&self.shared().addresses).reserve_pool(placement, length)?;
+        let address = (self.address_space_for(placement)).reserve_pool(placement, length)?;
         Ok(AddressPool {
             device: self.clone(),
             address,

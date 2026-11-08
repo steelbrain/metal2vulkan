@@ -2385,7 +2385,7 @@ impl Device {
         // Its range of the address space is a new one, as a new buffer's; the buffer and its
         // memory go again where none is left.
         let place_address = |raw, memory: Placement| {
-            let address = lock(&shared.addresses).place(placement, length);
+            let address = self.address_space_for(placement).place(placement, length);
             match address {
                 Ok(address) => Ok((raw, (memory, address))),
                 Err(error) => {
@@ -2884,7 +2884,7 @@ impl Device {
             crate::creation::bind_buffer(raw_device, raw, placement.memory, placement.offset)
         };
         let address = match bound {
-            Ok(()) => lock(&shared.addresses).place(at, length),
+            Ok(()) => self.address_space_for(at).place(at, length),
             Err(error) => {
                 lock(&shared.memory).free(raw_device, &placement);
                 return Err(vulkan(error));

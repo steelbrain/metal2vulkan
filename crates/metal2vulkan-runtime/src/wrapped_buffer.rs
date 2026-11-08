@@ -304,7 +304,8 @@ impl Device {
             memory.type_index,
             memory.contents,
         );
-        let (address, reserved) = lock(&shared.addresses).place(AddressPlacement::Any, length)?;
+        let (address, reserved) =
+            (self.address_space_for(AddressPlacement::Any)).place(AddressPlacement::Any, length)?;
         let buffer = self.buffer_of(BufferParts {
             raw: buffer,
             memory: placement,

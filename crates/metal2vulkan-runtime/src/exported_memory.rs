@@ -209,8 +209,10 @@ impl Device {
         let bound = unsafe {
             crate::creation::bind_buffer(raw_device, raw, placement.memory, placement.offset)
         };
-        let address = (bound.map_err(vulkan))
-            .and_then(|()| lock(&shared.addresses).place(AddressPlacement::Any, length));
+        let address = (bound.map_err(vulkan)).and_then(|()| {
+            self.address_space_for(AddressPlacement::Any)
+                .place(AddressPlacement::Any, length)
+        });
         let (address, reserved) = match address {
             Ok(address) => address,
             Err(error) => {

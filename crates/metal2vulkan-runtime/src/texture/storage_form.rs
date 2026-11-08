@@ -991,7 +991,7 @@ impl Device {
         // The lock goes, then the textures' handles and the passing hold, then the
         // announcements, which run the program's callback.
         forms.close(waiting, &shared.counts, swaps);
-        passing.let_go(textures.into_iter().flatten());
+        drop(textures);
         drop(passing);
         for (format, (width, height), (old_bytes, bytes)) in notices {
             // Once per device: the scheduler's thread, outside any program call, may end it.
@@ -1091,7 +1091,7 @@ impl Switch {
         let wanted: Vec<(Weak<TextureShared>, Wanted)> = (textures.iter())
             .filter_map(|texture| Some((texture.downgrade(), texture.storage_form_wanted()?)))
             .collect();
-        passing.let_go(textures);
+        drop(textures);
         drop(passing);
         let made: Vec<(Weak<TextureShared>, Made)> = (wanted.into_iter())
             .filter_map(|(texture, wanted)| Some((texture, wanted.make(device)?)))
@@ -1109,7 +1109,7 @@ impl Switch {
                 None => unused.push(made),
             }
         }
-        passing.let_go(textures);
+        drop(textures);
         drop(passing);
         // The images made for textures that went meanwhile go with no passing hold under way.
         drop(unused);

@@ -40,7 +40,20 @@ pub(crate) struct ProgramObject<T> {
 struct Counted;
 
 impl Drop for Counted {
+    /// In builds with debug assertions (every test run), end the process where the object goes
+    /// inside a passing hold of a device's resources (`resource_ids.rs`): its drop or run is the
+    /// program's code, which a making on another thread may wait for. A release runs it once the
+    /// thread's outermost hold ended (`exit_guard::program_release`).
     fn drop(&mut self) {
+        if cfg!(debug_assertions) && crate::resource_ids::inside_passing_hold() {
+            let name = std::thread::current().name().map(str::to_owned);
+            eprintln!(
+                "metal2vulkan: thread {} let go of the program's object inside a passing hold of \
+                 a device's resources, which a making on another thread may wait for",
+                name.as_deref().unwrap_or("(unnamed)")
+            );
+            std::process::abort();
+        }
         HELD.fetch_sub(1, Ordering::SeqCst);
     }
 }
