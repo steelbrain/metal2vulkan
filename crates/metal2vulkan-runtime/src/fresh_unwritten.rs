@@ -692,7 +692,8 @@ impl FreshUnwritten {
         if !fresh.any() {
             return Ok(());
         }
-        for (target, aspects) in pass_targets(layout, |aspect| aspect.load == LoadAction::Load) {
+        let loads = |aspect: &Aspect| aspect.load == LoadAction::Load;
+        pass_targets(layout, loads, |target, aspects| {
             let texels = pass_texels(target, layout.extent)?;
             if let Some(key) = image_key(&target.texture, &texels)? {
                 let event = FreshEvent::Read {
@@ -702,8 +703,8 @@ impl FreshUnwritten {
                 };
                 maker.fresh_log().add(fresh, event);
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// A render pass of `maker`'s being planned loads the depth of `target`, its depth
@@ -742,7 +743,7 @@ impl FreshUnwritten {
             return Ok(());
         }
         let clears = |aspect: &Aspect| aspect.load == LoadAction::Clear && aspect.reaches;
-        for (target, aspects) in pass_targets(layout, clears) {
+        pass_targets(layout, clears, |target, aspects| {
             let texels = pass_texels(target, layout.extent)?;
             if let Some(key) = image_key(&target.texture, &texels)? {
                 let event = FreshEvent::Written {
@@ -752,8 +753,8 @@ impl FreshUnwritten {
                 };
                 maker.fresh_log().add(fresh, event);
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// A render pass of `maker`'s ended whose resolves are `resolved` (each resolve attachment,
@@ -874,14 +875,16 @@ struct Aspect {
     reaches: bool,
 }
 
-/// Each attachment's own texture in `layout` (a stand-in's own, separate depth and stencil
-/// textures each in its aspect), with the aspects for which `test` holds, where any does; a
-/// hidden depth and stencil, and an aspect no attachment names (`keep_depth`, `keep_stencil`),
-/// never.
-fn pass_targets(
-    layout: &PassLayout,
+/// `each` of each attachment's own texture in `layout` (a stand-in's own, separate depth and
+/// stencil textures each in its aspect), with the aspects for which `test` holds, where any does;
+/// a hidden depth and stencil, and an aspect no attachment names (`keep_depth`, `keep_stencil`),
+/// never. It lists them in no storage of its own: a pass begins and ends with a noted texture
+/// live elsewhere and allocates nothing for that (the module docs, **Cheap**).
+fn pass_targets<'a>(
+    layout: &'a PassLayout,
     test: impl Fn(&Aspect) -> bool,
-) -> Vec<(&Target, ImageAspectFlags)> {
+    mut each: impl FnMut(&'a Target, ImageAspectFlags) -> Result<(), Error>,
+) -> Result<(), Error> {
     let stores = |store: StoreAction| {
         matches!(
             store,
@@ -890,7 +893,6 @@ fn pass_targets(
                 | StoreAction::CustomSampleDepthStore
         )
     };
-    let mut targets = Vec::new();
     for color in layout.colors.iter().flatten() {
         let stand_in = color.stand_in.as_ref();
         let aspect = Aspect {
@@ -898,10 +900,10 @@ fn pass_targets(
             reaches: stand_in.is_none_or(|s| s.copies() && stores(color.store)),
         };
         if test(&aspect) {
-            targets.push((
+            each(
                 stand_in.map_or(&color.target, |s| &s.own),
                 ImageAspectFlags::COLOR,
-            ));
+            )?;
         }
     }
     let (depth, stencil) = (ImageAspectFlags::DEPTH, ImageAspectFlags::STENCIL);
@@ -940,20 +942,21 @@ fn pass_targets(
         };
         let aspects =
             by(&ds.depth, ds.keep_depth, depth) | by(&ds.stencil, ds.keep_stencil, stencil);
-        let own: Vec<(&Target, ImageAspectFlags)> = match (&ds.separate, &ds.stand_in) {
-            (Some(separate), _) => (separate.depth.iter().map(|t| (t, depth)))
-                .chain(std::iter::once((&separate.stencil, stencil)))
-                .collect(),
-            (None, Some(stand_in)) => vec![(&stand_in.own, depth | stencil)],
-            (None, None) => vec![(&ds.target, depth | stencil)],
+        let own: [Option<(&Target, ImageAspectFlags)>; 2] = match (&ds.separate, &ds.stand_in) {
+            (Some(separate), _) => [
+                separate.depth.as_ref().map(|t| (t, depth)),
+                Some((&separate.stencil, stencil)),
+            ],
+            (None, Some(stand_in)) => [Some((&stand_in.own, depth | stencil)), None],
+            (None, None) => [Some((&ds.target, depth | stencil)), None],
         };
-        targets.extend(
-            own.into_iter()
-                .map(|(target, its)| (target, aspects & its))
-                .filter(|(_, aspects)| !aspects.is_empty()),
-        );
+        for (target, its) in own.into_iter().flatten() {
+            if !(aspects & its).is_empty() {
+                each(target, aspects & its)?;
+            }
+        }
     }
-    targets
+    Ok(())
 }
 
 /// The texels a pass's attachment `target` covers over the render area `extent` from the
