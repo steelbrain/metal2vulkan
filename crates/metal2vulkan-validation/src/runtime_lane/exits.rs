@@ -528,6 +528,13 @@ fn child() {
                 .unwrap();
             encoder.end_encoding().unwrap();
             command_buffer.commit().unwrap();
+            // The pool's pieces held as the child exits (its making in progress where 1), and the
+            // hook's registrations: one after each making's driver call.
+            println!(
+                "{REPORT}-MAKING pool_busy={} {:?}",
+                device.work_counts().pipeline_pool_busy,
+                metal2vulkan_runtime::exit_registrations()
+            );
             exit_now(case, &messages);
         }
         "cpu_work_exit" => {
@@ -1085,7 +1092,14 @@ fn an_exit_while_a_host_step_waits_is_clean() {
 /// compiler, during its exit after its test passed (one test of a whole run under load).
 #[test]
 fn an_exit_mid_making_is_clean() {
-    exits_cleanly(&["making_exit"]);
+    let exited = exits_cleanly(&["making_exit"]);
+    let line = stdout_line(&exited[0], &format!("{REPORT}-MAKING "))
+        .expect("making_exit: no line of its making");
+    println!("{line}");
+    assert!(
+        !line.contains("at_makings: 0,"),
+        "making_exit: no making registered the hook again: {line}"
+    );
 }
 
 /// An exit while a CPU device runs work submitted before it (fills it runs for about
