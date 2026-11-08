@@ -493,17 +493,20 @@ struct Shape {
 
 /// A `GLOBALVAR` or `FUNCTION` record's fields as LLVM's version-1 writer wrote them: a function
 /// has 15 (to `personalityfn`), a global 6 or 12 (to `comdat`); a later field version 2 added is
-/// kept where it is not 0, and so are the fields before it.
+/// kept where it is set, and so are the fields before it. A field is unset at 0, and so is the
+/// partition's string-table offset (a function's field 17, a global's 14) where the partition's
+/// size after it is 0: LLVM's writer gives an empty partition the offset its table had reached.
 fn version_1_fields(code: u32, fields: &[u64], shape: &mut Shape) -> Vec<u64> {
-    let lengths: &[usize] = if code == MODULE_FUNCTION {
-        &[15]
+    let (lengths, partition): (&[usize], usize) = if code == MODULE_FUNCTION {
+        (&[15], 17)
     } else {
-        &[6, 12]
+        (&[6, 12], 14)
     };
+    let unset = |i: usize| fields[i] == 0 || (i == partition && fields.get(i + 1) == Some(&0));
     let cut = lengths
         .iter()
         .copied()
-        .find(|&n| fields.iter().skip(n).all(|&f| f == 0))
+        .find(|&n| (n..fields.len()).all(unset))
         .unwrap_or(fields.len())
         .min(fields.len());
     if code == MODULE_FUNCTION {
