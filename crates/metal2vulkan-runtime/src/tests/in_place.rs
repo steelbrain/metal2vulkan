@@ -609,7 +609,7 @@ fn a_change_beside_texels_that_share_no_line_fails_both_row_ends() {
 /// storage-write rounds of rows that end inside lines saw no change where the pointer and
 /// fresh-pages classes' did. A store failure of a class whose reads of those row ends passed
 /// fails the others' passes of that access and row ends; a reads failure, an unchecked verdict,
-/// and a store failure of a class whose reads failed carry nowhere.
+/// a store failure of a class whose reads failed, and one at a texel carry nowhere.
 #[test]
 fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
     use Access::{BufferWrites, Reads, Renders, Writes};
@@ -620,7 +620,7 @@ fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
     for class in [Pointer, Fresh, DmaBuf] {
         for rows in [InLines, OnLines] {
             for access in [Reads, Renders, Writes, BufferWrites] {
-                found.push((class, access, rows, Passed));
+                found.push(Found::new(class, access, rows, Passed));
             }
         }
     }
@@ -631,8 +631,8 @@ fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
         rows: RowEnds,
         verdict: Verdict,
     ) {
-        let at = (found.iter()).position(|f| (f.0, f.1, f.2) == (class, access, rows));
-        found[at.unwrap()].3 = verdict;
+        let at = (found.iter()).position(|f| (f.class, f.access, f.rows) == (class, access, rows));
+        found[at.unwrap()].verdict = verdict;
     }
     // The Iris Xe: renders and storage writes of rows that end inside lines fail in the pointer
     // and fresh-pages classes; the dma-buf class's storage writes passed in that check.
@@ -671,6 +671,32 @@ fn a_store_failure_fails_the_other_classes_passes_and_nothing_else_carries() {
         set(&mut found, class, Reads, InLines, Failed);
     }
     assert!(carried_store_failures(&found).is_empty());
+    // A store failure at a texel (the CPU did not see the GPU's stores through the class's
+    // mapping) carries nowhere; one beside the texels does.
+    for class in [Pointer, Fresh, DmaBuf] {
+        set(&mut found, class, Reads, InLines, Passed);
+    }
+    set(&mut found, Pointer, Writes, InLines, Failed);
+    for f in found
+        .iter_mut()
+        .filter(|f| f.class == Pointer && f.access == Writes)
+    {
+        f.beside = false;
+    }
+    assert!(carried_store_failures(&found).is_empty());
+    for f in found
+        .iter_mut()
+        .filter(|f| f.class == Pointer && f.access == Writes)
+    {
+        f.beside = true;
+    }
+    assert_eq!(
+        carried_store_failures(&found),
+        [
+            (Fresh, Writes, InLines, Pointer),
+            (DmaBuf, Writes, InLines, Pointer)
+        ]
+    );
 }
 
 #[test]

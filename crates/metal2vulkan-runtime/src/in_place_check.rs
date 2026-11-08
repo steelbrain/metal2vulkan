@@ -473,17 +473,21 @@ fn run(weak: crate::device::WeakDevice) {
             if stopped || word_overwritten(&device) {
                 stopped = true;
                 for (access, rows) in each() {
-                    found.push((class, access, rows, Verdict::Unchecked));
+                    found.push(Found::new(class, access, rows, Verdict::Unchecked));
                 }
                 continue;
             }
-            let Some(verdicts) = check_class(&device, class, access) else {
+            let Some((verdicts, beside)) = check_class(&device, class, access) else {
                 // The process is exiting, or the program let the device go: nothing is kept.
                 return;
             };
             for (&access, verdicts) in answered.iter().zip(verdicts) {
                 for rows in RowEnds::ALL {
-                    found.push((class, access, rows, verdicts[rows.index()]));
+                    let verdict = verdicts[rows.index()];
+                    found.push(Found {
+                        beside,
+                        ..Found::new(class, access, rows, verdict)
+                    });
                 }
             }
         }
@@ -497,17 +501,22 @@ fn run(weak: crate::device::WeakDevice) {
     let known: Vec<Found> = (PagesClass::ALL.into_iter())
         .flat_map(|class| Access::ALL.map(move |access| (class, access)))
         .flat_map(|(class, access)| RowEnds::ALL.map(move |rows| (class, access, rows)))
-        .filter(|&(class, access, rows)| {
-            !found
-                .iter()
-                .any(|f| (f.0, f.1, f.2) == (class, access, rows))
+        .filter(|&at| !found.iter().any(|f| f.at() == at))
+        .map(|(class, access, rows)| {
+            Found::new(class, access, rows, checks.verdict(class, access, rows))
         })
-        .map(|(class, access, rows)| (class, access, rows, checks.verdict(class, access, rows)))
-        .filter(|known| known.3 != Verdict::Pending)
+        .filter(|known| known.verdict != Verdict::Pending)
         .chain(found.iter().copied())
         .collect();
     let carried = carried_store_failures(&known);
-    for (class, access, rows, verdict) in found {
+    for Found {
+        class,
+        access,
+        rows,
+        verdict,
+        ..
+    } in found
+    {
         let from = (carried.iter()).find(|c| (c.0, c.1, c.2) == (class, access, rows));
         let verdict = match from {
             Some(&(_, _, _, from)) => {
@@ -565,13 +574,17 @@ fn word_overwritten(device: &Device) -> bool {
 /// storage writes that changed no byte but of its shape's rows' padding, where that padding is
 /// free ([`Shape::padding`]), fails [`Access::Writes`] (or [`Access::NarrowWrites`]) for its row
 /// ends and counts for [`Access::BufferWrites`] (or [`Access::NarrowBufferWrites`]) as a round
-/// that kept every byte, and the rounds go on. `None` where
-/// the process is exiting, or the program's last drop stopped the device's holds before a round
-/// (`device/holds.rs`).
-fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec<[Verdict; 2]>> {
+/// that kept every byte, and the rounds go on. With them, whether every byte its rounds found
+/// changed lay beside the texels (none was a texel). `None` where the process is exiting, or the
+/// program's last drop stopped the device's holds before a round (`device/holds.rs`).
+fn check_class(
+    device: &Device,
+    class: PagesClass,
+    access: Access,
+) -> Option<(Vec<[Verdict; 2]>, bool)> {
     let page = host_page();
     let line = device.shared().in_place.line();
-    let unchecked = || vec![[Verdict::Unchecked; 2]; access.answered().len()];
+    let unchecked = || (vec![[Verdict::Unchecked; 2]; access.answered().len()], true);
     let Some(pages) = ClassPages::make(device, class, BUFFER_BYTES) else {
         return Some(unchecked());
     };
@@ -656,10 +669,12 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec
                 Round::Changed(changed) => (changed, false),
             };
             let image = shape.bytes_per_row * shape.height;
-            let place = match offset.checked_rem(shape.bytes_per_row) {
-                _ if offset >= image => "after the image",
-                Some(column) if column >= shape.width * shape.texel => "after a row's texels",
-                _ => "a texel",
+            let (place, beside) = match offset.checked_rem(shape.bytes_per_row) {
+                _ if offset >= image => ("after the image", true),
+                Some(column) if column >= shape.width * shape.texel => {
+                    ("after a row's texels", true)
+                }
+                _ => ("a texel", false),
             };
             let operations = match access {
                 Access::Reads => "the first move",
@@ -688,21 +703,48 @@ fn check_class(device: &Device, class: PagesClass, access: Access) -> Option<Vec
                 shape.format, shape.width, shape.height, shape.bytes_per_row
             ));
             if !padding {
-                return Some(tally.verdicts(access, Some(rows), forced));
+                return Some((tally.verdicts(access, Some(rows), forced), beside));
             }
         }
     }
-    Some(tally.verdicts(access, None, forced))
+    Some((tally.verdicts(access, None, forced), true))
 }
 
-/// One verdict of the check: its class, access, row ends and answer.
-pub(crate) type Found = (PagesClass, Access, RowEnds, Verdict);
+/// One verdict of the check: its class, access, row ends and answer, and whether every byte
+/// its class's rounds of the access found changed lay beside the texels (none was a texel).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Found {
+    pub(crate) class: PagesClass,
+    pub(crate) access: Access,
+    pub(crate) rows: RowEnds,
+    pub(crate) verdict: Verdict,
+    pub(crate) beside: bool,
+}
+
+impl Found {
+    /// The verdict of `class`, `access` and `rows`, any byte found changed beside the texels.
+    pub(crate) fn new(class: PagesClass, access: Access, rows: RowEnds, verdict: Verdict) -> Found {
+        Found {
+            class,
+            access,
+            rows,
+            verdict,
+            beside: true,
+        }
+    }
+
+    /// Its class, access and row ends.
+    fn at(&self) -> (PagesClass, Access, RowEnds) {
+        (self.class, self.access, self.rows)
+    }
+}
 
 /// The passes of `found` a store failure fails, each with the class whose failure it is: a
 /// class's pass of an access whose rounds store (renders: a pass's clear and store, and a draw;
 /// storage writes and buffer writes: a kernel's stores) for texels whose rows end as another
-/// class's failure of that access did, where that class's reads of those row ends passed, so
-/// that its failure was the stores' and not the first move's.
+/// class's failure of that access did, where every byte that class's rounds found changed lay
+/// beside the texels and its reads of those row ends passed, so that its failure was the
+/// stores' and not the first move's.
 ///
 /// Such a failure is a byte beside the texels changed under the GPU's stores: a line of its
 /// cache that holds a row's last texels written back whole, with what it read beside them. The
@@ -714,8 +756,9 @@ pub(crate) type Found = (PagesClass, Access, RowEnds, Verdict);
 /// change in 3 of 18 rounds there, against 10 and 14 of 18 of the pointer and fresh-pages
 /// classes, so that the dma-buf class passed one fresh check in three.
 ///
-/// Nothing else carries: a reads failure (whether the GPU sees the CPU's bytes depends on the
-/// class's mapping and import), an unchecked verdict, or a class whose pages could not be made.
+/// Nothing else carries: a texel read otherwise (whether the CPU sees the GPU's stores depends
+/// on the class's mapping and import), a reads failure (whether the GPU sees the CPU's bytes
+/// does too), an unchecked verdict, or a class whose pages could not be made.
 pub(crate) fn carried_store_failures(
     found: &[Found],
 ) -> Vec<(PagesClass, Access, RowEnds, PagesClass)> {
@@ -725,22 +768,21 @@ pub(crate) fn carried_store_failures(
             Access::Renders | Access::Writes | Access::BufferWrites
         )
     };
-    let of = |class, access, rows| {
-        (found.iter())
-            .find(|f| (f.0, f.1, f.2) == (class, access, rows))
-            .map(|f| f.3)
-    };
-    let by_stores = |&(class, access, rows, verdict): &Found| {
-        verdict == Verdict::Failed
-            && stores(access)
-            && of(class, Access::Reads, rows) == Some(Verdict::Passed)
+    let of = |at| (found.iter()).find(|f| f.at() == at).map(|f| f.verdict);
+    let by_stores = |f: &Found| {
+        f.verdict == Verdict::Failed
+            && f.beside
+            && stores(f.access)
+            && of((f.class, Access::Reads, f.rows)) == Some(Verdict::Passed)
     };
     (found.iter())
-        .filter(|f| f.3 == Verdict::Passed && stores(f.1))
-        .filter_map(|&(class, access, rows, _)| {
+        .filter(|f| f.verdict == Verdict::Passed && stores(f.access))
+        .filter_map(|f| {
             (found.iter())
-                .find(|f| f.0 != class && (f.1, f.2) == (access, rows) && by_stores(f))
-                .map(|f| (class, access, rows, f.0))
+                .find(|g| {
+                    g.class != f.class && (g.access, g.rows) == (f.access, f.rows) && by_stores(g)
+                })
+                .map(|g| (f.class, f.access, f.rows, g.class))
         })
         .collect()
 }
