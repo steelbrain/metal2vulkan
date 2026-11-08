@@ -20,6 +20,7 @@ use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
     ResourceId, ResourceIdKind, ResourceOptions, Texture, TextureDescriptor,
 };
+use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -337,8 +338,12 @@ fn exported_buffer(device: &Device, length: u64, only: bool) -> Option<Buffer> {
 /// The device's check imports its dma-buf class's pages only as their dma-buf, never by their
 /// pointer, which a driver may also take (a mapping of its own exported allocation): such pages
 /// lie over the dma-buf where a plain no-copy import of the same kind of pages takes the pointer,
-/// and the check answers for the class (its reads never unchecked). A texture of the guest's shape over
-/// such pages (234x18 `BGRA8Unorm`, rows 1024 bytes apart, `ShaderRead`) is then in place exactly
+/// and the check answers for the class: its reads of rows that end on lines never unchecked, nor of
+/// rows that end inside lines but on a driver that renders an explicit plane's rows past its height
+/// (`RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`, lavapipe), where no image over dma-buf
+/// pages of a height that is no multiple of 4 is made, as no shape of the check whose rows end
+/// inside lines has such a height. A texture of the guest's shape over such pages (234x18
+/// `BGRA8Unorm`, rows 1024 bytes apart, `ShaderRead`) is then in place exactly
 /// where the class's verdict for reads of its row ends passed. Printed (`IN-PLACE-DMA-BUF`): where
 /// each import lay, the class's verdicts and the texture's path. Where the device exports no such
 /// pages, it says so and passes.
@@ -397,9 +402,16 @@ fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
         only.over_dma_buf()
     );
     // Reads take only the first move of an image over the dma-buf, which a device that makes
-    // such images makes for every format the check reads; the other accesses may need a feature
-    // of the linear modifier the device lacks, which leaves them unchecked.
+    // such images makes for every format the check reads, but of a height that is no multiple of 4
+    // where its driver renders an explicit plane's rows past the height (every shape whose rows
+    // end inside lines has such a height); the other accesses may need a feature of the linear
+    // modifier the device lacks, which leaves them unchecked.
+    let past_height = (device.properties().driver_defects)
+        .contains(&RuntimeDriverDefect::ExplicitPlaneRowsPastHeight);
     for rows in RowEnds::ALL {
+        if rows == RowEnds::InLines && past_height {
+            continue;
+        }
         let verdict = device.in_place_verdict(PagesClass::DmaBuf, Access::Reads, rows);
         assert_ne!(verdict, InPlaceVerdict::Unchecked, "DmaBuf reads, {rows:?}");
     }
