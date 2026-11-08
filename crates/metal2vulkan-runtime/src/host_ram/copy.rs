@@ -688,12 +688,14 @@ impl BlitCommandEncoder {
         // against the buffer, or, of runs one after another, one range from the first byte,
         // checked once the runs are in the RAM.
         let length = call.buffer.length();
-        let mut span = u64::MAX..0;
+        let mut span = 0..0;
         if call.consecutive.is_none() {
+            let (mut low, mut high) = (u64::MAX, 0);
             for (at, run) in &call.runs {
                 let bytes = bytes_in(call_name, *at, run.end - run.start, length)?;
-                span = span.start.min(bytes.start)..span.end.max(bytes.end);
+                (low, high) = (low.min(bytes.start), high.max(bytes.end));
             }
+            span = low..high;
         }
         let spans = ram.spans();
         let (mut pieces, total) = pieces(&call.runs, &spans).ok_or_else(refused)?;
