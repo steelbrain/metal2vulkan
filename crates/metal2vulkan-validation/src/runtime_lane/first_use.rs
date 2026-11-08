@@ -258,9 +258,32 @@ impl Busy {
         (BusyWork { links }, words)
     }
 
+    /// Encode one spin into `command_buffer` between its other work, on the flag that is
+    /// `words`' first word ([`release`]), zero until released: the spin publishes 5 in the word
+    /// after it once released (it leaves it where its cap ended it), and binds `words` whole, so
+    /// a command before it that writes `words`' bytes past those two runs before it, and one after
+    /// it that reads the published word runs after it, as the tracker orders uses of one buffer.
+    /// The spin's ticket's buffer, which it raises from 1 to 2 as it starts.
+    pub(super) fn spin_in(
+        &self,
+        device: &Device,
+        command_buffer: &CommandBuffer,
+        words: &Buffer,
+    ) -> Buffer {
+        let cap = buffer_with(device, &self.cap.to_le_bytes()).unwrap();
+        self.spin(device, command_buffer, words, &cap)
+    }
+
     /// Encode one spin into `command_buffer`: one threadgroup with a ticket of its own (the kernel
     /// takes the ticket's value and raises it), spinning on `words`' flag for at most `cap`'s loads.
-    fn spin(&self, device: &Device, command_buffer: &CommandBuffer, words: &Buffer, cap: &Buffer) {
+    /// The ticket's buffer.
+    fn spin(
+        &self,
+        device: &Device,
+        command_buffer: &CommandBuffer,
+        words: &Buffer,
+        cap: &Buffer,
+    ) -> Buffer {
         let ticket = buffer_with(device, &1u32.to_le_bytes()).unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder.set_compute_pipeline_state(&self.state).unwrap();
@@ -270,6 +293,7 @@ impl Busy {
         let one = Size::new(1, 1, 1);
         encoder.dispatch_threadgroups(one, one).unwrap();
         encoder.end_encoding().unwrap();
+        ticket
     }
 }
 

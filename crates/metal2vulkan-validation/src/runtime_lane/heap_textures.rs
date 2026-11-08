@@ -2219,6 +2219,151 @@ fn heap_depth_textures_keep_their_texels_in_metal_s_tiles() {
     layer_reported_nothing_at_all(&messages);
 }
 
+/// A CPU write of a heap's `Depth32Float` texture's bytes made while its command buffer runs,
+/// after the shadow's copy in read them and before the keep of a later command that writes
+/// another texel through the texture, is kept, as Metal keeps a write of bytes no command
+/// touches (`shadow.rs`, **Merged back**), and the command's write is merged. The command buffer:
+/// a blit reads one texel (the copy in), into the spin's spare bytes, which orders the spin
+/// ([`Busy::spin_in`]) after it; then a blit encoder whose first copy reads the word the spin
+/// publishes, so the keep before its next copy, which writes texel `(3, 1)`, runs after the
+/// spin. The CPU writes texel `(3, 0)` where Metal's tiles place it, in a buffer over the heap's
+/// bytes (`heap_layouts::tiled_offset`), once the spin raised its ticket, and then releases the
+/// spin. The texture's image holds the copied texels between, so a keep of the heap's bytes as
+/// it runs would hold the CPU's write, and the merge would undo it with the image's value; the
+/// keep holds the bytes the copy in read. Where the device makes the texture a shadow of Metal's
+/// tiles (`WorkCounts::heap_textures_tiled`), the keep is counted
+/// (`WorkCounts::shadow_texels_kept`), and not as one right after its copy in
+/// (`WorkCounts::shadow_keeps_from_staging`): the first encoder's is the only copy in.
+#[test]
+fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
+    use super::first_use::{release, Busy};
+    use super::heap_layouts::tiled_offset;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{Duration, Instant};
+    // The word at `index` of a Shared buffer, read atomically while the GPU may write it.
+    let word = |buffer: &Buffer, index: usize| {
+        let contents = buffer.contents().expect("a Shared buffer");
+        // SAFETY: a 4-aligned word inside the buffer, which the host only reads.
+        let word = unsafe { AtomicU32::from_ptr(contents.as_ptr().cast::<u32>().add(index)) };
+        word.load(Ordering::SeqCst)
+    };
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    {
+        let device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let busy = Busy::new(device, &queue);
+        let options = tracked(StorageMode::Shared);
+        let [w, h] = [37, 5];
+        let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::Depth32Float, w, h, false);
+        descriptor.resource_options = options;
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        descriptor.allow_gpu_optimized_contents = false;
+        let answer = device.heap_texture_size_and_align(&descriptor).unwrap();
+        let heap = heap(device, HeapType::Placement, 1 << 20, options);
+        let made = device.work_counts();
+        let texture = heap.new_texture_at_offset(&descriptor, 0).unwrap();
+        let tiled = device.work_counts().heap_textures_tiled > made.heap_textures_tiled;
+        let over = heap.new_buffer_at_offset(answer.size, options, 0).unwrap();
+        // Texel `i`'s depth names it: (i + 1) / 2^23, exact and inside [0, 1].
+        let depth = |i: u64| ((i + 1) as f32 / (1u32 << 23) as f32).to_le_bytes();
+        let at = |i: u64| tiled_offset(4, [w, h], i % w, i / w) as usize;
+        let mut bytes = vec![0; answer.size as usize];
+        for i in 0..w * h {
+            bytes[at(i)..at(i) + 4].copy_from_slice(&depth(i));
+        }
+        let source = staged(device, &bytes);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut copy = command_buffer.blit_command_encoder().unwrap();
+        copy.copy_from_buffer_to_buffer(&source, 0, &over, 0, answer.size)
+            .unwrap();
+        copy.end_encoding().unwrap();
+        run(&command_buffer);
+        let (cpu_texel, gpu_texel) = (3, w + 3);
+        let (cpu, written) = (0.5f32.to_le_bytes(), 0.25f32.to_le_bytes());
+        let value = staged(device, &written);
+        let words = staged(device, &[0; 16]);
+        let sink = staged(device, &[0; 4]);
+        let counted = device.work_counts();
+        let command_buffer = queue.command_buffer().unwrap();
+        let one = Size::new(1, 1, 1);
+        let mut read = command_buffer.blit_command_encoder().unwrap();
+        read.copy_from_texture_to_buffer(
+            &texture,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            one,
+            &words,
+            8,
+            4,
+            4,
+            BlitOption::None,
+        )
+        .unwrap();
+        read.end_encoding().unwrap();
+        let ticket = busy.spin_in(device, &command_buffer, &words);
+        let mut write = command_buffer.blit_command_encoder().unwrap();
+        write
+            .copy_from_buffer_to_buffer(&words, 4, &sink, 0, 4)
+            .unwrap();
+        write
+            .copy_from_buffer_to_texture(
+                &value,
+                0,
+                4,
+                4,
+                one,
+                &texture,
+                0,
+                0,
+                Origin::new(gpu_texel % w, gpu_texel / w, 0),
+                BlitOption::None,
+            )
+            .unwrap();
+        write.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while word(&ticket, 0) != 2 {
+            assert!(Instant::now() < deadline, "the spin never started");
+            std::thread::sleep(Duration::from_micros(50));
+        }
+        let contents = over.contents().expect("a Shared heap's buffer");
+        // SAFETY: the texel's four bytes inside the buffer, which no command of the running
+        // command buffer touches.
+        unsafe {
+            let texel = contents.as_ptr().add(at(cpu_texel));
+            std::ptr::copy_nonoverlapping(cpu.as_ptr(), texel, 4);
+        }
+        release(&words);
+        command_buffer
+            .wait_until_completed_for(super::WAIT)
+            .unwrap();
+        assert_eq!(command_buffer.error(), None);
+        assert_eq!(word(&words, 1), 5, "the spin ended at its release");
+        let after = device.work_counts();
+        let kept = after.shadow_texels_kept - counted.shadow_texels_kept;
+        let staged_keeps = after.shadow_keeps_from_staging - counted.shadow_keeps_from_staging;
+        eprintln!(
+            "HEAPTEX keep after copy in: tiled {tiled}, {kept} texels kept, {staged_keeps} keeps \
+             from staging right after a copy in"
+        );
+        if tiled {
+            assert!(kept > 0, "the merge's keep");
+            assert_eq!(staged_keeps, 0, "a keep apart from its copy in");
+        }
+        let bytes = gpu_read(&queue, &over, 0..answer.size);
+        let texel = |i: u64| &bytes[at(i)..at(i) + 4];
+        assert_eq!(texel(cpu_texel), cpu, "the CPU's write since the copy in");
+        assert_eq!(texel(gpu_texel), written, "the blit's write");
+        let off: Vec<u64> = (0..w * h)
+            .filter(|&i| i != cpu_texel && i != gpu_texel && texel(i) != depth(i))
+            .collect();
+        assert!(off.is_empty(), "texels no write touched: {off:?}");
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
 /// One aspect of one slice of a multisample texture a lane moves ([`sample_round_trip`]): its
 /// element bytes, its blit option, the slice, and its plane's first byte in that slice from the
 /// texture's.

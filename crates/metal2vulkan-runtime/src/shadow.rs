@@ -1023,8 +1023,9 @@ impl ShadowCopies {
     /// Whether a merge's keep right after this shadow's copy in, with no copy of the shadow
     /// between, may copy the staging buffer that copy in filled
     /// ([`record_kept_from_staging`](Self::record_kept_from_staging)): a heap's tiled texture's
-    /// whose moves give back each byte they took (`HeapTiledCopies::moves_bits`), or whose keep
-    /// holds the heap's bytes, a depth's (`HeapTiledCopies::takes_depth`).
+    /// whose moves give back each byte they took (`HeapTiledCopies::moves_bits`), or whose every
+    /// keep copies that buffer, a depth's (`HeapTiledCopies::takes_depth`,
+    /// [`record_kept`](Self::record_kept)).
     pub(super) fn keeps_from_staging(&self) -> bool {
         matches!(
             &self.source,
@@ -1035,17 +1036,18 @@ impl ShadowCopies {
         )
     }
 
-    /// Record a merge's keep into `to` from `at` as a copy of the staging buffer, right after the
-    /// shadow's copy in filled it with the heap's bytes and moved them into the image
-    /// ([`keeps_from_staging`](Self::keeps_from_staging)): the texture's bytes from its first as
-    /// the copy in took them, which a keep's move out of the image would leave there where the
-    /// moves give back each byte they took, without the move, and which a depth's keep holds
-    /// ([`record_kept`](Self::record_kept)). Nothing for any other shadow.
+    /// Record a merge's keep into `to` from `at` as a copy of the staging buffer as the shadow's
+    /// last copy left it: right after the shadow's copy in filled it with the heap's bytes and
+    /// moved them into the image ([`keeps_from_staging`](Self::keeps_from_staging)), the
+    /// texture's bytes from its first as the copy in took them, which a keep's move out of the
+    /// image would leave there where the moves give back each byte they took, without the move;
+    /// and a depth's keep after any copy ([`record_kept`](Self::record_kept)). Nothing for any
+    /// other shadow.
     ///
     /// # Safety
     ///
-    /// As `record_out`'s, after a barrier that orders the copy after the copy in, and with no
-    /// command between them that writes the shadow or its staging buffer.
+    /// As `record_out`'s, after a barrier that orders the copy after the shadow's last copy, and
+    /// with no command between them that writes the shadow or its staging buffer.
     pub(super) unsafe fn record_kept_from_staging(
         &self,
         device: &Vk,
@@ -1074,11 +1076,18 @@ impl ShadowCopies {
     /// [`record_out`](Self::record_out) copies them; but where a heap's tiled texture has a
     /// depth aspect, whose moves into its image may change a value
     /// (`HeapTiledCopies::takes_depth`: one outside `[0, 1]`, `restricted-depth-upload`, and
-    /// those `drawn-depth-copy` names), the heap's bytes themselves, so the merge writes each
-    /// byte the image holds otherwise than the heap: every byte a command wrote, and the values
-    /// the copy in changed (both announced), never a byte of the heap's in a value a command
-    /// wrote. A keep of the image would hold the changed value, and keep the heap's byte in each
-    /// byte a command wrote that equals it.
+    /// those `drawn-depth-copy` names), its staging buffer, after a barrier from everything
+    /// before. Every copy of the shadow fills that buffer whole (`HeapTiledCopies::record`,
+    /// `HeapTiledCopies::record_out`), and no command writes through the texture between the
+    /// last such copy and a keep: a copy in leaves it the heap's bytes it read, and a copy back
+    /// or a merge's copy of what changed the image's elements, which that copy back or merge
+    /// wrote into the heap. So the keep holds the heap's bytes as the image stands for them, and
+    /// the merge writes each byte the image holds otherwise: every byte a command wrote, and the
+    /// values the copy in changed (both announced), never a byte of the heap's in a value a
+    /// command wrote. A keep of the image would hold the changed value, and keep the heap's byte
+    /// in each byte a command wrote that equals it; one of the heap's bytes as the keep runs would
+    /// hold another writer's write since the copy in (the CPU's), which the merge would then undo
+    /// with the image's byte.
     ///
     /// # Safety
     ///
@@ -1091,20 +1100,17 @@ impl ShadowCopies {
         moves: Option<&SampleMoves>,
     ) {
         if let ShadowSource::Bytes {
-            buffer,
-            target: ShadowTarget::Tiled { staging, tiles, .. },
+            target: ShadowTarget::Tiled { tiles, .. },
             ..
         } = &self.source
         {
             if tiles.takes_depth() {
-                let region = vk::BufferCopy {
-                    src_offset: staging.into.src_offset,
-                    dst_offset: at,
-                    size: staging.into.size,
-                };
-                // SAFETY: the caller's contract; the texture's bytes lie in the heap's buffer from
-                // the staging copy's first, and `to` holds them from `at`.
-                unsafe { device.cmd_copy_buffer(command_buffer, buffer.raw(), to, &[region]) };
+                // SAFETY: the caller's contract; the barrier orders the copy after the shadow's
+                // last copy, which filled the staging buffer.
+                unsafe {
+                    Barrier::everything().record(device, command_buffer);
+                    self.record_kept_from_staging(device, command_buffer, (to, at));
+                }
                 return;
             }
         }
@@ -1337,7 +1343,7 @@ impl<M> ShadowCopy<M> {
     /// The moves between a heap's multisample texture's image and Metal's tiles that the copy's
     /// record takes (`texture/heap_tiled.rs`), planned now through `maker`: into the image for a
     /// copy in, out of it for every other step (a copy back, a merge's keep and its copy of what
-    /// changed) but a depth's keep, which holds the heap's bytes
+    /// changed) but a depth's keep, which copies its staging buffer
     /// ([`ShadowCopies::record_kept`]). `None` for every other texture. Refused as their images
     /// are made.
     pub(super) fn plan_moves(&self, maker: &UseMaker) -> Result<Option<SampleMoves>, Error> {

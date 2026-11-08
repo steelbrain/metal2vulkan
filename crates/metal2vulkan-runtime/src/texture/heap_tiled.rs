@@ -159,11 +159,13 @@
 //! writes undefined without `VK_EXT_depth_range_unrestricted` (ANV on the Iris Xe of RPL-P stores
 //! a 32-bit float one clamped: `restricted-depth-upload`, announced as the texture is made), and
 //! the drivers that `drawn-depth-copy` names change values inside it too. So a merge's keep holds
-//! the heap's bytes, not the image's (`ShadowCopies::record_kept`): the staging buffer right after
-//! the copy in filled it, else the heap's bytes themselves, and no move out of the image. A keep
-//! of the image would hold the changed value, and the merge would keep the heap's byte in each
-//! byte a command wrote that equals it. A byte the image holds otherwise than the heap is written
-//! back: every byte a command wrote, and the values the copy in changed.
+//! the heap's bytes as the image stands for them, not the image's (`ShadowCopies::record_kept`):
+//! the staging buffer as the shadow's last copy left it, the bytes the copy in read or those the
+//! last copy back or merge wrote, and no move out of the image. A keep of the image would hold
+//! the changed value, and the merge would keep the heap's byte in each byte a command wrote that
+//! equals it; a keep of the heap's bytes as it runs would hold the CPU's writes since the copy in,
+//! which the merge would undo. A byte the image holds otherwise than the heap is written back:
+//! every byte a command wrote, and the values the copy in changed.
 
 use super::super::blit_plan::BufferLayout;
 use super::super::buffer::Buffer;
@@ -1885,8 +1887,9 @@ impl HeapTiledCopies {
     /// Whether the image has a depth aspect, whose moves into it may change a value the heap's
     /// bytes hold (the module docs: a 32-bit float depth outside `[0, 1]`, which Vulkan leaves
     /// undefined without `VK_EXT_depth_range_unrestricted`, and the values `drawn-depth-copy`
-    /// names), so that a merge's keep holds the heap's bytes and moves nothing out of the image
-    /// (`ShadowCopies::record_kept`). Of a depth whose moves change none, the same bytes.
+    /// names), so that a merge's keep copies the staging buffer, the heap's bytes as the image
+    /// stands for them, and moves nothing out of the image (`ShadowCopies::record_kept`). Of a
+    /// depth whose moves change none, the same bytes.
     pub(crate) fn takes_depth(&self) -> bool {
         (self.regions.iter()).any(|region| {
             (region.image_subresource.aspect_mask).contains(vk::ImageAspectFlags::DEPTH)
