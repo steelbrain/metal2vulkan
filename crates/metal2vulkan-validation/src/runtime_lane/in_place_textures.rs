@@ -1687,9 +1687,10 @@ fn device_caches(device: &Device) -> Vec<(Buffer, Texture)> {
 
 /// [`DEVICE_CACHES`] over buffers that declare their padding unobserved, made as a guest's
 /// WindowServer makes them, before the device's check of its pooled memory answered (a device
-/// whose check has not run), under the validation layer: each is a shadow
-/// (`shadowed_textures`), none an image at its pitch (`pooled_pitched_images`), and one command
-/// buffer clears each to a value of its own. Once the check answered, the caches made again take
+/// whose check has not run), under the validation layer: none takes an image at its pitch
+/// (`pooled_pitched_images`), and each is a shadow (`shadowed_textures`) but where the device's
+/// own linear image lays its rows out at their pitch, which takes no verdict; one command buffer
+/// clears each to a value of its own. Once the check answered, the caches made again take
 /// the image at their pitch where the device makes it and its check passed
 /// (`pooled_pitched_images`), and the next command buffer, which blits each early cache into a
 /// buffer and is committed while no other is open, moves every early one whose shape takes it
@@ -1711,6 +1712,14 @@ fn device_caches_made_before_the_check_move_to_their_pitch_once_it_passes() {
         let made = device.work_counts();
         let pitched_early = made.pooled_pitched_images - start.pooled_pitched_images;
         let shadows_early = made.shadowed_textures - start.shadowed_textures;
+        // In place (`vk_image` answers one): an image at its pitch, or the device's own linear
+        // image where it lays the rows out at their pitch, which takes no verdict.
+        let in_place = |caches: &[(Buffer, Texture)]| {
+            (caches.iter())
+                .filter(|(_, texture)| path_of(texture) == "in place")
+                .count()
+        };
+        let linear_early = in_place(&early);
         // Each cache cleared to a value of its own (red 2i / 255 of the i-th, read within one of
         // 2i: the device's own conversion), before the check.
         let command_buffer = queue.command_buffer().unwrap();
@@ -1795,17 +1804,11 @@ fn device_caches_made_before_the_check_move_to_their_pitch_once_it_passes() {
                 ));
             }
         }
-        // In place (`vk_image` answers one): an image at its pitch, or the device's own linear
-        // image where it lays the rows out at their pitch, which takes no verdict.
-        let in_place = |caches: &[(Buffer, Texture)]| {
-            (caches.iter())
-                .filter(|(_, texture)| path_of(texture) == "in place")
-                .count()
-        };
         let (in_place, in_place_late) = (in_place(&early), in_place(&late));
         eprintln!(
             "POOLED-PITCHED-MOVE on {}: {} device caches made before the check answered ({}): \
-             {pitched_early} in place at their pitch, {shadows_early} shadows; made after it: \
+             {pitched_early} in place at their pitch ({linear_early} in place), {shadows_early} \
+             shadows; made after it: \
              {pitched_late} in place at their pitch ({in_place_late} in place); the early ones \
              after the next commit: {moved} moved ({counted} counted at their pitch, {freed} \
              shadows freed), {in_place} in place, {} shadows",
@@ -1817,11 +1820,11 @@ fn device_caches_made_before_the_check_move_to_their_pitch_once_it_passes() {
             },
             early.len() - in_place,
         );
-        if answered.is_none() && (pitched_early, shadows_early) != (0, early.len() as u64) {
+        let unplaced = (early.len() - linear_early) as u64;
+        if answered.is_none() && (pitched_early, shadows_early) != (0, unplaced) {
             lapses.push(format!(
                 "before the check answered: {pitched_early} at their pitch, {shadows_early} \
-                 shadows, where all {} are shadows",
-                early.len()
+                 shadows, where none is at its pitch and the {unplaced} not in place are shadows"
             ));
         }
         if (moved, counted, freed) != (pitched_late - pitched_early, moved, moved) {
