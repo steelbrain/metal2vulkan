@@ -537,7 +537,9 @@ impl Device {
             dirty,
             gate,
             runs,
+            dma_buf_only,
         } = memory.into_parts();
+        let source = (source, dma_buf_only);
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         let window = host.window;
         if of_heap && window.offset != 0 {
@@ -836,9 +838,11 @@ impl Device {
             dirty,
             gate,
             runs,
+            dma_buf_only,
         } = memory.into_parts();
         // A buffer whose GPU writes are dropped keeps them dropped over its new pages.
         let drops_writes = cell.drops_writes();
+        let source = (source, dma_buf_only);
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         let window = host.window;
         if heap.is_some() && window.offset != 0 {
@@ -2129,24 +2133,27 @@ fn source_failure(failed: Error, refusal: Error) -> Error {
 
 /// The host pages a no-copy object of `length` bytes at `pointer` imports on the device of
 /// `importer`, for `call`: the pages the range touches ([`import_window`]), imported by their
-/// pointer where the device's import alignment covers them, else only as a dma-buf where the
-/// caller gave a source the device can use. A source the device cannot use is dropped uncalled,
-/// as is any where `drops_writes` (imported through a read-only view, `read_only_view.rs`).
-/// Refused: memory past the address space's end (`Nil`, as Metal makes no buffer over it); a
-/// range the import alignment cannot cover, with no usable source (`Unsupported`, `HostMemory`).
+/// pointer where the device's import alignment covers them (but where `dma_buf_only`,
+/// `HostMemory::dma_buf_only`), else only as a dma-buf where the caller gave a source the device
+/// can use. A source the device cannot use is dropped uncalled, as is any where `drops_writes`
+/// (imported through a read-only view, `read_only_view.rs`). Refused: memory past the address
+/// space's end (`Nil`, as Metal makes no buffer over it); a range the import alignment cannot
+/// cover, or memory imported only as dma-bufs, with no usable source (`Unsupported`,
+/// `HostMemory`).
 fn host_window(
     call: &'static str,
     importer: &Importer,
     pointer: NonNull<u8>,
     length: u64,
-    source: Option<Source>,
+    (source, dma_buf_only): (Option<Source>, bool),
     drops_writes: bool,
 ) -> Result<HostWindow, Error> {
     let source = source.filter(|_| importer.imports_dma_bufs() && !drops_writes);
     let at = pointer.as_ptr() as u64;
     let window = import_window(at, length, importer.page, 1)
         .map_err(|_| nil(call, Problem::BufferLength { length }))?;
-    let by_pointer = import_window(at, length, importer.page, importer.alignment).is_ok();
+    let by_pointer =
+        !dma_buf_only && import_window(at, length, importer.page, importer.alignment).is_ok();
     if !by_pointer && source.is_none() {
         return Err(not_importable());
     }

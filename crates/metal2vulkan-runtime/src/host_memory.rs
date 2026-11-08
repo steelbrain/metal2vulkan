@@ -135,6 +135,9 @@ pub struct HostMemory {
     gate: Option<ImportGate>,
     /// The caller's resolver of the pages' runs in its guest RAM ([`HostMemory::with_runs`]).
     runs: Option<RunResolver>,
+    /// The pages are imported as dma-bufs of the source's, never by their pointer
+    /// ([`HostMemory::dma_buf_only`]): the device's check's pages of that class.
+    dma_buf_only: bool,
 }
 
 /// A consumer's resolver of a no-copy object's pages to the runs of guest RAM they are views of
@@ -222,6 +225,7 @@ impl std::fmt::Debug for HostMemory {
             .field("dirty_pages", &self.dirty.is_some())
             .field("import_gate", &self.gate.is_some())
             .field("runs", &self.runs.is_some())
+            .field("dma_buf_only", &self.dma_buf_only)
             .finish()
     }
 }
@@ -264,6 +268,7 @@ impl HostMemory {
             dirty: None,
             gate: None,
             runs: None,
+            dma_buf_only: false,
         }
     }
 
@@ -312,6 +317,7 @@ impl HostMemory {
             dirty: None,
             gate: None,
             runs: None,
+            dma_buf_only: false,
         }
     }
 
@@ -434,6 +440,20 @@ impl HostMemory {
         }
     }
 
+    /// This memory, imported only as the source's dma-bufs (`HostMemory::with_dma_buf`), never
+    /// by its pointer, even where the device would import the pointer: for the device's check of
+    /// images over pages imported as dma-bufs (`in_place_check.rs`), whose verdict is about such
+    /// imports and whose pages a driver may also take by their pointer (an allocation of the
+    /// device's own, exported and mapped). Without a source the device can use, the import is
+    /// refused as the pointer's would be (`Unsupported`, `HostMemory`).
+    #[cfg(unix)]
+    pub(crate) fn dma_buf_only(self) -> HostMemory {
+        HostMemory {
+            dma_buf_only: true,
+            ..self
+        }
+    }
+
     /// The pointer.
     pub fn pointer(&self) -> NonNull<u8> {
         self.pointer
@@ -442,8 +462,9 @@ impl HostMemory {
     /// The pointer, the dma-buf source where the caller gave one, whether the caller vouched
     /// for the pages' write permission ([`HostMemory::assume_writable`]), and its log of the pages
     /// written ([`HostMemory::with_dirty_pages`]), kept with the pointer its offsets count from,
-    /// its gate over their import ([`HostMemory::with_import_gate`]), and its resolver of their
-    /// runs in guest RAM ([`HostMemory::with_runs`]).
+    /// its gate over their import ([`HostMemory::with_import_gate`]), its resolver of their
+    /// runs in guest RAM ([`HostMemory::with_runs`]), and whether they are imported only as
+    /// dma-bufs ([`HostMemory::dma_buf_only`]).
     pub(super) fn into_parts(self) -> HostParts {
         let dirty = (self.dirty).map(|hook| DirtySource::new(hook, self.pointer.as_ptr() as u64));
         HostParts {
@@ -453,6 +474,7 @@ impl HostMemory {
             dirty,
             gate: self.gate,
             runs: self.runs,
+            dma_buf_only: self.dma_buf_only,
         }
     }
 }
@@ -465,6 +487,7 @@ pub(super) struct HostParts {
     pub(super) dirty: Option<Arc<DirtySource>>,
     pub(super) gate: Option<ImportGate>,
     pub(super) runs: Option<RunResolver>,
+    pub(super) dma_buf_only: bool,
 }
 
 /// A no-copy buffer's deallocator (Metal's block): called once, with the pointer and the length,

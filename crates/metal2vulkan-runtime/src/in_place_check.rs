@@ -121,10 +121,10 @@
 //!   waiter's `vkAllocateCommandBuffers` faulted on the magic (an M3 Max under MoltenVK 1.4.2,
 //!   one run of three), where the same work with no check running did not in 30 000 rounds.
 //! - **Its dma-bufs.** The runtime runs no `udmabuf` code, so the dma-buf class's pages are an
-//!   allocation of the device's own, host-visible and exported as a dma-buf, mapped: the device
-//!   refuses their pointer (a driver that takes it leaves the class unchecked), and the check's
-//!   source answers each request over them with that dma-buf. The image and its first move are
-//!   the product's.
+//!   allocation of the device's own, host-visible and exported as a dma-buf, mapped, and imported
+//!   only as that dma-buf (`HostMemory::dma_buf_only`), never by their pointer, which a driver may
+//!   take too (ANV's own mapped allocation); the check's source answers each request over them
+//!   with that dma-buf. The buffer's import, the image and its first move are the product's.
 
 use crate::check_draw::CheckDraw;
 use crate::device::holds::Holder;
@@ -999,7 +999,9 @@ fn dma_buf_pages(device: &Device, length: u64) -> Option<ClassPages> {
     // SAFETY: the pages are the device's mapped allocation, readable and writable, which stays
     // mapped until the keep-alive lets go of it; the source answers every request over them
     // with a dma-buf of exactly those pages (`ExportedPages::source`).
-    let memory = unsafe { HostMemory::with_dma_buf(start, source) };
+    // Imported only as the source's dma-bufs: a driver may also take the pointer of a mapping of
+    // its own exported allocation, which would make these pages the pointer's class.
+    let memory = unsafe { HostMemory::with_dma_buf(start, source) }.dma_buf_only();
     let buffer = no_copy_kept(device, memory, length, pages)?;
     if !buffer.over_dma_buf() {
         return None;

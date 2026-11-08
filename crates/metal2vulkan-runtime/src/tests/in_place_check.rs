@@ -306,3 +306,104 @@ fn texture_ids_keep_metals_order_while_the_in_place_check_runs() {
         "the IDs of the textures made while the check ran"
     );
 }
+
+/// A no-copy buffer of `length` bytes over an allocation of `device`'s own exported as a dma-buf
+/// and mapped (`dma_buf::ExportedPages`, the check's dma-buf pages), with a source of that
+/// dma-buf, imported only as it where `only` (`HostMemory::dma_buf_only`), else as any no-copy
+/// buffer's pages are, the pointer first. `None` where the device exports no such pages.
+#[cfg(target_os = "linux")]
+fn exported_buffer(device: &Device, length: u64, only: bool) -> Option<Buffer> {
+    let exported = crate::dma_buf::ExportedPages::make(device, length)?;
+    let start = exported.start();
+    let source = exported.source();
+    // SAFETY: the pages are the device's mapped allocation, readable and writable, which stays
+    // mapped until the keep-alive lets go of it; the source answers every request over them with
+    // a dma-buf of exactly those pages.
+    let memory = unsafe { crate::HostMemory::with_dma_buf(start, source) };
+    let memory = match only {
+        true => memory.dma_buf_only(),
+        false => memory,
+    };
+    let contents = BufferContents::NoCopy {
+        memory,
+        deallocator: None,
+        keep_alive: Some(Box::new(exported)),
+    };
+    let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents)
+        .with_placement(AddressPlacement::Outside);
+    device.new_buffer_with_descriptor(descriptor).ok()
+}
+
+/// The device's check imports its dma-buf class's pages only as their dma-buf, never by their
+/// pointer, which a driver may also take (a mapping of its own exported allocation): such pages
+/// lie over the dma-buf where a plain no-copy import of the same kind of pages takes the pointer,
+/// and the check answers for the class (its reads never unchecked). A texture of the guest's shape over
+/// such pages (234x18 `BGRA8Unorm`, rows 1024 bytes apart, `ShaderRead`) is then in place exactly
+/// where the class's verdict for reads of its row ends passed. Printed (`IN-PLACE-DMA-BUF`): where
+/// each import lay, the class's verdicts and the texture's path. Where the device exports no such
+/// pages, it says so and passes.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
+    let scratch = Scratch::new("in-place-check-dma-buf");
+    let device = device(&scratch.0);
+    let length = 1 << 20;
+    let (Some(pointer_first), Some(only)) = (
+        exported_buffer(&device, length, false),
+        exported_buffer(&device, length, true),
+    ) else {
+        eprintln!(
+            "IN-PLACE-DMA-BUF on {}: the device exports no dma-buf pages to check",
+            device.name()
+        );
+        return;
+    };
+    assert!(
+        only.over_dma_buf(),
+        "the dma-buf-only import lies over the dma-buf"
+    );
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let verdicts: Vec<InPlaceVerdict> = RowEnds::ALL
+        .into_iter()
+        .flat_map(|rows| {
+            Access::ALL.map(|access| device.in_place_verdict(PagesClass::DmaBuf, access, rows))
+        })
+        .collect();
+    let (w, h, bpr) = (234u64, 18u64, 1024u64);
+    let layout = crate::linear_plan::BufferLayout {
+        offset: 0,
+        row_pitch: bpr,
+        slice_pitch: bpr * h,
+        row_bytes: w * 4,
+        rows: h,
+        slices: 1,
+    };
+    let start = only.contents().map_or(0, |at| at.as_ptr().addr() as u64);
+    let rows = RowEnds::of(start, &layout, device.shared().in_place.line());
+    let reads = device.in_place_verdict(PagesClass::DmaBuf, Access::Reads, rows);
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = only.resource_options();
+    let texture = only.new_texture(&descriptor, 0, bpr).unwrap();
+    // SAFETY: the handle is only read, while the texture lives.
+    let in_place = unsafe { texture.vk_image() }.is_some();
+    eprintln!(
+        "IN-PLACE-DMA-BUF on {}: pointer-first import over the dma-buf {}, dma-buf-only {}; the \
+         DmaBuf verdicts (rows in lines, then on lines; reads, renders, writes, buffer writes) \
+         {verdicts:?}; a 234x18 BGRA8Unorm texture at 1024-byte rows ({rows:?}, reads {reads:?}) \
+         in place {in_place}",
+        device.name(),
+        pointer_first.over_dma_buf(),
+        only.over_dma_buf()
+    );
+    // Reads take only the first move of an image over the dma-buf, which a device that makes
+    // such images makes for every format the check reads; the other accesses may need a feature
+    // of the linear modifier the device lacks, which leaves them unchecked.
+    for rows in RowEnds::ALL {
+        let verdict = device.in_place_verdict(PagesClass::DmaBuf, Access::Reads, rows);
+        assert_ne!(verdict, InPlaceVerdict::Unchecked, "DmaBuf reads, {rows:?}");
+    }
+    assert_eq!(in_place, reads == InPlaceVerdict::Passed, "{reads:?}");
+    drop(texture);
+    drop((pointer_first, only));
+}
