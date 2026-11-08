@@ -4331,15 +4331,6 @@ pub(super) enum IdUse {
 }
 
 impl Texture {
-    /// The texture a view was made from, through every view between; else this one.
-    fn root(&self) -> &Texture {
-        let mut owner = self;
-        while let Some(parent) = &owner.0.parent {
-            owner = parent;
-        }
-        owner
-    }
-
     /// The identity a reader of the texture is known by across passes (`render/coverage.rs`):
     /// the address of the texture a view was made from, while it lives.
     pub(crate) fn root_address(&self) -> usize {

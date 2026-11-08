@@ -2489,6 +2489,8 @@ impl RenderExecution {
             // Each command's mesh draw takes its own (`object_threadgroup_lengths`).
             object_threadgroup_lengths: BTreeMap::new(),
             visibility,
+            // A replay measures no reader (`render/coverage.rs`).
+            readers: super::coverage::Readers::default(),
             tile: ArgumentTable::default(),
             dispatches: Vec::new(),
             dispatched: false,

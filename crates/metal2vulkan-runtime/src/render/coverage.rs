@@ -237,7 +237,9 @@ impl Drop for Readback {
         let Some(_busy) = exit_guard::enter() else {
             return;
         };
-        let mut results = vec![[0u64; 2]; MEASURED as usize];
+        // The measured readers took the pool's first queries, in turn.
+        let mut results = [[0u64; 2]; MEASURED as usize];
+        let results = &mut results[..self.measured.len()];
         // SAFETY: the pool's queries, each recorded by the pass whose command buffer completed or
         // never ran: 64-bit values, each with its availability, so one that never ran reads as
         // unavailable ("If VK_QUERY_RESULT_WAIT_BIT and VK_QUERY_RESULT_PARTIAL_BIT are both not
@@ -247,7 +249,7 @@ impl Drop for Readback {
             self.pool.device.shared().vk().get_query_pool_results(
                 self.pool.raw,
                 0,
-                &mut results,
+                results,
                 vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WITH_AVAILABILITY,
             )
         };
