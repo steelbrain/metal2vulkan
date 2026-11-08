@@ -301,7 +301,7 @@ impl RenderLowering {
         let restated =
             (self.again.kept.as_ref()).is_some_and(|kept| kept.stated != self.again.stated);
         if restated && !self.restate_kept(live, call, assembly, draw) {
-            return Again::No;
+            return self.rebind_stopped();
         }
         let Some(changed) = self.bring_in(live, stamps) else {
             return self.rebind_stopped();
