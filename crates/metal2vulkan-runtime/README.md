@@ -352,20 +352,23 @@ the record the pass is making.
   on them.
 - **Host memory without a copy.** `unsafe Device::new_buffer_with_bytes_no_copy` imports host
   memory, given as a `HostMemory`, through `VK_EXT_external_memory_host`; memory the device cannot
-  import exactly is refused. `unsafe Device::new_heap_with_bytes_no_copy` is its heap twin.
+  import exactly is refused, but where the driver refuses the pointer itself (below).
+  `unsafe Device::new_heap_with_bytes_no_copy` is its heap twin.
   `Buffer::rebind_bytes_no_copy` and `Heap::rebind_bytes_no_copy` move either to another range,
   keeping the objects, addresses and IDs. A rebind is refused (`RebindProblem::EncodedUses`) while
   a command buffer not yet committed, or an open encoder, used the bytes; a render encoder whose
   attachment lies in them uses them from its open. Where a driver refuses the pointer (RADV
   refuses shared mappings, a `memfd`'s among them), memory made with `HostMemory::with_dma_buf` is
   imported from dma-bufs of its pages instead
-  ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)); on NVIDIA's driver the runtime
+  ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)), and a no-copy buffer or heap
+  over memory made without a source is a copy of its pages, as below; on NVIDIA's driver the runtime
   never hands the driver pages the kernel cannot pin (a dma-buf's mapping): they take the source,
   and else, or where its import fails, a copy, as below. A no-copy buffer's import of such
   dma-bufs that only blits have read may be released while idle and imported again at its next
   blit, which then costs time: RADV lists every import in every submission. Nothing of Metal's
   observes it. A no-copy buffer, heap, or buffer's or heap's rebind whose import the caller's gate
-  refuses (`HostMemory::with_import_gate`), or whose admitted import fails, is made over a copy of
+  refuses (`HostMemory::with_import_gate`), or whose admitted import fails, and a no-copy buffer
+  or heap whose pointer the device refuses with no source of dma-bufs given, is made over a copy of
   its bytes in memory of the device's own, announced (`copied-host-pages`,
   [HOWTO](../../docs/HOWTO.md#copied-host-buffers)), wherever the process maps the pages
   readable (a dma-buf's mapping among them); over pages not mapped readable it is refused. A

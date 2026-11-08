@@ -336,6 +336,7 @@ pub(crate) struct Counters {
     host_imports_refused_by_host: AtomicU64,
     copied_host_buffers_made: AtomicU64,
     copied_host_buffers_refused: AtomicU64,
+    copied_host_buffers_device_refused: AtomicU64,
     copied_host_buffers_degraded: AtomicU64,
     copied_rebind_pages_moved: AtomicU64,
     copied_read_only_memory: AtomicU64,
@@ -2916,6 +2917,7 @@ impl Counters {
         match cause {
             CopiedBecause::Failed => &self.copied_host_buffers_degraded,
             CopiedBecause::Refused => &self.copied_host_buffers_refused,
+            CopiedBecause::DeviceRefused => &self.copied_host_buffers_device_refused,
             CopiedBecause::Moved => &self.copied_rebind_pages_moved,
             CopiedBecause::ReadOnly => &self.copied_read_only_memory,
             CopiedBecause::Unwritable => &self.copied_unwritable_pages,
@@ -6322,10 +6324,14 @@ pub struct WorkCounts {
     pub host_imports_refused_by_host: u64,
     /// The copied host buffers made (`copied-host-pages`): no-copy buffers whose bytes the GPU
     /// uses in a copy of the caller's pages in memory of the device's own, which no import maps.
-    /// Each is one of the next five.
+    /// Each is one of the next six.
     pub copied_host_buffers_made: u64,
     /// Of those, the ones made because the caller's gate refused the import.
     pub copied_host_buffers_refused: u64,
+    /// Of those, the ones made because the device refused the pointer's import and the caller
+    /// gave no source of dma-bufs of the pages (`HostMemory::with_dma_buf`): RADV refuses shared
+    /// memory, a `memfd` mapping among it (`Device::imports_shared_host_pointers`).
+    pub copied_host_buffers_device_refused: u64,
     /// Of those, the ones made because an import the device and the gate admitted failed (out
     /// of memory, another Vulkan error), or because the runtime refused the pages for the driver
     /// and no dma-buf of them served (`host_imports_unpinnable`).
@@ -8062,6 +8068,9 @@ impl Device {
             copied_host_buffers_refused: counters
                 .copied_host_buffers_refused
                 .load(Ordering::Relaxed),
+            copied_host_buffers_device_refused: counters
+                .copied_host_buffers_device_refused
+                .load(Ordering::Relaxed),
             copied_host_buffers_degraded: counters
                 .copied_host_buffers_degraded
                 .load(Ordering::Relaxed),
@@ -8469,6 +8478,8 @@ impl Device {
 pub(crate) enum CopiedBecause {
     /// The caller's gate refused their import (`HostMemory::with_import_gate`).
     Refused,
+    /// The device refused their pointer's import, and no source of dma-bufs of them was given.
+    DeviceRefused,
     /// The import the device and the gate admitted failed.
     Failed,
     /// A rebind's new bytes lie at another offset in their page than the old, where a texture

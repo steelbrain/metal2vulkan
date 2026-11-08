@@ -19,6 +19,9 @@
 //!   copied: the buffer is refused, as their import is.
 //! - **A dma-buf's mapping** (Linux, where `/dev/udmabuf` opens), whose pages the kernel's read
 //!   cannot pin, is copied where the gate refuses its import, with the same coherence.
+//! - **Shared memory the device refuses** (Linux: a `memfd` mapped shared, made with no source of
+//!   dma-bufs) is copied where the device refuses its pointer (RADV), announced and counted as the
+//!   device's refusal, with the same coherence; imported elsewhere.
 //! - **Read-only pages** (a read-only view of shared memory) are a copy whose GPU writes are
 //!   dropped, a buffer's and a rebind's: where the gate refuses their import, counted as a
 //!   refusal; on Linux where it admits it, counted as a copy of unwritable pages
@@ -82,6 +85,10 @@ enum Backing {
     DmaBuf {
         _mapping: super::copied::DmaBufMapping,
     },
+    /// A `memfd`'s pages mapped shared, read and write, as QEMU maps its
+    /// `memory-backend-memfd,share=on` guest RAM: unmapped as it drops.
+    #[cfg(target_os = "linux")]
+    Shared,
 }
 
 impl Host {
@@ -108,6 +115,38 @@ impl Host {
             backing: Backing::DmaBuf { _mapping: mapping },
             seed,
         })
+    }
+
+    /// Host memory over a `memfd`'s pages mapped shared, read and write, in the pattern of `seed`.
+    #[cfg(target_os = "linux")]
+    fn over_shared_memory(seed: u8) -> Host {
+        use std::os::fd::AsRawFd;
+        let fd = shared_memory();
+        // SAFETY: a new shared mapping of the memfd's `LENGTH` bytes, unmapped as the host drops;
+        // the descriptor may close once it is mapped.
+        let mapped = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                LENGTH,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(
+            mapped,
+            libc::MAP_FAILED,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        let host = Host {
+            pointer: NonNull::new(mapped.cast()).unwrap(),
+            backing: Backing::Shared,
+            seed,
+        };
+        host.write(0, &host.pattern());
+        host
     }
 
     /// The pattern it was made with.
@@ -166,6 +205,11 @@ impl Drop for Host {
             // Unmapped by the mapping's own drop.
             #[cfg(target_os = "linux")]
             Backing::DmaBuf { .. } => {}
+            // SAFETY: the mapping of `LENGTH` bytes made for it, which nothing uses any more.
+            #[cfg(target_os = "linux")]
+            Backing::Shared => unsafe {
+                assert_eq!(libc::munmap(self.pointer.as_ptr().cast(), LENGTH), 0);
+            },
         }
     }
 }
@@ -366,6 +410,44 @@ fn copied_buffer_is_made_where_the_caller_s_gate_refuses_the_import() {
 /// read cannot pin, whose import the gate refuses, are copied all the same (read with plain loads,
 /// mapped readable), with the copy's coherence. Linux only, where `/dev/udmabuf` opens.
 #[cfg(target_os = "linux")]
+/// A no-copy buffer over shared memory (a `memfd` mapped shared, as QEMU's
+/// `memory-backend-memfd,share=on` guest RAM is) made with no source of dma-bufs of its pages: on a
+/// device that refuses the pointer of shared memory (`Device::imports_shared_host_pointers`, RADV)
+/// a copy of the pages, announced and counted as the device's refusal, with every copy's
+/// coherence, where the call was refused before; elsewhere an import of the pointer.
+#[cfg(target_os = "linux")]
+#[test]
+fn copied_buffer_is_made_over_shared_memory_whose_pointer_the_device_refuses() {
+    let host = Host::over_shared_memory(9);
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let refuses = !device.imports_shared_host_pointers().unwrap();
+    let before = device.work_counts();
+    let buffer = host.buffer(&device, None);
+    let after = device.work_counts();
+    let device_refused =
+        after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused;
+    eprintln!(
+        "COPIED {}: the device refuses shared memory's pointer: {refuses}; the buffer over it is \
+         {:?}, {device_refused} copied for the device's refusal",
+        device.name(),
+        buffer.host_backing(),
+    );
+    match refuses {
+        true => {
+            assert_eq!(device_refused, 1, "counted as the device's refusal");
+            assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0], "a copy, no import");
+            assert_eq!(announced(&heard), 1, "announced");
+            lies_in_a_copy(&device, &buffer, &host);
+        }
+        false => {
+            assert_eq!(device_refused, 0);
+            assert_eq!(buffer.host_backing(), Some(HostBacking::ImportedByPointer));
+        }
+    }
+}
+
 #[test]
 fn copied_buffer_is_made_over_a_dma_buf_mapping_the_gate_refuses() {
     let Some(host) = Host::over_dma_buf(9) else {

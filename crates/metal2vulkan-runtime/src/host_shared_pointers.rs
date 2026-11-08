@@ -24,9 +24,11 @@ impl Device {
     /// released at once, and answered from that after; the import is counted as a no-copy
     /// buffer's is. False for a device that imports no host memory.
     ///
-    /// Where it is false, a no-copy buffer over shared memory is made only from the caller's
-    /// dma-buf source ([`HostMemory::with_dma_buf`](crate::HostMemory::with_dma_buf)), and a
-    /// source is what such memory needs, whatever its pages' protection: pages the process maps
+    /// Where it is false, a no-copy buffer over shared memory is imported only from the caller's
+    /// dma-buf source ([`HostMemory::with_dma_buf`](crate::HostMemory::with_dma_buf)), and without
+    /// one is a copy of the pages, announced (`copied-host-pages`,
+    /// `WorkCounts::copied_host_buffers_device_refused`). A source is what such memory needs to be
+    /// imported, whatever its pages' protection: pages the process maps
     /// read-only go to the source without their pointer's import being tried (a dma-buf pins
     /// nothing of the process's mapping), so a caller need not make a writable second mapping of
     /// them for the import. Measured: MoltenVK (an M3 Max) and lavapipe answer true, RADV (a

@@ -2042,7 +2042,10 @@ degradations! {
         /// A no-copy buffer, a no-copy heap or a buffer's rebind was made over a copy of the
         /// caller's host pages in memory of the device's own, which no import maps (`copied.rs`;
         /// a heap's textures shadows of its bytes): the caller's gate
-        /// (`HostMemory::with_import_gate`) refused the pages' import, or the import the device
+        /// (`HostMemory::with_import_gate`) refused the pages' import, or the device refused the
+        /// pointer's import and the caller gave no source of dma-bufs of the pages
+        /// (`HostMemory::with_dma_buf`; RADV refuses shared memory, a `memfd` mapping among it,
+        /// `WorkCounts::copied_host_buffers_device_refused`), or the import the device
         /// and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of
         /// memory, or another Vulkan error, such as a driver out of the mappings the host kernel
         /// allows), or the runtime kept pages the kernel cannot pin from a driver whose failed

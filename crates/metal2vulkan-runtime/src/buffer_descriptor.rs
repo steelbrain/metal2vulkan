@@ -875,22 +875,36 @@ impl Device {
                                 call, importer, pointer, length, window, source, class, keep,
                             )
                         }
-                        .map_err(|failed| source_failure(failed, refusal)),
-                        Err(error) => Err(error),
+                        .map_err(|failed| (source_failure(failed, refusal), false)),
+                        // The device's refusal of the pointer, with no source of dma-bufs of the
+                        // pages to take instead.
+                        Err(error) => {
+                            let by_device = error == not_importable();
+                            Err((error, by_device))
+                        }
                     };
                 let (buffer, memory, again) = match imported {
                     Ok(imported) => imported,
                     // An import the device and the gate admitted that then failed, or pages the
                     // runtime refused for the driver that no dma-buf of them served: a copy,
                     // announced.
-                    Err(error) if copyable && copies_after(&error) => {
+                    Err((error, _)) if copyable && copies_after(&error) => {
                         // SAFETY: the caller's contract.
                         let copied = unsafe {
                             self.copied_buffer(copy, release, dirty, CopiedFor::Failed(error))
                         };
                         return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                     }
-                    Err(error) => return Err(error),
+                    // Pages whose pointer the device refuses (RADV refuses shared memory, a
+                    // `memfd` mapping among it), with no dma-buf source of them: a copy,
+                    // announced, as Metal makes a no-copy buffer over any page.
+                    Err((_, true)) if copyable => {
+                        let why = CopiedFor::DeviceRefused;
+                        // SAFETY: the caller's contract.
+                        let copied = unsafe { self.copied_buffer(copy, release, dirty, why) };
+                        return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
+                    }
+                    Err((error, _)) => return Err(error),
                 };
                 (buffer, memory, again)
             }
@@ -1775,6 +1789,11 @@ impl Device {
                     "the caller's import gate (HostMemory::with_import_gate) refused their \
                           import"
                 }
+                CopiedBecause::DeviceRefused => {
+                    "the device refused their pointer's import (VK_EXT_external_memory_host), as \
+                     RADV refuses shared memory, and no source of dma-bufs of them was given \
+                     (HostMemory::with_dma_buf)"
+                }
                 CopiedBecause::Failed => "their import failed",
                 CopiedBecause::Moved => {
                     "they lie at another offset in their page than the buffer's old bytes, \
@@ -1870,6 +1889,7 @@ impl Device {
         let read_only = matches!(why, CopiedFor::ReadOnly);
         let (cause, failed) = match why {
             CopiedFor::Refused => (CopiedBecause::Refused, None),
+            CopiedFor::DeviceRefused => (CopiedBecause::DeviceRefused, None),
             CopiedFor::Failed(failed) => (CopiedBecause::Failed, Some(failed)),
             CopiedFor::ReadOnly => (CopiedBecause::ReadOnly, None),
             CopiedFor::Unwritable => (CopiedBecause::Unwritable, None),
@@ -2260,6 +2280,9 @@ pub(super) fn no_copy_options(options: ResourceOptions) -> (ResourceOptions, boo
 enum CopiedFor {
     /// The caller's gate refused their import (`HostMemory::with_import_gate`).
     Refused,
+    /// The device refused their pointer's import, and the caller gave no source of dma-bufs of
+    /// them (`HostMemory::with_dma_buf`).
+    DeviceRefused,
     /// The import the device and the gate admitted failed, with this.
     Failed(Error),
     /// Metal's private option bit 24 drops the GPU's writes to the memory, and the system maps
