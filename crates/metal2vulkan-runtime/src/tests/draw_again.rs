@@ -729,20 +729,39 @@ fn draws_after_buffer_changes_rebind_what_every_step_binds() {
     }
 }
 
-/// [`DRAWS`] draws of `state`'s rectangles from `rectangles` as [`offset_rectangles`] draws them,
-/// the `at`th in the color at `16 * at` bytes of `colors` (fragment buffer 0, bound again at that
-/// offset before each draw but the first), with `between` called after the binds.
+/// [`DRAWS`] rectangles of the columns [`rectangles_from_columns`] holds, each as the six points of
+/// its two triangles (`tob_triangle`'s, in `tob_rect`'s order), [`POINTS`] bytes each.
+fn rectangle_points(device: &Device) -> Buffer {
+    let points: Vec<f32> = (0..DRAWS)
+        .flat_map(|at| {
+            let (x0, x1) = (-1.0 + at as f32 * 2.0 / SIDE as f32, 1.0);
+            [x0, -1.0, x1, -1.0, x0, 1.0, x1, -1.0, x1, 1.0, x0, 1.0]
+        })
+        .collect();
+    let bytes = bytes_of(&points, f32::to_le_bytes);
+    device
+        .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
+        .unwrap()
+}
+
+/// The bytes of a rectangle's points ([`rectangle_points`]).
+const POINTS: u64 = 48;
+
+/// [`DRAWS`] draws of `state`'s rectangles (`tob_triangle`'s) from `points`, the `at`th at
+/// `POINTS * at` bytes of it (vertex buffer 0, its offset moved before each draw but the first),
+/// in the color at `16 * at` bytes of `colors` (fragment buffer 0, bound again at that offset
+/// before each draw but the first), with `between` called after the binds.
 fn moved_rectangles(
     encoder: &mut RenderCommandEncoder,
-    (state, rectangles, colors): (&RenderPipelineState, &Buffer, &Buffer),
+    (state, points, colors): (&RenderPipelineState, &Buffer, &Buffer),
     between: impl Fn(&mut RenderCommandEncoder),
 ) {
     encoder.set_render_pipeline_state(state).unwrap();
-    encoder.set_vertex_buffer(Some(rectangles), 0, 0).unwrap();
+    encoder.set_vertex_buffer(Some(points), 0, 0).unwrap();
     encoder.set_fragment_buffer(Some(colors), 0, 0).unwrap();
     for at in 0..DRAWS {
         if at > 0 {
-            encoder.set_vertex_buffer_offset(16 * at, 0).unwrap();
+            encoder.set_vertex_buffer_offset(POINTS * at, 0).unwrap();
             encoder
                 .set_fragment_buffer(Some(colors), 16 * at, 0)
                 .unwrap();
@@ -759,13 +778,19 @@ fn moved_rectangles(
 /// of every kind, state commands, noted uses and pixels as the same draws with a call between each
 /// that changes nothing for them, each of which takes every step; each at another offset of both
 /// buffers, in another color each, as each column's count of draws and each draw's color show.
+/// The vertex function reads its points through a pointer, from the offset to the buffer's end, so
+/// each draw's use of them lies inside the first's, noted already (`WorkCounts::uses_noted_covered`).
 #[test]
 fn draws_after_offsets_alone_moved_bind_what_every_step_binds() {
     let scratch = Scratch::new("draw-again-moved");
     let heard = Heard::default();
     let device = device(&scratch.0, &[], &heard);
-    let state = adding_state(&device);
-    let rectangles = rectangles_from_columns(&device);
+    let state = state(
+        &device,
+        "engine/tob_renders.ll",
+        ("tob_triangle", "tob_solid"),
+    );
+    let rectangles = rectangle_points(&device);
     let colors: Vec<f32> = (0..DRAWS)
         .flat_map(|at| [(at + 1) as f32 / 64.0; 4])
         .collect();
