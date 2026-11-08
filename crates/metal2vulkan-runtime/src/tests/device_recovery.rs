@@ -14,6 +14,7 @@ use crate::{
     DeviceKind, DeviceOptions, ResourceOptions, ShaderCacheOptions,
 };
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The bytes each copy of the busy command buffer moves: enough that it is still in flight as the
 /// loss is marked, on a CPU device and on a GPU.
@@ -93,9 +94,20 @@ fn busy(device: &Device, queue: &CommandQueue) -> CommandBuffer {
     command_buffer
 }
 
-/// The command buffer's final status and error, awaited.
+/// The longest the test waits for a command buffer to complete: one that does not fails the test
+/// at its line, its status named, where an unbounded wait would hang it.
+const WAIT: Duration = Duration::from_secs(60);
+
+/// The command buffer's final status and error, awaited for at most [`WAIT`].
+#[track_caller]
 fn outcome(command_buffer: &CommandBuffer) -> (CommandBufferStatus, Option<CommandBufferError>) {
-    command_buffer.wait_until_completed().unwrap();
+    if command_buffer.wait_until_completed_for(WAIT).is_err() {
+        panic!(
+            "a command buffer did not complete in {WAIT:?}: {:?}, {:?}",
+            command_buffer.status(),
+            command_buffer.error()
+        );
+    }
     (command_buffer.status(), command_buffer.error())
 }
 
@@ -155,6 +167,58 @@ fn a_loss_holds_the_hang_s_queue_until_the_recovery() {
         return;
     }
     panic!("no loss of {ATTEMPTS} caught the busy command buffer in flight");
+}
+
+/// A loss marked while `queue`'s busy command buffer is in flight, as a failed wait finds it:
+/// whether it caught that command buffer as the hang, which else completed first. Either way the
+/// next call recovers the device.
+fn hang_caught(device: &Device, queue: &CommandQueue) -> bool {
+    let in_flight = busy(device, queue);
+    let lost = in_flight.device().clone();
+    lost.mark_lost();
+    lost.shared().completion.fail_in_flight();
+    outcome(&in_flight)
+        == (
+            CommandBufferStatus::Error,
+            Some(CommandBufferError::GpuHang),
+        )
+}
+
+/// A queue's second hang revokes it from the hang's completion, as Metal's: a command buffer
+/// committed on it between that loss and the recovery runs nothing and fails with
+/// `AccessRevoked`, as one committed after the recovery does, not as the recovery's victim.
+#[test]
+fn a_queue_s_second_hang_revokes_it_before_the_recovery() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    assert!(
+        (0..ATTEMPTS).any(|_| hang_caught(&device, &queue)),
+        "no loss of {ATTEMPTS} caught the first busy command buffer in flight"
+    );
+    for _ in 0..ATTEMPTS {
+        let filled = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+        // SAFETY: a shared buffer of 4096 bytes, which nothing uses yet.
+        unsafe { std::ptr::write_bytes(filled.contents().unwrap().as_ptr(), 0, 4096) };
+        let revoked = filled_by(&queue, &filled);
+        if !hang_caught(&device, &queue) {
+            continue;
+        }
+        revoked.commit().unwrap();
+        assert_eq!(
+            outcome(&revoked),
+            (
+                CommandBufferStatus::Error,
+                Some(CommandBufferError::AccessRevoked)
+            )
+        );
+        // SAFETY: a shared buffer of 4096 bytes, nothing in flight writes it.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(filled.contents().unwrap().as_ptr(), 4096) };
+        assert!(bytes.iter().all(|&byte| byte == 0), "the revoked fill ran");
+        return;
+    }
+    panic!("no loss of {ATTEMPTS} caught the second busy command buffer in flight");
 }
 
 /// A command buffer whose work completed, its queue's timeline past it, completes though the wait

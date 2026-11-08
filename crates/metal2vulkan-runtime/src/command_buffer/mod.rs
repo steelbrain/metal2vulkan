@@ -754,7 +754,8 @@ pub(super) struct State {
     parked: usize,
     /// Why a batch could not be submitted: the command buffer finishes with it, and its
     /// scheduled handlers never run. Or the failure `commit_failed` chose, with which it
-    /// finishes once its batches completed, its scheduled handlers run.
+    /// finishes once its batches completed, its scheduled handlers run. Or a revoked queue's
+    /// `AccessRevoked`, set at its commit, which a refused batch leaves.
     failure: Option<CommandBufferError>,
     completed: VecDeque<Handler>,
     /// Its completion-seen handlers ([`CommandBuffer::add_completion_seen_handler`]): run as its
@@ -4938,7 +4939,8 @@ impl CommandBufferShared {
     }
 
     /// A batch could not be submitted (the scheduler dropped the rest): the command buffer
-    /// finishes with `error` once what it submitted before completed, at its `VkQueue`'s last
+    /// finishes with `error` (one committed on a revoked queue with its `AccessRevoked`) once
+    /// what it submitted before completed, at its `VkQueue`'s last
     /// submitted value in `values`, and, where a command buffer ends at a fence
     /// ([`fences::ends_at_fence`]), at one submitted after it, as a command buffer whose last
     /// batch was submitted finishes; at the value alone when the queue takes no such fence (a
@@ -4949,7 +4951,12 @@ impl CommandBufferShared {
         let vk_queue = self.queue.vk_queue();
         {
             let mut state = lock(&self.state);
-            state.failure = Some(error);
+            // One committed on a queue Metal revoked answers `AccessRevoked` from its commit, as
+            // Metal's does, which no GPU work decides (`revocation.rs`): a refusal of its batches,
+            // a lost device's among them, leaves it so.
+            if state.failure != Some(CommandBufferError::AccessRevoked) {
+                state.failure = Some(error);
+            }
             // Its hold's batch before the wait, not taken yet, never is (`hang.rs`).
             if matches!(
                 state.hang_scheduling,

@@ -616,8 +616,9 @@ meanwhile wait for it.
 - The command buffers in flight fail: the oldest incomplete one with `GpuHang`, the rest with
   `GpuRecoveryVictim`. Until the recovery, a command buffer committed on the hang's queue runs
   nothing and completes with no error, as on Metal's hang's queue. One made before the recovery
-  and committed after fails with `GpuRecoveryVictim`. A queue's second hang revokes it
-  (`AccessRevoked`), as Metal's does.
+  and committed after fails with `GpuRecoveryVictim`. A queue's second hang revokes it, as
+  Metal's does: a command buffer committed on it from then on, before the recovery too, fails
+  with `AccessRevoked`.
 - The `Device` and its `CommandQueue`s go on: what they make from then on is made on the new
   `VkDevice`.
 - An object made before the recovery is refused where it meets the new `VkDevice` (an encoder's
