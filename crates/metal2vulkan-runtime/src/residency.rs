@@ -407,7 +407,8 @@ impl Residency {
     /// for reading in the stages it used the heap in, as `use_heap` made the heap's textures
     /// (the module docs): an encoder calls it as it encodes each command that reaches its
     /// resident resources. Those it first uses here (held as [`use_resource`](Self::use_resource)
-    /// holds what it makes resident). A heap that made no texture since costs one lock.
+    /// holds what it makes resident). A heap that made no texture since costs one atomic load
+    /// (`Heap::textures_made`).
     pub(super) fn sync_heaps(&mut self) -> Vec<Used> {
         let made = self.heap_textures();
         self.join_heap_textures(made)
@@ -415,7 +416,8 @@ impl Residency {
 
     /// The textures made in the heaps it used since it last looked, each with the render stages
     /// it used its heap in: what [`sync_heaps`](Self::sync_heaps) makes resident. A heap that
-    /// made no texture since costs one lock.
+    /// made no texture since costs one atomic load (`Heap::textures_made`); one that made one
+    /// takes its list's lock to read them.
     pub(super) fn heap_textures(&mut self) -> Vec<(Texture, RenderStages)> {
         let mut made = Vec::new();
         for used in &mut self.heaps {
