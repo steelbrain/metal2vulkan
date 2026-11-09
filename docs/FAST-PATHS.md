@@ -1236,19 +1236,9 @@ driver's. Each is open work.
   (`copied-host-pages`), at a copy's cost; a guest RAM's chunk over them is not imported. Which later allocations the driver fails, and for how long, is
   **unaudited** past the shapes measured there.
 
-- **On NVIDIA, a process that exits with a device live can take `SIGSEGV` in its exit** (615.71.09
-  on the RTX 5080 Laptop GPU, Linux): one of the driver's own worker threads faults in
-  `libnvidia-glvkspirv` (at address 0x18) while the main thread runs `libEGL_nvidia`'s exit
-  handler. Seen in 1 of 94 child processes that made a device on a test harness's thread and
-  returned with it live, beside the runtime's device suite: none of the runtime's threads was in a
-  section of the exit guard (`exit_guard.rs`) or a pipeline making, all waiting, and the faulting
-  worker carried the name of that thread, which had ended; and twice in a consumer's suite of about
-  1900 tests, in a test that keeps its device in a static. A program without the runtime, which
-  made an instance, a device and a compute pipeline and returned, did not fault in 1550 runs beside
-  the same load: 1028 with everything destroyed first, and 522 with the device live, 263 made on
-  the main thread and 259 on a thread joined before the return (the driver's workers made from it
-  still running at the return, as in the runtime's child). The cause is not found, nor whether the
-  runtime's own state takes part.
+- **On NVIDIA's proprietary driver, a process that exits with a device live can fault in the
+  driver's own worker thread during its exit handler**: about 1 in 100 test processes beside other
+  GPU work. The cause is not found.
 
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers
