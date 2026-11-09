@@ -202,14 +202,15 @@ fn refusal_error(call: &'static str, refusal: PositionRefusal) -> Error {
 /// whatever the pass's depth/stencil attachment: [`positioned`] under the device's rules with no
 /// attachment, so the two can never disagree about a pass.
 pub(super) fn taken(device: &Device, positions: &[SamplePosition], samples: u32) -> bool {
-    let rules = PositionRules::of(device, samples);
-    !positions.is_empty() && positioned(rules, positions, samples, None).is_ok()
+    !positions.is_empty()
+        && positioned(PositionRules::of(device, samples), positions, samples, None).is_ok()
 }
 
 /// The pass's sample positions on `device`, in sixteenths of a pixel (empty for the device's
 /// own), for a pass of `samples` samples; `depth_stencil` is the create flags of its
 /// depth/stencil attachment's image, where it has one. Refused as Metal refuses them, and typed
-/// where not built (the module docs).
+/// where not built (the module docs). A pass without positions, as most are, asks the device
+/// nothing: its rules are looked up in the profile's properties only for positions to check.
 pub(super) fn grid(
     call: &'static str,
     device: &Device,
@@ -217,6 +218,9 @@ pub(super) fn grid(
     samples: u32,
     depth_stencil: Option<ImageCreateFlags>,
 ) -> Result<Vec<Sixteenths>, Error> {
+    if positions.is_empty() {
+        return Ok(Vec::new());
+    }
     let rules = PositionRules::of(device, samples);
     positioned(rules, positions, samples, depth_stencil)
         .map_err(|refusal| refusal_error(call, refusal))
