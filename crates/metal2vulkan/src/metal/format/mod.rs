@@ -1192,7 +1192,7 @@ macro_rules! formats_held_for_copies {
 /// conformance recordings): `newTextureWithDescriptor:` makes a texture of each in every texture
 /// type its type rules take (`metal2vulkan-runtime`'s `texture_descriptor.rs`: no cube of a
 /// one-plane YCbCr format), in `Shared` and `Private` storage, and `replaceRegion:` and
-/// `getBytes:` move each texel's bytes unchanged, 2 or 4 a texel ([`footprint`]'s element), a
+/// `getBytes:` move each texel's bytes unchanged, 2 or 4 a texel ([`footprint()`]'s element), a
 /// fresh texture's reading zero; where Metal keeps the texture compressed (seven of the padded
 /// formats, 16 by 16 under `ShaderRead`) both host copies leave their destinations as they were,
 /// which the runtime does not follow (`docs/API.md`, accepted differences). What a function
@@ -1207,7 +1207,7 @@ pub fn copies_only(pf: PixelFormat) -> bool {
 }
 
 /// [`copies_only`]'s candidate for `pf`: the unsigned integer format of its texel's bytes, the
-/// element [`footprint`] counts.
+/// element [`footprint()`] counts.
 fn copies_only_repr(pf: PixelFormat) -> Repr {
     let bytes = match footprint(pf) {
         Some(Footprint::Tiled { bytes, .. } | Footprint::OnePlane { bytes, .. }) => bytes,
