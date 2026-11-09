@@ -5,7 +5,7 @@
 //! memory (`aligned_byte`), so each plane lies at a multiple of 256 there.
 //!
 //! - **The image names the memory's handle type.** Each plane's texture is an image bound in the
-//!   buffer's exported memory, which must name the memory's handle type
+//!   buffer's exported memory, which must name a handle type the memory is exportable as
 //!   (`VUID-vkBindImageMemory-memory-02728`); the validation layer, enabled on the device, reports
 //!   nothing ([`Watched::layer_reported_nothing`]): without the handle type it reports 02728 at the
 //!   bind.
@@ -25,9 +25,22 @@
 //!   (`VUID-vkBindImageMemory-memory-10926`), each texture is a shadow that reads the same bytes,
 //!   its placement refused (`InPlaceRefusal::Placement`).
 //!
-//! Printed (`EXPORTED-TEXTURES`): what the device exported, and for each plane its image's
-//! alignment, row pitch and size as `vkGetImageMemoryRequirements` and `vkGetImageSubresourceLayout`
-//! answer them, and its offset in the memory.
+//! - **A dma-buf's block, its images naming an opaque file descriptor.** Where the device's
+//!   buffer queries (`vkGetPhysicalDeviceExternalBufferProperties`) answer a buffer's memory
+//!   exportable as a dma-buf and as an opaque file descriptor together, each compatible with the
+//!   other and the opaque one not only as a dedicated allocation, the block of dma-bufs is
+//!   exportable as both, and elsewhere as a dma-buf alone (the queries asked here, apart from the
+//!   runtime's). Where the device's image format query then takes a dma-buf's handle type for no
+//!   image of a plane's format in a shared block, linear or `DRM_FORMAT_MOD_LINEAR` (RADV: none
+//!   linear, and the other only in a dedicated allocation), the plane's image names the opaque
+//!   one: in place where the device's check of that memory passed, which made the same image
+//!   (`WorkCounts::exported_dma_buf_images_named_opaque_fd`), or a shadow of a byte the check
+//!   found changed, never one it made no image for. The descriptor the buffer exports is a dma-buf
+//!   of its memory either way.
+//!
+//! Printed (`EXPORTED-TEXTURES`, `EXPORTED-DMA-BUF`): what the device exported, and for each plane
+//! its image's alignment, row pitch and size as `vkGetImageMemoryRequirements` and
+//! `vkGetImageSubresourceLayout` answer them, and its offset in the memory.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -36,6 +49,7 @@ use super::blit_holds::{Scratch, WAIT};
 use super::layer_claim::Watched;
 use super::pending_rebind::device;
 use crate::error::{Error, RuntimeGap};
+use crate::memory::BoundMemory;
 use crate::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, Device, InPlaceRefusal, MemoryExport,
     Origin, ResourceOptions, Size, Texture, TextureDescriptor, TexturePlacement,
@@ -394,5 +408,243 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
     }
     watched.layer_reported_nothing(
         "textures over exported memory name its handle type (VUID-vkBindImageMemory-memory-02728)",
+    );
+}
+
+/// The dma-buf and opaque file descriptor handle types together.
+const BOTH: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::from_raw(
+    vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT.as_raw()
+        | vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD.as_raw(),
+);
+
+/// Whether `device`'s buffer queries (`vkGetPhysicalDeviceExternalBufferProperties`, of the usage
+/// its buffers are made with) answer a buffer's memory exportable as a dma-buf and as an opaque
+/// file descriptor together: each exportable and compatible with the other, the opaque one not
+/// only as a dedicated allocation.
+fn exports_both(device: &Device) -> bool {
+    let shared = device.shared();
+    let usage = crate::buffer::usage(shared.device_address);
+    let query = |handle| {
+        let info = vk::PhysicalDeviceExternalBufferInfo::default()
+            .usage(usage)
+            .handle_type(handle);
+        let mut properties = vk::ExternalBufferProperties::default();
+        // SAFETY: the device's physical device, of its instance at Vulkan 1.2 or later.
+        unsafe {
+            shared
+                .instance
+                .raw
+                .get_physical_device_external_buffer_properties(
+                    shared.physical,
+                    &info,
+                    &mut properties,
+                )
+        };
+        properties.external_memory_properties
+    };
+    let dma_buf = query(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let opaque = query(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+    let exportable = vk::ExternalMemoryFeatureFlags::EXPORTABLE;
+    (dma_buf.external_memory_features).contains(exportable)
+        && dma_buf.compatible_handle_types.contains(BOTH)
+        && (opaque.external_memory_features).contains(exportable)
+        && !(opaque.external_memory_features)
+            .contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        && opaque.compatible_handle_types.contains(BOTH)
+}
+
+/// Whether `device`'s image format query takes a dma-buf's handle type, exportable and not only
+/// as a dedicated allocation, for an image of `format` with the narrowest usage a sampled texture
+/// over a buffer has (sampled, both transfers): linear, or `DRM_FORMAT_MOD_LINEAR` where the
+/// device makes such images, shared among its queue families as the runtime's are.
+fn dma_buf_images_shared(device: &Device, format: vk::Format) -> bool {
+    let shared = device.shared();
+    let usage = vk::ImageUsageFlags::SAMPLED
+        | vk::ImageUsageFlags::TRANSFER_SRC
+        | vk::ImageUsageFlags::TRANSFER_DST;
+    let families = &shared.queue_families;
+    let takes = |tiling: vk::ImageTiling| {
+        let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let mut modifier = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+            .drm_format_modifier(crate::dma_buf::DRM_FORMAT_MOD_LINEAR);
+        modifier = match families.len() > 1 {
+            true => modifier
+                .sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(families),
+            false => modifier.sharing_mode(vk::SharingMode::EXCLUSIVE),
+        };
+        let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(format)
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(tiling)
+            .usage(usage)
+            .push_next(&mut external);
+        if tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT {
+            info = info.push_next(&mut modifier);
+        }
+        let mut answer = vk::ExternalImageFormatProperties::default();
+        let mut properties = vk::ImageFormatProperties2::default().push_next(&mut answer);
+        // SAFETY: the device's physical device, of its instance at Vulkan 1.2 or later, which
+        // enables `VK_EXT_image_drm_format_modifier` where that tiling is asked; `info` and
+        // `properties` and their chains live for the call.
+        let queried = unsafe {
+            (shared.instance.raw).get_physical_device_image_format_properties2(
+                shared.physical,
+                &info,
+                &mut properties,
+            )
+        };
+        let features = answer.external_memory_properties.external_memory_features;
+        queried.is_ok()
+            && features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+            && !features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+    };
+    takes(vk::ImageTiling::LINEAR)
+        || (device.makes_modifier_images() && takes(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT))
+}
+
+/// `plane`'s format as Vulkan names it.
+fn vk_format(plane: Plane) -> vk::Format {
+    match plane.format {
+        PixelFormat::R8Unorm => vk::Format::R8_UNORM,
+        PixelFormat::RG8Unorm => vk::Format::R8G8_UNORM,
+        format => panic!("no plane of {format:?}"),
+    }
+}
+
+/// Whether `fd` is a dma-buf: its `fdinfo` names the exporter of one (`exp_name`), as the kernel
+/// writes for a dma-buf alone.
+#[cfg(target_os = "linux")]
+fn is_dma_buf(fd: &std::os::fd::OwnedFd) -> bool {
+    use std::os::fd::AsRawFd;
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd())).unwrap();
+    info.lines().any(|line| line.starts_with("exp_name:"))
+}
+
+#[test]
+fn a_dma_buf_block_s_planes_name_an_opaque_fd_where_its_images_take_no_dma_buf_in_a_shared_block() {
+    let watched = Watched::default();
+    let scratch = Scratch::new("exported-dma-buf-opaque");
+    let device = device(&watched, &scratch.0);
+    let name = device.name().to_owned();
+    let both = exports_both(&device);
+    let options = ResourceOptions::shared();
+    let picture = match picture(&device, options, MemoryExport::DmaBuf) {
+        Ok(picture) => picture,
+        Err(Error::NotImplemented(
+            gap @ (RuntimeGap::ExportableMemory | RuntimeGap::DmaBufExport),
+        )) => {
+            eprintln!("EXPORTED-DMA-BUF on {name}: refused: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("{name}: {error:?}"),
+    };
+    let exported = picture.export_memory_dma_buf().unwrap();
+    #[cfg(target_os = "linux")]
+    assert!(
+        is_dma_buf(&exported.fd),
+        "the buffer's export is a dma-buf, whatever else its block is exportable as"
+    );
+    let exports = match picture.bound_memory() {
+        BoundMemory::External(exports) => exports,
+        BoundMemory::NoImage(no) => {
+            assert!(exported.dedicated, "{no:?}");
+            eprintln!("EXPORTED-DMA-BUF on {name}: a dedicated allocation, which takes no image");
+            return;
+        }
+        BoundMemory::Own => panic!("{name}: the buffer's memory is not exported"),
+    };
+    let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+    assert_eq!(
+        exports,
+        if both { BOTH } else { dma_buf },
+        "{name}: the block is exportable as the device's buffer queries answer (both {both})"
+    );
+    fill(&device, &picture);
+    // The first placement query starts the device's check of that memory: its answer first.
+    let first = descriptor(PLANES[0], options);
+    let _ = (picture.texture_placement(&first, PLANES[0].at, ROW)).unwrap();
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let counts = device.work_counts();
+    let (mut in_place, mut opaque) = (0, 0);
+    for plane in PLANES {
+        let shared_dma_buf = dma_buf_images_shared(&device, vk_format(plane));
+        let descriptor = descriptor(plane, options);
+        let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
+        let texture = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+        assert!(
+            read(&device, &texture, plane) == want(plane),
+            "{name} {plane:?}: the texels"
+        );
+        let report = |placement: &TexturePlacement| {
+            eprintln!(
+                "EXPORTED-DMA-BUF on {name}: {:?} {}x{}: block exports {:#x}, a dma-buf image \
+                 in a shared block {shared_dma_buf}: {placement:?}",
+                plane.format,
+                plane.size[0],
+                plane.size[1],
+                exports.as_raw()
+            );
+        };
+        report(&placement);
+        if both && !shared_dma_buf {
+            // The image names an opaque file descriptor, which the check made too: in place, or a
+            // shadow of a byte the check found changed.
+            let changed = matches!(
+                placement,
+                TexturePlacement::Shadow(TextureShadowReason::CheckFailed { .. })
+            );
+            if placement != TexturePlacement::NotHostPages {
+                for line in (device.in_place_check_report().iter())
+                    .skip(crate::in_place::VERDICTS)
+                    .filter(|line| line.starts_with("ExportedDmaBuf "))
+                {
+                    eprintln!("EXPORTED-DMA-BUF on {name}: the check: {line}");
+                }
+            }
+            assert!(
+                placement == TexturePlacement::NotHostPages || changed,
+                "{name} {plane:?}: an image naming an opaque file descriptor, in place or a \
+                 shadow of a changed byte: {placement:?}"
+            );
+            if placement == TexturePlacement::NotHostPages {
+                opaque += 1;
+            }
+        }
+        if placement == TexturePlacement::NotHostPages {
+            in_place += 1;
+            assert!(texture.shadow().is_none(), "{name} {plane:?}: in place");
+            let [alignment, row_pitch, offset, size, at] =
+                image_facts(&device, &picture, &texture, plane);
+            eprintln!(
+                "EXPORTED-DMA-BUF on {name}: {:?}: in place, at {at} of the memory, alignment \
+                 {alignment}, row pitch {row_pitch}, offset {offset}, size {size}",
+                plane.format
+            );
+            assert_eq!(at % alignment, 0);
+            assert_eq!((row_pitch, offset), (ROW, 0));
+        } else {
+            assert!(texture.shadow().is_some(), "{name} {plane:?}: a shadow");
+        }
+    }
+    let named = device.work_counts().exported_dma_buf_images_named_opaque_fd
+        - counts.exported_dma_buf_images_named_opaque_fd;
+    eprintln!(
+        "EXPORTED-DMA-BUF on {name}: {in_place} planes in place, {named} naming an opaque file \
+         descriptor"
+    );
+    // Each plane the dma-buf type takes no image of names the opaque one; one it takes may too,
+    // where its query of the texture's own usage refuses what the narrowest's took.
+    assert!(
+        (opaque..=in_place).contains(&named),
+        "{name}: {opaque} planes name an opaque file descriptor at least, {in_place} at most"
+    );
+    if !both {
+        assert_eq!(named, 0, "{name}: a block exportable as a dma-buf alone");
+    }
+    watched.layer_reported_nothing(
+        "images over a dma-buf block name a handle type it is exportable as \
+         (VUID-vkBindImageMemory-memory-02728)",
     );
 }

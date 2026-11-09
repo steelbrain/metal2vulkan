@@ -2125,6 +2125,11 @@ impl Device {
                     (usage, handle),
                 )
             };
+            // A shared block of dma-bufs is exportable as the handle types the device exports
+            // together.
+            if let Some(export) = &dma_buf_export {
+                memory.export_dma_bufs_as(export.exports);
+            }
             (opaque, dma_buf_export)
         };
         // How the device exports a timeline semaphore as an opaque file descriptor, where it

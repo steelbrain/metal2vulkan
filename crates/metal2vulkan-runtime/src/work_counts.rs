@@ -505,6 +505,7 @@ pub(crate) struct Counters {
     feedback_loop_alias_images: AtomicU64,
     unobserved_padding_aliases: AtomicU64,
     pooled_pitched_images: AtomicU64,
+    exported_dma_buf_images_named_opaque_fd: AtomicU64,
     pooled_textures_moved_in_place: AtomicU64,
     pooled_texture_shadows_freed_after_move: AtomicU64,
     feedback_loop_shadow_images: AtomicU64,
@@ -3874,6 +3875,13 @@ impl Counters {
     /// (`Device::pooled_pitched_image`).
     pub(crate) fn pooled_pitched_image(&self) {
         self.pooled_pitched_images.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device made an image aliasing a buffer's bytes in a block of dma-bufs that names an
+    /// opaque file descriptor, which the block is exportable as too, where its image format query
+    /// takes the dma-buf handle type for no such image (`texture.rs`'s `alias_unbound`).
+    pub(crate) fn exported_dma_buf_image_named_opaque_fd(&self) {
+        (self.exported_dma_buf_images_named_opaque_fd).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A shadow over a buffer of the device's pooled memory made before that class's in-place
@@ -7424,6 +7432,15 @@ pub struct WorkCounts {
     /// host pages); without one the texture is a shadow (`shadowed_textures`). One per image made.
     /// A runtime extension: Metal has none.
     pub pooled_pitched_images: u64,
+    /// Images aliasing a buffer of the runtime's memory exported as dma-bufs
+    /// (`MemoryExport::DmaBuf`) that name an opaque file descriptor, as an image bound in memory
+    /// exportable as both may (`VUID-vkBindImageMemory-memory-02728`): made where the device
+    /// exports such a buffer's shared blocks as both handle types together, and its image format
+    /// query takes the dma-buf type for no such image but in a dedicated allocation (RADV) and
+    /// takes the opaque one in a shared block. Counted where the image is made, in place or as a
+    /// shadow's move; each is in place, not a shadow. The dma-buf the buffer exports is the same
+    /// memory's. A runtime extension: Metal has none.
+    pub exported_dma_buf_images_named_opaque_fd: u64,
     /// Textures over a buffer of the device's pooled memory made shadows before the device's
     /// check of that memory had answered (`TexturePlacement::Pending` as they were made, counted
     /// in `shadowed_textures`) that moved to their `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
@@ -8475,6 +8492,9 @@ impl Device {
             feedback_loop_alias_images: counters.feedback_loop_alias_images.load(Ordering::Relaxed),
             unobserved_padding_aliases: counters.unobserved_padding_aliases.load(Ordering::Relaxed),
             pooled_pitched_images: counters.pooled_pitched_images.load(Ordering::Relaxed),
+            exported_dma_buf_images_named_opaque_fd: (counters
+                .exported_dma_buf_images_named_opaque_fd)
+                .load(Ordering::Relaxed),
             pooled_textures_moved_in_place: (counters.pooled_textures_moved_in_place)
                 .load(Ordering::Relaxed),
             pooled_texture_shadows_freed_after_move: (counters

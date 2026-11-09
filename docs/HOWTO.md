@@ -812,14 +812,16 @@ let exported = frame.export_memory_dma_buf()?;
 // plane at `exported.offset` plus its offset in the frame, DRM_FORMAT_MOD_LINEAR.
 ```
 
-A texture over a plane of the frame is an image of the exported memory in place, made for the
-export's handle type (`VkExternalMemoryImageCreateInfo`, as Vulkan requires of an image bound in
-exported memory), where all of these hold for the plane's linear image (its format, extent and
-usage, that handle type; the plain linear image first, else a `DRM_FORMAT_MOD_LINEAR` one):
+A texture over a plane of the frame is an image of the exported memory in place, made for a
+handle type the memory is exportable as (`VkExternalMemoryImageCreateInfo`, as Vulkan requires of
+an image bound in exported memory), where all of these hold for the plane's linear image (its
+format, extent and usage, that handle type; the plain linear image first, else a
+`DRM_FORMAT_MOD_LINEAR` one):
 
 - the image format query (`vkGetPhysicalDeviceImageFormatProperties2` with
   `VkPhysicalDeviceExternalImageFormatInfo`) takes the handle type for it, and not in a dedicated
-  allocation alone;
+  allocation alone, and lists every handle type the memory is exportable as among those
+  compatible with it;
 - the plane's byte in the memory, `exported.offset` plus the plane's offset in the frame, is a
   multiple of the `alignment` `vkGetImageMemoryRequirements` answers for the image;
 - `vkGetImageSubresourceLayout` answers `offset` 0 and a `rowPitch` equal to the plane's row
@@ -827,6 +829,17 @@ usage, that handle type; the plain linear image first, else a `DRM_FORMAT_MOD_LI
 - the device's in-place check of the runtime's memory exported with that handle type passed for
   the texture's access (a texture made before the check answered is a shadow that moves in place
   at a later commit).
+
+Dma-buf-exportable buffers that share a block share one allocated exportable as a dma-buf, and as
+an opaque file descriptor too where `vkGetPhysicalDeviceExternalBufferProperties` answers both
+exportable for the runtime's buffers, each compatible with the other, the opaque one not only in a
+dedicated allocation. A plane's image there names the dma-buf handle type where the format query
+takes it as above, else the opaque one where the query takes that. RADV takes the dma-buf handle
+type for no plain linear image and for a `DRM_FORMAT_MOD_LINEAR` image only in a dedicated
+allocation, so its planes over such a block name the opaque one
+(`WorkCounts::exported_dma_buf_images_named_opaque_fd`). `export_memory_dma_buf` answers a dma-buf
+of the same memory whatever else the block is exportable as, and the device's check of that memory
+makes the image a texture there makes.
 
 Elsewhere the texture is a shadow, announced with its cause: the memory is the buffer's dedicated
 allocation (Vulkan binds no image in memory dedicated to a buffer), the format query refuses the

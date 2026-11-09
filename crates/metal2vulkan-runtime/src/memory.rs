@@ -1094,8 +1094,12 @@ impl NoImage {
 /// allocation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Exported {
-    /// The handle type it exports.
+    /// The handle type it exports to the buffers' consumers, which the buffers name.
     pub(super) handle: vk::ExternalMemoryHandleTypeFlags,
+    /// Every handle type it was allocated exportable as: `handle`, and for a shared block of
+    /// dma-bufs an opaque file descriptor too where the device exports both together
+    /// ([`Memory::export_dma_bufs_as`]). An image bound in it names one of them.
+    pub(super) exports: vk::ExternalMemoryHandleTypeFlags,
     /// It is the buffer's dedicated allocation (`VkMemoryDedicatedAllocateInfo`).
     pub(super) dedicated: bool,
 }
@@ -1104,6 +1108,7 @@ impl std::fmt::Debug for Exported {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Exported")
             .field("handle", &self.handle.as_raw())
+            .field("exports", &self.exports.as_raw())
             .field("dedicated", &self.dedicated)
             .finish()
     }
@@ -1546,6 +1551,9 @@ pub(super) struct Memory {
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
     zero_images: bool,
+    /// The handle types a shared block of dma-bufs ([`Holds::DmaBufs`]) is allocated exportable
+    /// as ([`Memory::export_dma_bufs_as`]).
+    dma_buf_exports: vk::ExternalMemoryHandleTypeFlags,
     /// The pool a color texture's host-transfer image places in, once asked: `Some(None)` where
     /// the device copies no color texture on the host ([`Memory::host_copy_pool`]).
     host_copy_pool: Option<Option<(Holds, u32)>>,
@@ -1662,6 +1670,7 @@ impl Memory {
             binds_wait: binds_wait(driver),
             overflows: 0,
             zero_images: false,
+            dma_buf_exports: DMA_BUF_HANDLE,
             host_copy_pool: None,
             readying: Vec::new(),
             host_copy_blocks: HostCopyBlocks::default(),
@@ -1683,6 +1692,13 @@ impl Memory {
     /// used read zero, and an image placed in any other starts as before.
     pub(super) fn zero_image_blocks(&mut self) {
         self.zero_images = true;
+    }
+
+    /// Allocate every shared block of dma-bufs ([`Holds::DmaBufs`]) exportable as `exports`, the
+    /// dma-buf handle type among them: the device's answer for such blocks
+    /// (`exported_memory.rs`'s `FdExport::new`), as the device is made, before any is.
+    pub(super) fn export_dma_bufs_as(&mut self, exports: vk::ExternalMemoryHandleTypeFlags) {
+        self.dma_buf_exports = exports | DMA_BUF_HANDLE;
     }
 
     /// Share its buffers among `families`: the device's, then its staging queue's (`sharing.rs`).
@@ -2143,6 +2159,7 @@ impl Memory {
             device_address: self.device_address,
             families: self.buffer_families.clone(),
             zero_images: self.zero_images,
+            dma_buf_exports: self.dma_buf_exports,
         }
     }
 
@@ -2552,7 +2569,7 @@ impl Memory {
             Some(Exported {
                 dedicated: true, ..
             }) => BoundMemory::NoImage(NoImage::Dedicated),
-            Some(exported) => BoundMemory::External(exported.handle),
+            Some(exported) => BoundMemory::External(exported.exports),
             None if block.imported || block.pages.is_some() || block.view.is_some() => {
                 BoundMemory::External(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT)
             }
@@ -2635,6 +2652,8 @@ struct BlockMaker {
     families: Vec<u32>,
     /// As [`Memory`]'s.
     zero_images: bool,
+    /// As [`Memory`]'s.
+    dma_buf_exports: vk::ExternalMemoryHandleTypeFlags,
 }
 
 impl BlockMaker {
@@ -2642,7 +2661,8 @@ impl BlockMaker {
     /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
     /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
     /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]), and exportable as
-    /// the handle type of the exportable buffers it holds ([`Holds::handle`]).
+    /// the handle type of the exportable buffers it holds ([`Holds::handle`]; a block of dma-bufs
+    /// as [`Memory::export_dma_bufs_as`] says).
     fn make(
         &self,
         device: &ash::Device,
@@ -2652,8 +2672,13 @@ impl BlockMaker {
     ) -> Result<Block, Error> {
         let zeroed = holds == Holds::Images && self.zero_images;
         let export = holds.handle().map(|handle| {
+            let exports = match holds {
+                Holds::DmaBufs => self.dma_buf_exports,
+                _ => handle,
+            };
             let exported = Exported {
                 handle,
+                exports,
                 dedicated: false,
             };
             (vk::Buffer::null(), exported)
@@ -2700,7 +2725,7 @@ impl BlockMaker {
         }
         let handle = export.map_or(
             vk::ExternalMemoryHandleTypeFlags::empty(),
-            |(_, exported)| exported.handle,
+            |(_, exported)| exported.exports,
         );
         let mut exportable = vk::ExportMemoryAllocateInfo::default().handle_types(handle);
         let dedicated_to = (export.filter(|(_, exported)| exported.dedicated))

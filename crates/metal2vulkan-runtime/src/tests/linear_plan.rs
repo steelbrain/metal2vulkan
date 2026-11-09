@@ -1439,14 +1439,32 @@ fn a_refused_linear_image_names_the_need_that_failed() {
             && import.contains("importable false, dedicated only true"),
         "{import}"
     );
+    let opaque = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+    let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
     let export = describe(LinearRefusal::External(
-        ModifierMemory::Exported(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD),
+        ModifierMemory::Exported {
+            named: opaque,
+            exports: opaque,
+        },
         vk::ExternalMemoryFeatureFlags::EXPORTABLE | vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY,
     ));
     assert!(
         export.contains("refuses the runtime's memory exported as opaque file descriptors")
             && export.contains("exportable true, dedicated only true"),
         "{export}"
+    );
+    let both = ModifierMemory::Exported {
+        named: opaque,
+        exports: opaque | dma_buf,
+    };
+    let incompatible = describe(LinearRefusal::Incompatible(both, opaque));
+    assert!(
+        incompatible.contains("lists handle types 0x1 as compatible")
+            && incompatible.contains(
+                "for the runtime's memory exported as dma-bufs, named as opaque file \
+                 descriptors, whose memory is exported as 0x201"
+            ),
+        "{incompatible}"
     );
 }
 

@@ -810,6 +810,10 @@ pub(super) enum LinearRefusal {
     /// type): the device's image format query takes none of that memory for such an image, or
     /// only a dedicated allocation (its external memory features).
     External(ModifierMemory, vk::ExternalMemoryFeatureFlags),
+    /// For the runtime's memory exported as more than one handle type: the device's image format
+    /// query, of the handle type the image names, lists these handle types as compatible with
+    /// it, not every one the memory is exported as.
+    Incompatible(ModifierMemory, vk::ExternalMemoryHandleTypeFlags),
 }
 
 impl LinearRefusal {
@@ -860,6 +864,13 @@ impl LinearRefusal {
                 features.contains(memory.needs()),
                 features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
             ),
+            LinearRefusal::Incompatible(memory, compatible) => format!(
+                "its image format query lists handle types {:#x} as compatible with a linear \
+                 image of {format:?}, usage {usage:?}, for {}, whose memory is exported as {:#x}",
+                compatible.as_raw(),
+                memory.words(),
+                memory.shared_with().as_raw()
+            ),
         }
     }
 }
@@ -886,6 +897,10 @@ type Aliased = Result<(Arc<Image>, AliasCount), (String, Option<ShadowCause>)>;
 struct AliasCount {
     /// A `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch (`WorkCounts::pooled_pitched_images`).
     pitched: bool,
+    /// It names an opaque file descriptor in a block of dma-bufs exportable as one too, whose
+    /// dma-buf handle type the device's image format query takes for no such image
+    /// (`WorkCounts::exported_dma_buf_images_named_opaque_fd`).
+    alternate: bool,
     /// Its rows (or slices) lie apart over bytes its buffer declares unobserved
     /// (`WorkCounts::unobserved_padding_aliases`).
     unobserved: bool,
@@ -898,6 +913,9 @@ impl AliasCount {
     fn count(self, counts: &crate::work_counts::Counters) {
         if self.pitched {
             counts.pooled_pitched_image();
+        }
+        if self.alternate {
+            counts.exported_dma_buf_image_named_opaque_fd();
         }
         if self.unobserved {
             counts.unobserved_padding_alias();
@@ -2818,8 +2836,10 @@ impl Device {
     /// handle type (host allocations, `VK_EXT_external_memory_host`, or the runtime's memory
     /// exported as an opaque file descriptor or a dma-buf), where its image format query
     /// (`VkPhysicalDeviceExternalImageFormatInfo`) takes that memory for such an image (importable,
-    /// or exportable for memory the runtime exports) without a dedicated allocation; why not where
-    /// it does not, or makes no such image (the refusal named).
+    /// or exportable for memory the runtime exports) without a dedicated allocation, and lists
+    /// every handle type the memory is exported as among those compatible with it
+    /// (`ModifierMemory::shared_with`); why not where it does not, or makes no such image (the
+    /// refusal named).
     pub(super) fn external_image_limits(
         &self,
         info: &vk::ImageCreateInfo<'_>,
@@ -2861,9 +2881,13 @@ impl Device {
             Ok(()) => {
                 let takes = features.contains(memory.needs())
                     && !features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY);
-                match takes {
-                    true => Ok(Ok(limits)),
-                    false => Ok(Err(LinearRefusal::External(memory, features))),
+                let compatible = external.external_memory_properties.compatible_handle_types;
+                if !takes {
+                    Ok(Err(LinearRefusal::External(memory, features)))
+                } else if !compatible.contains(memory.shared_with()) {
+                    Ok(Err(LinearRefusal::Incompatible(memory, compatible)))
+                } else {
+                    Ok(Ok(limits))
                 }
             }
             Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED) => {
@@ -2884,50 +2908,61 @@ impl Device {
     ///   ([`Device::pooled_pitched_image`]). The device's check of its pooled memory makes no
     ///   linear image: it measures the pitched one.
     /// - In a block exported as an opaque file descriptor or a dma-buf (`exported_memory.rs`):
-    ///   the same two images, each made for that handle type, which an image bound there must name
-    ///   (`VUID-vkBindImageMemory-memory-02728`), and so made `UNDEFINED`
-    ///   (`VUID-VkImageCreateInfo-pNext-01443`), whose first move may discard the bytes: where the
-    ///   device's policy and its check of that exported memory ([`PagesClass::ExportedFd`],
-    ///   [`PagesClass::ExportedDmaBuf`]) take each access the usage takes for texels that lie in
-    ///   its lines as these do (a pending verdict starts the check, and the texture is a shadow
-    ///   meanwhile), and where the device's image format query takes the handle type for the
-    ///   image without a dedicated allocation. The check's own textures take them whatever the
-    ///   verdicts.
+    ///   the same two images, each made for a handle type the block is exported as, which an image
+    ///   bound there must name one of (`VUID-vkBindImageMemory-memory-02728`), and so made
+    ///   `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), whose first move may discard the
+    ///   bytes: where the device's policy and its check of that exported memory
+    ///   ([`PagesClass::ExportedFd`], [`PagesClass::ExportedDmaBuf`]) take each access the usage
+    ///   takes for texels that lie in its lines as these do (a pending verdict starts the check,
+    ///   and the texture is a shadow meanwhile), and where the device's image format query takes
+    ///   the handle type for the image without a dedicated allocation, listing every type the
+    ///   block is exported as among those compatible with it. A block of dma-bufs exportable as an
+    ///   opaque file descriptor too (`exported_memory.rs`'s `FdExport::new`) has its image name the
+    ///   dma-buf type where the query takes it, else the opaque one: RADV takes the dma-buf type
+    ///   for no linear image and for a `DRM_FORMAT_MOD_LINEAR` one only in a dedicated allocation,
+    ///   and takes the opaque one in a shared block. The check's own textures take them whatever
+    ///   the verdicts, so its verdicts are of the image a texture names.
     /// - In a buffer's dedicated allocation (an exportable buffer's where the driver exports
     ///   such memory only so, or prefers or requires it), no image
     ///   (`VUID-vkBindImageMemory-memory-10926`).
     ///
-    /// Why not: why the linear image is not, and why the pitched image is not, its cause (a
-    /// refused pitch, image or placement, or the policy and the device's check), which the
-    /// placement query answers.
+    /// With whether it is the `DRM_FORMAT_MOD_LINEAR` one, and whether it names an opaque file
+    /// descriptor over a block of dma-bufs ([`AliasCount`]). Why not: why the linear image is not,
+    /// and why the pitched image is not, its cause (a refused pitch, image or placement, or the
+    /// policy and the device's check), which the placement query answers; over a block of
+    /// dma-bufs exportable as an opaque file descriptor too, each handle type's in turn.
     fn alias_unbound(
         &self,
         plan: &ImagePlan,
         texels: &Texels,
         usage: TextureUsage,
         facts: &ImageFacts<'_>,
-    ) -> Result<Result<(LinearMade, bool), (String, ShadowCause)>, Error> {
-        let memory = match texels.buffer.bound_memory() {
-            BoundMemory::Own => ModifierMemory::Own,
-            BoundMemory::External(handle) => {
-                let Some(class) = PagesClass::exported(handle) else {
+    ) -> Result<Result<(LinearMade, bool, bool), (String, ShadowCause)>, Error> {
+        let exports = match texels.buffer.bound_memory() {
+            BoundMemory::Own => {
+                let made =
+                    self.alias_unbound_in(plan, texels, usage, facts, ModifierMemory::Own)?;
+                return Ok(made.map(|(made, pitched)| (made, pitched, false)));
+            }
+            BoundMemory::External(exports) => {
+                let Some(class) = PagesClass::exported(exports) else {
                     let why = format!(
-                        "the buffer's memory is external memory of handle type {:#x}, which no \
+                        "the buffer's memory is external memory of handle types {:#x}, which no \
                          texture over a buffer of the runtime's own takes",
-                        handle.as_raw()
+                        exports.as_raw()
                     );
                     let cause = ShadowCause::Refused(Refusal::Image, why.clone());
                     return Ok(Err((why, cause)));
                 };
                 if let Err(cause) = self.exported_takes(class, texels, usage) {
                     let why = format!(
-                        "an image over {} names its handle type and starts UNDEFINED, whose first \
-                         move the device's check of that memory covers",
+                        "an image over {} names a handle type it is exported as and starts \
+                         UNDEFINED, whose first move the device's check of that memory covers",
                         class.words()
                     );
                     return Ok(Err((why, cause)));
                 }
-                ModifierMemory::Exported(handle)
+                exports
             }
             BoundMemory::NoImage(no) => {
                 let cause = ShadowCause::Refused(Refusal::Placement, no.words().to_owned());
@@ -2937,6 +2972,55 @@ impl Device {
                 )));
             }
         };
+        let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+        let opaque = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+        let mut refused: Option<(String, ShadowCause)> = None;
+        for named in [dma_buf, opaque] {
+            if !exports.contains(named) {
+                continue;
+            }
+            let memory = ModifierMemory::Exported { named, exports };
+            let (linear, cause) = match self.alias_unbound_in(plan, texels, usage, facts, memory)? {
+                Ok((made, pitched)) => {
+                    let alternate = named == opaque && exports.contains(dma_buf);
+                    return Ok(Ok((made, pitched, alternate)));
+                }
+                Err(refusal) => refusal,
+            };
+            refused = Some(match refused {
+                None => (linear, cause),
+                Some((first, first_cause)) => {
+                    let cause = match first_cause {
+                        ShadowCause::Refused(refusal, why) => ShadowCause::Refused(
+                            refusal,
+                            format!(
+                                "{why}; and naming an opaque file descriptor, {}",
+                                cause.words()
+                            ),
+                        ),
+                        first_cause => first_cause,
+                    };
+                    let why = format!("{first}; and naming an opaque file descriptor, {linear}");
+                    (why, cause)
+                }
+            });
+        }
+        Ok(Err(refused.ok_or_else(|| {
+            internal("the runtime's exported memory names no handle type an image takes")
+        })?))
+    }
+
+    /// [`alias_unbound`](Self::alias_unbound)'s image over `texels` made for `memory` (the
+    /// runtime's own of no export, or exported, the image naming one handle type it is exported
+    /// as), with whether it is the `DRM_FORMAT_MOD_LINEAR` one; why not.
+    fn alias_unbound_in(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        usage: TextureUsage,
+        facts: &ImageFacts<'_>,
+        memory: ModifierMemory,
+    ) -> Result<Result<(LinearMade, bool), (String, ShadowCause)>, Error> {
         let (_, buffer_offset, type_index) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
@@ -3050,7 +3134,7 @@ impl Device {
         facts: &ImageFacts<'_>,
     ) -> Result<Result<(), ShadowCause>, Error> {
         Ok(match self.alias_unbound(plan, texels, usage, facts)? {
-            Ok((made, _)) => {
+            Ok((made, ..)) => {
                 // SAFETY: the image is live and unbound, and no command uses it.
                 unsafe { release::object(self.shared().vk(), made.raw) };
                 Ok(())
@@ -3165,7 +3249,7 @@ impl Device {
         let (memory, buffer_offset, _) = texels.buffer.memory();
         let memory_offset = buffer_offset + texels.layout.offset;
         let raw_device = self.shared().vk();
-        let (made, pitched) = match self.alias_unbound(&plan, texels, usage, facts)? {
+        let (made, pitched, alternate) = match self.alias_unbound(&plan, texels, usage, facts)? {
             Ok(made) => made,
             Err((linear, cause)) => {
                 let why = format!("{linear}; and {}", cause.words());
@@ -3221,6 +3305,7 @@ impl Device {
         *lock(&image.first_move) = Some(first);
         let count = AliasCount {
             pitched,
+            alternate,
             unobserved: texels.buffer.padding_unobserved() && texels.layout.padded(),
             feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
         };

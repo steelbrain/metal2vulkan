@@ -1590,6 +1590,17 @@ impl Device {
                 features.as_raw()
             ));
         }
+        let compatible = imported.external_memory_properties.compatible_handle_types;
+        if !compatible.contains(memory.shared_with()) {
+            return Err(format!(
+                "its image format query lists handle types {:#x} as compatible with a \
+                 DRM_FORMAT_MOD_LINEAR image of {:?} for {}, whose memory is exported as {:#x}",
+                compatible.as_raw(),
+                plan.format,
+                memory.words(),
+                memory.shared_with().as_raw()
+            ));
+        }
         Ok(limits)
     }
 }
@@ -1624,14 +1635,18 @@ impl Device {
 /// ([`Device::dma_buf_image`]); host pages imported by their pointer, where a texture's image in
 /// place lays its rows out at Metal's pitch (`texture/in_place_image.rs`); or a buffer's memory of
 /// the runtime's own, where a texture over the buffer lays its rows out at Metal's pitch
-/// (`texture.rs`'s `alias_image`): with no external memory, or exported as the handle type its
-/// record names (`memory.rs`'s `Memory::bound_memory`, `exported_memory.rs`).
+/// (`texture.rs`'s `alias_image`): with no external memory, or exported as the handle types its
+/// record names (`memory.rs`'s `Memory::bound_memory`, `exported_memory.rs`), the image naming
+/// one of them, `named` (`VUID-vkBindImageMemory-memory-02728`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ModifierMemory {
     DmaBuf,
     Host,
     Own,
-    Exported(vk::ExternalMemoryHandleTypeFlags),
+    Exported {
+        named: vk::ExternalMemoryHandleTypeFlags,
+        exports: vk::ExternalMemoryHandleTypeFlags,
+    },
 }
 
 impl std::fmt::Debug for ModifierMemory {
@@ -1640,7 +1655,12 @@ impl std::fmt::Debug for ModifierMemory {
             ModifierMemory::DmaBuf => f.write_str("DmaBuf"),
             ModifierMemory::Host => f.write_str("Host"),
             ModifierMemory::Own => f.write_str("Own"),
-            ModifierMemory::Exported(handle) => write!(f, "Exported({:#x})", handle.as_raw()),
+            ModifierMemory::Exported { named, exports } => write!(
+                f,
+                "Exported({:#x} of {:#x})",
+                named.as_raw(),
+                exports.as_raw()
+            ),
         }
     }
 }
@@ -1653,7 +1673,21 @@ impl ModifierMemory {
             ModifierMemory::DmaBuf => Some(DMA_BUF),
             ModifierMemory::Host => Some(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT),
             ModifierMemory::Own => None,
-            ModifierMemory::Exported(handle) => Some(handle),
+            ModifierMemory::Exported { named, .. } => Some(named),
+        }
+    }
+
+    /// The handle types an image's format query must list as compatible with the one it names
+    /// (`VkExternalMemoryProperties::compatibleHandleTypes`): for the runtime's exported memory,
+    /// every type its blocks are exported as, which an image bound there shares memory with
+    /// (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`); none for other memory, whose
+    /// allocation names the image's type alone.
+    pub(super) fn shared_with(self) -> vk::ExternalMemoryHandleTypeFlags {
+        match self {
+            ModifierMemory::Exported { exports, .. } => exports,
+            ModifierMemory::DmaBuf | ModifierMemory::Host | ModifierMemory::Own => {
+                vk::ExternalMemoryHandleTypeFlags::empty()
+            }
         }
     }
 
@@ -1663,8 +1697,13 @@ impl ModifierMemory {
             ModifierMemory::DmaBuf => "dma-bufs",
             ModifierMemory::Host => "host allocations",
             ModifierMemory::Own => "the runtime's own memory",
-            ModifierMemory::Exported(DMA_BUF) => "the runtime's memory exported as dma-bufs",
-            ModifierMemory::Exported(_) => {
+            ModifierMemory::Exported { named: DMA_BUF, .. } => {
+                "the runtime's memory exported as dma-bufs"
+            }
+            ModifierMemory::Exported { exports, .. } if exports.contains(DMA_BUF) => {
+                "the runtime's memory exported as dma-bufs, named as opaque file descriptors"
+            }
+            ModifierMemory::Exported { .. } => {
                 "the runtime's memory exported as opaque file descriptors"
             }
         }
@@ -1675,7 +1714,7 @@ impl ModifierMemory {
     /// for an import.
     pub(super) fn needs(self) -> vk::ExternalMemoryFeatureFlags {
         match self {
-            ModifierMemory::Exported(_) => vk::ExternalMemoryFeatureFlags::EXPORTABLE,
+            ModifierMemory::Exported { .. } => vk::ExternalMemoryFeatureFlags::EXPORTABLE,
             ModifierMemory::DmaBuf | ModifierMemory::Host | ModifierMemory::Own => {
                 vk::ExternalMemoryFeatureFlags::IMPORTABLE
             }
@@ -1688,7 +1727,7 @@ impl ModifierMemory {
     /// the image's own pages is its dedicated import.
     pub(super) fn shared_memory(self) -> bool {
         match self {
-            ModifierMemory::Host | ModifierMemory::Exported(_) => true,
+            ModifierMemory::Host | ModifierMemory::Exported { .. } => true,
             ModifierMemory::DmaBuf | ModifierMemory::Own => false,
         }
     }

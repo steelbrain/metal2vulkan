@@ -1657,10 +1657,16 @@ bound.
   pending, failed or unchecked, as over host pages, a pending one moving to the image once the
   verdict passes, at a quiet commit, with no copy (`WorkCounts::pooled_textures_moved_in_place`);
   over memory the runtime exports (`MemoryExport`, a runtime extension), where either image names
-  the memory's handle type as Vulkan requires and so starts `UNDEFINED`, its check of that exported
-  memory has not passed for the texture's accesses (a pending one moving the same way), the
-  device's image format query takes the handle type for no such image but in a dedicated
-  allocation, or the memory is the buffer's dedicated allocation, to which no image may be bound;
+  a handle type the memory is exportable as, as Vulkan requires, and so starts `UNDEFINED`: its
+  check of that exported memory has not passed for the texture's accesses (a pending one moving
+  the same way), the device's image format query takes none of those handle types for such an
+  image but in a dedicated allocation, or lists not every one the memory is exportable as among
+  those compatible with it, or the memory is the buffer's dedicated allocation, to which no image
+  may be bound (a block of dma-bufs is exportable as an opaque file descriptor too where the
+  device's buffer queries answer both together, each compatible with the other, and its image then
+  names the opaque handle type where the query takes no dma-buf for it, as RADV's does for linear
+  images, `WorkCounts::exported_dma_buf_images_named_opaque_fd`; the buffer's export stays a dma-buf
+  of the same memory);
   for one that renders, whose rows each to its
   pitch share no line with bytes past them, the check of renders that lets the rows' padding
   change, as the declaration does, and no byte past the last row's pitch); past a bound in bytes of its rows to their
