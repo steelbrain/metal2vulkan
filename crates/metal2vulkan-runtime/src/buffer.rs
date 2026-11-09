@@ -2511,8 +2511,8 @@ impl Device {
                 ..own
             };
             let asked = [
-                Some(own).filter(|_| wants_fresh),
-                Some(plain).filter(|_| holds == Holds::FdBuffers),
+                wants_fresh.then_some(own),
+                (holds == Holds::FdBuffers).then_some(plain),
             ];
             taken = (asked.into_iter().flatten()).find_map(|making| self.recycled_buffer(&making));
         }
