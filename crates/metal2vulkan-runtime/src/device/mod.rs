@@ -2134,10 +2134,16 @@ impl Device {
             };
             // The device's own buffers lie in blocks exportable as opaque file descriptors, never
             // exported, where it exports such a descriptor of a pooled buffer's memory for the
-            // usage of those buffers and of a buffer of addresses (`memory.rs`'s "Buffers in
+            // usage of those buffers and of a buffer of addresses, and its policy takes textures
+            // over memory of an export in place by its check (`memory.rs`'s "Buffers in
             // exportable blocks").
+            let in_place = compile.policy().host_page_textures
+                == metal2vulkan::device::HostPageTexturePolicy::InPlace;
             let exports = match &functions {
                 None => Err("the device enables no VK_KHR_external_memory_fd"),
+                Some(_) if !in_place => {
+                    Err("the device's policy shadows every texture over memory of an export")
+                }
                 Some(_) => {
                     let usages = [
                         Some(super::buffer::usage(false)),
