@@ -1251,16 +1251,20 @@ pub enum DriverWorkaround {
     /// into the `OpFConvert` to 16 bits of its result, rounding the exact result to `half` once,
     /// though both are decorated `NoContraction` (which forbids combining the operation with
     /// another instruction into a single operation), in an entry declaring `RoundingModeRTE`,
-    /// `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits. Metal rounds the `float`
-    /// result to `half`, so where that result lies on a `half` midpoint the two differ by one
-    /// unit in the last place of the `half`. Measured on the Radeon 780M (RADV PHOENIX): ACO
-    /// compiled the product's `OpFMul` and the narrowing as one `v_fma_mixlo_f16`, and the
-    /// product of 2.6822087e-7 and 1.0000001 answered `0x0005` where Metal's `half` of the
-    /// `float` product is `0x0004` (`runtime_lane::half_conversions`); a sum's narrowing was one
-    /// `v_fma_mixlo_f16` too. Keyed on RADV (`VK_DRIVER_ID_MESA_RADV`) on every GPU, the others
-    /// unmeasured. Such a profile keeps the conversion under the float controls, and a module that
-    /// rounds such an operation's result through it records `PrecisionNote::NativeHalfConversion`
-    /// (`lower::arith::narrow::rounds_arithmetic`).
+    /// `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits. Metal rounds the `float` result
+    /// to `half`, so where that result lies on a `half` midpoint the two differ by one unit in the
+    /// last place of the `half`. Measured with Mesa 26.2.6 on the Radeon 780M (RADV PHOENIX,
+    /// GFX11): ACO compiled the product's `OpFMul` and the narrowing as one `v_fma_mixlo_f16` (a
+    /// sum's narrowing too), and the product of 2.6822087e-7 and 1.0000001 answered `0x0005` where
+    /// Metal's `half` of the `float` product is `0x0004`; the Radeon RX 7900 XTX (RADV NAVI31,
+    /// GFX11) answered as the 780M did, 4,542 of the 253,958 product lanes off Metal's on each
+    /// (`runtime_lane::half_conversions`). On the Radeon RX 550 (RADV POLARIS12, GFX8) the
+    /// narrowing alone answers its own way (8,185 of the 253,958 lanes of a loaded `float`), every
+    /// narrowing there records `PrecisionNote::NativeHalfConversion` already, and no fusion is told
+    /// apart. A fact of RADV's compiler, keyed on RADV (`VK_DRIVER_ID_MESA_RADV`) on every GPU;
+    /// other drivers unmeasured. Such a profile keeps the conversion under the float controls, and
+    /// a module that rounds such an operation's result through it records
+    /// `PrecisionNote::NativeHalfConversion` (`lower::arith::narrow::rounds_arithmetic`).
     HalfConversionFusedWithArithmetic,
     /// The driver refuses a fragment shader that reads both barycentric builtins,
     /// `BaryCoordKHR` and `BaryCoordNoPerspKHR`, at pipeline creation, where Metal compiles a
