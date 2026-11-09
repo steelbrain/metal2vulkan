@@ -415,8 +415,10 @@ fn hearing(cache: &Path) -> (Device, Arc<Mutex<Vec<String>>>) {
 fn sampler_state(device: &Device, lod: u32) -> SamplerState {
     let mut descriptor = SamplerDescriptor::new();
     descriptor.lod_min_clamp = lod as f32;
-    let mut options = SamplerStateOptions::default();
-    options.support_argument_buffers = true;
+    let options = SamplerStateOptions {
+        support_argument_buffers: true,
+        ..SamplerStateOptions::default()
+    };
     (device.new_sampler_state_with_options(&descriptor, options)).unwrap()
 }
 
