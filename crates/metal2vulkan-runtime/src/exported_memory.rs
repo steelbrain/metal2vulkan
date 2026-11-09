@@ -83,7 +83,7 @@
 
 use super::address::Place;
 use super::buffer::LINEAR_IMAGE_ALIGNMENT;
-use super::buffer::{buffer_class, placed, usage, BufferParts, Modes, Owner};
+use super::buffer::{buffer_class, placed, usage, BufferParts, Modes, Naming, Owner};
 use super::device::lock;
 use super::error::{invalid, nil, vulkan, Error, Problem};
 use super::memory::{allocate_exported, Exported, DMA_BUF_HANDLE, EXPORT_HANDLE};
@@ -370,6 +370,7 @@ impl Device {
             drops_writes: false,
             mirror: None,
             again: None,
+            naming: Naming::New,
         });
         // New memory holds no value until written: zero, as Metal's new buffer reads. Dropping
         // `buffer` on failure releases it.

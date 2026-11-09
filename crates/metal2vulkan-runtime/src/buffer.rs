@@ -34,7 +34,7 @@ use super::fresh_pages;
 use super::generated_commands::PREPROCESS_BUFFER;
 use super::heap::{Heap, HeapType};
 use super::host_aliases::Alias;
-use super::host_memory::{HeldBack, KeepAlive, Release};
+use super::host_memory::{HeldBack, HostParts, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
 #[cfg(unix)]
 use super::host_residency::{Again, Residency};
@@ -901,6 +901,9 @@ pub(super) struct HostPages {
     /// The key they named to their copy, where they lie in one ([`HostPages::copied_as`]): its
     /// naming goes as they go.
     named: OnceLock<ResourceKey>,
+    /// The caller's memory they were made of, a buffer's (not a heap's own): what its device's
+    /// recovery makes the buffer again of on the next generation (`Buffer::carry`).
+    made_of: OnceLock<HostParts>,
 }
 
 impl HostPages {
@@ -918,6 +921,7 @@ impl HostPages {
             dirty: OnceLock::new(),
             ram_runs: OnceLock::new(),
             named: OnceLock::new(),
+            made_of: OnceLock::new(),
         }
     }
 
@@ -964,6 +968,17 @@ impl HostPages {
         if let Some(log) = import.log.get() {
             import.device.shared().dirty.logged_in_place(key, log);
         }
+    }
+
+    /// Keep `parts`, the caller's memory they were made of ([`HostPages::made_of`]).
+    pub(super) fn keep_made_of(&self, parts: HostParts) {
+        let _kept = self.made_of.set(parts);
+    }
+
+    /// The caller's memory they were made of, a buffer's (not a heap's own), which its device's
+    /// recovery makes the buffer again of on the next generation (`Buffer::carry`).
+    pub(super) fn made_of(&self) -> Option<&HostParts> {
+        self.made_of.get()
     }
 
     /// Keep the guest RAM and the runs of it their caller resolved them to (`host_ram.rs`).
@@ -2173,6 +2188,32 @@ pub(super) struct BufferParts {
     /// while idle (`host_residency.rs`).
     #[cfg(unix)]
     pub(super) again: Option<Again>,
+    /// A new buffer, or the same buffer on its device's next generation.
+    pub(super) naming: Naming,
+}
+
+/// Who a buffer being made is ([`Device::buffer_of`], `Device::buffer_over_host_parts`): a new
+/// buffer, with an identity and an `ObjectId` of its own, or a buffer its device's recovery
+/// carries (`Buffer::carry`), the same buffer on the next generation, its identity, `ObjectId`
+/// and attributes the buffer's.
+pub(super) enum Naming {
+    New,
+    Carried {
+        object_id: ObjectId,
+        identity: Identity,
+        attributes: ResourceAttributes,
+    },
+}
+
+impl Naming {
+    /// The buffer's identity: a new one of `hazard` (a heap's own where `of_heap`), or the
+    /// carried buffer's.
+    fn identity(&self, hazard: HazardTrackingMode, of_heap: bool) -> Identity {
+        match self {
+            Naming::New => Identity::new(hazard, of_heap),
+            Naming::Carried { identity, .. } => *identity,
+        }
+    }
 }
 
 impl std::fmt::Debug for Buffer {
@@ -2763,6 +2804,7 @@ impl Device {
             mirror,
             #[cfg(unix)]
             again: None,
+            naming: Naming::New,
         });
         Ok((buffer, bytes))
     }
@@ -2909,6 +2951,7 @@ impl Device {
             mirror: None,
             #[cfg(unix)]
             again: None,
+            naming: Naming::New,
         }))
     }
 
@@ -2931,9 +2974,10 @@ impl Device {
             mirror,
             #[cfg(unix)]
             again,
+            naming,
         } = parts;
         let pages = self.pages_of(raw, memory, offset, base, reach);
-        let identity = Identity::new(modes.hazard, of_heap);
+        let identity = naming.identity(modes.hazard, of_heap);
         let lie = match owner {
             // A no-copy buffer's pages are its until a rebind (`rebind.rs`).
             Owner::Caller => {
@@ -2966,7 +3010,7 @@ impl Device {
             mirror,
             range_token: KeptToken::default(),
         };
-        self.buffer_lying(own, length, modes, address)
+        self.buffer_lying(own, length, modes, address, naming)
     }
 
     /// The import of a no-copy buffer's `pages`: one the device releases while idle where
@@ -3006,8 +3050,9 @@ impl Device {
         modes: Modes,
         (address, reserved): (GpuAddress, Held),
         release: Option<Release>,
+        naming: Naming,
     ) -> Buffer {
-        let identity = Identity::new(modes.hazard, false);
+        let identity = naming.identity(modes.hazard, false);
         let own = OwnBytes {
             lie: self.host_lie(identity.key, import, release, false),
             reserved,
@@ -3016,7 +3061,7 @@ impl Device {
             mirror: None,
             range_token: KeptToken::default(),
         };
-        self.buffer_lying(own, length, modes, address)
+        self.buffer_lying(own, length, modes, address, naming)
     }
 
     /// A no-copy buffer's lie, of `key`: pages of its own in `import`, released to `release`
@@ -3048,23 +3093,32 @@ impl Device {
         Lie::Host(cell)
     }
 
-    /// The buffer of `own`'s bytes, `length` long, of `modes`, at `address`.
+    /// The buffer of `own`'s bytes, `length` long, of `modes`, at `address`, named by `naming`.
     fn buffer_lying(
         &self,
         own: OwnBytes,
         length: u64,
         modes: Modes,
         address: GpuAddress,
+        naming: Naming,
     ) -> Buffer {
         let options = ResourceOptions::new(modes.storage, modes.cache, own.identity.mode());
+        let (object_id, attributes) = match naming {
+            Naming::New => (ObjectId::new(), ResourceAttributes::new()),
+            Naming::Carried {
+                object_id,
+                attributes,
+                ..
+            } => (object_id, attributes),
+        };
         Buffer(Arc::new(BufferShared {
             device: MadeOn::new(self.clone()),
             generation: std::ptr::from_ref(self.shared()).addr(),
-            object_id: ObjectId::new(),
+            object_id,
             length,
             options,
             address,
-            attributes: ResourceAttributes::new(),
+            attributes,
             bytes: Bytes::Own(own),
             held_by: HeldBy::default(),
             handed_out: Arc::default(),

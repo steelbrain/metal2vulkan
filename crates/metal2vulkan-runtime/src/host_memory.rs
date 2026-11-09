@@ -489,7 +489,9 @@ impl HostMemory {
     }
 }
 
-/// A [`HostMemory`]'s parts ([`HostMemory::into_parts`]).
+/// A [`HostMemory`]'s parts ([`HostMemory::into_parts`]): cloned, what a no-copy buffer's pages
+/// were made of, which its device's recovery makes it again of (`HostPages::made_of`).
+#[derive(Clone)]
 pub(super) struct HostParts {
     pub(super) pointer: NonNull<u8>,
     pub(super) source: Option<Source>,
@@ -499,6 +501,12 @@ pub(super) struct HostParts {
     pub(super) runs: Option<RunResolver>,
     pub(super) dma_buf_only: bool,
 }
+
+// SAFETY: as `HostMemory`'s: an address and the caller's guarantee for it, and parts that are
+// `Send` and `Sync`.
+unsafe impl Send for HostParts {}
+// SAFETY: as above.
+unsafe impl Sync for HostParts {}
 
 /// A no-copy buffer's deallocator (Metal's block): called once, with the pointer and the length,
 /// when the buffer is released. It may run on a runtime thread, as Metal's runs on any thread: a

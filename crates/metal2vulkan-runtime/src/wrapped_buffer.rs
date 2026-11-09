@@ -29,7 +29,7 @@
 //!   the memory against the runtime's work through semaphores or completion.
 
 use super::address::AddressPlacement;
-use super::buffer::{usage, Buffer, BufferParts, Modes, Owner};
+use super::buffer::{usage, Buffer, BufferParts, Modes, Naming, Owner};
 use super::device::lock;
 use super::error::{invalid, nil, Error, Problem};
 use super::memory::Placement;
@@ -323,6 +323,7 @@ impl Device {
             mirror: None,
             #[cfg(unix)]
             again: None,
+            naming: Naming::New,
         });
         Ok(self.visible(buffer))
     }

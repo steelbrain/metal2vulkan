@@ -13,7 +13,7 @@ use super::address_pool::AddressPool;
 #[cfg(unix)]
 use super::buffer::Pages;
 use super::buffer::{
-    usage, Buffer, BufferParts, HostCell, HostPages, Lying, Modes, Owner, ReadApart,
+    usage, Buffer, BufferParts, HostCell, HostPages, Lying, Modes, Naming, Owner, ReadApart,
 };
 use super::copied::NotCopied;
 use super::degradation::Degradation;
@@ -27,7 +27,7 @@ use super::host_bytes::HostBytes;
 use super::host_memory::{
     based_size, binds_in, buffer_base, import_refused, import_window, not_importable,
     refuse_unwritable, refused, unpinnable, Deallocator, HostMemory, HostParts, HostRelease,
-    ImportRequest, ImportWindow, Importer, KeepAlive, Source,
+    ImportRequest, ImportWindow, Importer, KeepAlive, Release, Source,
 };
 use super::host_ram::{RamOnDevice, Routed};
 #[cfg(unix)]
@@ -681,6 +681,57 @@ impl Device {
         of_heap: bool,
         drops_writes: bool,
     ) -> Result<Buffer, Error> {
+        let parts = memory.into_parts();
+        let release = release.of(parts.pointer, length);
+        let made = (call, length, options, placement);
+        // SAFETY: the caller's contract.
+        unsafe {
+            self.buffer_over_host_parts(made, parts, release, of_heap, drops_writes, Naming::New)
+        }
+    }
+
+    /// [`Device::buffer_over_host_memory`] of the caller's memory's `parts`, `made` (for its call,
+    /// of its length and options, at its placement) as the buffer `naming` names, given back to
+    /// `release`: a new buffer, or one its device's recovery carries to this generation
+    /// (`Buffer::carry`). A buffer's pages (not a heap's own) keep what they were made of, which
+    /// a recovery makes the buffer again of ([`HostPages::made_of`]).
+    ///
+    /// # Safety
+    ///
+    /// The memory of `parts` meets [`HostMemory::new`]'s contract for `length` bytes.
+    pub(super) unsafe fn buffer_over_host_parts(
+        &self,
+        made: (&'static str, u64, ResourceOptions, Place),
+        parts: HostParts,
+        release: Option<Release>,
+        of_heap: bool,
+        drops_writes: bool,
+        naming: Naming,
+    ) -> Result<Buffer, Error> {
+        let made_of = (!of_heap).then(|| parts.clone());
+        // SAFETY: the caller's contract.
+        let buffer =
+            unsafe { self.host_parts_buffer(made, parts, release, of_heap, drops_writes, naming) }?;
+        if let (Some(made_of), Some(pages)) = (made_of, buffer.host_pages()) {
+            pages.keep_made_of(made_of);
+        }
+        Ok(buffer)
+    }
+
+    /// [`Device::buffer_over_host_parts`]'s buffer.
+    ///
+    /// # Safety
+    ///
+    /// As there.
+    unsafe fn host_parts_buffer(
+        &self,
+        (call, length, options, placement): (&'static str, u64, ResourceOptions, Place),
+        parts: HostParts,
+        release: Option<Release>,
+        of_heap: bool,
+        drops_writes: bool,
+        naming: Naming,
+    ) -> Result<Buffer, Error> {
         let modes = Modes::of(options)?;
         let class = match modes.storage {
             StorageMode::Shared => MemoryClass::Shared,
@@ -708,7 +759,7 @@ impl Device {
             gate,
             runs,
             dma_buf_only,
-        } = memory.into_parts();
+        } = parts;
         let source = (source, dma_buf_only);
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         let window = host.window;
@@ -725,7 +776,6 @@ impl Device {
         // does one whose GPU writes are dropped (its import is a read-only view of the pages, or
         // its copy drops them).
         let made_over = (pointer.as_ptr() as u64, length);
-        let release = release.of(pointer, length);
         let shares = (!of_heap && !drops_writes)
             .then(|| shared.aliases.import(made_over, class))
             .flatten();
@@ -739,7 +789,7 @@ impl Device {
                 false => Kind::Import(class),
             };
             let buffer =
-                self.buffer_in_import(Arc::clone(&import), length, modes, address, release);
+                self.buffer_in_import(Arc::clone(&import), length, modes, address, release, naming);
             let key = buffer.identity().key;
             // The GPU's writes through it are reported to the import's logs, as through the
             // buffer it was made for, over the same bytes (`dirty_pages.rs`), and merged back
@@ -823,8 +873,9 @@ impl Device {
                 // buffer over the bytes, nor does one lie in it.
                 if drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES {
                     // SAFETY: the caller's contract.
-                    let copied =
-                        unsafe { self.copied_buffer(copy, release, dirty, CopiedFor::ReadOnly) };
+                    let copied = unsafe {
+                        self.copied_buffer(copy, release, dirty, CopiedFor::ReadOnly, naming)
+                    };
                     return copied.map(|buffer| {
                         let buffer = kept(buffer, log, kept_runs);
                         shared.aliases.place(buffer.identity().key, made_over);
@@ -843,8 +894,9 @@ impl Device {
                 if refused_by_host {
                     shared.counts.host_import_refused_by_host();
                     // SAFETY: the caller's contract.
-                    let copied =
-                        unsafe { self.copied_buffer(copy, release, dirty, CopiedFor::Refused) };
+                    let copied = unsafe {
+                        self.copied_buffer(copy, release, dirty, CopiedFor::Refused, naming)
+                    };
                     return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                 }
                 // Only a buffer that imports its pages pins them, and so has their writability
@@ -854,8 +906,9 @@ impl Device {
                 // Metal drops them, their source never called ([`unwritable_pages`]).
                 if unwritable_pages(&host, writable, &shared.counts)? {
                     // SAFETY: the caller's contract.
-                    let copied =
-                        unsafe { self.copied_buffer(copy, release, dirty, CopiedFor::Unwritable) };
+                    let copied = unsafe {
+                        self.copied_buffer(copy, release, dirty, CopiedFor::Unwritable, naming)
+                    };
                     return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                 }
                 // SAFETY: the window lies in the pages of the caller's bytes, which stay mapped
@@ -911,7 +964,13 @@ impl Device {
                     Err((error, _)) if copyable && copies_after(&error) => {
                         // SAFETY: the caller's contract.
                         let copied = unsafe {
-                            self.copied_buffer(copy, release, dirty, CopiedFor::Failed(error))
+                            self.copied_buffer(
+                                copy,
+                                release,
+                                dirty,
+                                CopiedFor::Failed(error),
+                                naming,
+                            )
                         };
                         return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                     }
@@ -922,7 +981,8 @@ impl Device {
                     Err((_, true)) if copyable => {
                         let why = CopiedFor::DeviceRefused;
                         // SAFETY: the caller's contract.
-                        let copied = unsafe { self.copied_buffer(copy, release, dirty, why) };
+                        let copied =
+                            unsafe { self.copied_buffer(copy, release, dirty, why, naming) };
                         return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                     }
                     Err((error, _)) => return Err(error),
@@ -954,6 +1014,7 @@ impl Device {
             mirror: None,
             #[cfg(unix)]
             again,
+            naming,
         });
         // A buffer just made lies in its pages (`HostCell::current`), looked at once (their lock,
         // `WorkCounts::no_copy_lies_read`) for everything below.
@@ -1026,6 +1087,9 @@ impl Device {
             .host_import
             .as_ref()
             .map_err(|unsupported| Error::Unsupported(unsupported.clone()))?;
+        let parts = memory.into_parts();
+        // What a recovery makes a buffer's new pages again of (`HostPages::made_of`).
+        let made_of = heap.is_none().then(|| parts.clone());
         let HostParts {
             pointer,
             source,
@@ -1034,7 +1098,7 @@ impl Device {
             gate,
             runs,
             dma_buf_only,
-        } = memory.into_parts();
+        } = parts;
         // A buffer whose GPU writes are dropped keeps them dropped over its new pages.
         let drops_writes = cell.drops_writes();
         let source = (source, dma_buf_only);
@@ -1382,6 +1446,9 @@ impl Device {
         shared.aliases.place(key, (pointer.as_ptr() as u64, length));
         if let Some(release) = release.of(pointer, length) {
             pages.release_to(release);
+        }
+        if let Some(made_of) = made_of {
+            pages.keep_made_of(made_of);
         }
         // What lay in the old pages goes with them: the images swapped out, and the texel views.
         // A detached buffer lay in none: what took its stand-in goes with the new pages.
@@ -1904,9 +1971,10 @@ impl Device {
             Place,
             bool,
         ),
-        release: Option<super::host_memory::Release>,
+        release: Option<Release>,
         dirty: Option<Arc<super::dirty_pages::DirtySource>>,
         why: CopiedFor,
+        naming: Naming,
     ) -> Result<Buffer, Error> {
         let read_only = matches!(why, CopiedFor::ReadOnly);
         let (cause, failed) = match why {
@@ -2003,6 +2071,7 @@ impl Device {
             mirror: None,
             #[cfg(unix)]
             again: None,
+            naming,
         });
         let drops = copied.drops_writes();
         if let Some(pages) = buffer.host_pages() {
