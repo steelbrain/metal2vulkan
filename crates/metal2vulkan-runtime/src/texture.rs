@@ -3083,7 +3083,7 @@ impl Device {
 
     /// The last step before the shadow of a texture over a buffer of the runtime's memory exported
     /// as a dma-buf (`exported_memory.rs`: a shared block of such buffers, or a buffer's dedicated
-    /// allocation), where no image binds in that memory itself ([`alias_unbound`]'s refusal,
+    /// allocation), where no image binds in that memory itself ([`Self::alias_unbound`]'s refusal,
     /// `cause`: RADV makes no linear image for dma-bufs, and asks a dedicated allocation of its
     /// `DRM_FORMAT_MOD_LINEAR` one; Vulkan binds no image in a buffer's dedicated allocation): a
     /// `DRM_FORMAT_MOD_LINEAR` image at the texels' offset in the memory with Metal's pitches,

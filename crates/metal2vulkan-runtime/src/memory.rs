@@ -601,9 +601,10 @@ impl<T> Pool<T> {
         (self.place_fresh(size, align)).map(|(index, offset, _)| (index, offset))
     }
 
-    /// [`Pool::place`]'s (block, offset), with whether the place reads zero: it lies in a block
-    /// allocated zero-initialized, past every range placed in that block before, so that no
-    /// resource used its bytes since the driver zeroed them.
+    /// A place for `size` bytes aligned to `align` in a pooled block that has room, (block,
+    /// offset), with whether the place reads zero: it lies in a block allocated zero-initialized,
+    /// past every range placed in that block before, so that no resource used its bytes since the
+    /// driver zeroed them.
     pub(super) fn place_fresh(&mut self, size: u64, align: u64) -> Option<(usize, u64, bool)> {
         if align > self.align {
             // Every block's longest free range was derived at the smaller alignment.
