@@ -33,13 +33,17 @@
 //!   only queries answers the texture's width and height.
 
 use super::degrade_notices::on_device;
-use super::driver_deviations::{half_nan, stage_notes};
+use super::driver_deviations::{half_nan, stage_notes_under};
 use super::extended_range_targets::half_value;
 use super::{buffer_with, read_buffer, Messages};
 use crate::air_library::AirLibrary;
-use metal2vulkan::metal::format::sampled_type;
+use metal2vulkan::cache::VariantKey;
+use metal2vulkan::error::{Error as CompileError, RuntimeInput};
+use metal2vulkan::metal::format::{sampled_type, storage_image_choice};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, SampledType, StageSource};
+use metal2vulkan::pipeline::{
+    ComputePipelineDescriptor, PrecisionNote, SampledType, Stage, StageSource,
+};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputePipelineState, Degradation, Device, PipelineOptions, Region,
@@ -456,11 +460,26 @@ const NAN_NOTES: [PrecisionNote; 3] = [
     PrecisionNote::DeviceNanEncoding,
 ];
 
-/// Whether the stage of kernel `k` doing `kind` with `ty` texels leaves a NaN's bits to the
-/// device: it records one of [`NAN_NOTES`].
-fn leaves_nan_bits(device: &Device, kind: Kind, ty: Ty) -> bool {
+/// Whether the stage of kernel `k` doing `kind` with `ty` texels of a texture of `format` leaves a
+/// NaN's bits to the device: it records one of [`NAN_NOTES`]. Compiled as the runtime compiles it
+/// for that texture: with no input where the device reads and writes the slot's format without
+/// declaring one, and elsewhere with the format's storage choice (`storage_image_choice`), the
+/// input the function asks for (`NeedsInput(StorageTextureFormat)`; ANV on the Iris Xe, Mesa
+/// 26.2.6, reads some of [`FORMATS`] only through a declared format).
+fn leaves_nan_bits(device: &Device, kind: Kind, ty: Ty, format: PixelFormat) -> bool {
     let bitcode = llvm_assemble_text(&kernel(kind, ty)).unwrap();
-    let notes = stage_notes(device, &bitcode, "k");
+    let mut inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
+    let notes = match stage_notes_under(device, &bitcode, "k", &inputs) {
+        Err(CompileError::NeedsInput(RuntimeInput::StorageTextureFormat { slot })) => {
+            let profile = device.compile_device().profile();
+            let choice = storage_image_choice(format, profile)
+                .unwrap_or_else(|e| panic!("{kind:?} {ty:?} over {format:?}: {e}"));
+            inputs.storage_images.insert(slot, choice);
+            stage_notes_under(device, &bitcode, "k", &inputs)
+        }
+        notes => notes,
+    }
+    .unwrap_or_else(|e| panic!("{kind:?} {ty:?} over {format:?}: {e}"));
     NAN_NOTES.iter().any(|n| notes.contains(n))
 }
 
@@ -530,7 +549,7 @@ fn neutral_announced(messages: &Messages) -> BTreeSet<Degradation> {
 fn cross_class_storage_and_buffer_reads_are_the_native_words() {
     on_device(|device, messages| {
         let mut pipelines: BTreeMap<(Kind, Ty), ComputePipelineState> = BTreeMap::new();
-        let mut nan_bits: BTreeMap<(Kind, Ty), bool> = BTreeMap::new();
+        let mut nan_bits: BTreeMap<(Kind, Ty, PixelFormat), bool> = BTreeMap::new();
         let (mut checked, mut differ, mut skipped, mut nonzero) = (0usize, 0usize, 0usize, 0usize);
         let mut nans = 0usize;
         let _ = messages.take_notices();
@@ -576,8 +595,8 @@ fn cross_class_storage_and_buffer_reads_are_the_native_words() {
                     };
                     let mut leaves = |t: Ty| {
                         *nan_bits
-                            .entry((kind, t))
-                            .or_insert_with(|| leaves_nan_bits(device, kind, t))
+                            .entry((kind, t, format))
+                            .or_insert_with(|| leaves_nan_bits(device, kind, t, format))
                     };
                     let bits = leaves(ty) || leaves(ty.native(class));
                     let unlike = (0..got.len()).filter(|&i| got[i] != expected(want[i], ty));
