@@ -8323,8 +8323,9 @@ impl RenderLowering {
                             "{call}: a draw whose fragment function writes its sample mask under \
                              early tests, under a visibility result"
                         ),
-                        "the device does not state earlyFragmentMultisampleCoverageAfterSampleCounting, \
-                         so its occlusion query may count after the fragment function's sample mask"
+                        "the device does not state \
+                         earlyFragmentMultisampleCoverageAfterSampleCounting, so its occlusion \
+                         query may count after the fragment function's sample mask"
                             .to_owned(),
                     )
                 });
