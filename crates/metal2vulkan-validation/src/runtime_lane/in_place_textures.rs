@@ -164,8 +164,37 @@ pub(super) type Rows = (u64, u64, u64);
 
 /// The verdicts the device's check gives, each a line of its report before what it found
 /// changed: six classes (`Pointer`, `Fresh`, `DmaBuf`, `Pooled`, `ExportedFd`, `ExportedDmaBuf`),
-/// seven accesses, two row ends.
+/// seven accesses, two row ends. Held to the report's own count ([`verdicts_in`]).
 const VERDICTS: usize = 84;
+
+/// The verdicts of a device's check `report`, counted from its own lines: the report gives one line
+/// per class for a texture that reads, each named by its class alone (`Pointer: Passed`), then one
+/// per class, in that order, for each other access and row end (`Pointer renders: Passed`), then
+/// what the check found changed. So the classes are the first lines' names, and each further run
+/// of as many lines that names them in order, under a suffix no run had, is one more access or row
+/// end; the first that does not is past the verdicts.
+fn verdicts_in(report: &[String]) -> usize {
+    let key = |line: &String| line.split_once(": ").map(|(key, _)| key.to_owned());
+    let classes: Vec<String> = (report.iter())
+        .map_while(|line| key(line).filter(|key| !key.contains([' ', ','])))
+        .collect();
+    assert!(!classes.is_empty(), "no class in the report: {report:?}");
+    let mut suffixes = std::collections::HashSet::new();
+    let runs = (report.chunks_exact(classes.len()))
+        .map_while(|run| {
+            let tails: Option<Vec<String>> = (run.iter().zip(&classes))
+                .map(|(line, class)| key(line)?.strip_prefix(class.as_str()).map(str::to_owned))
+                .collect();
+            let tails = tails?;
+            tails
+                .iter()
+                .all(|tail| *tail == tails[0])
+                .then(|| tails[0].clone())
+        })
+        .take_while(|suffix| suffixes.insert(suffix.clone()))
+        .count();
+    classes.len() * runs
+}
 
 /// The devices made again where load beside the submission checks split their import tax's tries
 /// ([`answered_device`]).
@@ -1266,6 +1295,27 @@ fn the_guests_surface_lies_in_place_where_its_checks_passed() {
 }
 
 #[test]
+fn a_check_report_s_verdicts_are_counted_from_its_lines() {
+    let report: Vec<String> = [
+        "Pointer: Passed",
+        "Fresh: Unchecked",
+        "Pointer renders: Passed",
+        "Fresh renders: Failed",
+        "Pointer, rows on lines: Passed",
+        "Fresh, rows on lines: Passed",
+        "Pointer renders, rows on lines: Passed",
+        "Fresh renders, rows on lines: Passed",
+        "Fresh renders: no pages to check: none",
+        "Fresh renders, rows on lines: changed byte 3",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    assert_eq!(verdicts_in(&report), 8);
+    assert_eq!(verdicts_in(&report[..8]), 8);
+    assert_eq!(verdicts_in(&report[..5]), 4);
+}
+
+#[test]
 fn a_failed_check_keeps_the_shadow_and_no_record() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -1277,6 +1327,11 @@ fn a_failed_check_keeps_the_shadow_and_no_record() {
         .unwrap();
         settled(&device);
         let report = device.in_place_check_report();
+        assert_eq!(
+            verdicts_in(&report),
+            VERDICTS,
+            "the check's verdicts, one per class, access and row end: {report:?}"
+        );
         assert!(
             report
                 .iter()
