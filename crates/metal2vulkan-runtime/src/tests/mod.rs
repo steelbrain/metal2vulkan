@@ -19,6 +19,8 @@ mod argument_sampler_count;
 #[cfg(debug_assertions)]
 mod argument_table;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod attached_levels;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod attached_read_standing;
 mod attachmentless;
 mod attributes;

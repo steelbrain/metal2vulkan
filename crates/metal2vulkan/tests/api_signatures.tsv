@@ -2551,10 +2551,12 @@ field	metal2vulkan-runtime::WorkCounts.argument_tables_held_at_bind	pub argument
 field	metal2vulkan-runtime::WorkCounts.argument_tables_retained	pub argument_tables_retained: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots	pub attached_read_slots: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_any_level	pub attached_read_slots_any_level: u64
-field	metal2vulkan-runtime::WorkCounts.attached_read_slots_below	pub attached_read_slots_below: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_apart	pub attached_read_slots_apart: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_first_level	pub attached_read_slots_first_level: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_narrowed	pub attached_read_slots_narrowed: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_one_level	pub attached_read_slots_one_level: u64
 field	metal2vulkan-runtime::WorkCounts.attached_read_slots_reaching	pub attached_read_slots_reaching: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_written	pub attached_read_slots_written: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_clears_recorded	pub attachment_clears_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_read_clears	pub attachment_read_clears: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_read_splits	pub attachment_read_splits: u64

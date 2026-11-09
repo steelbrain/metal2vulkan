@@ -25,6 +25,7 @@ fixture air_2_1_front_end: metal: Apple metal version 32023.921 (metalfe-32023.9
 fixture air_2_2_texture_status: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture air_2_4_front_end: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture air_2_9_front_end: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
+fixture alv_levels: metal: Apple metal version 32023.922 (metalfe-32023.922.4); macosx-sdk: 27.2 (26B118)
 fixture ani_cube_grad: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture bary_weights: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
 fixture bcx_half_read: metal: Apple metal version 32023.921 (metalfe-32023.921.6); macosx-sdk: 27.0 (26A425)
