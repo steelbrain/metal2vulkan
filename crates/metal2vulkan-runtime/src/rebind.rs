@@ -294,7 +294,7 @@ impl Rebinds {
         entry.pending += 1;
         Some(match cell.lying() {
             Lying::In(pages) => Pinned::Held(pages),
-            Lying::Detached(_) => Pinned::Detached,
+            Lying::Detached(_) | Lying::Gone(_) => Pinned::Detached,
         })
     }
 
@@ -306,7 +306,7 @@ impl Rebinds {
         let cell = buffers.get(&key)?.cell.upgrade()?;
         let pinned = match cell.lying() {
             Lying::In(pages) => Pinned::Held(pages),
-            Lying::Detached(_) => Pinned::Detached,
+            Lying::Detached(_) | Lying::Gone(_) => Pinned::Detached,
         };
         Some(pinned)
     }
@@ -579,7 +579,7 @@ impl Submitting<'_> {
             let entry = self.buffers.get(key);
             let cell = entry.and_then(|entry| entry.cell.upgrade());
             match (pinned, cell.as_ref().map(|cell| cell.lying())) {
-                (_, None) | (_, Some(Lying::Detached(_))) => false,
+                (_, None) | (_, Some(Lying::Detached(_) | Lying::Gone(_))) => false,
                 (Pinned::Detached, Some(Lying::In(_))) => true,
                 (Pinned::Held(pages), Some(Lying::In(current))) => !Arc::ptr_eq(pages, &current),
                 (Pinned::Waiting(pages), Some(Lying::In(current))) => {
@@ -615,7 +615,7 @@ impl Submitting<'_> {
             // Compared by identity, so a pin whose pages went still compares; neither is the last
             // hold: the cell holds what it lies in, and the buffer its cell.
             let moved = match (&pinned, &now) {
-                (_, None) => true,
+                (_, None | Some(Lying::Gone(_))) => true,
                 (Pinned::Detached, Some(Lying::Detached(_))) => false,
                 (Pinned::Detached, Some(Lying::In(_))) => true,
                 (Pinned::Held(_) | Pinned::Waiting(_), Some(Lying::Detached(_))) => true,

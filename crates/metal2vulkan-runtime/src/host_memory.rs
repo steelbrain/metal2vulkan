@@ -556,6 +556,7 @@ impl HostRelease {
             deallocator: Mutex::new(deallocator),
             keep_alive: Mutex::new(keep_alive),
             held_back: Mutex::new(None),
+            due_to: Mutex::new(None),
         })
     }
 }
@@ -1309,9 +1310,14 @@ pub(super) struct Release {
     length: u64,
     deallocator: Mutex<Option<ProgramObject<Deallocator>>>,
     keep_alive: Mutex<Option<ProgramObject<KeepAlive>>>,
-    /// Where a detach held both back ([`Release::hold_back`]): told as the release would have run
-    /// the deallocator.
+    /// Where a detach held both back ([`Release::hold_back`]), or a recovery carried the buffer to
+    /// its device's next generation ([`Release::carry_on`]): told, as the release would have run
+    /// the deallocator, that these pages may be unmapped.
     held_back: Mutex<Option<Arc<HeldBack>>>,
+    /// Where these pages are those a recovery made the buffer again over on its device's next
+    /// generation ([`Release::carried`]): where the deallocator and the keep-alive wait, told as
+    /// the release would have run the deallocator that it came and these pages may be unmapped.
+    due_to: Mutex<Option<Arc<HeldBack>>>,
 }
 
 // SAFETY: the pointer is only handed to the deallocator, which is `Send`; the deallocator and
@@ -1353,11 +1359,17 @@ impl Release {
         self.length
     }
 
-    /// Run the deallocator, once; a panic inside it is caught. Where a detach held it back, the
-    /// [`HeldBack`] is told instead: the pages may be unmapped from now on.
+    /// Run the deallocator, once; a panic inside it is caught. Where a detach held it back, or a
+    /// recovery carried the buffer on, the [`HeldBack`] is told instead: the pages may be
+    /// unmapped from now on; where these are the pages a recovery made the buffer again over, it
+    /// is told the release came too.
     pub(super) fn run(&self) {
         if let Some(held) = lock(&self.held_back).take() {
             held.unmappable();
+            return;
+        }
+        if let Some(held) = lock(&self.due_to).take() {
+            held.released();
             return;
         }
         let deallocator = lock(&self.deallocator).take();
@@ -1379,13 +1391,19 @@ impl Release {
     /// the deallocator ran and the pages may be unmapped, so the deallocator may read the bytes, as
     /// with a release. `None` where it has no deallocator left to run.
     pub(super) fn hold_back(&self) -> Option<Arc<HeldBack>> {
+        // Pages a recovery made the buffer again over: what waits for its release is held back
+        // already, which the release of these pages now tells only that they may be unmapped.
+        if let Some(held) = lock(&self.due_to).take() {
+            *lock(&self.held_back) = Some(Arc::clone(&held));
+            return Some(held);
+        }
         let deallocator = lock(&self.deallocator).take()?;
         let keep_alive = lock(&self.keep_alive).take();
         let held = Arc::new(HeldBack {
             state: Mutex::new(Back {
                 deallocator: Some(deallocator),
                 keep_alive,
-                unmappable: false,
+                mapped: 1,
                 due: false,
             }),
             pointer: self.pointer,
@@ -1393,6 +1411,53 @@ impl Release {
         });
         *lock(&self.held_back) = Some(Arc::clone(&held));
         Some(held)
+    }
+
+    /// Hold back its deallocator and its keep-alive for a recovery that carries the buffer to its
+    /// device's next generation, which makes it again over the same pages (`Buffer::carry`): both
+    /// wait for the buffer's release, or its next rebind, there ([`Release::carried`]), and for
+    /// every import of the pages, on each generation the buffer lay on, to be freed, as Metal
+    /// keeps a buffer's pages wired until it releases them. Where these pages are those an
+    /// earlier recovery made the buffer again over, what waits already waits for one more import.
+    /// `None` where it holds neither.
+    pub(super) fn carry_on(&self) -> Option<Arc<HeldBack>> {
+        if let Some(held) = lock(&self.due_to).take() {
+            lock(&held.state).mapped += 1;
+            *lock(&self.held_back) = Some(Arc::clone(&held));
+            return Some(held);
+        }
+        let deallocator = lock(&self.deallocator).take();
+        let keep_alive = lock(&self.keep_alive).take();
+        if deallocator.is_none() && keep_alive.is_none() {
+            return None;
+        }
+        let held = Arc::new(HeldBack {
+            state: Mutex::new(Back {
+                deallocator,
+                keep_alive,
+                // These pages' import, and the next generation's.
+                mapped: 2,
+                due: false,
+            }),
+            pointer: self.pointer,
+            length: self.length,
+        });
+        *lock(&self.held_back) = Some(Arc::clone(&held));
+        Some(held)
+    }
+
+    /// The release of the pages a recovery made a buffer again over (`Buffer::carry`), of the
+    /// `length` bytes at `pointer`: what `held` holds back of the pages' first release
+    /// ([`Release::carry_on`]) waits for it.
+    pub(super) fn carried(pointer: NonNull<u8>, length: u64, held: Arc<HeldBack>) -> Release {
+        Release {
+            pointer,
+            length,
+            deallocator: Mutex::new(None),
+            keep_alive: Mutex::new(None),
+            held_back: Mutex::new(None),
+            due_to: Mutex::new(Some(held)),
+        }
     }
 }
 
@@ -1412,7 +1477,10 @@ pub(super) struct HeldBack {
 struct Back {
     deallocator: Option<ProgramObject<Deallocator>>,
     keep_alive: Option<ProgramObject<KeepAlive>>,
-    unmappable: bool,
+    /// The imports of the pages whose release has not reached it yet ([`HeldBack::unmappable`]):
+    /// the one a detach let go of, or one on each generation a recovery carried the buffer
+    /// across ([`Release::carry_on`]). The pages may be unmapped once none is left.
+    mapped: usize,
     due: bool,
 }
 
@@ -1456,11 +1524,12 @@ impl HeldBack {
     /// What runs and goes now: the deallocator once due and the pages are mapped (a keep-alive)
     /// or may be unmapped; the keep-alive once the deallocator ran and they may be unmapped.
     fn ready(back: &mut Back) -> Ready {
-        let deallocator = match back.due && (back.unmappable || back.keep_alive.is_some()) {
+        let unmappable = back.mapped == 0;
+        let deallocator = match back.due && (unmappable || back.keep_alive.is_some()) {
             true => back.deallocator.take(),
             false => None,
         };
-        let keep_alive = match back.unmappable && back.deallocator.is_none() {
+        let keep_alive = match unmappable && back.deallocator.is_none() {
             true => back.keep_alive.take(),
             false => None,
         };
@@ -1494,7 +1563,7 @@ impl HeldBack {
     fn unmappable(&self) {
         let ready = {
             let mut back = lock(&self.state);
-            back.unmappable = true;
+            back.mapped = back.mapped.saturating_sub(1);
             HeldBack::ready(&mut back)
         };
         self.run(ready);
@@ -1511,6 +1580,18 @@ impl HeldBack {
         };
         self.run(ready);
         waits
+    }
+
+    /// The pages a recovery made the buffer again over went ([`Release::carried`]): the buffer's
+    /// release or next rebind came, and their import's release reached it.
+    fn released(&self) {
+        let ready = {
+            let mut back = lock(&self.state);
+            back.due = true;
+            back.mapped = back.mapped.saturating_sub(1);
+            HeldBack::ready(&mut back)
+        };
+        self.run(ready);
     }
 }
 

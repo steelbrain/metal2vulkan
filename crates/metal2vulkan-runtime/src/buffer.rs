@@ -197,8 +197,15 @@ pub(super) struct HostCell {
     /// again.
     exposed: AtomicU8,
     /// The device whose work counts each look at its pages adds to
-    /// (`WorkCounts::no_copy_lies_read`).
-    device: Device,
+    /// (`WorkCounts::no_copy_lies_read`): its generation, let go of once the buffer was carried
+    /// to the next one and its pages there went (`device/carry.rs`).
+    device: MadeOn,
+    /// Its pages on its lost generation were marked let go of, the buffer carried to the next one
+    /// and that generation at rest ([`LostHost`]): no call takes them from now on
+    /// (`Buffer::held_parts`).
+    released: AtomicBool,
+    /// They went ([`LostHost`]): it lies in none ([`Lying::Gone`]).
+    freed: AtomicBool,
     /// The GPU's writes to the buffer are dropped, as Metal's private option bit 24 drops them:
     /// its pages are imported through a read-only view of them (`read_only_view.rs`), or copied,
     /// the copy's GPU writes never written back (`copied.rs`), and a rebind's are too.
@@ -431,6 +438,18 @@ pub(super) enum Lying {
     In(Arc<HostPages>),
     /// Detached: in no pages.
     Detached(Arc<Detached>),
+    /// Its pages on a lost generation went at the generation's rest, the buffer carried to the
+    /// next one ([`LostHost`], `device/carry.rs`), where they lay as the [`Shape`] says: no work
+    /// of the generation reads them from then on, and every other reach of the buffer goes to
+    /// where it was carried.
+    Gone(Shape),
+}
+
+/// A read of a carried no-copy buffer's pages on its lost generation after the generation's rest
+/// ([`Lying::Gone`]), which no work makes: none of its command buffers records, and a call that
+/// held them keeps them until it ends (`Buffer::held_parts`).
+pub(super) fn read_gone() -> ! {
+    unreachable!("a carried no-copy buffer's pages read on its lost generation after its rest")
 }
 
 /// What a detached no-copy buffer's commands take of it while it is detached (`detach.rs`): the
@@ -498,7 +517,7 @@ impl HostCell {
         self.device.shared().counts.thread().no_copy_lie_read();
         match &*lock(&self.pages) {
             Lying::In(pages) => Some(Arc::clone(pages)),
-            Lying::Detached(_) => None,
+            Lying::Detached(_) | Lying::Gone(_) => None,
         }
     }
 
@@ -521,6 +540,7 @@ impl HostCell {
                 let pages = &detached.pages;
                 (pages.raw, pages.base, Shape::of(pages).base)
             }
+            Lying::Gone(_) => read_gone(),
         }
     }
 
@@ -534,7 +554,7 @@ impl HostCell {
                 let start = (mapped.as_ptr() as usize).checked_add(shape.offset as usize)?;
                 Some(start..start.checked_add(shape.reach as usize)?)
             }
-            Lying::Detached(_) => None,
+            Lying::Detached(_) | Lying::Gone(_) => None,
         }
     }
 
@@ -548,6 +568,7 @@ impl HostCell {
         match &*lock(&self.pages) {
             Lying::In(pages) => pages.offset(),
             Lying::Detached(detached) => detached.pages.offset,
+            Lying::Gone(shape) => shape.offset,
         }
     }
 
@@ -791,13 +812,86 @@ impl LostBuffer {
     }
 }
 
+/// A carried no-copy buffer's parts on a lost generation (`Buffer::carry`): its hold there on the
+/// caller's pages (`cell`, its pages' import among them) and the buffer's handle of the
+/// generation, let go of once none of the generation's command buffers may record, as a buffer of
+/// the generation's goes there: out of its live buffers and its registries of no-copy buffers,
+/// its pages let go of, whose release tells what waits for every import of them
+/// (`Release::carry_on`).
+struct LostHost {
+    cell: Arc<HostCell>,
+    buffer: Weak<BufferShared>,
+}
+
+impl LostParts for LostHost {
+    fn mark(&self) {
+        self.cell.released.store(true, Ordering::Release);
+    }
+
+    fn release(self: Box<Self>) {
+        // The buffer went: its drop on the generation let go of everything there.
+        let Some(buffer) = self.buffer.upgrade() else {
+            return;
+        };
+        {
+            let mut calls = lock(&buffer.calls);
+            if calls.under_way > 0 {
+                // The last call under way on them lets them go (`Buffer::held_parts`).
+                calls.waiting = Some(self);
+                return;
+            }
+        }
+        (*self).release_now(&buffer);
+    }
+}
+
+impl LostHost {
+    /// Let the parts go, no call on them under way, as [`LostBuffer::release_now`] does.
+    fn release_now(self, buffer: &BufferShared) {
+        if buffer.handed_out.load(Ordering::Acquire) {
+            return;
+        }
+        // The process is exiting: the parts are left to its end, as every buffer's.
+        let Some(busy) = exit_guard::enter() else {
+            return;
+        };
+        let shared = buffer.device.shared();
+        shared
+            .live_buffers
+            .forget(buffer.address.0, buffer.object_id);
+        if let Bytes::Own(own) = &buffer.bytes {
+            shared.rebinds.forget(own.identity.key);
+            shared.aliases.forget(own.identity.key);
+        }
+        drop(busy);
+        let shape = match self.cell.lying() {
+            Lying::In(pages) => pages.import.shape,
+            Lying::Detached(detached) => Shape::of(&detached.pages),
+            Lying::Gone(shape) => shape,
+        };
+        let left = self.cell.replace(Lying::Gone(shape));
+        self.cell.freed.store(true, Ordering::Release);
+        // The pages go where nothing else holds them, their import freed where none holds it:
+        // their release tells what waits for every import of them.
+        drop(left);
+        // SAFETY: its parts on the generation went, no command buffer of the generation records,
+        // no call under way reads them (`Buffer::held_parts`), its cell lies in none of them and
+        // is read no more there (`Lying::Gone`), and every other reach of the buffer goes to
+        // where it was carried (`Buffer::carried`).
+        unsafe {
+            self.cell.device.let_go();
+            buffer.device.let_go();
+        }
+    }
+}
+
 /// The calls outside a command buffer's work under way on a buffer's parts on one generation
 /// ([`Buffer::held_parts`]), and the release of those parts that waits for them to end, where the
 /// buffer was carried from that generation and it came to rest (`device/carry.rs`).
 #[derive(Default)]
 struct LinkCalls {
     under_way: usize,
-    waiting: Option<Box<LostBuffer>>,
+    waiting: Option<Box<dyn LostParts>>,
 }
 
 /// A call outside a command buffer's work on a buffer's parts on one generation
@@ -818,8 +912,9 @@ impl Drop for HeldParts<'_> {
                 _ => None,
             }
         };
+        // Released now: no call is under way on them, unless one began since.
         if let Some(lost) = waiting {
-            (*lost).release_now(self.link);
+            lost.release();
         }
     }
 }
@@ -1943,6 +2038,7 @@ impl OwnBytes {
             Lie::Host(cell) => match cell.lying() {
                 Lying::In(pages) => f(&pages.import.pages(reason)),
                 Lying::Detached(detached) => f(&detached.pages),
+                Lying::Gone(_) => read_gone(),
             },
         }
     }
@@ -1953,7 +2049,7 @@ impl OwnBytes {
             Lie::Fixed(fixed) => Some(f(&fixed.pages)),
             Lie::Host(cell) => match cell.lying() {
                 Lying::In(pages) => Some(f(&pages.import.pages(reason))),
-                Lying::Detached(_) => None,
+                Lying::Detached(_) | Lying::Gone(_) => None,
             },
         }
     }
@@ -1966,6 +2062,7 @@ impl OwnBytes {
             Lie::Host(cell) => match cell.lying() {
                 Lying::In(pages) => pages.import.shape,
                 Lying::Detached(detached) => Shape::of(&detached.pages),
+                Lying::Gone(shape) => shape,
             },
         }
     }
@@ -2065,18 +2162,26 @@ impl BufferShared {
                 lie: Lie::Fixed(fixed),
                 ..
             }) => fixed.released.load(Ordering::Acquire),
-            _ => false,
+            Bytes::Own(OwnBytes {
+                lie: Lie::Host(cell),
+                ..
+            }) => cell.released.load(Ordering::Acquire),
+            Bytes::Heap(_) => false,
         }
     }
 
-    /// Whether its parts on a lost generation went (`FixedPages::release_lost`).
+    /// Whether its parts on a lost generation went (`FixedPages::release_lost`, [`LostHost`]).
     fn freed(&self) -> bool {
         match &self.bytes {
             Bytes::Own(OwnBytes {
                 lie: Lie::Fixed(fixed),
                 ..
             }) => fixed.freed.load(Ordering::Acquire),
-            _ => false,
+            Bytes::Own(OwnBytes {
+                lie: Lie::Host(cell),
+                ..
+            }) => cell.freed.load(Ordering::Acquire),
+            Bytes::Heap(_) => false,
         }
     }
 }
@@ -3085,7 +3190,9 @@ impl Device {
             textures: Mutex::new(TexturesOver::default()),
             in_place: Mutex::new(Vec::new()),
             exposed: AtomicU8::new(0),
-            device: self.clone(),
+            device: MadeOn::new(self.clone()),
+            released: AtomicBool::new(false),
+            freed: AtomicBool::new(false),
             drops_writes,
             held_back: Mutex::new(None),
         });
@@ -3749,6 +3856,7 @@ impl Buffer {
                     Lying::Detached(detached) => {
                         space(&detached.pages, Shape::of(&detached.pages).base)
                     }
+                    Lying::Gone(_) => read_gone(),
                 },
             },
             Bytes::Heap(bytes) => bytes.bytes.at_for(bytes.offset, ReadApart::Binding),
@@ -3814,6 +3922,7 @@ impl Buffer {
                     Lying::Detached(detached) => {
                         (Shape::of(&detached.pages).base, address(&detached.pages))
                     }
+                    Lying::Gone(_) => read_gone(),
                 },
             },
             Bytes::Heap(bytes) => (
@@ -4127,7 +4236,7 @@ impl Buffer {
                 ..
             }) => match cell.lying() {
                 Lying::In(pages) => pages.in_import(offset),
-                Lying::Detached(_) => None,
+                Lying::Detached(_) | Lying::Gone(_) => None,
             },
             Bytes::Own(_) => None,
             Bytes::Heap(bytes) => bytes.bytes.host_memory_at(bytes.offset + offset),
@@ -4301,6 +4410,7 @@ impl Buffer {
         match self.pages_cell().map(|cell| cell.lying()) {
             Some(Lying::In(pages)) => pages.type_index(),
             Some(Lying::Detached(detached)) => detached.type_index,
+            Some(Lying::Gone(_)) => read_gone(),
             None => self.memory().2,
         }
     }
@@ -4319,7 +4429,7 @@ impl Buffer {
         match self.pages_cell().map(|cell| cell.lying()) {
             Some(Lying::In(pages)) => pages.over_dma_buf(),
             Some(Lying::Detached(detached)) => detached.over_dma_buf,
-            None => false,
+            Some(Lying::Gone(_)) | None => false,
         }
     }
 
@@ -4501,6 +4611,7 @@ impl Buffer {
         };
         let fixed = match (&own.owner, &own.lie) {
             (Owner::Runtime, Lie::Fixed(fixed)) => fixed,
+            (Owner::Caller, Lie::Host(cell)) => return self.carry_no_copy(last, own, cell, to),
             (Owner::Caller, _) => return Err(Left::NoCopy),
             (Owner::Vulkan, _) | (Owner::Runtime, Lie::Host(_)) => return Err(Left::Caller),
         };
@@ -4625,6 +4736,77 @@ impl Buffer {
 }
 
 impl Buffer {
+    /// [`Buffer::carry`] of a no-copy buffer whose parts on the generation it leaves are `last`,
+    /// `own` their bytes and `cell` their hold on the caller's pages: made again on `to` of the
+    /// caller's memory its pages were made of ([`HostPages::made_of`]), over the same pages, as its
+    /// making or last rebind made it (an import of the pointer or of the source's dma-bufs, a run
+    /// of a guest RAM the device uses, a copy, a read-only view), the caller's gate and resolver
+    /// asked again there, its `contents` pointer and bytes as they are. Its deallocator and
+    /// keep-alive wait for its release, or next rebind, there and for the import on each
+    /// generation to be freed ([`Release::carry_on`]). Left the lost generation's: a buffer
+    /// detached, or whose last detach's deallocator waits for its next rebind (a detach is not
+    /// carried), and one whose making there fails.
+    fn carry_no_copy(
+        &self,
+        last: &Arc<BufferShared>,
+        own: &OwnBytes,
+        cell: &Arc<HostCell>,
+        to: &Device,
+    ) -> Result<Contents, Left> {
+        const CALL: &str = "new_buffer_with_bytes_no_copy";
+        if lock(&cell.held_back).is_some() {
+            return Err(Left::NoCopy);
+        }
+        let pages = cell.current().ok_or(Left::NoCopy)?;
+        let parts = pages.made_of().cloned().ok_or(Left::NoCopy)?;
+        let pointer = parts.pointer;
+        let naming = Naming::Carried {
+            object_id: last.object_id,
+            identity: own.identity,
+            attributes: last.attributes.carried(),
+        };
+        let at = Place::Shared {
+            address: last.address,
+            held: own.reserved,
+        };
+        let made = (CALL, last.length, last.options, at);
+        // SAFETY: the caller's pages stay mapped while the buffer lives, as the contract of the
+        // memory it was made or rebound over says (`HostMemory::new`).
+        let carried = unsafe {
+            to.buffer_over_host_parts(made, parts, None, false, cell.drops_writes(), naming)
+        }
+        .map_err(|_| Left::Failed)?;
+        let (Bytes::Own(carried_own), Some(carried_pages)) =
+            (&carried.0.bytes, carried.host_pages())
+        else {
+            return Err(Left::Failed);
+        };
+        // What the caller gave back the pages to waits for the buffer's release there and for
+        // each import of them to be freed.
+        if let Some(held) = pages.release.get().and_then(Release::carry_on) {
+            carried_pages.release_to(Release::carried(pointer, last.length, held));
+        }
+        own.range_token.hand_to(&carried_own.range_token);
+        let unobserved = last.padding_unobserved.load(Ordering::Acquire);
+        carried
+            .0
+            .padding_unobserved
+            .store(unobserved, Ordering::Release);
+        let from = last.device.shared();
+        let lost = LostHost {
+            cell: Arc::clone(cell),
+            buffer: Arc::downgrade(last),
+        };
+        let _set = last.next.set(carried);
+        // Every link before it is carried already.
+        last.carried.store(true, Ordering::Release);
+        // Its parts on the lost generation go once none of its command buffers may record.
+        from.carry.lost(from, Box::new(lost));
+        // The program's buffer is the next generation's from now on.
+        let _kept = to.visible(self.clone());
+        Ok(Contents::Kept)
+    }
+
     /// Whether the buffer's parts on the generation it was made on went, carried from there
     /// (`FixedPages::release_lost`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

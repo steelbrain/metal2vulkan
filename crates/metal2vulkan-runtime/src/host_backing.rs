@@ -65,6 +65,7 @@ impl Buffer {
         let pages = match self.pages_cell()?.lying() {
             Lying::In(pages) => pages,
             Lying::Detached(_) => return Some(HostBacking::Detached),
+            Lying::Gone(_) => super::buffer::read_gone(),
         };
         let backing = if pages.copied() {
             HostBacking::Copied

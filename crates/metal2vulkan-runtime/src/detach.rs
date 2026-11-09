@@ -258,7 +258,9 @@ impl Device {
                     pages.park(gone);
                     super::heap_sets::retire(self, Box::new(Arc::clone(pages)));
                 }
-                Lying::Detached(_) => super::heap_sets::retire(self, Box::new(gone)),
+                Lying::Detached(_) | Lying::Gone(_) => {
+                    super::heap_sets::retire(self, Box::new(gone))
+                }
             }
         }
         // The old pages go now where no command buffer holds them, their import freed; their

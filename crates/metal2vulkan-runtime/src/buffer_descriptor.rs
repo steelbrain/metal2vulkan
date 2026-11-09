@@ -1454,7 +1454,7 @@ impl Device {
         // A detached buffer lay in none: what took its stand-in goes with the new pages.
         let keeper = match &old {
             Lying::In(old) => Arc::clone(old),
-            Lying::Detached(_) => Arc::clone(&pages),
+            Lying::Detached(_) | Lying::Gone(_) => Arc::clone(&pages),
         };
         let rebound = !swaps.is_empty() || !texels.is_empty();
         // The textures that presented stand-ins while the bytes were detached present their own
