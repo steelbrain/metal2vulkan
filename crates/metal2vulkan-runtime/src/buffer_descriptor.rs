@@ -984,7 +984,7 @@ impl Device {
         let (address, reserved) = match self.place_window(placement, &window, length) {
             Ok(held) => held,
             Err(error) => {
-                self.discard_import(buffer, memory);
+                self.discard_import(buffer.raw, memory);
                 return Err(error);
             }
         };
@@ -1286,7 +1286,7 @@ impl Device {
                         let remade = match images_again(&placement) {
                             Ok(remade) => remade,
                             Err(error) => {
-                                self.discard_import(host, placement);
+                                self.discard_import(host.raw, placement);
                                 return Err(error);
                             }
                         };
@@ -1295,7 +1295,7 @@ impl Device {
                                 Some(again) => settled = Some(again),
                                 None => {
                                     drop(remade);
-                                    self.discard_import(host, placement);
+                                    self.discard_import(host.raw, placement);
                                     return Err(detached_textures());
                                 }
                             }
@@ -1323,7 +1323,7 @@ impl Device {
                                 match images_again(&placement) {
                                     Ok(remade) => Ok((host, placement, remade)),
                                     Err(error) => {
-                                        self.discard_import(host, placement);
+                                        self.discard_import(host.raw, placement);
                                         return Err(error);
                                     }
                                 }
@@ -1340,7 +1340,7 @@ impl Device {
                                 None => {
                                     if let Ok((host, placement, remade)) = made {
                                         drop(remade);
-                                        self.discard_import(host, placement);
+                                        self.discard_import(host.raw, placement);
                                     }
                                     return Err(detached_textures());
                                 }
@@ -2080,13 +2080,14 @@ impl Device {
         Ok(buffer)
     }
 
-    /// Release `buffer` and its `placement`, an import made for a buffer or rebind that is not
-    /// made after all: the `VkBuffer` first, once its sparse binding completed.
-    pub(super) fn discard_import(&self, buffer: HostBuffer, placement: Placement) {
+    /// Release the `VkBuffer` `raw` and its `placement`, an import made for a buffer or rebind
+    /// that is not made after all, or one made to ask the driver (`host_shared_pointers.rs`,
+    /// `Device::ram_takes_dma_bufs`): the `VkBuffer` first, once its sparse binding completed.
+    pub(super) fn discard_import(&self, raw: vk::Buffer, placement: Placement) {
         let shared = self.shared();
         placement.settle();
         // SAFETY: the buffer is unused, and its binding completed.
-        unsafe { release::object(shared.vk(), buffer.raw) };
+        unsafe { release::object(shared.vk(), raw) };
         lock(&shared.memory).free(shared.vk(), &placement);
     }
 

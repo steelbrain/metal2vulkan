@@ -625,6 +625,41 @@ impl Device {
         Ok((buffer.raw, placement))
     }
 
+    /// Whether the driver takes the dma-bufs a guest RAM's `source` makes of its pages
+    /// (`host_ram.rs`'s `Plan::listed`, whose chunks are those dma-bufs): asked of it by an import
+    /// of `page`, the RAM's first host page, as one ([`Device::ram_span_as_dma_buf`], which counts
+    /// a failure and remembers the driver's refusal), released at once. Not where the device
+    /// imports no dma-buf or makes no buffer for one, or the driver refused a dma-buf of a RAM's
+    /// source before (`RamSource::refuses_dma_bufs`), the source unasked; taken where the source
+    /// alone failed the page, its failures that span's alone. The page's dma-buf pins it, and
+    /// udmabuf allocates it in the guest's file where the guest never wrote it.
+    ///
+    /// # Safety
+    ///
+    /// As [`Device::ram_span_as_dma_buf`]'s, for `page`.
+    pub(super) unsafe fn ram_takes_dma_bufs(
+        &self,
+        importer: &Importer,
+        page: Range<u64>,
+        source: &DmaBufSource,
+    ) -> bool {
+        let refused = || self.shared().host_ram.refuses_dma_bufs();
+        if !importer.imports_dma_bufs()
+            || !self.imports_dma_buf_buffers(vk::BufferCreateFlags::empty())
+            || refused()
+        {
+            return false;
+        }
+        // SAFETY: the caller's.
+        match unsafe { self.ram_span_as_dma_buf(importer, page, source) } {
+            Ok((raw, placement)) => {
+                self.discard_import(raw, placement);
+                true
+            }
+            Err(_) => !refused(),
+        }
+    }
+
     /// `runs`, host pages of a guest RAM (`host_ram.rs`: by start, sharing no page, each inside
     /// one chunk), imported as the one dma-buf of them, their pages one after another, that the
     /// RAM's `source` of run lists makes (`HostRam::with_dma_buf_of_runs`): the `VkBuffer` over
@@ -633,7 +668,9 @@ impl Device {
     /// placed in it.
     /// Refused, everything made released, as [`Device::ram_span_as_dma_buf`] is, where the device
     /// makes no such buffer, the source fails or answers a chunk of another length, or the driver
-    /// refuses the dma-buf.
+    /// refuses the dma-buf; and, the source unasked, where the driver refused a dma-buf of a
+    /// RAM's source before (`RamSource::refuses_dma_bufs`). The driver's refusal of the list's is
+    /// remembered so too, for the device's life; the source's failures are that list's alone.
     ///
     /// # Safety
     ///
@@ -645,8 +682,10 @@ impl Device {
         runs: &[Range<u64>],
         source: &DmaBufRunsSource,
     ) -> Result<(vk::Buffer, Placement), Error> {
+        let shared = self.shared();
         if !importer.imports_dma_bufs()
             || !self.imports_dma_buf_buffers(vk::BufferCreateFlags::empty())
+            || shared.host_ram.refuses_dma_bufs()
         {
             return Err(not_importable());
         }
@@ -689,8 +728,9 @@ impl Device {
                 &window,
                 MemoryClass::Shared,
             )
-        }?;
-        self.shared().counts.dma_buf_imported(pages.memories.len());
+        }
+        .inspect_err(|_| shared.host_ram.refuse_dma_bufs())?;
+        shared.counts.dma_buf_imported(pages.memories.len());
         let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, length, start);
         Ok((buffer.raw, placement))
     }

@@ -23,13 +23,17 @@
 //!   dma-buf of its own pages from the same source (`dma_buf.rs`), asked at the RAM's addresses
 //!   of them (`Placement::dma_buf_address`). Counted: `WorkCounts::host_ram_dma_buf_imports`,
 //!   and `host_ram_dma_buf_imports_failed` where the driver refused the dma-buf (NVIDIA's refuses
-//!   a udmabuf), which then takes the pointer.
+//!   a udmabuf), which then takes the pointer. The driver's refusal is remembered for the device's
+//!   life: no later chunk, run or copy's list asks a source.
 //! - **Few listed imports** ([`Plan::listed`]). Where the device imports dma-bufs, the RAM has a
 //!   source and the device's held imports add to the cost of every submission (RADV lists every
 //!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1,
 //!   an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a submission's median from 14 us to 60 to
 //!   88 us, as 32 of 256 MiB to 32 to 33 us, as 16 of 512 MiB to 24 us, as 3 of 2730 MiB to 16
-//!   us), a chunk is as long as [`LONGEST_LISTED_CHUNK`] (512 MiB), one dma-buf of the source
+//!   us), and the driver takes the source's dma-bufs (asked as the use begins, by an import of the
+//!   RAM's first page as one, the source asked for that page, released at once; not where it
+//!   refused one before: NVIDIA's refuses a udmabuf, and its RAMs keep their 64 MiB chunks), a
+//!   chunk is as long as [`LONGEST_LISTED_CHUNK`] (512 MiB), one dma-buf of the source
 //!   ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
 //!   `maxBufferSize` and `maxStorageBufferRange` take, in whole [`CHUNK_BYTES`]
 //!   ([`listed_chunk_bytes`]): an 8 GiB RAM is 16 imports at most. The cap is a bound on memory,
@@ -717,9 +721,9 @@ pub(crate) struct Plan {
     /// Each chunk's bytes; the last of a range may be fewer.
     pub(crate) bytes: u64,
     /// The device's held imports add to the cost of every submission and the RAM's chunks are
-    /// its dma-bufs (the module docs): its chunks are as long as [`listed_chunk_bytes`] allows,
-    /// none is imported ahead, and each is imported by the device's thread once an object over
-    /// it asked.
+    /// its dma-bufs, the driver having taken one of the RAM's source as the use began (the module
+    /// docs): its chunks are as long as [`listed_chunk_bytes`] allows, none is imported ahead,
+    /// and each is imported by the device's thread once an object over it asked.
     pub(crate) listed: bool,
     /// A listed chunk no object holds is released once idle for its window
     /// ([`RamOnDevice::idle`]): only where the whole RAM does not fit in the share of the memory
@@ -1972,8 +1976,9 @@ pub(crate) struct RamSource {
     /// ([`Device::count_host_ram_imports_against`]); 0 for the heaps'.
     #[cfg(test)]
     import_heaps: std::sync::atomic::AtomicU64,
-    /// Whether the driver refused a dma-buf a RAM's source made of a span of its pages
-    /// (`Device::ram_span_as_dma_buf`): from then on no span asks a source, for the device's life.
+    /// Whether the driver refused a dma-buf a RAM's source made of a span or a list of its pages
+    /// (`Device::ram_span_as_dma_buf`, `ram_runs_as_dma_buf`): from then on, for the device's
+    /// life, no span or list asks a source, and no RAM's plan is [`Plan::listed`].
     dma_bufs_refused: AtomicBool,
 }
 
@@ -2006,12 +2011,12 @@ impl RamSource {
         lock(&self.rams).iter().any(|used| Arc::ptr_eq(used, ram))
     }
 
-    /// Whether the driver refused a span's dma-buf ([`RamSource::refuse_dma_bufs`]).
+    /// Whether the driver refused a span's or a list's dma-buf ([`RamSource::refuse_dma_bufs`]).
     pub(crate) fn refuses_dma_bufs(&self) -> bool {
         self.dma_bufs_refused.load(Ordering::Relaxed)
     }
 
-    /// Remember that the driver refused a span's dma-buf, for the device's life.
+    /// Remember that the driver refused a span's or a list's dma-buf, for the device's life.
     pub(crate) fn refuse_dma_bufs(&self) {
         self.dma_bufs_refused.store(true, Ordering::Relaxed);
     }
@@ -2088,16 +2093,20 @@ impl Device {
     ///
     /// Where the device's held imports add to the cost of every submission and it imports the RAM's
     /// dma-bufs (RADV), each listed import costs every submission, so the RAM is imported in fewer,
-    /// longer chunks instead: as long as one dma-buf of its source holds
-    /// ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
-    /// `maxBufferSize` and `maxStorageBufferRange` take, in whole 64 MiB, and never past 512 MiB (a
-    /// chunk's import makes every page of it resident, those the guest never touched too). There
-    /// the thread imports nothing ahead: the first object over a chunk not imported asks it for the
-    /// chunk, which it imports off the object's thread (a chunk's import pins all its pages: 660 to
-    /// 692 ms for 2.7 GiB on a Radeon 780M), and that object and those over the chunk meanwhile are
-    /// bound in imports of their own runs alone, as above; a buffer's is released while idle, the
-    /// buffer bound in the chunk at its next use, and a heap's, or a buffer's whose address was
-    /// handed out, stays while it lives. A copy by runs over a chunk not imported
+    /// longer chunks instead, once the driver took one: the call asks the RAM's source for its
+    /// first host page and imports that dma-buf, released at once (a refusal counted in
+    /// `WorkCounts::host_ram_dma_buf_imports_failed`, and remembered for the device's life:
+    /// NVIDIA's refuses a udmabuf, and its RAMs keep their 64 MiB chunks). The chunks are as long
+    /// as one dma-buf of its source holds ([`HostRam::with_largest_dma_buf`]) and the device's
+    /// `maxMemoryAllocationSize`, `maxBufferSize` and `maxStorageBufferRange` take, in whole
+    /// 64 MiB, and never past 512 MiB (a chunk's import makes every page of it resident, those the
+    /// guest never touched too). There the thread imports nothing ahead: the first object over a
+    /// chunk not imported asks it for the chunk, which it imports off the object's thread (a
+    /// chunk's import pins all its pages: 660 to 692 ms for 2.7 GiB on a Radeon 780M), and that
+    /// object and those over the chunk meanwhile are bound in imports of their own runs alone, as
+    /// above; a buffer's is released while idle, the buffer bound in the chunk at its next use,
+    /// and a heap's, or a buffer's whose address was handed out, stays while it lives. A copy by
+    /// runs over a chunk not imported
     /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`) takes the chunk as an
     /// object does, or, of a RAM with a source of run lists ([`HostRam::with_dma_buf_of_runs`]),
     /// asks for nothing: it imports its own pages, one dma-buf of that source for each list of up
@@ -2247,16 +2256,29 @@ impl Device {
 
 impl Device {
     /// How the device imports `ram`'s chunks (the module docs): [`Plan::listed`] where the RAM has
-    /// a source of dma-bufs, the device imports dma-bufs and its held imports add to the cost of
-    /// every submission (its submission checks' import tax, `submit_check.rs`), so that its
-    /// chunks are its dma-bufs; [`Plan::AHEAD`] elsewhere, its chunks of shared memory refused
+    /// a source of dma-bufs, the device imports dma-bufs, its held imports add to the cost of
+    /// every submission (its submission checks' import tax, `submit_check.rs`) and the driver
+    /// takes the source's dma-bufs (asked of it, by an import of the RAM's first page as one
+    /// released at once, unless it refused one before: `Device::ram_takes_dma_bufs`), so that
+    /// its chunks are its dma-bufs; [`Plan::AHEAD`] elsewhere, its chunks of shared memory refused
     /// where the RAM has no source and the device imports no pointer to shared memory
     /// ([`Plan::shared_refused`]: asked of the device, by an import of one page released at once,
     /// only where a range of the RAM is shared memory).
     fn ram_plan(&self, ram: &HostRam) -> Plan {
-        let imports_dma_bufs =
-            (self.shared().host_import.as_ref()).is_ok_and(|importer| importer.imports_dma_bufs());
-        if ram.dma_buf.is_none() || !imports_dma_bufs || !self.pointer_imports_tax_submissions() {
+        let importer = (self.shared().host_import.as_ref()).ok();
+        let listed = match (importer, ram.dma_buf.as_ref(), ram.ranges.first()) {
+            (Some(importer), Some(source), Some(first)) => {
+                importer.imports_dma_bufs() && self.pointer_imports_tax_submissions() && {
+                    let page = first.start..first.start + importer.page;
+                    // SAFETY: the RAM's first page, mapped while the RAM lives, past the import
+                    // released before this returns; the source's dma-bufs hold exactly the pages
+                    // asked for (`HostRam::with_dma_buf`).
+                    unsafe { self.ram_takes_dma_bufs(importer, page, source) }
+                }
+            }
+            _ => false,
+        };
+        if !listed {
             let shared = ram.dma_buf.is_none()
                 && (ram.ranges.iter()).any(|range| shared_memory(range.start..range.end));
             return Plan {

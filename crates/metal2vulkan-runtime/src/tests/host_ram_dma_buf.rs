@@ -9,13 +9,17 @@
 //!
 //! - **The route.** Where the device's held pointer imports tax every submission (the import tax,
 //!   `submit_check.rs`: RADV; forced so on the device, so that the route runs on every device and
-//!   in every run, whatever its check measured), the chunk an object lies in is imported as one
-//!   dma-buf of it, the source asked once for the chunk's whole span at the RAM's addresses, with
-//!   a granule of its length (`WorkCounts::host_ram_dma_buf_imports`), or, where the driver
-//!   refuses that dma-buf (NVIDIA's refuses a udmabuf), by its pointer, the refusal counted
-//!   (`host_ram_dma_buf_imports_failed`) and remembered: the next chunk goes to its pointer, the
-//!   source unasked (shown on every device through a stand-in for the driver's refusal, and on
-//!   NVIDIA's by the driver itself); where the tax is not held (forced so), the pointer is
+//!   in every run, whatever its check measured), the use asks the driver first, with a dma-buf of
+//!   the RAM's first page from the source, released at once, and lists the RAM where it takes it;
+//!   the chunk an object lies in is imported as one dma-buf of it, the source asked once for the
+//!   chunk's whole span at the RAM's addresses, with a granule of its length
+//!   (`WorkCounts::host_ram_dma_buf_imports`), or, where the driver refuses that dma-buf (NVIDIA's
+//!   refuses a udmabuf), by its pointer, the refusal counted (`host_ram_dma_buf_imports_failed`)
+//!   and remembered: the next chunk, and a copy's list of runs, goes to its pointer, the sources
+//!   unasked, and a RAM used after it is not listed; a refusal of the use's own page leaves the
+//!   RAM its 64 MiB chunks, each to its pointer (shown on every device through a stand-in for the
+//!   driver's refusal, and on NVIDIA's by the driver itself); where the tax is not held (forced
+//!   so), the pointer is
 //!   imported where the driver takes it, the source never asked, and the dma-buf only where it
 //!   refuses it. Either way the buffer is bound in the chunk (`chunk_bound_buffers_made`), reports
 //!   `InHostRam`, and a second buffer over the chunk imports nothing more.
@@ -295,6 +299,12 @@ fn held_device(scratch: &Scratch, messages: Option<MessageSink>) -> Option<Devic
     Some(device)
 }
 
+/// The host's page size, as the device's imports know it: the page a use of a RAM asks the
+/// driver with (`Device::ram_takes_dma_bufs`).
+fn page_of(device: &Device) -> u64 {
+    (device.shared().host_import.as_ref()).map_or(4096, |importer| importer.page)
+}
+
 /// Whether the device imports dma-bufs.
 fn imports_dma_bufs(device: &Device) -> bool {
     (device.shared().host_import.as_ref()).is_ok_and(|importer| importer.imports_dma_bufs())
@@ -350,15 +360,23 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
     let (ram, start, view, asked, dropped) = ram(true);
     fill_pattern(view, AT + 4 * LENGTH);
+    let unused = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let before = device.work_counts();
+    let at_use = asked.lock().unwrap().requests.clone();
+    let probe_refused =
+        before.host_ram_dma_buf_imports_failed - unused.host_ram_dma_buf_imports_failed;
+    let [(listed, _)] = device.host_ram_chunks()[..] else {
+        panic!("one RAM");
+    };
     let first = buffer(&device, view, start, AT, LENGTH);
     let made = device.work_counts();
     let dma_bufs = made.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
     let refused = made.host_ram_dma_buf_imports_failed - before.host_ram_dma_buf_imports_failed;
     let requests = asked.lock().unwrap().requests.clone();
     println!(
-        "HOST-RAM-DMA-BUF {}: import tax forced held (measured {}: {}); the chunk's route: \
+        "HOST-RAM-DMA-BUF {}: import tax forced held (measured {}: {}); the use asked the driver \
+         with {at_use:?} ({probe_refused} refused), the RAM listed: {listed}; the chunk's route: \
          {dma_bufs} dma-buf import(s), {refused} refused, the source asked {requests:?}",
         device.name(),
         match measured {
@@ -376,20 +394,41 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
         1
     );
     assert_eq!(first.host_backing(), Some(HostBacking::InHostRam));
-    // The dma-buf first, of the whole chunk at the RAM's addresses: imported, or refused by the
-    // driver and the pointer imported; never asked of a device that imports no dma-bufs.
+    // The use asks the driver with a dma-buf of the RAM's first page, and lists the RAM where it
+    // took it. Then the dma-buf first, of the whole chunk at the RAM's addresses: imported, or
+    // refused by the driver and the pointer imported; where the driver refused the first page's,
+    // the pointer, the source unasked. Never asked of a device that imports no dma-bufs.
+    let page = page_of(&device);
     match imports_dma_bufs(&device) {
         true => {
-            assert_eq!(requests, [(start, 64 * MIB, 64 * MIB)]);
-            assert!(
-                matches!((dma_bufs, refused), (1, 0) | (0, 1)),
-                "the chunk's dma-buf imported, or refused and counted: {dma_bufs} imported, \
-                 {refused} refused"
+            assert_eq!(at_use, [(start, page, page)]);
+            assert_eq!(
+                listed,
+                probe_refused == 0,
+                "listed where the driver took the page's"
             );
+            match listed {
+                true => {
+                    assert_eq!(requests, [(start, page, page), (start, 64 * MIB, 64 * MIB)]);
+                    assert!(
+                        matches!((dma_bufs, refused), (1, 0) | (0, 1)),
+                        "the chunk's dma-buf imported, or refused and counted: {dma_bufs} \
+                         imported, {refused} refused"
+                    );
+                }
+                false => {
+                    assert_eq!(
+                        requests, at_use,
+                        "the source asked after the driver refused"
+                    );
+                    assert_eq!((dma_bufs, refused), (0, 0));
+                }
+            }
         }
         false => {
             assert!(requests.is_empty(), "{requests:?}");
-            assert_eq!((dma_bufs, refused), (0, 0));
+            assert_eq!((probe_refused, dma_bufs, refused), (0, 0, 0));
+            assert!(!listed);
         }
     }
     // The GPU reads the CPU's bytes, and its fill reaches the file's pages, the page past the
@@ -479,7 +518,7 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     // A driver's refusal is the device's to remember (NVIDIA's of every udmabuf): a buffer over
     // the RAM's second chunk takes that chunk's pointer, the source unasked and nothing counted
     // again.
-    let third = (refused == 1).then(|| {
+    let third = (refused + probe_refused == 1).then(|| {
         let (counted, requested) = (device.work_counts(), asked.lock().unwrap().requests.len());
         let third = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
         let after = device.work_counts();
@@ -512,12 +551,15 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
 }
 
 /// Where the driver refuses a chunk's dma-buf (a test's stand-in for NVIDIA's refusal of every
-/// udmabuf, `Memory::import_refusal`, on every device that imports dma-bufs; the import tax forced
-/// held), the device remembers the refusal: the RAM's first chunk asks the source, its dma-buf is
-/// refused and counted (`WorkCounts::host_ram_dma_buf_imports_failed`), and the chunk takes its
-/// pointer; the second chunk goes to its pointer at once, the source unasked and nothing counted
-/// again. On a device that refuses pointers to shared memory (RADV's) neither chunk is imported,
-/// and the source is still asked once.
+/// udmabuf, `Memory::import_refusal`, on every device that imports dma-bufs, set once the use
+/// began; the import tax forced held), the device remembers the refusal: the RAM's first chunk
+/// asks the source, its dma-buf is refused and counted
+/// (`WorkCounts::host_ram_dma_buf_imports_failed`), and the chunk takes its pointer; the second
+/// chunk goes to its pointer at once, the source unasked and nothing counted again; and a RAM
+/// used after it is not listed, its source unasked (`Device::ram_takes_dma_bufs`). On a device
+/// that refuses pointers to shared memory (RADV's) neither chunk is imported, and the source is
+/// still asked once. Where the driver itself refused the dma-buf of the page the use asked it
+/// with (NVIDIA's), the RAM is not listed and nothing more to test.
 #[test]
 fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer() {
     let scratch = Scratch::new();
@@ -529,11 +571,19 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
         return;
     }
     (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
-    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
-    crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
     let pointers = device.imports_shared_host_pointers().unwrap();
     let (ram, start, view, asked, _dropped) = ram(true);
     let used = device.use_host_ram(&ram).unwrap();
+    let [(true, _)] = device.host_ram_chunks()[..] else {
+        eprintln!(
+            "HOST-RAM-DMA-BUF {}: the driver refused the dma-buf the use asked it with; the RAM \
+             is not listed; nothing more to test",
+            device.name()
+        );
+        return;
+    };
+    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
     let counts = |device: &Device| {
         let counts = device.work_counts();
         let requests = asked.lock().unwrap().requests.clone();
@@ -543,7 +593,7 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
         );
         (imported, counts.host_ram_dma_buf_imports_failed, requests)
     };
-    let (before, failed_before, _) = counts(&device);
+    let (before, failed_before, at_use) = counts(&device);
     let first = try_buffer(&device, view, start, AT, LENGTH);
     let ((chunks, dma_bufs), failed, requests) = counts(&device);
     let second = try_buffer(&device, view, start, 64 * MIB + AT, LENGTH);
@@ -557,15 +607,17 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
             Err(_) => "refused",
         },
         failed - failed_before,
-        requests.len(),
+        requests.len() - at_use.len(),
         match &second {
             Ok(_) => "made",
             Err(_) => "refused",
         },
         failed_after - failed,
-        requests_after.len(),
+        requests_after.len() - at_use.len(),
     );
-    assert_eq!(requests, [(start, 64 * MIB, 64 * MIB)]);
+    let page = page_of(&device);
+    assert_eq!(at_use, [(start, page, page)], "the use's question");
+    assert_eq!(requests, [(start, page, page), (start, 64 * MIB, 64 * MIB)]);
     assert_eq!(failed - failed_before, 1, "the first chunk's refusal");
     assert_eq!(
         requests_after, requests,
@@ -582,6 +634,174 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
         }
     }
     drop((first, second, used, ram));
+    // A RAM used after the refusal: not listed, its source unasked.
+    let (later, _, _, later_asked, _later_dropped) = self::ram(true);
+    let later_use = device.use_host_ram(&later).unwrap();
+    let chunks = device.host_ram_chunks();
+    assert!(
+        chunks.iter().all(|(listed, _)| !listed),
+        "a RAM listed after the driver refused: {chunks:?}"
+    );
+    assert!(later_asked.lock().unwrap().requests.is_empty());
+    assert_eq!(device.work_counts().host_ram_dma_buf_imports_failed, failed);
+    drop((later_use, later));
+}
+
+/// Where the driver refuses the dma-buf of the page a use of a RAM asks it with (a test's
+/// stand-in for NVIDIA's refusal of every udmabuf, `Memory::import_refusal`, set before the use;
+/// the import tax forced held), the RAM is not listed: it keeps its 64 MiB chunks
+/// (`Device::host_ram_chunks`), the source asked once, for the RAM's first page, the refusal
+/// counted (`WorkCounts::host_ram_dma_buf_imports_failed`); and a buffer over its first chunk
+/// takes the chunk's pointer, the source unasked and nothing counted again (on a device that
+/// refuses pointers to shared memory, RADV's, the chunk is not imported).
+#[test]
+fn a_driver_s_refusal_as_the_use_begins_keeps_the_ram_s_chunks_short() {
+    let scratch = Scratch::new();
+    let Some(device) = held_device(&scratch, None) else {
+        return;
+    };
+    if !imports_dma_bufs(&device) {
+        eprintln!("HOST-RAM-DMA-BUF: the device imports no dma-bufs; nothing to test");
+        return;
+    }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
+    let pointers = device.imports_shared_host_pointers().unwrap();
+    let (ram, start, view, asked, _dropped) = ram(true);
+    let before = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let at_use = device.work_counts();
+    let chunks = device.host_ram_chunks();
+    let requests = asked.lock().unwrap().requests.clone();
+    let made = try_buffer(&device, view, start, AT, LENGTH);
+    let after = device.work_counts();
+    println!(
+        "HOST-RAM-DMA-BUF {}: the driver refuses the use's question: chunks {chunks:?}, the source \
+         asked {requests:?}; the first object {}",
+        device.name(),
+        match &made {
+            Ok(_) => "made",
+            Err(_) => "refused",
+        },
+    );
+    let page = page_of(&device);
+    let halves = vec![start..start + 64 * MIB, start + 64 * MIB..start + RAM_BYTES];
+    assert_eq!(chunks, [(false, halves)], "the RAM listed");
+    assert_eq!(requests, [(start, page, page)], "the use's question");
+    assert_eq!(
+        at_use.host_ram_dma_buf_imports_failed - before.host_ram_dma_buf_imports_failed,
+        1
+    );
+    assert_eq!(
+        asked.lock().unwrap().requests,
+        requests,
+        "the source asked for the chunk"
+    );
+    assert_eq!(
+        after.host_ram_dma_buf_imports_failed,
+        at_use.host_ram_dma_buf_imports_failed
+    );
+    assert_eq!(
+        after.host_ram_dma_buf_imports,
+        before.host_ram_dma_buf_imports
+    );
+    if pointers {
+        assert_eq!(
+            after.host_ram_chunks_imported - at_use.host_ram_chunks_imported,
+            1
+        );
+        let backing = made.as_ref().map(Buffer::host_backing).ok().flatten();
+        assert_eq!(backing, Some(HostBacking::InHostRam));
+    }
+    drop((made, used, ram));
+}
+
+/// Where the driver refuses a dma-buf of a RAM's sources (a test's stand-in for NVIDIA's refusal of
+/// every udmabuf, `Memory::import_refusal`, set once the use of a listed RAM began; the import tax
+/// forced held), a copy over a chunk not imported asks the source of run lists once: its list's
+/// dma-buf is refused and remembered, and the copy takes its chunk's pointer, the source of
+/// dma-bufs unasked; a copy over the other chunk after it asks neither source. On a device whose
+/// barriers do not order blits through two imports of the same pages
+/// ([`runs_alone`]: ANV's), or that imports no dma-buf, or whose driver refused the use's own
+/// question (NVIDIA's), copies take no lists: nothing to test. The copies' bytes are checked where
+/// the device imports pointers to shared memory.
+#[test]
+fn a_driver_s_refused_dma_buf_sends_copies_past_the_source_of_run_lists() {
+    let scratch = Scratch::new();
+    let Some(device) = held_device(&scratch, None) else {
+        return;
+    };
+    if !imports_dma_bufs(&device) || runs_alone(&device) == 0 {
+        eprintln!(
+            "HOST-RAM-DMA-BUF {}: copies take no lists here; nothing to test",
+            device.name()
+        );
+        return;
+    }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    let pointers = device.imports_shared_host_pointers().unwrap();
+    let (ram, start, view, asked, _dropped) = listed_ram(true, Some(LIST_RUNS));
+    let used = device.use_host_ram(&ram).unwrap();
+    let [(true, _)] = device.host_ram_chunks()[..] else {
+        eprintln!(
+            "HOST-RAM-DMA-BUF {}: the driver refused the dma-buf the use asked it with; the RAM \
+             is not listed; nothing to test",
+            device.name()
+        );
+        return;
+    };
+    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
+    let at_use = asked.lock().unwrap().requests.clone();
+    let own = device
+        .new_buffer(4 * 4096, ResourceOptions::shared())
+        .unwrap();
+    let mut copied = Vec::new();
+    for at in [AT, 64 * MIB + AT] {
+        let run = start + at..start + at + 4 * 4096;
+        // SAFETY: the view's bytes, which no command buffer uses now.
+        unsafe {
+            for offset in at..at + 4 * 4096 {
+                *((view + offset) as *mut u8) = pattern(offset);
+            }
+        }
+        let (answer, _, _) = tile_copy(&device, &ram, std::slice::from_ref(&run), &own, true);
+        let asked = asked.lock().unwrap();
+        println!(
+            "HOST-RAM-DMA-BUF {}: a copy at {at:#x} after the driver refused: {answer:?}; lists \
+             asked {}, the source of dma-bufs asked {:?}",
+            device.name(),
+            asked.lists.len(),
+            &asked.requests[at_use.len()..],
+        );
+        copied.push((answer, asked.lists.len(), asked.requests.clone()));
+        if pointers && copied.last().is_some_and(|(answer, _, _)| answer.is_ok()) {
+            let contents = own.contents().unwrap();
+            // SAFETY: the buffer's bytes, which no command writes now.
+            let got = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 4 * 4096) };
+            assert!(
+                (at..).zip(got).all(|(offset, &b)| b == pattern(offset)),
+                "the copy's gather at {at:#x}"
+            );
+        }
+    }
+    let lists: Vec<usize> = copied.iter().map(|(_, lists, _)| *lists).collect();
+    assert_eq!(
+        lists,
+        [1, 1],
+        "the lists asked by the first copy and in all"
+    );
+    for (_, _, requests) in &copied {
+        assert_eq!(
+            requests, &at_use,
+            "the source of dma-bufs asked after the driver refused a list"
+        );
+    }
+    if pointers {
+        assert!(copied.iter().all(|(answer, _, _)| answer.is_ok()));
+    }
+    drop((own, used, ram));
 }
 
 /// Where the pointer goes first (the import tax not held, forced so on the device), a chunk whose
@@ -701,13 +921,16 @@ fn udmabuf_size_limit() -> u64 {
         .saturating_mul(MIB)
 }
 
-/// Where each listed import costs every submission, a RAM whose dma-bufs may be as long as the
-/// host's udmabuf limit allows is imported in chunks that long (the whole RAM where the limit
-/// takes it, else two of 64 MiB), none ahead, each by the device's thread once an object over it
-/// asked (or, where the device's barriers do not order blits through two imports of the same
-/// pages, by that object: [`runs_alone`]), and, the RAM made too long for the memory the
-/// device's imports count against, released once idle (the module docs); elsewhere it keeps its
-/// 64 MiB chunks. The device's thread runs (no hold), so the release is its.
+/// Where each listed import costs every submission (the import tax forced held on the device, so
+/// that the plan runs on every device and in every run) and the driver takes the dma-buf of the
+/// page the use asks it with (`Device::ram_takes_dma_bufs`), a RAM whose dma-bufs may be as long
+/// as the host's udmabuf limit allows is imported in chunks that long (the whole RAM where the
+/// limit takes it, else two of 64 MiB), none ahead, each by the device's thread once an object
+/// over it asked (or, where the device's barriers do not order blits through two imports of the
+/// same pages, by that object: [`runs_alone`]), and, the RAM made too long for the memory the
+/// device's imports count against, released once idle (the module docs); elsewhere (a device
+/// that imports no dma-buf, or whose driver refused the page's: NVIDIA's) it keeps its 64 MiB
+/// chunks. The device's thread runs (no hold), so the release is its.
 #[test]
 fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_once_idle() {
     let scratch = Scratch::new();
@@ -719,21 +942,37 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
         eprintln!("HOST-RAM-LISTED: the device imports no host memory here; nothing to test");
         return;
     }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
     // Half the RAM, which it fits in with unified memory or without.
     device.count_host_ram_imports_against(RAM_BYTES / 2);
-    let listed = device.pointer_imports_tax_submissions() && imports_dma_bufs(&device);
     let largest = udmabuf_size_limit();
     let (ram, start, view, asked, dropped) = ram(true);
     let ram = Arc::into_inner(ram).expect("the test's RAM");
     let ram = Arc::new(ram.with_largest_dma_buf(largest));
     fill_pattern(view, RAM_BYTES);
+    let unused = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let chunks = device.host_ram_chunks();
+    let refused = device.work_counts().host_ram_dma_buf_imports_failed
+        - unused.host_ram_dma_buf_imports_failed;
+    let at_use = asked.lock().unwrap().requests.clone();
+    let listed = chunks.iter().any(|(listed, _)| *listed);
     println!(
-        "HOST-RAM-LISTED {}: each listed import costs a submission: {listed}; the udmabuf limit \
-         {} MiB; chunks {chunks:?}",
+        "HOST-RAM-LISTED {}: import tax forced held; the use asked the driver with {at_use:?} \
+         ({refused} refused); listed: {listed}; the udmabuf limit {} MiB; chunks {chunks:?}",
         device.name(),
         largest >> 20,
+    );
+    let page = page_of(&device);
+    let probe = (start, page, page);
+    match imports_dma_bufs(&device) {
+        true => assert_eq!(at_use, [probe], "the use's question"),
+        false => assert!(at_use.is_empty(), "{at_use:?}"),
+    }
+    assert_eq!(
+        listed,
+        imports_dma_bufs(&device) && refused == 0,
+        "listed where the driver took the page's dma-buf"
     );
     let halves = vec![start..start + 64 * MIB, start + 64 * MIB..start + RAM_BYTES];
     if !listed {
@@ -830,13 +1069,14 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     let mut asked_for: Vec<(u64, u64, u64)> = (spans.iter())
         .map(|span| (span.start, span.end - span.start, span.end - span.start))
         .chain((runs_asked.iter().take((alone * count) as usize)).map(|&at| (at, LENGTH, LENGTH)))
+        .chain(std::iter::once(probe))
         .collect();
     asked_for.sort_unstable();
     let mut requests = asked.lock().unwrap().requests.clone();
     requests.sort_unstable();
     assert_eq!(
         requests, asked_for,
-        "each chunk and each run's import asked once"
+        "the use's question, and each chunk and each run's import asked once"
     );
     // The GPU's fill through the second buffer, past the first 64 MiB, reaches the file's pages.
     blit(&device, |encoder| {
@@ -942,10 +1182,13 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
     }
 }
 
-/// Where each listed import costs every submission and the RAM fits in the memory the device's
-/// imports count against (made four times the RAM by the test), its chunks, once imported, stay
-/// imported past their objects and the idle window: none is released, and the next object over
-/// each lies in its chunk with no import made for it. Elsewhere nothing to test.
+/// Where each listed import costs every submission (the import tax forced held on the device),
+/// the driver takes the dma-buf of the page the use asks it with (`Device::ram_takes_dma_bufs`)
+/// and the RAM fits in the memory the device's imports count against (made four times the RAM by
+/// the test), its chunks, once imported, stay imported past their objects and the idle window:
+/// none is released, and the next object over each lies in its chunk with no import made for it.
+/// Elsewhere (a device that imports no dma-buf, or whose driver refused the page's: NVIDIA's)
+/// the RAM is not listed: nothing more to test.
 #[test]
 fn where_the_ram_fits_its_listed_chunks_stay_imported_once_idle() {
     let scratch = Scratch::new();
@@ -957,23 +1200,29 @@ fn where_the_ram_fits_its_listed_chunks_stay_imported_once_idle() {
         eprintln!("HOST-RAM-KEPT: the device imports no host memory here; nothing to test");
         return;
     }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
     device.count_host_ram_imports_against(4 * RAM_BYTES);
-    let listed = device.pointer_imports_tax_submissions() && imports_dma_bufs(&device);
-    if !listed {
-        eprintln!(
-            "HOST-RAM-KEPT {}: no listed imports here; nothing to test",
-            device.name()
-        );
-        return;
-    }
     let (ram, start, view, _asked, dropped) = ram(true);
     let ram = Arc::into_inner(ram).expect("the test's RAM");
     let ram = Arc::new(ram.with_largest_dma_buf(udmabuf_size_limit()));
     fill_pattern(view, RAM_BYTES);
+    let unused = device.work_counts();
     let used = device.use_host_ram(&ram).unwrap();
     let chunks = device.host_ram_chunks();
+    let refused = device.work_counts().host_ram_dma_buf_imports_failed
+        - unused.host_ram_dma_buf_imports_failed;
     let [(true, spans)] = &chunks[..] else {
-        panic!("one listed RAM: {chunks:?}");
+        eprintln!(
+            "HOST-RAM-KEPT {}: not listed ({refused} refused of the use's question); nothing \
+             more to test",
+            device.name()
+        );
+        assert!(
+            !imports_dma_bufs(&device) || refused == 1,
+            "a RAM not listed whose dma-bufs the driver takes: {chunks:?}"
+        );
+        drop((used, ram));
+        return;
     };
     let count = spans.len() as u64;
     let before = device.work_counts();
@@ -1310,11 +1559,12 @@ impl TileRound<'_> {
 }
 
 /// Whether a copy over a chunk not imported takes lists of its runs, given the RAM's source of
-/// them: the device imports a RAM with a source as each listed import costing every submission
-/// (`Plan::listed`, RADV's), and its barriers order blits through two imports of the same pages
-/// (no `AliasedImportBlitsUnordered`, [`runs_alone`]).
-fn copies_by_lists(device: &Device) -> bool {
-    device.pointer_imports_tax_submissions() && imports_dma_bufs(device) && runs_alone(device) == 1
+/// them: the device imports the RAM as each listed import costing every submission (`listed`,
+/// the RAM's `Plan::listed` as `Device::host_ram_chunks` reads it: RADV's), and its barriers
+/// order blits through two imports of the same pages (no `AliasedImportBlitsUnordered`,
+/// [`runs_alone`]).
+fn copies_by_lists(device: &Device, listed: bool) -> bool {
+    listed && runs_alone(device) == 1
 }
 
 /// Past a tick of the device's thread, which imports a chunk asked for at once.
@@ -1345,8 +1595,10 @@ fn lists_kept_the_contract(asked: &Asked) -> bool {
 /// (QEMU's `memory-backend-memfd,share=on`) with a source of dma-bufs, as a consumer's cache asks
 /// copy it: first with its chunks not imported, then with them imported by objects over them.
 /// Each gather reads the RAM's bytes page by page, each scatter writes each page and leaves the
-/// page above it alone. Where each listed import costs every submission and the device's barriers
-/// order blits through two imports of the same pages (RADV), a copy over a chunk not imported,
+/// page above it alone. Where each listed import costs every submission (the import tax forced
+/// held on the device; the RAM listed where the driver takes the dma-buf of the page the use asks
+/// it with) and the device's barriers order blits through two imports of the same pages (RADV),
+/// a copy over a chunk not imported,
 /// of a RAM with a source of run lists, takes lists of its runs (1,800 runs, two lists of at most
 /// 1,024), no chunk and no other dma-buf, and asks the device's thread for none; the next copy of
 /// the same pages takes the lists kept, and imports none, and the device's thread lets them go
@@ -1365,7 +1617,7 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
         eprintln!("HOST-RAM-TILE: the device imports no host memory here; nothing to test");
         return;
     }
-    let by_lists = copies_by_lists(&device);
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
     let own = device
         .new_buffer(TILE_PAGES * 4096, ResourceOptions::shared())
         .unwrap();
@@ -1384,9 +1636,10 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
         let first = device.work_counts();
         let used = device.use_host_ram(&ram).unwrap();
         let chunks = device.host_ram_chunks();
-        let [(_, spans)] = &chunks[..] else {
+        let [(listed, spans)] = &chunks[..] else {
             panic!("one RAM: {chunks:?}");
         };
+        let by_lists = copies_by_lists(&device, *listed);
         let runs = tile_runs(start, tile);
         let imported = |counts: &crate::WorkCounts| {
             counts.host_ram_chunks_imported - first.host_ram_chunks_imported
@@ -1509,9 +1762,10 @@ fn a_tile_of_scattered_pages_copies_both_ways_over_a_ram_of_shared_pages() {
 }
 
 /// A tile copied both ways over a RAM of which the guest wrote the tile's pages alone, the rest
-/// of its file never touched, with a source of run lists: where copies take lists (RADV,
-/// [`copies_by_lists`]), the copies make no page of the file resident but the tile's own
-/// (`mincore` over the RAM's mapping), however its pages lie: lists of its runs, by address
+/// of its file never touched, with a source of run lists: where copies take lists (the import tax
+/// forced held on the device; RADV, [`copies_by_lists`]), the use makes no page of the file
+/// resident but the first, which it asks the driver with (`Device::ram_takes_dma_bufs`), and the
+/// copies none but the tile's own (`mincore` over the RAM's mapping), however its pages lie: lists of its runs, by address
 /// across the RAM's two chunks (90 clusters in both, one list, which the scatter takes again), no
 /// chunk imported, none asked for. A chunk's import would make all of the chunk resident. Elsewhere the
 /// copies' bytes are checked and the resident bytes printed. Printed: `HOST-RAM-TILE` per copy,
@@ -1527,7 +1781,8 @@ fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
         eprintln!("HOST-RAM-RESIDENT: the device imports no host memory here; nothing to test");
         return;
     }
-    let by_lists = copies_by_lists(&device);
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    let page = page_of(&device);
     let own = device
         .new_buffer(TILE_PAGES * 4096, ResourceOptions::shared())
         .unwrap();
@@ -1549,13 +1804,17 @@ fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
                 }
             }
         }
-        let touched = resident_bytes(start);
+        let written = resident_bytes(start);
         let used = device.use_host_ram(&ram).unwrap();
+        // The use's question to the driver, a dma-buf of the RAM's first page, made that page
+        // resident where the guest never wrote it (`Device::ram_takes_dma_bufs`).
+        let touched = resident_bytes(start);
         let first = device.work_counts();
         let chunks = device.host_ram_chunks();
-        let [(_, spans)] = &chunks[..] else {
+        let [(listed, spans)] = &chunks[..] else {
             panic!("one RAM: {chunks:?}");
         };
+        let by_lists = copies_by_lists(&device, *listed);
         let round = TileRound {
             device: &device,
             ram: &ram,
@@ -1572,14 +1831,19 @@ fn copies_over_a_listed_ram_make_no_untouched_page_of_it_resident() {
         let after = resident_bytes(start);
         let counts = device.work_counts();
         println!(
-            "HOST-RAM-RESIDENT {}: {tile:?}: {} KiB of the file in memory before the copies, {} \
-             KiB after; {} chunk(s) imported",
+            "HOST-RAM-RESIDENT {}: {tile:?}: {} KiB of the file in memory as the guest wrote it, \
+             {} KiB once the use began, {} KiB after the copies; {} chunk(s) imported",
             device.name(),
+            written >> 10,
             touched >> 10,
             after >> 10,
             counts.host_ram_chunks_imported - first.host_ram_chunks_imported,
         );
         if by_lists {
+            assert!(
+                touched <= written + page,
+                "{tile:?}: the use made more than its question's page resident"
+            );
             let gather = Took {
                 chunks: 0,
                 dma_bufs: 0,

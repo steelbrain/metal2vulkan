@@ -67,7 +67,7 @@ impl Device {
         };
         let answer = match imported {
             Ok((buffer, placement)) => {
-                self.discard_import(buffer, placement);
+                self.discard_import(buffer.raw, placement);
                 true
             }
             Err(error) if refused(&error) => false,

@@ -635,18 +635,23 @@ submission, can give the device the guest's RAM once instead:
   of its own pages, as over an object's own dma-buf imports, asked of the same source. A source that
   fails, or a dma-buf the driver refuses (NVIDIA's refuses a udmabuf), leaves the chunk to its
   pointer (`WorkCounts::host_ram_dma_buf_imports_failed`); a driver's refusal is remembered for the
-  device's life, and its later chunks take their pointer without asking the source.
+  device's life, and its later chunks (and the copies' lists below) take their pointer without
+  asking the source.
 - `HostRam::with_largest_dma_buf(bytes)` says how long one dma-buf of the source may be (for
   `udmabuf`, its `size_limit_mb` parameter, read from `/sys/module/udmabuf/parameters/`). On a
   device whose held imports add to the cost of every submission, with a source, each listed
   import costs every submission: an 8 GiB RAM held as 128 dma-bufs of 64 MiB raised a
   submission's median from 14 us to 60 to 88 us on the Radeon 780M (Mesa 26.2.6, Linux 7.3.1;
   `runtime_lane::submit_per_import::submit_per_ram_dma_buf`), as 3 of 2730 MiB to 16 us. There
-  each chunk is as long as that, the device's `maxMemoryAllocationSize`, `maxBufferSize` and
-  `maxStorageBufferRange` all take, in whole 64 MiB, and never longer than 512 MiB (an 8 GiB RAM in
-  16 chunks at most): a chunk's import pins every page of it, and `udmabuf` allocates the pages
-  of the `memfd` the guest never touched, which stay allocated after the chunk is freed, so a
-  longer chunk makes more of the guest's untouched RAM resident. Without the call, or where a
+  `use_host_ram` first asks the driver whether it takes the source's dma-bufs: it asks the source
+  for the RAM's first host page and imports that dma-buf, released at once (so that page is
+  allocated in the `memfd` where the guest never wrote it). Where the driver refuses it, or
+  refused one before, the RAM keeps its 64 MiB chunks, imported ahead, each by its pointer. Where
+  it takes it, each chunk is as long as that, the device's `maxMemoryAllocationSize`,
+  `maxBufferSize` and `maxStorageBufferRange` all take, in whole 64 MiB, and never longer than
+  512 MiB (an 8 GiB RAM in 16 chunks at most): a chunk's import pins every page of it, and
+  `udmabuf` allocates the pages of the `memfd` the guest never touched, which stay allocated after
+  the chunk is freed, so a longer chunk makes more of the guest's untouched RAM resident. Without the call, or where a
   kernel caps it at 64 MiB, the chunks stay 64 MiB. On such a device no chunk is imported ahead. The first object over a chunk
   not imported asks a thread of the device's for it, and that thread imports it, which pins
   every page of the chunk (all of it resident, where 64 MiB chunks pinned only those the objects

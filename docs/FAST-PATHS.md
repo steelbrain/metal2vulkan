@@ -1274,8 +1274,10 @@ driver's. Each is open work.
   (importing the pointer) is the one NVIDIA takes for writable pages and is unaffected: a guest
   RAM's chunk whose dma-buf it refused is imported by its pointer, the refusal counted
   (`WorkCounts::host_ram_dma_buf_imports_failed`) and remembered for the device's life, so the
-  device's later chunks take their pointer without asking the source, and no second descriptor is
-  let go of. A device whose driver failed one such import for want of memory remembers it the same
+  device's later chunks and copies' lists take their pointer without asking the source, and no
+  second descriptor is let go of. Where the import tax holds, a RAM's use asks the driver first,
+  by an import of the RAM's first page as one: refused, the RAM keeps its 64 MiB chunks imported
+  ahead by their pointer, never the long chunks made for dma-bufs. A device whose driver failed one such import for want of memory remembers it the same
   way and pays the import tax for its later chunks. A device that imports dma-bufs (RADV) is
   **unaudited** for the clone.
 
