@@ -28,6 +28,10 @@
 //!   the same length was filled and released: the inplace-surface probe's `fresh` mode).
 //! - **Each frame's buffers, recycled.** Eight `Private` buffers made, filled and released each of
 //!   sixty frames take parked buffers from the second frame on.
+//!
+//! Each test's device settles its check of textures over host pages before the test counts: the
+//! check, which a buffer's making starts where its verdicts are pending, parks and recycles
+//! buffers of its own while it runs.
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::recycle;
@@ -61,7 +65,12 @@ fn device(cache: &Path) -> Device {
         },
         ..DeviceOptions::default()
     };
-    Device::system_default_with(&options).unwrap()
+    let device = Device::system_default_with(&options).unwrap();
+    // The device's check of textures over host pages, which its first buffer's making starts
+    // (`in_place.rs`'s `fd_blocks_checked`), parks and recycles buffers of its own as it runs:
+    // settled before a test counts, so the counts are the test's own.
+    device.settle_in_place_checks(WAIT);
+    device
 }
 
 fn descriptor() -> TextureDescriptor {
