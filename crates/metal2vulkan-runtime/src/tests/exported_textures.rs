@@ -35,7 +35,6 @@
 //!   (`VUID-vkBindImageMemory-memory-10926`), each texture is a shadow that reads the same bytes,
 //!   its placement refused (`InPlaceRefusal::Placement`); a dma-buf's dedicated allocation takes
 //!   the import of its own dma-buf (below) where the device makes one.
-//!
 //! - **The runtime's own buffers' blocks.** The same picture in a buffer the program made with no
 //!   export, keeping its padding. One made before the device's in-place check answered lies in a
 //!   plain block. Once it answered, where the device allocates its buffers' blocks exportable and
