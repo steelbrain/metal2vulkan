@@ -283,6 +283,18 @@ impl Owners {
         );
     }
 
+    /// The live buffers the program made (`Device::visible`), for the device's recovery to carry
+    /// (`device/carry.rs`).
+    pub(super) fn buffers(&self) -> Vec<Buffer> {
+        let registry = lock(&self.inner);
+        (registry.owners.values())
+            .filter_map(|(owner, _)| match owner {
+                Owner::Buffer(buffer, _) => buffer.upgrade(),
+                Owner::Texture(_) | Owner::Heap(_) => None,
+            })
+            .collect()
+    }
+
     /// Add the owners of `keys` to `used`.
     fn list(&self, keys: &BTreeSet<ResourceKey>, used: &mut Listing) {
         let owners: Vec<Owner> = {
@@ -579,14 +591,15 @@ impl CommandBuffer {
 impl Device {
     /// `buffer`, one the program made of its own, kept among the device's program resources
     /// (`Owners::buffer`), and among its live buffers, which a command reaches unnamed, unless a
-    /// command buffer's use must list it first (a no-copy buffer; `live_buffers.rs`), and for the
-    /// device's recovery to carry (`device/carry.rs`): carried here, by its maker, where that
-    /// recovery took this generation's buffers already.
+    /// command buffer's use must list it first (a no-copy buffer; `live_buffers.rs`). The
+    /// device's recovery carries it from there (`device/carry.rs`), or its maker here, where that
+    /// recovery took this generation's buffers before it was kept: a load of a flag on a
+    /// generation never recovered.
     pub(super) fn visible(&self, buffer: Buffer) -> Buffer {
         let shared = self.shared();
         shared.owners.buffer(&buffer);
         shared.live_buffers.made(&buffer);
-        if shared.carry.buffer(&buffer) {
+        if shared.carry.taken() && shared.carry.late_buffer(&buffer) {
             self.carry_late(|serving| buffer.carry(serving));
         }
         buffer

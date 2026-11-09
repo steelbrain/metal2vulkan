@@ -97,14 +97,14 @@ use super::command_buffer::revocation::QueueErrors;
 use super::command_buffer::CommandBuffer;
 use super::contexts;
 use super::degradation::Degradation;
-use super::device::carry::Recording;
+use super::device::carry::RestWatch;
 use super::device::{lock, Device};
 use super::error::{Error, Invalid, Problem};
 use super::queue_share::Choice;
 use super::texture::copy_images::CopyImages;
 use super::texture::kept_image::KeptImages;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
 
 /// The uncompleted command buffers a queue holds when made with `new_command_queue`: Metal's
@@ -239,6 +239,9 @@ pub(crate) struct Slots {
     freed: Condvar,
     /// The device's slots open, over all its queues.
     uncommitted: Arc<Uncommitted>,
+    /// What its last slot to come back tells its generation, for that generation's rest once its
+    /// recovery carried its objects (`device/carry.rs`): set as the queue's place is made.
+    rest: OnceLock<RestWatch>,
 }
 
 /// The command buffers of a device's queues made and not committed (nor dropped): its slots open,
@@ -277,7 +280,13 @@ impl Slots {
             held: Mutex::new(Held::default()),
             freed: Condvar::new(),
             uncommitted,
+            rest: OnceLock::new(),
         })
+    }
+
+    /// Whether a command buffer holds one of its slots.
+    pub(crate) fn held_any(&self) -> bool {
+        self.lock().all > 0
     }
 
     /// The slots held, locked.
@@ -313,15 +322,21 @@ impl Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        {
+        let none = {
             let mut held = self.slots.lock();
             held.all -= 1;
             if self.open {
                 held.open -= 1;
                 self.slots.uncommitted.0.fetch_sub(1, Ordering::SeqCst);
             }
-        }
+            held.all == 0
+        };
         self.slots.freed.notify_one();
+        // The last of its command buffers that may record on the generation: its rest, where its
+        // recovery carried its objects (`device/carry.rs`).
+        if let (true, Some(rest)) = (none, self.slots.rest.get()) {
+            rest.last_slot_back();
+        }
     }
 }
 
@@ -536,6 +551,11 @@ impl Device {
             }
             self.start_queue_switch_check();
         }
+        // Its slots, which its command buffers hold while they may record, watched for the
+        // generation's rest once its recovery carried its objects (`device/carry.rs`).
+        let slots = Slots::new(count, Arc::clone(&self.shared().uncommitted));
+        let rest = (shared.carry).queue(self.shared_arc(), &slots);
+        let _set = slots.rest.set(rest);
         QueueGen(Arc::new(QueueShared {
             device: self.clone(),
             common: Arc::clone(common),
@@ -543,7 +563,7 @@ impl Device {
             vk_queue: AtomicUsize::new(vk_queue),
             kind,
             sharing: AtomicU8::new(0),
-            slots: Slots::new(count, Arc::clone(&self.shared().uncommitted)),
+            slots,
             latest_gpu_end: Mutex::new(0),
             memoryless_backings: Mutex::new(BackingPool::default()),
             kept_images: KeptImages::default(),
@@ -707,11 +727,13 @@ impl QueueGen {
         // Counted with its slot: it waits out a fetched render target's switch to its storage
         // form, if one is under way (`texture/storage_form.rs`).
         self.0.device.storage_form_wait();
-        // Refused on a lost generation at rest, past its loss check (`device/carry.rs`).
-        let Some(recording) = Recording::begin(self.0.device.shared()) else {
+        // Refused on a lost generation at rest, past its loss check, its slot held
+        // (`device/carry.rs`).
+        if self.0.device.shared().carry.refuses() {
+            drop(slot);
             return Err(self.0.device.lost_refusal());
-        };
-        let command_buffer = CommandBuffer::new(self, root, slot, recording);
+        }
+        let command_buffer = CommandBuffer::new(self, root, slot);
         if joined {
             self.0.device.degrade_once(Degradation::QueueSharing, || {
                 (

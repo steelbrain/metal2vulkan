@@ -3,16 +3,20 @@
 //! pages the runtime owns, each the same Metal object on the new `VkDevice`, as Metal keeps its
 //! objects across its GPU's recovery.
 //!
-//! - **Kept as made.** Each event (`EventShared::new`) and each buffer the program made of its
-//!   own (`Device::visible`) is kept here, held weakly, by the generation it was made on.
+//! - **Kept as made.** Each event (`EventShared::new`) is kept here, held weakly, by the
+//!   generation it was made on; each buffer the program made of its own (`Device::visible`) is
+//!   kept among the generation's program resources already (`Owners::buffer`), which the
+//!   recovery reads ([`Carry::take`]), so making one costs a load of a flag more and no lock.
 //! - **Carried before the next generation serves.** The recovery takes the lost generation's live
 //!   objects ([`Carry::take`]) and carries each to the new one before the line serves it
 //!   ([`Device::carry_to`]), so no call meets the device half carried; a call that waits for the
 //!   recovery meets every object carried.
 //! - **None left behind.** A call that took its arguments before the loss completes on the lost
-//!   generation (`Device::at_serving_taking`), and what it makes is kept here after the recovery
-//!   took the generation's objects: its maker carries it then ([`Device::carry_late`]). The take
-//!   and the keeping share one lock, so each object is carried once, by one or the other.
+//!   generation (`Device::at_serving_taking`), and what it makes after the recovery took the
+//!   generation's objects its maker carries ([`Device::carry_late`]). The take names the buffers
+//!   it took under the registry's lock, which a maker that finds the generation taken asks
+//!   ([`Carry::late_buffer`]), and an event is kept under it, so each object is carried once, by
+//!   one or the other.
 //! - **What each kind becomes.** An event: a new timeline semaphore at the value the host saw
 //!   (`EventShared::carry`). A `Private` buffer: new memory, its contents lost with the
 //!   `VkDevice` (it reads zero). A buffer in fresh pages (`fresh_pages.rs`): the same pages
@@ -35,9 +39,13 @@
 //!   the generation it was carried to last everywhere: a command buffer of the lost generation
 //!   that waits for or signals it after the carry refuses it, as its device is the next
 //!   generation (`Device::foreign`).
-//! - **The lost generation goes once nothing records on it** ([`Recording`]). Its command
-//!   buffers that may still record are counted, from their making to their completion or their
-//!   drop. Once the line serves past it and none is left, the carried buffers' `VkBuffer`s there
+//! - **The lost generation goes once nothing records on it.** A command buffer holds its queue's
+//!   slot on the generation from its making to its completion, or to its drop where it never
+//!   completed (`queue.rs`'s `Slot`); the registry knows the generation's queues' slots
+//!   ([`Carry::queue`]) and looks at them as the last of a queue's slots comes back once the
+//!   recovery took the generation's objects ([`RestWatch`]). So a generation never recovered pays
+//!   a load of a flag as a command buffer is made and as a queue's last slot comes back, and
+//!   nothing more. Once the line serves past it and no slot is held, the carried buffers' `VkBuffer`s there
 //!   are destroyed and their memory freed, a carried event's semaphore once no host call on it is
 //!   under way, and each carried object lets go of its handle of the generation ([`MadeOn`]):
 //!   "When a device is lost, its child objects are not implicitly destroyed and their handles are
@@ -50,12 +58,15 @@
 //!   alone meanwhile (`WorkCounts::vk_devices_live`).
 
 use super::{lock, Device, DeviceShared};
-use crate::buffer::{Buffer, WeakBuffer};
+use crate::buffer::Buffer;
 use crate::event::EventShared;
+use crate::queue::Slots;
+use crate::resource::ObjectId;
 use crate::Error;
 use std::cell::UnsafeCell;
+use std::collections::HashSet;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 /// The least size at which the registry drops gone objects' entries.
@@ -79,21 +90,25 @@ pub(crate) trait LostParts: Send {
 #[derive(Default)]
 pub(crate) struct Carry {
     state: Mutex<State>,
-    /// Its command buffers that may still record ([`Recording`]).
-    recording: AtomicUsize,
-    /// `State::taken`, read without the lock as a command buffer is made ([`Recording::begin`]).
-    taken: AtomicBool,
+    /// `State::taken`, read without the lock as a buffer or a command buffer is made
+    /// ([`Carry::taken`]), and as a queue's last slot comes back ([`RestWatch`]).
+    taken: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
 struct State {
-    buffers: Vec<WeakBuffer>,
     events: Vec<Weak<EventShared>>,
-    /// The size at which the next keeping drops the gone objects' entries.
+    /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
     /// The recovery took the generation's objects ([`Carry::take`]): what is kept from now on,
     /// its maker carries.
     taken: bool,
+    /// The buffers the recovery took ([`Carry::take`]), which their makers leave to it
+    /// ([`Carry::late_buffer`]).
+    took: HashSet<ObjectId>,
+    /// The slots of the generation's queues, which its command buffers hold while they may
+    /// record ([`Carry::queue`]).
+    queues: Vec<Weak<Slots>>,
     /// The carried objects' parts on this generation, let go of once none of its command buffers
     /// may record.
     lost: Vec<Box<dyn LostParts>>,
@@ -102,19 +117,25 @@ struct State {
     past: bool,
     /// None of its command buffers recorded once the line served past it: what it keeps for reuse
     /// and its device-level objects went (`DeviceShared::keep_nothing`), and no command buffer is
-    /// made here again ([`Recording::begin`]).
+    /// made here again ([`Carry::refuses`]).
     at_rest: bool,
 }
 
 impl State {
-    /// Drop the gone objects' entries once the registry reached its size for that.
+    /// Drop the gone events' entries once the registry reached its size for that.
     fn prune(&mut self) {
-        if self.buffers.len() + self.events.len() < self.prune_at {
+        if self.events.len() < self.prune_at {
             return;
         }
-        self.buffers.retain(WeakBuffer::lives);
         self.events.retain(|event| event.strong_count() > 0);
-        self.prune_at = (2 * (self.buffers.len() + self.events.len())).max(PRUNE_FLOOR);
+        self.prune_at = (2 * self.events.len()).max(PRUNE_FLOOR);
+    }
+
+    /// Whether a command buffer of the generation holds a slot of one of its queues.
+    fn slot_held(&self) -> bool {
+        (self.queues.iter())
+            .filter_map(Weak::upgrade)
+            .any(|slots| slots.held_any())
     }
 }
 
@@ -125,13 +146,21 @@ pub(crate) struct Taken {
 }
 
 impl Carry {
-    /// Keep `buffer`, which the program made on this generation: whether the recovery took the
-    /// generation's objects already, so that its maker carries it ([`Device::carry_late`]).
-    pub(crate) fn buffer(&self, buffer: &Buffer) -> bool {
-        let mut state = lock(&self.state);
-        state.prune();
-        state.buffers.push(buffer.downgrade());
-        state.taken
+    /// Whether the recovery took the generation's objects ([`Carry::take`]): one load, which a
+    /// maker of a buffer reads once the buffer is among the generation's program resources, and a
+    /// maker of a command buffer once it holds its slot.
+    pub(crate) fn taken(&self) -> bool {
+        self.taken.load(Ordering::Acquire)
+    }
+
+    /// Whether the maker of `buffer`, which the program made on this generation and which is
+    /// among its program resources (`Owners::buffer`), carries it ([`Device::carry_late`]): the
+    /// recovery took the generation's objects ([`taken`](Self::taken)) and not this one. Its
+    /// take reads the program resources under this lock: a buffer it missed was kept there after
+    /// it read them, so after it set the flag, which its maker then finds set.
+    pub(crate) fn late_buffer(&self, buffer: &Buffer) -> bool {
+        let state = lock(&self.state);
+        state.taken && !state.took.contains(&buffer.object_id())
     }
 
     /// Keep `event`, made on this generation: as [`buffer`](Self::buffer).
@@ -142,20 +171,44 @@ impl Carry {
         state.taken
     }
 
-    /// The generation's live objects, for its recovery to carry; from now on, each one kept is its
+    /// The live objects of `shared`, this generation, for its recovery to carry: its events and
+    /// its program resources' buffers (`Owners::buffers`). From now on, each one made is its
     /// maker's to carry.
-    fn take(&self) -> Taken {
+    fn take(&self, shared: &DeviceShared) -> Taken {
         let mut state = lock(&self.state);
         state.taken = true;
         self.taken.store(true, Ordering::SeqCst);
+        let buffers = shared.owners.buffers();
+        state.took = buffers.iter().map(Buffer::object_id).collect();
         Taken {
-            buffers: state
-                .buffers
-                .iter()
-                .filter_map(WeakBuffer::upgrade)
-                .collect(),
+            buffers,
             events: state.events.iter().filter_map(Weak::upgrade).collect(),
         }
+    }
+
+    /// Know `slots`, the slots of a queue of `shared`, this generation, which its command
+    /// buffers hold while they may record: what watches them for the generation's rest, which a
+    /// queue's last slot to come back reads.
+    pub(crate) fn queue(&self, shared: &Arc<DeviceShared>, slots: &Arc<Slots>) -> RestWatch {
+        let mut state = lock(&self.state);
+        state.queues.retain(|queue| queue.strong_count() > 0);
+        state.queues.push(Arc::downgrade(slots));
+        RestWatch {
+            taken: Arc::clone(&self.taken),
+            generation: Arc::downgrade(shared),
+        }
+    }
+
+    /// Whether a command buffer made on this generation, holding its slot, is refused: the
+    /// generation is at rest, its device-level objects of work gone ([`let_go_at_rest`]), for a
+    /// call that passed its loss check before the loss to refuse as on the lost device. A load of
+    /// a flag on a generation never recovered. The rest looks at the slots held under this lock,
+    /// so a command buffer that holds its slot as the generation comes to rest is either seen
+    /// there or sees the rest here.
+    ///
+    /// [`let_go_at_rest`]: Self::let_go_at_rest
+    pub(crate) fn refuses(&self) -> bool {
+        self.taken() && lock(&self.state).at_rest
     }
 
     /// A carried object's `parts` on `shared`, this generation, let go of once none of its
@@ -176,12 +229,12 @@ impl Carry {
     /// buffers may record: let go of the carried objects' parts, and the first time, of what it
     /// keeps for reuse and its device-level objects (`DeviceShared::keep_nothing`). The parts are
     /// marked under the registry's lock, which a command buffer made after that takes
-    /// ([`Recording::begin`]), so its work meets none of them (`Buffer::s`), and released after
+    /// ([`Carry::refuses`]), so its work meets none of them (`Buffer::s`), and released after
     /// it. Called with none of a command buffer's locks held, by a holder of the generation.
     fn let_go_at_rest(&self, shared: &DeviceShared) {
         let (lost, first) = {
             let mut state = lock(&self.state);
-            if !state.taken || !state.past || self.recording.load(Ordering::SeqCst) > 0 {
+            if !state.taken || !state.past || state.slot_held() {
                 return;
             }
             let mut lost = Vec::with_capacity(state.lost.len());
@@ -191,6 +244,10 @@ impl Carry {
             }
             let first = !state.at_rest;
             state.at_rest = true;
+            // A maker that finds the generation taken now finds it at rest: the recovery carried
+            // what it took before the line served past it.
+            state.took.clear();
+            state.took.shrink_to_fit();
             (lost, first)
         };
         if first {
@@ -235,38 +292,24 @@ impl DeviceShared {
     }
 }
 
-/// One command buffer's count among its generation's that may still record (`Carry::recording`):
-/// from its making until its completion, or its drop where it never completed. Its end lets the
-/// carried objects' parts on the generation go where it was the last ([`Carry::let_go_at_rest`]).
-pub(crate) struct Recording {
-    ended: AtomicBool,
+/// What a queue's slots on a generation read as the last of them comes back (`queue.rs`'s
+/// `Slot`): whether the recovery took the generation's objects, and if so, the generation, to let
+/// go of the carried objects' parts there where no slot of its queues is held now
+/// ([`Carry::let_go_at_rest`]).
+pub(crate) struct RestWatch {
+    taken: Arc<AtomicBool>,
+    generation: Weak<DeviceShared>,
 }
 
-impl Recording {
-    /// A command buffer made on `shared`'s generation, which may record: `None` on a lost
-    /// generation at rest, whose device-level objects of work went (`Carry::let_go_at_rest`), for
-    /// a call that passed its loss check before the loss to refuse as on the lost device.
-    pub(crate) fn begin(shared: &DeviceShared) -> Option<Recording> {
-        let carry = &shared.carry;
-        carry.recording.fetch_add(1, Ordering::SeqCst);
-        if carry.taken.load(Ordering::SeqCst) && lock(&carry.state).at_rest {
-            // At rest, nothing is left to let go of on its end.
-            carry.recording.fetch_sub(1, Ordering::SeqCst);
-            return None;
-        }
-        Some(Recording {
-            ended: AtomicBool::new(false),
-        })
-    }
-
-    /// The command buffer records no more on `shared`'s generation, its own: completed, or
-    /// dropped. Once per command buffer; called without a lock of the command buffer's.
-    pub(crate) fn end(&self, shared: &DeviceShared) {
-        if self.ended.swap(true, Ordering::AcqRel) {
+impl RestWatch {
+    /// The last of the queue's slots came back, with no lock of the queue's held: a load of a
+    /// flag on a generation never recovered.
+    pub(crate) fn last_slot_back(&self) {
+        if !self.taken.load(Ordering::Acquire) {
             return;
         }
-        if shared.carry.recording.fetch_sub(1, Ordering::SeqCst) == 1 {
-            shared.carry.let_go_at_rest(shared);
+        if let Some(shared) = self.generation.upgrade() {
+            shared.carry.let_go_at_rest(&shared);
         }
     }
 }
@@ -365,7 +408,8 @@ impl Device {
     /// recovery made, before `next` serves (the module docs): what was carried and left, for the
     /// recovery's notice.
     pub(super) fn carry_to(&self, next: &Device) -> Carried {
-        let Taken { buffers, events } = self.shared().carry.take();
+        let shared = self.shared();
+        let Taken { buffers, events } = shared.carry.take(shared);
         let mut carried = Carried::default();
         for event in &events {
             carried.event(event.carry(next));
@@ -377,7 +421,7 @@ impl Device {
     }
 
     /// Carry an object made on this generation after its recovery took the generation's objects
-    /// (`Carry::buffer`, `Carry::event`) with `carry`, to the generation that serves once that
+    /// (`Carry::late_buffer`, `Carry::event`) with `carry`, to the generation that serves once that
     /// recovery made it (the module docs). Nothing where no later generation serves: a line that
     /// cannot recover, or a thread command buffers' completion depends on, whose calls reach the
     /// lost generation (`Line::current`).

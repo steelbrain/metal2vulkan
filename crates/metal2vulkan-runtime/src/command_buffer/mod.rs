@@ -65,7 +65,6 @@ use super::copied::CopiesReached;
 use super::deferred::{Deferred, Prepared, StepInputs};
 use super::degradation::{Degradation, NoticesFor};
 use super::descriptor_arena::DescriptorArena;
-use super::device::carry::Recording;
 use super::device::relay::Relayed;
 use super::device::{lock, DeviceShared};
 use super::dirty_pages::DirtyCommit;
@@ -229,9 +228,6 @@ pub(super) struct CommandBufferShared {
     /// handle to tell apart. Declared before `device`, so it goes first.
     generation: Arc<DeviceShared>,
     device: Device,
-    /// Its count among its generation's command buffers that may still record, from its making to
-    /// its completion or its drop (`device/carry.rs`).
-    recording: Recording,
     /// Its queue's place on the generation it was made on (`queue.rs`).
     queue: QueueGen,
     /// Its queue (`commandQueue`).
@@ -2097,8 +2093,6 @@ impl Drop for CommandBufferShared {
             let shared = self.device.shared();
             shared.spares.give_command_pool(shared, pool, false);
         }
-        // It records no more, where it never completed (`device/carry.rs`).
-        self.recording.end(&self.generation);
     }
 }
 
@@ -2112,20 +2106,13 @@ fn write_fields(upload: &Upload, table: u64, set: u64, count: u64) -> Result<(),
 }
 
 impl CommandBuffer {
-    /// A new command buffer of `root`, on its place `queue`, holding `slot` of it, counted among
-    /// its generation's that may record (`recording`).
-    pub(super) fn new(
-        queue: &QueueGen,
-        root: &CommandQueue,
-        slot: Slot,
-        recording: Recording,
-    ) -> CommandBuffer {
+    /// A new command buffer of `root`, on its place `queue`, holding `slot` of it.
+    pub(super) fn new(queue: &QueueGen, root: &CommandQueue, slot: Slot) -> CommandBuffer {
         let footprints = Footprints::default();
         CommandBuffer(Arc::new(CommandBufferShared {
             id: ObjectId::new(),
             generation: Arc::clone(queue.device().shared_arc()),
             device: queue.device().clone(),
-            recording,
             queue: queue.clone(),
             root: root.clone(),
             state: Mutex::new(State {
@@ -5638,8 +5625,6 @@ impl CommandBufferShared {
             let shared = self.device.shared();
             shared.spares.begin_ahead(shared, pool);
         }
-        // It records no more (`device/carry.rs`).
-        self.recording.end(&self.generation);
     }
 }
 
