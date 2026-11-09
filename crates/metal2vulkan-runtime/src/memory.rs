@@ -4390,7 +4390,7 @@ pub(super) fn keep_room(
         (kept, memory.maker())
     };
     // The pools in that order, read in place: a creation call allocates nothing for them. The
-    // blocks of the runtime's own pages come first where its buffers take them now, else not at all.
+    // blocks of the runtime's own pages come first where its buffers take them now, else none.
     let page = |holds: Holds| holds == Holds::PageBuffers;
     let first = (kept.iter()).filter(|&&(holds, _)| holds == own || (page(holds) && pages));
     let rest = (kept.iter())
