@@ -165,18 +165,18 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
                 answer == TexturePlacement::InPlace,
                 "undeclared in the runtime's own pages at {pitch}: the answer is the making's"
             );
-            continue;
+        } else {
+            assert_eq!(
+                answer,
+                TexturePlacement::Shadow(TextureShadowReason::BytesBetweenRows),
+                "undeclared at {pitch}: the answer"
+            );
+            assert!(
+                texture.shadow().is_some() && !texture.aliases_buffer(),
+                "undeclared at {pitch}: a shadow"
+            );
+            assert_eq!(after.shadowed_textures - before.shadowed_textures, 1);
         }
-        assert_eq!(
-            answer,
-            TexturePlacement::Shadow(TextureShadowReason::BytesBetweenRows),
-            "undeclared at {pitch}: the answer"
-        );
-        assert!(
-            texture.shadow().is_some() && !texture.aliases_buffer(),
-            "undeclared at {pitch}: a shadow"
-        );
-        assert_eq!(after.shadowed_textures - before.shadowed_textures, 1);
         assert_eq!(
             after.unobserved_padding_aliases,
             before.unobserved_padding_aliases
