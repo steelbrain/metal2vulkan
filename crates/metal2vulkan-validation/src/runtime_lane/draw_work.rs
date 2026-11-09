@@ -1635,10 +1635,14 @@ fn draws_take_their_shape_from_their_encoder_s_draws_of_the_same_inputs() {
 /// (`pipeline/shared_layouts.rs`, `WorkCounts::pipeline_layouts_shared`), each draw the target's
 /// whole rectangle, the texture switched halfway: where the device pushes set 0, each draw pushes
 /// what the same draws of the first state alone push, the writes that changed, and at least one
-/// past the first where the driver's pushed descriptors go stale across a pipeline bind
-/// (`RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds`). No push counts as a switch
-/// between equal shapes (`WorkCounts::set_zero_equal_shape_switches` and kin), either way. The
-/// target is the second texture's; both ways ([`on_device_both_ways`]).
+/// in a draw past the first that bound its pipeline (`vkCmdBindPipeline`) where the driver's
+/// pushed descriptors go stale across a pipeline bind
+/// (`RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds`). The blend is of factors one
+/// and zero, so where the attachment takes a rule of Metal's the two states link one `VkPipeline`
+/// (`color_writes::takes_metal_rule`: no Vulkan blend), and a draw that binds none pushes what the
+/// first state's alone does. No push counts as a switch between equal shapes
+/// (`WorkCounts::set_zero_equal_shape_switches` and kin), either way. The target is the second
+/// texture's; both ways ([`on_device_both_ways`]).
 #[test]
 fn draws_alternating_states_of_one_layout_push_only_what_changed() {
     const DRAWS: usize = 8;
@@ -1662,13 +1666,13 @@ fn draws_alternating_states_of_one_layout_push_only_what_changed() {
         });
         assert!(shared >= 1, "the second state's layout shared: {shared}");
         let corners = [-1.0f32, -1.0, 1.0, 1.0].map(f32::to_le_bytes).concat();
-        // Each draw's pushed writes, and the three counts' growth, through the first state alone
-        // or both in turn.
+        // Each draw's pushed writes and whether it bound its pipeline, and the three counts'
+        // growth, through the first state alone or both in turn.
         let run = |alternate: bool| {
             let (command_buffer, mut encoder) = scene.encoder(device);
             encoder.set_vertex_bytes(&corners, 0).unwrap();
             let before = device.work_counts();
-            let pushed: Vec<u64> = (0..DRAWS)
+            let (pushed, bound): (Vec<u64>, Vec<bool>) = (0..DRAWS)
                 .map(|d| {
                     let state = if alternate { d % 2 } else { 0 };
                     encoder
@@ -1680,9 +1684,13 @@ fn draws_alternating_states_of_one_layout_push_only_what_changed() {
                     }
                     let before = device.work_counts();
                     draw(&mut encoder);
-                    grew(&before, &device.work_counts(), |c| c.set_zero_writes_pushed)
+                    let after = device.work_counts();
+                    (
+                        grew(&before, &after, |c| c.set_zero_writes_pushed),
+                        grew(&before, &after, |c| c.commands_recorded.cmd_bind_pipeline) > 0,
+                    )
                 })
-                .collect();
+                .unzip();
             let after = device.work_counts();
             encoder.end_encoding().unwrap();
             let counts = [
@@ -1694,13 +1702,14 @@ fn draws_alternating_states_of_one_layout_push_only_what_changed() {
             ];
             let pixels = scene.pixels(&command_buffer);
             assert!(pixels.iter().all(|&p| p == GREEN), "{pixels:?}");
-            (pushed, counts)
+            (pushed, bound, counts)
         };
-        let (alone, alone_counts) = run(false);
-        let (alternating, counts) = run(true);
+        let (alone, _, alone_counts) = run(false);
+        let (alternating, bound, counts) = run(true);
         println!(
-            "runtime_lane: set 0 pushed alone {alone:?}, alternating {alternating:?}; equal-shape \
-             switches, writes carried and writes if shared {counts:?}"
+            "runtime_lane: set 0 pushed alone {alone:?}, alternating {alternating:?}, the \
+             alternating draws that bound their pipeline {bound:?}; equal-shape switches, writes \
+             carried and writes if shared {counts:?}"
         );
         assert_eq!(alone_counts, [0; 3], "{alone:?}");
         assert_eq!(counts, [0; 3], "{alternating:?}");
@@ -1711,8 +1720,11 @@ fn draws_alternating_states_of_one_layout_push_only_what_changed() {
             metal2vulkan::error::RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds;
         let at_least = u64::from(device.properties().driver_defects.contains(&stale));
         assert!(alone[0] > 0, "{alone:?}");
-        let expected: Vec<u64> = (alone.iter().enumerate())
-            .map(|(d, &n)| if d == 0 { n } else { n.max(at_least) })
+        let expected: Vec<u64> = (alone.iter().zip(&bound).enumerate())
+            .map(|(d, (&n, &bound))| match d > 0 && bound {
+                true => n.max(at_least),
+                false => n,
+            })
             .collect();
         assert_eq!(alternating, expected, "alone {alone:?}");
     });
