@@ -43,6 +43,13 @@
 //!   [`RUNTIME_BUFFERS`] a phase: the pool of exportable buffers grows, its blocks made ahead
 //!   (`memory/ready.rs`), each a buffer object of its own reservation, so that the makings timed
 //!   are the creation calls, on the calling thread.
+//! - **Images, made by the runtime**: a `Private` `RGBA8Unorm` texture of [`IMAGE_SIDE`] square (4
+//!   MiB), rendered to and sampled, every [`IMAGE_EVERY`] (a frame at 60 Hz), at most
+//!   [`IMAGE_TEXTURES`] a phase: the runtime's pool of images grows, its blocks made ahead
+//!   (`memory/ready.rs`), plain blocks whose making holds the device's submissions on RADV.
+//! - **Images of mixed sizes, made by the runtime**: the same, in turn the sizes of
+//!   [`MIXED_SIDES`] (a frame's textures and two screen-sized ones, larger than a small block), at
+//!   most [`MIXED_TEXTURES`] a phase.
 //! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
 //!   the device's first memory type that is host-visible and host-coherent but not device-local or
 //!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of
@@ -92,9 +99,12 @@
 //! (`WorkCounts::batches_submitted_at_commit`) and the time spent in `vkQueueSubmit`
 //! (`WorkCounts::batch_submit_nanos`); the makings, their median and slowest, the runtime's blocks
 //! made ahead and in place and the blocks made ahead a call waited for
-//! (`WorkCounts::blocks_ahead_waited_for`), its buffers' blocks made exportable and plain, every
-//! plain block of buffers made (`WorkCounts::plain_buffer_blocks_made`), and its buffers laid in
-//! plain blocks while the check was pending or once it refused such blocks; the host's reclaim over
+//! (`WorkCounts::blocks_ahead_waited_for`), its blocks of images made ahead and in place, every
+//! pooled block made (`WorkCounts::pooled_memory_blocks_made`), the dedicated blocks added
+//! (`WorkCounts::dedicated_memory_blocks_live`), its buffers' blocks made exportable and plain,
+//! every plain block of buffers made (`WorkCounts::plain_buffer_blocks_made`), and its buffers laid
+//! in plain blocks while the check was pending or once it refused such blocks; the size its pooled
+//! blocks of plain memory were made of at the end (`memory.rs`'s "Pooling"); the host's reclaim over
 //! the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction stalls,
 //! allocation stalls, pages swapped out); the memory the fragmenting took, the host's free memory
 //! and the cgroup's room it was sized from; the free blocks of each order before and after the
@@ -108,9 +118,10 @@
 use super::host_residency::{device, Scratch};
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, HostMemory,
-    ResourceOptions, ShaderCacheOptions,
+    ResourceOptions, ShaderCacheOptions, Texture, TextureDescriptor,
 };
 use ash::vk;
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -129,6 +140,25 @@ const GIB: u64 = 1 << 30;
 const RUNTIME_BUFFER_BYTES: u64 = 32 * MIB;
 const RUNTIME_BUFFERS: usize = 24;
 const RUNTIME_EVERY: Duration = Duration::from_millis(400);
+/// The images arm's textures: `RGBA8Unorm` of this side (4 MiB), one a frame at 60 Hz, at most
+/// this many a phase (768 MiB).
+const IMAGE_SIDE: u64 = 1024;
+const IMAGE_EVERY: Duration = Duration::from_micros(16_667);
+const IMAGE_TEXTURES: usize = 192;
+/// The mixed images arm's textures, in turn, one a frame at 60 Hz, at most [`MIXED_TEXTURES`] a
+/// phase: six of 4 MiB, one of 14.1 MiB (2560 x 1440) and one of 31.6 MiB (3840 x 2160), 836 MiB
+/// a phase.
+const MIXED_SIDES: [(u64, u64); 8] = [
+    (1024, 1024),
+    (1024, 1024),
+    (1024, 1024),
+    (2560, 1440),
+    (1024, 1024),
+    (1024, 1024),
+    (1024, 1024),
+    (3840, 2160),
+];
+const MIXED_TEXTURES: usize = 96;
 /// The raw arms' bytes a phase, and the gap between their 64 MiB allocations.
 const RAW_BYTES: u64 = 768 * MIB;
 const RAW_EVERY: Duration = Duration::from_millis(800);
@@ -401,6 +431,10 @@ enum Making {
     Runtime,
     /// The runtime's exportable `Private` buffers (the module docs).
     Exportable,
+    /// The runtime's `Private` textures (the module docs).
+    Images,
+    /// The runtime's `Private` textures of mixed sizes (the module docs).
+    ImagesMixed,
     /// Allocations of `bytes` of the memory type `index`, [`RAW_BYTES`] a phase, exportable as
     /// `export`'s handle type where given.
     Raw {
@@ -415,6 +449,7 @@ enum Making {
 #[derive(Default)]
 struct Made {
     buffers: Vec<Buffer>,
+    textures: Vec<Texture>,
     raw: Vec<vk::DeviceMemory>,
 }
 
@@ -428,6 +463,8 @@ fn make(
     let mut times = Vec::new();
     let (every, most) = match making {
         Making::Runtime | Making::Exportable => (RUNTIME_EVERY, RUNTIME_BUFFERS),
+        Making::Images => (IMAGE_EVERY, IMAGE_TEXTURES),
+        Making::ImagesMixed => (IMAGE_EVERY, MIXED_TEXTURES),
         Making::Raw { bytes, .. } => (
             RAW_EVERY.mul_f64(bytes as f64 / (64 * MIB) as f64),
             (RAW_BYTES / bytes) as usize,
@@ -448,6 +485,17 @@ fn make(
                     .new_exportable_buffer(RUNTIME_BUFFER_BYTES, ResourceOptions::private())
                     .unwrap(),
             ),
+            Making::Images | Making::ImagesMixed => {
+                let (width, height) = match making {
+                    Making::Images => (IMAGE_SIDE, IMAGE_SIDE),
+                    _ => MIXED_SIDES[times.len() % MIXED_SIDES.len()],
+                };
+                let mut descriptor =
+                    TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, width, height, false);
+                descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+                descriptor.resource_options = ResourceOptions::private();
+                made.textures.push(device.new_texture(&descriptor).unwrap());
+            }
             Making::Raw {
                 index,
                 bytes,
@@ -548,7 +596,8 @@ fn phase(
          {turn_p99:.3}, slowest {turn_slowest:.3}; command buffers submitted {submitted}, by the \
          committing thread {}, in vkQueueSubmit {:.1} ms, {:.3} ms each; {} makings, ms median \
          {make_median:.1}, slowest {make_slowest:.1}; blocks made ahead {}, in place {}, \
-         waited for {}; \
+         waited for {}; image blocks made ahead {}, in place {}; pooled blocks made {}; \
+         dedicated blocks added {}; \
          blocks of the runtime's buffers made exportable {}, made plain {}, plain blocks of \
          buffers made {}; buffers in plain blocks awaiting the check {}, by its refusal {}; \
          reclaim: {}; blocks live {}, empty {}; MemAvailable {} MiB",
@@ -565,6 +614,10 @@ fn phase(
         counts.buffer_blocks_made_ahead - earlier.buffer_blocks_made_ahead,
         counts.buffer_blocks_made_in_place - earlier.buffer_blocks_made_in_place,
         counts.blocks_ahead_waited_for - earlier.blocks_ahead_waited_for,
+        counts.image_blocks_made_ahead - earlier.image_blocks_made_ahead,
+        counts.image_blocks_made_in_place - earlier.image_blocks_made_in_place,
+        counts.pooled_memory_blocks_made - earlier.pooled_memory_blocks_made,
+        (counts.dedicated_memory_blocks_live).saturating_sub(earlier.dedicated_memory_blocks_live),
         counts.fd_buffer_blocks_made - earlier.fd_buffer_blocks_made,
         counts.fd_buffer_blocks_plain - earlier.fd_buffer_blocks_plain,
         counts.plain_buffer_blocks_made - earlier.plain_buffer_blocks_made,
@@ -604,6 +657,10 @@ enum Arm {
     },
     /// The runtime's exportable buffers.
     Exportable,
+    /// The runtime's textures.
+    Images,
+    /// The runtime's textures of mixed sizes.
+    ImagesMixed,
     SystemHeap {
         bytes: u64,
         export: Option<Handle>,
@@ -648,6 +705,8 @@ fn arm(label: &str, arm: Arm) {
             Making::Runtime
         }
         Arm::Exportable => Making::Exportable,
+        Arm::Images => Making::Images,
+        Arm::ImagesMixed => Making::ImagesMixed,
         Arm::SystemHeap { bytes, export } => Making::Raw {
             index: system_heap(),
             bytes,
@@ -708,8 +767,12 @@ fn arm(label: &str, arm: Arm) {
         &mut made,
     );
     buddies("after the pressed phase");
+    eprintln!(
+        "RECLAIM-SUBMIT {label}: pooled blocks of plain memory made of {} MiB at the end",
+        crate::device::lock(&device.shared().memory).plain_block_bytes() >> 20
+    );
     drop(pressing);
-    drop((source, middle, out, made.buffers));
+    drop((source, middle, out, made.buffers, made.textures));
     for memory in made.raw {
         // SAFETY: nothing uses the memory.
         unsafe { crate::release::object(device.shared().vk(), memory) };
@@ -1134,6 +1197,21 @@ fn reclaim_submit_bench_runtime_settled() {
     arm(
         "made by the runtime, settled",
         Arm::Runtime { settled: true },
+    );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images() {
+    arm("images, made by the runtime", Arm::Images);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_mixed() {
+    arm(
+        "images of mixed sizes, made by the runtime",
+        Arm::ImagesMixed,
     );
 }
 

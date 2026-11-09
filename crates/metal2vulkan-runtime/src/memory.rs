@@ -6,7 +6,15 @@
 //!   at offsets).
 //! - **Pooling.** Resources share blocks of [`BLOCK_BYTES`], so `maxMemoryAllocationCount` (4096
 //!   on many devices) stays out of reach. A request larger than half a block takes a dedicated
-//!   block of its own size.
+//!   block of its own size. Where a block of plain memory (allocated with no export) took longer
+//!   than [`MAKING_BOUND`] to make, the device's later pooled blocks of plain memory are made of
+//!   the largest power of two its rate makes within the bound, at least [`MIN_PLAIN_BLOCK_BYTES`]
+//!   ([`Memory::plain_block_made`]), a placement larger than such a block taking one of the power
+//!   of two that holds it: on RADV such a block shares the reservation of the process's buffer
+//!   objects, and its making holds every submission of the process for as long as it runs (a
+//!   Radeon 780M whose free memory lies in single pages took 9 to 23 ms for 64 MiB at the median).
+//!   The blocks of exportable buffers keep their size: each is a buffer object of its own
+//!   reservation, whose making holds no submission.
 //! - **Kept for reuse.** A block that empties is kept for the next placements rather than freed:
 //!   a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] empty ones are kept in its pool, and
 //!   past that, as a dedicated one of the runtime's own memory, while the empty blocks kept in its
@@ -166,6 +174,15 @@ mod ready;
 
 /// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
+
+/// The longest a making of a block of plain memory may take before the device's later pooled
+/// blocks of plain memory are made smaller ([`Memory::plain_block_made`]): half a frame at 60 Hz.
+/// On RADV such a making holds every submission of the process for as long as it runs (the module
+/// docs), so a frame submitted meanwhile is late by what is left of it.
+pub(super) const MAKING_BOUND: Duration = Duration::from_millis(8);
+
+/// The smallest a pooled block of plain memory is made ([`Memory::plain_block_made`]).
+pub(super) const MIN_PLAIN_BLOCK_BYTES: u64 = 16 << 20;
 
 /// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget
 /// ([`Pool::release`], [`Memory::kept_budget`]). In a pool the encodings place in, one of them is
@@ -1376,6 +1393,8 @@ pub(super) struct Block {
     /// ([`place_carried`]): the buffers carried from one block of the lost generation lie in it at
     /// their offsets, and nothing else is placed in it, so it goes once they do.
     carried: bool,
+    /// How long its making took ([`BlockMaker::make`]): zero for an import.
+    took: Duration,
 }
 
 /// The external memory a placement's memory is, as an image bound in it names it
@@ -1864,6 +1883,10 @@ pub(super) struct Memory {
     /// The buffers' pools by memory type, then the images' ([`Memory::pool`]).
     pools: Vec<Pool<Block>>,
     block_bytes: u64,
+    /// The bytes a pooled block of plain memory is made of now: [`Memory::block_bytes`], made
+    /// smaller at each making that took longer than [`MAKING_BOUND`], down to
+    /// [`MIN_PLAIN_BLOCK_BYTES`] ([`Memory::plain_block_made`]).
+    plain_block_bytes: u64,
     /// Blocks are allocated with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`: the device enabled
     /// `bufferDeviceAddress`, so buffers carry device addresses.
     device_address: bool,
@@ -2065,6 +2088,7 @@ impl Memory {
                 .collect(),
             types,
             block_bytes: BLOCK_BYTES.min(max_allocation.max(1)),
+            plain_block_bytes: BLOCK_BYTES.min(max_allocation.max(1)),
             device_address,
             address_types: None,
             fd_address_types: None,
@@ -2562,7 +2586,7 @@ impl Memory {
         let Some(made) = readying.take() else {
             return false;
         };
-        let bytes = self.block_bytes;
+        let bytes = made.block.size;
         self.add_block(pool, made.block, bytes, false, 0);
         self.ahead.made_ahead(pool.0, waited_for, made.waited);
         if self.host_copy_pool == Some(Some(pool)) {
@@ -2727,6 +2751,9 @@ impl Memory {
             Holds::PageBuffers => self.fd_blocks.pages_plain += 1,
             Holds::Images | Holds::Exports | Holds::DmaBufs => {}
         }
+        if block.exported.is_none() && !block.fd && !block.pooled_pages {
+            self.plain_block_made(block.size, block.took);
+        }
         self.allocated += size;
         let heap = self.heap_of(type_index);
         if let Some((_, live)) = self.heaps.get_mut(heap) {
@@ -2740,6 +2767,61 @@ impl Memory {
         pool.add_as(size, dedicated, block, used, zeroed)
     }
 
+    /// The bytes of a pooled block made for `pool` with room for half of it
+    /// ([`pooled_block_bytes`]).
+    fn pooled_bytes(&self, pool: (Holds, u32)) -> u64 {
+        let types = (
+            self.fd_buffer_types.unwrap_or(0),
+            self.page_buffer_types.unwrap_or(0),
+        );
+        let plain = plain(pool, types.0, types.1).then_some(self.plain_block_bytes);
+        pooled_block_bytes(self.block_bytes, plain, 0)
+    }
+
+    /// The bytes of each live pooled block that holds `holds`, of every memory type, for the
+    /// crate's tests.
+    #[cfg(test)]
+    pub(super) fn pooled_block_sizes(&self, holds: Holds) -> Vec<u64> {
+        let count = self.types.len() as u32;
+        (0..count)
+            .flat_map(|type_index| {
+                let pool = self.pool_ref(holds, type_index);
+                pool.blocks
+                    .iter()
+                    .flatten()
+                    .filter(|block| !block.dedicated)
+            })
+            .map(|block| block.size)
+            .collect()
+    }
+
+    /// The bytes a pooled block of plain memory is made of now ([`Memory::plain_block_made`]), for
+    /// the crate's tests.
+    #[cfg(test)]
+    pub(super) fn plain_block_bytes(&self) -> u64 {
+        self.plain_block_bytes
+    }
+
+    /// A block of plain memory of `size` bytes was made in `took` (`vkAllocateMemory`, its
+    /// mapping and its buffer of addresses): where that is longer than [`MAKING_BOUND`], the later
+    /// pooled blocks of plain memory are made of the largest power of two that the making's rate
+    /// (`size` in `took`) makes within the bound, where that is smaller than those made now, at
+    /// least [`MIN_PLAIN_BLOCK_BYTES`]. A block that took that long held every submission of the
+    /// process on RADV as long, and a block's making there takes about as much longer as the block
+    /// is larger. Never made larger again: the host's state that made it slow (its free memory in
+    /// single pages, no freed pages at hand in the kernel's pools) comes back.
+    pub(super) fn plain_block_made(&mut self, size: u64, took: Duration) {
+        if took <= MAKING_BOUND {
+            return;
+        }
+        let within = u128::from(size) * MAKING_BOUND.as_nanos() / took.as_nanos();
+        let fits = match u64::try_from(within).unwrap_or(u64::MAX).checked_ilog2() {
+            Some(log) => 1 << log,
+            None => 0,
+        };
+        self.plain_block_bytes = self.plain_block_bytes.min(fits.max(MIN_PLAIN_BLOCK_BYTES));
+    }
+
     /// What making a block takes, copied out so that the block is made with the memory's lock
     /// released ([`place`], [`keep_room`]).
     fn maker(&self) -> BlockMaker {
@@ -2748,6 +2830,7 @@ impl Memory {
             .fold(0, |bits, (index, _)| bits | 1 << index);
         BlockMaker {
             block_bytes: self.block_bytes,
+            plain_block_bytes: self.plain_block_bytes,
             host_visible,
             fd_types: self.fd_buffer_types.unwrap_or(0),
             page_types: self.page_buffer_types.unwrap_or(0),
@@ -2988,11 +3071,11 @@ impl Memory {
         }
         // A block made ahead for a pool that stopped growing that long ago, where the pool has
         // room for half a block (`memory/ready.rs`).
-        let room = self.block_bytes / 2;
         let mut at = 0;
         while at < self.readying.len() {
             let (holds, type_index) = self.readying[at].pool();
             let started = self.readying[at].started();
+            let room = self.pooled_bytes((holds, type_index)) / 2;
             let pool = self.pool(holds, type_index);
             let since = pool.grew(None).map_or(started, |grew| grew.max(started));
             let unused = now.saturating_duration_since(since) >= KEPT_EMPTY_FOR
@@ -3340,11 +3423,37 @@ impl Memory {
     }
 }
 
+/// Whether the blocks of `pool` are of plain memory, allocated with no export
+/// ([`BlockMaker::make`]): not those of exportable buffers ([`Holds::handle`]), nor those of
+/// [`Holds::FdBuffers`] of a memory type `fd_types` names (as bits), which are allocated
+/// exportable as [`FD_BLOCKS_HANDLE`], nor those of [`Holds::PageBuffers`] of a memory type
+/// `page_types` names, which are pages the runtime maps and imports.
+fn plain((holds, type_index): (Holds, u32), fd_types: u32, page_types: u32) -> bool {
+    let named = |types: u32| types & 1 << type_index != 0;
+    holds.handle().is_none()
+        && !(holds == Holds::FdBuffers && named(fd_types))
+        && !(holds == Holds::PageBuffers && named(page_types))
+}
+
+/// The bytes of a pooled block that holds a placement of `size` bytes, at most half of
+/// `block_bytes` ([`place`]): `block_bytes` where its blocks are allocated exportable (`plain`
+/// `None`); else the bytes `plain` says a pooled block of plain memory is made of now
+/// ([`Memory::plain_block_made`]), or the power of two that holds the placement where that is
+/// larger.
+pub(super) fn pooled_block_bytes(block_bytes: u64, plain: Option<u64>, size: u64) -> u64 {
+    match plain {
+        None => block_bytes,
+        Some(plain) => (plain.max(size.next_power_of_two())).min(block_bytes),
+    }
+}
+
 /// What making a block of the runtime's memory takes ([`Memory::maker`]): a copy of the memory's
 /// constants, so that the block is made with its lock released.
 struct BlockMaker {
     /// A pooled block's size ([`BLOCK_BYTES`], or the device's largest allocation).
     block_bytes: u64,
+    /// As [`Memory`]'s.
+    plain_block_bytes: u64,
     /// The host-visible memory types, as bits: a block of one is mapped whole.
     host_visible: u32,
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits.
@@ -3364,6 +3473,13 @@ struct BlockMaker {
 }
 
 impl BlockMaker {
+    /// The bytes of a pooled block made for `pool` that holds a placement of `size` bytes, at
+    /// most half a block ([`place`]; [`pooled_block_bytes`]).
+    fn pooled_bytes(&self, pool: (Holds, u32), size: u64) -> u64 {
+        let plain = plain(pool, self.fd_types, self.page_types).then_some(self.plain_block_bytes);
+        pooled_block_bytes(self.block_bytes, plain, size)
+    }
+
     /// A new block of `size` bytes of memory type `type_index` that holds `holds`, with a buffer
     /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
     /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
@@ -3481,6 +3597,7 @@ impl BlockMaker {
             zeroed: false,
             pooled_pages: true,
             carried: false,
+            took: Duration::ZERO,
         }))
     }
 
@@ -3497,6 +3614,7 @@ impl BlockMaker {
         export: Exportable,
         zeroed: bool,
     ) -> Result<Block, Error> {
+        let began = Instant::now();
         let addresses = if addressed.is_some() && self.device_address {
             let sharing = Sharing::new(&self.families);
             Some(address_buffer(device, size, sharing, export.handle())?)
@@ -3598,6 +3716,7 @@ impl BlockMaker {
             zeroed,
             pooled_pages: false,
             carried: false,
+            took: began.elapsed(),
         })
     }
 }
@@ -3848,6 +3967,7 @@ pub(super) unsafe fn import_host(
         zeroed: false,
         pooled_pages: false,
         carried: false,
+        took: Duration::ZERO,
     };
     let host = pointer.as_ptr() as usize;
     let mut memory = lock(memory);
@@ -3887,6 +4007,7 @@ pub(super) fn import_own_pages(
         zeroed: false,
         pooled_pages: false,
         carried: false,
+        took: Duration::ZERO,
     };
     let mut memory = lock(memory);
     memory.say_block("imported fresh pages for a buffer", &block);
@@ -3949,6 +4070,7 @@ pub(super) fn place_carried(
                 zeroed: false,
                 pooled_pages: true,
                 carried: true,
+                took: Duration::ZERO,
             };
             let mut guard = lock(memory);
             match carried_in(&guard) {
@@ -4261,13 +4383,16 @@ fn place(
         return Err(Error::OutOfMemory(MemoryKind::Device));
     }
     let dedicated = fit == Fit::Apart || size > maker.block_bytes / 2;
-    let block_size = if dedicated { size } else { maker.block_bytes };
     let mut failure = Error::OutOfMemory(MemoryKind::Device);
     // The class's own types first, then those it overflows into where none of them has room.
     let order = (candidates.iter().map(|&type_index| (type_index, false)))
         .chain(overflow.iter().map(|&type_index| (type_index, true)));
     for (type_index, overflowing) in order {
         let pool = (holds, type_index);
+        let block_size = match dedicated {
+            true => size,
+            false => maker.pooled_bytes(pool, size),
+        };
         if fit == Fit::Pooled {
             let mut guard = lock(memory);
             if let Some(placement) =
@@ -4412,12 +4537,12 @@ pub(super) fn keep_room(
     let first = (kept.iter()).filter(|&&(holds, _)| holds == own || (page(holds) && pages));
     let rest = (kept.iter())
         .filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers && !page(holds));
-    let room = maker.block_bytes / 2;
     for &pool in first.chain(rest) {
         let addressed = pool.0.buffers().then_some(&**counts);
+        let bytes = maker.pooled_bytes(pool, 0);
         loop {
             let mut guard = lock(memory);
-            if guard.pool(pool.0, pool.1).has_room(room) {
+            if guard.pool(pool.0, pool.1).has_room(bytes / 2) {
                 break;
             }
             // The host copies' block made ahead joins its pool at the placement that needs it
@@ -4441,11 +4566,11 @@ pub(super) fn keep_room(
             if !crate::allocations::room_ahead(device.handle()) {
                 break;
             }
-            let Ok(block) = maker.make(device, pool, maker.block_bytes, addressed) else {
+            let Ok(block) = maker.make(device, pool, bytes, addressed) else {
                 break;
             };
             let mut guard = lock(memory);
-            guard.add_block(pool, block, maker.block_bytes, false, 0);
+            guard.add_block(pool, block, bytes, false, 0);
             guard.ahead.made_in_place(pool.0);
             break;
         }
@@ -4471,7 +4596,7 @@ fn ready_if_growing(
     counts: &Arc<Counters>,
     (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
 ) {
-    let bytes = memory.block_bytes;
+    let bytes = memory.pooled_bytes(pool);
     let ahead = memory.readying_at(pool).is_some();
     let pool_of = memory.pool(pool.0, pool.1);
     let grew = (pool_of.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
@@ -4505,12 +4630,11 @@ fn ready_ahead(
     let Some(pool) = memory.host_copy_pool(device, copies) else {
         return;
     };
-    let room = memory.block_bytes / 2;
-    if memory.readying_at(pool).is_some() || memory.pool(pool.0, pool.1).has_room(room) {
+    let bytes = memory.pooled_bytes(pool);
+    if memory.readying_at(pool).is_some() || memory.pool(pool.0, pool.1).has_room(bytes / 2) {
         return;
     }
     let maker = memory.maker();
-    let bytes = maker.block_bytes;
     let functions = Arc::clone(functions);
     let started = ready::Readying::start(maker, functions, Arc::clone(quiet), None, (pool, bytes));
     memory.readying.extend(started);
