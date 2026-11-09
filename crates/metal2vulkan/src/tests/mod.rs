@@ -60,6 +60,7 @@ mod engine_fpc_frames;
 mod engine_fragment;
 mod engine_fragment_depth_clamp;
 mod engine_fragment_imageblock;
+mod engine_front_facing_byte;
 mod engine_function_constant_interface;
 mod engine_function_constant_pointers;
 mod engine_gated_texture_slots;

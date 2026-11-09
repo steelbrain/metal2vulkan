@@ -1064,6 +1064,19 @@ fn bool_as_uint(cx: &EmitCx<'_>, link: &Link) -> bool {
         )
 }
 
+/// Whether `link` is a `bool` builtin (`FrontFacing`) read into an integer argument, as an older
+/// front end's ABI passes `[[front_facing]]` (`i8`): the argument holds 1 or 0.
+fn bool_builtin_as_int(cx: &EmitCx<'_>, link: &Link) -> bool {
+    matches!(link.form.held, Held::Int { .. })
+        && matches!(
+            cx.plan.families.stage_io.objects.get(link.object),
+            Some(IoObject::Builtin {
+                shape: Shape::Bool,
+                ..
+            })
+        )
+}
+
 /// The `uint` form with the lanes of `form`.
 fn uint_lanes(form: Form) -> Form {
     form.with(Held::Int {
@@ -1074,7 +1087,8 @@ fn uint_lanes(form: Form) -> Form {
 
 /// `x`, a value loaded through `link`, as the lowered representation of its form: a narrow
 /// integer masked to its width, a narrow float rounded to its format, a `bool` carried as `uint`
-/// compared with 0, the weights of a [`Place::Weights`] read.
+/// compared with 0, a `bool` builtin read into an integer as 1 or 0, the weights of a
+/// [`Place::Weights`] read.
 fn to_lowered(
     cx: &EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1086,6 +1100,11 @@ fn to_lowered(
     if bool_as_uint(cx, link) {
         let zero = ops::splat(fb, uint_lanes(form), 0)?;
         return fb.binary(BinOp::INotEqual, x, zero);
+    }
+    if bool_builtin_as_int(cx, link) {
+        let one = ops::splat(fb, form, 1)?;
+        let zero = ops::splat(fb, form, 0)?;
+        return fb.select(x, one, zero);
     }
     let x = ops::mask(fb, form, x)?;
     narrow::round(fb, form, x)

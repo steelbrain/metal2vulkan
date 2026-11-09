@@ -2026,9 +2026,11 @@ fn input_builtin(
                 None,
             )
         }
+        // A `bool` argument, or an integer one an older front end's ABI passes it in (`i8`,
+        // truncated to `i1` where read): the face as 1 or 0 (`to_lowered`).
         Bi::FrontFacing if !vertex => {
             if f.held != Held::Bool || f.lanes != 1 {
-                return Err(not_lowered());
+                int_scalar(f)?;
             }
             (
                 B::FrontFacing,
