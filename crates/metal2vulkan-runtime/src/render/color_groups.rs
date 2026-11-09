@@ -486,7 +486,9 @@ impl RenderLowering {
                 counting: false,
             })),
         );
-        Ok(RenderLowering::assemble(core, draws, opening))
+        // A later group's encoder starts from no carried draw: a group's pass carries none
+        // (`render/carried.rs`).
+        Ok(RenderLowering::assemble(core, draws, opening, None))
     }
 
     /// Whether a later group's decisive call ran otherwise than the first group's.
