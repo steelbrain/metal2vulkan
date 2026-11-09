@@ -26,7 +26,7 @@
 //!   exported memory, and an event whose semaphore was made exportable, whose importers hold the
 //!   lost one. The recovery's notice counts those it kept by kind (`Degradation::DeviceRecovered`):
 //!   every one but a heap's buffer, which its heap holds.
-//! - **Each generation's work reaches its own parts** ([`RecordsOn`]). A command buffer of the
+//! - **Each generation's work reaches its own parts** (`NoticesFor::generation`). A command buffer of the
 //!   lost generation may still record once the recovery carried its objects: an encoder a
 //!   program's thread opened before the loss, a render encoder's end on the lowering thread.
 //!   Inside a command buffer's work, a carried buffer answers its parts of that command buffer's
@@ -53,7 +53,7 @@ use super::{lock, Device, DeviceShared};
 use crate::buffer::{Buffer, WeakBuffer};
 use crate::event::EventShared;
 use crate::Error;
-use std::cell::{Cell, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -269,45 +269,6 @@ impl Recording {
             shared.carry.let_go_at_rest(shared);
         }
     }
-}
-
-thread_local! {
-    /// The generation whose command buffer's work this thread does now ([`RecordsOn`]): the
-    /// address of its `DeviceShared`.
-    static RECORDS_ON: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-/// This thread doing the work of a command buffer of one generation, until it goes: a buffer its
-/// device's recovery carried answers its parts of that generation meanwhile (`Buffer::s`), so a
-/// command buffer of the lost generation records the lost generation's handles alone (the module
-/// docs). Made with each scope of a command buffer's work (`CommandBufferShared::notices_for`);
-/// one made inside another names its own generation until it goes. Neither `Send` nor `Sync`.
-pub(crate) struct RecordsOn {
-    outer: Option<usize>,
-    _thread: std::marker::PhantomData<*const ()>,
-}
-
-impl RecordsOn {
-    /// The work of a command buffer of `shared`'s generation, from now.
-    pub(crate) fn enter(shared: &DeviceShared) -> RecordsOn {
-        let address = std::ptr::from_ref(shared).addr();
-        RecordsOn {
-            outer: RECORDS_ON.with(|records| records.replace(Some(address))),
-            _thread: std::marker::PhantomData,
-        }
-    }
-}
-
-impl Drop for RecordsOn {
-    fn drop(&mut self) {
-        RECORDS_ON.with(|records| records.set(self.outer));
-    }
-}
-
-/// The generation whose command buffer's work this thread does now, if any ([`RecordsOn`]): the
-/// address of its `DeviceShared`.
-pub(crate) fn records_on() -> Option<usize> {
-    RECORDS_ON.with(Cell::get)
 }
 
 /// Why a buffer stays the lost generation's ([`Buffer::carry`]; the module docs).

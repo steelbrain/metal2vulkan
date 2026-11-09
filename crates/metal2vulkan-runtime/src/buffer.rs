@@ -119,6 +119,9 @@ struct BufferShared {
     /// this one's, its own parts that generation's (`Buffer::s`). Set once; held by this one
     /// alone, which the program's handles are.
     next: OnceLock<Buffer>,
+    /// `next` is set: read at one relaxed load where nothing was carried ([`Buffer::s`]), `next`
+    /// with its own ordering where it was.
+    carried: AtomicBool,
 }
 
 /// Where a buffer's bytes are.
@@ -2993,6 +2996,7 @@ impl Device {
             padding_unobserved: AtomicBool::new(false),
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
+            carried: AtomicBool::new(false),
         }))
     }
 
@@ -3245,6 +3249,7 @@ impl Heap {
             padding_unobserved: AtomicBool::new(false),
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
+            carried: AtomicBool::new(false),
         }))
     }
 }
@@ -3252,21 +3257,21 @@ impl Heap {
 impl Buffer {
     /// The buffer's parts as the work at hand reaches them: its own, where its device's recovery
     /// never carried it, at one load (`device/carry.rs`). Where it did, inside a command buffer's
-    /// work (`device/carry.rs`'s `RecordsOn`) those of that command buffer's generation where the
+    /// work (`NoticesFor::generation`) those of that command buffer's generation where the
     /// buffer has some, so the lost generation's command buffers record its own handles alone;
     /// else those of the generation it was carried to last.
     #[inline]
     fn s(&self) -> &Arc<BufferShared> {
-        match self.0.next.get() {
-            None => &self.0,
-            Some(_) => self.carried(),
+        match self.0.carried.load(Ordering::Relaxed) {
+            false => &self.0,
+            true => self.carried(),
         }
     }
 
     /// [`s`](Self::s) of a buffer its device's recovery carried.
     #[cold]
     fn carried(&self) -> &Arc<BufferShared> {
-        let records = crate::device::carry::records_on();
+        let records = crate::degradation::NoticesFor::generation();
         let mut shared = &self.0;
         loop {
             // Not its parts on a lost generation, let go of: a command buffer made there after
@@ -4405,6 +4410,7 @@ impl Buffer {
             padding_unobserved: AtomicBool::new(last.padding_unobserved.load(Ordering::Acquire)),
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
+            carried: AtomicBool::new(false),
         }));
         // Zero, as a new buffer's. Dropping it on failure lets go of its parts and range share,
         // and of the range token, which goes back to the buffer left.
@@ -4421,6 +4427,8 @@ impl Buffer {
             buffer: Arc::downgrade(last),
         };
         let _set = last.next.set(carried);
+        // Every link before it is carried already.
+        last.carried.store(true, Ordering::Release);
         // Its parts on the lost generation go once none of its command buffers may record.
         from.carry.lost(from, Box::new(lost));
         // The program's buffer is the next generation's from now on.

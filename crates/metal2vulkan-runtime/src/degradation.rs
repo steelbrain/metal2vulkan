@@ -56,7 +56,6 @@
 use super::attachment_stand_in::{Cause, StandIn};
 use super::binding::{CommandUses, ResidentPrefix};
 use super::color_resolve;
-use super::device::carry::RecordsOn;
 use super::device::{DebugMessage, Device, DeviceShared, MessageKind, MessageSeverity};
 use super::error::Error;
 use super::fragment_imageblock::PassImageblock;
@@ -2962,48 +2961,76 @@ impl Announced {
 }
 
 thread_local! {
-    /// The command buffer whose work this thread does now ([`NoticesFor`]).
-    static NOTICES_FOR: Cell<Option<ObjectId>> = const { Cell::new(None) };
+    /// The command buffer whose work this thread does now, and its generation ([`NoticesFor`]).
+    static NOTICES_FOR: Cell<Scope> = const {
+        Cell::new(Scope {
+            command_buffer: None,
+            generation: None,
+        })
+    };
+}
+
+/// What a thread's [`NoticesFor`] names: the command buffer whose work it does, and that command
+/// buffer's generation of its device, the address of its `DeviceShared`, which a buffer its
+/// device's recovery carried answers its parts of (`Buffer::carried`, `device/carry.rs`).
+#[derive(Clone, Copy)]
+struct Scope {
+    command_buffer: Option<ObjectId>,
+    generation: Option<usize>,
 }
 
 /// This thread doing one command buffer's work, from its making until it is dropped: every notice
-/// announced meanwhile names that command buffer ([`DegradeNotice::command_buffer`]). Made where
-/// the runtime holds the command buffer, at each place that does its work
-/// (`CommandBuffer::notices_for`); one made inside another names its own command buffer until it
-/// goes, then the other's again, and [`NoticesFor::none`] names none meanwhile. Neither `Send` nor
-/// `Sync`: it is this thread's.
+/// announced meanwhile names that command buffer ([`DegradeNotice::command_buffer`]), and a
+/// buffer its device's recovery carried answers its parts of that command buffer's generation
+/// ([`NoticesFor::generation`]). Made where the runtime holds the command buffer, at each place
+/// that does its work (`CommandBuffer::notices_for`); one made inside another names its own
+/// command buffer until it goes, then the other's again, and [`NoticesFor::none`] names none
+/// meanwhile, the generation left as it was. Neither `Send` nor `Sync`: it is this thread's.
 pub(crate) struct NoticesFor {
-    outer: Option<ObjectId>,
-    /// The command buffer's generation, for the objects its device's recovery carried
-    /// (`device/carry.rs`'s `RecordsOn`): what [`NoticesFor::none`] leaves as it was.
-    _records: Option<RecordsOn>,
+    outer: Scope,
     _thread: std::marker::PhantomData<*const ()>,
 }
 
 impl NoticesFor {
     /// The work of the command buffer of ID `command_buffer`, made on `generation`, from now.
     pub(crate) fn new(command_buffer: ObjectId, generation: &DeviceShared) -> NoticesFor {
-        NoticesFor::of(Some(command_buffer), Some(RecordsOn::enter(generation)))
+        let scope = Scope {
+            command_buffer: Some(command_buffer),
+            generation: Some(std::ptr::from_ref(generation).addr()),
+        };
+        NoticesFor {
+            outer: NOTICES_FOR.with(|current| current.replace(scope)),
+            _thread: std::marker::PhantomData,
+        }
     }
 
     /// Work for no command buffer, from now, inside one's: what is announced about several
     /// command buffers, or about the device. The work is the outer command buffer's generation's
     /// still, where it is inside one's.
     pub(crate) fn none() -> NoticesFor {
-        NoticesFor::of(None, None)
-    }
-
-    fn of(command_buffer: Option<ObjectId>, records: Option<RecordsOn>) -> NoticesFor {
+        let outer = NOTICES_FOR.with(|current| {
+            let outer = current.get();
+            current.set(Scope {
+                command_buffer: None,
+                ..outer
+            });
+            outer
+        });
         NoticesFor {
-            outer: NOTICES_FOR.with(|current| current.replace(command_buffer)),
-            _records: records,
+            outer,
             _thread: std::marker::PhantomData,
         }
     }
 
     /// The command buffer whose work this thread does now, if any.
     pub(crate) fn current() -> Option<ObjectId> {
-        NOTICES_FOR.with(Cell::get)
+        NOTICES_FOR.with(|current| current.get().command_buffer)
+    }
+
+    /// The generation whose command buffer's work this thread does now, if any: the address of
+    /// its `DeviceShared`.
+    pub(crate) fn generation() -> Option<usize> {
+        NOTICES_FOR.with(|current| current.get().generation)
     }
 }
 
