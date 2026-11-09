@@ -2437,91 +2437,93 @@ impl Device {
                 ..
             }
         );
-        let why =
-            match route {
-                Route::Levels(levels) => format!(
+        let why = match route {
+            Route::Levels(levels) => format!(
                 "it has {levels} levels, and no image over the buffer's memory holds levels past \
                  the first: one image of its own holds every level, its first a copy of the \
                  buffer's bytes, copied in before the commands that use it and back after those \
                  that write it"
             ),
-                Route::Past => "its texels run past the buffer's length, which no image over the \
+            Route::Past => "its texels run past the buffer's length, which no image over the \
                             buffer's memory reaches: the texture's tail holds them"
-                    .to_owned(),
-                Route::Host {
-                    way: HostWay::DeviceCopy,
-                    ..
-                } => String::new(),
-                Route::Host {
-                    class,
-                    rows,
-                    padding,
-                    way: HostWay::InPlace { storable },
-                } => {
-                    let checking = in_place::checking();
-                    let made = (&*texels, class, storable);
-                    let cause = match self.in_place_image(&plan, descriptor, made, &facts)? {
-                        Ok((image, pitched)) => {
-                            if !checking {
-                                let counts = &self.shared().counts;
-                                let written = in_place::Access::Writes.takes(usage);
-                                let copied = texels.buffer.copied();
-                                counts.host_texture_in_place(class, (pitched, written, copied));
-                                let usage = image.plan().usage;
-                                if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
-                                    counts.feedback_loop_alias_image();
-                                }
+                .to_owned(),
+            Route::Host {
+                way: HostWay::DeviceCopy,
+                ..
+            } => String::new(),
+            Route::Host {
+                class,
+                rows,
+                padding,
+                way: HostWay::InPlace { storable },
+            } => {
+                let checking = in_place::checking();
+                let made = (&*texels, class, storable);
+                let cause = match self.in_place_image(&plan, descriptor, made, &facts)? {
+                    Ok((image, pitched)) => {
+                        if !checking {
+                            let counts = &self.shared().counts;
+                            let written = in_place::Access::Writes.takes(usage);
+                            let copied = texels.buffer.copied();
+                            counts.host_texture_in_place(class, (pitched, written, copied));
+                            let usage = image.plan().usage;
+                            if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+                                counts.feedback_loop_alias_image();
                             }
-                            return Ok(Storage::Alias { image, texels });
                         }
-                        Err((refusal, why)) => ShadowCause::Refused(refusal, why),
-                    };
-                    let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
-                    self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
-                }
-                Route::Host {
-                    class,
-                    rows,
-                    padding,
-                    way: HostWay::Shadow(cause),
-                } => {
-                    let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
-                    self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
-                }
-                Route::Device { holds } => {
-                    let over = (&*texels, &holds, usage);
-                    match self.alias_over_device(&plan, (descriptor, layout), over, &facts)? {
-                        Ok((image, count)) => {
-                            if !in_place::checking() {
-                                count.count(&self.shared().counts);
-                            }
-                            return Ok(Storage::Alias { image, texels });
-                        }
-                        // The device's check of its pooled or exported memory makes no shadow:
-                        // its round is not made.
-                        Err(_) if in_place::checking() => return Err(internal(
-                            "the in-place check's texture takes no image over the runtime's memory",
-                        )),
-                        // Made before its class's verdict (the pooled memory's, for an image at
-                        // Metal's pitch; the exported memory's, for any image there): the shadow
-                        // moves to that image once the verdict passes, as the texture would have
-                        // been made then (`texture/storage_form.rs`).
-                        Err((why, Some(ShadowCause::CheckPending(class, _, rows)))) => {
-                            let line = self.shared().in_place.line();
-                            *pending = Some(in_place::PendingMove {
-                                class,
-                                rows,
-                                padding: texels.padding(line),
-                                usage,
-                                plan: plan.clone(),
-                                descriptor: *descriptor,
-                            });
-                            why
-                        }
-                        Err((why, _)) => why,
+                        return Ok(Storage::Alias { image, texels });
                     }
+                    Err((refusal, why)) => ShadowCause::Refused(refusal, why),
+                };
+                let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
+                self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
+            }
+            Route::Host {
+                class,
+                rows,
+                padding,
+                way: HostWay::Shadow(cause),
+            } => {
+                let shadowed = ((class, texels.buffer.copied()), (rows, padding), cause);
+                self.host_shadowed(shadowed, (usage, &plan), descriptor, pending)?
+            }
+            Route::Device { holds } => {
+                let over = (&*texels, &holds, usage);
+                match self.alias_over_device(&plan, (descriptor, layout), over, &facts)? {
+                    Ok((image, count)) => {
+                        if !in_place::checking() {
+                            count.count(&self.shared().counts);
+                        }
+                        return Ok(Storage::Alias { image, texels });
+                    }
+                    // The device's check of its pooled or exported memory makes no shadow:
+                    // its round is not made.
+                    Err((why, _)) if in_place::checking() => {
+                        return Err(internal(&format!(
+                            "the in-place check's texture takes no image over the runtime's \
+                                 memory: {why}"
+                        )))
+                    }
+                    // Made before its class's verdict (the pooled memory's, for an image at
+                    // Metal's pitch; the exported memory's, for any image there): the shadow
+                    // moves to that image once the verdict passes, as the texture would have
+                    // been made then (`texture/storage_form.rs`).
+                    Err((why, Some(ShadowCause::CheckPending(class, _, rows)))) => {
+                        let line = self.shared().in_place.line();
+                        *pending = Some(in_place::PendingMove {
+                            class,
+                            rows,
+                            padding: texels.padding(line),
+                            usage,
+                            plan: plan.clone(),
+                            descriptor: *descriptor,
+                        });
+                        why
+                    }
+                    Err((why, _)) => why,
                 }
-            };
+            }
+        };
         let plan = self.with_undeclared_usage(plan, layout, usage, &facts)?;
         if !plan
             .usage
