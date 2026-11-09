@@ -210,6 +210,46 @@ fn the_hook_waits_past_its_bound_for_a_making_in_progress() {
     drop(busy);
 }
 
+/// The hook's wait on a thread whose thread-locals were destroyed runs no test step and returns:
+/// on macOS `exit` destroys the exiting thread's thread-locals before it runs the exit handlers,
+/// and a wait that read the step's (`exit_guard::BETWEEN_COUNTS`) there panicked, which in the
+/// handler, a function that cannot unwind, aborted every test child that exited from a thread
+/// with a section of the runtime's in progress (the M3's exit probe, 2965 of 5931 children). Here
+/// the wait runs in a thread-local's destructor, after the step's was destroyed: thread-locals
+/// are destroyed in the reverse order of their first use.
+#[test]
+fn the_hook_waits_on_a_thread_whose_thread_locals_are_destroyed() {
+    struct WaitsAtExit(&'static Guard, mpsc::Sender<bool>);
+    impl Drop for WaitsAtExit {
+        fn drop(&mut self) {
+            let ended = self.0.close(0, Duration::from_millis(20), Duration::ZERO);
+            let _ = self.1.send(ended);
+        }
+    }
+    thread_local! {
+        static AT_EXIT: std::cell::RefCell<Option<WaitsAtExit>> = const {
+            std::cell::RefCell::new(None)
+        };
+    }
+    let guard = guard();
+    // A section in progress on another thread for the wait to wait for.
+    let busy = guard.enter().expect("open");
+    let (sender, waited) = mpsc::channel();
+    std::thread::spawn(move || {
+        AT_EXIT.with(|at_exit| *at_exit.borrow_mut() = Some(WaitsAtExit(guard, sender)));
+        // First used after `AT_EXIT`, so destroyed before it.
+        exit_guard::BETWEEN_COUNTS.with(|step| assert!(step.borrow().is_none()));
+    })
+    .join()
+    .expect("the thread's end");
+    assert_eq!(
+        waited.recv_timeout(Duration::from_secs(5)),
+        Ok(false),
+        "the wait for the section in progress ended at its bound"
+    );
+    drop(busy);
+}
+
 /// A making that ends as the hook looks, past its bound, is seen ended: whether it ends between
 /// the hook's read of the sections and its read of the makings, or the hook reads both between
 /// the section's end and its making's. The hook gave up on such a making once (`close` returned

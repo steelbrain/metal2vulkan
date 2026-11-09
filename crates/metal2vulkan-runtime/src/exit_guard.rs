@@ -1179,10 +1179,14 @@ where
 
 /// A test's step between the guard's two counts, run once: between a section's end and its
 /// making's ([`Busy`]'s drop), or between [`Guard::close`]'s read of the sections and its read of
-/// the makings, whichever this thread reaches first (`tests::exit_guard`).
+/// the makings, whichever this thread reaches first (`tests::exit_guard`). None once this thread's
+/// thread-locals are destroyed: on macOS `exit` destroys the exiting thread's before it runs the
+/// exit handlers, the hook's [`Guard::close`] among them, where a read of a destroyed one panics,
+/// which in a handler that cannot unwind aborts the process.
 #[cfg(test)]
 fn between_counts() {
-    if let Some(step) = BETWEEN_COUNTS.with(|step| step.borrow_mut().take()) {
+    let step = BETWEEN_COUNTS.try_with(|step| step.borrow_mut().take());
+    if let Ok(Some(step)) = step {
         step();
     }
 }
