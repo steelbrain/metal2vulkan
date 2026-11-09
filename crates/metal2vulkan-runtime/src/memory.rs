@@ -1974,6 +1974,14 @@ pub(super) struct Memory {
     /// A test's stand-in for every heap's budget of kept empty blocks ([`Memory::kept_budget`]).
     #[cfg(test)]
     pub(crate) kept_budget_stand_in: Option<u64>,
+    /// The longest making of a block added since a test last cleared it ([`BlockMaker::make`]'s
+    /// `vkAllocateMemory`, mapping and buffer of addresses), wherever it was made.
+    #[cfg(test)]
+    pub(crate) longest_making: Duration,
+    /// The pooled blocks a call made itself in a pool whose blocks are made ahead, by their
+    /// bytes, since a test last cleared it ([`AheadBlocks::made_in_place`]).
+    #[cfg(test)]
+    pub(crate) in_place_bytes: std::collections::BTreeMap<u64, u64>,
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
     zero_images: bool,
@@ -2137,6 +2145,10 @@ impl Memory {
             import_refusal: None,
             #[cfg(test)]
             kept_budget_stand_in: None,
+            #[cfg(test)]
+            longest_making: Duration::ZERO,
+            #[cfg(test)]
+            in_place_bytes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -2766,6 +2778,10 @@ impl Memory {
             Holds::PageBuffers if block.pooled_pages => self.fd_blocks.pages += 1,
             Holds::PageBuffers => self.fd_blocks.pages_plain += 1,
             Holds::Images | Holds::Exports | Holds::DmaBufs => {}
+        }
+        #[cfg(test)]
+        {
+            self.longest_making = self.longest_making.max(block.took);
         }
         if block.exported.is_none() && !block.fd && !block.pooled_pages {
             self.plain_block_made(block.size, block.took);
@@ -4456,6 +4472,10 @@ fn place(
                 let mut memory = lock(memory);
                 if !dedicated && memory.makes_ahead(pool) {
                     memory.ahead.made_in_place(holds);
+                    #[cfg(test)]
+                    {
+                        *memory.in_place_bytes.entry(block_size).or_default() += 1;
+                    }
                 }
                 if !dedicated && memory.host_copy_pool == Some(Some(pool)) {
                     memory.host_copy_blocks.made_in_place += 1;
@@ -4589,6 +4609,10 @@ pub(super) fn keep_room(
             let mut guard = lock(memory);
             guard.add_block(pool, block, bytes, false, 0);
             guard.ahead.made_in_place(pool.0);
+            #[cfg(test)]
+            {
+                *guard.in_place_bytes.entry(bytes).or_default() += 1;
+            }
             break;
         }
         ready_if_growing(&mut lock(memory), pool, counts, (functions, quiet));

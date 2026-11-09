@@ -56,6 +56,9 @@
 //! - **Images of mixed sizes, made by the runtime**: the same, in turn the sizes of
 //!   [`MIXED_SIDES`] (a frame's textures and two screen-sized ones, larger than a small block), at
 //!   most [`MIXED_TEXTURES`] a phase.
+//! - **Images in bursts, made by the runtime**: the images arm's textures, [`BURST`] back to back
+//!   every [`BURST_EVERY`], at most [`IMAGE_TEXTURES`] a phase: a burst needs more blocks than one,
+//!   as a scroll's new tiles do.
 //! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
 //!   the device's first memory type that is host-visible and host-coherent but not device-local or
 //!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of
@@ -105,8 +108,10 @@
 //! (`WorkCounts::batches_submitted_at_commit`) and the time spent in `vkQueueSubmit`
 //! (`WorkCounts::batch_submit_nanos`); the makings, their median and slowest, the runtime's blocks
 //! made ahead and in place and the blocks made ahead a call waited for
-//! (`WorkCounts::blocks_ahead_waited_for`), its blocks of images made ahead and in place, every
-//! pooled block made (`WorkCounts::pooled_memory_blocks_made`), the dedicated blocks added
+//! (`WorkCounts::blocks_ahead_waited_for`; of them those whose wait for a burst's end the call cut
+//! short, `WorkCounts::blocks_ahead_hurried`), its blocks of images made ahead and in place, the
+//! blocks made in place by their size, of buffers and of images, the longest making of a block added, wherever it was made (`vkAllocateMemory`, its mapping and its
+//! buffer of addresses), every pooled block made (`WorkCounts::pooled_memory_blocks_made`), the dedicated blocks added
 //! (`WorkCounts::dedicated_memory_blocks_live`), its buffers' blocks made exportable and plain,
 //! every plain block of buffers made (`WorkCounts::plain_buffer_blocks_made`), and its buffers laid
 //! in plain blocks while the check was pending or once it refused such blocks; the size its pooled
@@ -155,6 +160,10 @@ const SCROLL_EVERY: Duration = Duration::from_millis(30);
 const IMAGE_SIDE: u64 = 1024;
 const IMAGE_EVERY: Duration = Duration::from_micros(16_667);
 const IMAGE_TEXTURES: usize = 192;
+/// The burst arm's textures back to back (64 MiB, four blocks of 16 MiB), and the gap between
+/// bursts.
+const BURST: usize = 16;
+const BURST_EVERY: Duration = Duration::from_millis(500);
 /// The mixed images arm's textures, in turn, one a frame at 60 Hz, at most [`MIXED_TEXTURES`] a
 /// phase: six of 4 MiB, one of 14.1 MiB (2560 x 1440) and one of 31.6 MiB (3840 x 2160), 836 MiB
 /// a phase.
@@ -447,6 +456,8 @@ enum Making {
     Images,
     /// The runtime's `Private` textures of mixed sizes (the module docs).
     ImagesMixed,
+    /// The runtime's `Private` textures in bursts (the module docs).
+    ImagesBursts,
     /// Allocations of `bytes` of the memory type `index`, [`RAW_BYTES`] a phase, exportable as
     /// `export`'s handle type where given.
     Raw {
@@ -478,6 +489,7 @@ fn make(
         Making::Scroll => (SCROLL_EVERY, SCROLL_BUFFERS),
         Making::Images => (IMAGE_EVERY, IMAGE_TEXTURES),
         Making::ImagesMixed => (IMAGE_EVERY, MIXED_TEXTURES),
+        Making::ImagesBursts => (BURST_EVERY, IMAGE_TEXTURES),
         Making::Raw { bytes, .. } => (
             RAW_EVERY.mul_f64(bytes as f64 / (64 * MIB) as f64),
             (RAW_BYTES / bytes) as usize,
@@ -503,10 +515,10 @@ fn make(
                     .new_exportable_buffer(RUNTIME_BUFFER_BYTES, ResourceOptions::private())
                     .unwrap(),
             ),
-            Making::Images | Making::ImagesMixed => {
+            Making::Images | Making::ImagesMixed | Making::ImagesBursts => {
                 let (width, height) = match making {
-                    Making::Images => (IMAGE_SIDE, IMAGE_SIDE),
-                    _ => MIXED_SIDES[times.len() % MIXED_SIDES.len()],
+                    Making::ImagesMixed => MIXED_SIDES[times.len() % MIXED_SIDES.len()],
+                    _ => (IMAGE_SIDE, IMAGE_SIDE),
                 };
                 let mut descriptor =
                     TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, width, height, false);
@@ -522,7 +534,10 @@ fn make(
             Making::Nothing => unreachable!(),
         }
         times.push((began.elapsed(), at));
-        std::thread::sleep(every);
+        match making {
+            Making::ImagesBursts if times.len() % BURST != 0 => {}
+            _ => std::thread::sleep(every),
+        }
     }
     times
 }
@@ -574,6 +589,11 @@ fn phase(
     (length, making): (Duration, Making),
     made: &mut Made,
 ) {
+    {
+        let mut memory = crate::device::lock(&device.shared().memory);
+        memory.longest_making = Duration::ZERO;
+        memory.in_place_bytes.clear();
+    }
     let before = (vmstat(), device.work_counts());
     let stop = AtomicBool::new(false);
     let (submits, turnarounds, makes) = std::thread::scope(|scope| {
@@ -593,6 +613,13 @@ fn phase(
         (submits, turnarounds, maker.join().unwrap())
     });
     let after = (vmstat(), device.work_counts());
+    let (longest, in_place) = {
+        let memory = crate::device::lock(&device.shared().memory);
+        let sizes: Vec<String> = (memory.in_place_bytes.iter())
+            .map(|(bytes, count)| format!("{count} of {} MiB", bytes >> 20))
+            .collect();
+        (memory.longest_making, sizes.join(", "))
+    };
     let over = |times: &[(Duration, f64)], bound: f64| {
         (times.iter())
             .filter(|&&(took, _)| took.as_secs_f64() * 1e3 >= bound)
@@ -614,7 +641,8 @@ fn phase(
          {turn_p99:.3}, slowest {turn_slowest:.3}; command buffers submitted {submitted}, by the \
          committing thread {}, in vkQueueSubmit {:.1} ms, {:.3} ms each; {} makings, ms median \
          {make_median:.1}, slowest {make_slowest:.1}; blocks made ahead {}, in place {}, \
-         waited for {}; image blocks made ahead {}, in place {}; pooled blocks made {}; \
+         waited for {}, hurried {}; image blocks made ahead {}, in place {}; blocks made in \
+         place by size [{in_place}]; longest block making {:.1} ms; pooled blocks made {}; \
          dedicated blocks added {}; \
          blocks of the runtime's buffers made exportable {}, made plain {}, plain blocks of \
          buffers made {}; buffers in plain blocks awaiting the check {}, by its refusal {}; \
@@ -632,8 +660,10 @@ fn phase(
         counts.buffer_blocks_made_ahead - earlier.buffer_blocks_made_ahead,
         counts.buffer_blocks_made_in_place - earlier.buffer_blocks_made_in_place,
         counts.blocks_ahead_waited_for - earlier.blocks_ahead_waited_for,
+        counts.blocks_ahead_hurried - earlier.blocks_ahead_hurried,
         counts.image_blocks_made_ahead - earlier.image_blocks_made_ahead,
         counts.image_blocks_made_in_place - earlier.image_blocks_made_in_place,
+        longest.as_secs_f64() * 1e3,
         counts.pooled_memory_blocks_made - earlier.pooled_memory_blocks_made,
         (counts.dedicated_memory_blocks_live).saturating_sub(earlier.dedicated_memory_blocks_live),
         counts.fd_buffer_blocks_made - earlier.fd_buffer_blocks_made,
@@ -681,6 +711,8 @@ enum Arm {
     Images,
     /// The runtime's textures of mixed sizes.
     ImagesMixed,
+    /// The runtime's textures in bursts.
+    ImagesBursts,
     SystemHeap {
         bytes: u64,
         export: Option<Handle>,
@@ -728,6 +760,7 @@ fn arm(label: &str, arm: Arm) {
         Arm::Scroll => Making::Scroll,
         Arm::Images => Making::Images,
         Arm::ImagesMixed => Making::ImagesMixed,
+        Arm::ImagesBursts => Making::ImagesBursts,
         Arm::SystemHeap { bytes, export } => Making::Raw {
             index: system_heap(),
             bytes,
@@ -1240,6 +1273,12 @@ fn reclaim_submit_bench_images_mixed() {
         "images of mixed sizes, made by the runtime",
         Arm::ImagesMixed,
     );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_bursts() {
+    arm("images in bursts, made by the runtime", Arm::ImagesBursts);
 }
 
 #[test]
