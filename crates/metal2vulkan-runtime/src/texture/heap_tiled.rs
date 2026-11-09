@@ -1150,12 +1150,16 @@ fn image_element(pf: PixelFormat, format: Format) -> Option<(u64, [u64; 2])> {
             [(ImageAspectFlags::STENCIL, bytes, block)] => Some((bytes, block)),
             _ => None,
         },
-        PixelFormat::Depth16Unorm | PixelFormat::Depth32Float => match units[..] {
-            [(ImageAspectFlags::DEPTH, bytes, block)] => {
-                (depth_bytes(format) == Some(bytes)).then_some((bytes, block))
+        // A depth format's image holds its depth, beside a stencil it does not present where
+        // the image is combined (`DepthInCombined`; `texel_units`).
+        PixelFormat::Depth16Unorm | PixelFormat::Depth32Float => {
+            match texel_units(format, pf)[..] {
+                [(ImageAspectFlags::DEPTH, bytes, block)] => {
+                    (depth_bytes(format) == Some(bytes)).then_some((bytes, block))
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         _ => {
             let bytes_of = |pf: PixelFormat| byte_format(pf).filter(|&own| own == format);
             let same = bytes_of(pf).or_else(|| srgb_raw_twin(pf).and_then(bytes_of));
@@ -1503,8 +1507,9 @@ fn multisample_tiles(
 
 /// The one aspect of an image of `format` whose elements a texture of `pf` lays out where the image
 /// holds another it presents none of ([`texel_units`]): a stencil format's over a combined image
-/// (`X32Stencil8`'s), its tiles its stencil's, the image's depth holding none of its texels; `None`
-/// where the texture's tiles are each of the image's aspects.
+/// (`X32Stencil8`'s), its tiles its stencil's, and a depth format's (`Depth32Float` over
+/// `D32_SFLOAT_S8_UINT`), its tiles its depth's, the other aspect holding none of its texels;
+/// `None` where the texture's tiles are each of the image's aspects.
 fn held_aspect(format: Format, pf: PixelFormat) -> Option<ImageAspectFlags> {
     match texel_units(format, pf)[..] {
         [(aspect, _, _)] if copy_units(format, pf).len() > 1 => Some(aspect),

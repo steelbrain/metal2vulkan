@@ -964,6 +964,54 @@ fn a_heap_shadow_keeps_each_aspect_in_planes_at_multiples_of_four_bytes() {
     );
 }
 
+/// A heap texture over a combined depth and stencil image moves only the aspects its format
+/// presents (`texel_units`): a `Depth32Float` texture over `D32_SFLOAT_S8_UINT`
+/// (`DepthInCombined`) has its depth's planes alone, 1024 bytes for 16 x 16, as over
+/// `D32_SFLOAT`, and its image holds Metal's 4-byte depth elements; an `X32Stencil8` or a
+/// `Stencil8` texture over a combined image (`StencilInCombined`) has its stencil's, 256 bytes,
+/// as `Stencil8` over `S8_UINT`, and its image holds Metal's 1-byte stencil elements. A
+/// `Depth32Float_Stencil8` texture, which presents both, keeps both planes.
+#[test]
+fn a_heap_texture_over_a_combined_image_moves_only_the_aspects_its_format_presents() {
+    use crate::texture::heap::heap_plane_layout;
+    use crate::texture::heap_tiled::holds_metal_texels;
+    use metal2vulkan::metal::PixelFormat as P;
+    use metal2vulkan::vk::Format as F;
+    use metal2vulkan::vk::ImageAspectFlags as A;
+    let planes = |format, pf| {
+        let (planes, end) = heap_plane_layout(format, pf, [16, 16, 1], 1, 1);
+        let aspects: Vec<_> = planes
+            .iter()
+            .map(|p| (p.aspect, p.offset, p.unit))
+            .collect();
+        (aspects, end)
+    };
+    let depth = (vec![(A::DEPTH, 0, 4)], 1024);
+    let stencil = (vec![(A::STENCIL, 0, 1)], 256);
+    assert_eq!(planes(F::D32_SFLOAT, P::Depth32Float), depth);
+    assert_eq!(planes(F::D32_SFLOAT_S8_UINT, P::Depth32Float), depth);
+    assert_eq!(planes(F::S8_UINT, P::Stencil8), stencil);
+    assert_eq!(planes(F::D32_SFLOAT_S8_UINT, P::Stencil8), stencil);
+    assert_eq!(planes(F::D24_UNORM_S8_UINT, P::Stencil8), stencil);
+    assert_eq!(planes(F::D32_SFLOAT_S8_UINT, P::X32Stencil8), stencil);
+    assert_eq!(
+        planes(F::D32_SFLOAT_S8_UINT, P::Depth32FloatStencil8),
+        (vec![(A::DEPTH, 0, 4), (A::STENCIL, 1024, 1)], 1280)
+    );
+    for (pf, format, bytes) in [
+        (P::Depth32Float, F::D32_SFLOAT, 4),
+        (P::Depth32Float, F::D32_SFLOAT_S8_UINT, 4),
+        (P::Stencil8, F::S8_UINT, 1),
+        (P::Stencil8, F::D32_SFLOAT_S8_UINT, 1),
+        (P::X32Stencil8, F::D32_SFLOAT_S8_UINT, 1),
+    ] {
+        assert!(
+            holds_metal_texels(pf, format, bytes),
+            "{pf:?} over {format:?}"
+        );
+    }
+}
+
 /// A heap shadow of a colour, a compressed and a 3D texture (a no-copy heap's texture that no
 /// image over the heap's memory serves) lays each level's images out tightly, a level at a
 /// multiple of 4 bytes and of its block's bytes, and `HeapPlane::row` finds a row of blocks

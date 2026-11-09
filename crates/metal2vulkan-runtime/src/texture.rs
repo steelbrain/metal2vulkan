@@ -4639,19 +4639,23 @@ pub(super) fn copy_units(
 }
 
 /// The copy units of an image of `format` that a texture of `pf` holds texels in: [`copy_units`]'s
-/// but the depth aspect where `pf` presents no depth (`X32Stencil8`, or a stencil-only format over
-/// a combined image), whose image's depth holds none of its texels: Metal's texture of such a
-/// format has no depth (an `X32_Stencil8` texture's 32 bits beside its stencil are padding it
-/// never presents), so nothing moves that aspect to or from the texture's bytes.
+/// but each depth or stencil aspect `pf` does not present (`metal::format::aspects`), whose
+/// image's aspect holds none of its texels: a stencil-only format's depth over a combined image
+/// (an `X32_Stencil8` texture's 32 bits beside its stencil are padding Metal never presents), and
+/// a depth-only format's stencil (`Depth32Float` over `D32_SFLOAT_S8_UINT`,
+/// `FormatEmulation::DepthInCombined`). Nothing moves such an aspect to or from the texture's
+/// bytes.
 pub(super) fn texel_units(
     format: Format,
     pf: PixelFormat,
 ) -> Vec<(ImageAspectFlags, u32, [u32; 2])> {
-    let depthless = metal2vulkan::metal::format::aspects(pf)
-        .is_some_and(|own| !own.contains(ImageAspectFlags::DEPTH));
+    let own = metal2vulkan::metal::format::aspects(pf);
+    let presented = |aspect: ImageAspectFlags| {
+        aspect == ImageAspectFlags::COLOR || own.is_none_or(|own| own.contains(aspect))
+    };
     copy_units(format, pf)
         .into_iter()
-        .filter(|&(aspect, _, _)| !(depthless && aspect == ImageAspectFlags::DEPTH))
+        .filter(|&(aspect, _, _)| presented(aspect))
         .collect()
 }
 
