@@ -342,7 +342,9 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     let Some(device) = held_device(&scratch, None) else {
         return;
     };
+    // The verdict the device measured, and its report, before the force.
     let measured = device.pointer_imports_tax_submissions();
+    let report = device.submit_check_report();
     (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
     let (ram, start, view, asked, dropped) = ram(true);
     fill_pattern(view, AT + 4 * LENGTH);
@@ -361,7 +363,7 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
             true => "held",
             false => "not held",
         },
-        device.submit_check_report(),
+        report,
     );
     assert_eq!(
         made.host_ram_chunks_imported - before.host_ram_chunks_imported,
