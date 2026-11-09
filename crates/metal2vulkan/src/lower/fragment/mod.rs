@@ -751,16 +751,29 @@ pub fn writes_outside_interface(cx: &SelectCx<'_>) -> bool {
 }
 
 /// The work before the body, in the function's first block: read the imageblock input, place the
-/// fragment's tile in the pass's tile memory, and copy the textures read through snapshots
-/// (`snapshot`).
+/// fragment's tile in the pass's tile memory, copy the textures read through snapshots
+/// (`snapshot`), and read the texel of each storage-form color the function reads
+/// (`EmitCx::fetched`), which every use of the color then takes.
 pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
     imageblock::emit_entry(cx, fb)?;
     crate::lower::access::tile_memory::emit_entry(cx, fb)?;
-    snapshot::emit_entry(cx, fb)
+    snapshot::emit_entry(cx, fb)?;
+    let fp = &cx.plan.families.fragment;
+    let read: BTreeSet<u32> = fp
+        .colors
+        .iter()
+        .map(|c| c.color)
+        .filter(|color| fp.fetch.contains_key(color))
+        .collect();
+    for color in read {
+        let texel = fetch::texel(cx, fb, color)?;
+        cx.fetched.push((color, texel));
+    }
+    Ok(())
 }
 
 /// The value of parameter `b` in its lowered representation, read by an instruction or a
-/// terminator: a color input's texel, read at each use.
+/// terminator: a color input's texel (`color::value`).
 pub fn param_value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,

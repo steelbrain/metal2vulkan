@@ -4927,6 +4927,68 @@ fn an_interlocked_discard_kills_only_in_the_entry() {
     }
 }
 
+/// A function reads each color it fetches in the storage form once, before its body, and every
+/// use takes that texel: the coverage chain's discarding fill (`dsx_coverage_chain`'s
+/// `chain_color_discarding`, its coverage fetched, under the lane's attachments) tests the
+/// coverage for its discard and multiplies its color by it, two uses in two blocks, and reads
+/// the coverage's image once, in the first block of the function that holds the read, on every
+/// committed profile that orders fetch through the interlock. Every module passes L3, and on
+/// `moltenvk-m3` compiles through SPIRV-Cross to Metal.
+#[test]
+fn a_fetched_color_is_read_once_before_the_body() {
+    let Some(chain) = fixture("dsx_coverage_chain") else {
+        return;
+    };
+    let entry = "chain_color_discarding";
+    let colors = [
+        PixelFormat::RGBA16Float,
+        PixelFormat::RG16Float,
+        PixelFormat::RGBA16Float,
+    ]
+    .map(|f| Some(ColorAttachmentDescriptor::new(f)));
+    let mut inputs = LoweringInputs::new();
+    inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of([1], &colors, true, false, 1));
+    let mut checked = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        if !crate::lower::fragment::interlock_orders(&p) {
+            continue;
+        }
+        let what = format!("{entry} on {stem}");
+        let a = match compile_with(&chain, entry, &p, &inputs) {
+            Ok(a) => a,
+            // A device without the attachments' storage formats refuses the form.
+            Err(Error::Unsupported(_)) => continue,
+            Err(e) => panic!("{what}: {e}"),
+        };
+        let (_, m) =
+            typed_module_with(&chain, entry, &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
+        // Each image read, with whether it sits in its function's first block.
+        let reads: Vec<bool> = (m.functions().iter())
+            .flat_map(|f| {
+                f.blocks.iter().enumerate().flat_map(|(i, b)| {
+                    (m.blocks()[b.index()].insts.iter())
+                        .filter(|n| matches!(n.inst, Inst::ImageRead { .. }))
+                        .map(move |_| i == 0)
+                })
+            })
+            .collect();
+        assert_eq!(reads, [true], "{what}: one read, in a first block");
+        let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        if is_moltenvk_capture(&stem) {
+            match moltenvk_msl_compile(&words) {
+                Ok(()) => {}
+                Err(AssembleError::Missing(why)) => eprintln!("SKIPPED MSL: {why}"),
+                Err(AssembleError::Rejected(why)) => panic!("{what}: MSL: {why}"),
+            }
+        }
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "no interlock profile compiled the storage form"
+    );
+}
+
 /// One function the interlock coherence test compiles: its fixture, its entry, the
 /// framebuffer-fetch colors it reads (with their formats), and whether it needs the Vulkan
 /// memory model.

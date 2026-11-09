@@ -6,8 +6,9 @@
 //! ([`interlock_orders`]: RADV, ANV, and MoltenVK where measured) orders a fetch instead through
 //! the ordered pixel interlock, the mechanism of raster order groups and imageblocks: each color
 //! attachment the function reads becomes a storage image of the attachment
-//! (`ResourceKind::TileAttachment(n)`), read at the fragment's pixel (the integer part of
-//! `FragCoord.xy`) at each use, and, when the function writes that attachment through its first
+//! (`ResourceKind::TileAttachment(n)`), read once at the fragment's pixel (the integer part of
+//! `FragCoord.xy`) before the body, the texel every use takes, and, when the function writes that
+//! attachment through its first
 //! (index 0) output, written there at the return in place of the output
 //! (`GraphicsState::storage_attachments`; colors it writes but does not read stay ordinary outputs,
 //! but those the pipeline's state names: an extended-range attachment it blends, below, and a color
@@ -2607,8 +2608,30 @@ fn as_held(fb: &mut FunctionBuilder<'_>, texel: SValue, numeric: SampledType) ->
     fb.convert(ConvOp::Bitcast, texel, uvec4)
 }
 
-/// The value of storage-form color input `c` in its lowered representation, read at its pixel
-/// (as `color::value` reads an input attachment).
+/// The texel the function reads of storage-form attachment `color` at its pixel (and sample):
+/// its shadow's, where the instance holds one, else its image's. The function reads it once,
+/// before its body (`fragment::emit_entry`), and every use takes it ([`value`]): Metal hands the
+/// function one value of the attachment, and one read keeps the image's accesses in the
+/// interlock to that read and the writes at the returns.
+pub(super) fn texel(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+) -> BResult<SValue> {
+    let Some(sc) = cx.plan.families.fragment.fetch.get(&color).copied() else {
+        return Err(cx.fail(format!("attachment {color} is not in the storage form")));
+    };
+    match (sc.shadowed, sc.view.extended) {
+        // The instance's shadow holds the tile value itself.
+        (true, Some(range)) => shadow_read(cx, fb, color, range),
+        (true, None) => Err(cx.fail("a shadow of an attachment of another form")),
+        (false, _) => read_texel(cx, fb, color, &sc),
+    }
+}
+
+/// The value of storage-form color input `c` in its lowered representation, from the texel the
+/// function read at its pixel before its body ([`texel`]; as `color::value` reads an input
+/// attachment).
 pub(super) fn value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -2617,15 +2640,8 @@ pub(super) fn value(
     let Some(sc) = cx.plan.families.fragment.fetch.get(&c.color).copied() else {
         return Err(cx.fail(format!("attachment {} is not in the storage form", c.color)));
     };
-    let texel = match (sc.shadowed, sc.view.extended) {
-        // The instance's shadow holds the tile value itself.
-        (true, Some(range)) => Some(shadow_read(cx, fb, c.color, range)?),
-        (true, None) => return Err(cx.fail("a shadow of an attachment of another form")),
-        (false, _) => None,
-    };
-    let texel = match texel {
-        Some(held) => held,
-        None => read_texel(cx, fb, c.color, &sc)?,
+    let Some(&(_, texel)) = cx.fetched.iter().find(|&&(color, _)| color == c.color) else {
+        return Err(cx.fail(format!("attachment {} was not read at entry", c.color)));
     };
     let texel = match (sc.view.extended, sc.view.uint_view) {
         (Some(_), _) if sc.shadowed => texel,

@@ -437,9 +437,10 @@ fn input_attachment(
     mb.resource(slot, StorageClass::UniformConstant, ty)
 }
 
-/// The value of color input `c` in its lowered representation, read at each use (the use may
-/// sit in a construct whose values do not dominate the rest of the block), at the invocation's
-/// sample for a per-sample function.
+/// The value of color input `c` in its lowered representation, at the invocation's sample for a
+/// per-sample function: an input attachment's read at each use (the use may sit in a construct
+/// whose values do not dominate the rest of the block), a storage-form attachment's from the
+/// texel the function read before its body (`fetch::value`).
 pub(super) fn value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,

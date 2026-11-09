@@ -210,6 +210,11 @@ pub struct EmitCx<'a> {
     /// `stage_io::emit_entry` finds before the body (`stage_io::MergedRead`): defined in the
     /// function's straight-line entry, so every later block of the function may read them.
     pub(crate) merged_draw: Option<crate::bind::MergedVertex>,
+    /// The texel of each storage-form color attachment a fragment function reads, by Metal
+    /// color index, at the invocation's pixel (and sample), which `fragment::emit_entry` reads
+    /// before the body: defined in the function's straight-line entry, inside the interlock, so
+    /// every use of the color in a later block takes the one texel (`fragment::fetch::value`).
+    pub(crate) fetched: Vec<(u32, SValue)>,
 }
 
 /// A value that is the same wherever an invocation computes it, so a block computes it once, and
@@ -261,6 +266,7 @@ impl<'a> EmitCx<'a> {
             fault: None,
             sampling: Default::default(),
             merged_draw: None,
+            fetched: Vec::new(),
         }
     }
 
@@ -680,6 +686,7 @@ impl<'a> Emitter<'a> {
                 fault: None,
                 sampling: Default::default(),
                 merged_draw: None,
+                fetched: Vec::new(),
             },
             vars: None,
             phis,
