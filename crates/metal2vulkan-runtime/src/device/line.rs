@@ -428,6 +428,8 @@ impl Line {
                 return old;
             }
         };
+        // The program's events and buffers go on with it before it serves (`carry.rs`).
+        let carried = old.carry_to(&next);
         let previous = {
             let mut state = lock(&self.state);
             std::mem::replace(&mut *state, State::Live(Arc::clone(next.shared_arc())))
@@ -479,7 +481,8 @@ impl Line {
                 "the device".to_owned(),
                 format!(
                     "its VkDevice was lost and made again in {took:?} (generation {generation}): \
-                     {culprit}"
+                     {culprit}; {}",
+                    carried.say()
                 ),
             )
         });

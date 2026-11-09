@@ -579,11 +579,16 @@ impl CommandBuffer {
 impl Device {
     /// `buffer`, one the program made of its own, kept among the device's program resources
     /// (`Owners::buffer`), and among its live buffers, which a command reaches unnamed, unless a
-    /// command buffer's use must list it first (a no-copy buffer; `live_buffers.rs`).
+    /// command buffer's use must list it first (a no-copy buffer; `live_buffers.rs`), and for the
+    /// device's recovery to carry (`device/carry.rs`): carried here, by its maker, where that
+    /// recovery took this generation's buffers already.
     pub(super) fn visible(&self, buffer: Buffer) -> Buffer {
         let shared = self.shared();
         shared.owners.buffer(&buffer);
         shared.live_buffers.made(&buffer);
+        if shared.carry.buffer(&buffer) {
+            self.carry_late(|serving| buffer.carry(serving));
+        }
         buffer
     }
 }

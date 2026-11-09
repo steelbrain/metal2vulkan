@@ -162,9 +162,25 @@ impl<Q, S> EventTimeline<Q, S> {
     }
 
     /// Whether the host may set the value.
-    #[cfg(test)]
     pub(super) fn settable(&self) -> bool {
         self.settable
+    }
+
+    /// The timeline of the event carried to a new semaphore, at 0, on its device's next
+    /// generation (`device/carry.rs`): the value the host saw, its floor included, and nothing
+    /// pending. The lost device's signals the host never saw land on no semaphore, and a wait for
+    /// a value only they reach waits for a later signal, as for one never encoded.
+    pub(super) fn carried(&self) -> EventTimeline<Q, S> {
+        EventTimeline {
+            reached: 0,
+            reached_value: self.reached_value,
+            pending: VecDeque::new(),
+            floor: self.floor,
+            settable: self.settable,
+            landed: 0,
+            unfinished: VecDeque::new(),
+            released_value: self.released_value.max(self.reached_value),
+        }
     }
 }
 

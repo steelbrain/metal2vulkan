@@ -232,6 +232,15 @@ impl KeptToken {
         Ok(())
     }
 
+    /// Hand the token kept, if any, to `to`, which keeps none: a buffer carried to its device's
+    /// next generation (`device/carry.rs`), whose parts there hold the buffer's range last.
+    pub(super) fn hand_to(&self, to: &KeptToken) {
+        let token = lock(&self.0).take();
+        if let Some(token) = token {
+            *lock(&to.0) = Some(token);
+        }
+    }
+
     /// Drop the token kept, if any: the resource's range is free, outside its teardown's exit
     /// section and with no runtime lock held, so a creation at the range from its drop on
     /// succeeds. Its drop is the program's code, which a runtime thread (a command buffer's

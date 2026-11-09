@@ -59,7 +59,7 @@ use super::exit_guard::{self, Call};
 use crate::release;
 use ash::vk;
 use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 /// How long a host wait goes at most without reading the semaphore's counter.
@@ -109,11 +109,11 @@ impl<'a> From<&'a SharedEvent> for EventRef<'a> {
 }
 
 impl EventRef<'_> {
-    /// The event.
+    /// The event, as its device's serving generation holds it ([`EventShared::serving`]).
     pub(super) fn shared(&self) -> &Arc<EventShared> {
         match self {
-            EventRef::Event(event) => &event.0,
-            EventRef::Shared(event) => &event.0,
+            EventRef::Event(event) => event.0.serving(),
+            EventRef::Shared(event) => event.0.serving(),
         }
     }
 }
@@ -131,9 +131,14 @@ pub(super) struct EventShared {
     /// (`exported_semaphore.rs`).
     exportable: bool,
     state: Mutex<EventState>,
-    /// Signaled whenever the value rises.
+    /// Signaled whenever the value rises, and as the event is carried to its device's next
+    /// generation, which its host waits go on with.
     changed: Condvar,
     label: Mutex<Option<String>>,
+    /// The event as its device's recovery carried it to the next generation (`device/carry.rs`):
+    /// a new semaphore there, which every call of the program's goes to from then on
+    /// ([`EventShared::serving`]). Set once, under the state's lock.
+    next: OnceLock<Arc<EventShared>>,
 }
 
 struct EventState {
@@ -200,7 +205,7 @@ impl EventShared {
         let semaphore =
             unsafe { device.shared().vk().create_semaphore(&info, None) }.map_err(vulkan)?;
         device.shared().interop.timeline_made(semaphore);
-        Ok(Arc::new(EventShared {
+        let event = Arc::new(EventShared {
             device: device.clone(),
             semaphore,
             exportable: export.is_some(),
@@ -211,7 +216,77 @@ impl EventShared {
             }),
             changed: Condvar::new(),
             label: Mutex::new(None),
-        }))
+            next: OnceLock::new(),
+        });
+        // Kept for the device's recovery; one made after its recovery took this generation's
+        // events is carried here, by its maker (`device/carry.rs`).
+        if device.shared().carry.event(&event) {
+            device.carry_late(|serving| event.carry(serving));
+        }
+        Ok(event)
+    }
+
+    /// The event as the device's serving generation holds it: itself, or where its device's
+    /// recovery carried it (`device/carry.rs`), the event it was carried to, every call of the
+    /// program's going there.
+    pub(super) fn serving(self: &Arc<Self>) -> &Arc<EventShared> {
+        let mut event = self;
+        while let Some(next) = event.next.get() {
+            event = next;
+        }
+        event
+    }
+
+    /// [`serving`](Self::serving), its state locked: the event a carry did not pass while the
+    /// lock is held, as a carry sets `next` under the lock of the event it carries.
+    fn serving_locked(self: &Arc<Self>) -> (&Arc<EventShared>, MutexGuard<'_, EventState>) {
+        let mut event = self.serving();
+        loop {
+            let state = lock(&event.state);
+            match event.next.get() {
+                None => return (event, state),
+                Some(next) => {
+                    drop(state);
+                    event = next;
+                }
+            }
+        }
+    }
+
+    /// Carry the event to `to`, its device's next generation, by the recovery that made it
+    /// (`device/carry.rs`): a new timeline semaphore there, at the value the host saw (its floor
+    /// included; the lost device's signals the host never saw never land), with its label and the
+    /// listeners' notifications not yet due, which come due there. Every call of the program's
+    /// goes to it from then on, and the host waits under way go on with it. Refused for an event
+    /// whose semaphore was made exportable (`exported_semaphore.rs`): its importers hold the lost
+    /// one, whose state Vulkan leaves undefined (vkspec 5.2.3), so it stays the lost device's
+    /// (`RuntimeGap::MadeBeforeRecovery` where it meets the next).
+    pub(crate) fn carry(self: &Arc<Self>, to: &Device) -> Result<(), Error> {
+        if self.exportable {
+            return Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery));
+        }
+        let settable = lock(&self.state).timeline.settable();
+        let next = EventShared::new(to, settable, None)?;
+        {
+            let mut state = lock(&self.state);
+            if self.next.get().is_some() {
+                // Carried already: by its maker, as it was made after the recovery took the
+                // generation's events.
+                return Ok(());
+            }
+            let mut carried = lock(&next.state);
+            carried.timeline = state.timeline.carried();
+            carried.notifications.extend(state.notifications.drain(..));
+            drop(carried);
+            let label = lock(&self.label).clone();
+            *lock(&next.label) = label;
+            let _set = self.next.set(Arc::clone(&next));
+            // The host waits asleep on it go on with the event carried.
+            self.changed.notify_all();
+        }
+        let due = due(&mut lock(&next.state));
+        next.post(due);
+        Ok(())
     }
 
     /// The device.
@@ -325,8 +400,16 @@ impl EventShared {
             .map_err(|_| Error::OutOfMemory(crate::error::MemoryKind::Host))?;
             watched.running = true;
         }
-        let signal =
-            (shared.scheduler).under_lock(|| lock(&self.state).timeline.signal_apart(value));
+        let signal = (shared.scheduler).under_lock(|| {
+            let mut state = lock(&self.state);
+            // Not where the device's recovery carried the event meanwhile (`device/carry.rs`).
+            (self.next.get().is_none()).then(|| state.timeline.signal_apart(value))
+        });
+        let Some(signal) = signal else {
+            // Reserved on the event carried, which every call goes to from now on.
+            drop(watched);
+            return self.serving().reserve_signal(value);
+        };
         if let Signal::Kept { index, .. } = signal {
             watched.pending.push_back((Arc::clone(self), index));
             watcher.wake.notify_all();
@@ -428,16 +511,16 @@ impl EventShared {
     /// The host set `value`: [`SharedEvent::set_signaled_value`]'s, and a command buffer's
     /// scheduled signal's (`CommandBuffer::encode_signal_event_scheduled`).
     pub(super) fn set(self: &Arc<Self>, value: u64) {
-        let due = {
-            let mut state = lock(&self.state);
+        let (event, due) = {
+            let (event, mut state) = self.serving_locked();
             if !state.timeline.set(value) {
                 return;
             }
-            self.rose(&state);
-            due(&mut state)
+            event.rose(&state);
+            (event, due(&mut state))
         };
-        self.post(due);
-        self.woke();
+        event.post(due);
+        event.woke();
     }
 
     /// Wait until the value reaches `value`, at most `timeout`; a timeout past what the host's
@@ -447,10 +530,12 @@ impl EventShared {
     pub(super) fn wait_until(self: &Arc<Self>, value: u64, timeout: Duration) -> bool {
         let deadline = Instant::now().checked_add(timeout);
         loop {
-            if self.value() >= value {
+            // The event as the device's serving generation holds it, at each turn: a recovery
+            // that carries it wakes the wait, which goes on with the event carried.
+            if self.serving().value() >= value {
                 return true;
             }
-            let mut state = lock(&self.state);
+            let (event, mut state) = self.serving_locked();
             if state.timeline.value() >= value {
                 return true;
             }
@@ -461,7 +546,7 @@ impl EventShared {
                 return false;
             }
             state.parked += 1;
-            let mut state = self
+            let mut state = event
                 .changed
                 .wait_timeout(state, left.min(POLL))
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -484,12 +569,12 @@ impl EventShared {
             listener: listener.clone(),
             block,
         };
-        let due = {
-            let mut state = lock(&self.state);
+        let (event, due) = {
+            let (event, mut state) = self.serving_locked();
             state.notifications.push(notification);
-            due(&mut state)
+            (event, due(&mut state))
         };
-        self.post(due);
+        event.post(due);
     }
 
     /// The value rose, under the state's lock (`state`): wake the host waits asleep on it, if any
@@ -640,7 +725,7 @@ impl Device {
         &self,
         handle: &SharedEventHandle,
     ) -> Result<SharedEvent, Error> {
-        if !handle.0.device.same(self) {
+        if !handle.0.serving().device.same(self) {
             return Err(Error::NotImplemented(RuntimeGap::SharedEventAcrossDevices));
         }
         Ok(SharedEvent(Arc::clone(&handle.0)))
@@ -658,17 +743,17 @@ impl std::fmt::Debug for Event {
 impl Event {
     /// `device`.
     pub fn device(&self) -> &Device {
-        &self.0.device
+        &self.0.serving().device
     }
 
     /// `setLabel:`.
     pub fn set_label(&self, label: &str) {
-        *lock(&self.0.label) = Some(label.to_owned());
+        *lock(&self.0.serving().label) = Some(label.to_owned());
     }
 
     /// `label`.
     pub fn label(&self) -> Option<String> {
-        lock(&self.0.label).clone()
+        lock(&self.0.serving().label).clone()
     }
 }
 
@@ -700,18 +785,18 @@ impl SharedEvent {
 
     /// `setLabel:`.
     pub fn set_label(&self, label: &str) {
-        *lock(&self.0.label) = Some(label.to_owned());
+        *lock(&self.0.serving().label) = Some(label.to_owned());
     }
 
     /// `label`.
     pub fn label(&self) -> Option<String> {
-        lock(&self.0.label).clone()
+        lock(&self.0.serving().label).clone()
     }
 
     /// `signaledValue`. Once the process is exiting, the value last seen: the runtime makes no
     /// Vulkan call then.
     pub fn signaled_value(&self) -> u64 {
-        self.0.value()
+        self.0.serving().value()
     }
 
     /// `setSignaledValue:`: the value becomes at least `value` at once; a value not above the
@@ -756,7 +841,7 @@ impl std::fmt::Debug for SharedEventHandle {
 impl SharedEventHandle {
     /// `label`: the event's.
     pub fn label(&self) -> Option<String> {
-        lock(&self.0.label).clone()
+        lock(&self.0.serving().label).clone()
     }
 }
 

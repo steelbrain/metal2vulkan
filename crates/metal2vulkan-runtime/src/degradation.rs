@@ -56,7 +56,8 @@
 use super::attachment_stand_in::{Cause, StandIn};
 use super::binding::{CommandUses, ResidentPrefix};
 use super::color_resolve;
-use super::device::{DebugMessage, Device, MessageKind, MessageSeverity};
+use super::device::carry::RecordsOn;
+use super::device::{DebugMessage, Device, DeviceShared, MessageKind, MessageSeverity};
 use super::error::Error;
 use super::fragment_imageblock::PassImageblock;
 use super::pipeline::objects::{may_pass_support, set_layout_support, SetSupport};
@@ -2970,24 +2971,29 @@ thread_local! {
 /// `Sync`: it is this thread's.
 pub(crate) struct NoticesFor {
     outer: Option<ObjectId>,
+    /// The command buffer's generation, for the objects its device's recovery carried
+    /// (`device/carry.rs`'s `RecordsOn`): what [`NoticesFor::none`] leaves as it was.
+    _records: Option<RecordsOn>,
     _thread: std::marker::PhantomData<*const ()>,
 }
 
 impl NoticesFor {
-    /// The work of the command buffer of ID `command_buffer`, from now.
-    pub(crate) fn new(command_buffer: ObjectId) -> NoticesFor {
-        NoticesFor::of(Some(command_buffer))
+    /// The work of the command buffer of ID `command_buffer`, made on `generation`, from now.
+    pub(crate) fn new(command_buffer: ObjectId, generation: &DeviceShared) -> NoticesFor {
+        NoticesFor::of(Some(command_buffer), Some(RecordsOn::enter(generation)))
     }
 
     /// Work for no command buffer, from now, inside one's: what is announced about several
-    /// command buffers, or about the device.
+    /// command buffers, or about the device. The work is the outer command buffer's generation's
+    /// still, where it is inside one's.
     pub(crate) fn none() -> NoticesFor {
-        NoticesFor::of(None)
+        NoticesFor::of(None, None)
     }
 
-    fn of(command_buffer: Option<ObjectId>) -> NoticesFor {
+    fn of(command_buffer: Option<ObjectId>, records: Option<RecordsOn>) -> NoticesFor {
         NoticesFor {
             outer: NOTICES_FOR.with(|current| current.replace(command_buffer)),
+            _records: records,
             _thread: std::marker::PhantomData,
         }
     }

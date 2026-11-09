@@ -140,6 +140,15 @@ impl ResourceAttributes {
         }
     }
 
+    /// The label and purgeable state now, for the resource carried to its device's next
+    /// generation (`device/carry.rs`).
+    pub(super) fn carried(&self) -> ResourceAttributes {
+        ResourceAttributes {
+            label: Mutex::new(lock(&self.label).clone()),
+            purgeable: Mutex::new(*lock(&self.purgeable)),
+        }
+    }
+
     /// `setLabel:`.
     pub(super) fn set_label(&self, label: &str) {
         *lock(&self.label) = Some(label.to_owned());

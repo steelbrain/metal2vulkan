@@ -1208,7 +1208,8 @@ pub(super) enum FreeCause {
     /// A buffer's fresh pages, imported as a dedicated block ([`import_own_pages`],
     /// `fresh_pages.rs`) and freed as its placement went.
     OwnPages = 5,
-    /// Freed as the device was destroyed, its queues idle ([`Memory::destroy`]).
+    /// Freed as the device was destroyed, its queues idle ([`Memory::destroy`]), or kept no
+    /// longer once it was lost and its recovery carried its objects on ([`Memory::keep_none`]).
     Teardown = 6,
 }
 
@@ -1267,8 +1268,10 @@ pub(super) struct Block {
     /// It is the caller's host memory, imported ([`import_host`]).
     imported: bool,
     /// The pages its memory was imported from, where the runtime mapped them for it
-    /// ([`import_own_pages`]): unmapped once the memory is freed.
-    pages: Option<OwnPages>,
+    /// ([`import_own_pages`]): unmapped once the memory is freed, and that of every other block
+    /// that imported them (a buffer's carried to its device's next generation imports its pages
+    /// again there, `device/carry.rs`).
+    pages: Option<Arc<OwnPages>>,
     /// The read-only view of the caller's pages its memory was imported from, which drops the
     /// GPU's writes ([`import_host`], `read_only_view.rs`): unmapped once the memory is
     /// freed.
@@ -1828,6 +1831,9 @@ pub(super) struct Memory {
     /// When the creation calls next look for stale kept blocks in every pool
     /// ([`Memory::sweep_stale`]).
     next_sweep: Instant,
+    /// The device was lost and its recovery carried its objects on (`device/carry.rs`): it keeps
+    /// no empty block for placements it never makes again ([`Memory::keep_none`]).
+    keeps_none: bool,
 }
 
 /// The counts of the blocks made ahead (`memory/ready.rs`), and of those made in place in the pools
@@ -1950,6 +1956,7 @@ impl Memory {
             host_copy_blocks: HostCopyBlocks::default(),
             ahead: AheadBlocks::default(),
             next_sweep: Instant::now() + KEPT_SWEEP_EVERY,
+            keeps_none: false,
             #[cfg(test)]
             import_hold: None,
             #[cfg(test)]
@@ -2670,6 +2677,13 @@ impl Memory {
             // SAFETY: nothing is placed in a kept empty block, and no command reads it.
             drop(unsafe { self.let_go(device, stale, FreeCause::KeptStale, None) });
         }
+        // A lost device keeps none ([`Memory::keep_none`]).
+        if self.keeps_none {
+            for kept in self.pool(holds, type_index).take_kept() {
+                // SAFETY: as above.
+                drop(unsafe { self.let_go(device, kept, FreeCause::Teardown, None) });
+            }
+        }
         match freed {
             Some((block, dedicated)) => {
                 let cause = match dedicated {
@@ -2943,6 +2957,15 @@ impl Memory {
         }
     }
 
+    /// The pages the runtime mapped that `placement`'s memory was imported from
+    /// ([`import_own_pages`], `fresh_pages.rs`), where it was: what a buffer's carry to its
+    /// device's next generation imports again there (`device/carry.rs`).
+    pub(super) fn own_pages(&self, placement: &Placement) -> Option<Arc<OwnPages>> {
+        let index = placement.block.filter(|_| placement.own_pages)?;
+        let pool = self.pool_ref(placement.holds, placement.type_index);
+        (pool.payload(index)?.pages.as_ref()).map(Arc::clone)
+    }
+
     /// Whether `placement` lies in device-local memory.
     pub(super) fn is_device_local(&self, placement: &Placement) -> bool {
         self.type_flags(placement.type_index)
@@ -2975,6 +2998,32 @@ impl Memory {
             placement.size,
             after,
         )
+    }
+
+    /// Free every empty block it keeps, and the blocks made ahead whose making ended, and from
+    /// now on every block as it empties: a lost device whose recovery carried its objects on,
+    /// none of its command buffers left to record (`device/carry.rs`), on which no placement is
+    /// made again. What it frees is counted as the device's teardown.
+    pub(super) fn keep_none(&mut self, device: &ash::Device) {
+        self.keeps_none = true;
+        let mut at = 0;
+        let mut ready = Vec::new();
+        while at < self.readying.len() {
+            if !self.readying[at].finished() {
+                at += 1;
+                continue;
+            }
+            ready.extend(self.readying.swap_remove(at).take().map(|made| made.block));
+        }
+        let kept: Vec<Block> = (self.pools.iter_mut())
+            .flat_map(Pool::take_kept)
+            .chain(ready)
+            .collect();
+        for block in kept {
+            // SAFETY: nothing is placed in a kept empty block or one made ahead, and no command
+            // reads it.
+            drop(unsafe { self.let_go(device, block, FreeCause::Teardown, None) });
+        }
     }
 
     /// Free every block, those that wait too: the device is being destroyed, its queues idle,
@@ -3413,19 +3462,20 @@ pub(super) unsafe fn import_host(
 
 /// Import `pages`, which the runtime mapped for a buffer of its own (`fresh_pages.rs`), as
 /// memory of type `type_index` in `memory`, as [`import_host`] imports the caller's: a
-/// dedicated block, which unmaps the pages once its memory is freed, and its placement at
-/// offset 0. The import is made with `memory`'s lock released, as a new block is ([`place`]).
-/// Refused with the driver's failure, the pages unmapped.
+/// dedicated block, which unmaps the pages once its memory is freed (and every other block's that
+/// imported them: a carried buffer's, `device/carry.rs`), and its placement at offset 0. The import
+/// is made with `memory`'s lock released, as a new block is ([`place`]). Refused with the driver's
+/// failure, the pages unmapped where nothing else holds them.
 pub(super) fn import_own_pages(
     memory: &Mutex<Memory>,
     device: &ash::Device,
-    pages: OwnPages,
+    pages: Arc<OwnPages>,
     type_index: u32,
 ) -> Result<Placement, ImportFailure> {
     let device_address = lock(memory).device_address;
     let (pointer, size) = (pages.pointer(), pages.length());
-    // SAFETY: the pages stay mapped until the block that takes them is freed, and their pointer
-    // and length are multiples of the import alignment (`Device::fresh_page_buffer`).
+    // SAFETY: the pages stay mapped until every block that takes them is freed, and their
+    // pointer and length are multiples of the import alignment (`Device::fresh_page_buffer`).
     let (raw, type_index) =
         unsafe { import_pointer(device, pointer, size, &[type_index], device_address) }?;
     let block = Block {

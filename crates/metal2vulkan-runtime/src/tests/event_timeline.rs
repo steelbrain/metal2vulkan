@@ -410,3 +410,40 @@ fn a_wait_completes_after_the_signal_that_reaches_it() {
     timeline.released(index);
     assert_eq!(timeline.unfinished(), 0);
 }
+
+/// A timeline carried to its device's next generation (`device/carry.rs`) starts its new
+/// semaphore at 0 with the value the host saw, its floor included: the signals the lost device
+/// was given and the host never saw are gone, a wait for a value only they reach is held until a
+/// later signal reaches it, and the next kept signal is index 1 of the new semaphore.
+#[test]
+fn a_carried_timeline_keeps_the_value_the_host_saw_and_nothing_pending() {
+    for settable in [false, true] {
+        let mut timeline = EventTimeline::<usize>::new(settable);
+        submit(&mut timeline, 3, 0);
+        submit(&mut timeline, 9, 1);
+        assert!(timeline.observe(1));
+        if settable {
+            assert!(timeline.set(5));
+        }
+        let seen = timeline.value();
+        let mut carried = timeline.carried();
+        assert_eq!(carried.settable(), settable);
+        assert_eq!((carried.value(), carried.known()), (seen, seen));
+        assert_eq!(carried.pending(), 0);
+        assert_eq!(carried.unfinished(), 0);
+        assert_eq!(carried.wait(seen), Some(WaitFor::Reached));
+        assert_eq!(carried.wait(9), None, "the lost signal of 9 never lands");
+        assert_eq!(carried.signallers(9), (None, None));
+        assert_eq!(
+            submit(&mut carried, 9, 0),
+            Signal::Kept {
+                index: 1,
+                after: None
+            }
+        );
+        // The new semaphore's counter, at 0, observes nothing.
+        assert!(!carried.observe(0));
+        assert!(carried.observe(1));
+        assert_eq!(carried.value(), 9);
+    }
+}

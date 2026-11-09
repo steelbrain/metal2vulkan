@@ -341,6 +341,14 @@ impl<R: Copy + Eq + Hash, M: Clone + Eq + Hash> Recycler<R, M> {
 }
 
 impl<R: Released, M> Recycler<R, M> {
+    /// Every parked object destroyed and its memory freed, and none parked from now on: each
+    /// live one goes as its last holder lets go of it (`park` hands it back). A lost device whose
+    /// recovery carried its objects on, on which nothing is made again (`device/carry.rs`).
+    pub(crate) fn close(&mut self, device: &ash::Device, memory: &mut Memory) {
+        self.live.clear();
+        self.destroy(device, memory);
+    }
+
     /// Every parked object, destroyed and its memory freed, as the device goes.
     pub(crate) fn destroy(&mut self, device: &ash::Device, memory: &mut Memory) {
         self.index.clear();

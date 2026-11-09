@@ -17,6 +17,7 @@
 
 mod adopt;
 pub(super) mod argument_buffers;
+pub(crate) mod carry;
 mod compiles;
 pub(super) mod create;
 pub(super) mod float_tininess;
@@ -573,6 +574,9 @@ pub(super) struct DeviceShared {
     pub(super) owners: super::used_resources::Owners,
     /// The program's live buffers of their own, and their resident set (`live_buffers.rs`).
     pub(super) live_buffers: super::live_buffers::LiveBuffers,
+    /// What its recovery carries to the next generation, and what it lets go of once nothing
+    /// records on it (`carry.rs`).
+    pub(crate) carry: carry::Carry,
     /// The imports of the caller's dma-bufs it releases while idle, and the thread that releases
     /// them (`host_residency.rs`).
     #[cfg(unix)]
@@ -2636,6 +2640,7 @@ impl Device {
             fresh: Default::default(),
             owners: Default::default(),
             live_buffers: Default::default(),
+            carry: Default::default(),
             #[cfg(unix)]
             residency: Default::default(),
             timing,

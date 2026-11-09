@@ -65,6 +65,7 @@ use super::copied::CopiesReached;
 use super::deferred::{Deferred, Prepared, StepInputs};
 use super::degradation::{Degradation, NoticesFor};
 use super::descriptor_arena::DescriptorArena;
+use super::device::carry::Recording;
 use super::device::relay::Relayed;
 use super::device::{lock, DeviceShared};
 use super::dirty_pages::DirtyCommit;
@@ -228,6 +229,9 @@ pub(super) struct CommandBufferShared {
     /// handle to tell apart. Declared before `device`, so it goes first.
     generation: Arc<DeviceShared>,
     device: Device,
+    /// Its count among its generation's command buffers that may still record, from its making to
+    /// its completion or its drop (`device/carry.rs`).
+    recording: Recording,
     /// Its queue's place on the generation it was made on (`queue.rs`).
     queue: QueueGen,
     /// Its queue (`commandQueue`).
@@ -2093,6 +2097,8 @@ impl Drop for CommandBufferShared {
             let shared = self.device.shared();
             shared.spares.give_command_pool(shared, pool, false);
         }
+        // It records no more, where it never completed (`device/carry.rs`).
+        self.recording.end(&self.generation);
     }
 }
 
@@ -2113,6 +2119,7 @@ impl CommandBuffer {
             id: ObjectId::new(),
             generation: Arc::clone(queue.device().shared_arc()),
             device: queue.device().clone(),
+            recording: Recording::begin(queue.device().shared()),
             queue: queue.clone(),
             root: root.clone(),
             state: Mutex::new(State {
@@ -4195,7 +4202,7 @@ impl CommandBufferShared {
     /// This thread doing the command buffer's work until the guard goes
     /// ([`CommandBuffer::notices_for`]).
     pub(super) fn notices_for(&self) -> NoticesFor {
-        NoticesFor::new(self.id)
+        NoticesFor::new(self.id, &self.generation)
     }
 
     /// This command buffer's address, which names it to [`own`]'s marker.
@@ -5625,6 +5632,8 @@ impl CommandBufferShared {
             let shared = self.device.shared();
             shared.spares.begin_ahead(shared, pool);
         }
+        // It records no more (`device/carry.rs`).
+        self.recording.end(&self.generation);
     }
 }
 
