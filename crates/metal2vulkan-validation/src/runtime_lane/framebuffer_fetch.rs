@@ -164,7 +164,7 @@ use super::Messages;
 use crate::air_library::AirLibrary;
 use crate::runtime_lane::{buffer_with, pipelines_settled, read_buffer, WAIT};
 use metal2vulkan::device::{DriverFact, FormatUsage, VkFeature};
-use metal2vulkan::error::{Feature, Unsupported};
+use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{
     BlendFactor, IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureType,
     TextureUsage,
@@ -173,9 +173,10 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan::vk;
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, Degradation, Error, IndirectCommandBufferDescriptor, Library,
-    LoadAction, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
-    StoreAction, Texture, TextureDescriptor, VisibilityResultMode, VkImageLayouts,
+    BlitOption, Buffer, ClearColor, Degradation, Device, Error, IndirectCommandBufferDescriptor,
+    Library, LoadAction, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    ResourceOptions, Size, StoreAction, Texture, TextureDescriptor, VisibilityResultMode,
+    VkImageLayouts,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -188,11 +189,48 @@ const TEXELS: usize = 16;
 
 /// The engine fixture `stem`'s library on `lane`'s device.
 fn library(lane: &Lane, stem: &str) -> Library {
+    fixture(&lane.device, stem)
+}
+
+/// The engine fixture `stem`'s library on `device`.
+fn fixture(device: &Device, stem: &str) -> Library {
     let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/public/engine")
         .join(format!("{stem}.ll"));
     let bitcode = llvm_assemble(&ll).unwrap();
-    lane.device.new_library_with_air(&bitcode).unwrap()
+    device.new_library_with_air(&bitcode).unwrap()
+}
+
+/// Whether `device` takes a framebuffer fetch: the gate every lane test that fetches opens with,
+/// skipping where it answers false. A device whose profile has a form a fetch takes,
+/// rasterization-order color attachment access (input attachments) or the fragment shader pixel
+/// interlock (the storage form), answers true and makes nothing, so a test's count of makings is
+/// its own (`degrade_notices::assert_made_once`). One with neither (RADV on the RX 550, GCN4) must
+/// refuse a fetching pipeline (`fragment_fetch`'s `fetch_scalar`), typed: `Unsupported` of
+/// `Feature::FramebufferFetch`, the device's honest answer, printed as a `FETCH-SKIP` line before
+/// it answers false. Any other answer there fails the test.
+pub(super) fn fetches(device: &Device) -> bool {
+    let fragment = device.compile_device().profile().fragment();
+    if fragment.rasterization_order_color_access || fragment.pixel_interlock {
+        return true;
+    }
+    let vertices = fixture(device, "rt6_resolves");
+    let fetch = fixture(device, "fragment_fetch");
+    let descriptor = pipeline_descriptor(
+        &vertices,
+        (&fetch, "fetch_scalar"),
+        &[PixelFormat::R32Float],
+        1,
+    );
+    let name = device.name();
+    match device.new_render_pipeline_state(&descriptor, &PipelineOptions::default()) {
+        Err(Error::Unsupported(refusal)) if refusal.feature == Feature::FramebufferFetch => {
+            println!("FETCH-SKIP on {name}: no framebuffer fetch form, refused: {refusal}");
+            false
+        }
+        Ok(_) => panic!("{name}: a fetching pipeline was made with no fetch form in the profile"),
+        Err(error) => panic!("{name}: a fetching pipeline was refused otherwise: {error}"),
+    }
 }
 
 /// A pipeline of the fullscreen triangle (of `vertices`) and `fragment` of `library`, drawing
@@ -420,26 +458,6 @@ fn loading(texture: &Texture, store: StoreAction) -> RenderPassDescriptor {
     descriptor
 }
 
-/// The refusal `error` is where it is the device's answer to every framebuffer fetch: the device
-/// has neither of the two forms a fetch takes, rasterization-order color attachment access (input
-/// attachments) and the fragment shader pixel interlock (the storage form), and `error` refuses
-/// the fetch, typed (`Unsupported` of `Feature::FramebufferFetch`). That is the device's honest
-/// answer (RADV on the RX 550, GCN4, has neither), which a lane prints and skips on; any other
-/// refusal, and this one on a device that has a form, stays the lane's failure.
-fn fetch_unavailable<'a>(lane: &Lane, error: &'a Error) -> Option<&'a Unsupported> {
-    let fragment = lane.device.compile_device().profile().fragment();
-    match error {
-        Error::Unsupported(refusal)
-            if refusal.feature == Feature::FramebufferFetch
-                && !fragment.rasterization_order_color_access
-                && !fragment.pixel_interlock =>
-        {
-            Some(refusal)
-        }
-        _ => None,
-    }
-}
-
 /// The form the device's framebuffer fetch takes, for the printed lines.
 fn form(lane: &Lane) -> &'static str {
     if through_inputs(lane) {
@@ -494,6 +512,9 @@ fn multisampled(lane: &Lane, name: &str, ran: Result<Vec<u8>, Error>, texels: &[
 #[test]
 fn fetches_read_every_earlier_fragment_of_the_pixel() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
     let pf = PixelFormat::R32Float;
@@ -534,6 +555,9 @@ fn fetches_read_every_earlier_fragment_of_the_pixel() {
 #[test]
 fn integer_read_modify_writes_follow_draw_order() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let count = library(&lane, "exf_fetch_count");
     let pf = PixelFormat::RGBA32Uint;
@@ -561,6 +585,9 @@ fn integer_read_modify_writes_follow_draw_order() {
 #[test]
 fn memoryless_attachments_are_fetched() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let pf = PixelFormat::RGBA32Uint;
@@ -608,6 +635,9 @@ fn memoryless_attachments_are_fetched() {
 #[test]
 fn a_dont_care_memoryless_attachment_reads_zero() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let pf = PixelFormat::RGBA32Uint;
@@ -665,6 +695,9 @@ fn a_dont_care_memoryless_attachment_reads_zero() {
 #[test]
 fn a_memoryless_attachment_stepped_after_an_inline_read_starts_from_zero() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let stepping = library(&lane, "mli_memoryless_step");
@@ -754,6 +787,9 @@ fn a_memoryless_attachment_stepped_after_an_inline_read_starts_from_zero() {
 #[test]
 fn a_left_out_color_s_framebuffer_view_is_a_placeholder() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let pf = PixelFormat::RGBA32Uint;
@@ -845,6 +881,9 @@ fn a_left_out_color_s_framebuffer_view_is_a_placeholder() {
 #[test]
 fn a_memoryless_attachment_fetched_after_a_plain_inline_draw_starts_from_zero() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let stepping = library(&lane, "mli_memoryless_step");
@@ -972,6 +1011,9 @@ fn passes(
 #[test]
 fn a_queue_keeps_one_memoryless_backing_for_its_passes() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let pf = PixelFormat::RGBA32Uint;
@@ -1047,6 +1089,9 @@ fn a_queue_keeps_one_memoryless_backing_for_its_passes() {
 fn a_queue_keeps_a_memoryless_backing_for_each_shape_it_renders() {
     const SIDES: u64 = 12;
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let unwritten = library(&lane, "exf2_fetch_unwritten");
     let pf = PixelFormat::RGBA32Uint;
@@ -1109,6 +1154,9 @@ fn a_queue_keeps_a_memoryless_backing_for_each_shape_it_renders() {
 fn visibility_results_span_split_passes() {
     use VisibilityResultMode::{Boolean, Counting, Disabled};
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let precise = lane
         .device
         .properties()
@@ -1226,6 +1274,9 @@ pub(super) const FETCHES: [Degradation; 3] = [
 #[test]
 fn fetches_degrade_once_per_kind() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
@@ -1362,6 +1413,9 @@ fn sampled(lane: &Lane, texture: &Texture) -> Vec<u8> {
 #[test]
 fn fetched_textures_load_store_and_reach_later_passes() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name();
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
@@ -1426,6 +1480,9 @@ fn fetched_textures_load_store_and_reach_later_passes() {
 #[test]
 fn a_callers_image_without_the_fetch_usage_fetches_through_a_scratch() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
@@ -1618,6 +1675,9 @@ fn a_callers_image_without_the_fetch_usage_fetches_through_a_scratch() {
 #[test]
 fn a_plain_draw_before_a_fetch_takes_the_devices_faster_form() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
@@ -1746,6 +1806,9 @@ fn a_plain_draw_before_a_fetch_takes_the_devices_faster_form() {
 #[test]
 fn a_callers_multisampled_image_without_the_fetch_usage_fetches_through_a_scratch() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
@@ -2103,6 +2166,9 @@ fn indirect_pipeline_at(
 #[test]
 fn indirect_render_commands_fetch_as_the_encoder_s_draws() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
     let pf = PixelFormat::R32Float;
@@ -2283,6 +2349,9 @@ fn execute_between(
 #[test]
 fn indirect_render_commands_fetch_multisampled_attachments_as_the_encoder_s_draws() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
     let pf = PixelFormat::R32Float;
@@ -2366,6 +2435,9 @@ fn indirect_render_commands_fetch_multisampled_attachments_as_the_encoder_s_draw
 #[test]
 fn indirect_render_commands_fetch_a_callers_image_through_a_scratch() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let vertices = library(&lane, "rt6_resolves");
     let fetch = library(&lane, "fragment_fetch");
@@ -2493,6 +2565,9 @@ fn a_guests_fetching_pipeline_blends_an_extended_range_attachment() {
     use metal2vulkan::error::Needs;
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask};
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let coverage = library(&lane, "con_fetch_coverage");
     let device = lane.device.name();
@@ -2650,6 +2725,9 @@ fn a_discarding_fetch_stores_only_what_metals_later_tests_keep() {
     use metal2vulkan::metal::state::DepthStencilDescriptor;
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask, CompareFunction};
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let tested = library(&lane, "tsw_fetch_discard");
     let device = lane.device.name();
@@ -2923,6 +3001,9 @@ fn a_state_storing_before_its_tests_makes_its_first_draw_s_pipeline_at_creation(
     use metal2vulkan::metal::state::DepthStencilDescriptor;
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask, CompareFunction};
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let tested = library(&lane, "tsw_fetch_discard");
     let device = lane.device.name();
@@ -3082,6 +3163,9 @@ fn a_state_storing_before_its_tests_makes_its_first_draw_s_pipeline_at_creation(
 fn masked_fetched_writes_keep_the_channels_the_mask_leaves_out() {
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask};
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let coverage = library(&lane, "con_fetch_coverage");
     let device = lane.device.name();

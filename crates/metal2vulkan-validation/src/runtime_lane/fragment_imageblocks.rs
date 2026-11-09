@@ -20,6 +20,9 @@
 //!   as Metal's validation refuses it; a draw of another master's alignment after the pass's
 //!   first, and a draw beside a tile dispatch whose tile function's explicit imageblock is of
 //!   another size (in either order), are `NotImplemented`.
+//!
+//! A device without the ordered pixel interlock refuses an imageblock's state, and each test skips
+//! it (`Fixture::imageblocks`).
 
 use super::degrade_notices::{assert_once, made_render_kinds, made_tile_kinds};
 use super::shared_kinds;
@@ -29,6 +32,8 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::VkFeature;
+use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -71,6 +76,35 @@ impl Fixture {
         Fixture {
             views: device.new_library_with_air(&bitcode).unwrap(),
             device: device.clone(),
+        }
+    }
+
+    /// Whether the device runs a fragment imageblock: it has the ordered pixel interlock and
+    /// stores in the fragment stage, which the cells' writes need, and then this makes nothing.
+    /// Where it lacks either, `imageblock_accumulate`'s state must be refused as `Imageblocks`; the
+    /// refusal is printed and the caller skips the device.
+    fn imageblocks(&self) -> bool {
+        let profile = self.device.compile_device().profile();
+        if profile.fragment().pixel_interlock
+            && profile
+                .enabled()
+                .features
+                .contains(&VkFeature::FragmentStoresAndAtomics)
+        {
+            return true;
+        }
+        let name = self.device.name();
+        let descriptor = self.descriptor("imageblock_accumulate", false);
+        match self
+            .device
+            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        {
+            Err(Error::Unsupported(refusal)) if refusal.feature == Feature::Imageblocks => {
+                println!("IMAGEBLOCKS-SKIP on {name}: no imageblock form, refused: {refusal}");
+                false
+            }
+            Ok(_) => panic!("{name}: an imageblock's state was made with no form in the profile"),
+            Err(error) => panic!("{name}: an imageblock's state was refused otherwise: {error}"),
         }
     }
 
@@ -236,6 +270,9 @@ fn a_pass_keeps_its_imageblock_across_draws_and_a_split() {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         kinds.extend(shared_kinds(&device));
         let fixture = Fixture::new(&device);
+        if !fixture.imageblocks() {
+            return;
+        }
         for fragment in [
             "imageblock_clear_odd",
             "imageblock_accumulate",
@@ -305,6 +342,9 @@ fn imageblock_draws_are_refused_where_metal_or_the_runtime_refuses_them() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let fixture = Fixture::new(&device);
+        if !fixture.imageblocks() {
+            return;
+        }
         let accumulate = fixture.state("imageblock_accumulate");
         let transition = fixture.state("imageblock_transition");
         let targets = fixture.targets(|_, _| 0);
@@ -388,6 +428,9 @@ fn commands_reach_the_pass_s_imageblock() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let fixture = Fixture::new(&device);
+        if !fixture.imageblocks() {
+            return;
+        }
         let clear = fixture.state_for("imageblock_clear_odd", true);
         let accumulate = fixture.state_for("imageblock_accumulate", true);
         let resolve = fixture.state_for("imageblock_resolve", true);

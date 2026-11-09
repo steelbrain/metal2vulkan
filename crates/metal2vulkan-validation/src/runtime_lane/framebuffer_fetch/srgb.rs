@@ -466,6 +466,9 @@ fn differing(read: &[u8], want: &[u8]) -> Vec<(usize, [u8; 4], [u8; 4])> {
 #[test]
 fn an_srgb_target_is_fetched_as_metal_fetches_it() {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let fetch = library(&lane, "fragment_fetch");
     let device = lane.device.name();
     let inputs = through_inputs(&lane);

@@ -566,6 +566,9 @@ fn refused_at(
 /// The cases (the module docs) at `samples`.
 fn cases_at(samples: u32) {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let kit = Kit::new(&lane, samples, false);
     let inputs = through_inputs(&lane);
@@ -680,6 +683,9 @@ fn cases_at(samples: u32) {
 #[test]
 fn a_fetch_under_a_stencil_test_without_a_depth_attachment_is_metals_through_inputs_else_refused() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let kit = Kit::new(&lane, 1, true);
     let what = format!("a Stencil8 stencil alone on {device}");

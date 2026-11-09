@@ -487,6 +487,9 @@ fn a_blended_eight_bit_unorm_fetch_stores_metals_blend() {
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = kinds.into_iter().collect();
     });
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name();
     let mut drawn = 0;
     for fixture in &FIXTURES {
@@ -680,6 +683,9 @@ fn other_blends_masks_and_the_blend_color_store_metals_blend() {
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = kinds.into_iter().collect();
     });
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name();
     let (pf, order) = FORMATS[0];
     let mut drawn = 0;
@@ -832,6 +838,9 @@ fn srgb_blends(formats: &[(PixelFormat, &[usize])]) {
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = kinds.iter().copied().collect();
     });
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name();
     let bytes = &*SRGB_BYTES;
     let mut drawn = 0;

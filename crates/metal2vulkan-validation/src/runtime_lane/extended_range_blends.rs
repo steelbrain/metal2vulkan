@@ -26,6 +26,7 @@ use super::extended_range_targets::{
     digest, dispatch, half_bits, half_value, kernel, outputs, reads, COUNT, HEIGHT, SOURCE_HALF,
     WIDTH,
 };
+use super::framebuffer_fetch::fetches;
 use super::resolves::{lane, lane_with, quiet, Lane, FULL, WHITE};
 use super::two_plane_copies::Rng;
 use super::xr_codes::{assert_announced, texel_within};
@@ -1017,6 +1018,9 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
     use crate::air_library::AirLibrary;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble};
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let name = lane.device.name().to_owned();
     let pf = PixelFormat::RGB10A82PXR10;
     let form = ExtendedRange::of(pf).expect("an extended-range format");

@@ -35,7 +35,7 @@
 
 use super::degrade_notices::counts;
 use super::extended_range_blends::STORED_CODES;
-use super::framebuffer_fetch::through_inputs;
+use super::framebuffer_fetch::{fetches, through_inputs};
 use super::resolves::{lane, quiet, Lane};
 use crate::air_library::AirLibrary;
 use crate::runtime_lane::{buffer_with, read_buffer};
@@ -127,6 +127,9 @@ fn depth(compare: CompareFunction, write: bool) -> DepthStencilDescriptor {
 #[test]
 fn a_moved_writer_keeps_what_metals_later_tests_drop() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name();
     let library = library(&lane);
     let first = pipeline(&lane, &library, "smw_plain", (true, false));

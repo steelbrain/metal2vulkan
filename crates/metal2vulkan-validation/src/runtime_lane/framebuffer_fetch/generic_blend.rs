@@ -570,6 +570,9 @@ fn a_blended_fetch_of_another_format_stores_the_generic_blend() {
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = [kind].into_iter().collect();
     });
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name();
     let mut drawn = 0;
     for safe in [false, true] {
@@ -612,6 +615,9 @@ fn a_second_source_blend_of_a_fetched_attachment_stores_the_generic_blend() {
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = [kind].into_iter().collect();
     });
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name();
     let library = library(&lane, "fbl_fetch_dual");
     let formats = [

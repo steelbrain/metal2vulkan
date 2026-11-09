@@ -53,6 +53,9 @@ fn covered(index: usize) -> bool {
 #[test]
 fn a_fetch_that_writes_memory_beside_depth_runs_metals_draws() {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let vertices = library(&lane, "rt6_resolves");
     let coherent = library(&lane, "dvp_rog_coherence");
     let device = lane.device.name();

@@ -25,10 +25,9 @@
 //! blend itself, exactly, announcing none of them, which is asserted. Through input attachments
 //! (lavapipe) the device blends; what it announces and how many channels are Metal's is printed.
 //! Each draw prints a `FETCH-BLEND16-NARROW` line, naming its blend. A device that has neither
-//! form refuses each pipeline, typed: each refusal is printed and its draw skipped
-//! (`fetch_unavailable`).
+//! form skips it (`fetches`).
 
-use super::super::{fetch_unavailable, form, library, through_inputs};
+use super::super::{fetches, form, library, through_inputs};
 use super::{half_bits, half_value, Words, NOTES, SIDE, TEXELS};
 use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::degrade_notices::counts;
@@ -155,6 +154,9 @@ fn a_two_lane_output_into_a_blended_two_channel_fetch_stores_metals_blend() {
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = kinds.into_iter().collect();
     });
+    if !fetches(&lane.device) {
+        return;
+    }
     let fixture = library(&lane, "fbl_fetch_blend16_narrow");
     let device = lane.device.name();
     let interlock = !through_inputs(&lane);
@@ -166,8 +168,6 @@ fn a_two_lane_output_into_a_blended_two_channel_fetch_stores_metals_blend() {
                 .function_descriptor(),
         )
     };
-    // The draws refused as the device's answer to every fetch (`fetch_unavailable`).
-    let mut skipped = 0;
     for (blend, case) in BLENDS
         .into_iter()
         .flat_map(|blend| CASES.map(|case| (blend, case)))
@@ -191,21 +191,10 @@ fn a_two_lane_output_into_a_blended_two_channel_fetch_stores_metals_blend() {
         descriptor.color_attachments[0] = Some(none);
         descriptor.color_attachments[1] = Some(blended);
         descriptor.color_attachments[2] = Some(none);
-        let state = match (lane.device)
+        let state = lane
+            .device
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-        {
-            Ok(state) => state,
-            Err(error) => {
-                match fetch_unavailable(&lane, &error) {
-                    Some(refusal) => {
-                        println!("FETCH-BLEND16-NARROW {what}: skipped, the device has no fetch: {refusal}");
-                        skipped += 1;
-                        continue;
-                    }
-                    None => panic!("{what}: {error}"),
-                }
-            }
-        };
+            .unwrap_or_else(|error| panic!("{what}: {error}"));
         let (texels, sources) = data(case);
         let target = filled(&lane, &texels);
         let bytes: Vec<u8> = match case.float {
@@ -285,11 +274,6 @@ fn a_two_lane_output_into_a_blended_two_channel_fetch_stores_metals_blend() {
                 wrong.len()
             );
         }
-    }
-    if skipped > 0 {
-        println!(
-            "FETCH-BLEND16-NARROW | {device} | skipped: {skipped} pipelines refused, no fetch form"
-        );
     }
     let _ = messages.take_notices();
     quiet(lane, &messages);

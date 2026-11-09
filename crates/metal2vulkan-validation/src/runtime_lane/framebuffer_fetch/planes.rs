@@ -125,6 +125,9 @@ fn target(lane: &Lane, pf: PixelFormat) -> Texture {
 #[test]
 fn sample_planes_carry_every_sample() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let fetch = library(&lane, "msf_fetch_ms");
     let vertices = &library(&lane, "rt6_resolves");

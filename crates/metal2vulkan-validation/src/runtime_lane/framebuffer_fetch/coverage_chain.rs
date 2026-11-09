@@ -743,6 +743,9 @@ fn lost(coverage: Coverage, color: [u16; 4], texels: &[u8]) -> (usize, Vec<(u32,
 #[test]
 fn a_coverage_chain_through_fetch_keeps_every_block() {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let chain = library(&lane, "dsx_coverage_chain");
     let device = lane.device.name().to_owned();
     let mut failed = Vec::new();

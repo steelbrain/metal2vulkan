@@ -326,6 +326,9 @@ fn refusal(lane: &Lane) -> Option<(Attachment, Needs)> {
 /// Metal's answer for every case at `samples` (the module docs).
 fn cases_at(samples: u32) {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let vertices = library(&lane, "rt6_resolves");
     let returning = library(&lane, "dsx_fetch_returned_stencil");

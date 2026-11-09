@@ -180,6 +180,9 @@ pub(in crate::runtime_lane) const STORAGE_FORMS: [Degradation; 1] =
 #[test]
 fn a_fetched_target_takes_its_storage_form_once() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let halve = halving(&lane);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -291,6 +294,9 @@ fn a_fetched_target_takes_its_storage_form_once() {
 #[test]
 fn an_incomplete_command_buffer_holds_the_storage_form_off() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let halve = halving(&lane);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -340,6 +346,9 @@ fn an_incomplete_command_buffer_holds_the_storage_form_off() {
 #[test]
 fn an_argument_buffer_reaches_the_target_through_its_storage_form() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let halve = halving(&lane);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -416,8 +425,12 @@ struct Beside {
 /// copy out of the target, then one lone fetching pass: on two threads at once from a barrier,
 /// both made before either commits, where `parallel`, else each made, encoded and committed in
 /// turn; committed in order either way. Every frame's copy holds its value, and the lone pass's.
-fn beside(parallel: bool) -> Beside {
+/// `None` where the device has no fetch form ([`fetches`]).
+fn beside(parallel: bool) -> Option<Beside> {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return None;
+    }
     let device = lane.device.name().to_owned();
     let halve = halving(&lane);
     // The pipeline made first, by a pass over an untracked target (`a_fetched_target_takes_its_
@@ -508,12 +521,12 @@ fn beside(parallel: bool) -> Beside {
         .collect();
     drop(cache);
     quiet(lane, &messages);
-    Beside {
+    Some(Beside {
         device,
         kinds,
         taken: taken_after,
         through_scratch,
-    }
+    })
 }
 
 /// One queue's command buffers encoded on two threads at once, then committed in order (the
@@ -530,8 +543,10 @@ fn beside(parallel: bool) -> Beside {
 /// deferral has, the scratch's copies in and out at each pass until then.
 #[test]
 fn a_target_fetched_beside_an_encoding_command_buffer_keeps_its_answers() {
-    let serial = beside(false);
-    let parallel = beside(true);
+    let Some(serial) = beside(false) else {
+        return;
+    };
+    let parallel = beside(true).expect("the device fetches, as it did serially");
     let device = &serial.device;
     println!(
         "PARALLEL-STORAGE-FORM on {device}: through a scratch {}, forms taken after each frame and the lone pass serially {:?}, on two threads {:?}",
@@ -558,6 +573,9 @@ fn a_target_fetched_beside_an_encoding_command_buffer_keeps_its_answers() {
 #[test]
 fn a_handed_out_image_keeps_its_form() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let halve = halving(&lane);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -1085,6 +1103,9 @@ fn failing(kind: Option<EncoderKind>, seen: &Arc<AtomicUsize>) -> SubmissionChec
 #[test]
 fn a_checked_command_buffer_takes_the_storage_form_only_where_its_checks_pass() {
     let (messages, cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let device = lane.device.name().to_owned();
     let halve = halving(&lane);
     let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;

@@ -5,7 +5,9 @@
 //! shadow of the stencil the function tests and writes itself, copied in before each run of such
 //! draws and back after it (`runtime/shadow_stencil.rs`). Each pass here runs on the device as
 //! opened and again with the extension withheld (`DeviceOptions::withheld_extensions`), so that
-//! every venue runs the shadow, and both give Metal's answer, that of a Metal probe on an M4.
+//! every venue runs the shadow, and both give Metal's answer, that of a Metal probe on an M4. A
+//! device with neither the extension nor the ordered pixel interlock refuses the output's states,
+//! and that run is skipped (`Lane::outputs_stencil`).
 //!
 //! The pass, as the probe drew it: a 4x1 `Stencil8` target of 1 or 4 samples, its stencil loaded
 //! by `Clear` to 0x40 or by `Load` of an earlier pass's clear to 0x40, the encoder's stencil
@@ -53,6 +55,7 @@ use crate::candidate::runtime_samples;
 use crate::executor_contract::multisample::SampleRead;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::{DriverFact, VkExtension};
+use metal2vulkan::error::Feature;
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
     CompareFunction, IndirectCommandType, PixelFormat, PrimitiveType, StencilOperation,
@@ -213,6 +216,33 @@ impl Lane {
             made.extend(made_compute_kinds(&self.device, read));
         }
         made
+    }
+
+    /// Whether the device runs a fragment function's `[[stencil]]` output: it has
+    /// `VK_EXT_shader_stencil_export`, or the ordered pixel interlock the shadow runs in, and
+    /// then this makes nothing. Where it has neither, the output's state ([`Lane::stepped`]'s,
+    /// over the colour alone) must be refused as `StencilExport`; the refusal is printed and the
+    /// caller skips the device.
+    fn outputs_stencil(&self) -> bool {
+        let fragment = self.device.compile_device().profile().fragment();
+        if fragment.stencil_export || fragment.pixel_interlock {
+            return true;
+        }
+        let name = self.device.name();
+        let descriptor = self.stepped_descriptor(false);
+        match self
+            .device
+            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        {
+            Err(Error::Unsupported(refusal)) if refusal.feature == Feature::StencilExport => {
+                println!("STENCIL-SKIP on {name}: no stencil output form, refused: {refusal}");
+                false
+            }
+            Ok(_) => {
+                panic!("{name}: a stencil output's state was made with no form in the profile")
+            }
+            Err(error) => panic!("{name}: a stencil output's state was refused otherwise: {error}"),
+        }
     }
 
     /// The descriptor of the state [`Lane::stepped`] makes after the commit.
@@ -704,6 +734,9 @@ fn a_stencil_output_tests_and_writes_the_stencil_as_metal() {
                     .contains(&DriverFact::DontCareStoreIsMetals);
             let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
+            if !lane.outputs_stencil() {
+                continue;
+            }
             let mut answers = Vec::new();
             let mut drew = false;
             // The kinds the drawn passes' state makings announce, and whether the combined
@@ -815,6 +848,9 @@ fn executed_commands_test_and_write_the_stencil_as_metal() {
             let name = device.name().to_owned();
             let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
+            if !lane.outputs_stencil() {
+                continue;
+            }
             let mut answers = Vec::new();
             let mut drew = false;
             let mut made = BTreeSet::new();
@@ -896,6 +932,9 @@ fn a_host_step_s_draw_whose_stencil_output_reaches_no_attachment_binds_the_neutr
             let name = device.name().to_owned();
             let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
+            if !lane.outputs_stencil() {
+                continue;
+            }
             let (command_buffer, read) = lane.stepped(false).unwrap();
             assert_eq!(
                 (command_buffer.status(), command_buffer.error()),
@@ -957,6 +996,9 @@ fn a_host_step_s_run_of_another_shape_makes_its_objects_and_draws() {
             let name = device.name().to_owned();
             let system_memory = shared_in_system_memory(&device);
             let lane = Lane::new(device);
+            if !lane.outputs_stencil() {
+                continue;
+            }
             let (command_buffer, read) = lane.stepped(true).unwrap();
             let (status, error) = (command_buffer.status(), command_buffer.error());
             assert_eq!(

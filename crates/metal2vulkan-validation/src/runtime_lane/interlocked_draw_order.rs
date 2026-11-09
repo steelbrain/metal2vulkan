@@ -29,6 +29,7 @@
 //! (`WorkCounts::instance_splits_interlocked_writes`), which every draw after a pass's first must
 //! take where the runtime splits there.
 
+use super::framebuffer_fetch::fetches;
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -224,6 +225,9 @@ fn consecutive_fetching_draws_read_each_others_writes() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    if !fetches(&device) {
+        return;
+    }
     let ll = engine_dir().join("ido_draw_order.ll");
     let library = device
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
