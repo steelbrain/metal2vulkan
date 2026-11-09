@@ -3377,13 +3377,14 @@ impl Buffer {
     /// the loss (`Device::at_serving_taking`). Not for command buffers' work, whose queue slot
     /// holds the generation (`device/carry.rs`).
     pub(super) fn held(&self) -> HeldParts<'_> {
+        let mut link = self.s();
         loop {
-            let link = self.s();
             {
                 let mut calls = lock(&link.calls);
-                // Read under the lock their release takes: parts not let go of yet are released
+                // Read under the lock their release takes: parts not marked let go of yet, or
+                // whose release a call under way holds back (one this thread is inside, say), go
                 // only once this call ends.
-                if !link.released() {
+                if !link.released() || calls.under_way > 0 {
                     calls.under_way += 1;
                     drop(calls);
                     #[cfg(test)]
@@ -3395,7 +3396,12 @@ impl Buffer {
                 }
             }
             // Let go of on their lost generation since this thread read them: the generation
-            // the buffer was carried to serves its calls.
+            // the buffer was carried to serves its calls. Parts marked were carried.
+            link = &link
+                .next
+                .get()
+                .expect("a buffer's parts marked let go of were carried")
+                .0;
         }
     }
 
