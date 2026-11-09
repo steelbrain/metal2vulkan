@@ -142,13 +142,20 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
     // Its submission checks answered too, so that where the device takes blocks of its own pages,
     // every pitch's undeclared buffer lies in one (`memory.rs`'s `Holds::PageBuffers`).
     let _settled = device.settle_submit_checks(CHECK_WAIT);
+    eprintln!(
+        "UNOBSERVED-PADDING on {}: a held import costs submissions nothing {}, blocks of the \
+         runtime's own pages taken {}",
+        device.name(),
+        device.fresh_pages_pay(),
+        device.page_blocks_taken()
+    );
     let length = PITCHES[2] * HEIGHT;
     let descriptor = texture_descriptor();
     let mut aliased = Vec::new();
     for pitch in PITCHES {
         let observed = own_buffer(&device, length, false);
         let answer = observed.texture_placement(&descriptor, 0, pitch).unwrap();
-        let undeclared = answer;
+        let undeclared = (answer, observed.in_page_block());
         let (texture, before, after) = made(&device, &observed, pitch);
         if observed.in_page_block() {
             // In a block of the runtime's own pages: as over fresh pages, in place where the
@@ -244,9 +251,14 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
         }
         let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
         eprintln!(
-            "UNOBSERVED-PADDING on {}: {WIDTH}x{HEIGHT} BGRA8Unorm at {pitch}: undeclared \
-             {undeclared:?}; declared {} ({answer:?})",
+            "UNOBSERVED-PADDING on {}: {WIDTH}x{HEIGHT} BGRA8Unorm at {pitch}: undeclared {:?} \
+             in {}; declared {} ({answer:?})",
             device.name(),
+            undeclared.0,
+            match undeclared.1 {
+                true => "a block of the runtime's own pages",
+                false => "a plain block",
+            },
             match (aliases, pitched) {
                 (true, 0) => "the device's linear image",
                 (true, _) => "a DRM_FORMAT_MOD_LINEAR image at the pitch",
