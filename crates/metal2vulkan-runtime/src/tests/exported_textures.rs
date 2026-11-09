@@ -977,6 +977,21 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
             .collect()
     };
     let product = lost(&exportable);
+    // Of the textures in place over a plain block's buffer, those whose image there is a
+    // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`), which
+    // a block exportable as an opaque file descriptor alone would take only as a dedicated
+    // allocation on a device whose image format query says so.
+    let mut pitched = Vec::new();
+    for (at, (d, offset, row)) in layouts.iter().enumerate() {
+        if !plain_at[at] {
+            continue;
+        }
+        let before = device.work_counts().pooled_pitched_images;
+        drop(plain.new_texture(d, *offset, *row));
+        if device.work_counts().pooled_pitched_images > before {
+            pitched.push(at);
+        }
+    }
     // As the device's check asks: the images alone, whatever its verdicts.
     let images = std::thread::scope(|scope| {
         let thread = scope.spawn(|| {
@@ -1001,6 +1016,19 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         product.len(),
         images.len()
     );
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: of those in place over a plain block's buffer, {} take a \
+         DRM_FORMAT_MOD_LINEAR image at Metal's pitch, the rest the device's linear image",
+        pitched.len()
+    );
+    for &at in pitched.iter().take(8) {
+        let (d, offset, row) = &layouts[at];
+        eprintln!(
+            "EXPORTED-TEXTURES on {name}: pitched over a plain block: {:?} {}x{} at {offset}, \
+             rows {row} apart, {:?}",
+            d.pixel_format, d.width, d.height, d.usage
+        );
+    }
     let mut kinds = std::collections::BTreeMap::new();
     for &at in &images {
         let (d, offset, row) = &layouts[at];
