@@ -183,10 +183,11 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
 /// sampler, compute cube route and the rest of the seventeen), with the graphics cube route and the
 /// per-sample depth of macOS 27's Apple9 identity, that identity's normalized
 /// storage writes, full quads, normalized vertex fetch, alpha to coverage, moved NaNs, pack conversions, half conversions, small-float NaN stores and unary denormals, and every Apple GPU's 16-bit unorm depth stores, interpolation
-/// and first-vertex indices; lavapipe's `float` color NaNs and half-float storage writes; RADV's on
-/// the Radeon 780M, ANV's on the Iris Xe of RPL-P and the UHD 770 of RPL-S, and NVIDIA's on the
-/// RTX 3090 and the RTX 5080 Laptop GPU, as measured there; the 8-bit linear filter's bound where
-/// measured. Every other committed profile takes none. MoltenVK on another
+/// and first-vertex indices; lavapipe's `float` color NaNs and half-float storage writes; RADV's
+/// half-float storage writes on every GPU and its others on the Radeon 780M, ANV's on the Iris Xe
+/// of RPL-P and the UHD 770 of RPL-S, and NVIDIA's on the RTX 3090 and the RTX 5080 Laptop GPU, as
+/// measured there; the 8-bit linear filter's bound where measured. Every other committed profile
+/// takes none. MoltenVK on another
 /// vendor's GPU takes none, its cube routes unmeasured; another driver on Apple's vendor takes its
 /// own driver's rows, with Vulkan's cube rule. `InterpolateAtOffsetCentered` follows the driver alone.
 #[test]
@@ -290,6 +291,8 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
                 D::MetalNormStorageWrites,
                 D::MetalDepth16Stores,
             ],
+            // RADV's driver-wide row alone on the RADV GPUs no other row names.
+            (false, "amd-rdna3-radv" | "amd-rdna2-apu-radv") => vec![D::MetalHalfStorageWrites],
             (false, "intel-irisxe-rplp-anv") => vec![
                 D::MetalFloatDenormals,
                 D::MetalSmallFloatColorWrites,

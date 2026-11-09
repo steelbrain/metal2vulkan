@@ -251,15 +251,17 @@ pub(crate) fn among<F: Copy + Ord>(
 /// zero, past the largest 65504, every NaN `0x7e00`; every form, plain and under Metal's debug
 /// layer):
 /// - `MetalHalfStorageWrites`: every channel but NaNs Metal's, on MoltenVK 1.4.1 on the M3 Max
-///   and the M4, RADV, Mesa 26.2.4 on the Radeon 780M, ANV, Mesa 26.2.4 on the Iris Xe (RPL-P) and
-///   the UHD 770 (RPL-S), and NVIDIA's 615.71.09 on the RTX 3090 and the RTX 5080 Laptop GPU, and
-///   lavapipe (`MESA_LLVMPIPE`) from Mesa 26.0.8 through 26.2.4: Mesa 26.0.8 on LLVM 21.1.8, x86_64
-///   (the linux-gate container) and arm64 (on an M4 mini), and Mesa 26.2.4 on LLVM 23.1.1, x86_64
-///   (Arch's, on an i9-13900), all at fd90c81e3; and RADV, Mesa 26.2.6 on the RX 7900 XTX, at
-///   92202c5ea (2026-11-09).
+///   and the M4, ANV, Mesa 26.2.4 on the Iris Xe (RPL-P) and the UHD 770 (RPL-S), and NVIDIA's
+///   615.71.09 on the RTX 3090 and the RTX 5080 Laptop GPU, and lavapipe (`MESA_LLVMPIPE`) from
+///   Mesa 26.0.8 through 26.2.4: Mesa 26.0.8 on LLVM 21.1.8, x86_64 (the linux-gate container) and
+///   arm64 (on an M4 mini), and Mesa 26.2.4 on LLVM 23.1.1, x86_64 (Arch's, on an i9-13900), all
+///   at fd90c81e3; and RADV (`MESA_RADV`) on three GPUs of two generations: RDNA3, Mesa 26.2.4 on
+///   the Radeon 780M at fd90c81e3 and Mesa 26.2.6 on the RX 7900 XTX at 92202c5ea, and GCN4, Mesa
+///   26.2.6 on the RX 550 (Polaris 12) at 5020ce945 (2026-11-09).
 /// - `MetalHalfStorageNans`: every NaN `0x7e00` too, on MoltenVK 1.4.1 on the M3 Max and the M4.
 ///
-/// One row per GPU, as measured.
+/// One row per GPU, as measured; lavapipe's and RADV's one row each, of the driver on every GPU,
+/// every GPU each was measured on agreeing.
 ///
 /// `MetalHalfTexelWrites`, measured by `runtime_lane::half_write_nans` (at f38e6b9fc, 2026-10-09):
 /// a kernel's `half4` write through `access::write` and `access::read_write` of quiet and
@@ -589,16 +591,12 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageWrites)
     },
-    mesa_on(
-        DriverDeviation::MetalHalfStorageWrites,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RADEON_780M),
-    ),
-    mesa_on(
-        DriverDeviation::MetalHalfStorageWrites,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RX_7900_XTX),
-    ),
+    Measured {
+        fact: DriverDeviation::MetalHalfStorageWrites,
+        driver: DriverId::MESA_RADV,
+        vendor: None,
+        device: None,
+    },
     mesa_on(
         DriverDeviation::MetalHalfStorageWrites,
         DriverId::INTEL_OPEN_SOURCE_MESA,
