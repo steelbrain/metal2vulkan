@@ -1736,8 +1736,8 @@ impl RamChunk {
     /// The byte of its `VkBuffer` the host bytes `host` start at, where it holds them all, in
     /// order: inside its span, or, of a list, inside one of its runs.
     pub(crate) fn offset_of(&self, host: &Range<u64>) -> Option<u64> {
-        if self.runs.is_empty() {
-            let inside = self.span.start <= host.start && host.end <= self.span.end;
+        let inside = self.span.start <= host.start && host.end <= self.span.end;
+        if self.runs.is_empty() || !inside {
             return inside.then(|| host.start - self.span.start);
         }
         let after = (self.runs).partition_point(|(run, _)| run.start <= host.start);

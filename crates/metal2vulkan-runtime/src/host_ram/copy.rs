@@ -757,11 +757,14 @@ fn joined(mut ranges: Vec<Range<u64>>, most: usize) -> Vec<Range<u64>> {
     if out.len() <= most {
         return out;
     }
-    // Keep the `most - 1` widest gaps; join across the others.
+    // Keep the `most - 1` widest gaps (of two as wide, the first); join across the others.
     let mut gaps: Vec<(u64, usize)> = (out.windows(2).enumerate())
         .map(|(at, pair)| (pair[1].start - pair[0].end, at))
         .collect();
-    gaps.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let wider = |a: &(u64, usize), b: &(u64, usize)| b.0.cmp(&a.0).then(a.1.cmp(&b.1));
+    if most > 1 {
+        gaps.select_nth_unstable_by(most - 2, wider);
+    }
     let mut kept: Vec<usize> = gaps[..most - 1].iter().map(|&(_, at)| at).collect();
     kept.sort_unstable();
     let mut result = Vec::with_capacity(most);
@@ -1066,17 +1069,29 @@ impl BlitCommandEncoder {
             ));
         }
         let most_groups = limits.max_compute_work_group_count[0];
+        // The bytes of each chunk the pieces touch, sorted, those that meet or touch as one.
+        let ranges = chunk_ranges(&pieces, usize::MAX);
         if call.copy == PagesCopy::Scatter {
-            for (slot, _) in chunk_ranges(&pieces, MOST_RANGES) {
+            for &slot in ranges.keys() {
                 ram.copy_wrote(slot);
             }
-            if self.stages(ram, importer, (&pieces, &spans), PagesCopy::Scatter) {
+            if self.stages(
+                ram,
+                importer,
+                (&pieces, &spans),
+                (&ranges, PagesCopy::Scatter),
+            ) {
                 let bytes = (raw, at, span, total);
                 return self.record_staged_scatter(call, ram, (&pieces, &spans), bytes);
             }
         }
         if call.copy == PagesCopy::Gather
-            && self.stages(ram, importer, (&pieces, &spans), PagesCopy::Gather)
+            && self.stages(
+                ram,
+                importer,
+                (&pieces, &spans),
+                (&ranges, PagesCopy::Gather),
+            )
         {
             let bytes = (raw, at, span, total);
             return self.record_staged(call, ram, (&pieces, &spans), bytes);
@@ -1086,12 +1101,14 @@ impl BlitCommandEncoder {
         // imported yet, lists of the copy's pages, or one of each of those bytes alone while
         // the device's thread imports it (`RamOnDevice::copy_imports`). Each piece is then
         // counted in its import.
-        let touched = chunk_ranges(&pieces, MOST_RANGES);
+        let touched: BTreeMap<usize, Vec<Range<u64>>> = (ranges.iter())
+            .map(|(&slot, ranges)| (slot, joined(ranges.clone(), MOST_RANGES)))
+            .collect();
         let CopyImports {
             imports,
             of_chunk,
             waited,
-        } = ram.copy_imports(&device, importer, &chunk_ranges(&pieces, usize::MAX))?;
+        } = ram.copy_imports(&device, importer, &ranges)?;
         if imports.iter().any(|import| import.bytes() > range) {
             return Err(crate::error::internal(
                 "an import of host RAM past the device's storage range",
@@ -1234,8 +1251,9 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// Whether a copy of `pieces` (cut where the chunks of `spans` end), a gather or a scatter as
-    /// `copy` says, is staged through the CPU (the module docs' "First touch"): it is over a
+    /// Whether a copy of `pieces` (cut where the chunks of `spans` end, the bytes of each chunk
+    /// they touch `ranges`: [`chunk_ranges`]), a gather or a scatter as `copy` says, is staged
+    /// through the CPU (the module docs' "First touch"): it is over a
     /// chunk not imported yet that the device's thread imports ([`CopyTake::ThroughCpu`]), over
     /// none whose import only it would make ([`CopyTake::Waits`]); and, of a gather, no use but a
     /// copy's read may write its host bytes ([`RamOnDevice::written_over`]), none in its own
@@ -1248,15 +1266,15 @@ impl BlitCommandEncoder {
         ram: &RamOnDevice,
         importer: &super::Importer,
         (pieces, spans): (&[Piece], &[Range<u64>]),
-        copy: PagesCopy,
+        (ranges, copy): (&BTreeMap<usize, Vec<Range<u64>>>, PagesCopy),
     ) -> bool {
         if self.core().encodes_again() {
             return false;
         }
         let device = self.core().device().clone();
         let mut through_cpu = false;
-        for (slot, ranges) in chunk_ranges(pieces, usize::MAX) {
-            match ram.copy_take(&device, importer, slot, &alone_ranges(&ranges)) {
+        for (&slot, ranges) in ranges {
+            match ram.copy_take(&device, importer, slot, &alone_ranges(ranges)) {
                 CopyTake::Now => {}
                 CopyTake::ThroughCpu => through_cpu = true,
                 CopyTake::Waits => return false,

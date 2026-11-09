@@ -50,8 +50,15 @@ impl<T> Default for Kept<T> {
     }
 }
 
-/// Whether one of `runs` (by start, apart) holds `run` whole.
+/// Whether one of `runs` (by start, apart) holds `run` whole: none where `run` lies outside the
+/// span from the first's start to the last's end, else the run before its end, found by halves.
 fn holds(runs: &[Range<u64>], run: &Range<u64>) -> bool {
+    let (Some(first), Some(last)) = (runs.first(), runs.last()) else {
+        return false;
+    };
+    if run.start < first.start || run.end > last.end {
+        return false;
+    }
     let after = runs.partition_point(|held| held.start <= run.start);
     after
         .checked_sub(1)
