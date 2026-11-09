@@ -73,11 +73,15 @@
 //! (`SHADOW-COPY-BACK`, [`a_pass_copies_in_and_back_only_the_texels_its_scissors_reach`]): whether
 //! a shadow's copy back ran as a dispatch (`WorkCounts::shadow_copies_back_dispatched`).
 
+use super::degrade_notices::clear_conversions;
 use super::draw_work::pushes;
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::memoryless::memoryless_options;
-use super::no_copy_textures::{blending, blending_beside_scratch, floats, rects_beside, staged};
+use super::no_copy_textures::{
+    blending, blending_beside_scratch, clear_codes_apart, differing_by, floats, rects_beside,
+    staged,
+};
 use super::{
     layer_reported_nothing, layer_reported_nothing_at_all, validated_device, validated_device_with,
     Messages, ScratchCache, WAIT,
@@ -93,9 +97,10 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, CommandQueue, Degradation, Device, IoSurfacePlane, LoadAction,
-    Origin, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    SamplerState, ScissorRect, Size, StoreAction, Texture, TextureDescriptor, Viewport, WorkCounts,
+    BlitOption, Buffer, ClearColor, CommandQueue, DebugMessage, Degradation, Device,
+    IoSurfacePlane, LoadAction, Origin, PipelineOptions, Region, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, SamplerState, ScissorRect, Size, StoreAction, Texture,
+    TextureDescriptor, Viewport, WorkCounts,
 };
 
 /// A surface's plane: its name, pixel format and texel bytes, width, height and bytes per row.
@@ -573,27 +578,43 @@ struct Surface {
 impl Surface {
     /// Check that the pages hold `expected`: its texels (by `layout`), then every byte.
     fn check(&self, layout: &Layout, step: &str, expected: &[u8]) {
+        self.check_by(layout, step, expected, 0);
+    }
+
+    /// Check that the pages hold `expected`'s texels (by `layout`), each channel within `codes`
+    /// codes ([`differing_by`]), and its bytes between the rows (and past the last); the pages.
+    fn check_by(&self, layout: &Layout, step: &str, expected: &[u8], codes: u32) -> Vec<u8> {
         let what = &self.what;
         let now = self.mapping.read(0..self.len);
-        let (count, first) = differing(&rows(layout, &now), &rows(layout, expected), layout.texel);
+        let now_texels = rows(layout, &now);
+        let (count, first) =
+            differing_by(&now_texels, &rows(layout, expected), layout.texel, codes);
         assert!(
             count == 0,
-            "{what}, {step}: {count} texels in the pages differ from Metal's, the first at texel \
-             {first:?}"
+            "{what}, {step}: {count} texels in the pages differ from Metal's by more than {codes} \
+             codes, the first at texel {first:?}"
         );
+        let mut laid = expected.to_vec();
+        lay(layout, &mut laid, &now_texels);
         assert!(
-            now == expected,
+            now == laid,
             "{what}, {step}: the bytes between the rows (or past the last) changed: {}",
             padding_changes(layout, &now, expected)
         );
+        now
     }
 
     /// Print the shadows counted and the shadow's reason (`PITCHED-SURFACE`), and drop the
     /// texture, then the buffer, then the pages.
     fn report(self, device: &Device, messages: &Messages) {
-        let reason = messages
-            .take_notices()
-            .into_iter()
+        self.report_with(device, messages, Vec::new());
+    }
+
+    /// [`report`](Self::report), the shadow's reason found among the notices `taken` from
+    /// `messages` before and those it holds.
+    fn report_with(self, device: &Device, messages: &Messages, taken: Vec<DebugMessage>) {
+        let reason = (taken.into_iter())
+            .chain(messages.take_notices())
             .filter_map(|message| message.degradation)
             .find(|notice| notice.degradation == Degradation::ShadowedTexture)
             .map(|notice| format!(": {}", notice.reason))
@@ -623,7 +644,10 @@ fn reads_writes_and_renders_as_metal(layout: Layout) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.announce_each = [Degradation::DeviceColorConversion].into();
+        })
+        .unwrap();
         let queue = device.new_command_queue().unwrap();
         let texel = layout.texel;
         let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -721,11 +745,15 @@ fn reads_writes_and_renders_as_metal(layout: Layout) {
         }
         check("a blit of a private texture's box", &expected);
 
-        // Renders that store, against a private texture of the same texels.
+        // Renders that store, against a private texture of the same texels. A clear's channel,
+        // and a blend over it, may stand a code from the private texture's where the device's
+        // clear is not Metal's conversion, each image's clear announced (`clear_codes_apart`):
+        // the pages then hold the device's clear for the later steps.
         let blend = blending(&device, layout.pf);
         let reference = private_with(&queue, &layout, &rows(&layout, &expected));
         let left = ([-1.0, -1.0, 0.0, 1.0], [0.2, 0.4, 0.6, 0.5]);
         let right = ([0.0, -1.0, 1.0, 1.0], [0.9, 0.6, 0.1, 0.25]);
+        let mut taken = messages.take_notices();
         for (step, clear, rect) in [
             ("a pass that loads, blends and stores", false, left),
             ("a pass that clears, blends and stores", true, right),
@@ -737,13 +765,23 @@ fn reads_writes_and_renders_as_metal(layout: Layout) {
                 clear,
                 rect,
             );
+            let private = messages.take_notices();
             blend_pass(&queue, &blend, (texture, StoreAction::Store), clear, rect);
+            let ours = messages.take_notices();
+            let codes = clear_codes_apart(&device) * u32::from(clear);
+            let [private_cleared, ours_cleared] = [&private[..], &ours[..]].map(clear_conversions);
+            assert!(
+                codes == 0 || (private_cleared > 0 && ours_cleared > 0),
+                "{what}, {step}: the clears' device-color-conversion notices: the private \
+                 texture's {private_cleared}, ours {ours_cleared}"
+            );
+            taken.extend(private.into_iter().chain(ours));
             lay(
                 &layout,
                 &mut expected,
                 &blit_out(&queue, &layout, &reference),
             );
-            check(step, &expected);
+            expected = surface.check_by(&layout, step, &expected, codes);
         }
         // A pass that does not store leaves the pages as they were.
         blend_pass(
@@ -777,7 +815,7 @@ fn reads_writes_and_renders_as_metal(layout: Layout) {
             );
         }
         check("the last blit", &expected);
-        surface.report(&device, &messages);
+        surface.report_with(&device, &messages, taken);
     }
     layer_reported_nothing_at_all(&messages);
 }

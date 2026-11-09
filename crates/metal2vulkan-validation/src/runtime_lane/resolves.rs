@@ -1490,10 +1490,18 @@ fn a_single_sampled_colour_resolve_copies_its_texels() {
 /// as the linear channel it is) and an `RGBA8Unorm` one `80808080` (every channel's codes
 /// averaged), whichever format the attachment is. Into an sRGB texture the resolve decodes and
 /// encodes by the device's own sRGB conversions, so each color channel there stands within the
-/// two codes `device-rounded-resolve` states of Metal's ([`twin_resolved`]).
+/// two codes `device-rounded-resolve` states of Metal's ([`twin_resolved`]). The clear's codes
+/// are the device's conversion of the clear color, which Vulkan leaves to it (either code nearest
+/// a channel's value, and the sRGB encode), announced as `device-color-conversion`: on a device
+/// whose clear is not Metal's (no `DriverFact::ColorClearIsMetals`) each color channel of the
+/// agreeing samples' texel stands within a code of Metal's (ANV on the Iris Xe of RPL-P clears an
+/// `RGBA8Unorm_sRGB` channel's 0.5, 187.52 codes, to `0xbb` where Metal stores `0xbc`).
 #[test]
 fn a_resolve_into_the_srgb_twin_resolves_in_the_resolve_texture_s_encoding() {
     let (messages, _cache, lane) = lane();
+    let metals_clear =
+        (lane.device.properties().driver_facts).contains(&DriverFact::ColorClearIsMetals);
+    let mut cleared_apart = false;
     let unorm = PixelFormat::RGBA8Unorm;
     let srgb = PixelFormat::RGBA8UnormSRGB;
     for (attachment, into, view) in [
@@ -1554,21 +1562,39 @@ fn a_resolve_into_the_srgb_twin_resolves_in_the_resolve_texture_s_encoding() {
                 }
             })
             .unwrap();
-            twin_resolved(
-                &lane.read(&resolve, (0, 0), 4, BlitOption::None),
-                texel,
-                srgb_written,
-                &format!(
-                    "{attachment:?} into {into:?} through a view of {view:?}, samples {}",
-                    match draw {
-                        true => "that disagree",
-                        false => "that agree",
-                    }
-                ),
+            let got = lane.read(&resolve, (0, 0), 4, BlitOption::None);
+            let what = format!(
+                "{attachment:?} into {into:?} through a view of {view:?}, samples {}",
+                match draw {
+                    true => "that disagree",
+                    false => "that agree",
+                }
             );
+            let either = clear.is_some() && !metals_clear;
+            twin_resolved_within(&got, texel, twin_codes(srgb_written, either), &what);
+            cleared_apart |= either && got.chunks(4).any(|t| t != texel);
         }
     }
+    // A clear whose codes stand apart from Metal's was announced.
+    let notices = counts(&messages.take_notices());
+    assert!(
+        !cleared_apart || notices.contains_key(&Degradation::DeviceColorConversion),
+        "a clear apart from Metal's codes, unannounced: {notices:?}"
+    );
     quiet(lane, &messages);
+}
+
+/// The codes each channel of a twin resolve's texel may stand from Metal's: where the resolve
+/// writes an sRGB texture (`srgb`), a color channel within the two `device-rounded-resolve` states;
+/// where the texel is a clear's codes the device converts its own way (`cleared`), a color channel
+/// within one; the alpha exactly.
+fn twin_codes(srgb: bool, cleared: bool) -> [u8; 4] {
+    let color = match (srgb, cleared) {
+        (true, _) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+    };
+    [color, color, color, 0]
 }
 
 /// Hold each texel of a twin resolve's `got` to Metal's `texel` (the lane's 4x4 texture): every
@@ -1577,12 +1603,16 @@ fn a_resolve_into_the_srgb_twin_resolves_in_the_resolve_texture_s_encoding() {
 /// channel within the two codes `device-rounded-resolve` states and the alpha exactly. A texel
 /// apart from Metal's is printed.
 pub(super) fn twin_resolved(got: &[u8], texel: [u8; 4], srgb: bool, what: &str) {
-    let codes = |c: usize| if srgb && c < 3 { 2 } else { 0 };
+    twin_resolved_within(got, texel, twin_codes(srgb, false), what);
+}
+
+/// [`twin_resolved`], each channel `c` within `codes[c]` codes of Metal's `texel`.
+fn twin_resolved_within(got: &[u8], texel: [u8; 4], codes: [u8; 4], what: &str) {
     let within = got.chunks(4).all(|t| {
         t.iter()
             .zip(texel)
-            .enumerate()
-            .all(|(c, (&g, m))| g.abs_diff(m) <= codes(c))
+            .zip(codes)
+            .all(|((&g, m), codes)| g.abs_diff(m) <= codes)
     });
     assert!(
         within && got.len() == 4 * (SIZE * SIZE) as usize,

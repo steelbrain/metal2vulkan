@@ -2296,6 +2296,20 @@ pub(super) fn tie_cleared(device: &Device, covered: bool) -> BTreeSet<Degradatio
     forced(&[(Degradation::DeviceColorConversion, !(metals && covered))])
 }
 
+/// How many of `notices` a color attachment's clear announced as `device-color-conversion`
+/// (`render_pass::degrade_clear_conversion`, whose object is "a {format} color attachment's clear
+/// to {color}"), apart from a pipeline's record of the note: one at each such clear on a device
+/// whose options list the kind (`DeviceOptions::announce_each`).
+pub(super) fn clear_conversions(notices: &[DebugMessage]) -> usize {
+    (notices.iter())
+        .filter_map(|message| message.degradation.as_ref())
+        .filter(|notice| {
+            notice.degradation == Degradation::DeviceColorConversion
+                && notice.object.contains("color attachment's clear")
+        })
+        .count()
+}
+
 /// The kinds of `kinds` whose condition holds: each paired with the device fact, or the test's
 /// own step, that forces the runtime to announce it.
 pub(super) fn forced(kinds: &[(Degradation, bool)]) -> BTreeSet<Degradation> {
