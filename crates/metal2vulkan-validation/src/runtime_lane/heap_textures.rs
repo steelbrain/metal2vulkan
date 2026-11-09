@@ -2431,32 +2431,31 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// A heap's `Depth32Float` texture whose bytes hold depths outside `[0, 1]` (1.5, -0.5, 2.0, a
-/// NaN, an infinity and `0xeeeeeeee`, beside `-0.0` and depths inside,
+/// A heap's `Depth32Float` texture whose bytes hold depths outside `[0, 1]` (1.5, -0.5, 2.0, a NaN,
+/// an infinity and `0xeeeeeeee`, beside `-0.0` and depths inside,
 /// `depth_upload_clamps::depth_bits`) takes them into its image with no copy outside that range,
-/// under the validation layer's GPU-assisted check of buffer to image copies
-/// (`depth_upload_clamps::gpu_assisted_copies`, whose messages
-/// `depth_upload_clamps::reported_no_depth_outside_0_1` checks). Where the device would store such
-/// a depth clamped (`depth_upload_clamps::clamps`), its shadow's copy in clamps each into `[0, 1]`,
-/// a NaN to 1.0 and `-0.0` kept, and a blit of the texture into a buffer reads the clamped values;
-/// elsewhere it reads the bytes as they are. A `-0.0` reads as the device stores it, with its sign
-/// or as `0.0` (ANV's depth images keep no zero's sign). Both where the texture is a shadow of
-/// Metal's tiles, as on ANV and MoltenVK; one in place (lavapipe) lays its texels out as its
-/// driver does and copies nothing in. The texture is a `Shared` placement heap's 37x5 one, its
-/// bytes written through a buffer over them where Metal's tiles place each texel
+/// under the validation layer (`depth_upload_clamps::gpu_assisted_device`, whose messages
+/// `depth_upload_clamps::reported_no_depth_outside_0_1` checks; its copy check off). Where the
+/// device would store such a depth clamped (`depth_upload_clamps::clamps`), its shadow's copy in
+/// clamps each into `[0, 1]`, a NaN to 1.0 and `-0.0` kept, and a blit of the texture into a buffer
+/// reads the clamped values; elsewhere it reads the bytes as they are. A `-0.0` reads as the device
+/// stores it, with its sign or as `0.0` (ANV's depth images keep no zero's sign). Both where the
+/// texture is a shadow of Metal's tiles, as on ANV and MoltenVK; one in place (lavapipe) lays its
+/// texels out as its driver does and copies nothing in. The texture is a `Shared` placement heap's
+/// 37x5 one, its bytes written through a buffer over them where Metal's tiles place each texel
 /// (`heap_layouts::tiled_offset`). `HEAPTEX depth range` prints whether it was a shadow of Metal's
 /// tiles (`WorkCounts::heap_textures_tiled`), the route that copies it in, and the layer's other
 /// messages.
 #[test]
 fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
     use super::depth_upload_clamps::{
-        clamps, depth_bits, gpu_assisted_copies, reported_no_depth_outside_0_1, stored_as,
+        clamps, depth_bits, gpu_assisted_device, reported_no_depth_outside_0_1, stored_as,
     };
     use super::heap_layouts::tiled_offset;
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (clamps, tiled, read) = {
-        let device = &gpu_assisted_copies(&messages, cache.path());
+        let device = &gpu_assisted_device(&messages, cache.path());
         let clamps = clamps(device);
         let queue = device.new_command_queue().unwrap();
         let options = tracked(StorageMode::Shared);
@@ -2525,24 +2524,25 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
 /// A heap's texture of a format that presents no depth over an image of both aspects
 /// (`X32_Stencil8`, a `D32_SFLOAT_S8_UINT` image) moves its stencil alone between the heap's bytes
 /// and its image: Metal's texture has no depth, its 32 bits beside the stencil padding it never
-/// presents. In a `Shared` placement heap, its bytes first written as words of NaN patterns of
-/// both signs, infinities, values outside `[0, 1]`, a negative zero and others, a blit reads each
-/// stencil as the byte where Metal's tiles place it (`heap_layouts::tiled_offset`, a byte a
-/// texel), a blit's write into part of the texture changes those bytes alone, and every other
-/// byte of the texture's answer keeps its value byte for byte; it announces no
-/// `restricted-depth-upload`, and the layer's GPU-assisted check reports no copy of a depth
-/// outside `[0, 1]`. Of 37x5 with `allowGPUOptimizedContents` off and on, and of 64x64 with it on
-/// (which Metal keeps losslessly compressed: a shadow of its uncompressed tiles). A
-/// `Depth32Float_Stencil8` texture of 37x5 in the same kind of heap, on a device of its own
-/// without the GPU-assisted check (whose reads of a combined image's depth take 5 bytes a texel,
-/// past the copy's depths: `reported_no_depth_outside_0_1`), still takes its depth clamped where
-/// the device clamps (`depth_upload_clamps::clamps`): a shadow of Metal's tiles there announces
-/// `restricted-depth-upload`, and its depth reads as the device stores it (`stored_as`).
-/// `HEAPTEX stencil alone` lines print each texture's route and what differed.
+/// presents. In a `Shared` placement heap, its bytes first written as words of NaN patterns of both
+/// signs, infinities, values outside `[0, 1]`, a negative zero and others, a blit reads each
+/// stencil as the byte where Metal's tiles place it (`heap_layouts::tiled_offset`, a byte a texel),
+/// a blit's write into part of the texture changes those bytes alone, and every other byte of the
+/// texture's answer keeps its value byte for byte; it announces no `restricted-depth-upload`, and
+/// the layer reports no copy of a depth outside `[0, 1]` (its copy check off,
+/// `depth_upload_clamps::gpu_assisted_device`). Of 37x5 with `allowGPUOptimizedContents` off and
+/// on, and of 64x64 with it on (which Metal keeps losslessly compressed: a shadow of its
+/// uncompressed tiles). A `Depth32Float_Stencil8` texture of 37x5 in the same kind of heap, on a
+/// device of its own without GPU-assisted validation (whose copy check, where on, reads a combined
+/// image's depth at 5 bytes a texel, past the copy's depths: `reported_no_depth_outside_0_1`),
+/// still takes its depth clamped where the device clamps (`depth_upload_clamps::clamps`): a shadow
+/// of Metal's tiles there announces `restricted-depth-upload`, and its depth reads as the device
+/// stores it (`stored_as`). `HEAPTEX stencil alone` lines print each texture's route and what
+/// differed.
 #[test]
 fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
     use super::depth_upload_clamps::{
-        clamps, depth_bits, gpu_assisted_copies, reported_no_depth_outside_0_1, stored_as,
+        clamps, depth_bits, gpu_assisted_device, reported_no_depth_outside_0_1, stored_as,
     };
     use super::heap_layouts::tiled_offset;
     /// A texture of `descriptor` at a new `Shared` placement heap's first byte, a buffer over its
@@ -2616,7 +2616,7 @@ fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
     let messages = Messages::default();
     let mut tiled = Vec::new();
     {
-        let device = &gpu_assisted_copies(&messages, cache.path());
+        let device = &gpu_assisted_device(&messages, cache.path());
         let clamps = clamps(device);
         let queue = &device.new_command_queue().unwrap();
         for ([w, h], allow) in [([37, 5], false), ([37, 5], true), ([64, 64], true)] {

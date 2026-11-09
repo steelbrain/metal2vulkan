@@ -1,7 +1,6 @@
-//! 32-bit float depths outside `[0, 1]` uploaded into depth images under the validation layer's
-//! GPU-assisted check of buffer-to-image copies (`gpuav_buffer_copies`, which reports
-//! `VUID-vkCmdCopyBufferToImage-pRegions-07931` for each depth outside `[0, 1]` a copy takes into
-//! a depth image of a device without `VK_EXT_depth_range_unrestricted`). One lane a path:
+//! 32-bit float depths outside `[0, 1]` uploaded into depth images under the validation layer, its
+//! GPU-assisted validation on but its check of buffer-to-image copies off ([`gpu_assisted_device`],
+//! which says why). One lane a path:
 //! `replace_region`, a blit from a buffer (its copy as it is, through its plan's staging buffer,
 //! and into `Depth32Float_Stencil8`'s depth, a lane each), and a copy from a colour texture.
 //!
@@ -11,7 +10,9 @@
 //! takes a depth outside there, and each texel reads back as `bind::clamped_depth` gives it, a
 //! zero with its sign or without (the device's to keep). Elsewhere (lavapipe enables the
 //! extension) nothing is clamped and each texel reads back as written, a NaN as a NaN. Each lane
-//! prints `DEPTHCLAMP` with whether the device clamps and the uploads clamped.
+//! prints `DEPTHCLAMP` with whether the device clamps and the uploads clamped. The uploads clamped
+//! and the texels read back are the lanes' evidence: the layer's copy check, which would report
+//! each depth outside `[0, 1]` a copy takes, is off.
 
 use super::host_memory::run;
 use super::{
@@ -31,10 +32,23 @@ use std::path::Path;
 /// The textures' sides: rows of more than one workgroup's depths, and of an odd width.
 const SIDES: [u64; 2] = [37, 5];
 
-/// A lane device whose validation layer checks each buffer-to-image copy's depths on the GPU
-/// (`gpuav_enable`, `gpuav_buffer_copies`), its shader instrumentation off: the check this
-/// module's lanes and `heap_textures`' read.
-pub(super) fn gpu_assisted_copies(messages: &Messages, cache: &Path) -> Device {
+/// A lane device under the validation layer with GPU-assisted validation on (`gpuav_enable`), its
+/// shader instrumentation and its check of buffer-to-image copies (`gpuav_buffer_copies`) off:
+/// this module's lanes' and `heap_textures`' depth lanes' device.
+///
+/// The copy check reports `VUID-vkCmdCopyBufferToImage-pRegions-07931` for each depth outside
+/// `[0, 1]` a copy takes into a depth image of a device without `VK_EXT_depth_range_unrestricted`,
+/// by a dispatch of its own that it records before the copy, then restoring the compute state the
+/// command buffer had. Under layer 1.4.363 the Iris Xe of RPL-P (ANV, Mesa 26.2.6) crashed
+/// recording the staged blit's copy
+/// (`a_staged_blit_from_a_buffer_takes_no_depth_outside_0_1_into_a_depth_image`) in 4 of 10 runs,
+/// inside the driver below the layer's command, where the two dispatches before the copy had pushed
+/// set 0 under two layouts, two bindings (the staging's rows,
+/// `DriverFact::RowCopiesDispatchFaster`) and one (the depth clamp); in none of 10 runs with the
+/// rows copied by `vkCmdCopyBuffer` instead, none of 10 without the clamp's dispatch, and none of
+/// 15 with the check off. The layer's core checks report nothing of the command stream, which is
+/// valid. So the check stays off, and the rest of GPU-assisted validation on.
+pub(super) fn gpu_assisted_device(messages: &Messages, cache: &Path) -> Device {
     validated_device_with(TEST_DEVICE, messages, cache, |options| {
         let set = |name: &std::ffi::CStr, on: bool| {
             let value = LayerSettingValue::Bool(on);
@@ -42,7 +56,8 @@ pub(super) fn gpu_assisted_copies(messages: &Messages, cache: &Path) -> Device {
         };
         options.layer_settings.extend([
             set(c"gpuav_enable", true),
-            set(c"gpuav_buffer_copies", true),
+            // Off: layer 1.4.363's copy check crashes ANV's recording of a staged copy (above).
+            set(c"gpuav_buffer_copies", false),
             set(c"gpuav_shader_instrumentation", false),
         ]);
     })
@@ -64,15 +79,16 @@ fn reported_offset(text: &str) -> Option<u64> {
 }
 
 /// Check what the layer reported since `messages` was last read, printing it after `label`: no
-/// copy of a depth outside `[0, 1]`, and nothing else but the layer's warnings about the settings
-/// the GPU-assisted check takes (`VALIDATION-SETTINGS`: that it runs beside the core checks;
+/// copy of a depth outside `[0, 1]` (none is reported with the copy check off,
+/// [`gpu_assisted_device`]), and nothing else but the layer's warnings about the settings
+/// GPU-assisted validation takes (`VALIDATION-SETTINGS`: that it runs beside the core checks;
 /// `WARNING-Setting-Limit-Adjusted`: the descriptor limits it lowers for its own).
 ///
-/// `misreads`: the copy is into a `D32_SFLOAT_S8_UINT` image's depth, whose buffer data Vulkan
-/// lays out as `D32_SFLOAT`'s, 4 bytes a depth (the spec's table of buffer-image copy formats).
-/// The layer's check (1.4.363) reads it at the combined format's 5 bytes a texel instead, so a
-/// float it reports at an offset off 4 bytes straddles two depths and is no depth the copy takes:
-/// such reports are counted and printed apart, and only one at a depth's offset fails.
+/// `misreads`: the copy is into a `D32_SFLOAT_S8_UINT` image's depth, whose buffer data Vulkan lays
+/// out as `D32_SFLOAT`'s, 4 bytes a depth (the spec's table of buffer-image copy formats). The
+/// layer's copy check (1.4.363), where on, reads it at the combined format's 5 bytes a texel
+/// instead, so a float it reports at an offset off 4 bytes straddles two depths and is no depth the
+/// copy takes: such reports are counted and printed apart, and only one at a depth's offset fails.
 pub(super) fn reported_no_depth_outside_0_1(messages: &Messages, label: &str, misreads: bool) {
     let reported = messages.take();
     let (range, other): (Vec<_>, Vec<_>) = (reported.iter())
@@ -196,7 +212,7 @@ fn replace_region_takes_no_depth_outside_0_1_into_a_depth_image() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (clamps, clamped, hosted, read) = {
-        let device = &gpu_assisted_copies(&messages, cache.path());
+        let device = &gpu_assisted_device(&messages, cache.path());
         let clamps = clamps(device);
         let texture = texture(device, PixelFormat::Depth32Float, StorageMode::Shared);
         let [w, h] = SIDES;
@@ -234,9 +250,10 @@ fn replace_region_takes_no_depth_outside_0_1_into_a_depth_image() {
 const ABOVE: u32 = 0x4000_4000;
 
 /// A blit from a buffer into a new `Private` texture of `pf` (its depth, by `options`), from
-/// byte `at` of a buffer of [`depth_bits`]' texels at 0, else of [`ABOVE`]'s halves, under the
-/// GPU-assisted check, as the lanes below take it: no copy of a depth outside `[0, 1]`; where
-/// the device clamps, one upload clamped by a dispatch, and each texel read back clamped.
+/// byte `at` of a buffer of [`depth_bits`]' texels at 0, else of [`ABOVE`]'s halves, on
+/// [`gpu_assisted_device`], as the lanes below take it: no copy of a depth outside `[0, 1]`
+/// reported; where the device clamps, one upload clamped by a dispatch, and each texel read back
+/// clamped.
 /// `label` names the copy in `DEPTHCLAMP`'s line.
 fn blit_lane(label: &str, pf: PixelFormat, at: u64, options: BlitOption) {
     let messages = Messages::default();
@@ -246,7 +263,7 @@ fn blit_lane(label: &str, pf: PixelFormat, at: u64, options: BlitOption) {
         _ => ABOVE,
     };
     let (clamps, clamped, read) = {
-        let device = &gpu_assisted_copies(&messages, cache.path());
+        let device = &gpu_assisted_device(&messages, cache.path());
         let clamps = clamps(device);
         let [w, h] = SIDES;
         let bytes: Vec<u8> = match at {
@@ -340,7 +357,7 @@ fn a_copy_from_a_colour_texture_takes_no_depth_outside_0_1_into_a_depth_image() 
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (clamps, clamped, colour, read) = {
-        let device = &gpu_assisted_copies(&messages, cache.path());
+        let device = &gpu_assisted_device(&messages, cache.path());
         let clamps = clamps(device);
         let [w, h] = SIDES;
         let source = staged(device, &written(depth_bits));
