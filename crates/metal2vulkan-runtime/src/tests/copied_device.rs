@@ -406,10 +406,6 @@ fn copied_buffer_is_made_where_the_caller_s_gate_refuses_the_import() {
     drop((buffer, imported));
 }
 
-/// Pages of a dma-buf's mapping (`VM_PFNMAP`, as a consumer maps guest RAM), which the kernel's
-/// read cannot pin, whose import the gate refuses, are copied all the same (read with plain loads,
-/// mapped readable), with the copy's coherence. Linux only, where `/dev/udmabuf` opens.
-#[cfg(target_os = "linux")]
 /// A no-copy buffer over shared memory (a `memfd` mapped shared, as QEMU's
 /// `memory-backend-memfd,share=on` guest RAM is) made with no source of dma-bufs of its pages: on a
 /// device that refuses the pointer of shared memory (`Device::imports_shared_host_pointers`, RADV)
@@ -448,6 +444,10 @@ fn copied_buffer_is_made_over_shared_memory_whose_pointer_the_device_refuses() {
     }
 }
 
+/// Pages of a dma-buf's mapping (`VM_PFNMAP`, as a consumer maps guest RAM), which the kernel's
+/// read cannot pin, whose import the gate refuses, are copied all the same (read with plain loads,
+/// mapped readable), with the copy's coherence. Linux only, where `/dev/udmabuf` opens.
+#[cfg(target_os = "linux")]
 #[test]
 fn copied_buffer_is_made_over_a_dma_buf_mapping_the_gate_refuses() {
     let Some(host) = Host::over_dma_buf(9) else {
