@@ -467,10 +467,11 @@ struct Kernels {
     /// YCbCr texel's step on the grid `8192` with ties away from zero).
     native_half: bool,
     /// The `half` kernels (`read_half`, `sample_half`, `gather_red_half`, `gather_blue_half`) whose
-    /// stage rounds a `half` by the device's `OpQuantizeToF16` (`PrecisionNote::NativeHalfQuantize`,
-    /// on a device without `shaderFloat16`): a value below the smallest normal `half` may come out
-    /// as the zero of its sign.
-    quantizing: Vec<&'static str>,
+    /// stage rounds or narrows a `half` by the device's own form: `PrecisionNote::NativeHalfQuantize`
+    /// (its `OpQuantizeToF16`, on a device without `shaderFloat16`) or `NativeHalfConversion` (its
+    /// conversion, or its `PackHalf2x16` and `UnpackHalf2x16`), whose bounds let a value below the
+    /// smallest normal `half` come out as a zero.
+    flushing: Vec<&'static str>,
     /// Whether `write_masked_half`'s stage records `PrecisionNote::NativeNanEncoding`, announced
     /// as its state is made: not where the device's moves of a `half` NaN are Metal's
     /// (`DriverDeviation::MetalNanMoves`) and its write's store accounts for the texel's NaN.
@@ -514,7 +515,7 @@ impl Kernels {
             ]
             .iter()
             .any(|note| stage_notes(device, &bitcode, "read_half").contains(note)),
-            quantizing: [
+            flushing: [
                 "read_half",
                 "sample_half",
                 "gather_red_half",
@@ -522,7 +523,14 @@ impl Kernels {
             ]
             .into_iter()
             .filter(|entry| {
-                stage_notes(device, &bitcode, entry).contains(&PrecisionNote::NativeHalfQuantize)
+                let notes = stage_notes(device, &bitcode, entry);
+                println!("HALF-KERNEL {}: {entry} records {notes:?}", device.name());
+                notes.iter().any(|note| {
+                    matches!(
+                        note,
+                        PrecisionNote::NativeHalfQuantize | PrecisionNote::NativeHalfConversion
+                    )
+                })
             })
             .collect(),
             half_write_nans: stage_notes(device, &bitcode, "write_masked_half")
@@ -530,10 +538,10 @@ impl Kernels {
         }
     }
 
-    /// Whether the `half` kernel `entry`'s stage rounds by the device's quantize
-    /// ([`Kernels::quantizing`]).
-    fn quantizes(&self, entry: &str) -> bool {
-        self.quantizing.contains(&entry)
+    /// Whether the `half` kernel `entry`'s stage may give a value below the smallest normal `half`
+    /// as a zero ([`Kernels::flushing`]).
+    fn flushes(&self, entry: &str) -> bool {
+        self.flushing.contains(&entry)
     }
 }
 
@@ -4058,8 +4066,8 @@ fn srgb_twins_read_what_metal_reads() {
                     match (by_device, half) {
                         (true, _) => {
                             let entry = if slot { "sample_half" } else { "read_half" };
-                            let quantized = half && kernels.quantizes(entry);
-                            let read = (codes.output, half, quantized);
+                            let flushed = half && kernels.flushes(entry);
+                            let read = (codes.output, half, flushed);
                             assert_device_reads(texels, &vulkan, read, &what)
                         }
                         (false, true) if slot => {
@@ -4784,8 +4792,8 @@ fn assert_family_read(
     match (by_device, half) {
         (true, _) => {
             let want = family_vulkan(bytes, codes, conversion);
-            let quantized = half && kernels.quantizes("read_half");
-            assert_device_reads(texels, &want, (codes.output, half, quantized), case);
+            let flushed = half && kernels.flushes("read_half");
+            assert_device_reads(texels, &want, (codes.output, half, flushed), case);
         }
         (false, true) => {
             let want = family_modelled(bytes, codes, conversion);
@@ -5202,11 +5210,10 @@ fn ycbcr_half_gathers_round_ties_away() {
                                 v => v.log2().floor() as i32 - 10,
                             };
                             let off = (f64::from(h) - nearest).abs();
-                            // Or the zero of its sign the device's quantize gave a value below
-                            // the smallest normal `half` (`PrecisionNote::NativeHalfQuantize`).
-                            let zero = kernels.quantizes(&format!("gather_{channel}_half"))
+                            // Or a zero the device's rounding gave a value below the smallest normal
+                            // `half` (`Kernels::flushing`).
+                            let zero = kernels.flushes(&format!("gather_{channel}_half"))
                                 && h == 0.0
-                                && h.is_sign_negative() == f.is_sign_negative()
                                 && nearest.abs() < 2f64.powi(-14);
                             assert!(
                                 off <= 2f64.powi(exponent) || zero,

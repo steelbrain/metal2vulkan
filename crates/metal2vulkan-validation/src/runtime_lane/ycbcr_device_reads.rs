@@ -82,14 +82,14 @@ fn encoded(v: f64) -> f64 {
 /// `want` ([`vulkan_read`] of each texel) within [`DEVICE_BOUND`], an `_sRGB` twin's through the
 /// inverse of the curve, alpha 1. A converted format's texels, which its image stores as
 /// `half`s, and `half` reads also take the `half`'s rounding of each value, within one unit in
-/// the last place (`PrecisionNote::NativeHalfConversion`). A `half` read whose stage rounds by
-/// the device's `OpQuantizeToF16` (`quantized`, `PrecisionNote::NativeHalfQuantize`) may read a
-/// value below the smallest normal `half` as the zero of its sign. The largest distance, in units
-/// of `1/2048`, is printed.
+/// the last place (`PrecisionNote::NativeHalfConversion`). A `half` read whose stage rounds or
+/// narrows by the device's own form (`flushed`: `PrecisionNote::NativeHalfQuantize` or
+/// `NativeHalfConversion`) may read a value below the smallest normal `half` as a zero. The largest
+/// distance, in units of `1/2048`, is printed.
 pub(super) fn assert_device_reads(
     texels: &[u8],
     want: &[[f64; 3]],
-    (output, half, quantized): (YCbCrOutput, bool, bool),
+    (output, half, flushed): (YCbCrOutput, bool, bool),
     case: &str,
 ) {
     assert_ne!(
@@ -112,11 +112,9 @@ pub(super) fn assert_device_reads(
                 YCbCrOutput::Srgb => encoded(v),
                 _ => v,
             };
-            let (low, high) = match quantized && got == 0.0 {
-                // The quantize's zero: the value it rounded lies below the smallest normal
-                // `half`, of the zero's sign.
-                true if got.is_sign_negative() => (-(2f64.powi(-14)), 0.0),
-                true => (0.0, 2f64.powi(-14)),
+            let (low, high) = match flushed && got == 0.0 {
+                // The device's zero: the value it rounded lies below the smallest normal `half`.
+                true => (-(2f64.powi(-14)), 2f64.powi(-14)),
                 false => (got - ulp, got + ulp),
             };
             let (low, high) = (decode(low), decode(high));

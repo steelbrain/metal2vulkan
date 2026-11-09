@@ -33,8 +33,8 @@
 //! and the transfer's `Pow`, `1/8190 + 2^-14`), a `half` one within one more `half` step, a code
 //! within one (a NaN channel's the device's). Where the function rounds a `half` by the device's
 //! `OpQuantizeToF16` (`PrecisionNote::NativeHalfQuantize`, on a device without `shaderFloat16`),
-//! a value below the smallest normal `half` may read as the zero of its sign, Vulkan's choice
-//! for the quantize, which the device makes ([`flushed`]).
+//! a value below the smallest normal `half` may read as a zero of either sign, or `2^-14` from
+//! just below it, as the note's bound lets the device answer ([`flushed`]).
 //!
 //! A format the device does not render to, or whose staging view it cannot store to, is refused
 //! typed (`Unsupported`) and said.
@@ -194,16 +194,18 @@ fn conversion_bound(channel: Channel, want: f32) -> f32 {
 }
 
 /// Whether `have`, a `channel` read through a `half` the device's `OpQuantizeToF16` rounded
-/// (`PrecisionNote::NativeHalfQuantize`), is the zero of the sign of Metal's `want` that the
-/// quantize may give a value below the smallest normal `half` (`2^-14`): the device's `float`
-/// value, within [`conversion_bound`] of `want`, may lie below it.
+/// (`PrecisionNote::NativeHalfQuantize`), is what the note's bound lets the quantize give a value
+/// below the smallest normal `half` (`2^-14`): a zero of either sign, or `2^-14` of its own sign
+/// from just below it, where the device's `float` value, within [`conversion_bound`] of Metal's
+/// `want`, may lie below `2^-14`.
 fn flushed(channel: Option<Channel>, have: f32, want: f32) -> bool {
     let Some(channel) = channel else {
         return false;
     };
-    have == 0.0
-        && have.is_sign_negative() == want.is_sign_negative()
-        && want.abs() - conversion_bound(channel, want) < f32::powi(2.0, -14)
+    let smallest = f32::powi(2.0, -14);
+    let below = want.abs() - conversion_bound(channel, want) < smallest;
+    let normal = have.abs() == smallest && have.is_sign_negative() == want.is_sign_negative();
+    below && (have == 0.0 || normal)
 }
 
 /// Whether code `a` of `channel` lies within one of code `b` (signed codes as their values).
@@ -690,8 +692,8 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
                 assert_eq!(after, texels, "{name}: {entry} over {:?} keeps", format.pf);
                 if quantized {
                     println!(
-                        "HALF-QUANTIZE {name}: {entry} over {:?}: {zeros} channels read the zero \
-                         of a value below 2^-14",
+                        "HALF-QUANTIZE {name}: {entry} over {:?}: {zeros} channels read a zero \
+                         or 2^-14 for a value below 2^-14",
                         format.pf
                     );
                 }
