@@ -11,9 +11,10 @@
 //! Each arm submits small command buffers for [`QUIET`] with nothing else running and for
 //! [`PRESSED`] once the host's memory is fragmented, as a desktop's is after its builds: half of
 //! it read into the page cache from a sparse file (holes, so nothing is written to disk), and
-//! [`FRAGMENT_BYTES`] of private anonymous memory, every page written, of which every other page
-//! is then given back (`MADV_DONTNEED`), so that much of the free memory lies in single pages
-//! between pages in use, `MemAvailable` staying high; beside the phase a thread maps private
+//! private anonymous memory of all the host's free memory but [`FRAGMENT_SPARE_BYTES`] (at most
+//! [`FRAGMENT_MOST_BYTES`]), every page written, so that the free blocks of every order are taken,
+//! of which every other page is then given back (`MADV_DONTNEED`), so that the free memory lies in
+//! single pages between pages in use, `MemAvailable` staying high; beside the phase a thread maps private
 //! anonymous memory advised for huge pages in pieces of [`PIECE_BYTES`], every page written, up
 //! to [`ANON_HIGH_BYTES`] while the host's `MemAvailable` stays above [`FLOOR_BYTES`], drops every
 //! other piece down to [`ANON_LOW_BYTES`] and reads the file again. Each command buffer copies [`COPY_BYTES`] from a no-copy buffer over
@@ -80,8 +81,10 @@ const QUIET: Duration = Duration::from_secs(10);
 const PRESSED: Duration = Duration::from_secs(20);
 /// The gap between submissions.
 const EVERY: Duration = Duration::from_millis(1);
-/// The anonymous memory written and then given back page by page, every other page kept.
-const FRAGMENT_BYTES: u64 = 6 * GIB;
+/// The free memory the fragmenting mapping leaves, and its most: written, then given back page
+/// by page, every other page kept.
+const FRAGMENT_SPARE_BYTES: u64 = GIB;
+const FRAGMENT_MOST_BYTES: u64 = 14 * GIB;
 /// The anonymous memory the pressing thread holds between these bounds.
 const ANON_HIGH_BYTES: u64 = 5 * GIB;
 const ANON_LOW_BYTES: u64 = 2 * GIB;
@@ -213,8 +216,12 @@ impl Pressing {
         let stop = Arc::new(AtomicBool::new(false));
         let heat = Heat::new(meminfo("MemTotal") / 2);
         heat.read(&stop);
-        let fragments = Anonymous::new(FRAGMENT_BYTES, false);
-        for page in (0..FRAGMENT_BYTES / PAGE).step_by(2) {
+        let length = (meminfo("MemFree").saturating_sub(FRAGMENT_SPARE_BYTES))
+            .min(FRAGMENT_MOST_BYTES)
+            / PAGE
+            * PAGE;
+        let fragments = Anonymous::new(length, false);
+        for page in (0..length / PAGE).step_by(2) {
             // SAFETY: a page of the bench's own mapping, which nothing else uses: given back, it
             // reads as zeros if touched again.
             unsafe {
