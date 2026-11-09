@@ -875,6 +875,20 @@ impl Case for SamplerFiltering {
                 Degradation::BicubicFilterArithmetic.code(),
             ));
         }
+        // A `compare` row's `Depth32Float` texture: on a device without
+        // `VK_EXT_depth_range_unrestricted` (MoltenVK on the M3 Max) its upload clamps into
+        // [0, 1] (`restricted-depth-upload`) and the comparing stage records that its texels hold
+        // no value outside it (`restricted-depth-range`). Every texel of the family lies in
+        // [0, 1], so neither moves a sample: measured there, the notices site is the whole of the
+        // difference of each of the eight rows.
+        if matches!(self.family, Family::Compare(_)) {
+            for kind in [
+                Degradation::RestrictedDepthUpload,
+                Degradation::RestrictedDepthRange,
+            ] {
+                named.push(notice_allowance(kind.code()));
+            }
+        }
         named
     }
 

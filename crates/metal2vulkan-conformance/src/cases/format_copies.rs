@@ -314,7 +314,20 @@ impl Case for FormatCopies {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // A `Depth32Float` side's words reach its depth image by an upload, which a device without
+        // `VK_EXT_depth_range_unrestricted` (MoltenVK on the M3 Max, ANV) clamps into [0, 1] and
+        // announces (`restricted-depth-upload`). Every word this family moves lies in [0, 1], so
+        // the clamp leaves it as it is: measured on the M3 Max, the notices site is the whole of
+        // the difference of each of the six rows with a depth side.
+        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        let pair = self.pair();
+        if pair.from == PixelFormat::Depth32Float || pair.to == PixelFormat::Depth32Float {
+            allowances.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::RestrictedDepthUpload.code(),
+            ));
+        }
+        allowances
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

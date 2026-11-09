@@ -959,7 +959,21 @@ impl Case for SamplerCrossings {
         // (`float-sample-filter`, the address-mode triples and the three mip-filter rows on
         // llvmpipe and the 5080), the note is the device's own answer, which the suite declares
         // for every case (`crate::replay::NATIVE_NOTES`).
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // The `compare-filters` row's `Depth32Float` texture: on a device without
+        // `VK_EXT_depth_range_unrestricted` (MoltenVK on the M3 Max) its upload clamps into
+        // [0, 1] (`restricted-depth-upload`) and the comparing stage records that its texels hold
+        // no value outside it (`restricted-depth-range`). Its depths all lie in [0, 1], so
+        // neither moves a sample: measured there, the notices site is the whole of the
+        // difference.
+        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        if matches!(self.family, Family::CompareFilters) {
+            use metal2vulkan_runtime::Degradation as D;
+            for kind in [D::RestrictedDepthUpload, D::RestrictedDepthRange] {
+                allowances.push(crate::replay::notice_allowance(kind.code()));
+            }
+        }
+        allowances
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

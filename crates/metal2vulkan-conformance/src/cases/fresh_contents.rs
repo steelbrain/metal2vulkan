@@ -52,13 +52,16 @@
 //! announces for the `Shared` buffer each row reads its answer back through.
 //!
 //! The lane also carries a branch for a device that **cannot** write Metal's pattern and so reads
-//! zero, announcing `fresh-pattern-zeroed`. That branch is right for the lane, which must run
-//! anywhere, but **neither venue of this round takes it**: MoltenVK and lavapipe both write Metal's
-//! pattern exactly, in all 58 formats and every patterned shape. So these rows hold our side to
-//! Metal's pattern and name no allowance for the zeroing — an allowance that fires on no venue is
-//! a claim no run has checked, which the suite counts and which this family deliberately does not
-//! add. A device that does zero will read as `Divergent` here, and the allowance belongs in the
-//! commit that has that device's run behind it.
+//! zero, announcing `fresh-pattern-zeroed`. Two rows take it on one venue: `Depth32Float`'s
+//! pattern is a NaN, a depth outside `[0, 1]`, which a device without
+//! `VK_EXT_depth_range_unrestricted` takes into no depth image by a copy (MoltenVK on the M3 Max,
+//! replayed: the `fresh` site reads zero, announced). That format's texture row and pattern row
+//! alone declare the zeroing at their `fresh` site, and the texture row the
+//! `restricted-depth-upload` its [`OLD`] write announces. Elsewhere
+//! MoltenVK and lavapipe write Metal's pattern exactly, in every other format and patterned shape,
+//! so the other rows hold our side to Metal's pattern and name no allowance for the zeroing: an
+//! allowance that fires on no venue is a claim no run has checked, which the suite counts and
+//! which this family deliberately does not add.
 //!
 //! # Why one process is the right place for this, and more than the lane had
 //!
@@ -1099,6 +1102,15 @@ impl Case for FreshTexture {
         if self.row.storage == Storage::Private {
             allowances.push(crate::replay::without_compression("fresh"));
         }
+        // The `Depth32Float` row on a device without `VK_EXT_depth_range_unrestricted`: its
+        // pattern zeroed ([`zeroed_depth_pattern`]), and its `OLD` write of 0.5 an upload such a
+        // device clamps and announces, which leaves 0.5 as it is.
+        if self.row.shape.format == DEPTH32FLOAT.format {
+            allowances.extend(zeroed_depth_pattern());
+            allowances.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::RestrictedDepthUpload.code(),
+            ));
+        }
         allowances
     }
 
@@ -1327,6 +1339,24 @@ impl Pattern {
     }
 }
 
+/// What a `Depth32Float` row declares (the module docs): Metal's pattern for it is a NaN, a depth
+/// outside `[0, 1]`, which a device without `VK_EXT_depth_range_unrestricted` takes into no depth
+/// image by a copy, so the runtime zeroes the new texture and announces `fresh-pattern-zeroed`.
+/// Its `fresh` site goes unchecked, named, counted and reported, with that notice as the
+/// justification, and the notice is declared; measured on the M3 Max (MoltenVK), the zeroed
+/// texel is the whole of the difference beside the notices.
+fn zeroed_depth_pattern() -> [Allowance; 2] {
+    let zeroed = metal2vulkan_runtime::Degradation::FreshPatternZeroed.code();
+    [
+        Allowance::new(
+            "case/fresh/*",
+            crate::allowance::Loosening::Unchecked,
+            crate::allowance::Justification::Degradation(zeroed.to_owned()),
+        ),
+        crate::replay::notice_allowance(zeroed),
+    ]
+}
+
 /// A pattern row of the family: one format.
 pub struct FreshPattern {
     row: &'static Pattern,
@@ -1355,6 +1385,9 @@ impl Case for FreshPattern {
         allowances.extend(super::compressed_blits::kept_encoding_notice(
             self.row.format,
         ));
+        if self.row.format == DEPTH32FLOAT.format {
+            allowances.extend(zeroed_depth_pattern());
+        }
         allowances
     }
 

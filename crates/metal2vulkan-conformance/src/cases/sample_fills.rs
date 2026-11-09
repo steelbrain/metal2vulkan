@@ -467,6 +467,14 @@ impl Case for SampleFills {
         ] {
             allowances.push(notice_allowance(kind.code()));
         }
+        // A 32-bit float depth row's fill reaches its depth image by an upload, which a device
+        // without `VK_EXT_depth_range_unrestricted` (MoltenVK on the M3 Max) clamps into [0, 1]
+        // and announces (`restricted-depth-upload`); measured there, the notices site is the
+        // whole of the difference of each of the four such rows, and the wide row's digest is
+        // unchecked above.
+        if matches!(self.row.format, 252 | 260) {
+            allowances.push(notice_allowance(D::RestrictedDepthUpload.code()));
+        }
         allowances
     }
 
