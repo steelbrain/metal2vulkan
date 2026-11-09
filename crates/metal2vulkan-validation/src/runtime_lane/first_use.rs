@@ -242,13 +242,36 @@ impl Busy {
     /// its spin by the buffer both use. Once the flag is raised every spin still to run ends at
     /// its first load. The command buffers, and the buffer of the flag and the mark.
     pub(super) fn commit(&self, device: &Device, queue: &CommandQueue) -> (BusyWork, Buffer) {
+        self.commit_links(device, queue, LINKS)
+    }
+
+    /// [`commit`](Self::commit), the work giving up after `guard` rather than [`BUSY`] where
+    /// nothing released it: as many command buffers of `BUSY / LINKS` each as `guard` takes, so no
+    /// one submission runs longer, on a queue of their own that takes them all uncompleted
+    /// (`Device::new_command_queue_with_max_command_buffer_count`; Metal's default takes 64).
+    pub(super) fn commit_lasting(&self, device: &Device, guard: Duration) -> (BusyWork, Buffer) {
+        let link = BUSY / LINKS;
+        let links = u32::try_from(guard.as_nanos().div_ceil(link.as_nanos()).max(1)).unwrap();
+        let queue = device
+            .new_command_queue_with_max_command_buffer_count(links as usize)
+            .unwrap();
+        self.commit_links(device, &queue, links)
+    }
+
+    /// The busy work as `links` command buffers ([`commit`](Self::commit)).
+    fn commit_links(
+        &self,
+        device: &Device,
+        queue: &CommandQueue,
+        links: u32,
+    ) -> (BusyWork, Buffer) {
         let words = buffer_with(device, &[0; 8]).unwrap();
         let cap = buffer_with(device, &self.cap.to_le_bytes()).unwrap();
-        let links = (0..LINKS)
+        let links = (0..links)
             .map(|link| {
                 let command_buffer = queue.command_buffer().unwrap();
                 self.spin(device, &command_buffer, &words, &cap);
-                if link + 1 == LINKS {
+                if link + 1 == links {
                     end_mark(&command_buffer, &words);
                 }
                 command_buffer.commit().unwrap();
@@ -1634,10 +1657,12 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
 /// A display-sized `Shared` and `Managed` `BGRA8Unorm` texture a render pass may draw into, as a
 /// frame target is: `get_bytes` reads what a completed blit wrote, texel for texel, each of
 /// `FRAME_READS` times, and a command buffer committed after `replace_region` reads the bytes it
-/// wrote. Prints each call's time (`FRAME-COPY` lines). With about 2 s of GPU work running, it
-/// reads `replace_region`'s texels up to `LOADED_READS` times, until the work ends; where it copies
-/// on the host or the staging queue, the first read returns while the work runs, and the line gives
-/// the distribution of those that did.
+/// wrote. Prints each call's time (`FRAME-COPY` lines). With GPU work running, it reads
+/// `replace_region`'s texels up to `LOADED_READS` times, over about [`BUSY`]; where it copies on the
+/// host or the staging queue, the work runs until it is released after those reads, given up only
+/// past `WAIT`, and every read returns while it runs, however long a read takes on the device (a
+/// 1080p read from an RX 7900 XTX's uncached device-local memory took 1.0 to 1.7 s); the line gives
+/// their distribution. Elsewhere the reads wait for the work, which ends at its cap.
 #[test]
 fn frame_sized_textures_copy_texel_exact() {
     const WIDTH: u64 = 1920;
@@ -1754,12 +1779,20 @@ fn frame_sized_textures_copy_texel_exact() {
                 read_buffer(&out, 0, FRAME_BYTES as u64).unwrap() == written,
                 "{mode:?} on {name}: a later command buffer reads replace_region's texels"
             );
-            // With about 2 s of GPU work running: on the host or the staging queue, `get_bytes`
-            // returns while it runs (an absolute time is not portable), still texel exact. The
-            // reads go on until it ends, at most `LOADED_READS`; the times of those that
-            // returned while it ran are their distribution under load.
-            let (busy_work, mark) = busy.commit(device, &queue);
+            // With GPU work running: on the host or the staging queue, `get_bytes` returns while
+            // it runs (an absolute time is not portable), still texel exact. There the work lasts
+            // until it is released after the reads, so a read's own length never ends it first;
+            // only a read that waited for it sees it end, at `WAIT`. Elsewhere the reads wait for
+            // it, and it ends at its cap. The reads go on for about `BUSY`, at most
+            // `LOADED_READS`, or until it ends; the times of those that returned while it ran are
+            // their distribution under load.
+            let apart = hosted || staged;
+            let (busy_work, mark) = match apart {
+                true => busy.commit_lasting(device, WAIT),
+                false => busy.commit(device, &queue),
+            };
             busy_work.scheduled();
+            let reading = Instant::now();
             let mut loaded = Vec::new();
             let mut ended_after = None;
             for _ in 0..LOADED_READS {
@@ -1779,13 +1812,18 @@ fn frame_sized_textures_copy_texel_exact() {
                     break;
                 }
                 loaded.push(took);
+                if reading.elapsed() >= BUSY {
+                    break;
+                }
             }
             release(&mark);
             busy_work.wait_until_completed_for(WAIT).unwrap();
-            if hosted || staged {
+            if apart {
                 assert!(
-                    !loaded.is_empty(),
-                    "{mode:?} on {name}: get_bytes waited for the busy work ({ended_after:.2?} ms)"
+                    ended_after.is_none(),
+                    "{mode:?} on {name}: get_bytes waited for the busy work ({ended_after:.2?} ms, \
+                     after {} reads that returned while it ran)",
+                    loaded.len()
                 );
             }
             loaded.sort_by(f64::total_cmp);
