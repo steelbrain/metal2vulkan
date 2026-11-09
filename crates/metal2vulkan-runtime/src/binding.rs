@@ -2891,6 +2891,53 @@ pub(super) fn patch_buffer_uses(
     Ok(Some(inside))
 }
 
+/// Patch in `into`, as [`command_uses_into`] made it of `plan`'s uses and a command's of the same
+/// kind, the uses made of the command's own (`Command::uses`: a draw's index buffer's), as
+/// `command`'s and the draw's index buffer `index` (with its offset) now make them, their
+/// positions and uses pushed onto `moved.0` and `moved.1` (in their order, after what those
+/// hold): whether each lies inside the use it replaced (`Use::covers`), or `None` where they are
+/// not those `command_uses_into` would make in their place (another count of them, another
+/// resource or key), and the caller makes them whole. Every other use is the plan's, of slots,
+/// buffers and textures no call changed, and the keys the same, so the resident ones are
+/// (`render/draw_again/rebound.rs`).
+pub(super) fn patch_command_uses(
+    (plan, command): (&BindingPlan, &Command<'_>),
+    index: Option<(&Buffer, u64)>,
+    into: &mut CommandUses,
+    (moved_at, moved): (&mut Vec<usize>, &mut Vec<Use<ResourceKey>>),
+) -> Result<Option<bool>, Error> {
+    let CommandUses { uses, sources, .. } = into;
+    if sources.len() != uses.len() {
+        return Ok(None);
+    }
+    // The command's uses come last, each made of one of its own (`uses_into`), which each read.
+    let own = plan.uses.len();
+    let made = (sources.iter().rev()).take_while(|&&source| source as usize >= own);
+    let first = sources.len() - made.count();
+    if sources.len() - first != command.uses.len() {
+        return Ok(None);
+    }
+    let mut inside = true;
+    for (at, (used, resource)) in (uses[first..].iter_mut()).zip(command.uses).enumerate() {
+        let (UseTarget::IndexBuffer, Some((buffer, offset))) = (resource.resource, index) else {
+            return Ok(None);
+        };
+        if sources[first + at] as usize != own + at {
+            return Ok(None);
+        }
+        // Its reads and writes are its resource use's, as the use made of it holds them.
+        let now = bytes_use(resource, buffer, offset, (used.read, used.write));
+        if now.key != used.key {
+            return Ok(None);
+        }
+        inside &= *used == now || used.covers(&now);
+        moved_at.push(first + at);
+        moved.push(now.clone());
+        *used = now;
+    }
+    Ok(Some(inside))
+}
+
 /// List in `into`, as [`command_uses_into`] made it of `plan`'s and `command`'s uses, each of its
 /// uses of a buffer slot and its position (`CommandUses::slots`): every use past those of what the
 /// encoder made resident (of no slot) of a resource use of a buffer slot. Listed at the first

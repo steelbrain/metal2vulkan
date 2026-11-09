@@ -2924,6 +2924,32 @@ impl BindingPlan {
             _ => Ok(false),
         }
     }
+
+    /// [`instantiate_draw_apart_into`](Self::instantiate_draw_apart_into)'s commands of `draw`
+    /// for `state`, written over `commands`, which hold that method's commands of `from` for
+    /// `state`: `from` and `draw` direct draws of the same kind, without indices or of the same
+    /// index type and index buffer, that differ only in their arguments (vertex or index counts
+    /// and starts, the index offset, instance count, base vertex and base instance). Only what
+    /// the arguments decide is written again: the Vulkan draw, its index overrun, the
+    /// `BaseVertexInstance` push fields and the draw's own uses (its index buffer's), so the
+    /// commands are those `instantiate_draw_apart_into` writes. `Ok(false)` where the plan reads
+    /// the arguments some other way (a stage's argument or root table, a mesh, patch or
+    /// de-indexed draw, a fixed-function vertex buffer whose fetch window the two draws set
+    /// apart, which the extents hold) or the two are no such pair: `commands` then hold no
+    /// draw's commands, as after an error, and the caller instantiates whole. An error is one
+    /// `instantiate_draw_apart_into` answers for `draw` where it answered none for `from` (its
+    /// instances past a multiview limit).
+    pub fn redraw_apart_into(
+        &self,
+        state: &BindState,
+        (from, draw): (&DrawCall, &DrawCall),
+        commands: &mut DrawCommands,
+    ) -> Result<bool, BindError> {
+        match self.graphics.as_ref() {
+            Some(t) if !t.other_layer_variant => redraw_with(t, state, (from, draw), commands),
+            _ => Ok(false),
+        }
+    }
 }
 
 /// The Vulkan draw of a Metal draw, and the base vertex and first instance the
@@ -5185,6 +5211,89 @@ fn rebind_with(
         };
         written.1 = offset;
     }
+    Ok(true)
+}
+
+/// [`BindingPlan::redraw_apart_into`] of a render plan's template `t`.
+fn redraw_with(
+    t: &GraphicsTemplate,
+    state: &BindState,
+    (from, draw): (&DrawCall, &DrawCall),
+    out: &mut DrawCommands,
+) -> Result<bool, BindError> {
+    // What the arguments decide some other way: a stage's argument or root table, a mesh or
+    // patch draw's own reads, a de-indexed draw's layout and indices.
+    let other_reads = t
+        .stages
+        .iter()
+        .any(|st| st.root_first.is_some() || st.table.is_some())
+        || t.mesh.is_some()
+        || t.tessellation.is_some()
+        || t.deindexed.is_some();
+    let pair = match (*from, *draw) {
+        (DrawCall::Primitives { .. }, DrawCall::Primitives { .. }) => true,
+        (
+            DrawCall::Indexed {
+                index_type: from_type,
+                index_buffer: from_buffer,
+                ..
+            },
+            DrawCall::Indexed {
+                index_type,
+                index_buffer,
+                ..
+            },
+        ) => (from_type, from_buffer) == (index_type, index_buffer),
+        _ => false,
+    };
+    if other_reads || !pair {
+        return Ok(false);
+    }
+    // Each fixed-function vertex buffer's fetch window, which its slot's extent holds: the two
+    // draws' the same, so the extents are. Inline bytes take no window.
+    let vertex = state.stages.get(&Stage::Vertex);
+    for vb in &t.vertex_buffers {
+        let stride = match (
+            vb.stride,
+            vertex.and_then(|v| v.buffers.get(&vb.slot.index)),
+        ) {
+            (VertexStride::Static(s), Some(BoundBuffer::Buffer { .. })) => s,
+            (
+                VertexStride::PerBind,
+                Some(&BoundBuffer::Buffer {
+                    attribute_stride, ..
+                }),
+            ) => attribute_stride.unwrap_or(0),
+            (_, Some(BoundBuffer::Bytes { .. })) => continue,
+            (_, None) => return Err(BindError::UnboundVertexBuffer { slot: vb.slot }),
+        };
+        if fetch_window(vb, stride, from) != fetch_window(vb, stride, draw) {
+            return Ok(false);
+        }
+    }
+    multiview_instances(t.multiview_instance_limit, draw)?;
+    let overrun = index_overrun(t.robust_index_fetch, draw);
+    let (command, base) = vk_draw(draw, overrun);
+    // The `BaseVertexInstance` fields, each at its place in its stage's push write.
+    let mut pushes = 0;
+    for st in &t.stages {
+        let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
+        let push = (push_size != 0).then(|| {
+            pushes += 1;
+            pushes - 1
+        });
+        for f in (st.fields.iter()).filter(|f| f.field == PushField::BaseVertexInstance) {
+            let Some(write) = push.and_then(|push| out.push_constants.get_mut(push)) else {
+                return Ok(false);
+            };
+            let bytes = FieldBytes::words(base);
+            put(&mut write.bytes, push_start, &mut [], f.loc, &bytes)?;
+        }
+    }
+    out.uses.clear();
+    draw_uses(&mut out.uses, draw, overrun, None);
+    out.draw = command;
+    out.index_overrun = overrun;
     Ok(true)
 }
 

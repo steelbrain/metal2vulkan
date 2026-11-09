@@ -63,6 +63,12 @@
 //!   record does not hold recorded; it takes no shortcut of a draw moved, which reads what the
 //!   encoder's last draw left. Each state's bind state is its own, though states of one function
 //!   pair share an interface, so the draw kept of one is never the other's.
+//! - **Of other arguments.** A draw that differs from the kept draw only in its arguments (its
+//!   vertex or index counts and starts, its index buffer's offset, its instance count, base vertex
+//!   or base instance: `UnlikeKept::arguments_alone`), of something to draw, is rebound with them
+//!   (`rebound.rs`), whatever its tables' stamps: the steps that read them are worked out again,
+//!   the rest are the kept draw's. Every other draw unlike the kept draw takes every step
+//!   (`WorkCounts::draws_unlike_kept`, by what differed).
 //! - **Restated by a render state set.** A call that sets the encoder's render state alone (its
 //!   viewports, scissor rectangles, cull mode, winding, depth/stencil state, stencil references,
 //!   depth bias, depth clip mode, fill mode or blend color: `RenderLowering::log_restating`)
@@ -413,16 +419,16 @@ impl RenderLowering {
         [&self.vertex, &self.fragment, &self.object, &self.mesh].map(|table| table.stamp())
     }
 
-    /// Whether the draw of `call` assembling `assembly`, `draw` with `buffers`, is the kept draw
-    /// again (the module docs): then, but where it is checked (its check left in `checked`), it
-    /// is recorded, with the encoder's bind state `live`. Call it once the draw made the heaps'
-    /// new textures resident.
+    /// Whether the draw of `call` assembling `assembly`, `draw` with `buffers`, a draw of nothing
+    /// where `empty`, is the kept draw again (the module docs), or the kept draw of other
+    /// arguments, which is rebound (`rebound.rs`): then, but where it is checked (its check left
+    /// in `checked`), it is recorded, with the encoder's bind state `live`. Call it once the draw
+    /// made the heaps' new textures resident.
     pub(super) fn draw_again(
         &mut self,
         live: &mut LiveBind,
-        call: &'static str,
-        assembly: Assembly,
-        draw: &DrawCall,
+        (call, assembly): (&'static str, Assembly),
+        (draw, empty): (&DrawCall, bool),
         buffers: &DrawBuffers<'_>,
         checked: &mut Option<Checked>,
     ) -> Again {
@@ -442,6 +448,8 @@ impl RenderLowering {
             && index.is_none_or(|index| index.is_some())
             && kept.command_buffer == self.current.draws
             && kept.under == self.under();
+        // Of other arguments alone, of something to draw: rebound with them.
+        let mut reargued = false;
         if !same {
             if buffers.indirect.is_none() {
                 let (counts, index_offset, index_buffer) = apart(&kept.draw, draw);
@@ -461,14 +469,22 @@ impl RenderLowering {
                     command_buffer: kept.command_buffer != self.current.draws,
                     under: kept.under != self.under(),
                 };
-                self.core.counts().draw_unlike_kept(why);
+                reargued = why.arguments_alone() && !empty;
+                if !reargued {
+                    self.core.counts().draw_unlike_kept(why);
+                }
             }
-            return Again::No;
+            if !reargued {
+                return Again::No;
+            }
         }
         let stamps = self.table_stamps();
-        if kept.stamps != stamps || kept.between || kept.stated != self.again.stated {
+        if reargued || kept.stamps != stamps || kept.between || kept.stated != self.again.stated {
             return match kept.rebinds {
-                true => self.draw_rebound(live, call, (assembly, draw), buffers, stamps, checked),
+                true => {
+                    let drawn = (assembly, draw, reargued);
+                    self.draw_rebound(live, call, drawn, buffers, stamps, checked)
+                }
                 false => self.rebind_stopped(),
             };
         }
@@ -591,10 +607,19 @@ fn digest(part: impl std::fmt::Debug) -> u64 {
 
 /// What a draw rebound worked out (`rebound.rs`), which its every step must work out alike: its
 /// commands, set-0 writes, dynamic offsets, push bytes, vertex buffers, uses and resident keys,
-/// by digest ([`digest`]), and the draw state its recording records with (a draw restated's
-/// derived again, `restated.rs`).
+/// by digest ([`digest`]), and what its recording records with ([`Recorded`]).
 #[cfg(debug_assertions)]
-pub(super) struct Rebound([u64; 7], Option<super::DrawState>);
+pub(super) struct Rebound([u64; 7], Option<Recorded>);
+
+/// What a draw rebound's kept recording records it with: its draw state (a draw restated's
+/// derived again, `restated.rs`), and its Vulkan draw and index buffer's bind, by its buffer,
+/// offset, index type and bound size (a draw of other arguments' worked out again).
+#[cfg(debug_assertions)]
+type Recorded = (
+    super::DrawState,
+    metal2vulkan::vk::DrawCommand,
+    Option<(vk::Buffer, u64, vk::IndexType, Option<u64>)>,
+);
 
 #[cfg(debug_assertions)]
 impl Rebound {
@@ -640,7 +665,13 @@ impl Rebound {
                 digest(&*live.uses),
                 digest(live.uses.resident()),
             ],
-            (live.kept.recording()).map(|recording| recording.state.clone()),
+            (live.kept.recording()).map(|recording| {
+                let index = (recording.index).map(|index| {
+                    let size = index.sized.map(|(_, size)| size);
+                    (index.buffer, index.offset, index.index_type, size)
+                });
+                (recording.state.clone(), recording.draw, index)
+            }),
         )
     }
 
@@ -655,7 +686,8 @@ impl Rebound {
         }
         assert!(
             now.1 == self.1,
-            "a draw rebound records with another draw state than its every step"
+            "a draw rebound records with another draw state, Vulkan draw or index buffer bind \
+             than its every step"
         );
     }
 }

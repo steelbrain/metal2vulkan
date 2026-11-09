@@ -888,6 +888,170 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
     assert!(instantiate(&t, &state((64, 6), 12), &draw).is_ok());
 }
 
+/// The commands of `draw` that [`redraw_with`] writes over the commands of `from` (each
+/// [`super::instantiate`]'s apart from the heap tables): `None` where it answers `Ok(false)`,
+/// else the commands, which must be `draw`'s own (and an error the one `draw`'s answers).
+fn redrawn(
+    t: &GraphicsTemplate,
+    state: &BindState,
+    (from, draw): (&DrawCall, &DrawCall),
+) -> Result<Option<DrawCommands>, BindError> {
+    let mut commands = DrawCommands::default();
+    super::instantiate(t, state, from, &mut commands, Heap::Apart).expect("the first draw");
+    let own = || {
+        let mut own = DrawCommands::default();
+        super::instantiate(t, state, draw, &mut own, Heap::Apart).map(|()| own)
+    };
+    match redraw_with(t, state, (from, draw), &mut commands) {
+        Ok(true) => {
+            let own = own().expect("the draw's own commands");
+            assert_eq!(commands, own, "{draw:?} redrawn over {from:?}");
+            Ok(Some(commands))
+        }
+        Ok(false) => Ok(None),
+        Err(error) => {
+            assert_eq!(own().err(), Some(error.clone()), "{draw:?}'s error");
+            Err(error)
+        }
+    }
+}
+
+/// A draw that differs from the one before only in its arguments, redrawn over that one's
+/// commands, writes the commands every step writes for it: its Vulkan draw, its overrun, its
+/// `BaseVertexInstance` field and its index buffer's use; and none where a fixed-function vertex
+/// buffer's fetch window moves with them (a draw's vertices, a per-instance buffer's instances),
+/// where the plan reads them some other way (a de-indexed draw), or where the two are not of one
+/// kind and index buffer. Past a multiview plan's instance limit it answers every step's error.
+#[test]
+fn draws_of_other_arguments_redraw_what_every_step_writes() {
+    use crate::pipeline::interface::PlacedField;
+    let template = |vertex_buffers| GraphicsTemplate {
+        buffers: Vec::new(),
+        stages: vec![StageTemplate {
+            stage: Stage::Vertex,
+            flags: vk::ShaderStageFlags::VERTEX,
+            fields: vec![PlacedField {
+                field: PushField::BaseVertexInstance,
+                loc: PushLoc::Push { offset: 8 },
+                size: 8,
+            }],
+            push_range: Some((0, 16)),
+            table: None,
+            table_size: 0,
+            root_first: None,
+        }],
+        vertex_buffers,
+        pulled_strides: Vec::new(),
+        resources: ResourceTemplate::default(),
+        vertex_strides: rules(None, true),
+        multiview_instance_limit: None,
+        other_layer_variant: false,
+        amplifications: Vec::new(),
+        tessellation: None,
+        indirect_first_instance_missing: false,
+        robust_index_fetch: true,
+        shadow_stencil: None,
+        mesh: None,
+        shader_tests: None,
+        deindexed: None,
+        private_list: false,
+        storage_kept: 0,
+        line_band: None,
+    };
+    let state = {
+        let buffer = |attribute_stride| BoundBuffer::Buffer {
+            length: 4096,
+            offset: 64,
+            gpu_address: 0x1_0000,
+            device_address: None,
+            attribute_stride,
+        };
+        let mut t = StageTable::default();
+        t.buffers.insert(1, buffer(None));
+        t.buffers.insert(2, buffer(Some(8)));
+        let mut s = BindState::default();
+        s.stages.insert(Stage::Vertex, t);
+        s
+    };
+    let indexed =
+        |index_count, index_offset, base_vertex, instances: (u32, u32)| DrawCall::Indexed {
+            index_type: vk::IndexType::UINT16,
+            index_buffer: IndexBufferRef::new(7, 4096),
+            index_count,
+            index_offset,
+            instance_count: instances.1,
+            base_vertex,
+            base_instance: instances.0,
+        };
+    let t = template(vertex_buffers());
+    let first = indexed(6, 64, 5, (1, 5));
+    // Another first index, count and base vertex: the per-vertex buffer's window is the whole
+    // buffer for both, the per-instance one's the same instances'.
+    for draw in [
+        indexed(6, 128, 5, (1, 5)),
+        indexed(9, 0, -3, (1, 5)),
+        // Indices past the buffer's end, which the robust fetch draws.
+        indexed(12, 4090, 5, (1, 5)),
+    ] {
+        let commands = redrawn(&t, &state, (&first, &draw)).expect("redrawn");
+        assert!(commands.is_some(), "{draw:?} redrawn");
+    }
+    let base = redrawn(&t, &state, (&first, &indexed(6, 128, 9, (1, 5))))
+        .expect("redrawn")
+        .expect("redrawn at another base vertex");
+    assert_eq!(base.push_constants[0].bytes[8..12], 9u32.to_le_bytes());
+    // Other instances move the per-instance buffer's window; another kind, index type or index
+    // buffer is no such pair.
+    let moved = indexed(6, 64, 5, (2, 5));
+    assert_eq!(redrawn(&t, &state, (&first, &moved)), Ok(None));
+    let wide = DrawCall::Indexed {
+        index_type: vk::IndexType::UINT32,
+        index_buffer: IndexBufferRef::new(7, 4096),
+        index_count: 6,
+        index_offset: 64,
+        instance_count: 5,
+        base_vertex: 5,
+        base_instance: 1,
+    };
+    let other_buffer = DrawCall::Indexed {
+        index_type: vk::IndexType::UINT16,
+        index_buffer: IndexBufferRef::new(8, 4096),
+        index_count: 6,
+        index_offset: 64,
+        instance_count: 5,
+        base_vertex: 5,
+        base_instance: 1,
+    };
+    for draw in [wide, other_buffer, primitives(0, 6, (1, 5))] {
+        assert_eq!(redrawn(&t, &state, (&first, &draw)), Ok(None), "{draw:?}");
+    }
+    // Draws without indices of other vertices move the per-vertex buffer's window; with no
+    // fixed-function vertex buffer, every argument is the commands' alone.
+    let vertices = primitives(2, 3, (1, 5));
+    assert_eq!(
+        redrawn(&t, &state, (&vertices, &primitives(4, 3, (1, 5)))),
+        Ok(None)
+    );
+    let pulled = template(Vec::new());
+    for draw in [primitives(4, 3, (1, 5)), primitives(0, 30, (3, 2))] {
+        let commands = redrawn(&pulled, &state, (&vertices, &draw)).expect("redrawn");
+        assert!(commands.is_some(), "{draw:?} redrawn");
+    }
+    // A de-indexed draw reads its indices and layout itself.
+    let mut deindexed = template(Vec::new());
+    deindexed.deindexed = Some(metal::IndexType::UInt16);
+    let mut primitive = state.clone();
+    primitive.primitive_type = Some(metal::PrimitiveType::Triangle);
+    let indices = (&first, &indexed(6, 128, 5, (1, 5)));
+    assert_eq!(redrawn(&deindexed, &primitive, indices), Ok(None));
+    // Instances past a multiview plan's limit: every step's error.
+    let mut multiview = template(Vec::new());
+    multiview.multiview_instance_limit = Some(4);
+    let past = primitives(2, 3, (1, 5));
+    let redrawn_past = redrawn(&multiview, &state, (&primitives(2, 3, (0, 1)), &past));
+    assert!(redrawn_past.is_err(), "{redrawn_past:?}");
+}
+
 /// Inline vertex bytes at a per-bind layout read at their bind's stride, 0 without one, as plain
 /// Metal reads them (`setVertexBytes:length:atIndex:` read vertex 0 for every
 /// vertex, the stride form at 0, 4 and 8 its stride); and a stride fixed function cannot fetch is

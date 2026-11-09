@@ -8,7 +8,8 @@
 //! bound other buffers, offsets or bytes at its buffer slots, or other textures or sampler states
 //! at its texture and sampler slots, rebinds those alone (`render/draw_again/rebound.rs`,
 //! `WorkCounts::draws_rebound`), with the same commands and pixels as the same draws taking every
-//! step. In builds with debug assertions, every second draw
+//! step; so does a draw of other arguments alone, which works out again what they decide
+//! (`WorkCounts::draws_rebound_arguments`). In builds with debug assertions, every second draw
 //! again takes every step instead, and checks that it changed nothing the draw again leaves and,
 //! rebound, worked out what every step works out (the modules' checks), so these tests run those
 //! checks too.
@@ -1440,9 +1441,12 @@ fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
 }
 
 /// A draw unlike the draw its encoder kept is counted in each part it differed by
-/// (`WorkCounts::draws_unlike_kept_*`): the pass's first draw kept, a draw of other counts
-/// alone, its arguments alone (`draws_unlike_kept_arguments_alone`), and then one of another
-/// primitive type, which only its assembly sets apart from that one.
+/// (`WorkCounts::draws_unlike_kept_*`): the pass's first draw kept, a draw of other counts alone,
+/// which is rebound with them (`draws_rebound_arguments`), one of another primitive type, which
+/// only its assembly sets apart from that one, one of other counts alone that makes no primitive
+/// where that one makes some, whose route they change, so its rebind stops
+/// (`draws_rebind_stopped_arguments`), and one of other counts alone that draws nothing, which
+/// takes every step (`draws_unlike_kept_arguments_alone`).
 #[test]
 fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
     let scratch = Scratch::new("draw-again-unlike");
@@ -1451,16 +1455,21 @@ fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
     let draws = |encoder: &mut RenderCommandEncoder| {
         set_rectangle(encoder, &state);
         rectangle(encoder);
-        // Its first triangle: other counts alone.
-        let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0);
-        assert_eq!(drawn, Ok(()));
-        // The same three vertices as a strip: another assembly alone.
-        let drawn = encoder.draw_primitives(PrimitiveType::TriangleStrip, 0, 3, 1, 0);
-        assert_eq!(drawn, Ok(()));
+        // Its first triangle, then the same three vertices as a strip, then a strip of two
+        // vertices, which makes no triangle, then one of none.
+        for (primitive, count) in [
+            (PrimitiveType::Triangle, 3),
+            (PrimitiveType::TriangleStrip, 3),
+            (PrimitiveType::TriangleStrip, 2),
+            (PrimitiveType::TriangleStrip, 0),
+        ] {
+            let drawn = encoder.draw_primitives(primitive, 0, count, 1, 0);
+            assert_eq!(drawn, Ok(()));
+        }
     };
     warm(&device, draws);
     let ran = run(&device, draws);
-    let parts: [(&str, fn(&WorkCounts) -> u64, u64); 10] = [
+    let parts: [(&str, fn(&WorkCounts) -> u64, u64); 13] = [
         ("unlike", |c| c.draws_unlike_kept, 2),
         ("counts", |c| c.draws_unlike_kept_counts, 1),
         (
@@ -1475,6 +1484,17 @@ fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
         ("tessellation", |c| c.draws_unlike_kept_tessellation, 0),
         ("command buffer", |c| c.draws_unlike_kept_command_buffer, 0),
         ("under", |c| c.draws_unlike_kept_under, 0),
+        (
+            "rebound with other arguments",
+            |c| c.draws_rebound_arguments,
+            drawn_alone(1),
+        ),
+        (
+            "stopped at a step of their arguments",
+            |c| c.draws_rebind_stopped_arguments,
+            1,
+        ),
+        ("stopped", |c| c.draws_rebind_stopped, 1),
     ];
     for (part, count, expected) in parts {
         assert_eq!(
@@ -1482,5 +1502,102 @@ fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
             expected,
             "draws unlike their kept draw: {part}"
         );
+    }
+}
+
+/// Indexed draws that differ from the draw before only in their first index (their index
+/// buffer's offset) are rebound with it (`WorkCounts::draws_rebound_arguments`): their index
+/// buffer bound at their offset and their Vulkan draw, with the same commands of every kind, state
+/// commands, noted uses and pixels as the same draws with a call between each that changes nothing
+/// for them, each of which takes every step; the `at`th draws the `at`th rectangle's indices
+/// ([`rectangle_points`]), as each column's count of draws shows. So are draws that differ only in
+/// their base vertex, of the same indices, the `at`th from the `at`th rectangle's first point.
+#[test]
+fn draws_of_another_first_index_alone_are_rebound_with_their_pixels() {
+    let scratch = Scratch::new("draw-again-first-index");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    let state = state(
+        &device,
+        "engine/tob_renders.ll",
+        ("tob_triangle", "tob_solid"),
+    );
+    let rectangles = rectangle_points(&device);
+    let color = bytes_of(&[1.0f32 / 64.0; 4], f32::to_le_bytes);
+    let colors = (device.new_buffer_with_bytes(&color, ResourceOptions::shared())).unwrap();
+    // The `at`th rectangle's six indices, at `12 * at` bytes.
+    let indices: Vec<u16> = (0..6 * DRAWS as u16).collect();
+    let indices = bytes_of(&indices, u16::to_le_bytes);
+    let index = (device.new_buffer_with_bytes(&indices, ResourceOptions::shared())).unwrap();
+    type Arguments = (fn(u64) -> u64, fn(u64) -> i32);
+    let draws = |encoder: &mut RenderCommandEncoder,
+                 (offset, base): Arguments,
+                 between: &dyn Fn(&mut RenderCommandEncoder)| {
+        encoder.set_render_pipeline_state(&state).unwrap();
+        encoder.set_vertex_buffer(Some(&rectangles), 0, 0).unwrap();
+        encoder.set_fragment_buffer(Some(&colors), 0, 0).unwrap();
+        for at in 0..DRAWS {
+            if at > 0 {
+                between(encoder);
+            }
+            let drawn = encoder.draw_indexed_primitives(
+                PrimitiveType::Triangle,
+                6,
+                IndexType::UInt16,
+                &index,
+                offset(at),
+                1,
+                base(at),
+                0,
+            );
+            assert_eq!(drawn, Ok(()));
+        }
+    };
+    let nothing = |_: &mut RenderCommandEncoder| {};
+    let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
+    let first_indices: Arguments = (|at| 12 * at, |_| 0);
+    let base_vertices: Arguments = (|_| 0, |at| 6 * at as i32);
+    for (form, arguments) in [
+        ("first index", first_indices),
+        ("base vertex", base_vertices),
+    ] {
+        warm(&device, |encoder| draws(encoder, arguments, &nothing));
+        let rebound = run(&device, |encoder| draws(encoder, arguments, &nothing));
+        let every = run(&device, |encoder| draws(encoder, arguments, &forgets));
+        let reargued = |counts: &WorkCounts| counts.draws_rebound_arguments;
+        assert_eq!(rebound.counted(reargued), drawn_alone(HITS), "{form}");
+        assert_eq!(
+            rebound.counted(|counts| counts.draws_rebound),
+            drawn_alone(HITS),
+            "{form}"
+        );
+        let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
+        assert_eq!(rebound.counted(missed), 0, "{form}");
+        assert_eq!(every.counted(reargued), 0, "{form}");
+        assert_eq!(rebound.commands, every.commands, "{form}");
+        assert_eq!(rebound.commands["cmd_draw_indexed"], DRAWS, "{form}");
+        assert_eq!(
+            rebound.words, every.words,
+            "the pixels of the draws: {form}"
+        );
+        let counts: [(&str, fn(&WorkCounts) -> u64); 3] = [
+            ("draw_states_recorded", |counts| counts.draw_states_recorded),
+            ("commands_noted_as_before", |counts| {
+                counts.commands_noted_as_before
+            }),
+            ("draws_pushing_set_zero", |counts| {
+                counts.draws_pushing_set_zero
+            }),
+        ];
+        for (name, count) in counts {
+            assert_eq!(
+                rebound.counted(count),
+                every.counted(count),
+                "{form}: {name}"
+            );
+        }
+        // Column 0 holds the first draw's rectangle alone; the last column every draw's.
+        let last = SIDE as usize - 1;
+        assert_ne!(rebound.words[0], rebound.words[last], "the draws' {form}");
     }
 }

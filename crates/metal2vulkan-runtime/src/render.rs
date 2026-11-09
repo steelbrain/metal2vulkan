@@ -7892,7 +7892,8 @@ impl RenderLowering {
         // kept draw where it cannot.
         self.select_kept(live);
         let mut checked = None;
-        match self.draw_again(live, call, assembly, &draw, &buffers, &mut checked) {
+        let drawn = (&draw, empty);
+        match self.draw_again(live, (call, assembly), drawn, &buffers, &mut checked) {
             draw_again::Again::Drawn => return Ok(()),
             #[cfg(debug_assertions)]
             draw_again::Again::Check => {}

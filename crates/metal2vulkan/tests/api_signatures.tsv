@@ -2705,7 +2705,9 @@ field	metal2vulkan-runtime::WorkCounts.draws_moved	pub draws_moved: u64
 field	metal2vulkan-runtime::WorkCounts.draws_moved_inside	pub draws_moved_inside: u64
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped	pub draws_rebind_stopped: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments	pub draws_rebind_stopped_arguments: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebound	pub draws_rebound: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebound_arguments	pub draws_rebound_arguments: u64
 field	metal2vulkan-runtime::WorkCounts.draws_restated	pub draws_restated: u64
 field	metal2vulkan-runtime::WorkCounts.draws_settled	pub draws_settled: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept	pub draws_unkept: u64
@@ -8796,6 +8798,7 @@ method	metal2vulkan::bind::BindingPlan::instantiate_draw_into	pub fn instantiate
 method	metal2vulkan::bind::BindingPlan::instantiate_replay	pub fn instantiate_replay(&self, state: &BindState, threads_per_group: [u32; 3]) -> Result<DispatchCommands, BindError>
 method	metal2vulkan::bind::BindingPlan::rebind_draw_slots_into	pub fn rebind_draw_slots_into(&self, state: &BindState, slots: &[SlotRef], commands: &mut DrawCommands) -> Result<bool, BindError>
 method	metal2vulkan::bind::BindingPlan::rebind_draw_slots_with	pub fn rebind_draw_slots_with(&self, rebinds: &SlotRebinds, state: &BindState, commands: &mut DrawCommands) -> Result<bool, BindError>
+method	metal2vulkan::bind::BindingPlan::redraw_apart_into	pub fn redraw_apart_into(&self, state: &BindState, (from, draw): (&DrawCall, &DrawCall), commands: &mut DrawCommands) -> Result<bool, BindError>
 method	metal2vulkan::bind::BindingPlan::relisted_sampler_tables	pub fn relisted_sampler_tables(&self, device: &crate::device::Device, samplers: &[crate::bind::ArgumentSampler], placement: HeapPlacement) -> Result<Option<Vec<crate::bind::instantiate::DescriptorBytes>>, BindError>
 method	metal2vulkan::bind::BindingPlan::sampler_tables	pub fn sampler_tables(&self) -> Vec<(u32, u32)>
 method	metal2vulkan::bind::BindingPlan::slot_rebinds	pub fn slot_rebinds(&self, slots: &[SlotRef]) -> Option<SlotRebinds>

@@ -638,6 +638,8 @@ struct CommandCounters {
     draws_unlike_kept_arguments_alone: AtomicU64,
     draws_rebind_stopped: AtomicU64,
     draws_restated: AtomicU64,
+    draws_rebound_arguments: AtomicU64,
+    draws_rebind_stopped_arguments: AtomicU64,
 }
 
 /// What kept a direct draw that recorded from being kept to draw again
@@ -742,6 +744,21 @@ pub(crate) struct UnlikeKept {
     /// A no-copy buffer moved, or the residency, the host aliases, parts or held images, or the
     /// sampler IDs changed (`Under`).
     pub(crate) under: bool,
+}
+
+impl UnlikeKept {
+    /// Whether the draw differed by its arguments alone: its counts and starts or its index
+    /// buffer's offset, and nothing else a draw again compares
+    /// (`WorkCounts::draws_unlike_kept_arguments_alone`).
+    pub(crate) fn arguments_alone(&self) -> bool {
+        (self.counts || self.index_offset)
+            && !(self.pipeline
+                || self.call
+                || self.index_buffer
+                || self.tessellation
+                || self.command_buffer
+                || self.under)
+    }
 }
 
 /// The command counts by who adds them ([`CommandCounters`]): open encoders' tallies, and
@@ -1159,14 +1176,7 @@ impl Counting<'_> {
     pub(crate) fn draw_unlike_kept(&self, why: UnlikeKept) {
         let counts = self.0;
         counts.add(|counts| &counts.draws_unlike_kept, 1);
-        let arguments = why.counts || why.index_offset;
-        let alone = arguments
-            && !(why.pipeline
-                || why.call
-                || why.index_buffer
-                || why.tessellation
-                || why.command_buffer
-                || why.under);
+        let alone = why.arguments_alone();
         let parts: [(bool, fn(&CommandCounters) -> &AtomicU64); 9] = [
             (why.pipeline, |c| &c.draws_unlike_kept_pipeline),
             (why.call, |c| &c.draws_unlike_kept_call),
@@ -1195,6 +1205,19 @@ impl Counting<'_> {
     /// (`WorkCounts::draws_restated`).
     pub(crate) fn draw_restated(&self) {
         self.0.add(|counts| &counts.draws_restated, 1);
+    }
+
+    /// A render draw rebound with other arguments than its kept draw's
+    /// (`WorkCounts::draws_rebound_arguments`).
+    pub(crate) fn draw_rebound_arguments(&self) {
+        self.0.add(|counts| &counts.draws_rebound_arguments, 1);
+    }
+
+    /// A render draw of other arguments than its kept draw's whose rebind stopped at a step that
+    /// reads them (`WorkCounts::draws_rebind_stopped_arguments`).
+    pub(crate) fn draw_rebind_stopped_arguments(&self) {
+        self.0
+            .add(|counts| &counts.draws_rebind_stopped_arguments, 1);
     }
 
     /// A render draw rebound that was moved (`WorkCounts::draws_moved`).
@@ -6173,6 +6196,14 @@ pub struct WorkCounts {
     /// decides of it, its settings and draw state, and recorded the dynamic states it sets that its
     /// record held otherwise (`render/draw_again/restated.rs`).
     pub draws_restated: u64,
+    /// Of `draws_rebound`, those that differed from the draw they repeat only in their arguments
+    /// (`draws_unlike_kept_arguments_alone` lists them: their counts and starts, index buffer
+    /// offset, instance count, base vertex or base instance), which each worked out again where a
+    /// step reads them: its route (whether it draws a primitive), its Vulkan draw, index overrun,
+    /// base vertex and instance push fields and index buffer use
+    /// (`BindingPlan::redraw_apart_into`), its pulled attributes' reach and its index buffer's
+    /// bind, which it records with its draw (`render/draw_again/rebound.rs`).
+    pub draws_rebound_arguments: u64,
     /// Render encoders' direct draws that recorded a Vulkan draw and kept nothing to draw again
     /// or rebind (`render/draw_again.rs`), so their encoder's next draw takes every step; with,
     /// in the counts below, what kept each from being kept, a draw counted in every group it met
@@ -6219,10 +6250,11 @@ pub struct WorkCounts {
     /// meets: a split, a color group, an extended-range color, a rate map, a notice announced at
     /// each occurrence, among others).
     pub draws_unkept_other: u64,
-    /// Render encoders' direct draws whose encoder kept a draw, of another call, arguments,
-    /// index buffer or offset, pipeline state or command buffer, or after a no-copy buffer moved,
-    /// the residency, host aliases, parts or held images or the sampler IDs changed
-    /// (`render/draw_again.rs`): each takes every step.
+    /// Render encoders' direct draws whose encoder kept a draw, of another call, index buffer,
+    /// pipeline state or command buffer, or after a no-copy buffer moved, the residency, host
+    /// aliases, parts or held images or the sampler IDs changed, or of other arguments that draw
+    /// nothing (`render/draw_again.rs`): each takes every step. A draw that differs in its
+    /// arguments alone and draws something is rebound instead (`draws_rebound_arguments`).
     pub draws_unlike_kept: u64,
     /// Of `draws_unlike_kept`, those through another pipeline state than the kept draw's (or
     /// none); a draw is counted in each of the parts below it met.
@@ -6246,13 +6278,23 @@ pub struct WorkCounts {
     pub draws_unlike_kept_under: u64,
     /// Of `draws_unlike_kept`, those unlike only by their counts and starts or their index
     /// buffer's offset: the same pipeline state, call, assembly, index buffer and type, command
-    /// buffer and the rest the kept draw read.
+    /// buffer and the rest the kept draw read, and no vertex, index or instance to draw. Every
+    /// other draw so unlike its kept draw is rebound (`draws_rebound_arguments`) or stops where a
+    /// step reads its arguments (`draws_rebind_stopped_arguments`).
     pub draws_unlike_kept_arguments_alone: u64,
     /// Render encoders' direct draws of their kept draw again after calls, that took every step
     /// rather than being rebound (`draws_rebound`): a kept draw that keeps nothing to rebind, or a
     /// rebind that stopped (`render/draw_again/rebound.rs`'s stops). Builds with debug
     /// assertions' checked draws are not counted.
     pub draws_rebind_stopped: u64,
+    /// Of `draws_rebind_stopped`, draws that differed from their kept draw only in their
+    /// arguments (`draws_rebound_arguments`) and stopped at a step that reads them some other way
+    /// than a draw rebound works out again: a route they change (a draw of no complete primitive
+    /// after one of some, or the other way), a fixed-function vertex buffer whose fetch window
+    /// they move (another vertex range of a draw without indices, another instance range of a
+    /// per-instance buffer), or a plan that reads them itself (`BindingPlan::redraw_apart_into`:
+    /// a de-indexed draw, or one of a stage's argument or root table). Each takes every step.
+    pub draws_rebind_stopped_arguments: u64,
     /// The uses of resources a render encoder made resident (`useResource:usage:stages:`,
     /// `useHeap:stages:`) that its draws' binding plans list, as its draws worked them out for
     /// hazard tracking: a draw keeps the last draw's where its plan is the last draw's, or lists
@@ -8200,6 +8242,7 @@ impl Device {
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),
+            draws_rebound_arguments: commands(|counts| &counts.draws_rebound_arguments),
             draws_unkept: commands(|counts| &counts.draws_unkept),
             draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
             draws_unkept_instance_later: commands(|counts| &counts.draws_unkept_instance_later),
@@ -8235,6 +8278,9 @@ impl Device {
                 &counts.draws_unlike_kept_arguments_alone
             }),
             draws_rebind_stopped: commands(|counts| &counts.draws_rebind_stopped),
+            draws_rebind_stopped_arguments: commands(|counts| {
+                &counts.draws_rebind_stopped_arguments
+            }),
             resident_uses_made: commands(|counts| &counts.resident_uses_made),
             resident_keys_settled: commands(|counts| &counts.resident_keys_settled),
             resident_uses_gathered: commands(|counts| &counts.resident_uses_gathered),
