@@ -3821,12 +3821,18 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 /// ([`place`]), so that the pool's blocks change only at its placements, whenever the making
 /// ended. The kept empty blocks past their quiet period go here too, once a second at most
 /// ([`Memory::sweep_stale`]).
+///
+/// `own` is the kind of block the runtime's own buffers take now ([`Memory::own_buffers`]). Its
+/// pools keep room first, so that a device near its count of allocations
+/// (`maxMemoryAllocationCount`) keeps it where those buffers go before anywhere else; the pools
+/// of [`Holds::FdBuffers`] keep none while those buffers lie in plain blocks (until the device's
+/// in-place check answered, or where it refused such blocks).
 pub(super) fn keep_room(
     memory: &Mutex<Memory>,
     device: &ash::Device,
     counts: &Arc<Counters>,
     (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
-    copies: impl FnOnce() -> bool,
+    (copies, own): (impl FnOnce() -> bool, Holds),
 ) {
     ready_ahead(memory, device, (functions, quiet), copies);
     let (kept, maker) = {
@@ -3837,8 +3843,11 @@ pub(super) fn keep_room(
         };
         (kept, memory.maker())
     };
+    let (first, rest): (Vec<_>, Vec<_>) = (kept.into_iter())
+        .filter(|&(holds, _)| holds != Holds::FdBuffers || own == Holds::FdBuffers)
+        .partition(|&(holds, _)| holds == own);
     let room = maker.block_bytes / 2;
-    for pool in kept {
+    for pool in first.into_iter().chain(rest) {
         let addressed = pool.0.buffers().then_some(&**counts);
         loop {
             let mut guard = lock(memory);

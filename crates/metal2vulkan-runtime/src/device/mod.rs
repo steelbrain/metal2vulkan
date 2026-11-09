@@ -1364,12 +1364,16 @@ impl Device {
         let shared = self.shared();
         let copies = || self.copies_color_on_the_host();
         let memory = &shared.memory;
+        // The kind of block the runtime's own buffers take now (`buffer.rs`'s
+        // `placed_new_buffer`), asked as their making asks it but counting nothing.
+        let exportable = lock(memory).fd_buffer_types.is_ok();
+        let own = lock(memory).own_buffers(exportable && self.fd_blocks_taken());
         crate::memory::keep_room(
             memory,
             shared.vk(),
             &shared.counts,
             (&shared.functions, &shared.queue_quiet),
-            copies,
+            (copies, own),
         );
     }
 

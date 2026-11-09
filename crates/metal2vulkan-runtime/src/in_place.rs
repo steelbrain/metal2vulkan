@@ -1272,8 +1272,7 @@ impl Device {
     /// among the program's, where a program that makes no texture over host pages has no use
     /// for it.
     pub(crate) fn fd_blocks_checked(&self) -> bool {
-        let verdict = |class, access, rows| self.shared().in_place.verdict(class, access, rows);
-        match fd_blocks_take(verdict) {
+        match self.fd_blocks_now() {
             FdBlocksTake::Take => true,
             FdBlocksTake::Pending => {
                 self.shared().counts.fd_blocks_awaited();
@@ -1284,6 +1283,18 @@ impl Device {
                 false
             }
         }
+    }
+
+    /// Whether the runtime's own buffers lie in blocks allocated exportable now, as
+    /// [`Device::fd_blocks_checked`] answers it, counting nothing: for the pools that keep room
+    /// (`memory.rs`'s `keep_room`).
+    pub(crate) fn fd_blocks_taken(&self) -> bool {
+        self.fd_blocks_now() == FdBlocksTake::Take
+    }
+
+    /// [`fd_blocks_take`] of the device's verdicts now, starting no check.
+    fn fd_blocks_now(&self) -> FdBlocksTake {
+        fd_blocks_take(|class, access, rows| self.shared().in_place.verdict(class, access, rows))
     }
 
     /// Start the device's check of textures over host pages in place where its verdicts are

@@ -1051,7 +1051,8 @@ driver's. Each is open work.
   (`WorkCounts::plain_buffer_blocks_made`): those of the buffers that declare their padding
   unobserved, of images and of heaps, and of the few buffers the runtime places apart. A memory
   type whose buffers lie in both kinds keeps a pool of each, each keeping a block partly filled
-  or empty (the row above), so up to 64 MiB more stays held than with one. A two-plane
+  or empty (the row above), so up to 64 MiB more stays held than with one; the exportable pool
+  keeps its block first, and only while the runtime's buffers lie there. A two-plane
   texture's planes over a buffer in such a block are read through the texel buffer, not an image
   of the device's conversion (`WorkCounts::ycbcr_planes_images_kept_exportable_block`): the
   check covers single-plane images alone; over a buffer that declares its padding unobserved,
