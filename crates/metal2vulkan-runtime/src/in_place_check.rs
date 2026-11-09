@@ -1406,12 +1406,20 @@ impl ClassPages {
             // device allocates their blocks exportable (`memory.rs`'s `Holds::FdBuffers`), whatever
             // this class's verdicts, which decide whether they lie there
             // (`Device::fd_blocks_checked`), that declares the bytes between a texture's rows
-            // unobserved, as the product's buffers whose textures take a `DRM_FORMAT_MOD_LINEAR`
-            // image do: its textures take the images a texture over such a buffer takes
+            // unobserved, as a consumer's caches do: its textures take the image a texture over
+            // such a buffer takes, the device's linear image made for the blocks' handle type
             // (`texture.rs`'s `alias_image`).
             PagesClass::FdBlocks => {
                 let exportable = lock(&device.shared().memory).fd_buffer_types;
                 if let Err(why) = exportable {
+                    return Err(Unmade::lasting(why));
+                }
+                // Made only where such a block holds every image a texture over a plain block's
+                // buffer takes in place (`texture/fd_blocks_cover.rs`), noted in the memory log.
+                #[cfg(unix)]
+                if let Err(why) = device.fd_blocks_cover() {
+                    let line = format!("the runtime's own buffers lie in plain blocks: {why}");
+                    lock(&device.shared().memory).note(line);
                     return Err(Unmade::lasting(why));
                 }
                 let buffer = (device.pooled_check_buffer(length, Holds::FdBuffers))

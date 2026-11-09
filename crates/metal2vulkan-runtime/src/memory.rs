@@ -67,11 +67,11 @@
 //! - **Buffers in exportable blocks** ([`Holds::FdBuffers`], [`fd_buffer_types`]). On a device
 //!   with unified memory whose policy takes textures over exported memory in place
 //!   (`HostPageTexturePolicy::InPlace`) and whose memory types of a heap that is not device-local
-//!   (the system heap, where `Private` memory lies first, [`candidates`]) export a dma-buf of a
-//!   pooled buffer's memory (`vkGetPhysicalDeviceExternalBufferProperties`, for the program's
-//!   buffers' usage and a buffer of addresses' usage: exportable, and not only from a dedicated
-//!   allocation), and that enables `VK_EXT_image_drm_format_modifier`, the buffers the runtime's
-//!   buffer path makes (`buffer.rs`'s `placed_new_buffer`: the program's, those of buffer
+//!   (the system heap, where `Private` memory lies first, [`candidates`]) export an opaque file
+//!   descriptor of a pooled buffer's memory (`vkGetPhysicalDeviceExternalBufferProperties`, for
+//!   the program's buffers' usage and a buffer of addresses' usage: exportable, and not only from
+//!   a dedicated allocation), and whose linear image made for one takes them as the device's own
+//!   linear image does ([`fd_image_types`]), the buffers the runtime's buffer path makes (`buffer.rs`'s `placed_new_buffer`: the program's, those of buffer
 //!   descriptors, and the runtime's own, not a heap's own buffer, a copied host buffer's copy nor
 //!   the in-place check's buffer of plain pooled memory) are made with
 //!   `VkExternalMemoryBufferCreateInfo` naming that handle type ([`FD_BLOCKS_HANDLE`]) and lie in
@@ -80,13 +80,9 @@
 //!   for it, as a buffer bound in such memory must name it
 //!   (`VUID-vkBindBufferMemory-memory-02726`), and so is an image bound in it
 //!   (`VUID-vkBindImageMemory-memory-02728`, [`BoundMemory::Blocks`]: `texture.rs`'s
-//!   `alias_unbound`), which is so a `DRM_FORMAT_MOD_LINEAR` one: the handle types of such an
-//!   allocation must be ones the image format query takes for each resource in it
-//!   (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`), and RADV's takes a dma-buf for no
-//!   image of linear tiling, and an opaque file descriptor for a `DRM_FORMAT_MOD_LINEAR` one only
-//!   from a dedicated allocation (`VUID-VkMemoryAllocateInfo-pNext-00639`). Such an image starts
-//!   `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) where over a plain block's buffer the
-//!   device's linear image starts `PREINITIALIZED`. So the buffers lie there only once the device's in-place
+//!   `alias_unbound`), the device's linear image ([`FD_BLOCKS_HANDLE`] says why no other), which
+//!   so starts `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) where over a plain block's
+//!   buffer it starts `PREINITIALIZED`. So the buffers lie there only once the device's in-place
 //!   check of such blocks (`in_place.rs`'s `PagesClass::FdBlocks`) passed what a texture over one
 //!   takes that it takes over a plain block's (`in_place.rs`'s `fd_blocks_take`): from the check's
 //!   record as the device is made, else once its check answered, in plain blocks until then
@@ -99,8 +95,7 @@
 //!   blocks of the system heap held the scheduler's submissions about 9 ms each on a quiet host
 //!   and up to 56 ms on one whose free memory lay in single pages, where memory allocated
 //!   exportable as an opaque file descriptor is a buffer object of its own reservation, whose
-//!   making held none, as memory exportable as a dma-buf is (`tests::reclaim_submit_bench`).
-//!   Each such block held costs each
+//!   making held none (`tests::reclaim_submit_bench`). Each such block held costs each
 //!   submission about 1 us (`docs/FAST-PATHS.md`). Every other block of buffers, of images and of
 //!   a heap is allocated as before.
 //!
@@ -239,8 +234,8 @@ pub(super) enum MemoryClass {
 ///
 /// A fifth, [`Holds::FdBuffers`], holds the buffers the runtime's buffer path makes on a device
 /// whose blocks of them in memory of a heap that is not device-local are allocated exportable as
-/// a dma-buf ([`FD_BLOCKS_HANDLE`]), never exported (the module docs, "Buffers in exportable
-/// blocks").
+/// an opaque file descriptor ([`FD_BLOCKS_HANDLE`]), never exported (the module docs, "Buffers
+/// in exportable blocks").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Holds {
     Buffers,
@@ -312,6 +307,124 @@ pub(super) fn fd_buffer_types(
     }
 }
 
+/// Of the memory types `types` (as bits) whose blocks of [`Holds::FdBuffers`] would be allocated
+/// exportable ([`fd_buffer_types`]), those a linear image made for [`FD_BLOCKS_HANDLE`] takes
+/// wherever the device's own linear image takes them, by `vkGetImageMemoryRequirements` of one
+/// of each of [`FD_IMAGE_FORMATS`] (a texture over a buffer in a type its image takes not lies
+/// in place: `texture.rs`'s `aliases`), made and destroyed, never bound; and the types dropped,
+/// with why. Every type is dropped where such an image asks a dedicated allocation. The device's
+/// check of such blocks covers every format a texture over a buffer may take (`texture.rs`'s
+/// `Device::fd_blocks_cover`).
+///
+/// # Safety
+///
+/// `physical` belongs to `instance`, created at Vulkan 1.2 or later, and `device` is its live
+/// device, which enables `VK_KHR_external_memory_fd`.
+pub(super) unsafe fn fd_image_types(
+    (instance, physical): (&ash::Instance, vk::PhysicalDevice),
+    device: &ash::Device,
+    types: u32,
+) -> Result<(u32, Option<(u32, &'static str)>), Error> {
+    let mut kept = types;
+    for format in FD_IMAGE_FORMATS {
+        let mut external =
+            vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(FD_BLOCKS_HANDLE);
+        let query = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(format)
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(vk::ImageTiling::LINEAR)
+            .usage(FD_IMAGE_USAGE)
+            .push_next(&mut external);
+        let mut answer = vk::ExternalImageFormatProperties::default();
+        let mut properties = vk::ImageFormatProperties2::default().push_next(&mut answer);
+        // SAFETY: the caller's; `query`, `properties` and their chains are valid.
+        let result = unsafe {
+            instance.get_physical_device_image_format_properties2(physical, &query, &mut properties)
+        };
+        let features = answer.external_memory_properties.external_memory_features;
+        if result.is_err()
+            || !features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+            || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        {
+            let why = "the device's image format query takes an opaque file descriptor for a \
+                       linear image of a common format only from a dedicated allocation, or not \
+                       at all";
+            return Ok((0, Some((types, why))));
+        }
+        let [plain, exported] = [None, Some(FD_BLOCKS_HANDLE)]
+            .map(|handle| linear_image_memory(device, format, handle));
+        let ((plain, _), (exported, dedicated)) = (plain?, exported?);
+        if dedicated {
+            let why = "the device's linear image made for an opaque file descriptor asks a \
+                       dedicated allocation";
+            return Ok((0, Some((types, why))));
+        }
+        kept &= exported | !plain;
+    }
+    let dropped = types & !kept;
+    let why = "the device's linear image made for an opaque file descriptor takes none of them, \
+               where its own linear image does";
+    Ok((kept, (dropped != 0).then_some((dropped, why))))
+}
+
+/// The formats [`fd_image_types`] makes a linear image of: one of each texel width a texture over
+/// a buffer commonly takes.
+const FD_IMAGE_FORMATS: [vk::Format; 4] = [
+    vk::Format::R8_UNORM,
+    vk::Format::R8G8_UNORM,
+    vk::Format::R8G8B8A8_UNORM,
+    vk::Format::R16G16B16A16_SFLOAT,
+];
+
+/// The usage of [`fd_image_types`]' images: sampled and copied.
+const FD_IMAGE_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
+    vk::ImageUsageFlags::SAMPLED.as_raw()
+        | vk::ImageUsageFlags::TRANSFER_SRC.as_raw()
+        | vk::ImageUsageFlags::TRANSFER_DST.as_raw(),
+);
+
+/// The memory types a 64x4 linear image of `format`, sampled and copied, made for `handle` where
+/// given, takes (as bits), and whether it asks a dedicated allocation: made and destroyed.
+fn linear_image_memory(
+    device: &ash::Device,
+    format: vk::Format,
+    handle: Option<vk::ExternalMemoryHandleTypeFlags>,
+) -> Result<(u32, bool), Error> {
+    let mut external =
+        vk::ExternalMemoryImageCreateInfo::default().handle_types(handle.unwrap_or_default());
+    let mut info = vk::ImageCreateInfo::default()
+        .image_type(vk::ImageType::TYPE_2D)
+        .format(format)
+        .extent(vk::Extent3D {
+            width: 64,
+            height: 4,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .tiling(vk::ImageTiling::LINEAR)
+        .usage(FD_IMAGE_USAGE)
+        .initial_layout(vk::ImageLayout::UNDEFINED);
+    if handle.is_some() {
+        info = info.push_next(&mut external);
+    }
+    // SAFETY: the device is live and `info` valid: every Vulkan device makes linear images of
+    // these formats, sampled and copied, and the caller asked the image format query for one made
+    // for the handle type; the image is destroyed unbound.
+    let image = unsafe { crate::creation::image(device, &info) }?;
+    let mut dedicated = vk::MemoryDedicatedRequirements::default();
+    let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+    let asked = vk::ImageMemoryRequirementsInfo2::default().image(image);
+    // SAFETY: `image` is a live image of this device.
+    unsafe {
+        device.get_image_memory_requirements2(&asked, &mut requirements);
+        crate::release::object(device, image);
+    }
+    let bits = requirements.memory_requirements.memory_type_bits;
+    Ok((bits, dedicated.requires_dedicated_allocation != 0))
+}
+
 /// What a new block's memory is allocated exportable as ([`BlockMaker::make_as`]).
 #[derive(Clone, Copy)]
 enum Exportable {
@@ -349,12 +462,14 @@ pub(super) const DMA_BUF_HANDLE: vk::ExternalMemoryHandleTypeFlags =
     vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 
 /// The handle type the blocks of [`Holds::FdBuffers`] are allocated exportable as, never
-/// exported (the module docs, "Buffers in exportable blocks"): a dma-buf. Every image bound there
-/// is a `DRM_FORMAT_MOD_LINEAR` one, which RADV's image format query takes as a dma-buf from a
-/// block that buffers share, where it takes an opaque file descriptor for such an image only from
-/// a dedicated allocation (`VUID-VkMemoryAllocateInfo-pNext-00639`) and a dma-buf for no image of
-/// linear tiling (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`).
-pub(super) const FD_BLOCKS_HANDLE: vk::ExternalMemoryHandleTypeFlags = DMA_BUF_HANDLE;
+/// exported (the module docs, "Buffers in exportable blocks"): an opaque file descriptor, the one
+/// handle type for which RADV makes an image a texture over a buffer takes (the device's linear
+/// image) bound in a block that buffers share. Its image format query takes a dma-buf for no
+/// image of linear tiling, and an allocation's handle types must be supported for each resource
+/// in it (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`); and a `DRM_FORMAT_MOD_LINEAR`
+/// image made for either handle type asks a dedicated allocation
+/// (`VkMemoryDedicatedRequirements`).
+pub(super) const FD_BLOCKS_HANDLE: vk::ExternalMemoryHandleTypeFlags = EXPORT_HANDLE;
 
 /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` (`VK_EXT_zero_initialize_device_memory`), which
 /// `ash 0.38` predates.
@@ -1758,7 +1873,7 @@ impl AheadBlocks {
 /// The counts of the blocks of [`Holds::FdBuffers`] made so far.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FdBlocks {
-    /// Allocated exportable as a dma-buf: of a memory type [`fd_buffer_types`]
+    /// Allocated exportable as an opaque file descriptor: of a memory type [`fd_buffer_types`]
     /// names.
     pub(super) exportable: u64,
     /// Allocated as any block of buffers: of a memory type it does not name (device-local memory
@@ -1851,16 +1966,24 @@ impl Memory {
     }
 
     /// Allocate the blocks of [`Holds::FdBuffers`] of the memory types `types` names (as bits)
-    /// exportable as [`FD_BLOCKS_HANDLE`] from now on, where it names any, else note why not (the
-    /// memory log says which), as the device is made: `buffer.rs`'s `placed_new_buffer` then
+    /// exportable as [`FD_BLOCKS_HANDLE`] from now on, where it names any, else note why not, and
+    /// note the types `dropped` names that stay plain and why ([`fd_image_types`]; the memory log
+    /// says which), as the device is made: `buffer.rs`'s `placed_new_buffer` then
     /// makes its buffers for that handle type and places them there once the device's check of
     /// such blocks passed ([`Memory::own_buffers`]).
-    pub(super) fn fd_buffer_blocks(&mut self, types: Result<u32, &'static str>) {
+    pub(super) fn fd_buffer_blocks(
+        &mut self,
+        (types, dropped): (Result<u32, &'static str>, Option<(u32, &'static str)>),
+    ) {
         if let Some(log) = &self.log {
             log.line(match types {
                 Ok(types) => format!(
                     "the runtime's own buffers lie in blocks of memory types {types:#x} exportable \
-                     as dma-bufs once the device's check of them passed"
+                     as opaque file descriptors once the device's check of them passed{}",
+                    match dropped {
+                        Some((dropped, why)) => format!("; types {dropped:#x} stay plain: {why}"),
+                        None => String::new(),
+                    }
                 ),
                 Err(why) => format!("the runtime's own buffers lie in plain blocks: {why}"),
             });
@@ -1876,6 +1999,13 @@ impl Memory {
         match self.fd_buffer_types {
             Ok(_) if checked => Holds::FdBuffers,
             Ok(_) | Err(_) => Holds::Buffers,
+        }
+    }
+
+    /// Write `line` to the memory log, where the device keeps one.
+    pub(super) fn note(&self, line: String) {
+        if let Some(log) = &self.log {
+            log.line(line);
         }
     }
 

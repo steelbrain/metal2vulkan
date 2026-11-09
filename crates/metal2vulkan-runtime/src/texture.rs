@@ -156,6 +156,8 @@ mod attached_reads;
 mod attributes;
 pub(super) mod copy_images;
 pub(crate) mod decoded_twin;
+#[cfg(unix)]
+mod fd_blocks_cover;
 pub(crate) mod first_move;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod first_move_lifetimes;
@@ -233,10 +235,6 @@ pub(super) struct TextureState {
     /// per format at most.
     #[cfg(unix)]
     pub(super) modifier_features: Mutex<HashMap<Format, FormatFeatureFlags2>>,
-    /// Whether a `DRM_FORMAT_MOD_LINEAR` image takes in every format what the device's linear
-    /// image takes, worked out at the first ask (`dma_buf.rs`'s `modifier_takes_linear`).
-    #[cfg(unix)]
-    pub(super) modifier_takes_linear: std::sync::OnceLock<Result<(), String>>,
     /// Every pixel format's `minimumLinearTextureAlignmentForPixelFormat:` answer, worked out at
     /// the first query of any and kept for the device's life (`texture/linear_alignment.rs`).
     pub(super) linear_alignments: std::sync::OnceLock<HashMap<PixelFormat, u64>>,
@@ -287,8 +285,6 @@ impl TextureState {
             format_answers: Mutex::new(HashMap::new()),
             #[cfg(unix)]
             modifier_features: Mutex::new(HashMap::new()),
-            #[cfg(unix)]
-            modifier_takes_linear: std::sync::OnceLock::new(),
             linear_alignments: std::sync::OnceLock::new(),
             heap_types: std::sync::OnceLock::new(),
             requirements: Mutex::new(requirements::RequirementAnswers::new(
@@ -2913,16 +2909,14 @@ impl Device {
     ///   meanwhile), and where the device's image format query takes the handle type for the
     ///   image without a dedicated allocation. The check's own textures take them whatever the
     ///   verdicts.
-    /// - In a block of the runtime's buffers allocated exportable as a dma-buf and never exported
-    ///   (`memory.rs`'s "Buffers in exportable blocks"), which holds no image of linear tiling
-    ///   (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`): `DRM_FORMAT_MOD_LINEAR` images
-    ///   made for that handle type and so `UNDEFINED`, in the same two places. Where the device's
-    ///   linear image, made to be measured and never bound, lies on Metal's layout, one of its
-    ///   layout, as over a plain block's buffer, where the device's check of such blocks
+    /// - In a block of the runtime's buffers allocated exportable as an opaque file descriptor and
+    ///   never exported (`memory.rs`'s "Buffers in exportable blocks"): the device's linear image
+    ///   made for that handle type, and so `UNDEFINED`, where the device's check of such blocks
     ///   ([`PagesClass::FdBlocks`]) passed its first move for texels that lie in its lines as
-    ///   these do ([`Device::blocks_linear_image`]); else one at Metal's pitch where it passed
-    ///   each access the usage takes, as of plain pooled memory ([`Device::pooled_pitched_image`]).
-    ///   Both count as images at Metal's pitch (`WorkCounts::pooled_pitched_images`).
+    ///   these do ([`Device::blocks_linear_image`]); no `DRM_FORMAT_MOD_LINEAR` one, which such a
+    ///   block holds only where the device makes one for that handle type without a dedicated
+    ///   allocation, and the device's buffers lie there only where it makes no such image of its
+    ///   own memory either (`Device::fd_blocks_cover`).
     /// - In a buffer's dedicated allocation (an exportable buffer's where the driver exports
     ///   such memory only so, or prefers or requires it), no image
     ///   (`VUID-vkBindImageMemory-memory-10926`).
@@ -3013,38 +3007,19 @@ impl Device {
         } else if let Some(LinearLack { format, features }) = linear_lack(plan, facts) {
             Err(LinearRefusal::Need(LinearNeed::Features { format, features }).describe(plan))
         } else {
-            let made = match memory {
-                ModifierMemory::Own => self.linear_image(plan)?,
-                _ => self.external_linear_image(plan, memory)?,
-            };
-            made.map_err(|refusal| refusal.describe(plan))
+            match (memory, blocks) {
+                (_, true) => self.blocks_linear_image(plan, texels)?,
+                (ModifierMemory::Own, false) => {
+                    (self.linear_image(plan)?).map_err(|refusal| refusal.describe(plan))
+                }
+                (_, false) => (self.external_linear_image(plan, memory)?)
+                    .map_err(|refusal| refusal.describe(plan)),
+            }
         };
         let linear = match linear {
-            Ok(made) => match (elsewhere(&made), blocks) {
-                (None, false) => return Ok(Ok((made, false))),
-                // A block allocated exportable as a dma-buf holds no image of linear tiling: the
-                // device's linear image was made to be measured, and an image of its layout
-                // takes its place there.
-                (None, true) => {
-                    release_unbound(made);
-                    match self.blocks_linear_image(plan, texels, facts)? {
-                        Ok(made) => match elsewhere(&made) {
-                            None => return Ok(Ok((made, true))),
-                            Some(why) => {
-                                release_unbound(made);
-                                format!(
-                                    "its DRM_FORMAT_MOD_LINEAR image of the device's linear \
-                                     image's layout: {why}"
-                                )
-                            }
-                        },
-                        Err(why) => format!(
-                            "the device makes no DRM_FORMAT_MOD_LINEAR image of its linear \
-                             image's layout: {why}"
-                        ),
-                    }
-                }
-                (Some(why), _) => {
+            Ok(made) => match elsewhere(&made) {
+                None => return Ok(Ok((made, false))),
+                Some(why) => {
                     release_unbound(made);
                     format!("the device's linear image of the texture: {why}")
                 }
@@ -3052,16 +3027,14 @@ impl Device {
             Err(why) => format!("the device makes no linear image of the texture: {why}"),
         };
         let pitched = match (memory, blocks) {
-            (_, true) => {
-                let pooled = (
-                    PagesClass::FdBlocks,
-                    ModifierMemory::Exported(FD_BLOCKS_HANDLE),
-                );
-                self.pooled_pitched_image(plan, texels, usage, facts, pooled)?
-            }
+            (_, true) => Err(ShadowCause::Refused(
+                Refusal::Pitch,
+                "a block of the runtime's buffers allocated exportable takes no \
+                 DRM_FORMAT_MOD_LINEAR image at Metal's pitch"
+                    .to_owned(),
+            )),
             (ModifierMemory::Own, false) => {
-                let pooled = (PagesClass::Pooled, ModifierMemory::Own);
-                self.pooled_pitched_image(plan, texels, usage, facts, pooled)?
+                self.pooled_pitched_image(plan, texels, usage, facts)?
             }
             (_, false) => (self.pitched_image(plan, &texels.layout, facts, memory)?)
                 .map_err(|(refusal, why)| ShadowCause::Refused(refusal, why)),
@@ -3252,16 +3225,13 @@ impl Device {
     }
 
     /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` over `texels` in their buffer's pooled memory, its
-    /// one plane at Metal's pitch (`VkImageDrmFormatModifierExplicitCreateInfoEXT`), made for
-    /// `memory`: no external memory (`dma_buf::ModifierMemory::Own`) in a plain block, of class
-    /// [`PagesClass::Pooled`], and the block's handle type in one allocated exportable, of class
-    /// [`PagesClass::FdBlocks`] (`memory.rs`'s "Buffers in exportable blocks"); unbound and made
-    /// `UNDEFINED`
+    /// one plane at Metal's pitch (`VkImageDrmFormatModifierExplicitCreateInfoEXT`), no external
+    /// memory (`dma_buf::ModifierMemory::Own`), unbound and made `UNDEFINED`
     /// (`Device::pitched_image`), for a texture of Metal `usage` whose texels the device's own
     /// linear image lays out otherwise: where the device makes such images, the texture's rows to
     /// their pitch take no more than `in_place::POOLED_PITCHED_BYTES` (past it, a linear image
-    /// renders and samples slower than the shadow), and its policy and its check of `class` take
-    /// each access the usage takes
+    /// renders and samples slower than the shadow), and its policy and its check of the pooled
+    /// class ([`PagesClass::Pooled`]) take each access the usage takes
     /// for texels that lie in its lines as these do (`in_place::in_place`; a pending verdict
     /// starts the check, and the texture is a shadow meanwhile); the check's own textures whatever
     /// the verdicts. Why not.
@@ -3284,7 +3254,6 @@ impl Device {
         texels: &Texels,
         usage: TextureUsage,
         facts: &ImageFacts<'_>,
-        (class, memory): (PagesClass, ModifierMemory),
     ) -> Result<Result<LinearMade, ShadowCause>, Error> {
         if !self.makes_modifier_images() {
             return Ok(Err(ShadowCause::Refused(
@@ -3306,7 +3275,7 @@ impl Device {
             }
             let line = self.shared().in_place.line();
             let pages = (
-                class,
+                PagesClass::Pooled,
                 texels.rows(line),
                 texels.texel_bytes(),
                 texels.padding(line),
@@ -3317,27 +3286,24 @@ impl Device {
                 return Ok(Err(cause));
             }
         }
-        let made = self.pitched_image(plan, &texels.layout, facts, memory)?;
+        let own = crate::dma_buf::ModifierMemory::Own;
+        let made = self.pitched_image(plan, &texels.layout, facts, own)?;
         Ok(made.map_err(|(refusal, why)| ShadowCause::Refused(refusal, why)))
     }
 
-    /// The image that takes the place of the device's linear image of `plan` over `texels`, whose
-    /// layout lies on Metal's, in a block of the runtime's buffers allocated exportable as a
-    /// dma-buf (`memory.rs`'s "Buffers in exportable blocks"), which holds no image of linear
-    /// tiling (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`): a `DRM_FORMAT_MOD_LINEAR`
-    /// image of that layout (Metal's pitch), unbound, made for that handle type, which an image
-    /// bound there names (`VUID-vkBindImageMemory-memory-02728`), and so made `UNDEFINED`
-    /// (`VUID-VkImageCreateInfo-pNext-01443`), where over a plain block's buffer the linear image
-    /// starts `PREINITIALIZED`: where the device's check of such blocks ([`PagesClass::FdBlocks`])
+    /// The device's linear image of `plan` over `texels` in a block of the runtime's buffers
+    /// allocated exportable as an opaque file descriptor (`memory.rs`'s "Buffers in exportable
+    /// blocks"), unbound, made for that handle type, which an image bound there names
+    /// (`VUID-vkBindImageMemory-memory-02728`), and so made `UNDEFINED`
+    /// (`VUID-VkImageCreateInfo-pNext-01443`), where over a plain block's buffer it starts
+    /// `PREINITIALIZED`: where the device's check of such blocks ([`PagesClass::FdBlocks`])
     /// passed that move for texels that lie in its lines as these do, as it did wherever the
     /// device's buffers lie there (`in_place.rs`'s `fd_blocks_take`); the check's own textures
-    /// whatever its verdicts. Its other operations are a linear image's, as over a plain block's
-    /// buffer (the Glossary's Linear Resource). Why not.
+    /// whatever its verdicts. Why not.
     fn blocks_linear_image(
         &self,
         plan: &ImagePlan,
         texels: &Texels,
-        facts: &ImageFacts<'_>,
     ) -> Result<Result<LinearMade, String>, Error> {
         if !in_place::checking() {
             let rows = texels.rows(self.shared().in_place.line());
@@ -3352,8 +3318,8 @@ impl Device {
             }
         }
         let memory = ModifierMemory::Exported(FD_BLOCKS_HANDLE);
-        let made = self.pitched_image(plan, &texels.layout, facts, memory)?;
-        Ok(made.map_err(|(_, why)| why))
+        let made = self.external_linear_image(plan, memory)?;
+        Ok(made.map_err(|refusal| refusal.describe(plan)))
     }
 
     /// The linear image of `plan` aliasing `texels` in their buffer's memory (the runtime's own),

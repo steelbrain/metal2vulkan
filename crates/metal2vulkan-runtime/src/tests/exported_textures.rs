@@ -42,10 +42,10 @@
 //!   device allocates its buffers' blocks exportable and the check passed them (`memory.rs`'s
 //!   "Buffers in exportable blocks", `in_place.rs`'s `fd_blocks_take`), its memory is such a block
 //!   (`WorkCounts::fd_buffer_blocks_made`), which the runtime never exports (`export_memory_fd`
-//!   refuses it, `NotExportable`), and each plane is in place, its image a
-//!   `DRM_FORMAT_MOD_LINEAR` one naming the block's handle type, a dma-buf, the layer reporting
-//!   nothing (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860` where the block's handle types
-//!   take no image of linear tiling); elsewhere its memory is a plain block,
+//!   refuses it, `NotExportable`), and each plane is in place, its image the device's linear
+//!   image naming the block's handle type, an opaque file descriptor, the layer reporting nothing
+//!   (`VUID-vkBindImageMemory-memory-02728`, `VUID-VkExportMemoryAllocateInfo-handleTypes-09860`);
+//!   elsewhere its memory is a plain block,
 //!   each plane in place or the shadow the check decided. Each reads the same bytes. A second
 //!   device of the driver, its shader cache the first's, reads the verdicts from the check's
 //!   record as it is made, and lays its first buffer where they say, none waiting for the check.
@@ -783,8 +783,7 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
                  {placement:?}"
             );
             // Where the buffers lie in such blocks, every plane is in place as over a plain
-            // block's buffer: a DRM_FORMAT_MOD_LINEAR image the check passed, of the device's
-            // linear image's layout or at Metal's pitch.
+            // block's buffer: the device's linear image made for the blocks' handle type.
             if exportable {
                 assert_eq!(
                     placement,
@@ -887,8 +886,8 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
 /// offset 0 and at that answer, of `ShaderRead`, `ShaderRead | ShaderWrite` and
 /// `ShaderRead | RenderTarget` usage, a texture over a `Shared` buffer in such a block lies in place
 /// wherever one over a plain block's buffer of the same layout does (`Buffer::texture_placement`).
-/// Where the device lays its buffers in such blocks (`in_place.rs`'s `fd_blocks_take` and
-/// `dma_buf.rs`'s `Device::modifier_takes_linear`), a texture that loses its place fails; elsewhere
+/// Where the device lays its buffers in such blocks (`in_place.rs`'s `fd_blocks_take`, which
+/// `texture/fd_blocks_cover.rs` gates), a texture that loses its place fails; elsewhere
 /// the losses are printed, and those the images alone make, asked as the device's check asks them
 /// (its verdicts aside), with the notice of the first few such textures.
 ///
@@ -931,10 +930,10 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
     }
     let verdict = |class, access, rows| device.in_place_verdict(class, access, rows);
     let take = crate::in_place::fd_blocks_take(verdict);
-    let covered = device.modifier_takes_linear();
+    let covered = device.fd_blocks_cover();
     eprintln!(
-        "EXPORTED-TEXTURES on {name}: the verdicts of exportable blocks: {take:?}; the \
-         DRM_FORMAT_MOD_LINEAR tiling against the linear: {covered:?}"
+        "EXPORTED-TEXTURES on {name}: the verdicts of exportable blocks: {take:?}; such a block \
+         holds every image a plain one does: {covered:?}"
     );
     let length = 1 << 20;
     let plain = (device.pooled_check_buffer(length, Holds::Buffers)).unwrap();
@@ -988,9 +987,8 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
     };
     let product = lost(&exportable);
     // Of the textures in place over a plain block's buffer, those whose image there is a
-    // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`), which
-    // a block exportable as an opaque file descriptor alone would take only as a dedicated
-    // allocation on a device whose image format query says so.
+    // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`), which an
+    // exportable block takes none of.
     let mut pitched = Vec::new();
     for (at, (d, offset, row)) in layouts.iter().enumerate() {
         if !plain_at[at] {

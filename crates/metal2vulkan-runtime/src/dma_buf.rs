@@ -88,18 +88,14 @@ use super::host_memory::{based_size, import_refused, not_importable, ImportWindo
 use super::host_residency::Again;
 use super::image_plan::{ImageFacts, ImagePlan};
 use super::in_place_check::Unmade;
-use super::linear_plan::{
-    check_linear_limits, tiling_lack, viewed_formats, LinearLack, USAGE_FEATURES,
-};
+use super::linear_plan::{check_linear_limits, tiling_lack, viewed_formats, LinearLack};
 use super::memory::{self, ImportFailure, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
 use super::Device;
 use crate::release;
 use ash::vk;
 use metal2vulkan::error::RuntimeDriverDefect;
-use metal2vulkan::vk::{
-    Format, FormatFeatureFlags2, ImageCreateFlags, ImageUsageFlags, SampleCountFlags,
-};
+use metal2vulkan::vk::{Format, FormatFeatureFlags2, ImageCreateFlags, SampleCountFlags};
 use std::ops::Range;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::ptr::NonNull;
@@ -1643,55 +1639,6 @@ impl Device {
         // (`VUID-VkImageCreateInfo-initialLayout-12478`: `PREINITIALIZED` is for linear tiling
         // alone).
         unsafe { crate::creation::image_or_refusal(shared.vk(), &info) }
-    }
-
-    /// Whether a `DRM_FORMAT_MOD_LINEAR` image has, in every color format the runtime views a
-    /// texture of any pixel format as (`ImageFacts::any_views`, of the sampled, storage and
-    /// color attachment usages), each feature the runtime's usages rely on
-    /// (`linear_plan::USAGE_FEATURES`) that both the format's linear and optimal tilings have:
-    /// then such an image takes each usage of a texture over a buffer wherever the device's
-    /// linear image takes it (`linear_plan::linear_lack` and `tiling_lack` ask the same of each
-    /// tiling, a texture over a buffer having one level). Where the runtime's buffers' blocks are
-    /// allocated exportable, every texture over such a buffer is such an image (`memory.rs`'s
-    /// "Buffers in exportable blocks"), so its buffers lie there only where this holds
-    /// (`in_place.rs`'s `Device::fd_blocks_checked`), and a texture over one never loses its place
-    /// for a feature. Else the first format that lacks one, and what it lacks. Worked out at the
-    /// first ask and kept (`TextureState::modifier_takes_linear`).
-    pub(crate) fn modifier_takes_linear(&self) -> Result<(), String> {
-        let shared = self.shared();
-        let kept = shared.textures.modifier_takes_linear.get_or_init(|| {
-            let profile = self.compile_device().profile();
-            let facts = shared.textures.facts(profile);
-            let relied = (USAGE_FEATURES.iter())
-                .fold(FormatFeatureFlags2::empty(), |all, &(_, features)| {
-                    all.union(features)
-                });
-            let usages = [
-                ImageUsageFlags::SAMPLED,
-                ImageUsageFlags::STORAGE,
-                ImageUsageFlags::COLOR_ATTACHMENT,
-            ];
-            let formats: std::collections::BTreeSet<Format> = (usages.iter())
-                .flat_map(|&usage| facts.any_views.of(usage, profile).iter().copied())
-                .filter(|format| {
-                    !(format.block()).is_some_and(|b| b.depth.is_some() || b.stencil.is_some())
-                })
-                .collect();
-            for format in formats {
-                let linear = (facts.optimal(format))
-                    .intersection(facts.linear(format))
-                    .intersection(relied);
-                let lacks = linear.difference(self.modifier_features(format));
-                if !lacks.is_empty() {
-                    return Err(format!(
-                        "the DRM_FORMAT_MOD_LINEAR tiling of {format:?} lacks {lacks:?}, which its \
-                         linear and optimal tilings have for the runtime's usages"
-                    ));
-                }
-            }
-            Ok(())
-        });
-        kept.clone()
     }
 
     /// The features of `format`'s `DRM_FORMAT_MOD_LINEAR` tiling where the device lists that
