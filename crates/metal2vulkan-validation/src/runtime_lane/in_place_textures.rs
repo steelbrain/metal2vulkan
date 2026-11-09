@@ -163,9 +163,11 @@ pub(super) fn writes_passed(
 pub(super) type Rows = (u64, u64, u64);
 
 /// The verdicts the device's check gives, each a line of its report before what it found
-/// changed: six classes (`Pointer`, `Fresh`, `DmaBuf`, `Pooled`, `ExportedFd`, `ExportedDmaBuf`),
-/// seven accesses, two row ends. Held to the report's own count ([`verdicts_in`]).
-const VERDICTS: usize = 84;
+/// changed: seven classes (`Pointer`, `Fresh`, `DmaBuf`, `Pooled`, `ExportedFd`, `ExportedDmaBuf`,
+/// `FdBlocks`), seven accesses, two row ends. The report gives every class on every device, one
+/// the device cannot check `Unchecked` (`FdBlocks` where the device allocates no block of its
+/// buffers exportable). Held to the report's own count ([`verdicts_in`]).
+const VERDICTS: usize = 98;
 
 /// The verdicts of a device's check `report`, counted from its own lines: the report gives one line
 /// per class for a texture that reads, each named by its class alone (`Pointer: Passed`), then one
