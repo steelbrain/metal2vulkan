@@ -1087,11 +1087,13 @@ fn a_keep_alive_goes_after_the_imports_of_its_pages() {
     });
 }
 
-/// The refusals: memfd memory with no source is refused typed where the device refuses its
-/// pointer (RADV), as before; a source that fails keeps that refusal, called once; chunks that do
-/// not cover the pages, and a chunk whose descriptor is no dma-buf (the memfd itself), are the
-/// caller's misuse (`Invalid`, `DmaBuf`), their descriptors closed. Nothing is counted for any of
-/// them. Where the device imports the pointer, each is made and no source is called.
+/// The refusals: memfd memory with no source is no refusal, made on every device: where the
+/// device refuses its pointer (RADV) a copy of its pages (`copied.rs`), counted as the device's
+/// refusal (`WorkCounts::copied_host_buffers_device_refused`), else an import of the pointer. A
+/// source that fails keeps the device's refusal, called once; chunks that do not cover the pages,
+/// and a chunk whose descriptor is no dma-buf (the memfd itself), are the caller's misuse
+/// (`Invalid`, `DmaBuf`), their descriptors closed. No dma-buf import is counted for any of them.
+/// Where the device imports the pointer, each is made and no source is called.
 #[test]
 fn shared_memory_is_refused_without_a_working_source() {
     const TEST: &str = "dma-buf refusals";
@@ -1100,6 +1102,7 @@ fn shared_memory_is_refused_without_a_working_source() {
         let ram = Memfd::new(4 * page);
         let view = ram.view(&[(page, 2 * page)]);
         let before = dma_buf_counts(device);
+        let before_copies = device.work_counts();
         let refuses = imports_dma_buf(device);
         let check =
             |what: &str, made: Result<Buffer, Error>, expected: fn(&Error) -> bool| match made {
@@ -1118,7 +1121,27 @@ fn shared_memory_is_refused_without_a_working_source() {
                 None,
             )
         };
-        check("no source", plain, not_importable);
+        let plain = plain.unwrap_or_else(|error| panic!("{TEST}: no source: {error:?}"));
+        let copied = device.work_counts().copied_host_buffers_device_refused
+            - before_copies.copied_host_buffers_device_refused;
+        let backing = plain.host_backing();
+        match refuses {
+            Some(true) => assert_eq!(
+                (backing, copied),
+                (Some(HostBacking::Copied), 1),
+                "{TEST}: no source: a copy, for the device's refusal"
+            ),
+            Some(false) => assert_eq!(
+                (backing, copied),
+                (Some(HostBacking::ImportedByPointer), 0),
+                "{TEST}: no source: the pointer's import"
+            ),
+            None => eprintln!(
+                "{TEST}: no source, on {}: {backing:?}, {copied} copied for the device's refusal",
+                device.name()
+            ),
+        }
+        drop(plain);
         let calls = Arc::new(Mutex::new(0usize));
         let counted = Arc::clone(&calls);
         let failing: DmaBufSource = Arc::new(move |_| {
