@@ -1429,8 +1429,8 @@ fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
             true => 12.92 * v,
             false => 1.055 * v.powf(1.0 / 2.4) - 0.055,
         };
-        let [r, g, b] = [r, g, b].map(|v| 255.0 * encode(f64::from(v)));
-        let alpha = 255.0 * f64::from(a);
+        let [r, g, b] = [r, g, b].map(|v| 255.0 * encode(v));
+        let alpha = 255.0 * a;
         let exact = match pf {
             PixelFormat::BGRA8UnormSRGB => [b, g, r, alpha],
             _ => [r, g, b, alpha],
