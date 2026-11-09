@@ -846,9 +846,9 @@ format query refuses the handle type, the layout differs, or the check did not p
 a 3840x2160 NV12 frame (an `R8Unorm` plane, then an `RG8Unorm` 1920x1080 plane, both rows 3840
 bytes) made with `aligned_byte(0x20)`, its planes at 256 and 8,294,656 bytes of the memory, each
 plane's image answered row pitch 3840 and offset 0, with an alignment of 64 on lavapipe and 256 on
-RADV (RX 550, opaque file descriptors). The RX 550 (RADV POLARIS12) enables no
-`VK_EXT_image_drm_format_modifier`, so it has no image to import its dma-buf into, and its dma-buf
-planes are announced shadows.
+RADV (RX 550, opaque file descriptors). Mesa 26.2.6's RADV lists no
+`VK_EXT_image_drm_format_modifier` for the RX 550 (POLARIS12), so it has no image to import its
+dma-buf into, and its dma-buf planes are announced shadows.
 
 The export settles the zeros the buffer was made with first, so the decoder may write at once.
 After each of its writes, once the consumer waited for them (`vaSyncSurface`), call
