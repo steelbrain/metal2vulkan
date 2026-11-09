@@ -23,8 +23,10 @@ pub fn in_unit_range(bits: u32) -> bool {
 /// depth), holds a depth outside `[0, 1]`. A trailing partial word holds no depth.
 pub fn holds_depth_outside_unit_range(depths: &[u8]) -> bool {
     depths
-        .chunks_exact(4)
-        .any(|word| !in_unit_range(u32::from_le_bytes([word[0], word[1], word[2], word[3]])))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|word| !in_unit_range(u32::from_le_bytes(*word)))
 }
 
 /// The requirement that stops the engine's candidate from giving a depth image `depths` on a
