@@ -1387,6 +1387,10 @@ impl Image {
         let shared = self.device.shared();
         // A held image's scheduler state goes with it (`texture/held_depth.rs`).
         shared.textures.held.remove(self.identity.key);
+        // So do the host calls' copies staged for it, and their staging buffers, which hold the
+        // device (`FirstMoves::forget`).
+        let at: *const Image = self;
+        shared.textures.first_moves.forget(at.cast());
         let owned = match &self.owner {
             Owner::Runtime { .. } => Owned::ImageOwnMemory,
             Owner::Buffer { .. } => Owned::ImageInBuffer,

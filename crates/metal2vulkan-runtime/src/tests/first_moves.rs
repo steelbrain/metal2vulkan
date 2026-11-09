@@ -93,3 +93,58 @@ fn a_hand_out_takes_its_own_first_work_alone() {
     assert_eq!(firsts.take(|_| true).submitted(None).len(), 2);
     assert!(firsts.none_waiting());
 }
+
+/// A resource's staged work goes as the resource goes (`FirstMoves::forget`), not at the device's
+/// next submission, with what it holds: a buffer's staged bytes and an image's staged copy each
+/// hold a staging buffer, which holds the device, and a device the program let go of makes no
+/// submission to take them. Another resource's work waits still, and the next submission takes
+/// it.
+#[test]
+fn a_resource_s_staged_work_goes_with_it() {
+    let firsts = FirstMoves::default();
+    // What each piece of work holds, as a staging buffer holds its device.
+    let device: Arc<()> = Arc::new(());
+    let (gone, kept) = (vk::Buffer::from_raw(1), vk::Buffer::from_raw(2));
+    let buffers: Vec<Arc<NewBuffer>> = (0..2).map(|_| Arc::new(NewBuffer)).collect();
+    let source = (vk::Buffer::from_raw(3), 0);
+    for (buffer, raw) in buffers.iter().zip([gone, kept]) {
+        let weak: Weak<NewBuffer> = Arc::downgrade(buffer);
+        let held = Box::new(Arc::clone(&device));
+        assert!(!firsts.register_bytes(weak, (raw, 0), source, 16, held));
+    }
+    let images: Vec<Arc<u32>> = vec![Arc::new(0), Arc::new(1)];
+    let at = |image: &Arc<u32>| Arc::as_ptr(image).cast::<()>();
+    for image in &images {
+        let weak: Weak<u32> = Arc::downgrade(image);
+        let copy = (vk::Image::null(), vk::BufferImageCopy::default());
+        let held = Box::new(Arc::clone(&device));
+        let staged = TexelCopy::new(vk::Buffer::null(), 16, vec![copy], held);
+        assert!(!firsts.register_texels(weak, staged));
+    }
+    assert_eq!(Arc::strong_count(&device), 5);
+    firsts.forget(Arc::as_ptr(&buffers[0]).cast());
+    assert_eq!(
+        Arc::strong_count(&device),
+        4,
+        "the gone buffer's staging held"
+    );
+    assert!(!firsts.fills_wait(gone));
+    assert!(firsts.fills_wait(kept));
+    firsts.forget(at(&images[0]));
+    assert_eq!(
+        Arc::strong_count(&device),
+        3,
+        "the gone image's staging held"
+    );
+    assert!(!firsts.texels_wait(at(&images[0])));
+    assert!(firsts.texels_wait(at(&images[1])));
+    // An address no work waits for lets nothing go.
+    firsts.forget(std::ptr::null());
+    assert_eq!(Arc::strong_count(&device), 3);
+    // The device's next submission takes the rest, and holds it until it completed.
+    let held = firsts.take(|_| true).submitted(None);
+    assert_eq!(held.len(), 2);
+    assert!(firsts.none_waiting());
+    drop(held);
+    assert_eq!(Arc::strong_count(&device), 1);
+}

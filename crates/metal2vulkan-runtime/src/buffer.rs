@@ -102,6 +102,10 @@ struct BufferShared {
     /// it (`BufferDescriptor::padding_unobserved`), set as it is made: an image over such a
     /// texture's memory may hold them (`linear_plan::holding`).
     padding_unobserved: AtomicBool,
+    /// Work staged for the device's next submission holds what it reads for this buffer: a
+    /// staging buffer (`Buffer::fill_first_from`) or its host copy (`Buffer::upload`), each
+    /// holding the device. Its drop lets that work go with it (`FirstMoves::forget`).
+    staged: AtomicBool,
 }
 
 /// Where a buffer's bytes are.
@@ -1903,6 +1907,13 @@ impl Filled for BufferShared {
 
 impl Drop for BufferShared {
     fn drop(&mut self) {
+        // Its staged work goes with it, and the staging buffer or host copy that work holds,
+        // which hold the device: a device whose program let go of it has no submission to wait
+        // for, and its last handle would otherwise be one of its own.
+        if *self.staged.get_mut() {
+            let at: *const BufferShared = self;
+            self.device.shared().textures.first_moves.forget(at.cast());
+        }
         let own = match &mut self.bytes {
             Bytes::Own(own) => own,
             Bytes::Heap(bytes) => {
@@ -2812,6 +2823,7 @@ impl Device {
             held_by: HeldBy::default(),
             handed_out: Arc::default(),
             padding_unobserved: AtomicBool::new(false),
+            staged: AtomicBool::new(false),
         }))
     }
 
@@ -3033,6 +3045,7 @@ impl Heap {
             held_by: HeldBy::default(),
             handed_out: Arc::default(),
             padding_unobserved: AtomicBool::new(false),
+            staged: AtomicBool::new(false),
         }))
     }
 }
@@ -3194,6 +3207,7 @@ impl Buffer {
     /// bound of what is staged, a submission waited for makes it now.
     pub(super) fn fill_first_from(&self, staging: Buffer, length: u64) -> Result<(), Error> {
         let device = &self.0.device;
+        self.0.staged.store(true, Ordering::Relaxed);
         let weak: Weak<BufferShared> = Arc::downgrade(&self.0);
         let keeper: Weak<dyn Filled> = weak;
         let source = staging.at(0);
@@ -3471,6 +3485,7 @@ impl Buffer {
             return Ok(());
         }
         let device = &self.0.device;
+        self.0.staged.store(true, Ordering::Relaxed);
         let weak: Weak<BufferShared> = Arc::downgrade(&self.0);
         let keeper: Weak<dyn Filled> = weak;
         let past = (device.shared().textures.first_moves).register_bytes(

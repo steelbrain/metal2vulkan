@@ -105,6 +105,11 @@
 //!   ([`FirstMoves::internal_wait`]). Seen without it on RADV: a batch submitted with images in
 //!   `UNDEFINED` in its texture table, under the validation layer.
 //! - **Failure.** A submission that fails gives its work back, still to be done.
+//! - **A resource gone.** A buffer's fill and copies and an image's staged copies go as the
+//!   resource goes ([`FirstMoves::forget`]: a buffer's drop, an image's release), with the
+//!   staging buffer or host copy they hold, each holding the device: left for the next
+//!   submission, they would keep a device whose program let go of it alive for good, as no
+//!   submission comes.
 //! - **Out of reach of a submission.** A texture's `VkImage` handed out (`Texture::vk_image`)
 //!   rests in `GENERAL` as its contract says: handing it out does its work first, by a
 //!   submission waited for, which makes the fills of the buffer an image in place lies in too.
@@ -1227,6 +1232,28 @@ impl FirstMoves {
     /// (`command_buffer/submit.rs`).
     pub(crate) fn none_waiting(&self) -> bool {
         lock(&self.waiting).is_empty()
+    }
+
+    /// Let go of the fills and copies that wait for what is at `keeper` (the address of what
+    /// [`register_bytes`](Self::register_bytes), [`register_fill`](Self::register_fill),
+    /// [`register_acquire`](Self::register_acquire) or [`register_texels`](Self::register_texels)
+    /// was given), as it goes: a gone resource's work is no submission's, and what that work
+    /// holds (a staging buffer, a host copy, each holding the device) goes with it, once the lock
+    /// is free. Left waiting, it would hold the device past the program's last handle until a
+    /// submission took it, and a device the program let go of makes none.
+    pub(crate) fn forget(&self, keeper: *const ()) {
+        let gone: Vec<Waiting> = {
+            let mut waiting = lock(&self.waiting);
+            let (gone, kept): (Vec<Waiting>, Vec<Waiting>) =
+                waiting.drain(..).partition(|entry| match entry {
+                    Waiting::Fill(weak, _) => weak.as_ptr().cast::<()>() == keeper,
+                    Waiting::Texels(weak, _) => weak.as_ptr().cast::<()>() == keeper,
+                    Waiting::Moves(_) => false,
+                });
+            waiting.extend(kept);
+            gone
+        };
+        drop(gone);
     }
 
     /// Whether a host call's copy waits for the images of what is at `keeper` (the address of
