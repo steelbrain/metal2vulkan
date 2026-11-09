@@ -105,6 +105,26 @@
 //!   submission about 1 us (`docs/FAST-PATHS.md`). Every other block of buffers, of images and of
 //!   a heap is allocated as before.
 //!
+//! - **Buffers in the runtime's own pages** ([`Holds::PageBuffers`],
+//!   [`Memory::page_buffer_blocks`]). On a device that imports host pointers and whose submission
+//!   check found that a held import costs its submissions nothing (`submit_check.rs`'s import
+//!   tax), the `Shared`, write-combined and `Managed` (with unified memory) buffers the runtime's
+//!   buffer path makes (`buffer.rs`'s `placed_new_buffer`, as for [`Holds::FdBuffers`]) lie in
+//!   blocks of anonymous pages the runtime maps and imports by their pointer (`fresh_pages.rs`'s
+//!   `OwnPages`, [`BlockMaker::make_pages`]), of the host-visible memory types the driver imports
+//!   such pages as (`vkGetMemoryHostPointerPropertiesEXT`, asked once as the device is made),
+//!   where the class's best type for such a buffer is one of them. Each buffer there, and the
+//!   block's buffer of addresses, is made for host allocations
+//!   (`VUID-vkBindBufferMemory-memory-02985`), and so is an image bound there, which so starts
+//!   `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`): a texture over such a buffer takes the
+//!   route a texture over fresh pages takes (`texture/route.rs`). The block's host address is the
+//!   pages', so a recovery carries its buffers (`device/carry.rs`): the pages are imported again
+//!   on the next generation, once for every buffer carried from the block, into a block that
+//!   takes nothing else ([`place_carried`]), each buffer bound at its offset there, its
+//!   `contents` pointer and bytes as they were. Until the check answers, where it found a tax, and
+//!   where the system or the driver refuses the pages, the buffers lie in plain blocks, which a
+//!   recovery leaves on the lost generation.
+//!
 //! - **Blocks made ahead** (`memory/ready.rs`). Each pool the encodings and commits place their
 //!   own resources in ([`keep_room`]) and each pool of exportable buffers ([`allocate_exported`])
 //!   gets a block made off the program's thread while it grows, and the pool a color texture's

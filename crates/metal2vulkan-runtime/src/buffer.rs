@@ -4615,12 +4615,14 @@ impl Buffer {
     /// its maker (`device/carry.rs`): its parts there, the same buffer (its `ObjectId`, hazard
     /// key, Metal address with a share of its range, its range token, label and purgeable state),
     /// kept among `to`'s program resources and live buffers. A buffer in fresh pages lies in the
-    /// same pages there, imported again, its contents and `contents` pointer as they were; a
-    /// `Private` one in new memory, its contents lost with the `VkDevice` (it reads zero). Its
-    /// parts on the generation it leaves are let go of once none of that generation's command
-    /// buffers may record. Left the lost generation's, refused where it meets the next
-    /// (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory, whose
-    /// `contents` pointer is its block's mapping (or a `Managed` buffer's host copy's), a no-copy
+    /// same pages there, imported again, its contents and `contents` pointer as they were, and so
+    /// does one in a block of the runtime's own pages (`memory.rs`'s `Holds::PageBuffers`), at its
+    /// offset in them; a `Private` one in new memory, its contents lost with the `VkDevice` (it
+    /// reads zero). Its parts on the generation it leaves are let go of once none of that
+    /// generation's command buffers may record. Left the lost generation's, refused where it meets
+    /// the next (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory the
+    /// device allocated, whose `contents` pointer is its block's mapping (or a `Managed` buffer's
+    /// host copy's), a no-copy
     /// buffer, a heap's, one over the caller's `VkBuffer` or exportable memory, and one whose
     /// making there fails.
     pub(crate) fn carry(&self, to: &Device) -> Result<Contents, Left> {

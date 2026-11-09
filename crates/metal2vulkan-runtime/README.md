@@ -727,9 +727,12 @@ meanwhile wait for it.
   and completes on the lost one where the loss came after, its object then one made before the
   recovery.
 - The recovery carries the events, the uses of guest RAM (`HostRamUse`), the no-copy buffers, the
-  `Private` buffers and the buffers in the runtime's fresh pages to the new `VkDevice`: the same
+  `Private` buffers and the buffers in the runtime's own pages to the new `VkDevice`: the same
   objects, at the same addresses. An event keeps the value the host saw and its listeners'
-  notifications. A buffer in fresh pages keeps its bytes and its `contents` pointer. A no-copy
+  notifications. A buffer in the runtime's own pages keeps its bytes and its `contents` pointer:
+  a long host-visible buffer's fresh pages, and, on a device whose check found that a held import
+  of host pages costs its submissions nothing, the blocks of pages the `Shared` and `Managed`
+  (unified memory) buffers lie in, imported again on the new `VkDevice`. A no-copy
   buffer is made again over the same pages, so it keeps its bytes and its pointer; its import
   gate, run resolver and dma-buf source are asked again, on the thread that recovers, and must
   not call into the device. Its deallocator runs at its release once no `VkDevice` imports its
@@ -737,7 +740,9 @@ meanwhile wait for it.
 - Any other object made before the recovery is refused where it meets the new `VkDevice` (an
   encoder's bind, a pipeline made from its functions) and in its own calls that need its lost one:
   `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. That covers pooled `Shared` and
-  `Managed` buffers (their `contents` pointer is the lost memory's mapping), detached no-copy
+  `Managed` buffers in memory the device allocated (their `contents` pointer is the lost memory's
+  mapping): on a device that imports no host pointer, whose check found a held import costs its
+  submissions or had not answered, and a `Managed` buffer without unified memory; detached no-copy
   buffers, heaps, textures, pipeline states, libraries and exportable memory or events. Make it
   again.
   Metal's objects go on. The recovery's notice counts the buffers and events it carried and left.

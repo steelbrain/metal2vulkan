@@ -21,6 +21,9 @@
 //!   (`EventShared::carry`). A `Private` buffer: new memory, its contents lost with the
 //!   `VkDevice` (it reads zero). A buffer in fresh pages (`fresh_pages.rs`): the same pages
 //!   imported again, its contents and its `contents` pointer as they were (`Buffer::carry`). A
+//!   `Shared` or `Managed` buffer in a block of the runtime's own pages (`memory.rs`'s
+//!   `Holds::PageBuffers`): the block's pages imported again, once for every buffer carried from
+//!   it, the buffer at its offset there, its contents and `contents` pointer as they were. A
 //!   no-copy buffer: made again over the caller's pages it lies in, of the memory they were given
 //!   as (`HostPages::made_of`), as its making or last rebind made it there (the caller's gate and
 //!   resolver of guest RAM runs asked again, on the recovering thread), its contents and
@@ -31,8 +34,12 @@
 //!   share of its range) and range token, its label and purgeable state.
 //! - **What stays the lost generation's**, refused where it meets the next
 //!   (`RuntimeGap::MadeBeforeRecovery`): a buffer of pooled host-visible memory (`Shared`, and
-//!   `Managed`), whose `contents` pointer is its block's mapping, which Vulkan gives no way to
-//!   keep over new memory; a detached no-copy buffer, or one whose last detach's deallocator waits
+//!   `Managed`) the device allocated, whose `contents` pointer is its block's mapping, which
+//!   Vulkan gives no way to keep over new memory (where the device takes no blocks of the
+//!   runtime's own pages for it: it imports no host pointer, its check found that a held import
+//!   costs its submissions or has not answered, or no memory type of the buffer's class takes
+//!   such pages; and a `Managed` buffer's host copy without unified memory); a detached no-copy
+//!   buffer, or one whose last detach's deallocator waits
 //!   for its next rebind; a heap's buffer, one over the caller's `VkBuffer` or exported memory,
 //!   and an event whose semaphore was made exportable, whose importers hold the lost one. The recovery's notice counts those it kept by kind (`Degradation::DeviceRecovered`):
 //!   every one but a heap's buffer, which its heap holds.
