@@ -1035,9 +1035,12 @@
       ],
       "bounds": {
         "addressable_buffers_made": 2,
+        "blocks_ahead_waited_for": 5,
+        "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 2,
-        "device_memory_allocated": 335544320,
+        "device_memory_allocated": 134217728,
         "empty_memory_blocks_live": 2,
+        "image_blocks_made_ahead": 3,
         "image_blocks_made_in_place": 3,
         "memory_frees.pooled_emptied": 1,
         "new_buffer_bytes_cleared": 6272,
@@ -1054,14 +1057,18 @@
         "object_churn.vk_images_destroyed": 30,
         "object_churn.vk_images_made": 30,
         "object_churn.vk_memory_allocations": 2,
+        "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 5
       },
       "composed": {
         "addressable_buffers_made": 2,
-        "buffer_blocks_made_in_place": 2,
-        "device_memory_allocated": 335544320,
-        "image_blocks_made_in_place": 3,
+        "blocks_ahead_waited_for": 5,
+        "buffer_blocks_made_ahead": 2,
+        "buffer_blocks_made_in_place": 0,
+        "image_blocks_made_ahead": 3,
+        "image_blocks_made_in_place": 0,
         "memory_frees.pooled_emptied": 0,
+        "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 5
       }
     }

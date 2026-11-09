@@ -2070,9 +2070,13 @@
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
         "addressable_buffers_made": 2,
+        "blocks_ahead_hurried": 1,
+        "blocks_ahead_waited_for": 4,
+        "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 2,
-        "device_memory_allocated": 268435456,
         "host_copy_blocks_made_in_place": 1,
+        "host_copy_blocks_readied": 1,
+        "image_blocks_made_ahead": 2,
         "image_blocks_made_in_place": 2,
         "images_started_on_the_host": 2,
         "new_buffer_bytes_cleared": 10489872,
@@ -2092,10 +2096,14 @@
         "pooled_memory_blocks_made": 4
       },
       "composed": {
-        "buffer_blocks_made_in_place": 2,
-        "device_memory_allocated": 268435456,
+        "blocks_ahead_hurried": 1,
+        "blocks_ahead_waited_for": 4,
+        "buffer_blocks_made_ahead": 2,
+        "buffer_blocks_made_in_place": 0,
         "host_copy_blocks_made_in_place": 1,
-        "image_blocks_made_in_place": 2,
+        "host_copy_blocks_readied": 1,
+        "image_blocks_made_ahead": 2,
+        "image_blocks_made_in_place": 1,
         "plain_buffer_blocks_made": 2
       },
       "ceilings": {

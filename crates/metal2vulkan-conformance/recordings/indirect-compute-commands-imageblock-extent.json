@@ -403,6 +403,8 @@
         "argument_tables_retained": 1,
         "bare_starts": 1,
         "batches_with_none_pending": 1,
+        "blocks_ahead_waited_for": 3,
+        "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 2,
         "command_barriers": 1,
         "command_buffers_begun": 4,
@@ -425,7 +427,6 @@
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
-        "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 3,
         "fence_waits": 1,
         "finales_apart": 1,
@@ -433,6 +434,7 @@
         "gate_waits": 1,
         "gate_waits_slept": 1,
         "heap_tables_worked_out": 1,
+        "image_blocks_made_ahead": 1,
         "image_blocks_made_in_place": 1,
         "indirect_record_bytes_copied": 4496,
         "indirect_record_runs_read": 1,
@@ -445,6 +447,7 @@
         "object_churn.vk_buffers_made": 2,
         "pipeline_layouts_made": 1,
         "pipeline_layouts_shared": 1,
+        "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 1,
         "queues_sharing_a_vk_queue": 1,
@@ -472,9 +475,12 @@
         "gate_waits_slept": 0
       },
       "composed": {
-        "buffer_blocks_made_in_place": 2,
-        "device_memory_allocated": 201326592,
-        "image_blocks_made_in_place": 1,
+        "blocks_ahead_waited_for": 3,
+        "buffer_blocks_made_ahead": 2,
+        "buffer_blocks_made_in_place": 0,
+        "image_blocks_made_ahead": 1,
+        "image_blocks_made_in_place": 0,
+        "plain_buffer_blocks_made": 2,
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {
