@@ -897,8 +897,10 @@ fn reclaim_submit_bench_export_facts() {
                         Err(error) => format!("{error:?}"),
                     };
                     eprintln!(
-                        "RECLAIM-SUBMIT export facts, {name}, {tiling_name} {format:?} images \
-                         of usage {usage:?}: {answered}"
+                        "RECLAIM-SUBMIT export facts, {name}, {tiling_name} images of format {} \
+                         and usage {:#x}: {answered}",
+                        format.as_raw(),
+                        usage.as_raw()
                     );
                 }
             }
