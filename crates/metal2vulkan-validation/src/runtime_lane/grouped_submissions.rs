@@ -1206,7 +1206,12 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let seen = {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        // The default completion, which the lane's options leave for Metal's exact one: the held
+        // group is its.
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.completion = CompletionPolicy::Grouped;
+        })
+        .unwrap();
         let merging = merges(&device);
         let (first, second) = (
             device.new_command_queue().unwrap(),

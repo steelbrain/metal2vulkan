@@ -25,7 +25,7 @@ use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandBufferStatus,
     CommandQueue, CopyProblem, CpuCacheMode, Deallocator, DebugMessage, Device, Error, EventRef,
     HazardTrackingMode, HostBacking, HostMemory, Invalid, Nil, Origin, Problem, PurgeableState,
-    Region, ResourceOptions, Size, StorageMode, TextureDescriptor,
+    Region, ResourceOptions, Size, StorageMode, TextureDescriptor, WorkCounts,
 };
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan_runtime::{CommandBufferError, LayerSetting, LayerSettingValue};
@@ -706,6 +706,7 @@ fn a_deallocator_returns_whatever_thread_submits_past_its_completion() {
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
         );
+        let before = device.work_counts();
         let opener = second.command_buffer().unwrap();
         let (opened, open) = std::sync::mpsc::channel::<()>();
         let (release, released) = std::sync::mpsc::channel::<()>();
@@ -760,11 +761,16 @@ fn a_deallocator_returns_whatever_thread_submits_past_its_completion() {
             .unwrap();
         after.commit().unwrap();
         let holding = second.command_buffer().unwrap();
+        let later = after.clone();
         holding
-            .add_submission_handler(Box::new(move |_: &CommandBuffer| {
-                after_ran
-                    .recv_timeout(WAIT)
-                    .expect("the later command buffer's completed handler ran");
+            .add_submission_handler(Box::new(move |taken: &CommandBuffer| {
+                if after_ran.recv_timeout(WAIT).is_err() {
+                    panic!(
+                        "the later command buffer's completed handler never ran: it is {:?}; {}",
+                        later.status(),
+                        submitted_since(&before, &taken.device().work_counts())
+                    );
+                }
             }))
             .unwrap();
         holding.commit().unwrap();
@@ -779,6 +785,27 @@ fn a_deallocator_returns_whatever_thread_submits_past_its_completion() {
             assert_eq!(command_buffer.error(), None);
         }
     });
+}
+
+/// What the device's scheduler did from `before` to `after`: its submissions, by whom, and what
+/// held its heads back, for a failure's report.
+fn submitted_since(before: &WorkCounts, after: &WorkCounts) -> String {
+    let since = |field: fn(&WorkCounts) -> u64| field(after) - field(before);
+    format!(
+        "since the opener's commit, {} kernel submissions ({} batches at commit, {} grouped, {} \
+         groups kept) in {} passes; heads held for host steps {}, checks {}, earlier commits {}, \
+         event values {}, at their gate {}",
+        since(|counts| counts.queue_submissions),
+        since(|counts| counts.batches_submitted_at_commit),
+        since(|counts| counts.batches_grouped),
+        since(|counts| counts.groups_kept_pending),
+        since(|counts| counts.scheduler_passes),
+        since(|counts| counts.heads_held_for_host_steps),
+        since(|counts| counts.heads_held_for_checks),
+        since(|counts| counts.heads_held_for_earlier_commits),
+        since(|counts| counts.heads_held_for_event_values),
+        since(|counts| counts.heads_waiting_at_their_gate),
+    )
 }
 
 /// The consumer's EFI framebuffer (`display/efi.rs`): a 16-KiB-aligned mapping of the
