@@ -1012,8 +1012,8 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         };
         let product = lost(&exportable);
         // Of the textures in place over a plain block's buffer, those whose image there is a
-        // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`), which an
-        // exportable block takes none of.
+        // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`),
+        // which an exportable block takes none of.
         let mut pitched = Vec::new();
         for (at, (d, offset, row)) in layouts.iter().enumerate() {
             if !plain_at[at] {
@@ -1042,7 +1042,8 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         });
         let in_place_plain = plain_at.iter().filter(|&&at| at).count();
         eprintln!(
-            "EXPORTED-TEXTURES on {name}, {padding}: {} textures tried, {in_place_plain} in place over a plain \
+            "EXPORTED-TEXTURES on {name}, {padding}: {} textures tried, {in_place_plain} in place \
+             over a plain \
              block's buffer; over an exportable block's, {} of those lose their place, {} by the \
              images alone",
             layouts.len(),
@@ -1050,7 +1051,8 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
             images.len()
         );
         eprintln!(
-            "EXPORTED-TEXTURES on {name}, {padding}: of those in place over a plain block's buffer, {} take a \
+            "EXPORTED-TEXTURES on {name}, {padding}: of those in place over a plain block's \
+             buffer, {} take a \
              DRM_FORMAT_MOD_LINEAR image at Metal's pitch, the rest the device's linear image",
             pitched.len()
         );
