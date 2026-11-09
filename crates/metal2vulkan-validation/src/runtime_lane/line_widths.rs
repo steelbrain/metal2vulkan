@@ -2033,8 +2033,7 @@ fn a_refused_band_draws_at_the_nearest_width() {
                 let pixels = drawn.ids.chunks(4).filter(|t| t[3] != 0).count();
                 assert!(pixels > 0, "{what}: drew nothing");
                 println!(
-                    "LINES-NEAREST {what}: {pixels} pixels at the nearest width {} (Metal's line \
-                     at width 0 through these centres: 23)",
+                    "LINES-NEAREST {what}: {pixels} pixels at the nearest width {}",
                     facts.nearest(0.0)
                 );
                 if facts.tessellates {
