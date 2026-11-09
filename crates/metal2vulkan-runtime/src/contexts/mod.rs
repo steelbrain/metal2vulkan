@@ -128,10 +128,13 @@ struct Shared<I> {
     /// The identity the next context takes ([`Contexts::fresh`]).
     next: AtomicU64,
     /// The context whose items a thread pauses after, once it let go of what one held, before it
-    /// looks at the lines again, and for how long: a test's stand-in for a thread the host took
-    /// the CPU from there ([`Contexts::pause_after_items`]).
+    /// looks at the lines again, until the test lets it go: a test's stand-in for a thread the
+    /// host took the CPU from there ([`Contexts::pause_after_items`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pause: Mutex<Pause>,
+    /// Signaled when a pause begins and when pauses are let go.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    paused: Condvar,
 }
 
 /// A test's pause of the pool's threads after the items of one context
@@ -139,10 +142,12 @@ struct Shared<I> {
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 #[derive(Default)]
 struct Pause {
-    /// The context's logical queue, and how long each pause lasts.
-    after: Option<(u64, Duration)>,
-    /// The pauses made.
+    /// The context's logical queue.
+    after: Option<u64>,
+    /// The pauses begun: each takes the next number, from 1.
     made: u64,
+    /// The pauses let go: those numbered up to this one end.
+    released: u64,
 }
 
 struct State<I> {
@@ -198,6 +203,8 @@ impl<I: Run> Contexts<I> {
             next: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             pause: Mutex::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            paused: Condvar::new(),
             census: Arc::new(Census {
                 count: Mutex::new(Count {
                     threads: 1,
@@ -349,6 +356,8 @@ impl<I: Run> Contexts<I> {
     pub(crate) fn stop(&self) {
         lock(&self.shared.state).stopping = true;
         self.shared.wake.notify_all();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.release_pauses(u64::MAX);
         let census = &self.shared.census;
         let own = POOL.with(|pool| {
             pool.borrow()
@@ -365,18 +374,38 @@ impl<I: Run> Contexts<I> {
         }
     }
 
-    /// Make a pool's thread pause for `pause` once it let go of what an item of the context of
-    /// logical queue `queue` held, before it looks at the lines again, as a thread the host took
-    /// the CPU from there would.
+    /// Make a pool's thread pause once it let go of what an item of the context of logical queue
+    /// `queue` held, before it looks at the lines again, as a thread the host took the CPU from
+    /// there would, until [`Contexts::release_pauses`] lets its pause go (as the pool stops, every
+    /// pause goes).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn pause_after_items(&self, queue: u64, pause: Duration) {
-        lock(&self.shared.pause).after = Some((queue, pause));
+    pub(crate) fn pause_after_items(&self, queue: u64) {
+        lock(&self.shared.pause).after = Some(queue);
     }
 
-    /// How many pauses the pool's threads made ([`Contexts::pause_after_items`]).
+    /// How many pauses the pool's threads began ([`Contexts::pause_after_items`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn pauses_made(&self) -> u64 {
         lock(&self.shared.pause).made
+    }
+
+    /// Wait until the pool's threads began `pauses` pauses, or `within` passed: the pauses begun.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn await_pauses(&self, pauses: u64, within: Duration) -> u64 {
+        let pause = lock(&self.shared.pause);
+        let (pause, _) = (self.shared.paused)
+            .wait_timeout_while(pause, within, |pause| pause.made < pauses)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pause.made
+    }
+
+    /// Let the pauses numbered up to `through` go (each pause takes the next number, from 1).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn release_pauses(&self, through: u64) {
+        let mut pause = lock(&self.shared.pause);
+        pause.released = pause.released.max(through);
+        drop(pause);
+        self.shared.paused.notify_all();
     }
 
     /// The threads alive and the threads blocked in a wait.
@@ -390,17 +419,20 @@ impl<I: Run> Contexts<I> {
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 impl<I> Shared<I> {
     /// The pause a test asked for once a thread let go of what an item of the context of
-    /// logical queue `queue` held ([`Contexts::pause_after_items`]).
+    /// logical queue `queue` held, until the test lets it go ([`Contexts::pause_after_items`]).
     fn pause_after_item(&self, queue: u64) {
-        let length = {
-            let mut pause = lock(&self.pause);
-            let Some((_, length)) = pause.after.filter(|&(paused, _)| paused == queue) else {
-                return;
-            };
-            pause.made += 1;
-            length
-        };
-        std::thread::sleep(length);
+        let mut pause = lock(&self.pause);
+        if pause.after != Some(queue) {
+            return;
+        }
+        pause.made += 1;
+        let number = pause.made;
+        self.paused.notify_all();
+        drop(
+            (self.paused)
+                .wait_while(pause, |pause| pause.released < number)
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
 }
 
