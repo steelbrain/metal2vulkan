@@ -2497,13 +2497,24 @@ impl Device {
             _ => None,
         };
         // Where the device took no fresh pages, a parked buffer of its own memory, made so as the
-        // buffer is made below.
-        if let (None, None, Some(making)) = (&taken, &fresh, making.filter(|_| wants_fresh)) {
-            let making = BufferMaking {
+        // buffer is made below; and for one that would lie in a block allocated exportable, a
+        // parked one of a plain block, which any buffer may lie in (the device's buffers lie in
+        // plain blocks until its check answered: `in_place.rs`'s `fd_blocks_take`). Never the
+        // other way: a buffer that declares its padding unobserved lies in a plain block.
+        if let (None, None, Some(making)) = (&taken, &fresh, making) {
+            let own = BufferMaking {
                 fresh_pages: false,
                 ..making
             };
-            taken = self.recycled_buffer(&making);
+            let plain = BufferMaking {
+                holds: Holds::Buffers,
+                ..own
+            };
+            let asked = [
+                Some(own).filter(|_| wants_fresh),
+                Some(plain).filter(|_| holds == Holds::FdBuffers),
+            ];
+            taken = (asked.into_iter().flatten()).find_map(|making| self.recycled_buffer(&making));
         }
         let bytes = match fresh {
             Some(_) => NewBytes::Zero,
