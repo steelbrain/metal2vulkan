@@ -35,6 +35,7 @@ const UNPINNABLE: RuntimeDriverDefect = RuntimeDriverDefect::UnpinnablePagesBrea
 const VOLUME_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::VolumeBlitsUnfiltered;
 const ALIASED_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::AliasedImportBlitsUnordered;
 const VOLUME_RESOLVES: RuntimeDriverDefect = RuntimeDriverDefect::VolumeResolveFirstPlane;
+const TRIMS: RuntimeDriverDefect = RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission;
 
 /// Every committed profile's driver has its defects at every release and GPU but those a probe
 /// found clean: MoltenVK the multisampled depth/stencil colour copies, the inexact depths past
@@ -57,8 +58,9 @@ const VOLUME_RESOLVES: RuntimeDriverDefect = RuntimeDriverDefect::VolumeResolveF
 /// preprocessing after an execution set on every GPU but the 780M (Phoenix's and Hawk Point's),
 /// measured clean; ANV
 /// the compressed image's short size, the occlusion count per color output, the pushed
-/// descriptors a pipeline bind leaves stale and the blits through two imports of the same host
-/// pages a barrier does not order on every GPU (Arrow Lake's, not measured, too);
+/// descriptors a pipeline bind leaves stale, the blits through two imports of the same host
+/// pages a barrier does not order and the submission again of a command buffer that a trimmed one
+/// came after on every GPU (Arrow Lake's, not measured, too);
 /// NVIDIA's the
 /// stencil colour copies on every GPU but the RTX 5080 Laptop GPU, measured clean (the GTX 1060 and
 /// the RTX 5080 desktop GPU, not measured, take them), the 10-bit codes its Y′CbCr conversion reads
@@ -108,7 +110,7 @@ fn the_committed_profiles_drivers_have_their_defects() {
                 vec![NAN_COPIES, PREPROCESS, TEN_BIT_WORDS, VOLUME_RESOLVES]
             }
             Some(DriverId::INTEL_OPEN_SOURCE_MESA) => {
-                vec![COMPRESSION, COUNTS, STALE_PUSHES, ALIASED_BLITS]
+                vec![COMPRESSION, COUNTS, STALE_PUSHES, ALIASED_BLITS, TRIMS]
             }
             Some(DriverId::NVIDIA_PROPRIETARY) if desc.device_id == 0x2c19 => {
                 vec![TEN_BIT_WORDS, UNPINNABLE, VOLUME_RESOLVES]

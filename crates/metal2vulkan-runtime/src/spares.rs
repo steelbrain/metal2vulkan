@@ -28,11 +28,12 @@
 //! - **Freed on the device's free thread** ([`PoolFrees`], `free_thread.rs`), not on the thread
 //!   giving the pool back, which for a command buffer that completed is its queue's completion
 //!   thread before its completed handlers run and its waiters return: [`FREED_AT_ONCE`] command
-//!   buffers at a time, `vkFreeCommandBuffers` then `vkTrimCommandPool`, which returns what the
-//!   driver keeps of freed command buffers (`release.rs`'s `PoolBuffers`), each inside a section
-//!   of the exit guard. The pool stays out of the spares until its frees ran (a command pool needs
-//!   external synchronization), so a taker meanwhile takes another spare or makes a pool. Where
-//!   the free thread's queue is full, or the thread cannot start, they run on the giving thread.
+//!   buffers at a time, `vkFreeCommandBuffers` then `vkTrimCommandPool` (but on ANV, below),
+//!   which returns what the driver keeps of freed command buffers (`release.rs`'s
+//!   `PoolBuffers`), each inside a section of the exit guard. The pool stays out of the spares
+//!   until its frees ran (a command pool needs external synchronization), so a taker meanwhile
+//!   takes another spare or makes a pool. Where the free thread's queue is full, or the thread
+//!   cannot start, they run on the giving thread.
 //!   The device's teardown waits for those posted before it releases the spares. Counted (the
 //!   crate's tests): `Spares::freed_on`, the threads that freed them. On a Radeon 780M (RADV), in
 //!   release (`tests::spares_latency`), a give-back that freed a burst's command buffers on the
@@ -47,6 +48,15 @@
 //!   (0.22 ms at the slowest); on an Apple M3 Max (MoltenVK 1.4.2) 0.9 to 1.0 us each (3.5 us at
 //!   the slowest), the process's physical footprint unchanged by them (its first 252 command
 //!   buffers had added 176 KiB to it, which stayed); on lavapipe a few microseconds.
+//! - **Not trimmed where a trim fails the kept barriers** (ANV:
+//!   `RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`, `driver_defects.rs`). A
+//!   batch's kept barriers are submitted again as recorded (`command_buffer/kept_barriers.rs`),
+//!   and there each such submission names every command buffer that ever came next after one;
+//!   once one of those is trimmed away, the submission fails and the device is lost. So the pool's
+//!   command buffers are freed and the pool is not trimmed: the driver keeps each one it freed,
+//!   reset, for the pool's later allocations (Mesa's common command pool, `vk_command_pool.c`), a
+//!   pool holding for the device's life as many command buffers' objects as it held at once, but
+//!   none of their recordings beyond each one's first batch buffer object.
 //! - **Descriptor pools are bounded.** At most [`DESCRIPTOR_POOLS`] descriptor pools of at most
 //!   [`DESCRIPTORS`] descriptors together; a descriptor pool given back past them releases the
 //!   oldest spares first, so the spares follow the shapes in use. The descriptors bound the
@@ -160,8 +170,8 @@ pub(super) const RECENT_USES: usize = 8;
 /// module docs).
 pub(super) const IDLE_FOR: Duration = Duration::from_secs(10);
 
-/// The most command buffers one `vkFreeCommandBuffers` frees, the pool trimmed after each (the
-/// module docs).
+/// The most command buffers one `vkFreeCommandBuffers` frees, the pool trimmed after each where
+/// the device trims (the module docs).
 pub(super) const FREED_AT_ONCE: usize = 32;
 
 /// The index of `level`'s list in a [`CommandPool`]: primary 0, secondary 1.
@@ -399,11 +409,14 @@ pub(super) struct DescriptorPool {
 }
 
 /// A device's spares.
-#[derive(Default)]
 pub(super) struct Spares {
     /// Oldest first, shared with the device's free thread, which keeps a pool again once its
     /// command buffers are freed ([`PoolFrees`]).
     command_pools: Arc<Mutex<Vec<CommandPool>>>,
+    /// A pool is trimmed after its command buffers are freed, but where the driver fails a
+    /// command buffer submitted again once one that came next after it is trimmed (the module
+    /// docs).
+    trims: bool,
     /// The names of the threads that freed spares' command buffers, one each time, for the
     /// crate's device tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -415,6 +428,19 @@ pub(super) struct Spares {
 }
 
 impl Spares {
+    /// The spares of a device, which trims a command pool after freeing its command buffers
+    /// where `trims` (the module docs).
+    pub(super) fn new(trims: bool) -> Spares {
+        Spares {
+            command_pools: Default::default(),
+            trims,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            freed_on: Default::default(),
+            descriptor_pools: Default::default(),
+            fitted_pools: Default::default(),
+        }
+    }
+
     /// A spare command pool of `device` made for queue family `family`, none of whose command
     /// buffers is pending or recording (reset where one may be, the module docs); `None` when
     /// there is none, or this thread is in a section.
@@ -520,6 +546,7 @@ impl Spares {
             pool,
             buffers,
             idle,
+            trim: self.trims,
             spares: Arc::clone(&self.command_pools),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             freed_on: Arc::clone(&self.freed_on),
@@ -531,6 +558,13 @@ impl Spares {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(super) fn freed_on(&self) -> Vec<String> {
         lock(&self.freed_on).clone()
+    }
+
+    /// Whether a pool is trimmed after its command buffers are freed, for the crate's device
+    /// tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn trims(&self) -> bool {
+        self.trims
     }
 
     /// The command buffers the spare command pools hold, for the crate's device tests.
@@ -653,6 +687,8 @@ pub(crate) struct PoolFrees {
     buffers: Vec<vk::CommandBuffer>,
     /// Kept again as the oldest spare (a spare left idle), else as the newest.
     idle: bool,
+    /// The pool is trimmed after each free (the module docs).
+    trim: bool,
     /// The device's spare command pools.
     spares: Arc<Mutex<Vec<CommandPool>>>,
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -661,8 +697,8 @@ pub(crate) struct PoolFrees {
 
 impl PoolFrees {
     /// Free the command buffers through `device`, the device's functions taken inside a section of
-    /// the exit guard, [`FREED_AT_ONCE`] at a time, the pool trimmed after each (`release.rs`'s
-    /// `PoolBuffers`), then keep the pool among the spares again.
+    /// the exit guard, [`FREED_AT_ONCE`] at a time, the pool trimmed after each where the device
+    /// trims (`release.rs`'s `PoolBuffers`), then keep the pool among the spares again.
     ///
     /// # Safety
     ///
@@ -672,13 +708,23 @@ impl PoolFrees {
             pool,
             buffers,
             idle,
+            trim,
             spares,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             freed_on,
         } = self;
         for some in buffers.chunks(FREED_AT_ONCE) {
             // SAFETY: the caller's.
-            unsafe { release::object(device, release::PoolBuffers(pool.raw, some)) };
+            unsafe {
+                release::object(
+                    device,
+                    release::PoolBuffers {
+                        pool: pool.raw,
+                        buffers: some,
+                        trim,
+                    },
+                )
+            };
         }
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         lock(&freed_on).push(std::thread::current().name().unwrap_or_default().to_owned());

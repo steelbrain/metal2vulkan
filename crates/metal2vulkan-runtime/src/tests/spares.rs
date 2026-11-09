@@ -1,5 +1,5 @@
 //! A device's spare command pools and descriptor pools (`spares.rs`): which command buffers a pool
-//! hands out again, and what the bounds keep. The last test runs on a device: device tests compile
+//! hands out again, and what the bounds keep. The last tests run on a device: device tests compile
 //! only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use crate::descriptor_arena::{Room, SetNeeds};
@@ -383,12 +383,18 @@ fn a_spare_left_idle_sheds_its_command_buffers_and_goes_back_the_oldest() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device {
     use super::RECENT_USES;
+    use crate::command_buffer::kept_barriers::KEPT;
     use crate::tests::freed_memory::device;
-    use crate::{Buffer, CommandQueue, Device, ResourceOptions};
+    use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions};
     use std::time::{Duration, Instant};
 
     /// The blit encoders of the burst's command buffer.
     const BURST: usize = 64;
+
+    /// The blit encoders of the trims test's burst, each filling a buffer of its own, before
+    /// those filling one buffer, each after a barrier, and after them.
+    const LEAD: usize = 320;
+    const TAIL: usize = 768;
 
     /// The longest a command buffer, or the spares' count, is waited for.
     const WAIT: Duration = Duration::from_secs(30);
@@ -399,16 +405,28 @@ mod device {
     /// Commit a command buffer of `queue` of `device` of `encoders` blit encoders, each filling
     /// `target`, and wait for it, then for the frees its pool's give-back posted to the device's
     /// free thread, so that the next command buffer takes the pool again.
-    fn fills(device: &Device, queue: &CommandQueue, target: &Buffer, encoders: usize) {
+    fn fills(
+        device: &Device,
+        queue: &CommandQueue,
+        target: &Buffer,
+        encoders: usize,
+    ) -> CommandBufferStatus {
+        fills_of(device, queue, &vec![target; encoders])
+    }
+
+    /// [`fills`] of one blit encoder for each of `targets`, filling its first 256 bytes; the
+    /// command buffer's status once it completed or failed.
+    fn fills_of(device: &Device, queue: &CommandQueue, targets: &[&Buffer]) -> CommandBufferStatus {
         let command_buffer = queue.command_buffer().unwrap();
-        for at in 0..encoders {
+        for (at, target) in targets.iter().enumerate() {
             let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.fill_buffer(target, 0..4096, at as u8).unwrap();
+            blit.fill_buffer(target, 0..256, at as u8).unwrap();
             blit.end_encoding().unwrap();
         }
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         device.shared().frees.drain();
+        command_buffer.status()
     }
 
     /// The command buffers the device's spare command pools hold once `done` holds of it, or
@@ -464,6 +482,64 @@ mod device {
             "{after} held after {more} command buffers of one encoder, {before} before the burst"
         );
         drop((target, queue, device));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The kept barriers a burst's encoders came after (`command_buffer/kept_barriers.rs`) are
+    /// submitted again, and complete, once the pool's recent uses no longer reach the burst and
+    /// its command buffers were freed. Each of the burst's middle [`KEPT`] encoders fills one
+    /// buffer after a barrier, so a kept command buffer comes before each, and the encoders
+    /// before and after them fill buffers of their own, with no barrier, so the command buffers
+    /// those barriers came before are neither the pool's first nor its last. On ANV, which names
+    /// in each submission of a kept command buffer every command buffer that ever came next after
+    /// it, those submissions failed and the device was lost where the pool was trimmed after the
+    /// frees (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`).
+    #[test]
+    fn kept_barriers_run_again_after_the_command_buffers_after_them_were_freed() {
+        let scratch = std::env::temp_dir().join(format!("m2v-spares-trims-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let device = device(&scratch);
+        let queue = device.new_command_queue().unwrap();
+        let options = ResourceOptions::private();
+        let shared = device.new_buffer(256, options).unwrap();
+        let own: Vec<Buffer> = (0..LEAD + TAIL)
+            .map(|_| device.new_buffer(256, options).unwrap())
+            .collect();
+        let (lead, tail) = own.split_at(LEAD);
+        let burst: Vec<&Buffer> = lead
+            .iter()
+            .chain(std::iter::repeat_n(&shared, KEPT))
+            .chain(tail)
+            .collect();
+        let mut statuses = vec![fills(&device, &queue, &shared, 1)];
+        statuses.push(fills_of(&device, &queue, &burst));
+        // The burst's use leaves the pool's recent uses after as many more, and the give-back
+        // then frees what it made.
+        for _ in 0..=RECENT_USES {
+            statuses.push(fills(&device, &queue, &shared, 2));
+        }
+        let freed = device.shared().spares.freed_on().len();
+        // The kept barriers taken again, before command buffers the pool makes anew past the
+        // two it kept.
+        for _ in 0..4 {
+            statuses.push(fills(&device, &queue, &shared, KEPT));
+        }
+        let failed = statuses
+            .iter()
+            .filter(|status| **status != CommandBufferStatus::Completed)
+            .count();
+        let recoveries = device.work_counts().device_recoveries;
+        println!(
+            "SPARES-TRIMS {}: trims {}; {freed} frees ran; {failed} of {} command buffers not \
+             completed ({statuses:?}); {recoveries} recoveries",
+            device.name(),
+            device.shared().spares.trims(),
+            statuses.len()
+        );
+        assert!(freed > 0, "the burst's command buffers were never freed");
+        assert_eq!(failed, 0, "command buffers did not complete: {statuses:?}");
+        assert_eq!(recoveries, 0, "the device recovered from a loss");
+        drop((own, shared, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
     }
 }

@@ -2487,6 +2487,12 @@ impl Device {
         // Read before the properties move into the device's shared state (below): whether the
         // scheduler's thread waits for the GPU itself (`scheduler::waits_on_gpu`).
         let waits_on_gpu = crate::scheduler::waits_on_gpu(&properties.driver_defects);
+        // And whether a spare command pool is trimmed after its frees: not where a trim fails the
+        // kept barriers (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`,
+        // `spares.rs`).
+        let trims_spares = !properties
+            .driver_defects
+            .contains(&RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission);
         if let (Some(relay), true) = (instance.relay(), relays) {
             for slot in &queues {
                 let queue = slot.with(|queue| queue);
@@ -2682,7 +2688,7 @@ impl Device {
             host_copies,
             zero_initialize_device_memory,
             sparse,
-            spares: Spares::default(),
+            spares: Spares::new(trims_spares),
             live_binds: Default::default(),
             coverage_pools: Default::default(),
             live_dispatches: Default::default(),

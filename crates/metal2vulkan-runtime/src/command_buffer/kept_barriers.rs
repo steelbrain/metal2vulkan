@@ -23,7 +23,10 @@
 //!   (`anv_cmd_buffer_is_chainable`), and submits the rest one execbuffer each. The batch that
 //!   takes one marks it with its own timeline value before it is submitted: a batch whose
 //!   submission fails leaves that value to the queue's next batch, so the command buffer waits
-//!   for that one instead.
+//!   for that one instead. Chained so, a kept command buffer names in each submission every
+//!   command buffer that ever came next after it, and the submission fails once one of those was
+//!   trimmed away (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`): there the
+//!   spares free command buffers without trimming their pools (`spares.rs`).
 //! - **Timestamps, per slot.** A command buffer that writes timestamps writes them into one slot's
 //!   two queries, so it is kept for its slot ([`SlotStamps`]): one per slot and list, taken again
 //!   only by a batch of a later holding of that slot (`gpu_time::Slot::lease`), once the batch

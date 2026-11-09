@@ -783,10 +783,20 @@ impl Primer<'_> {
             .map_err(vulkan)?;
         self.made(Call::QueueWaitIdle);
         // A spare pool's command buffers freed and the pool trimmed as a command buffer gives it
-        // back (`spares.rs`).
+        // back (`spares.rs`). Trimmed on every device: no command buffer submitted again ever
+        // came before the priming's (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`).
         // SAFETY: the command buffer is the priming's pool's, its one submission completed, and
         // the pool is the priming's alone.
-        unsafe { release::object(device, release::PoolBuffers(pool, &buffers)) };
+        unsafe {
+            release::object(
+                device,
+                release::PoolBuffers {
+                    pool,
+                    buffers: &buffers,
+                    trim: true,
+                },
+            )
+        };
         self.made(Call::FreeCommandBuffers);
         self.made(Call::TrimCommandPool);
         if let Some(queries) = queries {

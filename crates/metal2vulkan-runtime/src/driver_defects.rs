@@ -545,6 +545,31 @@ pub(super) struct Affected {
 ///   `tests::host_ram_device::a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_bytes`
 ///   and `a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes` failed there in
 ///   each of two runs. Nothing is refused, as on MoltenVK.
+///
+/// `TrimmedCommandBufferFailsResubmission`:
+/// - Mesa's ANV (`INTEL_OPEN_SOURCE_MESA`): a submission's command buffers are chained into one
+///   batch, each one's end jumping to the first batch buffer object of the next
+///   (`anv_cmd_buffer_record_chain_submit` in `anv_batch_chain.c`), and under i915 that jump adds
+///   the next one's buffer object to those its last batch buffer object names, which only its
+///   reset or begin clears (`anv_batch_bo_start`). A command buffer submitted again as recorded,
+///   as a batch's kept barriers are (`command_buffer/kept_barriers.rs`), so names at each
+///   submission the first batch buffer object of every command buffer that ever came next after
+///   it. A freed command buffer stays in its pool, its first batch buffer object with it, for the
+///   pool's later allocations (`vk_command_pool.c`), until `vkTrimCommandPool` destroys it; a
+///   batch buffer object is a slice of a larger one (`anv_slab_bo.c`), whose handle is released
+///   once every slice of it is free. The next submission that names such a handle fails:
+///   `DRM_IOCTL_I915_GEM_EXECBUFFER2` returns `ENOENT`, its object list holding an object of
+///   handle 0 (`INTEL_DEBUG=submit`), and `vkQueueSubmit` returns `VK_ERROR_DEVICE_LOST`.
+///   Measured on Iris Xe Graphics (Raptor Lake-P) under Mesa 26.2.6 on i915:
+///   `runtime_lane::predication::streams_run_what_metal_ran`, under the validation layer, which
+///   reported nothing, failed so in each of 4 runs once a spare pool's frees ran uncapped on the
+///   device's free thread (`spares.rs`), and passed in each of 2 runs whose frees did not trim,
+///   2 that freed nothing, and 3 whose kept barriers were begun with
+///   `VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT`, which ANV never chains. Read in Mesa main's
+///   source of 2026-11-09. Nothing is refused: a spare pool's command buffers are freed without
+///   trimming the pool there, so its later command buffers take them again; what each holds of
+///   its recording the driver releases as it frees it. Under the xe kernel driver ANV names no
+///   such objects (`uses_relocs`), but no GPU of it is measured, so every ANV GPU takes the path.
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -710,6 +735,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     },
     Affected {
         defect: RuntimeDriverDefect::AliasedImportBlitsUnordered,
+        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         clean: &[],
     },

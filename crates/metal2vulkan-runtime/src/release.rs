@@ -145,25 +145,33 @@ pub(crate) unsafe fn generated(commands: &Commands, object: Generated) -> bool {
 }
 
 /// Command buffers of one command pool, freed together (`vkFreeCommandBuffers`), the pool then
-/// trimmed (`vkTrimCommandPool`), so that the driver returns what it keeps of them: a spare pool's
-/// past its recent uses (`spares.rs`).
-pub(crate) struct PoolBuffers<'a>(
-    pub(crate) vk::CommandPool,
-    pub(crate) &'a [vk::CommandBuffer],
-);
+/// trimmed (`vkTrimCommandPool`) where `trim`, so that the driver returns what it keeps of them: a
+/// spare pool's past its recent uses (`spares.rs`), whose pool is not trimmed where the driver
+/// fails a command buffer submitted again once one that came next after it is trimmed
+/// (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`, `driver_defects.rs`).
+pub(crate) struct PoolBuffers<'a> {
+    pub(crate) pool: vk::CommandPool,
+    pub(crate) buffers: &'a [vk::CommandBuffer],
+    pub(crate) trim: bool,
+}
 
 impl Released for PoolBuffers<'_> {
     const CALL: Call = Call::FreeCommandBuffers;
 
     unsafe fn destroy(self, device: &ash::Device, _: Door) {
-        let PoolBuffers(pool, buffers) = self;
+        let PoolBuffers {
+            pool,
+            buffers,
+            trim,
+        } = self;
         // SAFETY: the caller's: none of the command buffers is pending, and it holds the pool
         // alone.
-        unsafe {
-            device.free_command_buffers(pool, buffers);
-            device.trim_command_pool(pool, vk::CommandPoolTrimFlags::empty());
+        unsafe { device.free_command_buffers(pool, buffers) };
+        if trim {
+            // SAFETY: as above.
+            unsafe { device.trim_command_pool(pool, vk::CommandPoolTrimFlags::empty()) };
+            exit_guard::called(Call::TrimCommandPool);
         }
-        exit_guard::called(Call::TrimCommandPool);
     }
 }
 

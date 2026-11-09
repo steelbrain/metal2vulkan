@@ -1093,6 +1093,13 @@ pub enum RuntimeDriverDefect {
     /// begins at plane 1. Nothing is refused: the runtime resolves into a scratch image of the
     /// pass's layers, copied into the planes the resolve belongs in after the pass.
     VolumeResolveFirstPlane,
+    /// A command buffer submitted again as it was recorded, once its earlier submissions
+    /// completed, fails that submission with `VK_ERROR_DEVICE_LOST`, and the device is lost, once
+    /// a command buffer that came next after it in one of those submissions' `pCommandBuffers`
+    /// was freed and its command pool trimmed (`vkTrimCommandPool`). Nothing is refused: the
+    /// runtime frees command buffers without trimming their pools there, and the driver keeps
+    /// what it holds of them for the pools' later command buffers.
+    TrimmedCommandBufferFailsResubmission,
 }
 
 /// One device capability a refusal can name.

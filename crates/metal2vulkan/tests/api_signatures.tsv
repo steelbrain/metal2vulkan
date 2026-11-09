@@ -14023,6 +14023,7 @@ variant	metal2vulkan::error::RuntimeDriverDefect::PushedDescriptorsStaleAfterPip
 variant	metal2vulkan::error::RuntimeDriverDefect::ReadsCommandBuffersAfterTheirSignal	ReadsCommandBuffersAfterTheirSignal
 variant	metal2vulkan::error::RuntimeDriverDefect::SetLayoutSupportUnderstated	SetLayoutSupportUnderstated
 variant	metal2vulkan::error::RuntimeDriverDefect::TenBitCodesReadAsWords	TenBitCodesReadAsWords
+variant	metal2vulkan::error::RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission	TrimmedCommandBufferFailsResubmission
 variant	metal2vulkan::error::RuntimeDriverDefect::TwoPlaneChromaMisplaced	TwoPlaneChromaMisplaced
 variant	metal2vulkan::error::RuntimeDriverDefect::UnpinnablePagesBreakHostMemory	UnpinnablePagesBreakHostMemory
 variant	metal2vulkan::error::RuntimeDriverDefect::VolumeBlitsUnfiltered	VolumeBlitsUnfiltered
