@@ -45,7 +45,7 @@
 //! 8x4 blocks through the pixel interlock on MoltenVK) run under the default depth state and, as
 //! the consumer draws, under `GreaterEqual` without writes over a depth cleared to 0.
 
-use super::{form, library};
+use super::{fetches, form, library};
 use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::host_memory::{no_copy, Mapping};
 use crate::runtime_lane::memoryless::memoryless_options;

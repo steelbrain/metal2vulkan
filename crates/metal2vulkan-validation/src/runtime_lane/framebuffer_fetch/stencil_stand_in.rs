@@ -44,7 +44,7 @@
 //! needs the depth test beside it), typed `NotImplemented(FramebufferFetch)`, and draws Metal's
 //! answer through input attachments.
 
-use super::{form, halves, library, reads_planes, through_inputs, TEXELS};
+use super::{fetches, form, halves, library, reads_planes, through_inputs, TEXELS};
 use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::degrade_notices::counts;
 use crate::runtime_lane::resolves::{lane, quiet, Lane, FULL};

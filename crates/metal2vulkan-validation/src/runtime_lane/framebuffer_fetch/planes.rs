@@ -34,7 +34,7 @@
 //! resolve (`runtime::color_resolve`), a memoryless attachment the pass only fetches and resolves
 //! included.
 
-use super::{library, loading, multisampled, pass, pipeline, steps};
+use super::{fetches, library, loading, multisampled, pass, pipeline, steps};
 use super::{pipeline_descriptor, scratched};
 use crate::runtime_lane::degrade_notices::{assert_made_once, counts, forced, resolve_kind};
 use crate::runtime_lane::memoryless::memoryless_msaa;

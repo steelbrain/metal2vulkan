@@ -41,7 +41,7 @@
 //! draw, typed, `NotImplemented(FramebufferFetch)` at `Attachment::Depth`, and the case stops
 //! there.
 
-use super::{form, halves, library, through_inputs, TEXELS};
+use super::{fetches, form, halves, library, through_inputs, TEXELS};
 use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::degrade_notices::counts;
 use crate::runtime_lane::memoryless::memoryless_options;

@@ -17,7 +17,7 @@
 //! the depth the function writes, clamped as the runtime clamps it. Each case prints its outcome
 //! and form.
 
-use super::{form, library};
+use super::{fetches, form, library};
 use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::resolves::{lane, quiet, FULL};
 use metal2vulkan::metal::state::DepthStencilDescriptor;

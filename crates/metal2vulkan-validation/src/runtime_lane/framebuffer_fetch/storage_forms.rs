@@ -65,7 +65,7 @@
 //!   pass's GPU time through a scratch (an untracked target's) and in place, printed as
 //!   `STORAGE-FORM-COST` lines.
 
-use super::{library, loading, pass, pipeline, steps, SIDE, Z};
+use super::{fetches, library, loading, pass, pipeline, steps, SIDE, Z};
 use crate::runtime_lane::degrade_notices::assert_made_once;
 use crate::runtime_lane::resolves::lane_with;
 use crate::runtime_lane::resolves::{lane, quiet, Lane, Shape, ONE};

@@ -42,7 +42,7 @@
 //! texel, encoded by that table, meets within one code; Metal's without fast math, and within one
 //! code of the fast-math fixture's on our probe.
 
-use super::{form, library, through_inputs};
+use super::{fetches, form, library, through_inputs};
 use crate::runtime_lane::degrade_notices::counts;
 use crate::runtime_lane::resolves::{lane_with, quiet, Lane};
 use crate::runtime_lane::WAIT;

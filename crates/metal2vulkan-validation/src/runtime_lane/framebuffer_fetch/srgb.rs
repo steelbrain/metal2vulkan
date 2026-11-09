@@ -53,7 +53,7 @@
 //! sample's depth (`VkProperty::CenterFragCoordDepth`, MoltenVK on an M4), the `Less` cases run the
 //! depth test in the function against the depth's stand-in and are drawn, Metal's bytes.
 
-use super::{device_rounded, form, library, reads_planes, through_inputs};
+use super::{device_rounded, fetches, form, library, reads_planes, through_inputs};
 use crate::candidate::runtime_samples::{encode_through, shape};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use crate::runtime_lane::degrade_notices::made_render_kinds;

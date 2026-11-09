@@ -28,7 +28,7 @@
 //! shadow takes no sample mask beside it). Each case's colors, depth and stencil are read back and
 //! compared bit for bit; the form is printed.
 
-use super::{form, library, reads_planes, through_inputs, TEXELS, Z};
+use super::{fetches, form, library, reads_planes, through_inputs, TEXELS, Z};
 use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::resolves::{lane, quiet, Lane, FULL};
 use metal2vulkan::device::{VkFeature, VkProperty};

@@ -34,7 +34,7 @@
 //! `c`) and read back sample by sample through its `RGBA8Uint` view
 //! (`candidate::runtime_samples`); the fill is checked to store the bytes drawn.
 
-use super::{device_rounded, form, library, reads_planes, scratched, through_inputs};
+use super::{device_rounded, fetches, form, library, reads_planes, scratched, through_inputs};
 use crate::candidate::runtime_samples::{encode_through, shape};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use crate::runtime_lane::degrade_notices::made_render_kinds;

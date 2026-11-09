@@ -25,7 +25,7 @@
 //! depth's stand-in; and so does the stencil state, the function testing the stencil first against
 //! the stencil's stand-in (Refused at the draw before). Each case's outcome and form is printed.
 
-use super::{form, library, Z};
+use super::{fetches, form, library, Z};
 use crate::runtime_lane::resolves::{lane, quiet, FULL};
 use crate::runtime_lane::{buffer_with, read_buffer};
 use metal2vulkan::metal::state::DepthStencilDescriptor;

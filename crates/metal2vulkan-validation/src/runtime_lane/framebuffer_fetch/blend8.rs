@@ -44,7 +44,7 @@
 //! conversion, so a device that fetches through the pixel interlock announces
 //! `device-pack-conversion` alone, which is asserted, and its texels' agreement is printed.
 
-use super::{form, library, through_inputs};
+use super::{fetches, form, library, through_inputs};
 use crate::runtime_lane::degrade_notices::counts;
 use crate::runtime_lane::resolves::{lane_with, quiet, Lane};
 use crate::runtime_lane::WAIT;
