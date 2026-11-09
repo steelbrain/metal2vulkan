@@ -25,7 +25,7 @@ use super::attributes::ResourceAttributes;
 use super::buffer_texture::TexelViews;
 use super::churn_counts::Recycled;
 use super::degradation::Degradation;
-use super::device::carry::{Contents, Left};
+use super::device::carry::{Contents, Left, LostParts, MadeOn};
 use super::device::{lock, DeviceShared};
 use super::dirty_pages::{DirtySource, PagesLog};
 use super::error::{internal, invalid, nil, vulkan, Error, Problem};
@@ -86,7 +86,12 @@ impl WeakBuffer {
 }
 
 struct BufferShared {
-    device: Device,
+    /// Its generation of the device: let go of once the buffer was carried to the next one and its
+    /// parts there went (`device/carry.rs`).
+    device: MadeOn,
+    /// The address of its generation's `DeviceShared`, which a command buffer's work names
+    /// (`Buffer::carried`), read without the device.
+    generation: usize,
     /// Its identity (`object_id`).
     object_id: ObjectId,
     length: u64,
@@ -695,38 +700,62 @@ pub(super) enum MemoryHold {
 /// next buffer of the same making where the recycler noted them (`recycle.rs`), else destroys the
 /// `VkBuffer` (unless it is the caller's, `Owner::Vulkan`) and frees the placement.
 pub(super) struct FixedPages {
-    device: Device,
+    /// Its generation of the device: let go of with the pages on a lost generation
+    /// ([`FixedPages::release_lost`]).
+    device: MadeOn,
     pages: Pages,
     /// The `VkBuffer` is the runtime's to destroy.
     owned: bool,
-    /// Its `VkBuffer` and memory were let go of on its lost generation, its buffer carried to the
-    /// next one ([`FixedPages::release_lost`]): its drop lets go of nothing.
+    /// Its `VkBuffer` and memory are let go of on its lost generation, its buffer carried to the
+    /// next one ([`LostBuffer`]): no work meets them, and its drop lets go of nothing.
     released: AtomicBool,
 }
 
 impl FixedPages {
     /// Destroy the `VkBuffer` and free the memory of the pages of a buffer its device's recovery
-    /// carried to the next generation, on the lost one, once none of that generation's command
-    /// buffers may record (`device/carry.rs`). Vulkan leaves a lost device's objects to the
-    /// program to destroy: "When a device is lost, its child objects are not implicitly destroyed
-    /// and their handles are still valid. Those objects must still be destroyed before their
-    /// parents or the device can be destroyed" (vkspec 5.2.3). Nothing recycles them. Once.
+    /// carried to the next generation, on the lost one at rest, marked let go of
+    /// ([`LostBuffer`]), and let go of its handle of that generation (`device/carry.rs`). Vulkan
+    /// leaves a lost device's objects to the program to destroy: "When a device is lost, its
+    /// child objects are not implicitly destroyed and their handles are still valid. Those
+    /// objects must still be destroyed before their parents or the device can be destroyed"
+    /// (vkspec 5.2.3). Nothing recycles them. Left to the process's end while it exits.
     fn release_lost(&self) {
-        if self.released.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        // The Vulkan teardown is a section of the exit guard; while the process exits, the pages
-        // are left to its end.
-        let Some(_busy) = exit_guard::enter() else {
+        let Some(busy) = exit_guard::enter() else {
             return;
         };
         let shared = self.device.shared();
         if self.owned {
-            // SAFETY: no command buffer of the lost generation records or runs any more, and
-            // every later generation's work reaches the carried buffer's own pages there.
+            // SAFETY: none of the lost generation's command buffers records or is pending, and
+            // every later one's work reaches the carried buffer's own pages.
             unsafe { release::object(shared.vk(), self.pages.raw) };
         }
         lock(&shared.memory).free(shared.vk(), &self.pages.memory.placement);
+        drop(busy);
+        // SAFETY: as above; the pages' drop reads nothing once marked.
+        unsafe { self.device.let_go() };
+    }
+}
+
+/// A carried buffer's parts on its device's lost generation (`device/carry.rs`): its pages, held
+/// until they go whether the program keeps the buffer or not, and its handle of the generation.
+struct LostBuffer {
+    pages: Arc<FixedPages>,
+    buffer: Weak<BufferShared>,
+}
+
+impl LostParts for LostBuffer {
+    fn mark(&self) {
+        self.pages.released.store(true, Ordering::Release);
+    }
+
+    fn release(self: Box<Self>) {
+        self.pages.release_lost();
+        if let Some(buffer) = self.buffer.upgrade() {
+            // SAFETY: its parts on the generation went, no command buffer of the generation
+            // records, and every other reach of the buffer goes to where it was carried
+            // (`Buffer::carried`).
+            unsafe { buffer.device.let_go() };
+        }
     }
 }
 
@@ -1962,6 +1991,21 @@ impl BufferShared {
 
 impl Drop for BufferShared {
     fn drop(&mut self) {
+        // Carried to the next generation, its parts on this one went with its handle of it
+        // (`LostBuffer`): its share of its range goes back to the space every generation shares.
+        if self.device.gone() {
+            if let Bytes::Own(own) = &self.bytes {
+                let Some(_busy) = exit_guard::enter() else {
+                    return;
+                };
+                let mut last = &*self;
+                while let Some(next) = last.next.get() {
+                    last = &next.0;
+                }
+                lock(&last.device.shared().addresses).free(own.reserved);
+            }
+            return;
+        }
         // Its staged work goes with it, and the staging buffer or host copy that work holds,
         // which hold the device: a device whose program let go of it has no submission to wait
         // for, and its last handle would otherwise be one of its own.
@@ -2830,7 +2874,7 @@ impl Device {
                 self.host_lie(identity.key, import, release, drops_writes)
             }
             Owner::Runtime | Owner::Vulkan => Lie::Fixed(Arc::new(FixedPages {
-                device: self.clone(),
+                device: MadeOn::new(self.clone()),
                 pages,
                 owned: matches!(owner, Owner::Runtime),
                 released: AtomicBool::new(false),
@@ -2936,7 +2980,8 @@ impl Device {
     ) -> Buffer {
         let options = ResourceOptions::new(modes.storage, modes.cache, own.identity.mode());
         Buffer(Arc::new(BufferShared {
-            device: self.clone(),
+            device: MadeOn::new(self.clone()),
+            generation: std::ptr::from_ref(self.shared()).addr(),
             object_id: ObjectId::new(),
             length,
             options,
@@ -3181,7 +3226,8 @@ impl Heap {
         options: ResourceOptions,
     ) -> Buffer {
         Buffer(Arc::new(BufferShared {
-            device: heap_bytes.device().clone(),
+            device: MadeOn::new(heap_bytes.device().clone()),
+            generation: std::ptr::from_ref(heap_bytes.device().shared()).addr(),
             object_id: ObjectId::new(),
             length,
             options,
@@ -3225,9 +3271,7 @@ impl Buffer {
         loop {
             // Not its parts on a lost generation, let go of: a command buffer made there after
             // that meets the buffer's next ones, a device it is not of (`Recording::begin`).
-            if records == Some(std::ptr::from_ref(shared.device.shared()).addr())
-                && !shared.released()
-            {
+            if records == Some(shared.generation) && !shared.released() {
                 return shared;
             }
             match shared.next.get() {
@@ -4336,7 +4380,8 @@ impl Buffer {
         let range_token = KeptToken::default();
         own.range_token.hand_to(&range_token);
         let carried = Buffer(Arc::new(BufferShared {
-            device: to.clone(),
+            device: MadeOn::new(to.clone()),
+            generation: std::ptr::from_ref(to.shared()).addr(),
             object_id: last.object_id,
             length,
             options: last.options,
@@ -4344,7 +4389,7 @@ impl Buffer {
             attributes: last.attributes.carried(),
             bytes: Bytes::Own(OwnBytes {
                 lie: Lie::Fixed(Arc::new(FixedPages {
-                    device: to.clone(),
+                    device: MadeOn::new(to.clone()),
                     pages: to.pages_of(raw, placement, lead, lead, reach),
                     owned: true,
                     released: AtomicBool::new(false),
@@ -4371,17 +4416,13 @@ impl Buffer {
                 return Err(Left::Failed);
             }
         }
-        let lost = Arc::downgrade(fixed);
+        let lost = LostBuffer {
+            pages: Arc::clone(fixed),
+            buffer: Arc::downgrade(last),
+        };
         let _set = last.next.set(carried);
         // Its parts on the lost generation go once none of its command buffers may record.
-        from.carry.lost(
-            from,
-            Box::new(move || {
-                if let Some(pages) = lost.upgrade() {
-                    pages.release_lost();
-                }
-            }),
-        );
+        from.carry.lost(from, Box::new(lost));
         // The program's buffer is the next generation's from now on.
         let _kept = to.visible(self.clone());
         Ok(contents)

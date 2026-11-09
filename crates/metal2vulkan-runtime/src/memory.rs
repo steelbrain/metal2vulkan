@@ -1366,8 +1366,9 @@ impl std::fmt::Debug for Exported {
 }
 
 /// What the runtime mapped that a block's memory was imported from (`Block::pages`,
-/// `Block::view`), unmapped once the memory is freed.
-type MappedPages = (Option<OwnPages>, Option<ReadOnlyView>);
+/// `Block::view`), unmapped once the memory is freed: fresh pages once every generation of the
+/// device that imported them freed theirs (`device/carry.rs`).
+type MappedPages = (Option<Arc<OwnPages>>, Option<ReadOnlyView>);
 
 /// A buffer over the first `Block::size` bytes of a block, with every usage of an addressed
 /// buffer (`buffer::usage`), whose device address gives each buffer placed in the block its own

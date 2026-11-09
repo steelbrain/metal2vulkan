@@ -436,6 +436,9 @@ impl Line {
         };
         self.lineage.recoveries.fetch_add(1, Ordering::AcqRel);
         self.changed.notify_all();
+        // The lost generation lets go of the carried objects' parts and its device-level objects
+        // of work once none of its command buffers records (`carry.rs`).
+        old.shared().carry.served_past(old.shared());
         let culprit = match previous {
             State::Lost { culprit, .. } => culprit,
             _ => None,

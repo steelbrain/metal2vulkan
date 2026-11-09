@@ -2112,14 +2112,20 @@ fn write_fields(upload: &Upload, table: u64, set: u64, count: u64) -> Result<(),
 }
 
 impl CommandBuffer {
-    /// A new command buffer of `root`, on its place `queue`, holding `slot` of it.
-    pub(super) fn new(queue: &QueueGen, root: &CommandQueue, slot: Slot) -> CommandBuffer {
+    /// A new command buffer of `root`, on its place `queue`, holding `slot` of it, counted among
+    /// its generation's that may record (`recording`).
+    pub(super) fn new(
+        queue: &QueueGen,
+        root: &CommandQueue,
+        slot: Slot,
+        recording: Recording,
+    ) -> CommandBuffer {
         let footprints = Footprints::default();
         CommandBuffer(Arc::new(CommandBufferShared {
             id: ObjectId::new(),
             generation: Arc::clone(queue.device().shared_arc()),
             device: queue.device().clone(),
-            recording: Recording::begin(queue.device().shared()),
+            recording,
             queue: queue.clone(),
             root: root.clone(),
             state: Mutex::new(State {

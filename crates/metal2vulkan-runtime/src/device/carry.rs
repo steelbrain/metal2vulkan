@@ -35,32 +35,44 @@
 //!   the generation it was carried to last everywhere: a command buffer of the lost generation
 //!   that waits for or signals it after the carry refuses it, as its device is the next
 //!   generation (`Device::foreign`).
-//! - **The lost generation's memory goes once nothing records on it** ([`Recording`]). Its
-//!   command buffers that may still record are counted, from their making to their completion
-//!   or their drop; once the recovery carried its objects and none is left, the carried buffers'
-//!   `VkBuffer`s there are destroyed and their memory freed, and the generation parks and keeps
-//!   nothing for reuse from then on (`DeviceShared::keep_nothing`): "When a device is lost, its
-//!   child objects are not implicitly destroyed and their handles are still valid. Those objects
-//!   must still be destroyed before their parents or the device can be destroyed" (vkspec 5.2.3,
-//!   "Lost Device"). A carried event's semaphore there goes with the event: a host wait begun
-//!   before the loss may wait on it. Each carried object holds the lost generation, as the
-//!   objects left there do, so the lost `VkDevice` and its device-level objects stay until the
-//!   last object made on it goes (`WorkCounts::vk_devices_live`).
+//! - **The lost generation goes once nothing records on it** ([`Recording`]). Its command
+//!   buffers that may still record are counted, from their making to their completion or their
+//!   drop. Once the line serves past it and none is left, the carried buffers' `VkBuffer`s there
+//!   are destroyed and their memory freed, a carried event's semaphore once no host call on it is
+//!   under way, and each carried object lets go of its handle of the generation ([`MadeOn`]):
+//!   "When a device is lost, its child objects are not implicitly destroyed and their handles are
+//!   still valid. Those objects must still be destroyed before their parents or the device can be
+//!   destroyed" (vkspec 5.2.3, "Lost Device"). Its device-level objects of work, what it keeps
+//!   for reuse and its kept empty blocks go then too, and no command buffer is made on it again
+//!   (`DeviceShared::keep_nothing`). So a carried object holds nothing of the lost generation:
+//!   the lost `VkDevice` goes with the last object left on it (a pooled buffer, a pipeline state,
+//!   a texture), through the teardown every generation's goes through, and holds its own objects
+//!   alone meanwhile (`WorkCounts::vk_devices_live`).
 
 use super::{lock, Device, DeviceShared};
 use crate::buffer::{Buffer, WeakBuffer};
 use crate::event::EventShared;
 use crate::Error;
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
+use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 /// The least size at which the registry drops gone objects' entries.
 const PRUNE_FLOOR: usize = 256;
 
-/// What a lost generation lets go of once nothing records on it (the module docs): the Vulkan
-/// objects of one carried object's parts there.
-pub(crate) type LostParts = Box<dyn FnOnce() + Send>;
+/// One carried object's parts on a lost generation, which it lets go of once nothing records on it
+/// (the module docs): their Vulkan objects, their memory, and the object's handle of the
+/// generation ([`MadeOn`]).
+pub(crate) trait LostParts: Send {
+    /// Under the registry's lock: mark the parts let go of, so that the work of a command buffer
+    /// made on the generation from now on meets them nowhere.
+    fn mark(&self) {}
+
+    /// Then, with no lock held: destroy their Vulkan objects, free their memory and let go of
+    /// the object's handle of the generation.
+    fn release(self: Box<Self>);
+}
 
 /// A generation's registry of what its recovery carries, and of the carried objects' parts it lets
 /// go of once none of its command buffers may record (the module docs).
@@ -84,9 +96,13 @@ struct State {
     taken: bool,
     /// The carried objects' parts on this generation, let go of once none of its command buffers
     /// may record.
-    lost: Vec<LostParts>,
-    /// None of its command buffers recorded once the recovery took its objects: what it keeps for
-    /// reuse went (`DeviceShared::keep_nothing`).
+    lost: Vec<Box<dyn LostParts>>,
+    /// The line serves a later generation ([`Carry::served_past`]): no call's command buffer is
+    /// made here any more but one that passed its loss check before the loss.
+    past: bool,
+    /// None of its command buffers recorded once the line served past it: what it keeps for reuse
+    /// and its device-level objects went (`DeviceShared::keep_nothing`), and no command buffer is
+    /// made here again ([`Recording::begin`]).
     at_rest: bool,
 }
 
@@ -144,41 +160,74 @@ impl Carry {
 
     /// A carried object's `parts` on `shared`, this generation, let go of once none of its
     /// command buffers may record: here where none may.
-    pub(crate) fn lost(&self, shared: &DeviceShared, parts: LostParts) {
+    pub(crate) fn lost(&self, shared: &DeviceShared, parts: Box<dyn LostParts>) {
         lock(&self.state).lost.push(parts);
         self.let_go_at_rest(shared);
     }
 
-    /// On `shared`, this generation: let go of the carried objects' parts once the recovery took
-    /// the generation's objects and none of its command buffers may record, and the first time,
-    /// of what it keeps for reuse (`DeviceShared::keep_nothing`). Under the registry's lock, which
-    /// a command buffer made after that takes ([`Recording::begin`]), so its work meets none of
-    /// the parts let go of (`Buffer::s`). Called without a lock of a command buffer's.
+    /// The line serves the generation `shared`'s recovery made, past `shared`, this one: let go
+    /// of what it may ([`let_go_at_rest`](Self::let_go_at_rest)).
+    pub(super) fn served_past(&self, shared: &DeviceShared) {
+        lock(&self.state).past = true;
+        self.let_go_at_rest(shared);
+    }
+
+    /// On `shared`, this generation, once the line serves past it and none of its command
+    /// buffers may record: let go of the carried objects' parts, and the first time, of what it
+    /// keeps for reuse and its device-level objects (`DeviceShared::keep_nothing`). The parts are
+    /// marked under the registry's lock, which a command buffer made after that takes
+    /// ([`Recording::begin`]), so its work meets none of them (`Buffer::s`), and released after
+    /// it. Called with none of a command buffer's locks held, by a holder of the generation.
     fn let_go_at_rest(&self, shared: &DeviceShared) {
-        let mut state = lock(&self.state);
-        if !state.taken || self.recording.load(Ordering::SeqCst) > 0 {
-            return;
-        }
-        for parts in state.lost.drain(..) {
-            parts();
-        }
-        if !state.at_rest {
+        let (lost, first) = {
+            let mut state = lock(&self.state);
+            if !state.taken || !state.past || self.recording.load(Ordering::SeqCst) > 0 {
+                return;
+            }
+            let lost: Vec<Box<dyn LostParts>> = state.lost.drain(..).collect();
+            for parts in &lost {
+                parts.mark();
+            }
+            let first = !state.at_rest;
             state.at_rest = true;
+            (lost, first)
+        };
+        if first {
             shared.keep_nothing();
+        }
+        for parts in lost {
+            parts.release();
         }
     }
 }
 
 impl DeviceShared {
-    /// A lost generation whose recovery carried its objects on, none of its command buffers left
-    /// to record, on which nothing is made again: its parked buffers and images and the empty
-    /// blocks it keeps go, and it parks and keeps none from now on, so the memory a carried
-    /// object left there goes back to the device (`Recycler::close`, `Memory::keep_none`). Left
-    /// to the process's end while it exits.
+    /// A lost generation whose recovery carried its objects on, the line serving past it and none
+    /// of its command buffers left to record, on which no work is made again: its device-level
+    /// objects of work (the internal submissions' and the staging queue's pools, the runtime's own
+    /// kernels, the GPU pools' blocks, the mipmap scratch), its parked buffers and images and the
+    /// empty blocks it keeps go, and it parks and keeps none from now on. So the objects left on
+    /// it hold the bare `VkDevice` and their own memory alone, and a carried object's memory there
+    /// goes back to the device (`Recycler::close`, `Memory::keep_none`). Its teardown destroys the
+    /// rest, and the `VkDevice`, as ever (`DeviceShared`'s drop). Left to the process's end while
+    /// it exits.
     fn keep_nothing(&self) {
         let Some(_busy) = crate::exit_guard::enter() else {
             return;
         };
+        // SAFETY: the device is live. Its queues were waited idle by its recovery; a wait on a
+        // lost device returns in finite time (vkspec 5.2.3).
+        let _ = unsafe { self.vk().device_wait_idle() };
+        crate::exit_guard::called(crate::exit_guard::Call::DeviceWaitIdle);
+        if let Some(internal) = lock(&self.internal).take() {
+            internal.destroy(self.vk());
+        }
+        if let Some(staging) = &self.staging {
+            staging.destroy(self.vk());
+        }
+        lock(&self.owned_kernels).destroy(self.vk());
+        lock(&self.mipmap_scratch).destroy(self.vk(), &mut lock(&self.memory));
+        self.gpu_pools.destroy(self.vk(), &mut lock(&self.memory));
         lock(&self.recycled_buffers).close(self.vk(), &mut lock(&self.memory));
         lock(&self.textures.recycled).close(self.vk(), &mut lock(&self.memory));
         lock(&self.memory).keep_none(self.vk());
@@ -193,18 +242,20 @@ pub(crate) struct Recording {
 }
 
 impl Recording {
-    /// A command buffer made on `shared`'s generation, which may record. On a generation whose
-    /// recovery took its objects, after the carried objects' parts there were let go of, if they
-    /// were: its work then meets them nowhere (`Buffer::s`).
-    pub(crate) fn begin(shared: &DeviceShared) -> Recording {
+    /// A command buffer made on `shared`'s generation, which may record: `None` on a lost
+    /// generation at rest, whose device-level objects of work went (`Carry::let_go_at_rest`), for
+    /// a call that passed its loss check before the loss to refuse as on the lost device.
+    pub(crate) fn begin(shared: &DeviceShared) -> Option<Recording> {
         let carry = &shared.carry;
         carry.recording.fetch_add(1, Ordering::SeqCst);
-        if carry.taken.load(Ordering::SeqCst) {
-            drop(lock(&carry.state));
+        if carry.taken.load(Ordering::SeqCst) && lock(&carry.state).at_rest {
+            // At rest, nothing is left to let go of on its end.
+            carry.recording.fetch_sub(1, Ordering::SeqCst);
+            return None;
         }
-        Recording {
+        Some(Recording {
             ended: AtomicBool::new(false),
-        }
+        })
     }
 
     /// The command buffer records no more on `shared`'s generation, its own: completed, or
@@ -360,8 +411,6 @@ impl Device {
         for buffer in &buffers {
             carried.buffer(buffer.carry(next));
         }
-        // Let go of where none of this generation's command buffers may record.
-        self.shared().carry.let_go_at_rest(self.shared());
         carried
     }
 
@@ -377,5 +426,70 @@ impl Device {
         }
         // A refusal leaves the object the lost generation's, refused where it meets the next.
         let _carried = carry(&serving);
+    }
+}
+
+/// The device of an object a recovery may carry (a buffer, its pages, an event): the generation it
+/// was made on, as every object's device is, until the object's parts there were let go of
+/// (`Carry::lost`); then let go of itself ([`MadeOn::let_go`]), so a carried object holds the lost
+/// generation no longer and that generation goes with the objects left on it (the module docs).
+/// Read as a [`Device`] at one indirection, as the field it stands for.
+pub(crate) struct MadeOn {
+    device: UnsafeCell<ManuallyDrop<Device>>,
+    /// It was let go of.
+    gone: AtomicBool,
+}
+
+// SAFETY: it is a `Device`, which is `Send` and `Sync`, read through shared references, and let
+// go of once, when nothing reads it any more (`MadeOn::let_go`'s contract).
+unsafe impl Sync for MadeOn {}
+
+impl MadeOn {
+    /// `device`'s handle.
+    pub(crate) fn new(device: Device) -> MadeOn {
+        MadeOn {
+            device: UnsafeCell::new(ManuallyDrop::new(device)),
+            gone: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether it was let go of: the object's parts on the generation went, the object carried.
+    pub(crate) fn gone(&self) -> bool {
+        self.gone.load(Ordering::Acquire)
+    }
+
+    /// Let go of the handle, once.
+    ///
+    /// # Safety
+    ///
+    /// Nothing reads it from now on but [`gone`](Self::gone): its object's parts on the
+    /// generation were let go of and no work of the generation's reaches them
+    /// (`Carry::let_go_at_rest`), and every other reach of the object goes to where it was
+    /// carried.
+    pub(crate) unsafe fn let_go(&self) {
+        if self.gone.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        // SAFETY: the caller's: no reference to the handle is left, and none is taken again.
+        unsafe { ManuallyDrop::drop(&mut *self.device.get()) };
+    }
+}
+
+impl std::ops::Deref for MadeOn {
+    type Target = Device;
+
+    #[inline(always)]
+    fn deref(&self) -> &Device {
+        // SAFETY: it lives until `let_go`, after which nothing reads it (its contract).
+        unsafe { &*self.device.get() }
+    }
+}
+
+impl Drop for MadeOn {
+    fn drop(&mut self) {
+        if !*self.gone.get_mut() {
+            // SAFETY: not let go of, and the last reference.
+            unsafe { ManuallyDrop::drop(self.device.get_mut()) };
+        }
     }
 }

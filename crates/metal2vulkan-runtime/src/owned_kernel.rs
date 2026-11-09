@@ -601,11 +601,18 @@ pub(super) struct OwnedKernels {
     predication_step: Option<OwnedKernel>,
     twin_decodes: HashMap<TwinDecode, OwnedKernel>,
     tessellation_scans: HashMap<TessellationScanKernel, OwnedKernel>,
+    /// Every kernel was destroyed: a lost device's once its recovery carried its objects on and
+    /// none of its command buffers records (`device/carry.rs`), before its teardown.
+    destroyed: bool,
 }
 
 impl OwnedKernels {
-    /// Destroy every kernel; the device is idle, and is destroyed next.
-    pub(super) fn destroy(&self, raw: &ash::Device) {
+    /// Destroy every kernel, once; the device is idle, and is destroyed next or makes no work
+    /// again (`device/carry.rs`).
+    pub(super) fn destroy(&mut self, raw: &ash::Device) {
+        if std::mem::replace(&mut self.destroyed, true) {
+            return;
+        }
         for kernel in [
             self.visibility_combine,
             self.index_bounds_plan,

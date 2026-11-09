@@ -97,6 +97,7 @@ use super::command_buffer::revocation::QueueErrors;
 use super::command_buffer::CommandBuffer;
 use super::contexts;
 use super::degradation::Degradation;
+use super::device::carry::Recording;
 use super::device::{lock, Device};
 use super::error::{Error, Invalid, Problem};
 use super::queue_share::Choice;
@@ -706,7 +707,11 @@ impl QueueGen {
         // Counted with its slot: it waits out a fetched render target's switch to its storage
         // form, if one is under way (`texture/storage_form.rs`).
         self.0.device.storage_form_wait();
-        let command_buffer = CommandBuffer::new(self, root, slot);
+        // Refused on a lost generation at rest, past its loss check (`device/carry.rs`).
+        let Some(recording) = Recording::begin(self.0.device.shared()) else {
+            return Err(self.0.device.lost_refusal());
+        };
+        let command_buffer = CommandBuffer::new(self, root, slot, recording);
         if joined {
             self.0.device.degrade_once(Degradation::QueueSharing, || {
                 (

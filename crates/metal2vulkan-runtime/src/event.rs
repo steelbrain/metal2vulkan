@@ -52,6 +52,7 @@
 //!   (measured on Metal).
 
 use super::command_buffer::follow::Follow;
+use super::device::carry::{LostParts, MadeOn};
 use super::device::{lock, Device};
 use super::error::{vulkan, Error, RuntimeGap};
 use super::event_timeline::{EventTimeline, Signal, WaitFor};
@@ -59,7 +60,7 @@ use super::exit_guard::{self, Call};
 use crate::release;
 use ash::vk;
 use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 /// How long a host wait goes at most without reading the semaphore's counter.
@@ -124,7 +125,9 @@ pub type SharedEventNotification = Box<dyn FnOnce(&SharedEvent, u64) + Send + 's
 
 /// What both kinds of event share.
 pub(super) struct EventShared {
-    device: Device,
+    /// Its generation of the device: let go of once the event was carried to the next one and
+    /// its semaphore there went (`EventShared::release_lost`).
+    device: MadeOn,
     /// The timeline semaphore; its counter is the signal index.
     semaphore: vk::Semaphore,
     /// The semaphore was made exportable as an opaque file descriptor
@@ -139,6 +142,56 @@ pub(super) struct EventShared {
     /// a new semaphore there, which every call of the program's goes to from then on
     /// ([`EventShared::serving`]). Set once, under the state's lock.
     next: OnceLock<Arc<EventShared>>,
+    /// The host's calls on the semaphore under way ([`EventShared::host_use`]), whose last lets
+    /// the semaphore of an event carried to the next generation go.
+    uses: Mutex<HostUses>,
+}
+
+/// The host's calls on an event's semaphore under way (`EventShared::host_use`): a read of its
+/// counter, a host wait's slice, a reservation of a caller's signal.
+#[derive(Default)]
+struct HostUses {
+    under_way: usize,
+    /// The event was carried to its device's next generation and its lost generation is at rest
+    /// (`device/carry.rs`): its semaphore goes once no call is under way, and none begins again.
+    lost: bool,
+}
+
+/// One host call on an event's semaphore (`EventShared::host_use`), until it goes.
+struct HostUse<'a>(&'a EventShared);
+
+impl Drop for HostUse<'_> {
+    fn drop(&mut self) {
+        let last = {
+            let mut uses = lock(&self.0.uses);
+            uses.under_way -= 1;
+            uses.under_way == 0 && uses.lost
+        };
+        if last {
+            self.0.release_lost();
+        }
+    }
+}
+
+/// An event's parts on its device's lost generation, which a recovery carried it from
+/// (`device/carry.rs`): its semaphore and its handle of the generation.
+struct LostEvent(Weak<EventShared>);
+
+impl LostParts for LostEvent {
+    fn release(self: Box<Self>) {
+        let Some(event) = self.0.upgrade() else {
+            return;
+        };
+        let now = {
+            let mut uses = lock(&event.uses);
+            uses.lost = true;
+            uses.under_way == 0
+        };
+        // Else the last call under way lets them go.
+        if now {
+            event.release_lost();
+        }
+    }
 }
 
 struct EventState {
@@ -167,6 +220,10 @@ impl PartialEq for EventShared {
 
 impl Drop for EventShared {
     fn drop(&mut self) {
+        // Carried to the next generation, its semaphore went (`EventShared::release_lost`).
+        if self.device.gone() {
+            return;
+        }
         // Once the process is exiting, the semaphore is left to its end (`exit_guard`).
         let Some(_busy) = exit_guard::enter() else {
             return;
@@ -206,7 +263,7 @@ impl EventShared {
             unsafe { device.shared().vk().create_semaphore(&info, None) }.map_err(vulkan)?;
         device.shared().interop.timeline_made(semaphore);
         let event = Arc::new(EventShared {
-            device: device.clone(),
+            device: MadeOn::new(device.clone()),
             semaphore,
             exportable: export.is_some(),
             state: Mutex::new(EventState {
@@ -217,6 +274,7 @@ impl EventShared {
             changed: Condvar::new(),
             label: Mutex::new(None),
             next: OnceLock::new(),
+            uses: Mutex::default(),
         });
         // Kept for the device's recovery; one made after its recovery took this generation's
         // events is carried here, by its maker (`device/carry.rs`).
@@ -284,9 +342,47 @@ impl EventShared {
             // The host waits asleep on it go on with the event carried.
             self.changed.notify_all();
         }
+        // Its semaphore here goes once the lost generation is at rest and no host call on it is
+        // under way.
+        let from = self.device.shared();
+        from.carry
+            .lost(from, Box::new(LostEvent(Arc::downgrade(self))));
         let due = due(&mut lock(&next.state));
         next.post(due);
         Ok(())
+    }
+
+    /// A host call on the semaphore, under way until the result goes: `None` once the event was
+    /// carried to its device's next generation and its semaphore here went or goes as the calls
+    /// under way end, which the caller then makes on the event carried, or answers without.
+    fn host_use(&self) -> Option<HostUse<'_>> {
+        let mut uses = lock(&self.uses);
+        if uses.lost {
+            return None;
+        }
+        uses.under_way += 1;
+        Some(HostUse(self))
+    }
+
+    /// Destroy the semaphore of an event carried to its device's next generation, on the lost one
+    /// at rest, once no host call on it is under way (`HostUses`), and let go of its handle of
+    /// that generation: none of the generation's batches is pending (vkspec 5.2.3: a wait for one
+    /// on a lost device returns in finite time), and a host wait on the semaphore that began
+    /// before the loss returned ("If device loss occurs (see Lost Device) before the timeout has
+    /// expired, vkWaitSemaphores must return in finite time with either VK_SUCCESS or
+    /// VK_ERROR_DEVICE_LOST", vkspec 7.4.4). Left to the process's end while it exits.
+    fn release_lost(&self) {
+        let Some(busy) = exit_guard::enter() else {
+            return;
+        };
+        let shared = self.device.shared();
+        shared.interop.timeline_gone(self.semaphore);
+        // SAFETY: no batch or host call uses the semaphore any more (above), and none begins.
+        unsafe { release::object(shared.vk(), self.semaphore) };
+        drop(busy);
+        // SAFETY: every call of the program's goes to the event carried; no host call on this one
+        // begins again, and none of the generation's command buffers records.
+        unsafe { self.device.let_go() };
     }
 
     /// The device.
@@ -385,6 +481,10 @@ impl EventShared {
     /// the GPU. Refused where the device is lost, or where the watcher's thread cannot start then:
     /// nothing is reserved.
     pub(super) fn reserve_signal(self: &Arc<Self>, value: u64) -> Result<Signal, Error> {
+        let Some(_use) = self.host_use() else {
+            // Carried: its semaphore here went.
+            return self.serving().reserve_signal(value);
+        };
         if self.device.is_lost() {
             return Err(self.device.lost_refusal());
         }
@@ -466,7 +566,9 @@ impl EventShared {
     /// observed (the module docs). Once the process is exiting, the counter is not read
     /// (`exit_guard`): the value is the one last seen.
     pub(super) fn value(self: &Arc<Self>) -> u64 {
-        if let Some(busy) = exit_guard::enter() {
+        // Carried, its semaphore here gone: the value it was carried at.
+        let host_use = self.host_use();
+        if let Some(busy) = host_use.as_ref().and_then(|_| exit_guard::enter()) {
             let raw = self.device.shared().vk();
             // SAFETY: the semaphore is the device's and live. A failure (a lost device) leaves
             // the value as last seen.
@@ -646,9 +748,16 @@ fn watch(signals: &CallerSignals) {
                 }
             }
         };
-        match event.wait_landed(index, WATCH_SLICE) {
-            Some(true) => {
+        // A carried event's semaphore here went: as on the lost device it was carried from.
+        let landed = event.host_use().and_then(|_use| {
+            let landed = event.wait_landed(index, WATCH_SLICE);
+            if landed == Some(true) {
                 event.landed(index);
+            }
+            landed
+        });
+        match landed {
+            Some(true) => {
                 lock(&signals.state).pending.pop_front();
             }
             Some(false) => {}
