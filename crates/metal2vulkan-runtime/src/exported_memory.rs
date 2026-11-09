@@ -170,6 +170,12 @@ impl FdExport {
             dedicated_only: features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY),
         })
     }
+
+    /// Whether the device exports such memory from a block that buffers share, not only from a
+    /// buffer's dedicated allocation.
+    pub(super) fn pooled(&self) -> bool {
+        !self.dedicated_only
+    }
 }
 
 /// No Metal counterpart: a buffer's memory, exported as a file descriptor of its handle type

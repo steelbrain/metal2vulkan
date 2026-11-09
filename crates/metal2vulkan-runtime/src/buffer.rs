@@ -37,7 +37,9 @@ use super::host_memory::{HeldBack, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
 #[cfg(unix)]
 use super::host_residency::{Again, Residency};
-use super::memory::{BoundMemory, Mapped, MemoryClass, Placement, BLOCK_BYTES};
+use super::memory::{
+    BoundMemory, Holds, Mapped, MemoryClass, Placement, BLOCK_BYTES, EXPORT_HANDLE,
+};
 use super::program_objects::ProgramObject;
 use super::rebind::{ImportHold, Unexact};
 use super::recycle::{self, BufferMaking};
@@ -2311,6 +2313,28 @@ impl Device {
         Ok(buffer)
     }
 
+    /// A `Shared` buffer of `length` bytes, all zero, outside the Metal address space, in a
+    /// block of the runtime's pooled memory that is exported as no handle type, whatever kind of
+    /// block the device's own buffers take (`memory.rs`'s `Holds::FdBuffers`): the in-place
+    /// check's class of pooled memory (`in_place_check.rs`, `PagesClass::Pooled`), whose image
+    /// names no handle type. Refused as [`Device::new_buffer`] refuses its length.
+    pub(super) fn pooled_check_buffer(&self, length: u64) -> Result<Buffer, Error> {
+        const CALL: &str = "new_buffer";
+        let modes = Modes::of(ResourceOptions::shared())?;
+        let class = buffer_class(CALL, modes)?;
+        if length == 0 || length > self.properties().max_buffer_length {
+            return Err(nil(CALL, Problem::BufferLength { length }));
+        }
+        let placed = (AddressPlacement::Outside.into(), None);
+        self.zeroed_buffer_of(
+            CALL,
+            length,
+            (modes, class),
+            NewBufferOf::PlainBlock,
+            placed,
+        )
+    }
+
     /// A `Private` buffer of `length` bytes that the runtime makes for its own use and whose
     /// bytes hold no value before the GPU writes them: made without a submission, so that one of
     /// the runtime's sections, a host step's replay of an emulated mesh draw among them, makes
@@ -2388,7 +2412,9 @@ impl Device {
         let (of_heap, fresh) = match of {
             NewBufferOf::Heap => (true, FreshPages::WherePaid),
             NewBufferOf::Runtime(fresh) => (false, fresh),
+            NewBufferOf::PlainBlock => (false, FreshPages::WherePaid),
         };
+        let plain = of == NewBufferOf::PlainBlock;
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
@@ -2413,26 +2439,42 @@ impl Device {
             Some(_) => MemoryClass::Private,
             None => class,
         };
+        // The kind of block it lies in: one of the runtime's own lies where the device's own
+        // buffers do, whose blocks may be exportable as an opaque file descriptor, so that its
+        // `VkBuffer` names that handle type there (`VUID-vkBindBufferMemory-memory-02726`;
+        // `memory.rs`'s `Holds::FdBuffers`).
+        let holds = match of {
+            NewBufferOf::Runtime(_) => lock(&shared.memory).own_buffers(),
+            NewBufferOf::Heap | NewBufferOf::PlainBlock => Holds::Buffers,
+        };
+        let mut external =
+            vk::ExternalMemoryBufferCreateInfo::default().handle_types(EXPORT_HANDLE);
         // Its device address is its block's (`place_buffer_with`).
-        let info = shared.sharing().buffer(
+        let mut info = shared.sharing().buffer(
             vk::BufferCreateInfo::default()
                 .size(size)
                 .usage(usage(false)),
         );
+        if holds == Holds::FdBuffers {
+            info = info.push_next(&mut external);
+        }
         // A heap's own buffer lies where its textures can too, and is never parked. A long
         // host-visible one of the runtime's own lies in fresh pages where the device takes them
         // and its check found a held import adds nothing to its submissions (`fresh_pages.rs`).
+        // The in-place check's buffer of pooled memory lies in neither.
         let wants_fresh = !of_heap
+            && !plain
             && lead == 0
             && fresh_pages::takes_fresh_pages(size, class)
             && shared.host_import.is_ok()
             && (fresh == FreshPages::Wherever || self.fresh_pages_pay_now());
-        let making =
-            (!of_heap && lead == 0 && fresh == FreshPages::WherePaid).then_some(BufferMaking {
+        let making = (!of_heap && !plain && lead == 0 && fresh == FreshPages::WherePaid).then_some(
+            BufferMaking {
                 size,
                 class,
                 fresh_pages: wants_fresh,
-            });
+            },
+        );
         let mut taken = making.and_then(|making| self.recycled_buffer(&making));
         let fresh = match (&taken, wants_fresh) {
             (None, true) => self.fresh_page_buffer(size, class)?,
@@ -2479,7 +2521,7 @@ impl Device {
                 let placed = if of_heap {
                     self.place_heap_buffer(raw, length, class, placement)
                 } else {
-                    self.place_buffer(raw, length, class, placement)
+                    self.place_buffer_in(raw, length, (class, holds), placement)
                 };
                 match placed {
                     Ok(placed) => {
@@ -2637,7 +2679,7 @@ impl Device {
             raw,
             requirements,
             required.size,
-            MemoryClass::Private,
+            (MemoryClass::Private, Holds::Buffers),
             AddressPlacement::Outside.into(),
             false,
         );
@@ -2903,9 +2945,21 @@ impl Device {
         class: MemoryClass,
         at: Place,
     ) -> Result<(Placement, (GpuAddress, Held)), Error> {
+        self.place_buffer_in(raw, length, (class, Holds::Buffers), at)
+    }
+
+    /// [`place_buffer`](Device::place_buffer) in a block that holds `holds`: `Holds::Buffers`, or
+    /// `Holds::FdBuffers` for a buffer made for `EXPORT_HANDLE` (`memory.rs`).
+    fn place_buffer_in(
+        &self,
+        raw: vk::Buffer,
+        length: u64,
+        (class, holds): (MemoryClass, Holds),
+        at: Place,
+    ) -> Result<(Placement, (GpuAddress, Held)), Error> {
         // SAFETY: `raw` is a live buffer of this device.
         let requirements = unsafe { self.shared().vk().get_buffer_memory_requirements(raw) };
-        self.place_buffer_with(raw, requirements, length, class, at, true)
+        self.place_buffer_with(raw, requirements, length, (class, holds), at, true)
     }
 
     /// [`place_buffer`](Device::place_buffer) for a heap's own buffer: where the heap's textures
@@ -2920,19 +2974,20 @@ impl Device {
         // SAFETY: `raw` is a live buffer of this device.
         let own = unsafe { self.shared().vk().get_buffer_memory_requirements(raw) };
         let requirements = self.heap_requirements(own, class)?;
-        self.place_buffer_with(raw, requirements, length, class, at, true)
+        self.place_buffer_with(raw, requirements, length, (class, Holds::Buffers), at, true)
     }
 
     /// [`place_buffer`](Device::place_buffer) in memory that meets `requirements`, which hold
-    /// the buffer's own. Where `block_address`, `raw` was made without the device-address usage
-    /// and its device address is its block's (`memory::allocate_addressed`, the placement's
-    /// `address`); else its own, where it has the usage.
+    /// the buffer's own, in a block that holds `holds` ([`Device::place_buffer_in`]). Where
+    /// `block_address`, `raw` was made without the device-address usage and its device address
+    /// is its block's (`memory::allocate_addressed`, the placement's `address`); else its own,
+    /// where it has the usage.
     fn place_buffer_with(
         &self,
         raw: vk::Buffer,
         requirements: vk::MemoryRequirements,
         length: u64,
-        class: MemoryClass,
+        (class, holds): (MemoryClass, Holds),
         at: Place,
         block_address: bool,
     ) -> Result<(Placement, (GpuAddress, Held)), Error> {
@@ -2940,15 +2995,15 @@ impl Device {
         let raw_device = shared.vk();
         let requirements = placed(requirements);
         let placement = if block_address {
-            crate::memory::allocate_addressed(
+            crate::memory::allocate_addressed_in(
                 &shared.memory,
                 raw_device,
                 &requirements,
-                class,
+                (class, holds),
                 &shared.counts,
             )?
         } else {
-            crate::memory::allocate(&shared.memory, raw_device, &requirements, class)?
+            crate::memory::allocate_in(&shared.memory, raw_device, &requirements, class, holds)?
         };
         // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
         let bound = unsafe {
@@ -2971,14 +3026,19 @@ impl Device {
     }
 }
 
-/// Whose a buffer [`Device::placed_new_buffer`] makes is: a heap's own buffer, or one of the
-/// runtime's own, with where it lies in fresh pages.
+/// Whose a buffer [`Device::placed_new_buffer`] makes is: a heap's own buffer, one of the
+/// runtime's own, with where it lies in fresh pages, or the in-place check's of pooled memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NewBufferOf {
-    /// A heap's own buffer (`heap.rs`), never in fresh pages.
+    /// A heap's own buffer (`heap.rs`), never in fresh pages, in a block of `Holds::Buffers`.
     Heap,
-    /// A buffer of the runtime's own, in fresh pages where it says.
+    /// A buffer of the runtime's own, in fresh pages where it says, else in a block of the kind
+    /// the device's own buffers take (`memory.rs`'s `Memory::own_buffers`).
     Runtime(FreshPages),
+    /// The in-place check's buffer of the runtime's pooled memory (`in_place_check.rs`,
+    /// `PagesClass::Pooled`): in a block of `Holds::Buffers`, whose memory is exported as no
+    /// handle type, never in fresh pages and never parked.
+    PlainBlock,
 }
 
 /// Where [`Device::placed_new_buffer`] lays a long host-visible buffer of the runtime's own in

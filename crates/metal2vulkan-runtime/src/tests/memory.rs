@@ -1,5 +1,5 @@
 use crate::memory::{
-    candidates, host_cached, host_cached_placement, host_incoherent, kept_budget,
+    candidates, fd_buffer_types, host_cached, host_cached_placement, host_incoherent, kept_budget,
     overflow_candidates, MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
 };
 use ash::vk;
@@ -236,6 +236,55 @@ fn unified_private_memory_takes_the_system_heap_first() {
         ty(P::DEVICE_LOCAL | P::HOST_VISIBLE | P::HOST_COHERENT),
     ];
     assert_eq!(candidates(&anv, 0b11, private, true), [0, 1]);
+}
+
+/// The memory types whose blocks of the runtime's own buffers are allocated exportable as an
+/// opaque file descriptor (`memory.rs`'s "Buffers in exportable blocks"): with unified memory,
+/// those of a heap that is not device-local, where the device exports such memory from a pooled
+/// block; else none, and why.
+#[test]
+fn own_buffer_blocks_are_exportable_in_a_unified_device_s_system_heap() {
+    use vk::MemoryPropertyFlags as P;
+    // RADV (Mesa 26.2.4) on a Radeon 780M: heap 0 device-local, heap 1 system memory; types as
+    // in `unified_private_memory_takes_the_system_heap_first`, each in the heap its flags say.
+    let flags = [
+        0x1, 0x1, 0x6, 0x7, 0x7, 0xe, 0xe, 0x21, 0x21, 0x21, 0x21, 0x20, 0x20, 0xc1, 0xc6, 0xc7,
+        0xce,
+    ];
+    let properties = |flags: &[u32], heaps: &[vk::MemoryHeapFlags]| {
+        let mut properties = vk::PhysicalDeviceMemoryProperties {
+            memory_type_count: flags.len() as u32,
+            memory_heap_count: heaps.len() as u32,
+            ..Default::default()
+        };
+        for (at, &flags) in flags.iter().enumerate() {
+            let flags = P::from_raw(flags);
+            let heap = u32::from(!flags.contains(P::DEVICE_LOCAL) && heaps.len() > 1);
+            properties.memory_types[at] = vk::MemoryType {
+                property_flags: flags,
+                heap_index: heap,
+            };
+        }
+        for (at, &flags) in heaps.iter().enumerate() {
+            properties.memory_heaps[at] = vk::MemoryHeap {
+                size: 1 << 33,
+                flags,
+            };
+        }
+        properties
+    };
+    let local = vk::MemoryHeapFlags::DEVICE_LOCAL;
+    let radv = properties(&flags, &[local, vk::MemoryHeapFlags::empty()]);
+    let system = 1 << 2 | 1 << 5 | 1 << 6 | 1 << 11 | 1 << 12 | 1 << 14 | 1 << 16;
+    assert_eq!(fd_buffer_types(&radv, true, Ok(())), Ok(system));
+    // Where the device exports no such memory from a pooled block, none, for its reason.
+    let refused = "refused";
+    assert_eq!(fd_buffer_types(&radv, true, Err(refused)), Err(refused));
+    // Without unified memory (a discrete GPU's system heap), none.
+    assert!(fd_buffer_types(&radv, false, Ok(())).is_err());
+    // Every heap device-local (ANV, lavapipe, MoltenVK): none.
+    let anv = properties(&[0x1, 0x7], &[local]);
+    assert!(fd_buffer_types(&anv, true, Ok(())).is_err());
 }
 
 /// No class takes a device-coherent or device-uncached type of `VK_AMD_device_coherent_memory`,

@@ -64,6 +64,29 @@
 //!   buffers alone share, pooled and kept as any other; or in its dedicated allocation, freed with
 //!   it, where the device needs or prefers one for the export.
 //!
+//! - **Buffers in exportable blocks** ([`Holds::FdBuffers`], [`fd_buffer_types`]). On a device
+//!   with unified memory whose memory types of a heap that is not device-local (the system
+//!   heap, where `Private` memory lies first, [`candidates`]) export an opaque file descriptor of
+//!   a pooled buffer's memory (`vkGetPhysicalDeviceExternalBufferProperties`, for the program's
+//!   buffers' usage and a buffer of addresses' usage: exportable, and not only from a dedicated
+//!   allocation), the buffers the runtime's buffer path makes (`buffer.rs`'s
+//!   `placed_new_buffer`: the program's, those of buffer descriptors, and the runtime's own, not a
+//!   heap's own buffer nor the in-place check's buffer of pooled memory) are made with
+//!   `VkExternalMemoryBufferCreateInfo` naming that handle type and lie in blocks of their own,
+//!   whose blocks of those memory types are allocated exportable as it (`VkExportMemoryAllocateInfo`)
+//!   and never exported; their buffers of addresses are made for it too, as a buffer bound in
+//!   such memory must name its handle type (`VUID-vkBindBufferMemory-memory-02726`), and an image
+//!   bound in it names it as well (`VUID-vkBindImageMemory-memory-02728`, [`Memory::bound_memory`]:
+//!   a texture over such a buffer takes the in-place check's class of the runtime's memory
+//!   exported as opaque file descriptors). On a Radeon 780M (RADV) a block's `vkAllocateMemory`
+//!   of a buffer object private to the process takes the reservation of the process's GPU
+//!   address space, which every submission also takes, for as long as the kernel fills its
+//!   pages: each 64 MiB block of the system heap held the scheduler's `vkQueueSubmit` 9 ms on a
+//!   quiet host, and up to 22 ms on one whose free memory lay in single pages; memory allocated
+//!   exportable is a buffer object of its own reservation, whose making held no submission. Such
+//!   memory costs each submission about 0.9 us more for each such block (`docs/FAST-PATHS.md`).
+//!   Every other block of buffers, of images and of a heap is allocated as before.
+//!
 //! - **Blocks made ahead** (`memory/ready.rs`). Each pool the encodings and commits place their
 //!   own resources in ([`keep_room`]) gets a block made off the program's thread while it grows,
 //!   and the pool a color texture's host-transfer image places in ([`Memory::host_copy_pool`])
@@ -196,29 +219,101 @@ pub(super) enum MemoryClass {
 /// blocks are allocated exportable, as an opaque file descriptor ([`EXPORT_HANDLE`]) or as a
 /// dma-buf ([`DMA_BUF_HANDLE`]), which a buffer made without that handle type may not be bound to
 /// (`VUID-vkBindBufferMemory-memory-02726`), and the buffers of each handle type share them.
+///
+/// A fifth, [`Holds::FdBuffers`], holds the buffers the runtime's buffer path makes on a device
+/// whose blocks of them in memory of a heap that is not device-local are allocated exportable as
+/// an opaque file descriptor, never exported (the module docs, "Buffers in exportable blocks").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Holds {
     Buffers,
     Images,
     Exports,
     DmaBufs,
+    /// The buffers `buffer.rs`'s `placed_new_buffer` makes for the program and for the runtime
+    /// (not a heap's own buffer, nor the in-place check's buffer of pooled memory), on a device
+    /// that takes such blocks ([`Memory::fd_buffer_blocks`]): each made with
+    /// `VkExternalMemoryBufferCreateInfo` naming [`EXPORT_HANDLE`], so that it may be bound in a
+    /// block allocated exportable as that handle type (`VUID-vkBindBufferMemory-memory-02726`).
+    /// Its blocks of the memory types [`fd_buffer_types`] names are allocated so, its others as
+    /// any block of buffers.
+    FdBuffers,
 }
 
 impl Holds {
     /// The kinds, in the order of the device's pools ([`Memory::pool`]).
-    const ALL: [Holds; 4] = [
+    const ALL: [Holds; 5] = [
         Holds::Buffers,
         Holds::Images,
         Holds::Exports,
         Holds::DmaBufs,
+        Holds::FdBuffers,
     ];
 
-    /// The handle type its blocks are allocated exportable as; `None` for blocks not exported.
+    /// The handle type its blocks are allocated exportable as for another API's import; `None`
+    /// for blocks never exported, [`Holds::FdBuffers`]' among them.
     fn handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
         match self {
-            Holds::Buffers | Holds::Images => None,
+            Holds::Buffers | Holds::Images | Holds::FdBuffers => None,
             Holds::Exports => Some(EXPORT_HANDLE),
             Holds::DmaBufs => Some(DMA_BUF_HANDLE),
+        }
+    }
+
+    /// Whether its blocks hold buffers, and so may carry a buffer of addresses.
+    fn buffers(self) -> bool {
+        matches!(self, Holds::Buffers | Holds::FdBuffers)
+    }
+}
+
+/// The memory types whose [`Holds::FdBuffers`] blocks a device allocates exportable as an opaque
+/// file descriptor ([`EXPORT_HANDLE`]), as bits (the module docs, "Buffers in exportable
+/// blocks"), of a device with `properties`, with unified memory or without (`unified`), whose
+/// answers for an opaque file descriptor of a pooled buffer's memory are `exports`: with unified
+/// memory, the types of a heap that is not device-local, where the device exports such memory
+/// from a block that buffers share. Else why it takes none.
+pub(super) fn fd_buffer_types(
+    properties: &vk::PhysicalDeviceMemoryProperties,
+    unified: bool,
+    exports: Result<(), &'static str>,
+) -> Result<u32, &'static str> {
+    if !unified {
+        return Err("the device has no unified memory");
+    }
+    exports?;
+    let count = (properties.memory_type_count as usize).min(vk::MAX_MEMORY_TYPES);
+    let heaps = &properties.memory_heaps;
+    let types = (properties.memory_types[..count].iter().enumerate())
+        .filter(|(_, memory_type)| {
+            (heaps.get(memory_type.heap_index as usize))
+                .is_some_and(|heap| !heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+        })
+        .fold(0, |bits, (index, _)| bits | 1 << index);
+    match types {
+        0 => Err("the device has no memory type of a heap that is not device-local"),
+        types => Ok(types),
+    }
+}
+
+/// What a new block's memory is allocated exportable as ([`BlockMaker::make_as`]).
+#[derive(Clone, Copy, Debug)]
+enum Exportable {
+    /// Nothing.
+    No,
+    /// The handle type of the exportable buffers it holds (`exported_memory.rs`), for its buffer:
+    /// that buffer's dedicated allocation where `Exported::dedicated` says so.
+    For(vk::Buffer, Exported),
+    /// An opaque file descriptor ([`EXPORT_HANDLE`]), never exported: a block of
+    /// [`Holds::FdBuffers`] of a memory type [`fd_buffer_types`] names.
+    Fd,
+}
+
+impl Exportable {
+    /// The handle type it names; `None` for [`Exportable::No`].
+    fn handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
+        match self {
+            Exportable::No => None,
+            Exportable::For(_, exported) => Some(exported.handle),
+            Exportable::Fd => Some(EXPORT_HANDLE),
         }
     }
 }
@@ -1035,6 +1130,10 @@ pub(super) struct Block {
     type_index: u32,
     /// What it was allocated exportable as, where it was ([`allocate_exported`]).
     exported: Option<Exported>,
+    /// It was allocated exportable as an opaque file descriptor and is never exported
+    /// ([`Holds::FdBuffers`]): an image bound in it names that handle type
+    /// ([`Memory::bound_memory`]).
+    fd: bool,
     /// It was allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until
     /// written ([`Memory::zero_image_blocks`]).
     zeroed: bool,
@@ -1191,17 +1290,24 @@ impl Block {
 }
 
 /// A buffer of `size` bytes with every usage of an addressed buffer, shared as `sharing` says,
-/// unbound, and the bytes of memory it requires.
+/// made for `handle` where given (for a block exportable as it,
+/// `VUID-vkBindBufferMemory-memory-02726`), unbound, and the bytes of memory it requires.
 fn address_buffer(
     device: &ash::Device,
     size: u64,
     sharing: Sharing<'_>,
+    handle: Option<vk::ExternalMemoryHandleTypeFlags>,
 ) -> Result<(vk::Buffer, u64), Error> {
-    let info = sharing.buffer(
+    let mut external =
+        vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle.unwrap_or_default());
+    let mut info = sharing.buffer(
         vk::BufferCreateInfo::default()
             .size(size)
             .usage(usage(true)),
     );
+    if handle.is_some() {
+        info = info.push_next(&mut external);
+    }
     // SAFETY: the device is live and `info` valid.
     let raw = unsafe { crate::creation::buffer(device, &info) }.map_err(vulkan)?;
     // SAFETY: `raw` is a live buffer of this device.
@@ -1500,6 +1606,13 @@ pub(super) struct Memory {
     /// The memory types a buffer of addresses takes, as bits, once asked
     /// ([`allocate_addressed`]).
     address_types: Option<u32>,
+    /// As `address_types`, of a buffer of addresses made for [`EXPORT_HANDLE`], which the blocks
+    /// of [`Holds::FdBuffers`] that are allocated exportable carry.
+    fd_address_types: Option<u32>,
+    /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits, or
+    /// why none are ([`fd_buffer_types`]).
+    fd_buffer_types: Result<u32, &'static str>,
+    fd_blocks: FdBlocks,
     /// The pools the runtime's encodings and commits place their own resources in, once asked
     /// ([`Memory::kept`], [`keep_room`]).
     kept: Option<Vec<(Holds, u32)>>,
@@ -1610,6 +1723,17 @@ impl AheadBlocks {
     }
 }
 
+/// The counts of the blocks of [`Holds::FdBuffers`] made so far.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct FdBlocks {
+    /// Allocated exportable as an opaque file descriptor: of a memory type [`fd_buffer_types`]
+    /// names.
+    pub(super) exportable: u64,
+    /// Allocated as any block of buffers: of a memory type it does not name (device-local memory
+    /// the program's buffers overflowed into, or that their class takes first).
+    pub(super) plain: u64,
+}
+
 /// The counts of the blocks of the pool host copies place in ([`Memory::host_copy_pool`]).
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct HostCopyBlocks {
@@ -1648,6 +1772,9 @@ impl Memory {
             block_bytes: BLOCK_BYTES.min(max_allocation.max(1)),
             device_address,
             address_types: None,
+            fd_address_types: None,
+            fd_buffer_types: Err("the device was not asked for exportable buffer memory"),
+            fd_blocks: FdBlocks::default(),
             kept: None,
             unified,
             buffer_families: families.clone(),
@@ -1689,6 +1816,45 @@ impl Memory {
     /// Share its buffers among `families`: the device's, then its staging queue's (`sharing.rs`).
     pub(super) fn share_buffers_among(&mut self, families: Vec<u32>) {
         self.buffer_families = families;
+    }
+
+    /// Allocate the blocks of [`Holds::FdBuffers`] of the memory types `types` names (as bits)
+    /// exportable as an opaque file descriptor from now on, where it names any, else note why
+    /// not (the memory log says which), as the device is made: `buffer.rs`'s
+    /// `placed_new_buffer` then makes its buffers for that handle type and places them there
+    /// ([`Memory::own_buffers`]).
+    pub(super) fn fd_buffer_blocks(&mut self, types: Result<u32, &'static str>) {
+        if let Some(log) = &self.log {
+            log.line(match types {
+                Ok(types) => format!(
+                    "the runtime's own buffers lie in blocks of memory types {types:#x} exportable \
+                     as opaque file descriptors"
+                ),
+                Err(why) => format!("the runtime's own buffers lie in plain blocks: {why}"),
+            });
+        }
+        self.fd_buffer_types = types;
+    }
+
+    /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits, or
+    /// why none are.
+    pub(super) fn fd_buffer_types(&self) -> Result<u32, &'static str> {
+        self.fd_buffer_types
+    }
+
+    /// The kind of block the buffers `buffer.rs`'s `placed_new_buffer` makes for the program and
+    /// for the runtime take: [`Holds::FdBuffers`] where the device allocates any of them
+    /// exportable ([`Memory::fd_buffer_blocks`]), else [`Holds::Buffers`].
+    pub(super) fn own_buffers(&self) -> Holds {
+        match self.fd_buffer_types {
+            Ok(_) => Holds::FdBuffers,
+            Err(_) => Holds::Buffers,
+        }
+    }
+
+    /// The counts of the blocks of [`Holds::FdBuffers`] made so far.
+    pub(super) fn fd_blocks(&self) -> FdBlocks {
+        self.fd_blocks
     }
 
     /// Log each `VkDeviceMemory` allocated, imported or freed from now on to `log`
@@ -1859,7 +2025,7 @@ impl Memory {
         Ok(TypeView {
             types: self.types.clone(),
             heap_sizes: self.heaps.iter().map(|&(size, _)| size).collect(),
-            buffers: buffer_types(device, usage(false), sharing)?,
+            buffers: buffer_types(device, usage(false), sharing, None)?,
             images: color_image_types(device, sharing)?,
         })
     }
@@ -2030,17 +2196,30 @@ impl Memory {
         &self.pools[self.pool_at(holds, type_index)]
     }
 
-    /// The memory types a buffer of addresses takes, as bits, asked once: `None` without
-    /// `bufferDeviceAddress`, where blocks carry no buffer of addresses.
-    fn address_types(&mut self, device: &ash::Device) -> Result<Option<u32>, Error> {
+    /// The memory types a buffer of addresses of a block that holds `holds` takes, as bits,
+    /// asked once: `None` without `bufferDeviceAddress`, where blocks carry no buffer of
+    /// addresses. Of [`Holds::FdBuffers`] on a device that allocates its blocks exportable, a
+    /// buffer made for [`EXPORT_HANDLE`].
+    fn address_types(&mut self, device: &ash::Device, holds: Holds) -> Result<Option<u32>, Error> {
         if !self.device_address {
             return Ok(None);
         }
-        if self.address_types.is_none() {
-            let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
-            self.address_types = Some(buffer_types(device, usage(true), sharing)?);
+        let fd = holds == Holds::FdBuffers && self.fd_buffer_types.is_ok();
+        let known = match fd {
+            true => self.fd_address_types,
+            false => self.address_types,
+        };
+        if let Some(types) = known {
+            return Ok(Some(types));
         }
-        Ok(self.address_types)
+        let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
+        let handle = fd.then_some(EXPORT_HANDLE);
+        let types = buffer_types(device, usage(true), sharing, handle)?;
+        match fd {
+            true => self.fd_address_types = Some(types),
+            false => self.address_types = Some(types),
+        }
+        Ok(Some(types))
     }
 
     /// `size` bytes aligned to `align` in a pooled block of `pool` that has room, in a block
@@ -2059,7 +2238,7 @@ impl Memory {
             return Ok(None);
         };
         if let Some(counts) = addressed {
-            if let Err(error) = self.address_block(device, type_index, block, counts) {
+            if let Err(error) = self.address_block(device, (holds, type_index), block, counts) {
                 drop(self.release_range(device, (holds, type_index), block, offset, size, None));
                 return Err(error);
             }
@@ -2086,7 +2265,7 @@ impl Memory {
             return Ok(None);
         };
         if let Some(counts) = addressed {
-            if let Err(error) = self.address_block(device, type_index, block, counts) {
+            if let Err(error) = self.address_block(device, (holds, type_index), block, counts) {
                 drop(self.release_range(device, (holds, type_index), block, 0, size, None));
                 return Err(error);
             }
@@ -2112,12 +2291,26 @@ impl Memory {
                 (false, Holds::Images) => "made a pooled block of images",
                 (false, Holds::Exports) => "made a pooled block of exportable buffers",
                 (false, Holds::DmaBufs) => "made a pooled block of dma-buf-exportable buffers",
+                (false, Holds::FdBuffers) if block.fd => {
+                    "made a pooled block of fd-exportable buffers"
+                }
+                (false, Holds::FdBuffers) => "made a pooled block of buffers",
                 (true, Holds::Buffers) => "made a dedicated block of a buffer",
                 (true, Holds::Images) => "made a dedicated block of an image",
                 (true, Holds::Exports) => "made a dedicated block of an exportable buffer",
                 (true, Holds::DmaBufs) => "made a dedicated block of a dma-buf-exportable buffer",
+                (true, Holds::FdBuffers) if block.fd => {
+                    "made a dedicated block of an fd-exportable buffer"
+                }
+                (true, Holds::FdBuffers) => "made a dedicated block of a buffer",
             };
             self.say_block(what, &block);
+        }
+        if holds == Holds::FdBuffers {
+            match block.fd {
+                true => self.fd_blocks.exportable += 1,
+                false => self.fd_blocks.plain += 1,
+            }
         }
         self.allocated += size;
         let heap = self.heap_of(type_index);
@@ -2141,6 +2334,7 @@ impl Memory {
         BlockMaker {
             block_bytes: self.block_bytes,
             host_visible,
+            fd_types: self.fd_buffer_types.unwrap_or(0),
             device_address: self.device_address,
             families: self.buffer_families.clone(),
             zero_images: self.zero_images,
@@ -2150,16 +2344,33 @@ impl Memory {
     /// The pools the runtime's encodings and commits place their own resources in, found once:
     /// of buffers, the best memory type of `Private`, `WriteCombined` and `Shared` memory among
     /// those a buffer the runtime places takes (`buffer::usage(false)`, its address from a buffer
-    /// of addresses, [`allocate_addressed`]); of images, the best `Private` type among those a
-    /// color image of optimal tiling takes, which every such image takes (the Vulkan
-    /// specification's `VkMemoryRequirements`).
+    /// of addresses, [`allocate_addressed`]), in the blocks of [`Holds::Buffers`] and, where the
+    /// device allocates blocks of [`Holds::FdBuffers`] exportable, in those too, of a buffer made
+    /// for [`EXPORT_HANDLE`]; of images, the best `Private` type among those a color image of
+    /// optimal tiling takes, which every such image takes (the Vulkan specification's
+    /// `VkMemoryRequirements`).
     fn kept(&mut self, device: &ash::Device) -> Result<Vec<(Holds, u32)>, Error> {
         if let Some(kept) = &self.kept {
             return Ok(kept.clone());
         }
-        let addresses = self.address_types(device)?.unwrap_or(u32::MAX);
+        let addresses = self
+            .address_types(device, Holds::Buffers)?
+            .unwrap_or(u32::MAX);
+        let fd = match self.fd_buffer_types {
+            Ok(_) => Some(
+                self.address_types(device, Holds::FdBuffers)?
+                    .unwrap_or(u32::MAX),
+            ),
+            Err(_) => None,
+        };
         let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
-        let buffers = buffer_types(device, usage(false), sharing)? & addresses;
+        let buffers = buffer_types(device, usage(false), sharing, None)? & addresses;
+        let fd_buffers = match fd {
+            Some(addresses) => {
+                buffer_types(device, usage(false), sharing, Some(EXPORT_HANDLE))? & addresses
+            }
+            None => 0,
+        };
         let images = color_image_types(device, sharing)?;
         let best = |bits: u32, class: MemoryClass| {
             candidates(&self.types, bits, class, self.unified)
@@ -2175,9 +2386,12 @@ impl Memory {
         let buffer_pools = (classes.into_iter())
             .filter_map(|class| best(buffers, class))
             .map(|type_index| (Holds::Buffers, type_index));
+        let fd_pools = (classes.into_iter())
+            .filter_map(|class| best(fd_buffers, class))
+            .map(|type_index| (Holds::FdBuffers, type_index));
         let image_pool =
             best(images, MemoryClass::Private).map(|type_index| (Holds::Images, type_index));
-        for pool in buffer_pools.chain(image_pool) {
+        for pool in buffer_pools.chain(fd_pools).chain(image_pool) {
             if !kept.contains(&pool) {
                 kept.push(pool);
             }
@@ -2227,18 +2441,19 @@ impl Memory {
         }
     }
 
-    /// Give pooled block `block` of memory type `type_index` a buffer of addresses where it has
-    /// none: over its whole size, which it takes since the block is of a type such a buffer
-    /// takes ([`allocate_addressed`]); refused (an invariant) where the buffer would
-    /// need more bytes than the block has.
+    /// Give pooled block `block` of the pool of memory type `type_index` that holds `holds` a
+    /// buffer of addresses where it has none: over its whole size, which it takes since the
+    /// block is of a type such a buffer takes ([`allocate_addressed`]), made for the block's
+    /// handle type where it is exportable (`VUID-vkBindBufferMemory-memory-02726`); refused (an
+    /// invariant) where the buffer would need more bytes than the block has.
     fn address_block(
         &mut self,
         device: &ash::Device,
-        type_index: u32,
+        (holds, type_index): (Holds, u32),
         block: usize,
         counts: &Counters,
     ) -> Result<(), Error> {
-        let at = self.pool_at(Holds::Buffers, type_index);
+        let at = self.pool_at(holds, type_index);
         let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
         let payload = self.pools[at]
             .payload_mut(block)
@@ -2246,7 +2461,8 @@ impl Memory {
         if payload.addresses.is_some() {
             return Ok(());
         }
-        let (raw, required) = address_buffer(device, payload.size, sharing)?;
+        let handle = payload.fd.then_some(EXPORT_HANDLE);
+        let (raw, required) = address_buffer(device, payload.size, sharing, handle)?;
         if required > payload.size {
             // SAFETY: the buffer is unused.
             unsafe { release::object(device, raw) };
@@ -2554,6 +2770,7 @@ impl Memory {
                 dedicated: true, ..
             }) => BoundMemory::NoImage(NoImage::Dedicated),
             Some(exported) => BoundMemory::External(exported.handle),
+            None if block.fd => BoundMemory::External(EXPORT_HANDLE),
             None if block.imported || block.pages.is_some() || block.view.is_some() => {
                 BoundMemory::External(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT)
             }
@@ -2630,6 +2847,8 @@ struct BlockMaker {
     block_bytes: u64,
     /// The host-visible memory types, as bits: a block of one is mapped whole.
     host_visible: u32,
+    /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits.
+    fd_types: u32,
     /// As [`Memory`]'s.
     device_address: bool,
     /// The families its buffers of addresses are shared among: [`Memory`]'s buffers'.
@@ -2643,7 +2862,9 @@ impl BlockMaker {
     /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
     /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
     /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]), and exportable as
-    /// the handle type of the exportable buffers it holds ([`Holds::handle`]).
+    /// the handle type of the exportable buffers it holds ([`Holds::handle`]), or as an opaque
+    /// file descriptor where it is a block of [`Holds::FdBuffers`] of a memory type
+    /// [`fd_buffer_types`] names.
     fn make(
         &self,
         device: &ash::Device,
@@ -2652,30 +2873,38 @@ impl BlockMaker {
         addressed: Option<&Counters>,
     ) -> Result<Block, Error> {
         let zeroed = holds == Holds::Images && self.zero_images;
-        let export = holds.handle().map(|handle| {
-            let exported = Exported {
-                handle,
-                dedicated: false,
-            };
-            (vk::Buffer::null(), exported)
-        });
+        let export = match holds.handle() {
+            Some(handle) => Exportable::For(
+                vk::Buffer::null(),
+                Exported {
+                    handle,
+                    dedicated: false,
+                },
+            ),
+            None if holds == Holds::FdBuffers && self.fd_types & 1 << type_index != 0 => {
+                Exportable::Fd
+            }
+            None => Exportable::No,
+        };
         self.make_as(device, type_index, size, addressed, export, zeroed)
     }
 
-    /// [`make`](Self::make), its memory allocated exportable as `export` says where given, for its
-    /// buffer, the dedicated allocation of that buffer where it says so ([`allocate_exported`]),
-    /// and with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` where `zeroed`.
+    /// [`make`](Self::make), its memory allocated exportable as `export` says, the dedicated
+    /// allocation of its buffer where it says so ([`allocate_exported`]), and with
+    /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` where `zeroed`. Its buffer of addresses is
+    /// made for the handle type it is exportable as (`VUID-vkBindBufferMemory-memory-02726`).
     fn make_as(
         &self,
         device: &ash::Device,
         type_index: u32,
         size: u64,
         addressed: Option<&Counters>,
-        export: Option<(vk::Buffer, Exported)>,
+        export: Exportable,
         zeroed: bool,
     ) -> Result<Block, Error> {
         let addresses = if addressed.is_some() && self.device_address {
-            Some(address_buffer(device, size, Sharing::new(&self.families))?)
+            let sharing = Sharing::new(&self.families);
+            Some(address_buffer(device, size, sharing, export.handle())?)
         } else {
             None
         };
@@ -2699,15 +2928,15 @@ impl BlockMaker {
         if !allocate.is_empty() {
             info = info.push_next(&mut flags);
         }
-        let handle = export.map_or(
-            vk::ExternalMemoryHandleTypeFlags::empty(),
-            |(_, exported)| exported.handle,
-        );
-        let mut exportable = vk::ExportMemoryAllocateInfo::default().handle_types(handle);
-        let dedicated_to = (export.filter(|(_, exported)| exported.dedicated))
-            .map_or(vk::Buffer::null(), |(buffer, _)| buffer);
+        let handle = export.handle();
+        let mut exportable =
+            vk::ExportMemoryAllocateInfo::default().handle_types(handle.unwrap_or_default());
+        let dedicated_to = match export {
+            Exportable::For(buffer, exported) if exported.dedicated => buffer,
+            _ => vk::Buffer::null(),
+        };
         let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(dedicated_to);
-        if export.is_some() {
+        if handle.is_some() {
             info = info.push_next(&mut exportable);
         }
         if dedicated_to != vk::Buffer::null() {
@@ -2766,20 +2995,31 @@ impl BlockMaker {
             pages: None,
             view: None,
             type_index,
-            exported: export.map(|(_, exported)| exported),
+            exported: match export {
+                Exportable::For(_, exported) => Some(exported),
+                Exportable::No | Exportable::Fd => None,
+            },
+            fd: matches!(export, Exportable::Fd),
             zeroed,
         })
     }
 }
 
-/// The memory types a buffer of `usage` takes, as bits: those of one made for the query and
-/// destroyed at once, with no memory bound. Every buffer of one usage takes the same types.
+/// The memory types a buffer of `usage` takes, made for `handle` where given, as bits: those of
+/// one made for the query and destroyed at once, with no memory bound. Every buffer of one usage
+/// and handle type takes the same types.
 fn buffer_types(
     device: &ash::Device,
     usage: vk::BufferUsageFlags,
     sharing: Sharing<'_>,
+    handle: Option<vk::ExternalMemoryHandleTypeFlags>,
 ) -> Result<u32, Error> {
-    let info = sharing.buffer(vk::BufferCreateInfo::default().size(16).usage(usage));
+    let mut external =
+        vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle.unwrap_or_default());
+    let mut info = sharing.buffer(vk::BufferCreateInfo::default().size(16).usage(usage));
+    if handle.is_some() {
+        info = info.push_next(&mut external);
+    }
     // SAFETY: the device is live and `info` valid.
     let raw = unsafe { crate::creation::buffer(device, &info) }.map_err(vulkan)?;
     // SAFETY: `raw` is a live buffer of this device, destroyed right after the query with no
@@ -2997,6 +3237,7 @@ pub(super) unsafe fn import_host(
         view,
         type_index,
         exported: None,
+        fd: false,
         zeroed: false,
     };
     let host = pointer.as_ptr() as usize;
@@ -3032,6 +3273,7 @@ pub(super) fn import_own_pages(
         view: None,
         type_index,
         exported: None,
+        fd: false,
         zeroed: false,
     };
     let mut memory = lock(memory);
@@ -3088,13 +3330,25 @@ pub(super) fn allocate(
     requirements: &vk::MemoryRequirements,
     class: MemoryClass,
 ) -> Result<Placement, Error> {
+    allocate_in(memory, device, requirements, class, Holds::Buffers)
+}
+
+/// [`allocate`] in a block that holds `holds`: [`Holds::Buffers`], or [`Holds::FdBuffers`] for a
+/// buffer made for [`EXPORT_HANDLE`] (`buffer.rs`'s `placed_new_buffer`).
+pub(super) fn allocate_in(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    requirements: &vk::MemoryRequirements,
+    class: MemoryClass,
+    holds: Holds,
+) -> Result<Placement, Error> {
     place(
         memory,
         device,
         requirements,
         class,
         None,
-        Holds::Buffers,
+        holds,
         Fit::Pooled,
     )
 }
@@ -3162,8 +3416,25 @@ pub(super) fn allocate_addressed(
     class: MemoryClass,
     counts: &Counters,
 ) -> Result<Placement, Error> {
-    let Some(types) = lock(memory).address_types(device)? else {
-        return allocate(memory, device, requirements, class);
+    allocate_addressed_in(
+        memory,
+        device,
+        requirements,
+        (class, Holds::Buffers),
+        counts,
+    )
+}
+
+/// [`allocate_addressed`] in a block that holds `holds` ([`allocate_in`]).
+pub(super) fn allocate_addressed_in(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    requirements: &vk::MemoryRequirements,
+    (class, holds): (MemoryClass, Holds),
+    counts: &Counters,
+) -> Result<Placement, Error> {
+    let Some(types) = lock(memory).address_types(device, holds)? else {
+        return allocate_in(memory, device, requirements, class, holds);
     };
     let requirements = vk::MemoryRequirements {
         memory_type_bits: requirements.memory_type_bits & types,
@@ -3175,7 +3446,7 @@ pub(super) fn allocate_addressed(
         &requirements,
         class,
         Some(counts),
-        Holds::Buffers,
+        holds,
         Fit::Pooled,
     )
 }
@@ -3228,7 +3499,7 @@ pub(super) fn allocate_exported(
         if let Some(frees) = before {
             frees.wait();
         }
-        let export = Some((buffer, exported));
+        let export = Exportable::For(buffer, exported);
         match maker.make_as(device, type_index, size, None, export, false) {
             Ok(block) => {
                 let pool = (Holds::Buffers, type_index);
@@ -3403,7 +3674,7 @@ pub(super) fn keep_room(
     };
     let room = maker.block_bytes / 2;
     for pool in kept {
-        let addressed = (pool.0 == Holds::Buffers).then_some(&**counts);
+        let addressed = pool.0.buffers().then_some(&**counts);
         loop {
             let mut guard = lock(memory);
             if guard.pool(pool.0, pool.1).has_room(room) {
@@ -3441,7 +3712,7 @@ pub(super) fn keep_room(
         if !grew || pool_of.has_room(maker.block_bytes) || guard.readying_at(pool).is_some() {
             continue;
         }
-        let addressed = (pool.0 == Holds::Buffers).then(|| Arc::clone(counts));
+        let addressed = pool.0.buffers().then(|| Arc::clone(counts));
         let started = ready::Readying::start(
             guard.maker(),
             Arc::clone(functions),

@@ -1373,18 +1373,18 @@ impl ClassPages {
                 Ok(ClassPages { buffer, start })
             }
             PagesClass::DmaBuf => dma_buf_pages(device, length),
-            // A buffer of the runtime's own in its pooled memory that declares the bytes between
-            // a texture's rows unobserved, as the product's buffers whose textures take such an
-            // image do (`texture.rs`'s `alias_image`): only where the device makes
-            // `DRM_FORMAT_MOD_LINEAR` images.
+            // A buffer of the runtime's own in its pooled memory exported as no handle type
+            // (where the device's own buffers lie in blocks exportable as opaque file
+            // descriptors, a block of plain buffers: `memory.rs`'s `Holds::FdBuffers`) that
+            // declares the bytes between a texture's rows unobserved, as the product's buffers
+            // whose textures take such an image do (`texture.rs`'s `alias_image`): only where the
+            // device makes `DRM_FORMAT_MOD_LINEAR` images.
             PagesClass::Pooled => {
                 if !device.makes_modifier_images() {
                     let why = "the device makes no DRM_FORMAT_MOD_LINEAR images";
                     return Err(Unmade::lasting(why));
                 }
-                let shared = ResourceOptions::shared();
-                let outside = AddressPlacement::Outside;
-                let buffer = (device.new_buffer_placed(length, shared, outside))
+                let buffer = (device.pooled_check_buffer(length))
                     .map_err(|error| Unmade::of_error("its buffer was refused", &error))?;
                 if buffer.in_fresh_pages() {
                     let why = "its buffer lies in fresh pages, not pooled memory";

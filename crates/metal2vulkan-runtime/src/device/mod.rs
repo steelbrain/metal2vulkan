@@ -2132,6 +2132,41 @@ impl Device {
                     (usage, handle),
                 )
             };
+            // The device's own buffers lie in blocks exportable as opaque file descriptors, never
+            // exported, where it exports such a descriptor of a pooled buffer's memory for the
+            // usage of those buffers and of a buffer of addresses (`memory.rs`'s "Buffers in
+            // exportable blocks").
+            let exports = match &functions {
+                None => Err("the device enables no VK_KHR_external_memory_fd"),
+                Some(_) => {
+                    let usages = [
+                        Some(super::buffer::usage(false)),
+                        device_address.then(|| usage),
+                    ];
+                    let pooled = usages.into_iter().flatten().all(|usage| {
+                        // SAFETY: as above.
+                        let export = unsafe {
+                            crate::exported_memory::FdExport::new(
+                                &instance.raw,
+                                physical,
+                                functions.clone(),
+                                (usage, handle),
+                            )
+                        };
+                        export.is_some_and(|export| export.pooled())
+                    });
+                    match pooled {
+                        true => Ok(()),
+                        false => Err("the device exports an opaque file descriptor of no pooled \
+                                      buffer's memory of the runtime's usages"),
+                    }
+                }
+            };
+            memory.fd_buffer_blocks(crate::memory::fd_buffer_types(
+                &memory_properties,
+                properties.has_unified_memory,
+                exports,
+            ));
             // As a dma-buf where it enables the route's extensions, which name
             // `VK_KHR_external_memory_fd`, and the foreign family its acquire names.
             let dma_buf_functions = functions.filter(|_| dma_buf && foreign_family);

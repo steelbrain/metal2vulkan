@@ -5038,6 +5038,16 @@ pub struct WorkCounts {
     /// creation call that found its pool without room for half a block, or a placement that
     /// found no room (`memory/ready.rs`).
     pub buffer_blocks_made_in_place: u64,
+    /// The blocks the runtime's own buffers and the program's lie in (`memory.rs`'s
+    /// `Holds::FdBuffers`) made so far, pooled or dedicated, allocated exportable as an opaque
+    /// file descriptor and never exported, so that their making holds no other submission (the
+    /// module docs of `memory.rs`, "Buffers in exportable blocks"): 0 on a device that takes no
+    /// such blocks (`Memory::fd_buffer_types`'s reason, which the memory log names).
+    pub fd_buffer_blocks_made: u64,
+    /// The blocks of those buffers made so far as any block of buffers, not exportable: of a
+    /// memory type of a device-local heap, which such buffers overflowed into or their class
+    /// takes first.
+    pub fd_buffer_blocks_plain: u64,
     /// As `buffer_blocks_made_ahead`, of images, those of the pool host copies place in among
     /// them (`host_copy_blocks_readied`).
     pub image_blocks_made_ahead: u64,
@@ -7930,7 +7940,7 @@ impl Device {
             (made, freed),
             frees,
             host_copy,
-            ahead,
+            (ahead, fd_blocks),
         ) = {
             let memory = lock(&self.shared().memory);
             let turnover = memory.turnover();
@@ -7942,7 +7952,7 @@ impl Device {
                 turnover,
                 memory.frees(),
                 memory.host_copy_blocks(),
-                memory.ahead_blocks(),
+                (memory.ahead_blocks(), memory.fd_blocks()),
             )
         };
         let (frees_posted, frees_queue_full, free_waits) = self.shared().frees.counts();
@@ -8108,6 +8118,8 @@ impl Device {
             host_copy_blocks_made_in_place: host_copy.made_in_place,
             buffer_blocks_made_ahead: ahead.buffers_ahead,
             buffer_blocks_made_in_place: ahead.buffers_in_place,
+            fd_buffer_blocks_made: fd_blocks.exportable,
+            fd_buffer_blocks_plain: fd_blocks.plain,
             image_blocks_made_ahead: ahead.images_ahead,
             image_blocks_made_in_place: ahead.images_in_place,
             blocks_ahead_waited_for: ahead.waited_for,

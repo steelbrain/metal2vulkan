@@ -36,6 +36,15 @@
 //!   its placement refused (`InPlaceRefusal::Placement`); a dma-buf's dedicated allocation takes
 //!   the import of its own dma-buf (below) where the device makes one.
 //!
+//! - **The runtime's own buffers' blocks.** The same picture in a buffer the program made with no
+//!   export, its rows' padding declared unobserved as the consumer's caches declare it: where the
+//!   device's own buffers lie in blocks exportable as opaque file descriptors (`memory.rs`'s
+//!   "Buffers in exportable blocks"), its memory is such a block (`WorkCounts::fd_buffer_blocks_made`),
+//!   which the runtime never exports (`export_memory_fd` refuses it, `NotExportable`), and each
+//!   plane's image names the block's handle type, the layer reporting nothing; once the device's
+//!   check of that memory answered, each plane is in place or the shadow its verdict decided, and
+//!   reads the same bytes. Elsewhere its memory is a plain block, as before.
+//!
 //! Printed (`EXPORTED-TEXTURES`): what the device exported, and for each plane its image's
 //! alignment, row pitch and size as `vkGetImageMemoryRequirements` and `vkGetImageSubresourceLayout`
 //! answer them, and its offset in the memory.
@@ -46,7 +55,8 @@
 use super::blit_holds::{Scratch, WAIT};
 use super::layer_claim::Watched;
 use super::pending_rebind::device;
-use crate::error::{Error, RuntimeGap};
+use crate::error::{Error, Invalid, Problem, RuntimeGap};
+use crate::memory::BoundMemory;
 use crate::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, Device, InPlaceRefusal, MemoryExport,
     Origin, ResourceOptions, Size, Texture, TextureDescriptor, TexturePlacement,
@@ -675,5 +685,98 @@ fn a_dma_buf_export_s_planes_go_in_place_through_its_own_dma_buf_where_no_image_
     }
     watched.layer_reported_nothing(
         "images over a dma-buf export, in its memory or through its own dma-buf",
+    );
+}
+
+#[test]
+fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_handle_type() {
+    let watched = Watched::default();
+    let scratch = Scratch::new("own-buffer-textures");
+    let device = device(&watched, &scratch.0);
+    let name = device.name().to_owned();
+    let types = crate::device::lock(&device.shared().memory).fd_buffer_types();
+    eprintln!("EXPORTED-TEXTURES on {name}: the blocks of the runtime's own buffers: {types:?}");
+    let mut first = true;
+    for options in [ResourceOptions::private(), ResourceOptions::shared()] {
+        let descriptor = BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
+            .with_aligned_byte(LUMA_AT)
+            .with_padding_unobserved();
+        let picture = device.new_buffer_with_descriptor(descriptor).unwrap();
+        let (bound, counts) = (picture.bound_memory(), device.work_counts());
+        match types {
+            Ok(_) => {
+                let fd = BoundMemory::External(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+                assert!(
+                    bound == fd,
+                    "{options:?}: a block exportable as an opaque fd"
+                );
+                assert!(
+                    counts.fd_buffer_blocks_made > 0,
+                    "{options:?}: such blocks made"
+                );
+                assert!(
+                    matches!(
+                        picture.export_memory_fd(),
+                        Err(Error::Invalid(Invalid {
+                            problem: Problem::NotExportable,
+                            ..
+                        }))
+                    ),
+                    "{options:?}: the runtime exports no such buffer"
+                );
+            }
+            Err(_) => {
+                assert!(bound == BoundMemory::Own, "{options:?}: a plain block");
+                let made = (counts.fd_buffer_blocks_made, counts.fd_buffer_blocks_plain);
+                assert_eq!(made, (0, 0), "{options:?}: no block of such buffers");
+            }
+        }
+        fill(&device, &picture);
+        for plane in PLANES {
+            let texture =
+                (picture.new_texture(&descriptor(plane, options), plane.at, ROW)).unwrap();
+            assert!(
+                read(&device, &texture, plane) == want(plane),
+                "{options:?} {plane:?}: the texels, read as made"
+            );
+        }
+        if first {
+            assert!(device.settle_in_place_checks(WAIT), "the check answered");
+            first = false;
+        }
+        for plane in PLANES {
+            let descriptor = descriptor(plane, options);
+            let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
+            let texture = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+            assert!(
+                matches!(
+                    placement,
+                    TexturePlacement::NotHostPages
+                        | TexturePlacement::Shadow(
+                            TextureShadowReason::Unchecked { .. }
+                                | TextureShadowReason::CheckFailed { .. }
+                        )
+                ),
+                "{options:?} {plane:?}: in place, or a shadow the device's check decided: \
+                 {placement:?}"
+            );
+            assert_eq!(
+                texture.shadow().is_none(),
+                placement == TexturePlacement::NotHostPages
+            );
+            assert!(
+                read(&device, &texture, plane) == want(plane),
+                "{options:?} {plane:?}: the texels, read after the check answered"
+            );
+            eprintln!(
+                "EXPORTED-TEXTURES on {name}: a buffer of the runtime's own, {options:?} {:?} \
+                 {}x{}: {placement:?}",
+                plane.format, plane.size[0], plane.size[1]
+            );
+        }
+    }
+    watched.layer_reported_nothing(
+        "buffers and textures in blocks exportable as opaque fds name the handle type \
+         (VUID-vkBindBufferMemory-memory-02726, VUID-vkBindImageMemory-memory-02728)",
     );
 }
