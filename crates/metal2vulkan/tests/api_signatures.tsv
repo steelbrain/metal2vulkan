@@ -2998,6 +2998,8 @@ field	metal2vulkan-runtime::WorkCounts.own_pixel_reads	pub own_pixel_reads: u64
 field	metal2vulkan-runtime::WorkCounts.owned_descriptor_pools	pub owned_descriptor_pools: u64
 field	metal2vulkan-runtime::WorkCounts.owned_kernel_spirv_bytes	pub owned_kernel_spirv_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.owned_kernels_made	pub owned_kernels_made: u64
+field	metal2vulkan-runtime::WorkCounts.page_buffer_blocks_made	pub page_buffer_blocks_made: u64
+field	metal2vulkan-runtime::WorkCounts.page_buffer_blocks_plain	pub page_buffer_blocks_plain: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions	pub passes_not_inline_actions: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_dont_care_load	pub passes_not_inline_actions_dont_care_load: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_resolve	pub passes_not_inline_actions_resolve: u64
