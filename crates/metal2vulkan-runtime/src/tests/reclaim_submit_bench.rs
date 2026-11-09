@@ -37,10 +37,11 @@
 //!   device's in-place check before the phases, as a device of a driver whose check's record
 //!   holds its verdicts knows them as it is made, where the first's check runs beside them, as a
 //!   driver's first device's does.
-//! - **System heap, 64 MiB** and **System heap, 4 MiB**: allocations of the device's first
-//!   memory type that is host-visible and host-coherent but not device-local or cached (where a
-//!   unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of 64 MiB every
-//!   [`RAW_EVERY`] or of 4 MiB sixteen times as often, [`RAW_BYTES`] a phase.
+//! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
+//!   the device's first memory type that is host-visible and host-coherent but not device-local or
+//!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of
+//!   64 MiB every [`RAW_EVERY`], or of 16 or 4 MiB as much more often as they are smaller,
+//!   [`RAW_BYTES`] a phase.
 //! - **System heap, 64 MiB, exportable**, **System heap, 64 MiB, opaque fd** and **System heap,
 //!   64 MiB, both**: the system heap's 64 MiB allocations, each exportable
 //!   (`VkExportMemoryAllocateInfo`) as a dma-buf, as an opaque file descriptor, or as both.
@@ -1021,6 +1022,18 @@ fn reclaim_submit_bench_system_heap_4mib() {
         "system heap, 4 MiB",
         Arm::SystemHeap {
             bytes: 4 * MIB,
+            export: None,
+        },
+    );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_system_heap_16mib() {
+    arm(
+        "system heap, 16 MiB",
+        Arm::SystemHeap {
+            bytes: 16 * MIB,
             export: None,
         },
     );
