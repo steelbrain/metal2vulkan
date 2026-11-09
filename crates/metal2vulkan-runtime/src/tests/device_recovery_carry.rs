@@ -106,6 +106,9 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     let scratch = Scratch::new();
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
+    // The device's checks answered first, so that where its blocks allocated exportable passed,
+    // its own buffers lie in them (`Holds::FdBuffers`), the `Private` one below among them.
+    let _settled = device.settle_in_place_checks(WAIT);
     let queue = device.new_command_queue().unwrap();
     let private = device
         .new_buffer(BYTES, ResourceOptions::private())
