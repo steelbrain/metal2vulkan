@@ -40,11 +40,13 @@
 //!   wait for it, rather than make a second block: no two threads make one for the same pool, and
 //!   none is made only to be freed. A making still waiting for a burst's end when a call comes
 //!   allocates at once, so that the call waits for the allocation alone, never for the program's
-//!   own submissions to pause. The host copies' pool alone is
-//!   not waited for, as its making reads pages whose touch may wait behind the program's GPU
-//!   work: its placement makes its own block there. Where no block is made ahead, the call makes
-//!   its own (`WorkCounts::buffer_blocks_made_in_place`, `image_blocks_made_in_place`). The
-//!   pool's blocks change only at those calls, never as a making here ends.
+//!   own submissions to pause; a making that reads its pages as a call comes reads no more of
+//!   them, the pages left unread faulting in at their first touch, as a block made in place does.
+//!   The host copies' pool's block is added by its placements alone, and never waited for, as its
+//!   making reads pages whose touch may wait behind the program's GPU work: a placement there that
+//!   finds the making under way makes its own block. Where no block is made ahead, the call makes
+//!   its own (`WorkCounts::buffer_blocks_made_in_place`, `image_blocks_made_in_place`). A pool's
+//!   blocks change only at those calls, never as a making here ends.
 //! - **Bounded.** One making a pool at most, on a thread of its own that ends with the block.
 //!   While it waits to be added, its bytes count against its heap's budget of kept empty blocks
 //!   (`Memory::kept_budget`); one whose pool stopped growing for `KEPT_EMPTY_FOR`, the pool
@@ -74,6 +76,10 @@ use std::time::{Duration, Instant};
 /// The stride of the reads that touch a block's pages: the smallest page any host maps, so a
 /// host with larger pages reads each of its pages more than once.
 const PAGE: usize = 4096;
+
+/// The bytes of a block's pages read between two looks at whether a call waits for the block
+/// ([`ready`]).
+const ASK_EVERY: usize = 64 * PAGE;
 
 /// The longest a making waits for a burst of the device's submissions to end before it makes its
 /// block all the same, and the time without a submission after which the device is taken to be
@@ -159,8 +165,14 @@ impl Readying {
                 let waited = quiet.wait_after_burst(QUIET_MOST, || go() != WAIT);
                 let made = match go() {
                     STOP => None,
-                    _ => ready(&maker, &functions, addressed.as_deref(), pool, bytes)
-                        .map(|block| Made { block, waited }),
+                    _ => ready(
+                        &maker,
+                        &functions,
+                        addressed.as_deref(),
+                        (pool, bytes),
+                        || go() != WAIT,
+                    )
+                    .map(|block| Made { block, waited }),
                 };
                 *lock(&shared.made) = (true, made);
                 shared.ended.notify_all();
@@ -225,19 +237,24 @@ impl Readying {
 }
 
 /// Make a block of `bytes` for `pool`, with a buffer of addresses counted in `addressed` where
-/// given, and read every page of its mapping (the module docs).
+/// given, and read every page of its mapping (the module docs) until `wanted` says a call waits
+/// for the block (or the device's teardown stops the making): that call waits for the allocation
+/// alone, and the pages left unread fault in at their first touch, as a block made in place does.
 fn ready(
     maker: &BlockMaker,
     functions: &Functions,
     addressed: Option<&Counters>,
-    pool: (Holds, u32),
-    bytes: u64,
+    (pool, bytes): ((Holds, u32), u64),
+    wanted: impl Fn() -> bool,
 ) -> Option<Block> {
     let busy = exit_guard::enter()?;
     let block = maker.make(functions.get(), pool, bytes, addressed).ok()?;
     if let Some(mapped) = block.mapped {
         let length = usize::try_from(block.size).unwrap_or(usize::MAX);
         for offset in (0..length).step_by(PAGE) {
+            if offset % ASK_EVERY == 0 && wanted() {
+                break;
+            }
             // SAFETY: the offset lies within the block's mapping, made whole as the block was;
             // nothing is placed in the block yet, so nothing else reads or writes it.
             unsafe { std::ptr::read_volatile(mapped.as_ptr().add(offset)) };

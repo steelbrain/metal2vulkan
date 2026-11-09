@@ -14,7 +14,8 @@
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::freed_memory::device;
-use crate::{Buffer, CommandBufferStatus, Device, ResourceOptions, WorkCounts};
+use crate::{Buffer, CommandBufferStatus, Device, ResourceOptions, TextureDescriptor, WorkCounts};
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -36,6 +37,9 @@ const GROWTH: u64 = 6;
 
 /// The most buffers the run makes, well past what `GROWTH` blocks hold.
 const MOST: usize = 400;
+
+/// The creation calls that place nothing in the host copies' pool once its making ended.
+const CREATIONS: usize = 20;
 
 /// A scratch directory for a device's shader cache, removed when dropped.
 struct Scratch(std::path::PathBuf);
@@ -205,4 +209,59 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
             "a creation call waited {longest:?}, out to the making's wait for quiet"
         );
     });
+}
+
+/// The block made ahead for the pool host copies place in joins it at the host copy's placement
+/// that needs it, never at a creation call that places nothing there, however long ago its making
+/// ended: that pool's blocks change only at its placements.
+#[test]
+fn the_host_copies_block_made_ahead_joins_its_pool_at_its_placement_alone() {
+    let scratch = Scratch::new("host-copies");
+    let device = device(&scratch.0);
+    if !device.copies_color_on_the_host() {
+        println!(
+            "BLOCKS-AHEAD {}: copies no color texture on the host, so no block is made ahead for \
+             host copies",
+            device.name()
+        );
+        return;
+    }
+    // The device's first creation call starts the host copies' making; every creation call after
+    // its end finds the block made.
+    let queues: Vec<_> = (0..CREATIONS)
+        .map(|at| {
+            let queue = device.new_command_queue().unwrap();
+            if at == 0 {
+                makings_ended(&device);
+            }
+            queue
+        })
+        .collect();
+    let created = device.work_counts();
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 64, 64, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::shared();
+    let texture = device.new_texture(&descriptor).unwrap();
+    let placed = device.work_counts();
+    println!(
+        "BLOCKS-AHEAD {}: host copies' blocks made ahead and added after {CREATIONS} creation \
+         calls {}, after a texture's placement {}; made in place {}",
+        device.name(),
+        created.host_copy_blocks_readied,
+        placed.host_copy_blocks_readied,
+        placed.host_copy_blocks_made_in_place,
+    );
+    assert_eq!(
+        created.host_copy_blocks_readied, 0,
+        "a creation call that placed nothing in the host copies' pool added its block made ahead"
+    );
+    assert_eq!(
+        (
+            placed.host_copy_blocks_readied,
+            placed.host_copy_blocks_made_in_place
+        ),
+        (1, 0),
+        "the texture's placement did not take the host copies' block made ahead"
+    );
+    drop((texture, queues));
 }

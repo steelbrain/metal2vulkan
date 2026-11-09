@@ -3380,8 +3380,10 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 /// of `quiet`'s queue uses ended. The pool host copies place in, where `copies` says the device
 /// copies color textures on the host, gets its block made ahead once it lacks room for half a
 /// block; its making is never waited for here, as its pages' reads may wait behind the program's
-/// GPU work, and the pool keeps its room so. The kept empty blocks past their quiet period go here
-/// too, once a second at most ([`Memory::sweep_stale`]).
+/// GPU work, and its block is never added here: the placement there that finds no room adds it
+/// ([`place`]), so that the pool's blocks change only at its placements, whenever the making
+/// ended. The kept empty blocks past their quiet period go here too, once a second at most
+/// ([`Memory::sweep_stale`]).
 pub(super) fn keep_room(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -3403,12 +3405,22 @@ pub(super) fn keep_room(
         let addressed = (pool.0 == Holds::Buffers).then_some(&**counts);
         loop {
             let mut guard = lock(memory);
-            if guard.pool(pool.0, pool.1).has_room(room) || guard.add_ready(pool) {
+            if guard.pool(pool.0, pool.1).has_room(room) {
+                break;
+            }
+            // The host copies' block made ahead joins its pool at the placement that needs it
+            // (`place`), never here, whenever its making ended: its pool's blocks change only at
+            // its placements.
+            let host_copies = guard.host_copy_pool == Some(Some(pool));
+            if host_copies && guard.readying_at(pool).is_some() {
+                break;
+            }
+            if guard.add_ready(pool) {
                 break;
             }
             if guard.readying_at(pool).is_some() {
-                // The host copies' making, not waited for, or another call's to wait for.
-                if guard.host_copy_pool == Some(Some(pool)) || take_ready(memory, guard, pool) {
+                // Another call's making to wait for.
+                if take_ready(memory, guard, pool) {
                     break;
                 }
                 continue;
