@@ -683,6 +683,25 @@ pub(super) struct DeviceShared {
 }
 
 impl DeviceShared {
+    /// Wait each of the device's queues idle, each under its lock, as every use of a queue is
+    /// made: a thread of the device's may submit meanwhile (its submission checks,
+    /// `submit_check.rs`), where `vkDeviceWaitIdle` would need every queue externally
+    /// synchronized (vkspec 7.8, "Host access to all VkQueue objects created from device that are
+    /// not created with VK_DEVICE_QUEUE_CREATE_INTERNALLY_SYNCHRONIZED_BIT_KHR must be externally
+    /// synchronized"). A wait on a lost device returns in finite time (vkspec 5.2.3). Called
+    /// inside a section of the exit guard.
+    pub(super) fn queues_idle(&self) {
+        let raw = self.vk();
+        for slot in self.queues.iter() {
+            // SAFETY: the queue is the device's, used under its lock, inside a section. Its
+            // answer is not needed: the device is lost, or the work it waited for ended.
+            let _ = slot.with(|queue| unsafe { raw.queue_wait_idle(queue) });
+            exit_guard::called(Call::QueueWaitIdle);
+        }
+    }
+}
+
+impl DeviceShared {
     /// Whether the generation's `VkDevice` was lost.
     pub(crate) fn lost(&self) -> bool {
         self.lost.load(Ordering::Acquire)
@@ -1523,13 +1542,7 @@ impl Device {
             return;
         };
         let shared = self.shared();
-        let raw = shared.vk();
-        for slot in shared.queues.iter() {
-            // SAFETY: the queue is the device's, used under its lock, inside a section. Its
-            // answer is not needed: the device is lost, or the work it waited for ended.
-            let _ = slot.with(|queue| unsafe { raw.queue_wait_idle(queue) });
-            exit_guard::called(Call::QueueWaitIdle);
-        }
+        shared.queues_idle();
         shared.counts.queue_drain();
     }
 

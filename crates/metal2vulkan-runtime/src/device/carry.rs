@@ -284,10 +284,9 @@ impl DeviceShared {
         let Some(_busy) = crate::exit_guard::enter() else {
             return;
         };
-        // SAFETY: the device is live. Its queues were waited idle by its recovery; a wait on a
-        // lost device returns in finite time (vkspec 5.2.3).
-        let _ = unsafe { self.vk().device_wait_idle() };
-        crate::exit_guard::called(crate::exit_guard::Call::DeviceWaitIdle);
+        // Its queues idle, each under its lock: its submission checks' thread may submit there
+        // still (`DeviceShared::queues_idle`).
+        self.queues_idle();
         if let Some(internal) = lock(&self.internal).take() {
             internal.destroy(self.vk());
         }
