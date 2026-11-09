@@ -77,6 +77,7 @@ mod engine_imageblock;
 mod engine_index_words;
 mod engine_indirect_commands;
 mod engine_inline_asm;
+mod engine_integer_median3;
 mod engine_kernel_lod;
 mod engine_kernel_stage_in;
 mod engine_lazy_operands;
