@@ -110,7 +110,7 @@ fn target(device: &Device) -> Texture {
 /// the frame drew.
 fn frame(queue: &CommandQueue, passes: &[Pass<'_>], apart: Apart) -> Frame {
     let device = queue.device();
-    let target = target(&device);
+    let target = target(device);
     let back = device
         .new_buffer(SIDE * SIDE * 4, ResourceOptions::shared())
         .unwrap();
