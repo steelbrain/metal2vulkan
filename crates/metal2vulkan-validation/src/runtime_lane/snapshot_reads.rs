@@ -584,10 +584,13 @@ fn a_reader_that_discards_by_its_texel_takes_the_snapshot() {
     );
 }
 
+/// A clause of the unreadable own-pixel splits: its name and its count.
+type Clause = (&'static str, fn(&WorkCounts) -> u64);
+
 /// What `before` to `after` moved of the unreadable own-pixel splits' clauses
 /// (`WorkCounts::reading_draws_split_unreadable_own_pixel_*`), by name.
 fn unreadable_by(before: &WorkCounts, after: &WorkCounts) -> Vec<(&'static str, u64)> {
-    let clauses: [(&'static str, fn(&WorkCounts) -> u64); 12] = [
+    let clauses: [Clause; 12] = [
         ("branch", |c| {
             c.reading_draws_split_unreadable_own_pixel_branch
         }),
