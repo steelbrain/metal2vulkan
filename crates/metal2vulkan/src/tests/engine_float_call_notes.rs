@@ -11,7 +11,9 @@
 //! does, and whether its moves of a NaN are Metal's (`nan::moves_answered`). Each artifact's notes are exactly what the exported function answers for that call
 //! in that entry's math mode. The loads and stores around it record none, but a `half` kernel's
 //! widening and rounding, which the module records once by the profile's own form: its rounding's
-//! note (`narrow::native_rounding`), which the test sets aside, and a module's widening of a
+//! note (`narrow::native_rounding`), and under the float controls on a driver that fuses `float`
+//! arithmetic into the conversion `NativeHalfConversion` where the module rounds such a result
+//! (`narrow::rounds_arithmetic`), which the test sets aside, and a module's widening of a
 //! `half` from its bits or narrowing of one to them by the device (every profile), whose NaN's
 //! bits are the device's (`narrow::widens_bits`, `narrow::encodes_bits`, `NativeNanEncoding`) but
 //! where the device's moves of a NaN are measured to be Metal's (`narrow::moves_unfolded`), and
@@ -22,7 +24,7 @@
 
 use crate::air::intrinsics::{AirIntrinsic, Elem, Math, NumTy, Operand};
 use crate::air::ir::{BinOp, FastMath};
-use crate::device::profile::{FloatFunctions, NanEncoding};
+use crate::device::profile::{DriverWorkaround, FloatFunctions, NanEncoding};
 use crate::device::requirements::VkProperty;
 use crate::device::DeviceProfile;
 use crate::error::DriverDeviation;
@@ -371,6 +373,15 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
                         }
                         let (_, m) = typed_module(&bitcode, &k.name, p)
                             .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                        // The module's rounding of `float` arithmetic, fused into the conversion.
+                        let fused = form == crate::spirv::builder::QuantizeForm::Controlled
+                            && (p.workarounds())
+                                .contains(&DriverWorkaround::HalfConversionFusedWithArithmetic)
+                            && narrow::rounds_arithmetic(&m, &mut meter())
+                                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                        if fused && !want.contains(&PrecisionNote::NativeHalfConversion) {
+                            got.remove(&PrecisionNote::NativeHalfConversion);
+                        }
                         let crosses = narrow::widens_bits(&m, &mut meter())
                             .and_then(|w| Ok(w || narrow::encodes_bits(&m, &mut meter())?))
                             .unwrap_or_else(|e| panic!("{what}: {e:?}"));

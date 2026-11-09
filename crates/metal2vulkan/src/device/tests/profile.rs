@@ -723,10 +723,11 @@ fn moltenvk_on_apple_carries_the_early_tests_image_write_defect() {
     desc.driver_id = Some(vk::DriverId::MESA_RADV);
     // Every rasterizer but Apple's hands a clipped primitive's fragments other coverage than
     // Metal's pieces, and every tessellator but Apple's orders a patch's triangles its own way;
-    // RADV's own interpolation facts hold on any vendor.
+    // RADV's own interpolation facts and its fused half conversion hold on any vendor.
     assert_eq!(
         workarounds(&desc),
         [
+            W::HalfConversionFusedWithArithmetic,
             W::InterpolationNeedsTheWholeQuad,
             W::PerspectiveReadsExtrapolated,
             W::ClippedCoverageNotMetals,
