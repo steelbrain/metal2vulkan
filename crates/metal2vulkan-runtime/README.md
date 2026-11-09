@@ -768,8 +768,7 @@ draw whose vertices or indices complete no primitive of its type draws nothing, 
 
 | Device | Route |
 |---|---|
-| `wideLines`, non-strict, parallelogram wide lines, `w' > 1` on the granularity | Its own lines, exactly Metal's |
-| `wideLines`, its lines otherwise (strict, not stated as parallelograms, `w' < 1`, off the granularity) | Its own lines, announced `device-wide-lines` (`WideLinePolicy::Device`, the default); under `WideLinePolicy::Exact` (`DevicePolicy::exact_answers()`) the band |
+| `wideLines`, `w'` in `lineWidthRange` and above 0 | Its own lines, announced `device-wide-lines` (`WideLinePolicy::Device`, the default): no device's are taken as Metal's, a driver's parallelograms included, whose ends the driver places; under `WideLinePolicy::Exact` (`DevicePolicy::exact_answers()`) the band |
 | No `wideLines` (MoltenVK), `w'` outside `lineWidthRange`, or `w' = 0` | The band |
 | What neither draws | Its own lines at the width nearest Metal's they draw (clamped into `lineWidthRange` and put on the nearer step of `lineWidthGranularity`'s grid from its bottom, never 0; 1 without `wideLines`), announced `lines-at-nearest-width` |
 

@@ -26,24 +26,24 @@
 //! The work counts show which route each draw took (`WorkCounts::line_band_draws`,
 //! `device_wide_line_draws`, `nearest_width_line_draws`): every draw at a width other than 1 takes
 //! one of the three, and on a device without `wideLines` that tessellates, a line and a triangle's
-//! edges take the band. A draw the device's own lines draw otherwise than Metal is announced
-//! (`device-wide-lines`, at every occurrence here) and left unchecked; under
-//! `DevicePolicy::exact_answers()` no draw is, where the device has `tessellationShader`. The band
-//! of a triangle's edges under a depth bias that can bias them otherwise than Metal is announced
-//! (`wide-edge-depth-bias`) and left unchecked. What neither the device's lines nor the band draw
-//! (lines and edges without `tessellationShader` the device's lines do not draw, and those of a
-//! pipeline state whose band the translator refuses) runs the device's lines at the nearest width
-//! they draw, announced (`lines-at-nearest-width`) and counted at each draw; where that width is 1
-//! it is compared with Metal's map of the same geometry at width 1. A draw the device's lines draw
-//! at width 1 on a driver not measured to break a tie at a vertex two pixels' diamonds share as
-//! Metal does (`DriverFact::LineTiesAreMetals`: the RTX 5080 Laptop GPU draws the lane's strip's
-//! diagonal a row higher, and lavapipe, Mesa 26.2.4, leaves out its first pixel) is announced
-//! (`device-line-ties`) and left unchecked, and only there. A draw the band draws on a driver not
-//! measured to snap a vertex half a step off its 1/256-pixel subpixel grid as Metal snaps a line's
-//! endpoint (`DriverFact::SubpixelSnapIsMetals`: the RTX 5080 Laptop GPU and lavapipe draw the
-//! lines offset from rows of centres by `(r - 32) / 512` a row lower) is announced
-//! (`device-subpixel-snap`) and, where a vertex lies half a step off the grid, left unchecked;
-//! every other such case is compared as any other.
+//! edges take the band. A draw the device's own lines draw is announced (`device-wide-lines`, at
+//! every occurrence here) and left unchecked, as the runtime takes no device's lines as Metal's;
+//! under `DevicePolicy::exact_answers()` no draw is, where the device has `tessellationShader`. The
+//! band of a triangle's edges under a depth bias that can bias them otherwise than Metal is
+//! announced (`wide-edge-depth-bias`) and left unchecked. What neither the device's lines nor the
+//! band draw (lines and edges without `tessellationShader` the device's lines do not draw, and
+//! those of a pipeline state whose band the translator refuses) runs the device's lines at the
+//! nearest width they draw, announced (`lines-at-nearest-width`) and counted at each draw; where
+//! that width is 1 it is compared with Metal's map of the same geometry at width 1. A draw the
+//! device's lines draw at width 1 on a driver not measured to break a tie at a vertex two pixels'
+//! diamonds share as Metal does (`DriverFact::LineTiesAreMetals`: the RTX 5080 Laptop GPU draws the
+//! lane's strip's diagonal a row higher, and lavapipe, Mesa 26.2.4, leaves out its first pixel) is
+//! announced (`device-line-ties`) and left unchecked, and only there. A draw the band draws on a
+//! driver not measured to snap a vertex half a step off its 1/256-pixel subpixel grid as Metal
+//! snaps a line's endpoint (`DriverFact::SubpixelSnapIsMetals`: the RTX 5080 Laptop GPU and
+//! lavapipe draw the lines offset from rows of centres by `(r - 32) / 512` a row lower) is
+//! announced (`device-subpixel-snap`) and, where a vertex lies half a step off the grid, left
+//! unchecked; every other such case is compared as any other.
 //! Nothing is refused. A draw of
 //! no complete primitive (the consumer's triangles of 1 and 2 vertices, by vertices and by
 //! indices, under the last provoking vertex) draws nothing and takes no route. Not covered:
@@ -72,9 +72,9 @@ use std::collections::BTreeMap;
 const MEASURED: &str = include_str!("line_widths_m3_max.txt");
 
 /// The kinds the lane's runs take: a draw of lines at a width other than 1 that the device's own
-/// lines draw otherwise than Metal's parallelogram, one they draw at the nearest width they draw
-/// where neither they nor the band draw Metal's, and a band of a triangle's edges under a depth
-/// bias the device computes otherwise than Metal.
+/// lines draw, one they draw at the nearest width they draw where neither they nor the band draw
+/// Metal's, and a band of a triangle's edges under a depth bias the device computes otherwise than
+/// Metal.
 pub(super) const WIDE_LINES: [Degradation; 3] = [
     Degradation::DeviceWideLines,
     Degradation::LinesAtNearestWidth,
@@ -199,17 +199,15 @@ fn metal_width(width: f32) -> f32 {
 }
 
 /// What the device's lines draw: whether it enables `wideLines` and `tessellationShader`, its
-/// `lineWidthRange` and `lineWidthGranularity`, whether its lines are strict and its non-strict
-/// wide lines parallelograms, and whether its policy draws a width its lines draw otherwise than
-/// Metal by the band (`WideLinePolicy::Exact`, the lane's devices' `exact_answers`).
+/// `lineWidthRange` and `lineWidthGranularity`, and whether its policy draws a width its lines
+/// draw by the band (`WideLinePolicy::Exact`, the lane's devices' `exact_answers`): the runtime
+/// takes no device's lines as Metal's (`render/line_width.rs`).
 #[derive(Clone, Copy, Debug)]
 struct LineFacts {
     wide_lines: bool,
     tessellates: bool,
     range: [f32; 2],
     granularity: f32,
-    strict: bool,
-    parallelograms: bool,
     exact_policy: bool,
     /// The driver breaks a tie at a vertex two pixels' diamonds share as Metal does.
     ties: bool,
@@ -229,33 +227,16 @@ impl LineFacts {
             tessellates: has(VkFeature::TessellationShader),
             range: limits.line_width_range_bits.map(f32::from_bits),
             granularity: f32::from_bits(limits.line_width_granularity_bits),
-            strict: limits.strict_lines,
-            parallelograms: limits.non_strict_wide_lines_use_parallelogram,
             exact_policy: compile.policy().wide_lines == WideLinePolicy::Exact,
             ties: (device.properties().driver_facts).contains(&DriverFact::LineTiesAreMetals),
             snaps: (device.properties().driver_facts).contains(&DriverFact::SubpixelSnapIsMetals),
         }
     }
 
-    /// Whether the device's own lines draw Metal's `width` as Metal's parallelogram: non-strict
-    /// parallelograms above 1, on the granularity's grid from the range's bottom (the runtime's
-    /// docs, written apart from it).
-    fn draws_as_metal(self, width: f32) -> bool {
-        let w = metal_width(width);
-        let steps = (w - self.range[0]) / self.granularity;
-        self.draws(width)
-            && !self.strict
-            && self.parallelograms
-            && w > 1.0
-            && self.granularity > 0.0
-            && steps == steps.round()
-    }
-
-    /// Whether a draw of `width` takes the device's own lines: where they draw it, as Metal's
-    /// parallelogram or under `WideLinePolicy::Device`, or with no band to draw it (no
-    /// `tessellationShader`).
+    /// Whether a draw of `width` takes the device's own lines: where they draw it, under
+    /// `WideLinePolicy::Device` or with no band to draw it (no `tessellationShader`).
     fn device_route(self, width: f32) -> bool {
-        self.draws(width) && (self.draws_as_metal(width) || !self.exact_policy || !self.tessellates)
+        self.draws(width) && (!self.exact_policy || !self.tessellates)
     }
 
     /// The width nearest the one Metal draws for `width` (1/16 at 0) that the device's lines
@@ -1349,7 +1330,7 @@ struct Found {
     edges_matched: usize,
     /// Of `edges`, those left unchecked as announced line ties or subpixel snaps.
     edges_unchecked: usize,
-    /// Cases a device line drew otherwise than Metal, announced: left unchecked.
+    /// Cases the device's own lines drew, announced: left unchecked.
     announced: usize,
     /// Cases of a band of edges whose depth bias can differ from Metal's, announced: left
     /// unchecked.
@@ -1455,13 +1436,13 @@ fn printed(drawn: &Drawn, shot: &Shot, check: Check, blocks: &[String]) -> Vec<S
 }
 
 /// Every case of [`MEASURED`] on the cfg's device under `policy`: drawn as Metal drew it, or
-/// announced (where the device's lines draw it otherwise than Metal, where a band of edges takes
-/// a depth bias that can differ from Metal's, where the device's lines draw it at another width
-/// than Metal's, compared with Metal's map at width 1 where that width is 1, or where they draw it
-/// at width 1 on a driver whose ties are not measured to be Metal's, `device-line-ties`, announced
-/// exactly there, or where the band draws a vertex half a step off the subpixel grid on a driver
-/// whose snap is not measured to be Metal's, `device-subpixel-snap`, announced at every band
-/// draw there); and each draw at a width other than 1 counted by a route. Nothing is refused.
+/// announced (where the device's lines draw it, where a band of edges takes a depth bias that can
+/// differ from Metal's, where the device's lines draw it at another width than Metal's, compared
+/// with Metal's map at width 1 where that width is 1, or where they draw it at width 1 on a driver
+/// whose ties are not measured to be Metal's, `device-line-ties`, announced exactly there, or where
+/// the band draws a vertex half a step off the subpixel grid on a driver whose snap is not measured
+/// to be Metal's, `device-subpixel-snap`, announced at every band draw there); and each draw at a
+/// width other than 1 counted by a route. Nothing is refused.
 fn run(policy: DevicePolicy) -> Found {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
@@ -1542,10 +1523,15 @@ fn run(policy: DevicePolicy) -> Found {
             if !wide_lines {
                 assert_eq!(own, 0, "{name}: {key}: device lines without wideLines");
             }
-            // Each draw at the nearest width announces it here, and only those.
+            // Each draw at the nearest width announces it here, and only those; and each draw of
+            // the device's own lines its lines, and only those.
             assert_eq!(
                 announced_nearest as u64, nearest,
                 "{name}: {key}: nearest-width draws and their notices"
+            );
+            assert_eq!(
+                announced as u64, own,
+                "{name}: {key}: the device's line draws and their notices"
             );
             if matches!(check, Check::Lane(_) | Check::Map) {
                 assert!(
@@ -1726,18 +1712,16 @@ fn run(policy: DevicePolicy) -> Found {
 }
 
 /// Every case under the default policy: the device's own lines where they draw the width,
-/// announced where they draw it otherwise than Metal, else the band, a triangle's edges as a
-/// line's.
+/// announced, else the band, a triangle's edges as a line's.
 #[test]
 fn wide_lines_draw_metal_s_parallelograms() {
     let found = run(DevicePolicy::default());
     assert!(found.matched > 0, "{found:?}");
     let facts = found.facts.unwrap();
-    // On a device that tessellates nothing is drawn at the nearest width, and where its own
-    // lines differ from Metal's at no width drawn (none without `wideLines`: MoltenVK), every
-    // case is drawn as Metal's, the edges at their width too, but a band of edges under a depth
-    // bias that can differ and the cases the driver's ties and snap leave unchecked, edges among
-    // them.
+    // On a device that tessellates nothing is drawn at the nearest width, and where no draw
+    // takes its own lines (without `wideLines`: MoltenVK), every case is drawn as Metal's, the
+    // edges at their width too, but a band of edges under a depth bias that can differ and the
+    // cases the driver's ties and snap leave unchecked, edges among them.
     if facts.tessellates {
         assert_eq!(found.nearest, 0, "{found:?}");
     }
@@ -1759,8 +1743,8 @@ fn wide_lines_draw_metal_s_parallelograms() {
     }
 }
 
-/// Every case under `DevicePolicy::exact_answers()`: the band wherever the device's lines differ
-/// from Metal's, so no draw of lines or edges is announced as the device's lines on a device with
+/// Every case under `DevicePolicy::exact_answers()`: the band wherever the device's lines would
+/// draw, so no draw of lines or edges is announced as the device's lines on a device with
 /// `tessellationShader`, and every case, a triangle's edges' included, is Metal's but those of a
 /// band of edges under a depth bias that can differ and those the driver's ties and snap leave
 /// unchecked (`device-line-ties`, `device-subpixel-snap`).
@@ -1919,12 +1903,12 @@ fn a_draw_of_no_complete_primitive_draws_nothing() {
 }
 
 /// A whole triangle's edges in fill mode `Lines`, drawn twice. At width 4: by the device's own
-/// lines where they draw width 4 as Metal does, or where they draw it otherwise under
-/// `WideLinePolicy::Device` (announced; the lane's devices take `exact_answers`, whose band draws
-/// it), compared with Metal's where they draw it as Metal does; else as the band, silent; as Metal's edges at width 4, pixel for pixel. Without `tessellationShader`, at
-/// width 2: by the device's own lines where they draw it, else by them at the nearest width they
-/// draw, announced and counted at each draw, at width 1 (no `wideLines`: MoltenVK) as Metal's
-/// edges at width 1.
+/// lines where they draw width 4 under `WideLinePolicy::Device` (announced at each draw and left
+/// unchecked; the lane's devices take `exact_answers`, whose band draws it), else as the band,
+/// silent, as Metal's edges at width 4, pixel for pixel. Without `tessellationShader`, at width 2:
+/// by the device's own lines where they draw it (announced at each draw and left unchecked), else
+/// by them at the nearest width they draw, announced and counted at each draw, at width 1 (no
+/// `wideLines`: MoltenVK) as Metal's edges at width 1.
 #[test]
 fn edges_draw_as_bands_or_at_the_nearest_width() {
     let triangle = [4.0, 4.0, 28.0, 4.0, 16.0, 28.0];
@@ -1963,8 +1947,8 @@ fn edges_draw_as_bands_or_at_the_nearest_width() {
                 // The width drawn, where it is Metal's map's.
                 let drawn_at = match (facts.device_route(width), tessellated) {
                     (true, _) => {
-                        assert_eq!((routes, nearest), ([0, 1, 0], 0), "{what}");
-                        (differs == 0).then_some(width)
+                        assert_eq!((routes, differs, nearest), ([0, 1, 0], 1, 0), "{what}");
+                        None
                     }
                     (false, true) => {
                         assert_eq!((routes, differs, nearest), ([1, 0, 0], 0, 0), "{what}");

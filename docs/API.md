@@ -206,16 +206,15 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   recording. `pipeline_waits = PipelineWaitPolicy::Exact`, which `exact_answers()` selects, makes
   the predicted pipeline before the creation returns, as Metal compiles there, and waits for
   every draw's and dispatch's until made.
-- **A wide line the device's own** (`WideLinePolicy::Device`, the default; the runtime's choice,
-  no pipeline's code differs). A line Apple's `setLineWidth:` widens, and a triangle's edge in fill
-  mode `Lines`, is drawn by the device's own lines wherever it draws the width (`wideLines`,
-  inside `lineWidthRange`), exact where they are Metal's parallelogram (`strictLines` unset,
-  `nonStrictWideLinesUseParallelogram` set, the width on `lineWidthGranularity` and above 1),
-  announced `device-wide-lines` where not. `wide_lines = WideLinePolicy::Exact`, which
-  `exact_answers()` selects, draws those as the pipeline's band variant instead (section 4), on a
-  device with `tessellationShader`. Every other width other than 1 is the band under either value,
-  and what neither draws the device's lines at the nearest width they draw, announced
-  `lines-at-nearest-width` (the runtime's README, line widths).
+- **A wide line the device's own** (`WideLinePolicy::Device`, the default; the runtime's choice, no
+  pipeline's code differs). A line Apple's `setLineWidth:` widens, and a triangle's edge in fill
+  mode `Lines`, is drawn by the device's own lines wherever it draws the width (`wideLines`, inside
+  `lineWidthRange`), announced `device-wide-lines`: no device's lines are taken as Metal's
+  parallelogram, a driver's parallelograms included (their ends are the driver's). `wide_lines =
+  WideLinePolicy::Exact`, which `exact_answers()` selects, draws those as the pipeline's band
+  variant instead (section 4), on a device with `tessellationShader`. Every other width other than 1
+  is the band under either value, and what neither draws the device's lines at the nearest width
+  they draw, announced `lines-at-nearest-width` (the runtime's README, line widths).
 - **A compressed extended-range texture's blits keep the bytes** (`ExtendedRangeBlitPolicy::Kept`,
   the default; the runtime's choice, no pipeline differs). Metal's GPU blit into, out of or between
   `BGRA10_XR` or `BGRA10_XR_sRGB` textures it keeps losslessly compressed
@@ -3301,13 +3300,15 @@ bound.
   draw nothing, and some a few of the points or a box.
 - `metal2vulkan-degrade-device-wide-lines` (precision). `DeviceWideLines`: A draw of lines at a
   width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines` or of
-  a mesh draw, drawn by the device's own lines where they are not Metal's parallelogram: strict
-  lines (the rectangle the width spans across the segment, square ends), lines Vulkan does not
-  state as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width below 1), or a
-  width off the device's `lineWidthGranularity`, which rounds it. Under `WideLinePolicy::Exact` a
-  draw of lines or of a triangle's edges takes the band variant there instead, on a device with
-  `tessellationShader`. Cost: the lines can cover pixels Metal's parallelogram does not, and miss
-  others, at each end and along each edge.
+  a mesh draw, drawn by the device's own lines, which no device's are taken to draw as Metal's
+  parallelogram: strict lines (the rectangle the width spans across the segment, square ends), lines
+  Vulkan does not state as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width
+  below 1), a width off the device's `lineWidthGranularity`, which rounds it, and a driver's
+  parallelograms, whose ends and endpoints' snap are the driver's (RADV on the Radeon RX 7900 XTX
+  draws 21 of 48 scattered lines at width 2.5 a row or a column off Metal's at an end). Under
+  `WideLinePolicy::Exact` a draw of lines or of a triangle's edges takes the band variant instead,
+  on a device with `tessellationShader`. Cost: the lines can cover pixels Metal's parallelogram does
+  not, and miss others, at each end and along each edge.
 - `metal2vulkan-degrade-lines-at-nearest-width` (precision). `LinesAtNearestWidth`: A draw of lines
   at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines`
   or of a mesh draw, that neither the device's own lines at that width nor the band variant draws,

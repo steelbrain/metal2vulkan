@@ -536,7 +536,7 @@ fn the_runtime_s_wide_lines_choice_keys_no_profile() {
 }
 
 /// `DevicePolicy::exact_answers()` draws a wide line as Metal's parallelogram where the device's
-/// own line differs, and the default draws the device's own.
+/// own lines would draw it, and the default draws the device's own.
 #[test]
 fn exact_answers_draw_wide_lines_as_metal_s_parallelogram() {
     assert_eq!(DevicePolicy::UNTRUSTED.wide_lines, WideLinePolicy::Device);

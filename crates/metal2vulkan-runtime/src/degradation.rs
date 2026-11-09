@@ -2268,12 +2268,15 @@ degradations! {
              or a box";
         /// A draw of lines at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's
         /// edges in fill mode `Lines` or of a mesh draw, drawn by the device's own lines
-        /// (`render/line_width.rs`) where they are not Metal's parallelogram: strict lines (the
-        /// rectangle the width spans across the segment, square ends), lines Vulkan does not state
-        /// as parallelograms (`nonStrictWideLinesUseParallelogram` unset, or a width below 1), or a
-        /// width off the device's `lineWidthGranularity`, which rounds it. Under
+        /// (`render/line_width.rs`), which no device's are taken to draw as Metal's
+        /// parallelogram: strict lines (the rectangle the width spans across the segment, square
+        /// ends), lines Vulkan does not state as parallelograms
+        /// (`nonStrictWideLinesUseParallelogram` unset, or a width below 1), a width off the
+        /// device's `lineWidthGranularity`, which rounds it, and a driver's parallelograms, whose
+        /// ends and endpoints' snap are the driver's (RADV on the Radeon RX 7900 XTX draws 21 of
+        /// 48 scattered lines at width 2.5 a row or a column off Metal's at an end). Under
         /// `WideLinePolicy::Exact` a draw of lines or of a triangle's edges takes the band variant
-        /// there instead, on a device with `tessellationShader`.
+        /// instead, on a device with `tessellationShader`.
         DeviceWideLines = "device-wide-lines", Precision,
             "the lines can cover pixels Metal's parallelogram does not, and miss others, at each \
              end and along each edge";

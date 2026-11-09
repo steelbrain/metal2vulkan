@@ -16,8 +16,6 @@ use metal2vulkan::vk;
 enum Cell {
     /// `P`: as every line, at width 1.
     Plain,
-    /// `E`: the device's own lines, exactly Metal's parallelogram.
-    Exact,
     /// `A`: the device's own lines, announced as differing.
     Announced,
     /// `B`: the band.
@@ -33,7 +31,6 @@ impl Cell {
         row.split_whitespace()
             .map(|code| match code {
                 "P" => Cell::Plain,
-                "E" => Cell::Exact,
                 "A" => Cell::Announced,
                 "B" => Cell::Band,
                 "T" => Cell::Nearest(Unrouted::Untessellated),
@@ -108,12 +105,9 @@ fn cell(
         refused,
     ) {
         LineRoute::Plain => Cell::Plain,
-        LineRoute::Device { width, differs } => {
+        LineRoute::Device { width } => {
             assert_eq!(width, w);
-            match differs {
-                false => Cell::Exact,
-                true => Cell::Announced,
-            }
+            Cell::Announced
         }
         LineRoute::Band { half, primitive } => {
             assert_eq!(half, if w == 0.0 { 1.0 / 32.0 } else { w / 2.0 });
@@ -148,25 +142,26 @@ fn each_device_routes_each_width_as_its_lines_allow() {
     // (profile, widths, lines and edges Device, lines and edges Exact, mesh lines and patch
     // edges, amplified lines and edges)
     let table: [(&str, &[f32], [&str; 4]); 11] = [
-        // wideLines, [0, 8] by 1/8, non-strict parallelograms, tessellation.
+        // wideLines, [0, 8] by 1/8, non-strict parallelograms (not taken as Metal's),
+        // tessellation.
         (
             "amd-780m-radv",
             &[0.0, 0.5, 1.0, 1.5, 2.125, 2.0625, 8.0, 8.0625, 16.0],
             [
-                "B A P E E A E B B",
-                "B B P E E B E B B",
-                "U A P E E A E U U",
-                "V A P E E A E V V",
+                "B A P A A A A B B",
+                "B B P B B B B B B",
+                "U A P A A A A U U",
+                "V A P A A A A V V",
             ],
         ),
         (
             "amd-rdna3-radv",
             &[0.0, 0.5, 1.0, 1.5, 2.125, 2.0625, 8.0, 8.0625, 16.0],
             [
-                "B A P E E A E B B",
-                "B B P E E B E B B",
-                "U A P E E A E U U",
-                "V A P E E A E V V",
+                "B A P A A A A B B",
+                "B B P B B B B B B",
+                "U A P A A A A U U",
+                "V A P A A A A V V",
             ],
         ),
         // wideLines, [0, 8] by 1/128, not stated as parallelograms.
@@ -223,10 +218,10 @@ fn each_device_routes_each_width_as_its_lines_allow() {
             "amd-780m-hawkpoint-radv",
             &[0.0, 0.5, 1.0, 1.5, 2.125, 2.0625, 8.0, 8.0625, 16.0],
             [
-                "B A P E E A E B B",
-                "B B P E E B E B B",
-                "U A P E E A E U U",
-                "V A P E E A E V V",
+                "B A P A A A A B B",
+                "B B P B B B B B B",
+                "U A P A A A A U U",
+                "V A P A A A A V V",
             ],
         ),
     ];

@@ -83,11 +83,12 @@ pub struct DevicePolicy {
     /// each such command records as nothing. 4.5 s by default (as the creation wait, above). Unread
     /// under `Exact`. The runtime's alone: no emitted code changes.
     pub pipeline_commit_wait: Duration,
-    /// Whether a line Apple's `setLineWidth:` widens, at a width the device's own lines draw
-    /// otherwise than Metal (strict lines, lines that are not parallelograms, a width off the
-    /// device's granularity or below 1), is the device's own line at that width (the default) or
-    /// the pipeline's band variant, two triangles that cover Metal's parallelogram. The runtime's
-    /// choice alone: no emitted code of a pipeline changes, the band being a variant of its own.
+    /// Whether a line Apple's `setLineWidth:` widens, at a width the device's own lines draw (which
+    /// no device's are taken to draw as Metal's: strict lines, lines that are not parallelograms, a
+    /// width off the device's granularity or below 1, a driver's parallelograms, whose ends the
+    /// driver places), is the device's own line at that width (the default) or the pipeline's band
+    /// variant, two triangles that cover Metal's parallelogram. The runtime's choice alone: no
+    /// emitted code of a pipeline changes, the band being a variant of its own.
     pub wide_lines: WideLinePolicy,
     /// Whether a blit or fill through a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps
     /// losslessly compressed keeps the texels' bytes (the default) or writes Metal's canonical
@@ -425,21 +426,22 @@ pub enum PipelineWaitPolicy {
     Exact,
 }
 
-/// Which lines draw a line Apple's `setLineWidth:` widens (a width other than 1, quantized as
-/// Metal quantizes it), where the device's own lines draw that width otherwise than Metal's
-/// parallelogram: its lines are strict (rectangles), or not parallelograms
-/// (`nonStrictWideLinesUseParallelogram` unset or unknown), or the width is off the device's
-/// `lineWidthGranularity` (which rounds it) or below 1 (where Vulkan promises no shape). Where the
-/// device's lines draw the width as Metal does, they draw it under either value; where they cannot
-/// draw it at all (no `wideLines`, or a width outside `lineWidthRange`), and at width 0, the band
-/// draws it under either value. The runtime's choice alone: no emitted code changes.
+/// Which lines draw a line Apple's `setLineWidth:` widens (a width other than 1, quantized as Metal
+/// quantizes it) where the device's own lines draw that width, which no device's are taken to draw
+/// as Metal's parallelogram: strict lines (rectangles), lines not stated as parallelograms
+/// (`nonStrictWideLinesUseParallelogram` unset or unknown), a width off the device's
+/// `lineWidthGranularity` (which rounds it) or below 1 (where Vulkan promises no shape), and a
+/// driver's parallelograms, whose ends and endpoints' snap are the driver's. Where they cannot draw
+/// it at all (no `wideLines`, or a width outside `lineWidthRange`), and at width 0, the band draws
+/// it under either value. The runtime's choice alone: no emitted code changes.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WideLinePolicy {
-    /// The device's own line at the width (the default): its rectangle, its Bresenham columns, or
-    /// its width rounded to the granularity, which can cover pixels Metal's parallelogram does not
-    /// and miss others. Announced `device-wide-lines` at the first such draw.
+    /// The device's own line at the width (the default): its rectangle, its Bresenham columns, its
+    /// width rounded to the granularity, or its parallelogram's ends, which can cover pixels
+    /// Metal's parallelogram does not and miss others. Announced `device-wide-lines` at the first
+    /// such draw.
     #[default]
     Device,
     /// The pipeline's band variant (needs `tessellationShader`): each line two triangles over

@@ -47,13 +47,17 @@
 //!   Metal draws as nothing ([`draws_primitives`]); an indirect draw's count is the GPU's, so it
 //!   takes its route as any other.
 //! - **Device**: the device's own lines at `w'` (`lineWidth`), where it enables `wideLines` and
-//!   `w'` lies in its `lineWidthRange` and above 0. Exact where they are Metal's parallelogram:
-//!   `strictLines` unset, `nonStrictWideLinesUseParallelogram` set (Vulkan states the shape only
-//!   for widths above 1), and `w'` on `lineWidthGranularity` from the range's bottom. Elsewhere
-//!   the device's line differs (a strict device's rectangle covers the pixels within half the
-//!   width of the segment across it, square ends; a Bresenham one's columns; a width rounded to
-//!   the granularity): announced (`Degradation::DeviceWideLines`), or under
-//!   `WideLinePolicy::Exact` the band below, where it can draw.
+//!   `w'` lies in its `lineWidthRange` and above 0, announced as the device's
+//!   (`Degradation::DeviceWideLines`), or under `WideLinePolicy::Exact` the band below, where it
+//!   can draw. They are not taken as Metal's anywhere: a strict device's rectangle covers the
+//!   pixels within half the width of the segment across it, square ends; a Bresenham one's columns;
+//!   a width off `lineWidthGranularity`'s grid is rounded to it; and a driver's non-strict
+//!   parallelogram (`strictLines` unset, `nonStrictWideLinesUseParallelogram` set), Metal's shape
+//!   above a width of 1, ends where the driver places it and snaps its endpoints as the driver
+//!   rounds, which no driver is measured to do as Metal does. RADV, the one driver of the committed
+//!   profiles that states the parallelogram, draws 21 of the lane's 48 scattered lines at width 2.5
+//!   on the Radeon RX 7900 XTX a row or a column off Metal's at an end
+//!   (`runtime_lane::line_widths`): one more past the first vertex, one fewer before the last.
 //! - **Band**: the pipeline's band variant (`VariantKey::line_band`, the translator's
 //!   `pipeline::link::band`), through a tessellation control and evaluation stage
 //!   (`tessellationShader`): two triangles per line over Metal's parallelogram, and per triangle in
@@ -152,9 +156,9 @@ impl LineWidth {
 pub(super) enum LineRoute {
     /// As every line the runtime draws: Metal's width 1, or a draw of no lines.
     Plain,
-    /// The device's own lines `width` pixels wide (`lineWidth`), Metal's width, which differ from
-    /// Metal's parallelogram where `differs` (announced).
-    Device { width: f32, differs: bool },
+    /// The device's own lines `width` pixels wide (`lineWidth`), Metal's width, the device's
+    /// shape rather than Metal's parallelogram (announced).
+    Device { width: f32 },
     /// The pipeline's band variant of `primitive`, `half` pixels to each side of each segment.
     Band { half: f32, primitive: BandPrimitive },
     /// The device's own lines `width` pixels wide, the width nearest Metal's they draw, where
@@ -193,7 +197,7 @@ impl LineRoute {
     pub(super) fn fix(self, fixed: &mut FixedState) {
         match self {
             LineRoute::Plain => {}
-            LineRoute::Device { width, .. } | LineRoute::Nearest { width, .. } => {
+            LineRoute::Device { width } | LineRoute::Nearest { width, .. } => {
                 fixed.line_width = width.to_bits()
             }
             LineRoute::Band { primitive, .. } => {
@@ -361,27 +365,13 @@ fn route(
         return nearest(Unrouted::Executed);
     }
     let drawable = wide_lines && w > 0.0 && (low..=high).contains(&w);
-    // On the granularity's grid from the range's bottom: the widths the device draws without
-    // rounding.
-    let on_grid = granularity > 0.0 && {
-        let steps = (w - low) / granularity;
-        steps == steps.round()
-    };
-    let exact = drawable
-        && !limits.strict_lines
-        && limits.non_strict_wide_lines_use_parallelogram
-        && w > 1.0
-        && on_grid;
     let tessellates = enabled.features.contains(&VkFeature::TessellationShader);
     // Where the band can draw the draw's lines or edges.
     let band = drawn
         .banded()
         .filter(|_| tessellates && !amplifies && !refused);
-    if exact || (drawable && (policy == WideLinePolicy::Device || band.is_none())) {
-        return LineRoute::Device {
-            width: w,
-            differs: !exact,
-        };
+    if drawable && (policy == WideLinePolicy::Device || band.is_none()) {
+        return LineRoute::Device { width: w };
     }
     let Some(primitive) = band else {
         return nearest(match drawn.banded() {
@@ -415,10 +405,9 @@ fn drawn_width(w: f32, [low, high]: [f32; 2], granularity: f32) -> f32 {
 impl ShapeInputs<'_> {
     /// The route `call`'s draw of `pipeline` as `assembly` draws its lines by at the encoder's
     /// width (the module docs), of a draw that may draw a primitive where `primitives`
-    /// ([`draws_primitives`]); announcing a device line that differs from Metal's, one at the
-    /// nearest width, the device's lines at width 1 on a driver whose ties are not measured to be
-    /// Metal's, and the band on a driver whose subpixel snap is not measured to be Metal's, where
-    /// `announce`.
+    /// ([`draws_primitives`]); announcing the device's own lines, lines at the nearest width, the
+    /// device's lines at width 1 on a driver whose ties are not measured to be Metal's, and the
+    /// band on a driver whose subpixel snap is not measured to be Metal's, where `announce`.
     pub(super) fn line_route(
         &self,
         call: &'static str,
@@ -456,7 +445,7 @@ impl ShapeInputs<'_> {
             route => route,
         };
         match route {
-            LineRoute::Device { differs: true, .. } if announce => {
+            LineRoute::Device { .. } if announce => {
                 announce_device_lines(self.device, call, width.pixels());
             }
             LineRoute::Nearest { width: drawn, why } if announce => {
@@ -511,17 +500,26 @@ fn announce_subpixel_snap(device: &crate::Device, call: &'static str) {
     });
 }
 
-/// Announce `call`'s draw of lines `w` pixels wide by the device's own lines, which differ from
-/// Metal's parallelogram there (the module docs).
+/// Announce `call`'s draw of lines `w` pixels wide by the device's own lines, the device's shape
+/// rather than Metal's parallelogram (the module docs).
 fn announce_device_lines(device: &crate::Device, call: &'static str, w: f32) {
     let limits = device.compile_device().profile().limits();
     let [low, high] = limits.line_width_range_bits.map(f32::from_bits);
     let granularity = f32::from_bits(limits.line_width_granularity_bits);
     let parallelogram = limits.non_strict_wide_lines_use_parallelogram;
+    // On the granularity's grid from the range's bottom: the widths the device draws without
+    // rounding.
+    let on_grid = granularity > 0.0 && {
+        let steps = (w - low) / granularity;
+        steps == steps.round()
+    };
     let shape = match (limits.strict_lines, parallelogram) {
         (true, _) => "strict lines, the rectangle the width spans across the segment",
         (false, true) if w < 1.0 => "lines, whose shape below a width of 1 Vulkan leaves to it",
-        (false, true) => "lines, which round the width to their granularity",
+        (false, true) if !on_grid => "lines, which round the width to their granularity",
+        (false, true) => {
+            "parallelograms, whose ends and endpoints' snap the driver places as it draws them"
+        }
         (false, false) => "lines, which Vulkan does not state as parallelograms",
     };
     device.degrade(Degradation::DeviceWideLines, || {
