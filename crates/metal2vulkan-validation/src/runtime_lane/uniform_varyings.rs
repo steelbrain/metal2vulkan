@@ -18,10 +18,14 @@
 //! beside (`FLT-LANE`), with the share of the growing class (finite constants in a perspective
 //! `float` varying across a triangle whose w varies) the flat read removes (`FLT-LANE-SHARE`),
 //! and its special values' words (`FLT-LANE-WORD`). The flat read's every compared word must be
-//! Metal's, and its fragment module must carry the four varyings' `Flat` decorations the twin's
-//! lacks. A pipeline the device refuses (`Error::Unsupported`: on MoltenVK the centroid function,
-//! which reads `[[sample_mask]]`, as `PixelCoverageAtSampleRate`) is printed (`FLT-LANE-REFUSED`)
-//! and skipped, behind either vertex function.
+//! Metal's, but a `half` denormal's where a stage records the device's own `half` rounding
+//! (`PrecisionNote::NativeHalfQuantize` or `NativeHalfConversion`, on a device without
+//! `shaderFloat16`): there it may read as the zero the note's bound allows (`flushed`), as the
+//! RX 550's RADV answers each, counted and printed. Its fragment module must carry the four
+//! varyings' `Flat` decorations the twin's lacks. A pipeline the device refuses
+//! (`Error::Unsupported`: on MoltenVK the centroid function, which reads `[[sample_mask]]`, as
+//! `PixelCoverageAtSampleRate`) is printed (`FLT-LANE-REFUSED`) and skipped, behind either vertex
+//! function.
 //!
 //! [`MODULE`] is this lane's own MSL (`lane.metal`, the probe's with the device twin), compiled
 //! with `xcrun metal -S -emit-llvm -O2` and written with opaque pointers, its alias metadata
@@ -34,7 +38,9 @@ use super::{
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage};
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
+};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     ClearColor, CommandBufferStatus, Device, Error, ExecutedPipeline, Library, LoadAction,
@@ -452,7 +458,8 @@ const RECORD: usize = 16;
 
 /// What one varying's words came to: compared, equal to Metal's, and among them the finite
 /// normal constants' (the growing class); the residue's words; and per constant index the words
-/// that differ from Metal's.
+/// that differ from Metal's, apart from those the device's noted `half` rounding answers
+/// ([`flushed`]).
 #[derive(Default)]
 struct Tally {
     compared: u64,
@@ -461,10 +468,13 @@ struct Tally {
     normal_equal: u64,
     residue: u64,
     wrong: BTreeMap<usize, BTreeMap<u32, u64>>,
+    flushed: BTreeMap<usize, BTreeMap<u32, u64>>,
 }
 
 impl Tally {
-    fn add(&mut self, index: usize, normal: bool, got: u32, want: Option<u32>) {
+    /// One word `got` of constant `index` against Metal's `want`; `flushed` where it is not
+    /// Metal's but the device's noted rounding of a `half` denormal ([`flushed`]).
+    fn add(&mut self, index: usize, normal: bool, got: u32, want: Option<u32>, flushed: bool) {
         let Some(want) = want else {
             self.residue += 1;
             return;
@@ -474,9 +484,21 @@ impl Tally {
         if got == want {
             self.equal += 1;
             self.normal_equal += u64::from(normal);
+        } else if flushed {
+            *self
+                .flushed
+                .entry(index)
+                .or_default()
+                .entry(got)
+                .or_default() += 1;
         } else {
             *self.wrong.entry(index).or_default().entry(got).or_default() += 1;
         }
+    }
+
+    /// The words the device's noted rounding answered in Metal's place.
+    fn flushes(&self) -> u64 {
+        self.flushed.values().flat_map(|w| w.values()).sum()
     }
 
     fn share(n: u64, d: u64) -> String {
@@ -486,6 +508,22 @@ impl Tally {
             format!("{:.2}%", 100.0 * n as f64 / d as f64)
         }
     }
+}
+
+/// Whether `got` is the device's answer for Metal's `half` `want` under the notes its stages
+/// record, where it is not Metal's: `want` a `half` denormal and `got` a zero, of either sign
+/// where a stage rounds a `half` by the device's quantize (`PrecisionNote::NativeHalfQuantize`,
+/// on a device without `shaderFloat16`; the SPIR-V specification lets it answer a zero below the
+/// smallest normal `half`), of `want`'s sign where a stage widens or narrows a `half` by the
+/// device's conversion (`PrecisionNote::NativeHalfConversion`; a device that flushes 16-bit
+/// denormals). The flat read rounds each `half` lane after Metal's word for it and narrows it to
+/// its bits for the store, and the vertex function widens it from its bits.
+fn flushed(notes: &[PrecisionNote], want: u16, got: u16) -> bool {
+    let denormal = want & 0x7c00 == 0 && want & 0x3ff != 0;
+    let zero = got & 0x7fff == 0;
+    let quantized = notes.contains(&PrecisionNote::NativeHalfQuantize);
+    let converted = notes.contains(&PrecisionNote::NativeHalfConversion) && got == want & 0x8000;
+    denormal && zero && (quantized || converted)
 }
 
 /// The varyings of a record: `cp`, `cn` (`float4`), `hp`, `hn` (`half4`).
@@ -575,6 +613,11 @@ fn drawn(
         panic!("the draw executed no render pipeline");
     };
     let flats = flat_decorations(&executed.stages.last().expect("fragment").spirv);
+    let notes: Vec<PrecisionNote> = executed
+        .stages
+        .iter()
+        .flat_map(|s| s.precision_notes.iter().copied())
+        .collect();
     let words: Vec<u32> = read_buffer(&out, 0, (records * RECORD * 4) as u64)
         .unwrap()
         .as_chunks::<4>()
@@ -591,22 +634,21 @@ fn drawn(
         for k in 0..4 {
             let i = 4 * instance + k;
             let normal = f[i] & 0x7f80_0000 != 0 && f[i] & 0x7f80_0000 != 0x7f80_0000;
-            tallies[0].add(i, normal, r[1 + k], metal_float(f[i], true));
-            tallies[1].add(i, normal, r[5 + k], metal_float(f[i], false));
+            tallies[0].add(i, normal, r[1 + k], metal_float(f[i], true), false);
+            tallies[1].add(i, normal, r[5 + k], metal_float(f[i], false), false);
             let half = |w: u32| (w >> (16 * (k % 2))) as u16;
             let hnormal = h[i] & 0x7c00 != 0x7c00;
-            tallies[2].add(
-                i,
-                hnormal,
-                u32::from(half(r[9 + k / 2])),
-                Some(u32::from(metal_half(h[i]))),
-            );
-            tallies[3].add(
-                i,
-                hnormal,
-                u32::from(half(r[11 + k / 2])),
-                Some(u32::from(metal_half(h[i]))),
-            );
+            let want = metal_half(h[i]);
+            for (tally, word) in [(2, r[9 + k / 2]), (3, r[11 + k / 2])] {
+                let got = half(word);
+                tallies[tally].add(
+                    i,
+                    hnormal,
+                    u32::from(got),
+                    Some(u32::from(want)),
+                    flushed(&notes, want, got),
+                );
+            }
         }
     }
     Some((tallies, flats))
@@ -681,9 +723,10 @@ fn a_varying_alike_at_every_vertex_reads_metal_s_words() {
             );
             for (v, (a, b)) in VARYINGS.iter().zip(flat.iter().zip(twin.iter())) {
                 println!(
-                    "FLT-LANE {name}: {fragment} at {samples}x {v}: flat {}/{} = Metal ({}), finite {}/{} ({}), residue {}; device twin {}/{} = Metal ({}), finite {}/{} ({})",
+                    "FLT-LANE {name}: {fragment} at {samples}x {v}: flat {}/{} = Metal ({}), finite {}/{} ({}), residue {}, device-rounded denormals {}; device twin {}/{} = Metal ({}), finite {}/{} ({})",
                     a.equal, a.compared, Tally::share(a.equal, a.compared),
                     a.normal_equal, a.normal, Tally::share(a.normal_equal, a.normal), a.residue,
+                    a.flushes(),
                     b.equal, b.compared, Tally::share(b.equal, b.compared),
                     b.normal_equal, b.normal, Tally::share(b.normal_equal, b.normal),
                 );
@@ -722,10 +765,11 @@ fn a_varying_alike_at_every_vertex_reads_metal_s_words() {
                         if !special {
                             continue;
                         }
-                        let words = |t: &Tally| match (metal, t.wrong.get(&i)) {
-                            (None, _) => "residue".to_owned(),
-                            (Some(_), None) => "Metal's".to_owned(),
-                            (Some(_), Some(w)) => format!("{w:08x?}"),
+                        let words = |t: &Tally| match (metal, t.wrong.get(&i), t.flushed.get(&i)) {
+                            (None, _, _) => "residue".to_owned(),
+                            (Some(_), None, None) => "Metal's".to_owned(),
+                            (Some(_), None, Some(w)) => format!("the device's {w:08x?}"),
+                            (Some(_), Some(w), _) => format!("{w:08x?}"),
                         };
                         println!(
                             "FLT-LANE-WORD {name}: {v} constant {i} {value:08x}: Metal {metal:08x?}, flat {}, device twin {}",
