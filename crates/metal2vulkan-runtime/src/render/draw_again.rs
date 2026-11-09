@@ -664,9 +664,11 @@ impl Rebound {
                 digest(&*live.uses),
                 digest(live.uses.resident()),
                 digest((live.kept.recording()).map(|recording| {
+                    // By their raw values: ash's handles and enums print nothing.
                     let index = (recording.index).map(|index| {
                         let size = index.sized.map(|(_, size)| size);
-                        (index.buffer, index.offset, index.index_type, size)
+                        let buffer = vk::Handle::as_raw(index.buffer);
+                        (buffer, index.offset, index.index_type.as_raw(), size)
                     });
                     (recording.draw, index)
                 })),
