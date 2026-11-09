@@ -460,7 +460,22 @@ fn the_answer_is_the_route_the_texture_takes() {
     let ask = || own.texture_placement(&shared, 0, side * 4);
     let make = || own.new_texture(&shared, 0, side * 4);
     let (answer, _) = made_as_asked(&device, "a buffer of the device's memory", ask, make);
-    assert_eq!(answer, TexturePlacement::NotHostPages);
+    if own.in_page_block() {
+        // A block of the runtime's own pages: answered as fresh pages are (`texture/route.rs`).
+        assert!(
+            matches!(
+                answer,
+                TexturePlacement::InPlace
+                    | TexturePlacement::Shadow(
+                        TextureShadowReason::Unchecked { .. }
+                            | TextureShadowReason::CheckFailed { .. }
+                    )
+            ),
+            "{answer:?}"
+        );
+    } else {
+        assert_eq!(answer, TexturePlacement::NotHostPages);
+    }
 
     // Texels past a short buffer's length: the tail's shadow.
     let short = device.new_buffer(4000, ResourceOptions::shared()).unwrap();

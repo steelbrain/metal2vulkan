@@ -93,6 +93,10 @@ fn make(device: &Device, held: &mut Vec<Buffer>) -> WorkCounts {
 fn a_growing_pool_s_new_blocks_are_made_ahead_and_none_in_place() {
     let scratch = Scratch::new("growth");
     let device = device(&scratch.0);
+    // The pools the runtime keeps room in are known before the first creation: those of blocks
+    // of its own pages join them once the device's submission check answered
+    // (`memory.rs`'s `Holds::PageBuffers`), their first block made then.
+    let _settled = device.settle_submit_checks(Duration::from_secs(60));
     let mut held = Vec::new();
     // The first creation makes each pool's first block; the buffers' pool's first growth past it
     // is made in place, as nothing grew before it. Other pools' blocks are not counted.

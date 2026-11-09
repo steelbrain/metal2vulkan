@@ -712,7 +712,10 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     let early =
         (device.new_buffer_with_descriptor(descriptor_of(ResourceOptions::shared()))).unwrap();
     let verdicts_known = device.settle_in_place_checks(Duration::ZERO);
-    if !verdicts_known {
+    // A `Shared` buffer lies in a block of the runtime's own pages where the device takes them
+    // (`memory.rs`'s `Holds::PageBuffers`), whatever the check of exportable blocks answers.
+    let host_pages = BoundMemory::External(crate::memory::HOST_PAGES_HANDLE);
+    if !verdicts_known && !early.in_page_block() {
         assert!(
             early.bound_memory() == BoundMemory::Own,
             "made while the check was pending"
@@ -733,7 +736,9 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
             .new_buffer_with_descriptor(descriptor_of(options))
             .unwrap();
         let (bound, counts) = (picture.bound_memory(), device.work_counts());
+        let paged = picture.in_page_block();
         match exportable {
+            _ if paged => assert!(bound == host_pages, "{options:?}: {bound:?}"),
             true => {
                 assert!(bound == BoundMemory::Blocks, "{options:?}: {bound:?}");
                 assert!(
@@ -769,31 +774,34 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
             let descriptor = descriptor(plane, options);
             let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
             let texture = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+            // Over a block of the runtime's own pages, as over fresh pages: in place where the
+            // check passed for them (`texture/route.rs`).
+            let in_place = match paged {
+                true => TexturePlacement::InPlace,
+                false => TexturePlacement::NotHostPages,
+            };
             assert!(
-                matches!(
-                    placement,
-                    TexturePlacement::NotHostPages
-                        | TexturePlacement::Shadow(
+                placement == in_place
+                    || matches!(
+                        placement,
+                        TexturePlacement::Shadow(
                             TextureShadowReason::Unchecked { .. }
                                 | TextureShadowReason::CheckFailed { .. }
                         )
-                ),
+                    ),
                 "{options:?} {plane:?}: in place, or a shadow the device's check decided: \
                  {placement:?}"
             );
             // Where the buffers lie in such blocks, every plane is in place as over a plain
             // block's buffer: the device's linear image made for the blocks' handle type.
-            if exportable {
+            if exportable && !paged {
                 assert_eq!(
                     placement,
                     TexturePlacement::NotHostPages,
                     "{options:?} {plane:?}"
                 );
             }
-            assert_eq!(
-                texture.shadow().is_none(),
-                placement == TexturePlacement::NotHostPages
-            );
+            assert_eq!(texture.shadow().is_none(), placement == in_place);
             assert!(
                 read(&device, &texture, plane) == want(plane),
                 "{options:?} {plane:?}: the texels, read as made"
@@ -826,6 +834,7 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     );
     assert!(unobserved_at == BoundMemory::Own, "{unobserved_at:?}");
     match exportable {
+        _ if kept.in_page_block() => assert!(kept_at == host_pages, "{kept_at:?}"),
         true => assert!(kept_at == BoundMemory::Blocks, "{kept_at:?}"),
         false => assert!(kept_at == BoundMemory::Own, "{kept_at:?}"),
     }

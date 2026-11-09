@@ -34,7 +34,10 @@
 //!   blit reads the clear, a later one reads it with no shadow copy, and a later clear reaches
 //!   the buffer's rows, the bytes after the last row keeping the CPU's.
 //! - **Undeclared.** The same texture over a buffer made without the declaration answers
-//!   `Shadow(BytesBetweenRows)` and is a shadow (`shadowed_textures`), at every pitch.
+//!   `Shadow(BytesBetweenRows)` and is a shadow (`shadowed_textures`), at every pitch; where the
+//!   buffer lies in a block of the runtime's own pages (`memory.rs`'s `Holds::PageBuffers`), it
+//!   takes the route over fresh pages instead: in place where the device's check passed for
+//!   them, else a shadow it decided, as answered.
 //! - **Over the caller's memory**, the declaration is refused: `Invalid`
 //!   (`PaddingUnobservedNoCopy`).
 //!
@@ -142,12 +145,33 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
     for pitch in PITCHES {
         let observed = own_buffer(&device, length, false);
         let answer = observed.texture_placement(&descriptor, 0, pitch).unwrap();
+        let (texture, before, after) = made(&device, &observed, pitch);
+        if observed.in_page_block() {
+            // In a block of the runtime's own pages: as over fresh pages, in place where the
+            // check passed for them, else a shadow it decided (`texture/route.rs`).
+            assert!(
+                matches!(
+                    answer,
+                    TexturePlacement::InPlace
+                        | TexturePlacement::Shadow(
+                            TextureShadowReason::Unchecked { .. }
+                                | TextureShadowReason::CheckFailed { .. }
+                        )
+                ),
+                "undeclared in the runtime's own pages at {pitch}: the answer {answer:?}"
+            );
+            assert_eq!(
+                texture.shadow().is_none(),
+                answer == TexturePlacement::InPlace,
+                "undeclared in the runtime's own pages at {pitch}: the answer is the making's"
+            );
+            continue;
+        }
         assert_eq!(
             answer,
             TexturePlacement::Shadow(TextureShadowReason::BytesBetweenRows),
             "undeclared at {pitch}: the answer"
         );
-        let (texture, before, after) = made(&device, &observed, pitch);
         assert!(
             texture.shadow().is_some() && !texture.aliases_buffer(),
             "undeclared at {pitch}: a shadow"

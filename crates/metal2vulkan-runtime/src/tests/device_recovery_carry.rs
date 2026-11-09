@@ -98,18 +98,23 @@ fn live_vk_devices(device: &Device, live: u64) -> u64 {
 /// A recovery carries a `Private` buffer (its address kept, its bytes zero), a buffer in fresh
 /// pages (its `contents` pointer and bytes kept, the host's writes through that pointer after
 /// the recovery read by the GPU), and a shared event (its value, a listener's notification, a
-/// GPU signal after it), and leaves a pooled `Shared` buffer refused, as its notice counts. The
-/// pooled buffer keeps the lost `VkDevice`, but nothing it kept for reuse: the memory of buffers
-/// the program let go of before the loss (their `VkBuffer`s parked, or a block kept empty) is
-/// freed, and no empty block is left. The lost `VkDevice` goes with the pooled buffer.
+/// GPU signal after it), as its notice counts. A pooled `Shared` buffer it carries as the one in
+/// fresh pages where it lies in a block of the runtime's own pages (`memory.rs`'s
+/// `Holds::PageBuffers`), else leaves refused. What is left (that buffer, and a texture, which no
+/// recovery carries) keeps the lost `VkDevice`, but nothing it kept for reuse: the memory of
+/// buffers the program let go of before the loss (their `VkBuffer`s parked, or a block kept
+/// empty) is freed, and no empty block is left. The lost `VkDevice` goes with what is left.
 #[test]
 fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     let scratch = Scratch::new();
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
     // The device's checks answered first, so that where its blocks allocated exportable passed,
-    // its own buffers lie in them (`Holds::FdBuffers`), the `Private` one below among them.
+    // its own buffers lie in them (`Holds::FdBuffers`), the `Private` one below among them; and
+    // where a held import costs its submissions nothing, its `Shared` buffers lie in blocks of
+    // its own pages (`Holds::PageBuffers`).
     let _settled = device.settle_in_place_checks(WAIT);
+    let _settled = device.settle_submit_checks(WAIT);
     let queue = device.new_command_queue().unwrap();
     let private = device
         .new_buffer(BYTES, ResourceOptions::private())
@@ -144,6 +149,19 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     // SAFETY: the buffer's first `BYTES` bytes, which no work in flight uses.
     unsafe { std::ptr::write_bytes(pointer.as_ptr(), 3, BYTES as usize) };
     let pooled = device.new_buffer(BYTES, ResourceOptions::shared()).unwrap();
+    let pages = pooled.in_page_block();
+    eprintln!(
+        "CARRY-POOLED: {}: the pooled `Shared` buffer lies in a block of the runtime's own pages: \
+         {pages}",
+        device.name()
+    );
+    let pooled_pointer = pooled.contents().unwrap();
+    // SAFETY: the buffer's bytes, which no work in flight uses.
+    unsafe { std::ptr::write_bytes(pooled_pointer.as_ptr(), 5, BYTES as usize) };
+    // An object no recovery carries.
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    let texture = device.new_texture(&descriptor).unwrap();
     let event = device.new_shared_event().unwrap();
     event.set_signaled_value(5);
     let listener = SharedEventListener::new();
@@ -161,17 +179,21 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         })
         .collect();
     drop(reused);
-    let before = pooled.device().work_counts_now();
+    let before = texture.device().work_counts_now();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
     assert_eq!(said.len(), 1, "{said:?}");
+    let (kept, left) = match pages {
+        true => (2, 0),
+        false => (1, 1),
+    };
     assert!(
-        said[0].contains(
-            "it carried 1 events, 1 buffers with their contents and 1 `Private` buffers (4096 \
-             bytes) whose contents were lost (they read zero); left refused \
-             (`MadeBeforeRecovery`): 1 pooled `Shared` or `Managed` buffers"
-        ),
+        said[0].contains(&format!(
+            "it carried 1 events, {kept} buffers with their contents and 1 `Private` buffers \
+             (4096 bytes) whose contents were lost (they read zero); left refused \
+             (`MadeBeforeRecovery`): {left} pooled `Shared` or `Managed` buffers"
+        )),
         "{said:?}"
     );
     // The `Private` buffer: the same buffer on the next generation, its bytes zero.
@@ -204,19 +226,38 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     assert_eq!(event.signaled_value(), 5);
     signal(&queue, &event, 9);
     assert_eq!(notified.recv_timeout(WAIT), Ok(9));
-    // The pooled buffer stays the lost generation's, refused where it meets the next.
-    assert!(!pooled.device().generation_serves());
-    let refused = read(&device, &queue, &pooled);
-    assert!(
-        matches!(
-            refused,
-            Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery))
-        ),
-        "{refused:?}"
-    );
-    // It holds the lost `VkDevice`, which keeps no memory for work.
+    if pages {
+        // The pooled buffer in a block of the runtime's own pages: as the one in fresh pages, at
+        // its offset in its block's pages imported again.
+        assert!(pooled.device().generation_serves() && pooled.in_page_block());
+        assert_eq!(pooled.contents(), Some(pooled_pointer));
+        assert_eq!(
+            read(&device, &queue, &pooled).unwrap(),
+            vec![5; BYTES as usize]
+        );
+        // SAFETY: as above.
+        unsafe { std::ptr::write_bytes(pooled_pointer.as_ptr(), 6, BYTES as usize) };
+        assert_eq!(
+            read(&device, &queue, &pooled).unwrap(),
+            vec![6; BYTES as usize]
+        );
+    } else {
+        // The pooled buffer in memory the device allocated stays the lost generation's, refused
+        // where it meets the next.
+        assert!(!pooled.device().generation_serves());
+        let refused = read(&device, &queue, &pooled);
+        assert!(
+            matches!(
+                refused,
+                Err(Error::NotImplemented(RuntimeGap::MadeBeforeRecovery))
+            ),
+            "{refused:?}"
+        );
+    }
+    // What is left holds the lost `VkDevice`, which keeps no memory for work.
+    assert!(!texture.device().generation_serves());
     assert_eq!(live_vk_devices(&device, 2), 2);
-    let after = pooled.device().work_counts_now();
+    let after = texture.device().work_counts_now();
     let blocks =
         |counts: &crate::WorkCounts| counts.memory_blocks_live + counts.empty_memory_blocks_live;
     eprintln!(
@@ -235,7 +276,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         blocks(&before)
     );
     assert!(after.memory_frees.teardown > before.memory_frees.teardown);
-    drop(pooled);
+    drop((pooled, texture));
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
 

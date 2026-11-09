@@ -14,7 +14,10 @@ use crate::texture::{HostWay, Route};
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TexturePlacement {
-    /// A linear image aliasing the buffer's host pages, in place: the device's check passed for
+    /// A linear image aliasing the buffer's host pages, in place (a no-copy buffer's pages, or
+    /// pages the runtime mapped and imported for a buffer of its own: a long host-visible buffer's,
+    /// and, on a device whose check found that a held import of host pages costs its submissions
+    /// nothing, the blocks its `Shared` and `Managed` buffers lie in): the device's check passed for
     /// the pages' kind, for every access the texture's usage takes and for texels that lie in the
     /// device's lines of memory as its own do, and the device made the image of the texture's
     /// plan at its pitch, where its requirements take the bytes' place and memory type (the query
@@ -43,8 +46,8 @@ pub enum TexturePlacement {
     /// from the buffer before a command buffer's uses and back after its writes, announced
     /// (`shadowed-texture`) but for a device copy. Why.
     Shadow(TextureShadowReason),
-    /// The buffer's bytes are no host pages (a buffer of the device's own memory, or the caller's
-    /// `VkBuffer`): the texture is a linear image aliasing the buffer's memory, the device's own
+    /// The buffer's bytes are no host pages (a buffer of memory the device allocated, or the
+    /// caller's `VkBuffer`): the texture is a linear image aliasing the buffer's memory, the device's own
     /// where it lays one out as Metal does, else, over the device's own memory, a
     /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch where the device makes one and its check of
     /// such images over its pooled memory passed for the texture's accesses (the query made it

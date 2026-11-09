@@ -610,7 +610,8 @@ impl Device {
     /// rest as its victims (`GpuRecoveryVictim`); the runtime makes a new `VkDevice` of the same
     /// physical device, options, queue families and extensions, and every later call of the
     /// device, and of its command queues, goes to it. The events, `Private` buffers and buffers in
-    /// fresh pages made before go on there (`device/carry.rs`); any other object made before is
+    /// the runtime's own pages made before go on there (`device/carry.rs`); any other object made
+    /// before is
     /// refused where it meets it (`RuntimeGap::MadeBeforeRecovery`). Announced
     /// (`Degradation::DeviceRecovered`).
     /// Returns once the new `VkDevice` serves; where it could not be made, `DeviceLost`, and the

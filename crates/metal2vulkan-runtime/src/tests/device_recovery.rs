@@ -485,20 +485,26 @@ fn a_call_refused_for_a_loss_under_it_runs_again_on_the_next_generation() {
 fn a_call_that_took_its_arguments_completes_on_a_generation_lost_after() {
     let scratch = Scratch::new();
     let device = device(&scratch.0);
-    // A pooled `Shared` buffer, which a recovery leaves refused (`device/carry.rs`).
+    // A pooled `Shared` buffer: in memory the device allocated, which a recovery leaves refused;
+    // in a block of the runtime's own pages, which its maker carries to the next generation once
+    // the call completed (`device/carry.rs`).
     let buffer = device
         .at_serving_taking(4096, |serving, length| {
             serving.recover_for_test().unwrap();
             serving.new_buffer_now(length, ResourceOptions::shared())
         })
         .unwrap();
-    assert!(!buffer.device().generation_serves());
-    assert!(matches!(
-        buffer
-            .device()
-            .new_buffer_now(4096, ResourceOptions::shared()),
-        Err(Error::NotImplemented(crate::RuntimeGap::MadeBeforeRecovery))
-    ));
+    if buffer.in_page_block() {
+        assert!(buffer.device().generation_serves());
+    } else {
+        assert!(!buffer.device().generation_serves());
+        assert!(matches!(
+            buffer
+                .device()
+                .new_buffer_now(4096, ResourceOptions::shared()),
+            Err(Error::NotImplemented(crate::RuntimeGap::MadeBeforeRecovery))
+        ));
+    }
     // The device itself goes on, on the new generation.
     let next = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
     assert!(next.device().generation_serves());
