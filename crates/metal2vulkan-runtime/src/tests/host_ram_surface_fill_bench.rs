@@ -18,7 +18,8 @@
 //!   anonymous memory, and from a `Private` buffer, into the cache: the device's rate reading the
 //!   host's pages in a row, and its own memory.
 //!
-//! Printed (`SURFACE-FILL`), per kind, the median and slowest of: the call's CPU time and wall
+//! Each fill's bytes are checked against the pages it gathered, read back through a `Shared`
+//! buffer. Printed (`SURFACE-FILL`), per kind, the median and slowest of: the call's CPU time and wall
 //! time; of the call, the source's making of the lists' dma-bufs, the runtime's imports of them
 //! (`WorkCounts::host_ram_run_list_import_nanos`, the source's included) and the rest; the lists
 //! imported and the dispatches; `commit_and_submit`'s wall time; the GPU's time
@@ -244,6 +245,25 @@ fn blit(queue: &CommandQueue, source: &Buffer, cache: &Buffer, kind: &mut Kind) 
     submit(&command_buffer, kind);
 }
 
+/// Check that `cache` holds the pages of `runs` in order, read back through a `Shared` buffer.
+fn check(on: (&Device, &CommandQueue, &Buffer), runs: &[Range<u64>]) {
+    let (device, queue, cache) = on;
+    let shared = (device.new_buffer(SURFACE_BYTES, ResourceOptions::shared())).unwrap();
+    blit(queue, cache, &shared, &mut Kind::default());
+    let contents = shared.contents().unwrap();
+    for (at, run) in runs.iter().enumerate() {
+        let length = (run.end - run.start) as usize;
+        // SAFETY: the run's pages lie in the RAM's mapping, which no command writes; the buffer's
+        // bytes, which no command uses any more, are as long as the runs.
+        let (host, copied) = unsafe {
+            let copied = contents.as_ptr().add(at * PAGE as usize);
+            let host = std::slice::from_raw_parts(run.start as *const u8, length);
+            (host, std::slice::from_raw_parts(copied, length))
+        };
+        assert!(host == copied, "page {at} of the surface was not copied");
+    }
+}
+
 /// The listed RAM's fills: a warm-up surface, then the first fills and fills again.
 fn listed(on: (&Device, &CommandQueue, &Buffer), rng: &mut Rng) {
     let device = on.0;
@@ -269,14 +289,17 @@ fn listed(on: (&Device, &CommandQueue, &Buffer), rng: &mut Rng) {
     let mut warm = Kind::default();
     let runs = surface(start, &mut taken, rng);
     fill(on, (&ram, &runs[..]), &listing, &mut warm);
+    check(on, &runs);
     warm.print(device, "the warm-up surface's first fill");
     let (mut first, mut again) = (Kind::default(), Kind::default());
     for _ in 0..SURFACES {
         let runs = surface(start, &mut taken, rng);
         fill(on, (&ram, &runs[..]), &listing, &mut first);
+        check(on, &runs);
         for _ in 0..AGAIN {
             fill(on, (&ram, &runs[..]), &listing, &mut again);
         }
+        check(on, &runs);
     }
     first.print(device, "first fills, the lists imported");
     again.print(device, "fills again, the lists kept");
@@ -322,6 +345,7 @@ fn by_pointer(on: (&Device, &CommandQueue, &Buffer), rng: &mut Rng) {
     for _ in 0..ITERATIONS {
         fill(on, (&ram, &runs[..]), &listing, &mut imported);
     }
+    check(on, &runs);
     imported.print(device, "fills over chunks imported by pointer");
     drop((used, ram));
     let anonymous = Anonymous::new(SURFACE_BYTES);
