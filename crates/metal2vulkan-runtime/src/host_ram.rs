@@ -396,8 +396,52 @@ fn checked_ranges(
 /// import under way: past it the runtime reads, faults in and imports no page of the RAM, and only
 /// the imports a buffer or a pending command buffer still holds keep pages pinned, until the
 /// keep-alive goes. It holds the device. No Metal counterpart.
+///
+/// Where the device's recovery makes it a new `VkDevice` (`Degradation::DeviceRecovered`), the
+/// use goes on there: the new device uses the RAM from before it serves, and the lost one's use
+/// is let go of as a drop lets it go.
 #[must_use = "dropping the use lets go of the RAM at once"]
-pub struct HostRamUse {
+pub struct HostRamUse(Arc<RamUseCell>);
+
+impl std::fmt::Debug for HostRamUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostRamUse")
+            .field("ram", &lock(&self.0.on).ram.ram)
+            .finish()
+    }
+}
+
+/// A program's use of a RAM ([`HostRamUse`]): its use on the generation of the device its
+/// recovery carried it to last (`device/carry.rs`), or made it on.
+pub(crate) struct RamUseCell {
+    on: Mutex<UseOn>,
+}
+
+impl RamUseCell {
+    /// Carry the use to `to`, its device's next generation, by the recovery that made it or by
+    /// its maker (`device/carry.rs`): `to` uses the same RAM from now on, and the use on the
+    /// generation it leaves is let go of, as a drop lets it go (its thread ended, each chunk
+    /// freed once nothing there holds it). Refused as [`Device::use_host_ram`] refuses it there,
+    /// the use left the lost generation's.
+    pub(crate) fn carry(&self, to: &Device) -> Result<(), Error> {
+        let ram = {
+            let on = lock(&self.on);
+            if on.device.same(to) {
+                // Carried already, by its maker.
+                return Ok(());
+            }
+            Arc::clone(&on.ram.ram)
+        };
+        let used = to.ram_use_on(&ram)?;
+        let left = std::mem::replace(&mut *lock(&self.on), used);
+        // Let go of with no lock held: its drop waits for the lost generation's thread to end.
+        drop(left);
+        Ok(())
+    }
+}
+
+/// A use of a RAM on one generation of its device ([`RamUseCell`]).
+struct UseOn {
     device: Device,
     ram: Arc<RamOnDevice>,
     /// The device's thread for the RAM ([`import_ahead`], [`listed_chunks`]), joined by the drop;
@@ -405,15 +449,7 @@ pub struct HostRamUse {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
-impl std::fmt::Debug for HostRamUse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HostRamUse")
-            .field("ram", &self.ram.ram)
-            .finish()
-    }
-}
-
-impl Drop for HostRamUse {
+impl Drop for UseOn {
     fn drop(&mut self) {
         self.ram.copies.unplace(&self.device);
         let gone = self.device.shared().host_ram.remove(&self.ram);
@@ -2074,6 +2110,19 @@ impl Device {
 
     /// [`Device::use_host_ram`] on the generation that serves (`device/line.rs`).
     pub(crate) fn use_host_ram_now(&self, ram: &Arc<HostRam>) -> Result<HostRamUse, Error> {
+        let cell = Arc::new(RamUseCell {
+            on: Mutex::new(self.ram_use_on(ram)?),
+        });
+        // Kept for the device's recovery; one made after its recovery took this generation's
+        // uses is carried here, by its maker (`device/carry.rs`).
+        if self.shared().carry.ram_use(&cell) {
+            self.carry_late(|serving| cell.carry(serving));
+        }
+        Ok(HostRamUse(cell))
+    }
+
+    /// [`Device::use_host_ram_now`]'s use on this generation.
+    fn ram_use_on(&self, ram: &Arc<HostRam>) -> Result<UseOn, Error> {
         const CALL: &str = "use_host_ram";
         if self.is_lost() {
             return Err(self.lost_refusal());
@@ -2112,7 +2161,7 @@ impl Device {
                 Err(_) => used.wake.running.store(false, Ordering::Relaxed),
             }
         }
-        Ok(HostRamUse {
+        Ok(UseOn {
             device: self.clone(),
             ram: used,
             thread,

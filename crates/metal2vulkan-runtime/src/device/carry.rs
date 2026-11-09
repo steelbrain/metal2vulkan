@@ -65,6 +65,7 @@
 use super::{lock, Device, DeviceShared};
 use crate::buffer::Buffer;
 use crate::event::EventShared;
+use crate::host_ram::RamUseCell;
 use crate::queue::Slots;
 use crate::resource::ObjectId;
 use crate::Error;
@@ -103,6 +104,9 @@ pub(crate) struct Carry {
 #[derive(Default)]
 struct State {
     events: Vec<Weak<EventShared>>,
+    /// The program's uses of guest RAM (`host_ram.rs`'s `HostRamUse`), held weakly: few, so their
+    /// gone entries are dropped at each keeping.
+    ram_uses: Vec<Weak<RamUseCell>>,
     /// The size at which the next keeping drops the gone events' entries.
     prune_at: usize,
     /// The recovery took the generation's objects ([`Carry::take`]): what is kept from now on,
@@ -148,6 +152,7 @@ impl State {
 pub(crate) struct Taken {
     buffers: Vec<Buffer>,
     events: Vec<Arc<EventShared>>,
+    ram_uses: Vec<Arc<RamUseCell>>,
 }
 
 impl Carry {
@@ -176,9 +181,17 @@ impl Carry {
         state.taken
     }
 
-    /// The live objects of `shared`, this generation, for its recovery to carry: its events and
-    /// its program resources' buffers (`Owners::buffers`). From now on, each one made is its
-    /// maker's to carry.
+    /// Keep `cell`, a use of guest RAM made on this generation: as [`event`](Self::event).
+    pub(crate) fn ram_use(&self, cell: &Arc<RamUseCell>) -> bool {
+        let mut state = lock(&self.state);
+        state.ram_uses.retain(|cell| cell.strong_count() > 0);
+        state.ram_uses.push(Arc::downgrade(cell));
+        state.taken
+    }
+
+    /// The live objects of `shared`, this generation, for its recovery to carry: its events, its
+    /// uses of guest RAM and its program resources' buffers (`Owners::buffers`). From now on, each
+    /// one made is its maker's to carry.
     fn take(&self, shared: &DeviceShared) -> Taken {
         let mut state = lock(&self.state);
         state.taken = true;
@@ -188,6 +201,7 @@ impl Carry {
         Taken {
             buffers,
             events: state.events.iter().filter_map(Weak::upgrade).collect(),
+            ram_uses: state.ram_uses.iter().filter_map(Weak::upgrade).collect(),
         }
     }
 
@@ -359,15 +373,19 @@ pub(crate) struct Carried {
     lost: (u64, u64),
     /// The events left the lost generation's: their semaphores were made exportable.
     events_left: u64,
+    /// The uses of guest RAM carried, and those the new generation refused.
+    ram_uses: (u64, u64),
     /// The buffers left the lost generation's, by why.
     left: [u64; 5],
 }
 
 impl Carried {
     /// The objects carried and left, as the recovery's notice says them: the pooled buffers
-    /// left always, every other kind left where some was.
+    /// left always, every other kind left where some was, and the uses of guest RAM where any
+    /// lived.
     pub(crate) fn say(&self) -> String {
         let (lost, lost_bytes) = self.lost;
+        let (ram_uses, ram_uses_left) = self.ram_uses;
         let kinds = [
             "pooled `Shared` or `Managed` buffers",
             "no-copy buffers",
@@ -382,11 +400,19 @@ impl Carried {
                 (self.events_left > 0)
                     .then(|| format!("{} events made exportable", self.events_left)),
             )
+            .chain(
+                (ram_uses_left > 0)
+                    .then(|| format!("{ram_uses_left} guest RAM uses the new device refused")),
+            )
             .collect::<Vec<_>>()
             .join(", ");
+        let ram = match ram_uses {
+            0 => String::new(),
+            _ => format!("{ram_uses} guest RAM uses, "),
+        };
         format!(
-            "it carried {} events, {} buffers with their contents and {lost} `Private` buffers \
-             ({lost_bytes} bytes) whose contents were lost (they read zero); left refused \
+            "it carried {} events, {ram}{} buffers with their contents and {lost} `Private` \
+             buffers ({lost_bytes} bytes) whose contents were lost (they read zero); left refused \
              (`MadeBeforeRecovery`): {left}",
             self.events, self.kept
         )
@@ -411,6 +437,14 @@ impl Carried {
             Err(_) => self.events_left += 1,
         }
     }
+
+    /// One use of guest RAM's carry.
+    fn ram_use(&mut self, carried: Result<(), Error>) {
+        match carried {
+            Ok(()) => self.ram_uses.0 += 1,
+            Err(_) => self.ram_uses.1 += 1,
+        }
+    }
 }
 
 impl Device {
@@ -419,10 +453,18 @@ impl Device {
     /// recovery's notice.
     pub(super) fn carry_to(&self, next: &Device) -> Carried {
         let shared = self.shared();
-        let Taken { buffers, events } = shared.carry.take(shared);
+        let Taken {
+            buffers,
+            events,
+            ram_uses,
+        } = shared.carry.take(shared);
         let mut carried = Carried::default();
         for event in &events {
             carried.event(event.carry(next));
+        }
+        // Before the buffers: a no-copy buffer over a RAM's pages lies in its chunks there.
+        for cell in &ram_uses {
+            carried.ram_use(cell.carry(next));
         }
         for buffer in &buffers {
             carried.buffer(buffer.carry(next));
