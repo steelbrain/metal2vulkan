@@ -2,23 +2,33 @@
 //! while the scheduler is idle (`device/submit_stalls.rs`), against a model of the driver.
 
 use crate::device::submit_stalls::{
-    Caller, Period, BEHIND_NANOS, IDLE_NANOS, MARGIN, MOST_EMPTY, PERIOD, STALL_NANOS,
+    Caller, Period, Took, BEHIND_NANOS, IDLE_NANOS, MARGIN, MOST_EMPTY, PERIOD, STALL_NANOS,
 };
 
 /// The stall the RTX 5080's driver took, and its other calls' time, in nanoseconds.
 const STALL: u64 = 2_300_000;
 const CALL: u64 = 2_000;
 
+/// A call of `nanos` that spent them all on the calling thread's CPU, as the driver's stall does.
+fn spent(nanos: u64) -> Took {
+    Took {
+        nanos,
+        cpu: Some(nanos),
+    }
+}
+
 /// A driver whose every [`PERIOD`]th signalling call to the queue stalls, its first at call
 /// `first`, and every `early`th period `by` calls early; or none, where `stalls` is false. Its
 /// stalls take `stall`, and the calls of `costs` (each a call's number and its time) take long
-/// elsewhere.
+/// elsewhere, each on the calling thread's CPU; those of `waits` take long waiting, spending
+/// [`CALL`] of it.
 struct Driver {
     calls: u64,
     first: u64,
     stalls: bool,
     stall: u64,
     costs: Vec<(u64, u64)>,
+    waits: Vec<(u64, u64)>,
     /// The call that last stalled, and the periods so far.
     last: Option<u64>,
     periods: u64,
@@ -33,6 +43,7 @@ impl Driver {
             stalls,
             stall: STALL,
             costs: Vec::new(),
+            waits: Vec::new(),
             last: None,
             periods: 0,
             early: None,
@@ -40,7 +51,7 @@ impl Driver {
     }
 
     /// One signalling call: its time, and whether it stalled.
-    fn call(&mut self) -> (u64, bool) {
+    fn call(&mut self) -> (Took, bool) {
         self.calls += 1;
         let period = match self.early {
             Some((every, by)) if (self.periods + 1).is_multiple_of(every) => u64::from(PERIOD) - by,
@@ -52,14 +63,25 @@ impl Driver {
                 Some(last) => self.calls - last >= period,
             };
         if !stalls {
-            let cost = self.costs.iter().find(|(call, _)| *call == self.calls);
-            return (cost.map_or(CALL, |(_, took)| *took), false);
+            let at = |list: &[(u64, u64)]| {
+                list.iter()
+                    .find(|(call, _)| *call == self.calls)
+                    .map(|(_, took)| *took)
+            };
+            if let Some(waited) = at(&self.waits) {
+                let took = Took {
+                    nanos: waited,
+                    cpu: Some(CALL),
+                };
+                return (took, false);
+            }
+            return (spent(at(&self.costs).unwrap_or(CALL)), false);
         }
         if self.last.is_some() {
             self.periods += 1;
         }
         self.last = Some(self.calls);
-        (self.stall, true)
+        (spent(self.stall), true)
     }
 }
 
@@ -80,7 +102,7 @@ fn frames(driver: &mut Driver, frames: u32, per_frame: u32, take: bool) -> Run {
     for _ in 0..frames {
         for _ in 0..per_frame {
             let (took, stalled) = driver.call();
-            now += took + 15_000;
+            now += took.nanos + 15_000;
             if period.called(Caller::Work, took, now) {
                 run.on_work += 1;
             }
@@ -90,7 +112,7 @@ fn frames(driver: &mut Driver, frames: u32, per_frame: u32, take: bool) -> Run {
         if take && period.may_be_due() {
             for _ in 0..period.due_idle() {
                 let (took, _) = driver.call();
-                now += took;
+                now += took.nanos;
                 run.empty += 1;
                 if period.called(Caller::Empty, took, now) {
                     run.idle += 1;
@@ -150,6 +172,26 @@ fn long_calls_elsewhere_and_short_stalls_spend_no_empty_call() {
     assert!(with.empty <= with.idle * (25 + MARGIN), "{with:?}");
 }
 
+/// Beside other processes' GPU work, as in the runtime's device suite on the RTX 5080: calls that
+/// wait milliseconds in the driver while spending little of the thread's CPU (25 to 29 a run
+/// there, 1.3 to 40.8 ms each, 8 to 884 us of CPU) are no stall, so the place stays where the
+/// stalls put it, and every stall after the first is taken idle as without them. Taken by their
+/// length, those calls moved the place off the stalls before any came where the count put it,
+/// and none was taken idle: 20 stalls on work, none idle and no empty call, as in the device
+/// test's failure on the RTX 5080 beside the suite.
+#[test]
+fn calls_that_wait_long_beside_other_work_are_no_stall() {
+    let waits = [
+        300, 610, 880, 1290, 1570, 1930, 2210, 2500, 2850, 3190, 3460, 3770, 4090, 4400, 4720,
+    ];
+    let mut driver = Driver::new(28, true);
+    driver.waits = waits.iter().map(|&call| (call, 1_500_000)).collect();
+    let with = frames(&mut driver, 200, 25, true);
+    assert_eq!(with.on_work, 1, "{with:?}");
+    assert!(with.idle >= 4, "{with:?}");
+    assert!(with.empty <= with.idle * (25 + MARGIN), "{with:?}");
+}
+
 /// Once a stall came where the count put it, a long call elsewhere is no stall and leaves the
 /// place: the next stall is still due where the count puts it.
 #[test]
@@ -158,7 +200,7 @@ fn a_long_call_away_from_a_confirmed_place_leaves_it() {
     let mut now = 0;
     let mut call = |period: &mut Period, took: u64| {
         now += took + 15_000;
-        period.called(Caller::Work, took, now)
+        period.called(Caller::Work, spent(took), now)
     };
     assert!(call(&mut period, STALL));
     for _ in 0..PERIOD - 1 {
@@ -194,12 +236,12 @@ fn no_stall_seen_takes_none() {
 #[test]
 fn a_stall_due_that_does_not_come_forgets_the_place() {
     let mut period = Period::default();
-    assert!(period.called(Caller::Work, STALL, 10 * STALL));
+    assert!(period.called(Caller::Work, spent(STALL), 10 * STALL));
     for at in 0..PERIOD - 1 {
-        assert!(!period.called(Caller::Work, CALL, 20 * STALL + u64::from(at)));
+        assert!(!period.called(Caller::Work, spent(CALL), 20 * STALL + u64::from(at)));
     }
     assert!(period.may_be_due());
-    assert!(!period.called(Caller::Work, CALL, 30 * STALL));
+    assert!(!period.called(Caller::Work, spent(CALL), 30 * STALL));
     assert!(!period.may_be_due());
     assert_eq!(period.due_idle(), 0);
 }
@@ -208,9 +250,9 @@ fn a_stall_due_that_does_not_come_forgets_the_place() {
 #[test]
 fn an_uncounted_use_forgets_the_place() {
     let mut period = Period::default();
-    period.called(Caller::Work, STALL, STALL);
+    period.called(Caller::Work, spent(STALL), STALL);
     for at in 0..PERIOD - 10 {
-        period.called(Caller::Work, CALL, STALL + 15_000 * u64::from(at));
+        period.called(Caller::Work, spent(CALL), STALL + 15_000 * u64::from(at));
     }
     assert!(period.may_be_due());
     period.forget();
@@ -227,11 +269,11 @@ fn a_stall_is_taken_within_the_next_burst() {
         *now += 2 * IDLE_NANOS;
         for _ in 0..calls {
             *now += 15_000;
-            period.called(Caller::Work, CALL, *now);
+            period.called(Caller::Work, spent(CALL), *now);
         }
     };
     let (mut period, mut now) = (Period::default(), 0);
-    period.called(Caller::Work, STALL, STALL);
+    period.called(Caller::Work, spent(STALL), STALL);
     // 38 bursts of 25 after the stall (the first with the stall's call): 950 calls since, 74
     // left.
     for _ in 0..38 {
@@ -246,7 +288,7 @@ fn a_stall_is_taken_within_the_next_burst() {
     );
     // Bursts larger than the most: due within `MOST_EMPTY` calls alone.
     let (mut period, mut now) = (Period::default(), 0);
-    period.called(Caller::Work, STALL, STALL);
+    period.called(Caller::Work, spent(STALL), STALL);
     burst(&mut period, 700, &mut now);
     assert_eq!(period.due_idle(), 0, "324 left");
     burst(&mut period, 200, &mut now);
@@ -257,33 +299,39 @@ fn a_stall_is_taken_within_the_next_burst() {
 #[test]
 fn an_idle_splits_bursts() {
     let (mut period, mut now) = (Period::default(), 0);
-    period.called(Caller::Work, STALL, STALL);
+    period.called(Caller::Work, spent(STALL), STALL);
     for _ in 0..1000 {
         now += 15_000;
-        period.called(Caller::Work, CALL, now);
+        period.called(Caller::Work, spent(CALL), now);
     }
     // One burst of 1001 calls: 24 left, within the most.
     assert_eq!(period.due_idle(), 24);
     let (mut period, mut now) = (Period::default(), 0);
-    period.called(Caller::Work, STALL, STALL);
+    period.called(Caller::Work, spent(STALL), STALL);
     for at in 0..924 {
         now += match at % 10 {
             0 => 2 * IDLE_NANOS,
             _ => 15_000,
         };
-        period.called(Caller::Work, CALL, now);
+        period.called(Caller::Work, spent(CALL), now);
     }
     // Bursts of 10 (the first with the stall's, 11): 100 left, past 11 + the margin.
     assert_eq!(period.due_idle(), 0);
 }
 
-/// A call under `STALL_NANOS` is no stall, whatever its length.
+/// A call that spends under `STALL_NANOS` of its thread's CPU is no stall, whatever its length:
+/// one that waits 10 ms, spending a microsecond under it, is none; one that spends it all is.
 #[test]
 fn a_long_call_short_of_a_stall_is_none() {
     let mut period = Period::default();
-    assert!(!period.called(Caller::Work, STALL_NANOS - 1, STALL_NANOS));
+    assert!(!period.called(Caller::Work, spent(STALL_NANOS - 1), STALL_NANOS));
+    let waited = Took {
+        nanos: 10 * STALL_NANOS,
+        cpu: Some(STALL_NANOS - 1),
+    };
+    assert!(!period.called(Caller::Work, waited, 12 * STALL_NANOS));
     assert!(!period.may_be_due());
-    assert!(period.called(Caller::Work, STALL_NANOS, 3 * STALL_NANOS));
+    assert!(period.called(Caller::Work, spent(STALL_NANOS), 14 * STALL_NANOS));
 }
 
 /// The call that takes the queue's lock next waited behind a stall taken idle where an empty
@@ -292,11 +340,11 @@ fn a_long_call_short_of_a_stall_is_none() {
 #[test]
 fn a_wait_behind_a_stall_taken_idle_is_counted_once() {
     let mut period = Period::default();
-    period.called(Caller::Empty, STALL, STALL);
+    period.called(Caller::Empty, spent(STALL), STALL);
     assert_eq!(period.entered(BEHIND_NANOS - 1), None);
-    period.called(Caller::Empty, STALL, 2 * STALL);
+    period.called(Caller::Empty, spent(STALL), 2 * STALL);
     assert_eq!(period.entered(STALL / 2), Some(STALL / 2));
     assert_eq!(period.entered(STALL / 2), None);
-    period.called(Caller::Work, STALL, 3 * STALL);
+    period.called(Caller::Work, spent(STALL), 3 * STALL);
     assert_eq!(period.entered(STALL / 2), None);
 }

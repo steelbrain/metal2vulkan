@@ -1784,6 +1784,10 @@ impl Device {
         };
         let nudge = timelines[queue_places.len()];
         let queue_quiet = Arc::new(queue_quiet::QueueQuiet::default());
+        // Whether the driver stalls in one signalling call of every 1024 to a queue: its calls'
+        // CPU time tells its stall (`submit_stalls.rs`).
+        let stalls = (description.driver_facts())
+            .contains(&metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024);
         let queues: Vec<QueueSlot> = queue_places
             .iter()
             .zip(&timelines)
@@ -1792,7 +1796,7 @@ impl Device {
                 // call after the word is put back.
                 let queue = unsafe { loader_word.restored(|| raw.get_device_queue(family, index)) };
                 QueueSlot {
-                    raw: Mutex::new((queue, submit_stalls::Period::default())),
+                    raw: Mutex::new((queue, submit_stalls::Period::new(stalls))),
                     stall_due: AtomicBool::new(false),
                     family,
                     flags: flags_of(family),

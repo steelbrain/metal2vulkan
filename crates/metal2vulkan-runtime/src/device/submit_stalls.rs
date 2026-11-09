@@ -20,15 +20,24 @@
 //!
 //! - **Learnt per queue.** Each signalling call the runtime makes under a queue's lock and times
 //!   (a batch's, a fence's with no work, the device's own submission, an empty one of the plan's)
-//!   is counted; one that took [`STALL_NANOS`] or more is taken as the driver's stall, and the
-//!   count starts again from it, unless the place is confirmed and the call is not where the
-//!   count puts the next stall (within [`MARGIN`] calls before it): there it is another of the
-//!   driver's costs. The place is confirmed once a stall came where the count put it, so a long
-//!   call elsewhere before then (a device's first submissions) gives way to the next stall, and
-//!   one after leaves the place. A use of the queue the runtime cannot count (the program's, a
-//!   sparse binding, a wait for its idle) forgets the count until the next stall, as does a due
-//!   stall that did not come: a release without the stall submits no empty submission after its
-//!   first miss, and none before a stall was seen.
+//!   is counted; one in which the calling thread spent [`STALL_NANOS`] or more of its CPU is taken
+//!   as the driver's stall, and the count starts again from it, unless the place is confirmed and
+//!   the call is not where the count puts the next stall (within [`MARGIN`] calls before it):
+//!   there it is another of the driver's costs. The thread's CPU time, not the call's length
+//!   ([`Took`]): the stall is the driver's work on the calling thread, and a call that only waits
+//!   that long is none. In the device test on the RTX 5080 (615.71.09), alone and beside the
+//!   runtime's device suite, the 10 stalls spent 1998 to 3880 us of the thread's CPU, within 0.5%
+//!   of their length; beside the suite, 25 to 29 other calls a run took 1.3 to 40.8 ms waiting,
+//!   spending 8 to 884 us of CPU. Taken by their length, those calls moved the queue's place off
+//!   the stalls before any came where the count put it, so no stall was due at an idle and every
+//!   one fell on work. The place is confirmed once a stall came where the count put it, so a long
+//!   call elsewhere before then (a device's first submissions, up to 4.1 ms of CPU there) gives
+//!   way to the next stall, and one after leaves the place. A use of the queue the runtime cannot
+//!   count (the program's, a sparse binding, a wait for its idle) forgets the count until the
+//!   next stall, as does a due stall that did not come: a release without the stall submits no
+//!   empty submission after its first miss, and none before a stall was seen. A queue whose
+//!   driver lacks the cost fact reads no CPU time, and a call's length counts its stalls there
+//!   (`WorkCounts::submit_stalls_on_work`).
 //! - **Taken while idle.** Once the scheduler's thread has had nothing to submit for
 //!   [`IDLE_NANOS`] and a queue's next stall is due within its next burst of work (the most
 //!   signalling calls it made between two such idles over its last [`BURSTS`], plus [`MARGIN`]),
@@ -55,10 +64,11 @@ use std::sync::{Arc, Mutex};
 /// The signalling calls to a `VkQueue` from one stall of the driver's to the next.
 pub(crate) const PERIOD: u32 = 1024;
 
-/// A signalling call that took this long or longer, in nanoseconds, is the driver's stall where
-/// the count puts it, or where the queue's place is not confirmed ([`Period::called`]): the
-/// stalls measured took 1.97 ms or more (3 of 15 under 2 ms in the device test on the RTX 5080),
-/// and other signalling calls up to 1.4 ms, a device's 62nd 10 ms.
+/// A signalling call in which the calling thread spent this much of its CPU or more, in
+/// nanoseconds ([`Took`]), is the driver's stall where the count puts it, or where the queue's
+/// place is not confirmed ([`Period::called`]): the stalls measured took 1.97 ms or more (3 of 15
+/// under 2 ms in the device test on the RTX 5080), and other signalling calls up to 1.4 ms, a
+/// device's 62nd 10 ms.
 pub(crate) const STALL_NANOS: u64 = 1_000_000;
 
 /// How long the scheduler's thread has had nothing to submit before it takes a stall due, in
@@ -93,6 +103,23 @@ pub(crate) enum Uses {
     Unknown,
 }
 
+/// A signalling call's time ([`Period::called`]): its length, and the CPU time the calling thread
+/// spent in it where its queue's place is learnt from that ([`Period::cpu_now`]), each in
+/// nanoseconds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Took {
+    pub(crate) nanos: u64,
+    pub(crate) cpu: Option<u64>,
+}
+
+impl Took {
+    /// What the driver's stall is told by: the thread's CPU time in the call where it was read,
+    /// else the call's length.
+    fn spent(self) -> u64 {
+        self.cpu.unwrap_or(self.nanos)
+    }
+}
+
 /// Who made a signalling call to the queue.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Caller {
@@ -106,6 +133,10 @@ pub(crate) enum Caller {
 /// Kept under the queue's lock (`QueueSlot`).
 #[derive(Default)]
 pub(crate) struct Period {
+    /// The driver stalls in one signalling call of every [`PERIOD`]
+    /// (`DriverFact::SignallingSubmitsStallEvery1024`): its calls' CPU time is read
+    /// ([`cpu_now`](Self::cpu_now)). Elsewhere a call's length alone is read.
+    stalls: bool,
     /// The signalling calls since the last stall seen, each counted: `None` before one is seen,
     /// once a use was not counted, or once a stall due did not come.
     since: Option<u32>,
@@ -125,6 +156,28 @@ pub(crate) struct Period {
 }
 
 impl Period {
+    /// The place of a queue whose driver stalls in one signalling call of every [`PERIOD`] where
+    /// `stalls`, before any call.
+    pub(crate) fn new(stalls: bool) -> Period {
+        Period {
+            stalls,
+            ..Period::default()
+        }
+    }
+
+    /// The calling thread's CPU time now, in nanoseconds, where the driver stalls: a timed call
+    /// reads it before itself, and [`took`](Self::took) after; elsewhere `None`, read nowhere.
+    pub(crate) fn cpu_now(&self) -> Option<u64> {
+        self.stalls.then(thread_cpu).flatten()
+    }
+
+    /// What a call that took `nanos` took ([`Took`]), `cpu` the thread's CPU time
+    /// [`cpu_now`](Self::cpu_now) read before it: read again now.
+    pub(crate) fn took(&self, nanos: u64, cpu: Option<u64>) -> Took {
+        let cpu = (cpu.zip(self.cpu_now())).map(|(start, end)| end.saturating_sub(start));
+        Took { nanos, cpu }
+    }
+
     /// A use of the queue the runtime cannot count: no stall is due until one is seen.
     pub(crate) fn forget(&mut self) {
         self.since = None;
@@ -140,14 +193,15 @@ impl Period {
         behind
     }
 
-    /// A signalling call of `caller`'s that took `nanos` and ended at host time `end`, in
-    /// nanoseconds: whether it was the driver's stall, a call of [`STALL_NANOS`] or more where
-    /// the count puts the next stall (the [`PERIOD`]th call since the last, or up to [`MARGIN`]
-    /// calls before it), which confirms the place, or anywhere while the place is not confirmed.
-    /// A call of work [`IDLE_NANOS`] or more after the one before begins a burst.
-    pub(crate) fn called(&mut self, caller: Caller, nanos: u64, end: u64) -> bool {
+    /// A signalling call of `caller`'s that took `took` and ended at host time `end`, in
+    /// nanoseconds: whether it was the driver's stall, a call that spent [`STALL_NANOS`] or more
+    /// ([`Took`]) where the count puts the next stall (the [`PERIOD`]th call since the last, or up
+    /// to [`MARGIN`] calls before it), which confirms the place, or anywhere while the place is
+    /// not confirmed. A call of work [`IDLE_NANOS`] or more after the one before begins a burst.
+    pub(crate) fn called(&mut self, caller: Caller, took: Took, end: u64) -> bool {
+        let nanos = took.nanos;
         let expected = (self.since).is_some_and(|since| since + 1 + MARGIN >= PERIOD);
-        let stalled = nanos >= STALL_NANOS && (expected || !self.confirmed);
+        let stalled = took.spent() >= STALL_NANOS && (expected || !self.confirmed);
         if stalled {
             self.confirmed = expected;
         }
@@ -200,6 +254,29 @@ impl Period {
             true => left,
             false => 0,
         }
+    }
+}
+
+/// The calling thread's CPU time, in nanoseconds (`CLOCK_THREAD_CPUTIME_ID`); `None` where it
+/// cannot be read.
+fn thread_cpu() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `now` is a valid timespec for the call to fill.
+        if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) } != 0 {
+            return None;
+        }
+        let seconds = u64::try_from(now.tv_sec).ok()?;
+        let nanos = u64::try_from(now.tv_nsec).ok()?;
+        Some(seconds * 1_000_000_000 + nanos)
+    }
+    #[cfg(not(unix))]
+    {
+        None
     }
 }
 
@@ -328,6 +405,7 @@ impl IdleStalls {
             .push_next(&mut timeline);
         let raw = self.functions.get();
         let ((submitted, stalled), _) = slot.with_counted(Caller::Empty, |vk_queue, period| {
+            let cpu = period.cpu_now();
             let start = crate::gpu_time::host_nanos();
             // SAFETY: a submission of no work signalling the queue's own semaphore of the plan's
             // above every value it was signalled to (they rise under the plan's lock, by one
@@ -335,7 +413,8 @@ impl IdleStalls {
             let submitted = unsafe { raw.queue_submit(vk_queue, &[info], vk::Fence::null()) };
             let end = crate::gpu_time::host_nanos();
             let nanos = end.saturating_sub(start);
-            let stalled = submitted.is_ok() && period.called(Caller::Empty, nanos, end);
+            let took = period.took(nanos, cpu);
+            let stalled = submitted.is_ok() && period.called(Caller::Empty, took, end);
             (submitted, stalled.then_some(nanos))
         });
         exit_guard::called(Guarded::QueueSubmit);

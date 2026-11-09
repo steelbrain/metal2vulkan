@@ -10,8 +10,10 @@ use metal2vulkan::device::DriverFact;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// The frames, and each frame's command buffers: about five of the driver's periods of 1024
-/// signalling submissions, at the 25 command buffers a frame `host_ab present` commits.
+/// The frames, and each frame's command buffers, at the 25 command buffers a frame `host_ab
+/// present` commits: about five of the driver's periods of 1024 signalling submissions where each
+/// batch takes a call of its own, about two on the RTX 5080, where the scheduler merges the
+/// batches it finds ready together (2190 to 2500 signalling calls a run there).
 const FRAMES: u32 = 200;
 const PER_FRAME: u32 = 25;
 

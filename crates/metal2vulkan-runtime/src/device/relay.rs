@@ -466,6 +466,7 @@ impl super::DeviceShared {
             }
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             crate::command_buffer::completion::trace::submitting("submit called");
+            let cpu = period.cpu_now();
             let entered = crate::gpu_time::host_nanos();
             let submitted = f(vk_queue);
             let end = crate::gpu_time::host_nanos();
@@ -473,7 +474,8 @@ impl super::DeviceShared {
             crate::command_buffer::completion::trace::submitting("submit returned");
             let nanos = end.saturating_sub(entered);
             (self.counts).batch_submitted_in(nanos);
-            if submitted.is_ok() && period.called(Caller::Work, nanos, end) {
+            let took = period.took(nanos, cpu);
+            if submitted.is_ok() && period.called(Caller::Work, took, end) {
                 self.counts.submit_stall_on_work();
             }
             match (&submitted, logged) {
@@ -647,10 +649,12 @@ impl<'a> QueueUses<'a> {
                 Uses::Unknown => hold.with(f),
                 Uses::OneSignalling => {
                     let (used, behind) = hold.with_counted(Caller::Work, |vk_queue, period| {
+                        let cpu = period.cpu_now();
                         let entered = crate::gpu_time::host_nanos();
                         let used = f(vk_queue);
                         let end = crate::gpu_time::host_nanos();
-                        if period.called(Caller::Work, end.saturating_sub(entered), end) {
+                        let took = period.took(end.saturating_sub(entered), cpu);
+                        if period.called(Caller::Work, took, end) {
                             self.counts.submit_stall_on_work();
                         }
                         used
