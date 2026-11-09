@@ -17,11 +17,10 @@
 //!   Vulkan cannot state (`blit_plan.rs`) goes through a scratch buffer of the encoder, two
 //!   commands.
 //! - **Depth.** A copy from a buffer into 32-bit float depth copies the bytes as Metal holds
-//!   them, any `float`, as `Texture::replace_region` does, on a device that keeps such a value in
-//!   a depth image (`VK_EXT_depth_range_unrestricted` enabled, or a driver measured to keep it,
-//!   `DriverFact::DepthImageKeepsValuesOutsideUnitRange`). Elsewhere Vulkan takes no copied value
-//!   outside `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) and the device stores one
-//!   clamped: the copy's bytes go through a scratch buffer of the encoder (or the staging buffer
+//!   them, any `float`, as `Texture::replace_region` does, on a device with
+//!   `VK_EXT_depth_range_unrestricted` enabled. Elsewhere Vulkan takes no copied value outside
+//!   `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), whatever the driver is measured to
+//!   keep: the copy's bytes go through a scratch buffer of the encoder (or the staging buffer
 //!   its plan copies its rows into), where a dispatch clamps each depth into `[0, 1]`, a NaN to
 //!   1.0, before the copy into the image (`depth_clamp.rs`), as does a copy into a depth from a
 //!   colour texture through the scratch buffer below; the copy announces

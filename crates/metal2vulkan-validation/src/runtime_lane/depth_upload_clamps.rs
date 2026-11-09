@@ -5,8 +5,8 @@
 //! `replace_region`, a blit from a buffer (its copy as it is, through its plan's staging buffer,
 //! and into `Depth32Float_Stencil8`'s depth, a lane each), and a copy from a colour texture.
 //!
-//! Where the device may store such a depth clamped ([`clamps`]: no such extension enabled and no
-//! `DriverFact::DepthImageKeepsValuesOutsideUnitRange`, as ANV on the Iris Xe), each upload clamps
+//! Where the device lacks the extension ([`clamps`]: ANV on the Iris Xe, MoltenVK on the M3 Max,
+//! whatever `DriverFact::DepthImageKeepsValuesOutsideUnitRange` says), each upload clamps
 //! its depths into `[0, 1]` first (`WorkCounts::depth_uploads_clamped`, one an upload): no copy
 //! takes a depth outside there, and each texel reads back as `bind::clamped_depth` gives it, a
 //! zero with its sign or without (the device's to keep). Elsewhere (lavapipe enables the
@@ -20,7 +20,6 @@ use super::{
 };
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::clamped_depth;
-use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CpuCacheMode, Device, HazardTrackingMode, LayerSetting, LayerSettingValue,
@@ -50,26 +49,43 @@ pub(super) fn gpu_assisted_copies(messages: &Messages, cache: &Path) -> Device {
     .unwrap()
 }
 
-/// Whether `device` may store a depth outside `[0, 1]` a copy writes into a depth image clamped,
-/// so that its uploads clamp first: no `VK_EXT_depth_range_unrestricted` enabled, and no
-/// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`.
+/// Whether `device`'s uploads clamp their depths into `[0, 1]` first: no
+/// `VK_EXT_depth_range_unrestricted` enabled (`degrade_notices::clamps_depth_uploads`).
 pub(super) fn clamps(device: &Device) -> bool {
-    let facts = &device.properties().driver_facts;
-    !device.enables_extension(ash::ext::depth_range_unrestricted::NAME)
-        && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange)
+    super::degrade_notices::clamps_depth_uploads(device)
+}
+
+/// The byte offset a GPU-assisted report of a copy of a depth outside `[0, 1]` names ("has a
+/// float value at offset N"), where it names one.
+fn reported_offset(text: &str) -> Option<u64> {
+    let (_, rest) = text.split_once("at offset ")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 /// Check what the layer reported since `messages` was last read, printing it after `label`: no
 /// copy of a depth outside `[0, 1]`, and nothing else but the layer's warnings about the settings
 /// the GPU-assisted check takes (`VALIDATION-SETTINGS`: that it runs beside the core checks;
 /// `WARNING-Setting-Limit-Adjusted`: the descriptor limits it lowers for its own).
-pub(super) fn reported_no_depth_outside_0_1(messages: &Messages, label: &str) {
+///
+/// `misreads`: the copy is into a `D32_SFLOAT_S8_UINT` image's depth, whose buffer data Vulkan
+/// lays out as `D32_SFLOAT`'s, 4 bytes a depth (the spec's table of buffer-image copy formats).
+/// The layer's check (1.4.363) reads it at the combined format's 5 bytes a texel instead, so a
+/// float it reports at an offset off 4 bytes straddles two depths and is no depth the copy takes:
+/// such reports are counted and printed apart, and only one at a depth's offset fails.
+pub(super) fn reported_no_depth_outside_0_1(messages: &Messages, label: &str, misreads: bool) {
     let reported = messages.take();
     let (range, other): (Vec<_>, Vec<_>) = (reported.iter())
         .partition(|message| message.id_name.contains("07931") || message.text.contains("07931"));
+    let (misread, range): (Vec<_>, Vec<_>) = range.into_iter().partition(|message| {
+        misreads && reported_offset(&message.text).is_some_and(|at| !at.is_multiple_of(4))
+    });
+    let at: Vec<Option<u64>> = (misread.iter()).map(|m| reported_offset(&m.text)).collect();
     eprintln!(
-        "{label}: {} copies outside [0, 1] reported, and {} other messages: {other:#?}",
+        "{label}: {} copies outside [0, 1] reported, {} reads off a depth's 4 bytes \
+         {at:?}, and {} other messages: {other:#?}",
         range.len(),
+        misread.len(),
         other.len()
     );
     assert!(
@@ -204,7 +220,7 @@ fn replace_region_takes_no_depth_outside_0_1_into_a_depth_image() {
     let label = format!(
         "DEPTHCLAMP replace_region: clamps {clamps}, {clamped} uploads clamped, {hosted} host copies"
     );
-    reported_no_depth_outside_0_1(&messages, &label);
+    reported_no_depth_outside_0_1(&messages, &label, false);
     assert_eq!(clamped, u64::from(clamps), "the uploads clamped");
     let off = read_otherwise(&read, depth_bits, clamps);
     assert!(
@@ -265,7 +281,7 @@ fn blit_lane(label: &str, pf: PixelFormat, at: u64, options: BlitOption) {
         (clamps, clamped, texels(device, &texture, options))
     };
     let line = format!("DEPTHCLAMP {label}: clamps {clamps}, {clamped} uploads clamped");
-    reported_no_depth_outside_0_1(&messages, &line);
+    reported_no_depth_outside_0_1(&messages, &line, pf == PixelFormat::Depth32FloatStencil8);
     assert_eq!(clamped, u64::from(clamps), "the uploads clamped");
     let off = read_otherwise(&read, bits, clamps);
     assert!(
@@ -368,7 +384,7 @@ fn a_copy_from_a_colour_texture_takes_no_depth_outside_0_1_into_a_depth_image() 
     let label = format!(
         "DEPTHCLAMP copy from a colour texture: clamps {clamps}, {clamped} uploads clamped"
     );
-    reported_no_depth_outside_0_1(&messages, &label);
+    reported_no_depth_outside_0_1(&messages, &label, false);
     assert_eq!(clamped, u64::from(clamps), "the uploads clamped");
     let off = read_otherwise(&colour, depth_bits, false);
     assert!(

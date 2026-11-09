@@ -881,9 +881,8 @@ degradations! {
              neutral sampler, where Metal's reads the state";
         /// An upload (`replace_region`, a blit from a buffer, a copy from a colour texture) into
         /// the 32-bit float depth of a texture's depth image, on a device without
-        /// `VK_EXT_depth_range_unrestricted` enabled, where Vulkan takes no copied value outside
-        /// `[0, 1]`, whose driver is not measured to keep one
-        /// (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`): the upload clamps each value
+        /// `VK_EXT_depth_range_unrestricted` enabled (ANV on the Iris Xe, MoltenVK on the M3
+        /// Max), where Vulkan takes no copied value outside `[0, 1]`: the upload clamps each value
         /// into `[0, 1]`, a NaN to 1.0, as the device stores it (`depth_clamp.rs`). And a render pass's NaN
         /// clear depth on such a device, which Metal stores as `0x7fc00000`, cleared to 1.0
         /// (`nan_clear.rs`). And a heap's texture of such a depth whose shadow's copies in move the
@@ -2174,13 +2173,12 @@ degradations! {
         /// one, a blit into its depth, a pass's written NaN clear), or at the commit of the command
         /// buffer of a pass that loads a new texture's pattern (a NaN with the sign set) before a
         /// write covered it in commit order (`fresh_unwritten.rs`), on a device that keeps such a
-        /// value there
-        /// (`VK_EXT_depth_range_unrestricted` enabled, or
-        /// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`; elsewhere `restricted-depth-upload`
-        /// is announced). A device whose depth test compares magnitudes as Metal's
-        /// (`DriverFact::DepthTestComparesMagnitudes`: MoltenVK, whose test and store are the GPU's
-        /// own Metal ones) announces it instead at a pass that loads and stores the depth and sets
-        /// a state with depth writes but draws under none, which its pass leaves signed. A render
+        /// value there (`VK_EXT_depth_range_unrestricted` enabled; elsewhere a copy clamps it and
+        /// `restricted-depth-upload` is announced). Such a device whose depth test compares
+        /// magnitudes as Metal's (`DriverFact::DepthTestComparesMagnitudes`: MoltenVK, whose test
+        /// and store are the GPU's own Metal ones, were it to enable the extension) announces it
+        /// instead at a pass that loads and stores the depth and sets a state with depth writes
+        /// but draws under none, which its pass leaves signed. A render
         /// pass's NaN clear depth, which Metal stores as
         /// `0x7fc00000` and tests above every value, is written into the depth before the pass and
         /// loaded (`nan_clear.rs`); where the device writes no such word (a memoryless depth, a

@@ -1322,18 +1322,16 @@ fn depth_outside_the_unit_range_uploads_as_metal_holds_it() {
 }
 
 /// What `device`'s depth images keep, as the runtime plans them: whether it enabled
-/// `VK_EXT_depth_range_unrestricted`; whether such an image may store a copied value outside
-/// `[0, 1]` clamped (without the extension, where its driver lacks
-/// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`); and whether it keeps every `float`
-/// (it does not clamp, and its driver has `DriverFact::DepthImageKeepsDenormals`).
+/// `VK_EXT_depth_range_unrestricted`; whether its uploads clamp a value outside `[0, 1]`
+/// (without the extension, `degrade_notices::clamps_depth_uploads`); and whether it keeps every
+/// `float` (it does not clamp, and its driver has `DriverFact::DepthImageKeepsDenormals`).
 pub(super) fn depth_images(device: &Device) -> (bool, bool, bool) {
     let unrestricted = device
         .enabled()
         .extensions
         .contains(&VkExtension::ExtDepthRangeUnrestricted);
     let facts = &device.properties().driver_facts;
-    let clamps =
-        !unrestricted && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
+    let clamps = super::degrade_notices::clamps_depth_uploads(device);
     let keeps_floats = !clamps && facts.contains(&DriverFact::DepthImageKeepsDenormals);
     (unrestricted, clamps, keeps_floats)
 }
@@ -1358,16 +1356,17 @@ const DENORMALS: [u32; 11] = [
 const OUTSIDE: [f32; 5] = [-0.5, 2.0, 1000.0, -1000.0, 1.5];
 
 /// What a `D32_SFLOAT` image keeps of the `float`s Metal's `Depth32Float` texel holds, against
-/// the driver's facts (`DriverFact::DepthImageKeepsDenormals`,
-/// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`), which this lane measures and checks at
-/// each gate.
+/// the driver's denormal fact (`DriverFact::DepthImageKeepsDenormals`), which this lane measures
+/// and checks at each gate, and the upload's clamp.
 ///
 /// A render target's `Depth32Float` texture, which has a depth image on every device, takes 11
 /// denormals and 5 values outside `[0, 1]` through `replace_region` and reads them back through
 /// `get_bytes`. Each count kept is printed with the driver's `driverID` and `driverVersion`. A
-/// driver with a fact keeps every value of its kind, and every device keeps the values outside
-/// `[0, 1]` where it enabled `VK_EXT_depth_range_unrestricted`. The shader's reads and
-/// comparisons of such a texture are `depth_compares`' (Metal's answers there).
+/// driver with the fact keeps every denormal the upload gives it; every device keeps the values
+/// outside `[0, 1]` where it enabled `VK_EXT_depth_range_unrestricted`, and elsewhere its upload
+/// clamps each of them, and the negative denormals, as `bind::clamped_depth` does
+/// (`clamps_depth_uploads`). The shader's reads and comparisons of such a texture are
+/// `depth_compares`' (Metal's answers there).
 #[test]
 fn depth_images_keep_what_their_drivers_claim() {
     let cache = ScratchCache::new().unwrap();
@@ -1414,15 +1413,27 @@ fn depth_images_keep_what_their_drivers_claim() {
             description.driver_version,
             if unrestricted { "enabled" } else { "absent" },
         );
+        // What the upload gives the image: each value, or its clamp where uploads clamp.
+        let clamps = super::degrade_notices::clamps_depth_uploads(&device);
+        let given = |i: usize| match clamps {
+            true => metal2vulkan::bind::clamped_depth(words[i]),
+            false => words[i],
+        };
         if facts.contains(&DriverFact::DepthImageKeepsDenormals) {
-            assert_eq!(
-                denormals, 11,
-                "the driver's denormal fact on {name}: {read:08x?}"
+            let lost: Vec<usize> = (0..11).filter(|&i| read[i] != given(i)).collect();
+            assert!(
+                lost.is_empty(),
+                "the driver's denormal fact on {name}: {lost:?} of {read:08x?}"
             );
         }
-        if unrestricted || facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange) {
+        if unrestricted {
             assert_eq!(outside, 5, "values outside [0, 1] on {name}: {read:08x?}");
         }
+        let off: Vec<usize> = (11..16).filter(|&i| read[i] != given(i)).collect();
+        assert!(
+            unrestricted || off.is_empty(),
+            "values outside [0, 1] on {name}, clamped as uploaded: {off:?} of {read:08x?}"
+        );
         messages.take_notices();
     }
     layer_reported_nothing_at_all(&messages);

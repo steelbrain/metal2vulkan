@@ -110,9 +110,6 @@ pub(super) struct ImageFacts<'a> {
 pub(super) struct DepthImageFacts {
     /// `DriverFact::DepthImageKeepsDenormals`.
     pub(super) denormals: bool,
-    /// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`: without
-    /// `VK_EXT_depth_range_unrestricted`.
-    pub(super) outside_unit_range: bool,
     /// `DriverFact::DepthTestKeepsDenormals`.
     pub(super) test_denormals: bool,
     /// `DriverFact::DepthTestComparesMagnitudes`: the depth test is Metal's for every value a
@@ -125,7 +122,6 @@ impl DepthImageFacts {
     pub(super) fn of(facts: &BTreeSet<DriverFact>) -> DepthImageFacts {
         DepthImageFacts {
             denormals: facts.contains(&DriverFact::DepthImageKeepsDenormals),
-            outside_unit_range: facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange),
             test_denormals: facts.contains(&DriverFact::DepthTestKeepsDenormals),
             test_magnitudes: facts.contains(&DriverFact::DepthTestComparesMagnitudes),
         }
@@ -154,17 +150,17 @@ impl ImageFacts<'_> {
         }
     }
 
-    /// Whether a `D32_SFLOAT` image may store a copied value outside `[0, 1]` clamped: the
-    /// device lacks `VK_EXT_depth_range_unrestricted`, where Vulkan leaves such a value undefined
-    /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and its driver is not measured to keep one
-    /// (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`).
+    /// Whether a copy into a `D32_SFLOAT` image clamps a value outside `[0, 1]` first
+    /// (`depth_clamp.rs`): the device lacks `VK_EXT_depth_range_unrestricted`, where Vulkan takes
+    /// no such value by a copy (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), whatever its
+    /// driver is measured to keep.
     pub(super) fn depth_clamps(&self) -> bool {
         let unrestricted = self
             .profile
             .enabled()
             .extensions
             .contains(&VkExtension::ExtDepthRangeUnrestricted);
-        !unrestricted && !self.depth_images.outside_unit_range
+        !unrestricted
     }
 
     /// The optimal-tiling features of `format`.

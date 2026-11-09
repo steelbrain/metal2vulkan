@@ -463,8 +463,7 @@ fn a_buffer_copies_every_sample_of_a_multisampled_depth_or_stencil_both_ways() {
         let changes = Changes {
             driver: properties.description.driver_id,
             drawn: !copies && !exact_draw,
-            clamped: !unrestricted
-                && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange),
+            clamped: !unrestricted,
             flushed: !facts.contains(&DriverFact::DepthImageKeepsDenormals),
         };
         messages.take_notices();

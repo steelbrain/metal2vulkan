@@ -921,10 +921,13 @@ pub enum DriverFact {
     /// announces `depth-denormals`.
     DepthImageKeepsDenormals,
     /// Without `VK_EXT_depth_range_unrestricted` enabled, a `D32_SFLOAT` image keeps each value
-    /// outside `[0, 1]` a copy writes into it, where Vulkan leaves such a value undefined
-    /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) and ANV stores it clamped. With the extension
-    /// Vulkan keeps it on every driver. On a driver without either, an upload into a depth image
-    /// announces `restricted-depth-upload`.
+    /// outside `[0, 1]` it is given, as Metal's `Depth32Float` texel keeps any `float`, where ANV
+    /// stores it clamped. Vulkan states no such rule: it takes no such value by a copy
+    /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so a consumer's copy clamps it on every
+    /// device without the extension and announces `restricted-depth-upload`, this fact or not.
+    /// The translator's depth comparisons read it
+    /// ([`VkProperty::DepthImageKeepsValuesOutsideUnitRange`](crate::device::VkProperty::DepthImageKeepsValuesOutsideUnitRange)):
+    /// a value a render pass stored there.
     DepthImageKeepsValuesOutsideUnitRange,
     /// A fragment shader's `FragDepth` is stored in a 32-bit float depth attachment unchanged:
     /// each value in `[0, 1]` it is given, and, for the rest, the value it stored when given it
@@ -1601,7 +1604,8 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// (`INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.4 on Intel Graphics (RPL-S) and the Iris Xe (RPL-P)
 /// without the extension (no denormal, every value outside `[0, 1]` clamped). A driver with the
 /// extension is not measured for `DepthImageKeepsValuesOutsideUnitRange`, which only a device
-/// without it reads.
+/// without it reads. That lane checks the clamp in its place: on a device without the extension
+/// its uploads clamp every value outside `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`).
 ///
 /// `DepthImageKeepsDenormals` again and `DepthTestKeepsDenormals`, measured by
 /// `runtime_lane::depth_denormals` (2026-10-10): the smallest and largest denormal of each sign,

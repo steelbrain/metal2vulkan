@@ -5203,8 +5203,8 @@ impl Texture {
 
     /// Announce what `call`'s upload into `aspect` of the texture's image may store otherwise than
     /// Metal's, in the depth of a 32-bit float depth image: on a device without
-    /// `VK_EXT_depth_range_unrestricted` enabled whose driver is not measured to keep a value
-    /// outside `[0, 1]` there (`ImageFacts::depth_clamps`), `restricted-depth-upload`, the upload's
+    /// `VK_EXT_depth_range_unrestricted` enabled (`ImageFacts::depth_clamps`),
+    /// `restricted-depth-upload`, the upload's
     /// depths clamped into `[0, 1]` ([`clamps_depth_upload`](Self::clamps_depth_upload)). On any
     /// other, an upload that may store a negative value or a NaN (`signed`) in a render target's
     /// depth, which a depth test reads, `signed-depth-test`
@@ -6193,11 +6193,10 @@ impl Texture {
     /// accounts for), and a nonzero `bytes_per_row` below the level's row, where the driver
     /// asserts and the call moves nothing.
     ///
-    /// 32-bit float depth is copied as Metal holds it, any `float`, on a device that keeps such a
-    /// value in a depth image (`VK_EXT_depth_range_unrestricted` enabled, or a driver measured to
-    /// keep it, `DriverFact::DepthImageKeepsValuesOutsideUnitRange`). Elsewhere Vulkan takes no
-    /// copied value outside `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) and the device
-    /// stores one clamped: the bytes are clamped into `[0, 1]` on the CPU first, a NaN to 1.0,
+    /// 32-bit float depth is copied as Metal holds it, any `float`, on a device with
+    /// `VK_EXT_depth_range_unrestricted` enabled. Elsewhere Vulkan takes no copied value outside
+    /// `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), whatever the driver is measured to
+    /// keep: the bytes are clamped into `[0, 1]` on the CPU first, a NaN to 1.0,
     /// whichever way the copy goes, and the upload announces `restricted-depth-upload`.
     pub fn replace_region(
         &self,

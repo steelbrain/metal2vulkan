@@ -384,14 +384,12 @@ fn heap_textures_answer_and_place_as_metal_s_do() {
                 // bound in the heap's memory serves, a shadow of Metal's tiles there
                 // (`shadowed-texture`, `texture/heap_tiled.rs`; the NVIDIA RTX 5080 Laptop's). A
                 // 32-bit float depth texture whose image a shadow fills from the heap's bytes, on
-                // a device that may store a depth outside `[0, 1]` copied there clamped (no
-                // `VK_EXT_depth_range_unrestricted`, not measured to keep one: ANV),
-                // `restricted-depth-upload`.
+                // a device whose copies clamp a depth outside `[0, 1]` (no
+                // `VK_EXT_depth_range_unrestricted`: ANV, MoltenVK), `restricted-depth-upload`.
                 let facts = &device.properties().driver_facts;
                 let apart = is_depth_stencil(shape.pixel_format)
                     && facts.contains(&DriverFact::DepthStencilImagesLieApart);
-                let clamps = !device.enables_extension(ash::ext::depth_range_unrestricted::NAME)
-                    && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
+                let clamps = super::degrade_notices::clamps_depth_uploads(device);
                 let float_depth = matches!(
                     shape.pixel_format,
                     PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8
@@ -2496,7 +2494,7 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
         (clamps, tiled, read_buffer(&into, 0, row * h).unwrap())
     };
     let label = format!("HEAPTEX depth range: clamps {clamps}, tiled {tiled}");
-    reported_no_depth_outside_0_1(&messages, &label);
+    reported_no_depth_outside_0_1(&messages, &label, false);
     // A texture in place lays its texels out as its driver does, and copies nothing in: only a
     // shadow of Metal's tiles reads each texel where they place it.
     let off: Vec<(u64, u32, u32)> = (0..37 * 5)
@@ -2660,9 +2658,8 @@ fn heap_multisample_textures_keep_their_samples_in_metal_s_tiles() {
         let facts = &device.properties().driver_facts;
         let tiled = facts.contains(&DriverFact::DepthStencilImagesLieApart)
             || facts.contains(&DriverFact::DepthStencilImagesStayGpuOptimized);
-        // A device that may store a depth outside `[0, 1]` copied into a depth image clamped.
-        let clamps = !device.enables_extension(ash::ext::depth_range_unrestricted::NAME)
-            && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
+        // A device whose copies clamp a depth outside `[0, 1]` into a depth image.
+        let clamps = super::degrade_notices::clamps_depth_uploads(device);
         let queue = device.new_command_queue().unwrap();
         let options = tracked(StorageMode::Shared);
         let ds = PixelFormat::Depth32FloatStencil8;

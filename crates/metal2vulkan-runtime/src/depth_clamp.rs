@@ -1,13 +1,14 @@
 //! 32-bit float depths clamped into `[0, 1]` before a copy takes them into a depth image, on a
-//! device that may store one outside there clamped (`ImageFacts::depth_clamps`: no
-//! `VK_EXT_depth_range_unrestricted` enabled, and no
-//! `DriverFact::DepthImageKeepsValuesOutsideUnitRange`).
+//! device without `VK_EXT_depth_range_unrestricted` enabled (`ImageFacts::depth_clamps`: ANV on
+//! the Iris Xe, MoltenVK on the M3 Max, which does not expose it).
 //!
 //! - **Why.** Vulkan takes no value outside `[0, 1]` into a depth image by a copy there
-//!   (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and such a device stores one clamped. Metal's
+//!   (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), whatever a driver is measured to keep (ANV
+//!   stores one clamped; MoltenVK is measured to keep it,
+//!   `DriverFact::DepthImageKeepsValuesOutsideUnitRange`, which no copy relies on). Metal's
 //!   `Depth32Float` texel keeps any `float`. The clamp is `bind::clamped_depth` on a depth's bits:
 //!   a NaN of either sign 1.0, `-0.0` as it is, another negative value 0, a value above 1.0 1.0,
-//!   no denormal flushed. Announced `restricted-depth-upload` by the upload, as before.
+//!   no denormal flushed. Announced `restricted-depth-upload` by the upload.
 //! - **Where.** Every copy of a depth from a buffer or the host into a depth plane of a
 //!   `D32_SFLOAT` or `D32_SFLOAT_S8_UINT` image ([`clamps_depth`]): `replace_region`'s packed
 //!   bytes on the CPU, whichever way they go on (a host copy, the staging queue, a submission;
@@ -39,7 +40,7 @@ use std::ops::Range;
 
 /// Whether a copy into `aspect` of an image of `format` on `device` clamps its 32-bit float
 /// depths (the module docs): the depth of a `D32_SFLOAT` or `D32_SFLOAT_S8_UINT` image, on a
-/// device whose depth images may store a value outside `[0, 1]` clamped.
+/// device without `VK_EXT_depth_range_unrestricted`.
 pub(super) fn clamps_depth(device: &Device, format: Format, aspect: ImageAspectFlags) -> bool {
     let profile = device.compile_device().profile();
     aspect == ImageAspectFlags::DEPTH

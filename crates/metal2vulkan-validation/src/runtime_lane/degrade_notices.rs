@@ -2316,20 +2316,15 @@ pub(super) fn loses_depth_denormals(device: &Device, on_host: bool) -> bool {
     !(stored && facts.contains(&DriverFact::DepthTestKeepsDenormals))
 }
 
-/// Whether `device` announces `restricted-depth-upload` for an upload into a 32-bit float depth
-/// image: it lacks `VK_EXT_depth_range_unrestricted`, where Vulkan leaves a value outside
-/// `[0, 1]` undefined, and its driver is not measured to keep one
-/// (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`).
+/// Whether `device`'s uploads into a 32-bit float depth image clamp each value into `[0, 1]`
+/// first and announce `restricted-depth-upload`: it lacks `VK_EXT_depth_range_unrestricted`,
+/// where Vulkan takes no copied value outside `[0, 1]`
+/// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), whatever its driver is measured to keep.
 pub(super) fn clamps_depth_uploads(device: &Device) -> bool {
-    let unrestricted = device
+    !device
         .enabled()
         .extensions
-        .contains(&VkExtension::ExtDepthRangeUnrestricted);
-    let kept = device
-        .properties()
-        .driver_facts
-        .contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
-    !unrestricted && !kept
+        .contains(&VkExtension::ExtDepthRangeUnrestricted)
 }
 
 /// Whether `device` keeps a negative or NaN 32-bit float depth a write stores in a render

@@ -2228,10 +2228,10 @@ bound.
   neutral sampler, where Metal's reads the state.
 - `metal2vulkan-degrade-restricted-depth-upload` (precision). `RestrictedDepthUpload`: An upload
   (`replace_region`, a blit from a buffer, a copy from a colour texture) into the 32-bit float depth
-  of a texture's depth image, on a device without `VK_EXT_depth_range_unrestricted` enabled, where
-  Vulkan takes no copied value outside `[0, 1]`, whose driver is not measured to keep one
-  (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`): the upload clamps each value into
-  `[0, 1]`, a NaN to 1.0, as the device stores it. And a render pass's NaN clear depth on such
+  of a texture's depth image, on a device without `VK_EXT_depth_range_unrestricted` enabled (ANV
+  on the Iris Xe, MoltenVK on the M3 Max), where Vulkan takes no copied value outside `[0, 1]`: the
+  upload clamps each value into `[0, 1]`, a NaN to 1.0, as the device stores it. And a render
+  pass's NaN clear depth on such
   a device, which Metal stores as `0x7fc00000`, cleared to 1.0. And a heap's texture of such a depth
   whose shadow's copies in move the heap's bytes into its image, announced as it is made: the
   copies in clamp each value into `[0, 1]`, a NaN to 1.0, as the device stores it, and its copies
@@ -3202,11 +3202,11 @@ bound.
   no fragment wrote without its sign. Announced at a write that may give a render target's depth
   such a value, or at the commit of a pass that loads a new texture's pattern (a NaN with the sign
   set) before a write covered it in commit order, on a device that keeps such a value in a depth
-  image:
-  `VK_EXT_depth_range_unrestricted` enabled, or `DriverFact::DepthImageKeepsValuesOutsideUnitRange`
-  (elsewhere `restricted-depth-upload` is announced). MoltenVK's test is Metal's own
-  (`DriverFact::DepthTestComparesMagnitudes`): there it is announced at a pass that loads and stores
-  the depth and sets a state with depth writes but draws under none, whose pass keeps the signs.
+  image: `VK_EXT_depth_range_unrestricted` enabled (elsewhere a copy clamps it and
+  `restricted-depth-upload` is announced). Where such a device's test is Metal's own
+  (`DriverFact::DepthTestComparesMagnitudes`, MoltenVK's, were it to enable the extension), it is
+  announced at a pass that loads and stores the depth and sets a state with depth writes but draws
+  under none, whose pass keeps the signs.
   Also announced for a NaN clear depth the device does not write before the pass. Cost: a depth test
   against the stored value, or the value a pass with depth writes stores, can differ from Metal's in
   the pass or target named: the device compares a negative value below zero and a NaN by its own
