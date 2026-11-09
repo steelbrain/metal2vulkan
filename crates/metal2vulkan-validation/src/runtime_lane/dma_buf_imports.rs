@@ -27,9 +27,7 @@
 use super::degrade_notices;
 use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
 use super::first_use_writes::CHECK_WAIT;
-use super::host_memory::{
-    counting, gpu_fill, gpu_read, host_page, not_importable, on_device, run, Mapping,
-};
+use super::host_memory::{counting, gpu_fill, gpu_read, host_page, on_device, run, Mapping};
 use super::in_place_rows;
 use super::in_place_textures::refused;
 use super::keep_alives::eventually;
@@ -2502,9 +2500,10 @@ enum ViewRoute {
     Pointer,
     /// Through this many dma-bufs its source made, asked for once.
     DmaBufs(usize),
-    /// Refused (`Unsupported`, `HostMemory`): the pointer refused, and the source, asked once
-    /// for one dma-buf of the whole view, answered none.
-    Refused,
+    /// A copy of its pages, for the device's refusal (`copied.rs`,
+    /// `WorkCounts::copied_host_buffers_device_refused`): the pointer refused, and the source,
+    /// asked once for one dma-buf of the whole view, answered none.
+    Copied,
 }
 
 /// How `device` makes a no-copy buffer over a view of `runs` single pages of a file mapped in
@@ -2514,7 +2513,8 @@ enum ViewRoute {
 /// takes the pages and two past its `list_limit` (Mesa 26.2.6). ANV imports the pointer of the
 /// file's mapping, refuses the pointer of a udmabuf's (`VK_ERROR_INVALID_EXTERNAL_HANDLE`), and
 /// imports one dma-buf for a plain buffer but reports none for a sparse one, so it takes such a
-/// view only where one udmabuf holds it (Mesa 26.2.6 on i915). lavapipe imports every pointer.
+/// view in place only where one udmabuf holds it, and copies a larger one (Mesa 26.2.6 on i915).
+/// lavapipe imports every pointer.
 fn view_route(device: &Device, runs: usize, through: bool) -> Option<ViewRoute> {
     let one_dma_buf = runs <= Limits::of_host().items;
     match device.properties().description.driver_id {
@@ -2525,7 +2525,7 @@ fn view_route(device: &Device, runs: usize, through: bool) -> Option<ViewRoute> 
         Some(DriverId::INTEL_OPEN_SOURCE_MESA) => Some(match (through, one_dma_buf) {
             (false, _) => ViewRoute::Pointer,
             (true, true) => ViewRoute::DmaBufs(1),
-            (true, false) => ViewRoute::Refused,
+            (true, false) => ViewRoute::Copied,
         }),
         Some(DriverId::MESA_LLVMPIPE) => Some(ViewRoute::Pointer),
         _ => None,
@@ -2539,8 +2539,8 @@ fn view_route(device: &Device, runs: usize, through: bool) -> Option<ViewRoute> 
 /// with a dma-buf source of its pages. Made over 64 pages, which one udmabuf takes, and over
 /// `list_limit + 1`, which take two. Each takes the route its measured driver answers
 /// ([`view_route`]), counted (`dma_buf_imports`, `dma_buf_sparse_buffers`,
-/// `host_pointer_imports_made`), and none is a copy (`copied_host_buffers_made`); the GPU reads the
-/// CPU's bytes where it is made. Printed (`VIEW-IMPORT`): the making's answer, the source's calls,
+/// `host_pointer_imports_made`, and `copied_host_buffers_made` for the one route that copies); the
+/// GPU reads the CPU's bytes. Printed (`VIEW-IMPORT`): the making's answer, the source's calls,
 /// the counts, and the mappings the view and the import took.
 #[test]
 fn a_reversed_view_of_single_pages_takes_the_route_its_device_answers() {
@@ -2635,17 +2635,23 @@ fn a_reversed_view_of_single_pages_takes_the_route_its_device_answers() {
                     let expected = (chunks as u64, sparse, 0, 0);
                     assert_eq!(counted, expected, "{TEST}: {shape}: counted");
                 }
-                Some(ViewRoute::Refused) => {
+                Some(ViewRoute::Copied) => {
                     let (request, answered) = asked_once(&calls);
                     // One dma-buf of the whole view: the device assembles no buffer of several.
                     assert_eq!(request.granule, length, "{TEST}: {shape}: {request:?}");
                     assert_eq!(answered, 0, "{TEST}: {shape}: chunks answered");
+                    let backing = made.as_ref().map(|buffer| buffer.host_backing());
                     assert!(
-                        made.as_ref().is_err_and(not_importable),
-                        "{TEST}: {shape}: {:?}",
-                        made.as_ref().err()
+                        matches!(backing, Ok(Some(HostBacking::Copied))),
+                        "{TEST}: {shape}: {backing:?}"
                     );
-                    assert_eq!(counted, (0, 0, 0, 0), "{TEST}: {shape}: counted");
+                    let refused = after.copied_host_buffers_device_refused
+                        - before.copied_host_buffers_device_refused;
+                    assert_eq!(
+                        (counted, refused),
+                        ((0, 0, 0, 1), 1),
+                        "{TEST}: {shape}: counted, and copies for the device's refusal"
+                    );
                 }
                 None => {}
             }
