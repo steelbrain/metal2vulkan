@@ -673,6 +673,34 @@ fn float_to_wide_truncates_and_saturates() {
     );
 }
 
+/// Integer `median3` on wide values (two 32-bit words) answers the middle one of its operands,
+/// signed and unsigned, on scalars and 4-lane vectors of 64 and 40 bits: every ordered triple of
+/// the width's edges, ties and the extremes among them.
+#[test]
+fn wide_integer_median3_answers_the_middle_one_at_ties_and_extremes() {
+    for bits in [64u8, 40] {
+        let edges = width_edges(bits);
+        for s in [Sign::Signed, Sign::Unsigned] {
+            let op = IntFn::Median3(s);
+            for lanes in [1u8, 4] {
+                let f = vec(wide(bits), lanes);
+                check_wide(
+                    &format!("{op:?} wide i{bits} x{lanes}"),
+                    &[f; 3],
+                    f,
+                    &|fb, x| w::int_fn(fb, op, f, x),
+                    &triples(&edges, usize::from(lanes)),
+                    &|c| {
+                        (0..usize::from(lanes))
+                            .map(|l| int_ref(op, bits, &[c[0][l], c[1][l], c[2][l]]))
+                            .collect::<Option<Vec<u64>>>()
+                    },
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn wide_integer_functions_match_metal() {
     let mut rng = Rng(0x1F);
@@ -714,6 +742,7 @@ fn wide_integer_functions_match_metal() {
                 IntFn::Max(s),
                 IntFn::Min3(s),
                 IntFn::Max3(s),
+                IntFn::Median3(s),
                 IntFn::Clamp(s),
                 IntFn::AddSat(s),
                 IntFn::SubSat(s),
@@ -1074,6 +1103,7 @@ fn wide_integer_function_words_bound_their_emission() {
         ops.extend([
             IntFn::AbsDiff(s),
             IntFn::Min3(s),
+            IntFn::Median3(s),
             IntFn::Clamp(s),
             IntFn::AddSat(s),
             IntFn::SubSat(s),

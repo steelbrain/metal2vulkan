@@ -155,6 +155,8 @@ pub enum MathFn {
     IMin3(Sign),
     /// `air.max3.<s|u>`: the greatest of three integers.
     IMax3(Sign),
+    /// `air.median3.<s|u>`: the middle one of three integers.
+    IMedian3(Sign),
     /// `air.mul_hi.<s|u>`: the high half of the full product.
     MulHi(Sign),
     /// `air.mad_hi.<s|u>`: `mul_hi(a, b) + c`.
@@ -308,6 +310,7 @@ pub(super) const TABLE: &[(&str, Domain, Shape)] = {
         ("clamp", S(M::IClamp), Same(3)),
         ("min3", S(M::IMin3), Same(3)),
         ("max3", S(M::IMax3), Same(3)),
+        ("median3", S(M::IMedian3), Same(3)),
         ("mul_hi", S(M::MulHi), Same(2)),
         ("mad_hi", S(M::MadHi), Same(3)),
         ("mad_sat", S(M::MadSat), Same(3)),

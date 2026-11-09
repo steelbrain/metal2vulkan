@@ -11236,6 +11236,7 @@ variant	metal2vulkan-air::intrinsics::MathFn::HAdd	HAdd(Sign)
 variant	metal2vulkan-air::intrinsics::MathFn::IClamp	IClamp(Sign)
 variant	metal2vulkan-air::intrinsics::MathFn::IMax	IMax(Sign)
 variant	metal2vulkan-air::intrinsics::MathFn::IMax3	IMax3(Sign)
+variant	metal2vulkan-air::intrinsics::MathFn::IMedian3	IMedian3(Sign)
 variant	metal2vulkan-air::intrinsics::MathFn::IMin	IMin(Sign)
 variant	metal2vulkan-air::intrinsics::MathFn::IMin3	IMin3(Sign)
 variant	metal2vulkan-air::intrinsics::MathFn::Ilogb	Ilogb

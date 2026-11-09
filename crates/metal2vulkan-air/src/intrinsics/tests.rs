@@ -233,6 +233,11 @@ fn math_conversion_and_atomic_families_decode() {
         "air.clamp.u.v4i32",
         "air.max3.u.i32",
         "air.min3.s.i32",
+        // MSL's integer `median3`, as Apple's compiler spells it.
+        "air.median3.s.i32",
+        "air.median3.u.i32",
+        "air.median3.s.i16",
+        "air.median3.s.v4i32",
         "air.fmedian3.v4f16",
         "air.fast_fmax3.v2f32",
         "air.atan2.f16",
