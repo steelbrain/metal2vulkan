@@ -217,7 +217,7 @@ impl Carry {
     }
 
     /// Whether the generation came to rest ([`let_go_at_rest`](Self::let_go_at_rest)).
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn at_rest(&self) -> bool {
         lock(&self.state).at_rest
     }

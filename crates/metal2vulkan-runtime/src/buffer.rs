@@ -770,7 +770,7 @@ impl LostParts for LostBuffer {
                 return;
             }
         }
-        self.release_now(&buffer);
+        (*self).release_now(&buffer);
     }
 }
 
@@ -779,7 +779,7 @@ impl LostBuffer {
     /// but where their `VkBuffer` or memory was handed out (`Buffer::vk_buffer`,
     /// `Buffer::vk_host_memory`), which the caller may use while the buffer lives, so they go
     /// with the buffer, as a refused object's do.
-    fn release_now(self: Box<Self>, buffer: &BufferShared) {
+    fn release_now(self, buffer: &BufferShared) {
         if buffer.handed_out.load(Ordering::Acquire) {
             return;
         }
@@ -819,7 +819,7 @@ impl Drop for HeldParts<'_> {
             }
         };
         if let Some(lost) = waiting {
-            lost.release_now(self.link);
+            (*lost).release_now(self.link);
         }
     }
 }
@@ -4573,7 +4573,7 @@ impl Buffer {
 impl Buffer {
     /// Whether the buffer's parts on the generation it was made on went, carried from there
     /// (`FixedPages::release_lost`).
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn first_parts_freed(&self) -> bool {
         match &self.0.bytes {
             Bytes::Own(OwnBytes {
