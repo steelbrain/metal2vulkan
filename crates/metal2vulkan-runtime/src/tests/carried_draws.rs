@@ -31,6 +31,9 @@ const SIDE: u64 = 16;
 /// The offset of a buffer's second color: a constant buffer's offset alignment on every device.
 const SECOND: u64 = 256;
 
+/// The places for colors in a buffer of them.
+const COLORS: usize = 3;
+
 /// A pass's calls.
 type Pass<'a> = &'a dyn Fn(&mut RenderCommandEncoder);
 
@@ -74,13 +77,20 @@ impl Frame {
 
 /// The carry's counts ([`Frame::carries`]) of a frame whose carried draws are `carried`, the
 /// rebinds of which all go on, the first and every second one after it taking every step in a
-/// build with debug assertions (the module docs).
+/// build with debug assertions (the module docs); the frame's read back, a blit encoder after the
+/// last pass, lets that pass's kept draw go, counted as one between.
 fn rebound(carried: u64) -> [u64; 8] {
     let rebound = match cfg!(debug_assertions) {
         true => carried / 2,
         false => carried,
     };
-    [carried, rebound, 0, 0, 0, 0, 0, 0]
+    [carried, rebound, 0, 0, 0, 1, 0, 0]
+}
+
+/// The carry's counts of a frame that carried nothing: but the last pass's kept draw, which the
+/// read back lets go (`rebound`), and one let go at each of `blits` blit encoders between passes.
+fn dropped(blits: u64) -> [u64; 8] {
+    [0, 0, 0, 0, 0, blits + 1, 0, 0]
 }
 
 /// A pass over `level` of `target`, cleared where `first`, else loaded, and stored.
@@ -160,9 +170,13 @@ fn frame(queue: &CommandQueue, passes: &[Pass<'_>], apart: Apart) -> Frame {
     }
 }
 
-/// A shared buffer of `colors`, each at a multiple of [`SECOND`].
+/// A shared buffer of [`COLORS`] places of [`SECOND`] bytes, `colors` in the first ones: every
+/// buffer of one length, its bound length's class (`bind::length_class`, of 512 to 1023 bytes)
+/// the same at offsets 0 and [`SECOND`] alike, so a pass's other buffer or offset keeps the bind
+/// state's shape, as a draw rebound needs.
 fn colors(device: &Device, colors: &[[f32; 4]]) -> Buffer {
-    let mut bytes = vec![0; colors.len() * SECOND as usize];
+    assert!(colors.len() <= COLORS);
+    let mut bytes = vec![0; COLORS * SECOND as usize];
     for (at, color) in colors.iter().enumerate() {
         let color = bytes_of(color, f32::to_le_bytes);
         let at = at * SECOND as usize;
@@ -214,10 +228,12 @@ fn passes_of_the_same_state_rebind_the_carried_draw() {
     let blits = frame(&queue, &passes, Apart::Blits);
     let carried = PASSES as u64 - 1;
     assert_eq!(together.carries(), rebound(carried), "together");
-    assert_eq!(alone.carries(), [0; 8], "in command buffers of their own");
-    let mut between = [0; 8];
-    between[5] = carried;
-    assert_eq!(blits.carries(), between, "with blits between");
+    assert_eq!(
+        alone.carries(),
+        dropped(0),
+        "in command buffers of their own"
+    );
+    assert_eq!(blits.carries(), dropped(carried), "with blits between");
     assert_eq!(together.words, alone.words, "the pixels of the passes");
     assert_eq!(
         blits.words, alone.words,
@@ -292,7 +308,8 @@ fn a_slot_the_next_encoder_leaves_unbound_stops_the_carry() {
     let passes: [Pass<'_>; 2] = [&with_extra, &without];
     let together = frame(&queue, &passes, Apart::Together);
     let alone = frame(&queue, &passes, Apart::CommandBuffers);
-    assert_eq!(together.carries(), [1, 0, 1, 0, 0, 0, 0, 0], "the counts");
+    // The second pass's draw took every step and keeps itself, which the read back lets go.
+    assert_eq!(together.carries(), [1, 0, 1, 0, 0, 1, 0, 0], "the counts");
     assert_eq!(together.words, alone.words, "the pixels");
     let pixel = channels(together.words[0]);
     assert!(
