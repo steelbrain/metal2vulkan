@@ -1361,9 +1361,9 @@ fn draws_after_a_state_set_or_a_barrier_set_what_every_step_sets() {
 /// the scissor rectangle restated (`render/draw_again/restated.rs`), after the switch from the
 /// state's own kept draw; with the same commands of every kind, state commands and pixels as the
 /// same draws each taking every step, after a call between each that changes nothing for them
-/// (`set_tessellation_factor_scale`, which no draw of their states reads). Only the pass's first
-/// draw keeps nothing (`WorkCounts::draws_unkept`), and no draw finds its kept draw unlike it or
-/// stops its rebind.
+/// (`set_tessellation_factor_scale`, which no draw of their states reads). Every draw keeps
+/// itself (`WorkCounts::draws_unkept`), the pass's first, which begins its instance, too, and no
+/// draw finds its kept draw unlike it or stops its rebind.
 #[test]
 fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
     let scratch = Scratch::new("draw-again-gaps");
@@ -1437,7 +1437,7 @@ fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
         every.counted(states_recorded)
     );
     assert_eq!(rebound.words, every.words, "the pixels of the draws");
-    assert_eq!(rebound.counted(|counts| counts.draws_unkept), 1);
+    assert_eq!(rebound.counted(|counts| counts.draws_unkept), 0);
     let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
     assert_eq!(rebound.counted(missed), 0);
 }
