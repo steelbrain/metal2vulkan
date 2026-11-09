@@ -2261,8 +2261,8 @@ bound.
   written. Cost: a function reading the state through its ID in an argument buffer reads the
   neutral sampler, where Metal's reads the state.
 - `metal2vulkan-degrade-restricted-depth-upload` (precision). `RestrictedDepthUpload`: An upload
-  (`replace_region`, a blit from a buffer, a copy from a colour texture) into the 32-bit float depth
-  of a texture's depth image, on a device without `VK_EXT_depth_range_unrestricted` enabled (ANV
+  (`replace_region`, a blit from a buffer, a copy from a colour texture, a fill of a multisampled
+  texture) into the 32-bit float depth of a texture's depth image, on a device without `VK_EXT_depth_range_unrestricted` enabled (ANV
   on the Iris Xe, MoltenVK on the M3 Max), where Vulkan takes no copied value outside `[0, 1]`: the
   upload clamps each value into `[0, 1]`, a NaN to 1.0, as the device stores it. And a render
   pass's NaN clear depth on such

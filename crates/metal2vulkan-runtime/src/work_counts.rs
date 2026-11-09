@@ -5879,8 +5879,9 @@ pub struct WorkCounts {
     pub heap_shadow_cpu_copies: u64,
     /// Uploads into a 32-bit float depth image whose depths were clamped into `[0, 1]` before
     /// the copy, on a device whose depth images may store a value outside there clamped
-    /// (`depth_clamp.rs`): one a `replace_region`'s clamp on the CPU, and one a blit copy's
-    /// dispatches of `bind::depth_clamp_module` before its copy into an image. Zero elsewhere.
+    /// (`depth_clamp.rs`): one a `replace_region`'s clamp on the CPU, one a blit copy's
+    /// dispatches of `bind::depth_clamp_module` before its copy into an image, and one a
+    /// multisampled texture's fill, its samples' depths clamped on the CPU. Zero elsewhere.
     pub depth_uploads_clamped: u64,
     /// Host shadows of textures' texels made at a CPU read of them (`texture/host_shadow.rs`):
     /// one a texture whose CPU reads the driver keeps off the host and that the program reads

@@ -882,12 +882,12 @@ degradations! {
         UnlistedArgumentSampler = "unlisted-argument-sampler", Precision,
             "a function reading the state through its ID in an argument buffer reads the \
              neutral sampler, where Metal's reads the state";
-        /// An upload (`replace_region`, a blit from a buffer, a copy from a colour texture) into
-        /// the 32-bit float depth of a texture's depth image, on a device without
-        /// `VK_EXT_depth_range_unrestricted` enabled (ANV on the Iris Xe, MoltenVK on the M3
-        /// Max), where Vulkan takes no copied value outside `[0, 1]`: the upload clamps each value
-        /// into `[0, 1]`, a NaN to 1.0, as the device stores it (`depth_clamp.rs`). And a render pass's NaN
-        /// clear depth on such a device, which Metal stores as `0x7fc00000`, cleared to 1.0
+        /// An upload (`replace_region`, a blit from a buffer, a copy from a colour texture, a fill
+        /// of a multisampled texture) into the 32-bit float depth of a texture's depth image, on
+        /// a device without `VK_EXT_depth_range_unrestricted` enabled (ANV on the Iris Xe,
+        /// MoltenVK on the M3 Max), where Vulkan takes no copied value outside `[0, 1]`: the
+        /// upload clamps each value into `[0, 1]`, a NaN to 1.0, as the device stores it
+        /// (`depth_clamp.rs`). And a render pass's NaN clear depth on such a device, which Metal stores as `0x7fc00000`, cleared to 1.0
         /// (`nan_clear.rs`). And a heap's texture of such a depth whose shadow's copies in move the
         /// heap's bytes into its image, announced as it is made: the copies in clamp each value
         /// into `[0, 1]`, a NaN to 1.0, as the device stores it, and its copies back write each

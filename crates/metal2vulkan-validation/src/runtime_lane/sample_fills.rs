@@ -19,7 +19,13 @@
 //! either code nearest each (the RTX 5080 Laptop GPU stores 0.5 as 127, Metal 128; ANV on the
 //! Iris Xe of RPL-P stores the sRGB 187.52 as 187, Metal 188), so such a sample is compared
 //! against those codes ([`only_cleared_codes_apart`], a `SAMPLE-FILLS-CLEAR` line), and so is a
-//! sample an `RGBA8Unorm` colour fill wrote; every other word is Metal's. The depths outside `[0, 1]` (`d32-wide-4`)
+//! sample an `RGBA8Unorm` colour fill wrote; every other word is Metal's. A `Depth32Float` case
+//! on a device that announced `restricted-depth-upload` (no `VK_EXT_depth_range_unrestricted`:
+//! ANV on the Iris Xe, MoltenVK on the M3 Max) is compared against Metal's lines with every
+//! depth clamped into `[0, 1]`, a NaN 1.0 ([`clamped`], a `SAMPLE-FILLS-CLAMPED` line), the fill
+//! counted as it clamps. The probe recorded no lines of the depths outside `[0, 1]`
+//! (`d32-wide-4`), only their digest: the lane rebuilds them from the fill rule
+//! ([`depth_lines`]), held to that digest and to the two depth cases the probe recorded. They
 //! are not compared where the device's depth copies go by a draw that announced the values it
 //! changes (`drawn-depth-copy`), whose samples it prints on a `SAMPLE-FILLS-DRAWN` line; a
 //! differing case prints a `SAMPLE-FILLS-DIFFERS` line.
@@ -29,6 +35,7 @@ use super::resolves::{lane, quiet, Lane};
 use super::WAIT;
 use crate::candidate::runtime_samples::encode_through;
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
+use metal2vulkan::bind::clamped_depth;
 use metal2vulkan::error::Needs;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
@@ -38,8 +45,7 @@ use metal2vulkan_runtime::{
 use sha2::{Digest, Sha256};
 
 /// Metal's lines per case, each case's block headed `[<case>]` (the `d32-wide-4` case apart,
-/// whose depths out of `[0, 1]` a drawn depth copy changes on the devices that copy depth by a
-/// draw, so only its digest is Metal's).
+/// whose digest alone the probe's record kept: [`depth_lines`] rebuilds its lines).
 const METAL_LINES: &str = include_str!("../../fixtures/public/sample_fills/metal.txt");
 
 /// The SHA-256 of [`METAL_LINES`].
@@ -541,7 +547,14 @@ fn run(lane: &Lane, case: &Case) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// Metal's lines of `case`, or `None` where none are recorded.
+/// Metal's lines of `case`: the probe's recorded ones, else those [`depth_lines`] rebuilds.
+fn metal_answer(case: &Case) -> Vec<String> {
+    metal_lines(case.0)
+        .or_else(|| depth_lines(case))
+        .expect("every case's lines are recorded or rebuilt")
+}
+
+/// The probe's recorded lines of `case`, or `None` where none are recorded.
 fn metal_lines(case: &str) -> Option<Vec<String>> {
     let head = format!("[{case}]\n");
     let at = METAL_LINES.find(&head)? + head.len();
@@ -562,6 +575,54 @@ fn unlike_metal(lines: &[String], metal: &[String]) -> Option<String> {
         )),
         None => Some(format!("{} lines, Metal's {}", lines.len(), metal.len())),
     }
+}
+
+/// Metal's lines of a `Depth32Float` case filled with bytes, from the fill rule: every sample
+/// holds the pass's clear depth 0.25, and each sample of a texel in the fill's region its own
+/// four bytes of the pattern (a texel's samples take 16 bytes or fewer of it,
+/// `tests::blit_fill`). `None` for any other case.
+fn depth_lines(case: &Case) -> Option<Vec<String>> {
+    let &(_, raw, samples, slices, _, origin, size, fill, _) = case;
+    let Fill::Bytes(pattern) = fill else {
+        return None;
+    };
+    if PixelFormat::try_from(raw).ok()? != PixelFormat::Depth32Float || slices > 0 {
+        return None;
+    }
+    let (samples, pattern) = (samples as usize, hex(pattern));
+    let mut bytes = Vec::with_capacity(HEIGHT as usize * WIDTH as usize * samples * 4);
+    for y in 0..u64::from(HEIGHT) {
+        for x in 0..u64::from(WIDTH) {
+            let filled = (origin[0]..origin[0] + size[0]).contains(&x)
+                && (origin[1]..origin[1] + size[1]).contains(&y);
+            for s in 0..samples {
+                match filled {
+                    true => bytes.extend_from_slice(&pattern[s * 4..s * 4 + 4]),
+                    false => bytes.extend_from_slice(&0.25f32.to_le_bytes()),
+                }
+            }
+        }
+    }
+    Some(lines("after ", 0, &bytes, samples, 4))
+}
+
+/// Metal's lines `metal` of a `Depth32Float` case as a device whose depth uploads clamp holds
+/// them (`restricted-depth-upload`, `depth_clamp.rs`): every word through [`clamped_depth`].
+fn clamped(metal: &[String]) -> Vec<String> {
+    metal
+        .iter()
+        .map(|line| {
+            let (head, words) = line.split_once(':').expect("a line's head");
+            let words: Vec<String> = words
+                .split(' ')
+                .map(|word| match u32::from_str_radix(word, 16) {
+                    Ok(bits) if word.len() == 8 => format!("{:08x}", clamped_depth(bits)),
+                    _ => word.to_owned(),
+                })
+                .collect();
+            format!("{head}:{}", words.join(" "))
+        })
+        .collect()
 }
 
 /// The head of a read-back line and its hex words: `after  s0 y1: | 3e800000 3e800000 | ...`.
@@ -667,7 +728,8 @@ fn fills_a_depth_denormal(case: &Case) -> bool {
 }
 
 /// The recorded lines are the probe's: their own SHA-256, and each case's digest the probe
-/// printed of its lines.
+/// printed of its lines, the rebuilt ones' too; and every rebuilt case the probe recorded is
+/// rebuilt as recorded.
 #[test]
 fn the_recorded_lines_are_the_probes() {
     assert_eq!(
@@ -675,17 +737,31 @@ fn the_recorded_lines_are_the_probes() {
         METAL_LINES_SHA,
         "the recorded lines"
     );
+    let mut rebuilt = 0;
     for case in &CASES {
-        let Some(lines) = metal_lines(case.0) else {
-            assert_eq!(case.0, "d32-wide-4", "a case without recorded lines");
-            continue;
-        };
-        assert_eq!(digest(&lines), case.8, "{}", case.0);
+        assert_eq!(digest(&metal_answer(case)), case.8, "{}", case.0);
+        if let (Some(recorded), Some(lines)) = (metal_lines(case.0), depth_lines(case)) {
+            assert_eq!(lines, recorded, "{}: the rebuilt lines", case.0);
+            rebuilt += 1;
+        }
     }
+    assert_eq!(rebuilt, 2, "d32-4 and d32-2 rebuilt as recorded");
 }
 
-/// Every case's samples are Metal's, but a depth whose drawn copy announced (once a device, at
-/// the first depth fill) that it changes values out of `[0, 1]`, and a denormal depth on a device
+/// A clamped depth word is [`clamped_depth`]'s, and the rest of a line is kept.
+#[test]
+fn clamped_lines_clamp_each_depth_word() {
+    let line = "after  s0 y1: | 3e800000 77665544 | bbaa9988 ffeeddcc 80000000".to_owned();
+    assert_eq!(
+        clamped(&[line]),
+        ["after  s0 y1: | 3e800000 3f800000 | 00000000 3f800000 80000000"]
+    );
+}
+
+/// Every case's samples are Metal's, but a depth on a device whose depth uploads clamp
+/// (announced `restricted-depth-upload` once a device, and counted at every such fill), which
+/// holds Metal's clamped into `[0, 1]`; a depth whose drawn copy announced (once a device, at
+/// the first depth fill) that it changes values out of `[0, 1]`; and a denormal depth on a device
 /// that does not keep one a GPU write stores (`loses_depth_denormals`, announced
 /// `depth-denormals`): a multisampled image takes no CPU store, so Metal's `0x00000001` reads
 /// back as `0x00000000` there, and every other word is still compared.
@@ -702,10 +778,16 @@ fn multisample_fills_write_metal_s_samples() {
     let mut announced_denormals = false;
     // Whether the device announced its conversion of a clear (once a device: the first pass's).
     let mut converted = false;
+    // Whether the device announced that its depth uploads clamp (once a device), and how many
+    // cases it clamped.
+    let mut restricted = false;
+    let mut clamped_cases = 0;
     for case in &CASES {
+        let before = lane.device.work_counts().depth_uploads_clamped;
         let Some(lines) = run(&lane, case) else {
             continue;
         };
+        let clamps = lane.device.work_counts().depth_uploads_clamped - before;
         let notices = messages.take_notices();
         let kinds: Vec<Degradation> = notices
             .iter()
@@ -715,15 +797,27 @@ fn multisample_fills_write_metal_s_samples() {
         drawn |= kinds.contains(&Degradation::DrawnDepthCopy);
         converted |= kinds.contains(&Degradation::DeviceColorConversion);
         announced_denormals |= kinds.contains(&Degradation::DepthDenormals);
+        restricted |= kinds.contains(&Degradation::RestrictedDepthUpload);
         let case_name = case.0;
-        let unlike = match metal_lines(case_name) {
-            Some(metal) => unlike_metal(&lines, &metal),
-            None => (digest(&lines) != case.8)
-                .then(|| format!("{}, Metal's digest {}", digest(&lines), case.8)),
-        };
-        let Some(unlike) = unlike else {
+        let pf = PixelFormat::try_from(case.1).unwrap();
+        let metal = metal_answer(case);
+        let Some(unlike) = unlike_metal(&lines, &metal) else {
             continue;
         };
+        if restricted && pf == PixelFormat::Depth32Float && lines == clamped(&metal) {
+            assert!(
+                clamps > 0,
+                "{name}: {case_name}: Metal's depths clamped, with no clamp counted"
+            );
+            clamped_cases += 1;
+            println!(
+                "SAMPLE-FILLS-CLAMPED {name}: {case_name}: the announced clamp of the fill's \
+                 depths into [0, 1] ({clamps} counted) stands where Metal's keeps them, every \
+                 word Metal's clamped: {}",
+                lines[1]
+            );
+            continue;
+        }
         if drawn && case_name == "d32-wide-4" {
             println!(
                 "SAMPLE-FILLS-DRAWN {name}: {case_name}: the drawn depth copy announced its \
@@ -732,15 +826,13 @@ fn multisample_fills_write_metal_s_samples() {
             );
             continue;
         }
-        let cleared = converted
-            && metal_lines(case_name).is_some_and(|metal| {
-                let fill = match case.7 {
-                    Fill::Color(color) => Some(color),
-                    Fill::Bytes(_) => None,
-                };
-                let pf = PixelFormat::try_from(case.1).unwrap();
-                only_cleared_codes_apart(&lines, &metal, pf, fill)
-            });
+        let cleared = converted && {
+            let fill = match case.7 {
+                Fill::Color(color) => Some(color),
+                Fill::Bytes(_) => None,
+            };
+            only_cleared_codes_apart(&lines, &metal, pf, fill)
+        };
         if cleared {
             println!(
                 "SAMPLE-FILLS-CLEAR {name}: {case_name}: the announced conversion of the pass's \
@@ -750,9 +842,8 @@ fn multisample_fills_write_metal_s_samples() {
             );
             continue;
         }
-        let denormals = flushes
-            && fills_a_depth_denormal(case)
-            && metal_lines(case_name).is_some_and(|metal| only_flushed_denormals(&lines, &metal));
+        let denormals =
+            flushes && fills_a_depth_denormal(case) && only_flushed_denormals(&lines, &metal);
         if denormals {
             flushed_cases += 1;
             println!(
@@ -772,6 +863,7 @@ fn multisample_fills_write_metal_s_samples() {
         "{} cases differ from Metal's",
         wrong.len()
     );
+    println!("SAMPLE-FILLS-CLAMPS {name}: {clamped_cases} case(s) held Metal's depths clamped");
     assert!(
         flushed_cases == 0 || announced_denormals,
         "{name}: {flushed_cases} case(s) hold Metal's depth denormal as its zero with no \

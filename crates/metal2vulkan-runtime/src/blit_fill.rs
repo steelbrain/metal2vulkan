@@ -196,7 +196,7 @@ use super::values::{Origin, Region, Size};
 use super::Device;
 use super::{Buffer, Degradation};
 use ash::vk;
-use metal2vulkan::bind::{PlanesCopy, YCbCrCodes};
+use metal2vulkan::bind::{clamped_depth, PlanesCopy, YCbCrCodes};
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::format::{
@@ -1371,7 +1371,9 @@ impl BlitCommandEncoder {
     /// moves into the texture's region as a copy between multisampled textures moves it
     /// (`blit_texture.rs`: an image copy, the planes' copies where the device's copy converts
     /// float NaNs, a depth or stencil aspect's copies or draws, `sample_copy.rs`, exact or
-    /// announced as there).
+    /// announced as there). A 32-bit float depth on a device that may store one outside `[0, 1]`
+    /// clamped takes its samples' depths clamped on the CPU first, announced
+    /// `restricted-depth-upload` (`depth_clamp.rs`).
     fn sample_fill(
         &mut self,
         call: &'static str,
@@ -1396,10 +1398,24 @@ impl BlitCommandEncoder {
                 ))
             }
         };
+        // A 32-bit float depth on a device that may store a value outside [0, 1] clamped takes
+        // each sample's depth clamped first, as every upload into such a depth does
+        // (`depth_clamp.rs`): the copy into the depth image takes no value outside.
+        let clamps = bytes == 4 && texture.clamps_depth_upload(aspect);
         let values: Vec<[u32; 4]> = sample_units(pattern, bytes, samples)
             .iter()
-            .map(|unit| words(unit))
+            .map(|unit| {
+                let mut words = words(unit);
+                if clamps {
+                    words[0] = clamped_depth(words[0]);
+                }
+                words
+            })
             .collect();
+        if clamps {
+            texture.degrade_depth_upload(call, aspect, false);
+            self.core().device().shared().counts.depth_upload_clamped();
+        }
         let narrow = |range: &Range<u64>| -> Result<[u32; 2], Error> {
             let start = u32::try_from(range.start).map_err(|_| internal("a fill's origin"))?;
             let end = u32::try_from(range.end).map_err(|_| internal("a fill's extent"))?;

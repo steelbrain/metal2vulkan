@@ -15,15 +15,16 @@
 //!   texels moves on; a blit's copy from a buffer into the texture, through a scratch buffer of
 //!   the encoder that takes the copy's bytes, or through the staging buffer its plan copies its
 //!   rows into; and a copy between textures whose texels go through the encoder's scratch buffer
-//!   into a depth (a colour texture of its unit, `blit_texture.rs`). A heap's tiled texels clamp
-//!   as they move into their image (`texture/heap_tiled.rs`). Not on another device: each value
+//!   into a depth (a colour texture of its unit, `blit_texture.rs`). A multisampled texture's
+//!   fill clamps each sample's depth on the CPU before its bits are written (`blit_fill.rs`). A
+//!   heap's tiled texels clamp as they move into their image (`texture/heap_tiled.rs`). Not on another device: each value
 //!   is copied as Metal holds it.
 //! - **How**, on the GPU ([`BlitCommandEncoder::clamp_depths`]): one dispatch of
 //!   `bind::depth_clamp_module` per region (or per piece of one that its binding cannot hold
 //!   whole), each its own command over the bytes it rewrites in place, which the encoder's
 //!   tracker orders after the copy that wrote them and before the copy that reads them on.
-//! - **Counted.** `WorkCounts::depth_uploads_clamped`: one a `replace_region`'s clamp, and one a
-//!   blit copy's clamp of the depths it copies into an image.
+//! - **Counted.** `WorkCounts::depth_uploads_clamped`: one a `replace_region`'s clamp, one a
+//!   blit copy's clamp of the depths it copies into an image, and one a multisampled fill's.
 
 use super::blit::{reads, writes, writes_by, BlitCommandEncoder};
 use super::buffer::Buffer;
