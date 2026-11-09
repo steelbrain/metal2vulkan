@@ -533,9 +533,7 @@ impl Kernels {
     /// Whether the `half` kernel `entry`'s stage rounds by the device's quantize
     /// ([`Kernels::quantizing`]).
     fn quantizes(&self, entry: &str) -> bool {
-        self.quantizing
-            .iter()
-            .any(|&quantizing| quantizing == entry)
+        self.quantizing.contains(&entry)
     }
 }
 
