@@ -42,8 +42,10 @@
 //!   device allocates its buffers' blocks exportable and the check passed them (`memory.rs`'s
 //!   "Buffers in exportable blocks", `in_place.rs`'s `fd_blocks_take`), its memory is such a block
 //!   (`WorkCounts::fd_buffer_blocks_made`), which the runtime never exports (`export_memory_fd`
-//!   refuses it, `NotExportable`), and each plane is in place, its image naming one of the
-//!   block's handle types, the layer reporting nothing; elsewhere its memory is a plain block,
+//!   refuses it, `NotExportable`), and each plane is in place, its image a
+//!   `DRM_FORMAT_MOD_LINEAR` one naming the block's handle type, a dma-buf, the layer reporting
+//!   nothing (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860` where the block's handle types
+//!   take no image of linear tiling); elsewhere its memory is a plain block,
 //!   each plane in place or the shadow the check decided. Each reads the same bytes. A second
 //!   device of the driver, its shader cache the first's, reads the verdicts from the check's
 //!   record as it is made, and lays its first buffer where they say, none waiting for the check.
@@ -698,15 +700,8 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     let scratch = Scratch::new("own-buffer-textures");
     let device = device(&watched, &scratch.0);
     let name = device.name().to_owned();
-    let (types, handles) = {
-        let memory = crate::device::lock(&device.shared().memory);
-        (memory.fd_buffer_types, memory.fd_handles)
-    };
-    eprintln!(
-        "EXPORTED-TEXTURES on {name}: the blocks of the runtime's own buffers: {types:?}, \
-         exportable as {:#x}",
-        handles.as_raw()
-    );
+    let types = crate::device::lock(&device.shared().memory).fd_buffer_types;
+    eprintln!("EXPORTED-TEXTURES on {name}: the blocks of the runtime's own buffers: {types:?}");
     let descriptor_of = |options| {
         BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
             .with_aligned_byte(LUMA_AT)
@@ -739,10 +734,7 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
         let (bound, counts) = (picture.bound_memory(), device.work_counts());
         match exportable {
             true => {
-                assert!(
-                    bound == BoundMemory::Blocks(handles),
-                    "{options:?}: {bound:?}"
-                );
+                assert!(bound == BoundMemory::Blocks, "{options:?}: {bound:?}");
                 assert!(
                     counts.fd_buffer_blocks_made > 0,
                     "{options:?}: such blocks made"
@@ -789,8 +781,8 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
                  {placement:?}"
             );
             // Where the buffers lie in such blocks, every plane is in place as over a plain
-            // block's buffer: the device's linear image, or the DRM_FORMAT_MOD_LINEAR one the
-            // check passed.
+            // block's buffer: a DRM_FORMAT_MOD_LINEAR image the check passed, of the device's
+            // linear image's layout or at Metal's pitch.
             if exportable {
                 assert_eq!(
                     placement,
@@ -814,8 +806,9 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
         }
     }
     watched.layer_reported_nothing(
-        "buffers and textures in blocks allocated exportable name one of their handle types \
-         (VUID-vkBindBufferMemory-memory-02726, VUID-vkBindImageMemory-memory-02728)",
+        "buffers and textures in blocks allocated exportable name their handle type, which the \
+         image format query takes for each image there (VUID-vkBindBufferMemory-memory-02726, \
+         VUID-vkBindImageMemory-memory-02728, VUID-VkExportMemoryAllocateInfo-handleTypes-09860)",
     );
 }
 
@@ -844,7 +837,6 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
         second.settle_in_place_checks(Duration::ZERO),
         "known from the record at once"
     );
-    let handles = crate::device::lock(&second.shared().memory).fd_handles;
     let options = ResourceOptions::private();
     let picture = (second.new_buffer_with_descriptor(
         BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
@@ -866,7 +858,7 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
         "no buffer waited for the check"
     );
     match take {
-        true => assert!(picture.bound_memory() == BoundMemory::Blocks(handles)),
+        true => assert!(picture.bound_memory() == BoundMemory::Blocks),
         false => assert!(picture.bound_memory() == BoundMemory::Own),
     }
     fill(&second, &picture);

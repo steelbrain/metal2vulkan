@@ -98,7 +98,7 @@ use super::buffer_descriptor::MemoryExport;
 
 impl MemoryExport {
     /// The handle type its buffers export their memory as.
-    pub(super) fn handle(self) -> vk::ExternalMemoryHandleTypeFlags {
+    fn handle(self) -> vk::ExternalMemoryHandleTypeFlags {
         match self {
             MemoryExport::OpaqueFd => EXPORT_HANDLE,
             MemoryExport::DmaBuf => DMA_BUF_HANDLE,
@@ -130,9 +130,6 @@ pub(super) struct FdExport {
     functions: ash::khr::external_memory_fd::Device,
     /// The device exports a buffer's memory as one only from the buffer's dedicated allocation.
     dedicated_only: bool,
-    /// The handle types memory exportable as it may be exportable as too
-    /// (`VkExternalMemoryProperties::compatibleHandleTypes`).
-    compatible: vk::ExternalMemoryHandleTypeFlags,
 }
 
 impl FdExport {
@@ -171,7 +168,6 @@ impl FdExport {
         exports.then_some(FdExport {
             functions,
             dedicated_only: features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY),
-            compatible: memory.compatible_handle_types,
         })
     }
 
@@ -179,13 +175,6 @@ impl FdExport {
     /// buffer's dedicated allocation.
     pub(super) fn pooled(&self) -> bool {
         !self.dedicated_only
-    }
-
-    /// The handle types such memory may be allocated exportable as beside this one
-    /// (`VUID-VkExportMemoryAllocateInfo-handleTypes-00656`: those of one allocation are
-    /// compatible).
-    pub(super) fn compatible(&self) -> vk::ExternalMemoryHandleTypeFlags {
-        self.compatible
     }
 }
 

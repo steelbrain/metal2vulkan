@@ -38,7 +38,7 @@ use super::host_ram::RamOnDevice;
 #[cfg(unix)]
 use super::host_residency::{Again, Residency};
 use super::memory::{
-    BoundMemory, Holds, Mapped, MemoryClass, Placement, BLOCK_BYTES, EXPORT_HANDLE,
+    BoundMemory, Holds, Mapped, MemoryClass, Placement, BLOCK_BYTES, FD_BLOCKS_HANDLE,
 };
 use super::program_objects::ProgramObject;
 use super::rebind::{ImportHold, Unexact};
@@ -2442,7 +2442,7 @@ impl Device {
             None => class,
         };
         // The kind of block it lies in: one of the runtime's own lies where the device's own
-        // buffers do, whose blocks may be exportable as an opaque file descriptor once the
+        // buffers do, whose blocks may be exportable as a dma-buf once the
         // device's check of them passed, so that its `VkBuffer` names that handle type there
         // (`VUID-vkBindBufferMemory-memory-02726`; `memory.rs`'s `Holds::FdBuffers`).
         let holds = match of {
@@ -2455,7 +2455,7 @@ impl Device {
             NewBufferOf::Check(holds) => holds,
         };
         let mut external =
-            vk::ExternalMemoryBufferCreateInfo::default().handle_types(EXPORT_HANDLE);
+            vk::ExternalMemoryBufferCreateInfo::default().handle_types(FD_BLOCKS_HANDLE);
         // Its device address is its block's (`place_buffer_with`).
         let mut info = shared.sharing().buffer(
             vk::BufferCreateInfo::default()
@@ -2956,7 +2956,7 @@ impl Device {
     }
 
     /// [`place_buffer`](Device::place_buffer) in a block that holds `holds`: `Holds::Buffers`, or
-    /// `Holds::FdBuffers` for a buffer made for `EXPORT_HANDLE` (`memory.rs`).
+    /// `Holds::FdBuffers` for a buffer made for `FD_BLOCKS_HANDLE` (`memory.rs`).
     fn place_buffer_in(
         &self,
         raw: vk::Buffer,

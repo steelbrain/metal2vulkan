@@ -2132,69 +2132,53 @@ impl Device {
                     (usage, handle),
                 )
             };
-            // The device's own buffers lie in blocks exportable as opaque file descriptors, never
-            // exported, where it exports such a descriptor of a pooled buffer's memory for the
-            // usage of those buffers and of a buffer of addresses, and its policy takes textures
-            // over memory of an export in place by its check; exportable as dma-bufs too where it
-            // exports one of such memory as well, each handle type compatible with the other
-            // (`memory.rs`'s "Buffers in exportable blocks").
+            // The device's own buffers lie in blocks exportable as dma-bufs, never exported,
+            // where it exports such a buffer of a pooled buffer's memory for the usage of those
+            // buffers and of a buffer of addresses, makes images of a DRM format modifier (every
+            // image bound there is a `DRM_FORMAT_MOD_LINEAR` one), and its policy takes textures
+            // over memory of an export in place by its check (`memory.rs`'s "Buffers in
+            // exportable blocks").
             let in_place = compile.policy().host_page_textures
                 == metal2vulkan::device::HostPageTexturePolicy::InPlace;
             let usages = [
                 Some(super::buffer::usage(false)),
                 device_address.then_some(usage),
             ];
-            // The handle types each usage's pooled memory exportable as `export` is compatible
-            // with, where the device exports it so for every usage.
-            let compatible = |export, functions: Option<ash::khr::external_memory_fd::Device>| {
-                (usages.into_iter().flatten())
-                    .map(|usage| {
-                        // SAFETY: as above.
-                        let export = unsafe {
-                            crate::exported_memory::FdExport::new(
-                                &instance.raw,
-                                physical,
-                                functions.clone(),
-                                (usage, export),
-                            )
-                        };
-                        let export = export?;
-                        export.pooled().then(|| export.compatible())
-                    })
-                    .collect::<Option<Vec<_>>>()
+            // Whether the device exports each usage's pooled memory as a dma-buf.
+            let pooled = |functions: &ash::khr::external_memory_fd::Device| {
+                (usages.into_iter().flatten()).all(|usage| {
+                    // SAFETY: as above.
+                    let export = unsafe {
+                        crate::exported_memory::FdExport::new(
+                            &instance.raw,
+                            physical,
+                            Some(functions.clone()),
+                            (usage, crate::buffer_descriptor::MemoryExport::DmaBuf),
+                        )
+                    };
+                    export.is_some_and(|export| export.pooled())
+                })
             };
             let exports = match &functions {
                 None => Err("the device enables no VK_KHR_external_memory_fd"),
                 Some(_) if !in_place => {
                     Err("the device's policy shadows every texture over memory of an export")
                 }
-                Some(_) => match compatible(handle, functions.clone()) {
-                    None => Err("the device exports an opaque file descriptor of no pooled \
-                                 buffer's memory of the runtime's usages"),
-                    Some(fd) => {
-                        let dma_buf_handle = crate::buffer_descriptor::MemoryExport::DmaBuf;
-                        let dma = compatible(dma_buf_handle, functions.clone().filter(|_| dma_buf));
-                        let both = dma.is_some_and(|dma| {
-                            let (fd_handle, dma_handle) =
-                                (handle.handle(), dma_buf_handle.handle());
-                            (fd.iter()).all(|types| types.contains(dma_handle))
-                                && (dma.iter()).all(|types| types.contains(fd_handle))
-                        });
-                        Ok(match both {
-                            true => handle.handle() | dma_buf_handle.handle(),
-                            false => handle.handle(),
-                        })
-                    }
-                },
-            };
-            memory.fd_buffer_blocks(
-                crate::memory::fd_buffer_types(
-                    &memory_properties,
-                    properties.has_unified_memory,
-                    exports.map(|_| ()),
+                Some(_) if !dma_buf || !dma_buf_images => Err(
+                    "the device enables no dma-buf export, or no image of a DRM format modifier, \
+                     which every image in such a block is",
                 ),
-                exports.unwrap_or(crate::memory::EXPORT_HANDLE),
-            );
+                Some(functions) if !pooled(functions) => Err(
+                    "the device exports a dma-buf of no pooled buffer's memory of the runtime's \
+                     usages",
+                ),
+                Some(_) => Ok(()),
+            };
+            memory.fd_buffer_blocks(crate::memory::fd_buffer_types(
+                &memory_properties,
+                properties.has_unified_memory,
+                exports,
+            ));
             // As a dma-buf where it enables the route's extensions, which name
             // `VK_KHR_external_memory_fd`, and the foreign family its acquire names.
             let dma_buf_functions = functions.filter(|_| dma_buf && foreign_family);

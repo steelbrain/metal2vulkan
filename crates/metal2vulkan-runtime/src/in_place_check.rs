@@ -1417,7 +1417,7 @@ impl ClassPages {
                 let buffer = (device.pooled_check_buffer(length, Holds::FdBuffers))
                     .map_err(|error| Unmade::of_error("its buffer was refused", &error))?;
                 match buffer.bound_memory() {
-                    BoundMemory::Blocks(_) => {}
+                    BoundMemory::Blocks => {}
                     _ => {
                         let why = "its buffer lies in no block allocated exportable";
                         return Err(Unmade::passing(why));
@@ -1460,7 +1460,7 @@ fn exported_pages(
         BoundMemory::External(_) => {}
         BoundMemory::NoImage(NoImage::Dedicated) if export == MemoryExport::DmaBuf => {}
         BoundMemory::NoImage(no) => return Err(Unmade::lasting(no.words())),
-        BoundMemory::Own | BoundMemory::Blocks(_) => {
+        BoundMemory::Own | BoundMemory::Blocks => {
             return Err(Unmade::passing("its buffer's memory is not exported"))
         }
     }

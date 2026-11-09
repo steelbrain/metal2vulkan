@@ -115,11 +115,11 @@
 //!   linear image is tried first, then the `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch, whose
 //!   own alignment decides.
 //! - **The runtime's buffers' exportable blocks.** Where the device allocates the blocks its
-//!   buffers lie in exportable and never exports them (`memory.rs`'s "Buffers in exportable
-//!   blocks"), a texture over such a buffer takes the device's linear image made for a handle
-//!   type of the block the device's image format query takes for it, else the
-//!   `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch made for one it takes for that, each so
-//!   starting `UNDEFINED`, under the check of such blocks ([`PagesClass::FdBlocks`]). Its
+//!   buffers lie in exportable as dma-bufs and never exports them (`memory.rs`'s "Buffers in
+//!   exportable blocks"), such a block holds no image of linear tiling, and a texture over such a
+//!   buffer takes a `DRM_FORMAT_MOD_LINEAR` image made for that handle type, so starting
+//!   `UNDEFINED`: of the device's linear image's layout where that lies on Metal's, else at
+//!   Metal's pitch, under the check of such blocks ([`PagesClass::FdBlocks`]). Its
 //!   verdicts decide, before any buffer lies there, whether the device's buffers do
 //!   ([`fd_blocks_take`]): where every texture over such a buffer takes in place what it takes
 //!   over a plain block's, whose linear image starts `PREINITIALIZED` and needs no verdict.
@@ -196,11 +196,11 @@ pub(crate) enum PagesClass {
     ExportedDmaBuf,
     /// A buffer of the runtime's own in a block of the kind its buffers take where the device
     /// allocates their blocks exportable and never exports them (`memory.rs`'s
-    /// `Holds::FdBuffers`, "Buffers in exportable blocks"): the device's linear image made for
-    /// one of the block's handle types its image format query takes for it, else a
-    /// `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch made for one it takes for that, bound in the
-    /// buffer's memory (`texture.rs`'s `alias_image`). Either names that handle type
-    /// (`VUID-vkBindImageMemory-memory-02728`), so it is made `UNDEFINED`
+    /// `Holds::FdBuffers`, "Buffers in exportable blocks"): a `DRM_FORMAT_MOD_LINEAR` image made
+    /// for the block's handle type, a dma-buf, of the device's linear image's layout where that
+    /// lies on Metal's, else at Metal's pitch, bound in the buffer's memory (`texture.rs`'s
+    /// `alias_image`). Either names that handle type (`VUID-vkBindImageMemory-memory-02728`), so
+    /// it is made `UNDEFINED`
     /// (`VUID-VkImageCreateInfo-pNext-01443`), and its first move leaves that layout. Its verdicts
     /// decide whether the device's buffers lie in such blocks at all
     /// ([`Device::fd_blocks_checked`]).
@@ -993,8 +993,9 @@ pub(crate) enum FdBlocksTake {
 /// in place what it takes over a buffer of a plain block, whose blocks hold the same memory
 /// exported as no handle type. Over a plain block's buffer, the device's own linear image is
 /// made `PREINITIALIZED`, whose first move keeps its bytes, and needs no verdict; over an
-/// exportable block's, it names a handle type and so is made `UNDEFINED`
-/// (`VUID-VkImageCreateInfo-pNext-01443`), its other operations the same: so the class's verdict
+/// exportable block's, a `DRM_FORMAT_MOD_LINEAR` image of its layout takes its place, which names
+/// the block's handle type and so is made `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), its
+/// other operations a linear image's as well: so the class's verdict
 /// of that move ([`Access::Reads`]) must pass for texels of both row ends. A
 /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch is made `UNDEFINED` in both, and takes each
 /// access its usage takes where its class passed: so every verdict of plain pooled memory
@@ -1038,7 +1039,7 @@ pub(crate) fn fd_blocks_take(
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 14;
+pub(crate) const CHECK_VERSION: u32 = 15;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";

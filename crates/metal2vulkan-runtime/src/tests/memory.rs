@@ -238,8 +238,8 @@ fn unified_private_memory_takes_the_system_heap_first() {
     assert_eq!(candidates(&anv, 0b11, private, true), [0, 1]);
 }
 
-/// The memory types whose blocks of the runtime's own buffers are allocated exportable as an
-/// opaque file descriptor (`memory.rs`'s "Buffers in exportable blocks"): with unified memory,
+/// The memory types whose blocks of the runtime's own buffers are allocated exportable as a
+/// dma-buf (`memory.rs`'s "Buffers in exportable blocks"): with unified memory,
 /// those of a heap that is not device-local, where the device exports such memory from a pooled
 /// block; else none, and why.
 #[test]
@@ -288,9 +288,10 @@ fn own_buffer_blocks_are_exportable_in_a_unified_device_s_system_heap() {
 }
 
 /// The device's verdicts decide whether the runtime's buffers lie in blocks allocated exportable
-/// (`in_place.rs`'s `fd_blocks_take`): the first move of the class's linear image must pass for
-/// both row ends, and the class must pass wherever plain pooled memory passed; a pending verdict
-/// that decides it leaves them in plain blocks meanwhile.
+/// (`in_place.rs`'s `fd_blocks_take`): the first move of the image that takes the place of the
+/// device's linear image there must pass for both row ends, and the class must pass wherever
+/// plain pooled memory passed; a pending verdict that decides it leaves them in plain blocks
+/// meanwhile.
 #[test]
 fn exportable_blocks_take_what_plain_blocks_take() {
     use crate::in_place::{fd_blocks_take, Access, FdBlocksTake, PagesClass, RowEnds, Verdict};
