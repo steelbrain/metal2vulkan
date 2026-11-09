@@ -31,6 +31,12 @@
 //!   at successive first indices and base vertices over segments of `6j..6j + 6` drawn at base
 //!   vertex `-6j`, so every vertex is a corner of `zwd_quad`'s. The runtime keeps the first draw
 //!   and rebinds each later one with its arguments (`WorkCounts::draws_rebound_arguments`).
+//! - **`joined`**: `passes`, while a second no-copy buffer over the chunk's very bytes lives, as a
+//!   guest's two textures over one surface's pages do: the second joins the chunk's memory, so
+//!   every command's uses of the chunk's bytes carry the memory's key (the runtime's
+//!   `host_aliases.rs`), looked up under the device's lock unless the encoder found them already
+//!   (`WorkCounts::host_alias_lookups`). The second buffer goes after the shape's frames, and the
+//!   chunk's uses take nothing again.
 //! - **`bare sets`** and **`bare pushed`**: the same frame in plain Vulkan on the runtime's own
 //!   device, through the driver's commands (loaded with `vkGetDeviceProcAddr`, not the runtime's
 //!   counted ones): per pass a `vkCmdBeginRenderPass` (one render pass object clearing, one
@@ -116,6 +122,7 @@ enum Shape {
     OnePass,
     Barriers,
     Glass,
+    Joined,
 }
 
 impl Shape {
@@ -125,6 +132,7 @@ impl Shape {
             Shape::OnePass => "one pass",
             Shape::Barriers => "barriers",
             Shape::Glass => "glass",
+            Shape::Joined => "joined",
         }
     }
 }
@@ -152,7 +160,7 @@ struct Composite {
     indices: Buffer,
     /// The no-copy buffer over the chunk, and the chunk's pages, which outlive it (declared after).
     chunk: Buffer,
-    _pages: Mapping,
+    pages: Mapping,
 }
 
 /// A function of `library`, its constant 0 (`zwd_variant`) 0.
@@ -244,7 +252,7 @@ impl Composite {
             target,
             indices,
             chunk,
-            _pages: pages,
+            pages,
             device,
         }
     }
@@ -342,7 +350,7 @@ impl Composite {
     fn frame(&self, shape: Shape, counted: bool) -> Frame {
         let mut frame = Frame::default();
         let (encoders, passes) = match shape {
-            Shape::Passes => (PASSES, 1),
+            Shape::Passes | Shape::Joined => (PASSES, 1),
             Shape::OnePass | Shape::Barriers => (1, PASSES),
             Shape::Glass => (GLASS_PASSES, 1),
         };
@@ -527,8 +535,28 @@ fn summarize(frames: &[Frame], counted: Option<&[Frame]>) -> Measured {
 }
 
 impl Composite {
+    /// A second no-copy buffer over the chunk's bytes, which joins the chunk's memory while it
+    /// lives, for `joined` (the module docs); none for any other shape.
+    fn joined(&self, shape: Shape) -> Option<Buffer> {
+        (shape == Shape::Joined).then(|| {
+            // SAFETY: the pages are this process's, mapped read and write, and outlive the buffer:
+            // it goes as the shape's frames end, before the composite and its pages.
+            unsafe {
+                no_copy(
+                    &self.device,
+                    self.pages.pointer(),
+                    CHUNK,
+                    ResourceOptions::shared(),
+                    None,
+                )
+            }
+            .unwrap()
+        })
+    }
+
     /// One shape's timed and counted frames, warmed first.
     fn measure(&self, shape: Shape) -> Measured {
+        let _joined = self.joined(shape);
         for _ in 0..WARM {
             self.frame(shape, false);
         }
@@ -543,6 +571,7 @@ impl Composite {
 
     /// The work counts one frame of `shape` moves, once warm.
     fn counts(&self, shape: Shape) -> BTreeMap<String, u64> {
+        let _joined = self.joined(shape);
         self.frame(shape, false);
         let before = self.device.work_counts();
         self.frame(shape, false);
@@ -566,6 +595,8 @@ fn measure() {
         barriers.print(&name, Shape::Barriers.label());
         let glass = composite.measure(Shape::Glass);
         glass.print(&name, Shape::Glass.label());
+        let joined = composite.measure(Shape::Joined);
+        joined.print(&name, Shape::Joined.label());
         println!(
             "COMPOSITE-PASS {name}: (passes - one pass) / {}: {:.2} us of CPU, {:.2} us wall a \
              pass",
@@ -586,7 +617,13 @@ fn measure() {
             }
         }
     }
-    for shape in [Shape::Passes, Shape::OnePass, Shape::Barriers, Shape::Glass] {
+    for shape in [
+        Shape::Passes,
+        Shape::OnePass,
+        Shape::Barriers,
+        Shape::Glass,
+        Shape::Joined,
+    ] {
         let counts = composite.counts(shape);
         let text: Vec<String> = counts
             .iter()
