@@ -4334,8 +4334,10 @@ impl Buffer {
         let from = last.device.shared();
         let placement = &fixed.pages.memory.placement;
         let bound = lock(&from.memory).bound_memory(placement);
-        if bound != BoundMemory::Own && !placement.over_own_pages() {
-            // Exportable memory, which another API imports (`exported_memory.rs`).
+        let runtime_s = matches!(bound, BoundMemory::Own | BoundMemory::Blocks);
+        if !runtime_s && !placement.over_own_pages() {
+            // Exportable memory, which another API imports (`exported_memory.rs`). A block of the
+            // runtime's own buffers allocated exportable is never exported (`Holds::FdBuffers`).
             return Err(Left::Caller);
         }
         let modes = Modes::of(last.options).map_err(|_| Left::Failed)?;
@@ -4347,7 +4349,9 @@ impl Buffer {
             held: own.reserved,
         };
         let (raw, placement, contents) = if modes.storage == StorageMode::Private {
-            // New memory, as a new buffer's: its contents went with the lost `VkDevice`.
+            // New memory, as a new buffer's: its contents went with the lost `VkDevice`. In a
+            // plain block (`Device::place_buffer`), where any of the device's buffers may lie, as
+            // they do until its check of exportable blocks answered (`Holds::FdBuffers`).
             let shared = to.shared();
             let info = shared.sharing().buffer(
                 vk::BufferCreateInfo::default()
