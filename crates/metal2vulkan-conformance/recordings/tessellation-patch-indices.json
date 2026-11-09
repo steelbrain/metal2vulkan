@@ -533,11 +533,11 @@
         "linked_use_questions_asked": 9,
         "live_tables_uploaded": 1,
         "new_buffer_bytes_cleared": 197120,
-        "object_churn.buffers_evicted": 2,
+        "object_churn.buffers_evicted": 4,
         "object_churn.buffers_parked": 10,
         "object_churn.buffers_recycled": 6,
         "object_churn.vk_buffer_bindings": 4,
-        "object_churn.vk_buffers_destroyed": 2,
+        "object_churn.vk_buffers_destroyed": 4,
         "object_churn.vk_buffers_made": 4,
         "passes_not_inline_layouts": 3,
         "pipeline_layouts_made": 2,
@@ -569,7 +569,7 @@
         "variant_pipelines_made": 3,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 10
+        "wakes_spared": 8
       },
       "moving": {
         "gate_waits_slept": 0

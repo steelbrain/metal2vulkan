@@ -802,7 +802,6 @@
         "render_passes_made": 10,
         "resident_textures_looked_at": 4,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,

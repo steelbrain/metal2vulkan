@@ -397,7 +397,6 @@
         "draws_unkept": 1,
         "draws_unkept_writing": 1,
         "driver_diagnostics_withheld": 1,
-        "empty_memory_blocks_live": 1,
         "encoder_command_buffers_begun": 2,
         "fence_waits": 1,
         "finales_folded": 1,

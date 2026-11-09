@@ -361,8 +361,7 @@
         "completed_where_seen": 2,
         "completion_arms": 7,
         "completion_arms_after_a_wake": 4,
-        "completion_waiter_parks": 5,
-        "completion_waiter_parks_timed_out": 1,
+        "completion_waiter_parks": 4,
         "device_memory_allocated": 738197504,
         "empty_memory_blocks_live": 1,
         "encoder_command_buffers_begun": 4,
@@ -401,7 +400,7 @@
         "trail_waits": 2,
         "wakes_completion_waiters": 4,
         "wakes_handler_threads": 4,
-        "wakes_spared": 34
+        "wakes_spared": 35
       },
       "composed": {
         "addressable_buffers_made": 3,

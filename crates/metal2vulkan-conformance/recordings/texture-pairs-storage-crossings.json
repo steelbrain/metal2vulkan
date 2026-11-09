@@ -6827,7 +6827,6 @@
         "object_churn.images_evicted": 32,
         "object_churn.images_own_memory": 44,
         "object_churn.images_parked": 32,
-        "object_churn.images_recycled": 3,
         "object_churn.making_sites_dropped": 8,
         "object_churn.textures_image": 44,
         "object_churn.textures_texels": 4,
@@ -6837,6 +6836,7 @@
         "object_churn.vk_images_destroyed": 71,
         "object_churn.vk_images_made": 71,
         "object_churn.vk_memory_allocations": 1,
+        "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 5,
         "requirement_images_made": 15,
         "requirement_limits_asked": 15
@@ -6847,6 +6847,7 @@
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 0,
         "image_blocks_made_in_place": 2,
+        "plain_buffer_blocks_made": 2,
         "requirement_images_made": 15,
         "requirement_limits_asked": 15
       },
