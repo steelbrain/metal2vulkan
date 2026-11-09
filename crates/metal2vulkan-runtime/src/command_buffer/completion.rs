@@ -1456,6 +1456,25 @@ pub(crate) mod trace {
         });
     }
 
+    /// How long the scheduler pauses once a command buffer's `vkQueueSubmit` returned
+    /// ([`submit_returned`]); none unless a test asks ([`pause_after_submit`]).
+    static AFTER_SUBMIT: Mutex<Option<std::time::Duration>> = Mutex::new(None);
+
+    /// Pause the scheduler for `pause` each time a command buffer's `vkQueueSubmit` returned,
+    /// from now on (`None`: no more): a scheduler thread preempted there, while the GPU runs the
+    /// work.
+    pub(crate) fn pause_after_submit(pause: Option<std::time::Duration>) {
+        *AFTER_SUBMIT.lock().unwrap() = pause;
+    }
+
+    /// A command buffer's `vkQueueSubmit` returned (`submit.rs`): the pause a test asked for.
+    pub(crate) fn submit_returned() {
+        let pause = *AFTER_SUBMIT.lock().unwrap();
+        if let Some(pause) = pause {
+            std::thread::sleep(pause);
+        }
+    }
+
     /// Keep the commit's step `what` on its way to its submission, now.
     pub(crate) fn submitting(what: &'static str) {
         record(|| Traced::Submitting {

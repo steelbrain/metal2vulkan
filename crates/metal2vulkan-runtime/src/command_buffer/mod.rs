@@ -3931,10 +3931,12 @@ impl CommandBuffer {
         gpu_time::seconds(self.0.kernel.shown_start())
     }
 
-    /// `kernelEndTime`: the host time at which the device's scheduler finished submitting the
-    /// command buffer's work to Vulkan, or held its last batch for one kernel submission with
-    /// later ones (`CompletionPolicy::Grouped`); it is then `Scheduled`; 0 before. Like Metal's,
-    /// the read waits for no submission in progress and no GPU work.
+    /// `kernelEndTime`: the host time at which the device's scheduler called Vulkan's submission
+    /// of the command buffer's last batch (the call's start: a driver may run the work before the
+    /// call returns, and the GPU end is never earlier, as Metal's is not), or held that batch for
+    /// one kernel submission with later ones (`CompletionPolicy::Grouped`); it is then
+    /// `Scheduled`; 0 before. Like Metal's, the read waits for no submission in progress and no
+    /// GPU work.
     pub fn kernel_end_time(&self) -> f64 {
         gpu_time::seconds(self.0.kernel.end())
     }

@@ -1076,6 +1076,8 @@ impl CommandBufferShared {
         if let Some(audit) = raw.pending_audit() {
             audit.submitted(raw, carried, &[work.as_slice(), finale.as_slice()]);
         }
+        // The host time its submission was called, where it went now (`Group::submit`).
+        let mut called = None;
         if grouped {
             scheduler.group.open(queue, &scheduler.waited[queue]);
         } else {
@@ -1107,6 +1109,9 @@ impl CommandBufferShared {
                 scheduler
                     .group
                     .submit(device, &mut scheduler.waited[queue], Some(after));
+            // A test's stand-in for a scheduler thread preempted once the call returned.
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            super::completion::trace::submit_returned();
             if let Err(error) = submitted {
                 if let Some(audit) = raw.pending_audit() {
                     audit.withdrawn(carried, &[work.as_slice(), finale.as_slice()]);
@@ -1128,19 +1133,21 @@ impl CommandBufferShared {
                 }
                 return Err(error);
             }
+            called = submitted.ok();
         }
         // It makes its command buffer `Scheduled` where it ends it, unless a hang's thread makes
         // it (`hang.rs`): the command buffer's own hang's, once this batch, the one before the
         // hang's wait, is taken (the thread waits for it on `changed`), or, for one committed
-        // during a hang, early, where it did not wait past the hang. A held batch's kernel end is
-        // its group's (`Group::submit`).
+        // during a hang, early, where it did not wait past the hang. Its kernel end is the host
+        // time its submission was called, which no GPU end of its work can precede
+        // (`Group::submit`); a held batch's is its group's.
         let (schedules, took) = hang::schedules(&mut state.hang_scheduling, index, last);
         if took {
             let parked = state.parked > 0;
             self.wake_parked(parked);
         }
-        if schedules && !grouped {
-            self.kernel.end_at(gpu_time::host_nanos());
+        if let (true, Some(at)) = (schedules, called) {
+            self.kernel.end_at(at);
         }
         if !single {
             match folded {

@@ -272,6 +272,8 @@ mod kept_images;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kept_shadowed_draws;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod kernel_end_device;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod layer_claim;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod learned_coverage;

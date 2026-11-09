@@ -106,7 +106,13 @@
 //!   times are refused (`Unsupported`, `Feature::GpuTimes`). So are a command buffer's that found
 //!   no slot free.
 //! - **Kernel times** are the host times at which the scheduler began submitting the command
-//!   buffer's first batch and finished submitting its last. They are kept apart from the command
+//!   buffer's first batch and called the driver's submission of its last (`vkQueueSubmit`; or held
+//!   it for one submission with later ones). The end is the call's start, never its return: a
+//!   driver may run the work, and its timestamps place its end, before the call returns (an RTX
+//!   3090's returned 57 to 64 ms after its work ran, `tests/completion.rs`), and so may lavapipe's
+//!   while a loaded host keeps the scheduler's thread from running once the call returned (one
+//!   `GPUEndTime` before its `kernelEndTime` in a replay beside the test suites); Metal's
+//!   `GPUEndTime` is never earlier than its `kernelEndTime`. They are kept apart from the command
 //!   buffer's state ([`KernelTimes`]), which the scheduler holds while it records the batch's
 //!   own command buffers and submits it: a read waits for no submission in
 //!   progress and for no GPU work, as Metal's reads wait for none. The start shows only once the
@@ -949,7 +955,7 @@ unsafe fn calibration(
 pub(crate) struct KernelTimes {
     /// The scheduler began submitting its first batch.
     start: AtomicU64,
-    /// The scheduler finished submitting its last batch.
+    /// The scheduler called the driver's submission of its last batch.
     end: AtomicU64,
 }
 
@@ -959,7 +965,8 @@ impl KernelTimes {
         self.start.store(host_nanos(), Ordering::Release);
     }
 
-    /// The scheduler finished submitting the last batch at host time `at`.
+    /// The scheduler called the driver's submission of the last batch at host time `at`, or
+    /// held it for a later one (the module docs).
     pub(crate) fn end_at(&self, at: u64) {
         self.end.store(at, Ordering::Release);
     }
@@ -983,7 +990,7 @@ impl KernelTimes {
         }
     }
 
-    /// When the scheduler finished submitting the last batch; 0 before.
+    /// When the scheduler called the driver's submission of the last batch; 0 before.
     pub(crate) fn end(&self) -> u64 {
         self.end.load(Ordering::Acquire)
     }

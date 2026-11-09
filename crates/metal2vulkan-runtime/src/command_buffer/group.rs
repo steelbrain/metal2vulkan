@@ -433,16 +433,22 @@ impl Group {
     /// `VkQueue` of `device`, only the last signalling (the module docs); `waited` is the
     /// scheduler's list of what that queue waited for. Inside a section of the exit guard. The
     /// held batches' outcome is kept for the scheduler ([`take_outcome`](Group::take_outcome));
-    /// the call's own result is `after`'s, as the `vkQueueSubmit` returned it.
+    /// the call's own result is `after`'s, as the `vkQueueSubmit` returned it: on success, the
+    /// host time at which the scheduler called it, the kernel end of a command buffer whose last
+    /// batch it carried (now where it submitted nothing). Taken as the call is made, never once
+    /// it returned: the GPU may run the work, and its timestamps place its end, before the call
+    /// returns (a driver that runs it as it is submitted, lavapipe's or NVIDIA's) or before a
+    /// scheduler thread preempted after the call takes the time, and Metal's `GPUEndTime` is never
+    /// earlier than its `kernelEndTime`.
     pub(crate) fn submit(
         &mut self,
         device: &Device,
         waited: &mut [u64],
         after: Option<After<'_>>,
-    ) -> Result<(), vk::Result> {
+    ) -> Result<u64, vk::Result> {
         if self.members.is_empty() {
             return match after {
-                None => Ok(()),
+                None => Ok(gpu_time::host_nanos()),
                 Some(after) => submit_alone(device, after),
             };
         }
@@ -514,9 +520,11 @@ impl Group {
         // SAFETY: as each batch's own submission (`submit.rs`): every command buffer is
         // executable and submitted once; every wait is for a signal submitted before; the one
         // timeline signal is above the queue's value; the `VkQueue` is used under its lock.
+        let mut called = 0;
         let submitted =
             shared.submit_logged((queue, Some(value)), fence, &relayed, |vk_queue| unsafe {
                 shared.counts.queue_submitted(submits.len(), buffers);
+                called = gpu_time::host_nanos();
                 raw.queue_submit(vk_queue, submits, fence.unwrap_or(vk::Fence::null()))
             });
         exit_guard::called(Call::QueueSubmit);
@@ -524,11 +532,10 @@ impl Group {
         let several = count + usize::from(!alone) > 1;
         let outcome = match submitted {
             Ok(()) => {
-                let now = gpu_time::host_nanos();
                 for member in self.members.drain(..) {
                     self.spare.push(member.infos);
                     if member.submission.schedules() && !member.submission.scheduled() {
-                        member.submission.buffer().kernel.end_at(now);
+                        member.submission.buffer().kernel.end_at(called);
                     }
                     self.made.push(member.submission);
                 }
@@ -574,12 +581,13 @@ impl Group {
             });
         }
         self.outcome = Some(outcome);
-        submitted
+        submitted.map(|()| called)
     }
 }
 
 /// Submit `after` alone on its `VkQueue` of `device`: the group's submission with no batch held.
-fn submit_alone(device: &Device, after: After<'_>) -> Result<(), vk::Result> {
+/// On success, the host time at which its `vkQueueSubmit` was called ([`Group::submit`]).
+fn submit_alone(device: &Device, after: After<'_>) -> Result<u64, vk::Result> {
     let shared = device.shared();
     let raw = shared.vk();
     let After {
@@ -590,13 +598,15 @@ fn submit_alone(device: &Device, after: After<'_>) -> Result<(), vk::Result> {
         fence,
         relayed,
     } = after;
+    let mut called = 0;
     // SAFETY: the batch's submission's own (`submit.rs`).
     let submitted = shared.submit_logged((queue, Some(value)), fence, relayed, |vk_queue| unsafe {
         shared.counts.queue_submitted(infos.len(), buffers);
+        called = gpu_time::host_nanos();
         raw.queue_submit(vk_queue, infos, fence.unwrap_or(vk::Fence::null()))
     });
     exit_guard::called(Call::QueueSubmit);
-    submitted
+    submitted.map(|()| called)
 }
 
 /// Signal the end a failed group held (its events' semaphores to their indices, then `VkQueue`
