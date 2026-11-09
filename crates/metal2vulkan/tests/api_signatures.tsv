@@ -2713,6 +2713,15 @@ field	metal2vulkan-runtime::WorkCounts.draws_unkept_tables_writing	pub draws_unk
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_writing	pub draws_unkept_writing: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept_writing_resident	pub draws_unkept_writing_resident: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept	pub draws_unlike_kept: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_arguments_alone	pub draws_unlike_kept_arguments_alone: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_call	pub draws_unlike_kept_call: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_command_buffer	pub draws_unlike_kept_command_buffer: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_counts	pub draws_unlike_kept_counts: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_index_buffer	pub draws_unlike_kept_index_buffer: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_index_offset	pub draws_unlike_kept_index_offset: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_pipeline	pub draws_unlike_kept_pipeline: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_tessellation	pub draws_unlike_kept_tessellation: u64
+field	metal2vulkan-runtime::WorkCounts.draws_unlike_kept_under	pub draws_unlike_kept_under: u64
 field	metal2vulkan-runtime::WorkCounts.driver_diagnostics_withheld	pub driver_diagnostics_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.empty_memory_blocks_live	pub empty_memory_blocks_live: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_command_buffers_begun	pub encoder_command_buffers_begun: u64

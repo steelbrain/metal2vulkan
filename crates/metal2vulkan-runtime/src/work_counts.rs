@@ -624,6 +624,15 @@ struct CommandCounters {
     draws_unkept_making: AtomicU64,
     draws_unkept_other: AtomicU64,
     draws_unlike_kept: AtomicU64,
+    draws_unlike_kept_pipeline: AtomicU64,
+    draws_unlike_kept_call: AtomicU64,
+    draws_unlike_kept_counts: AtomicU64,
+    draws_unlike_kept_index_buffer: AtomicU64,
+    draws_unlike_kept_index_offset: AtomicU64,
+    draws_unlike_kept_tessellation: AtomicU64,
+    draws_unlike_kept_command_buffer: AtomicU64,
+    draws_unlike_kept_under: AtomicU64,
+    draws_unlike_kept_arguments_alone: AtomicU64,
     draws_rebind_stopped: AtomicU64,
     draws_restated: AtomicU64,
 }
@@ -654,6 +663,30 @@ pub(crate) struct UnkeptDraw {
     pub(crate) tables_heap: bool,
     /// Its `VkPipeline` still being made.
     pub(crate) making: bool,
+}
+
+/// How a direct draw differed from the draw its encoder kept (`WorkCounts::draws_unlike_kept`):
+/// each a part of what a draw again compares (`render/draw_again.rs`), any number of them at
+/// once.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct UnlikeKept {
+    /// Another pipeline state, or none.
+    pub(crate) pipeline: bool,
+    /// Another call or primitive assembly.
+    pub(crate) call: bool,
+    /// Other vertex or index counts or starts, instance count, base vertex or base instance.
+    pub(crate) counts: bool,
+    /// Another index buffer or index type, or an index buffer read through a copy.
+    pub(crate) index_buffer: bool,
+    /// The same index buffer at another offset.
+    pub(crate) index_offset: bool,
+    /// Patch or control-point index buffers (a tessellation draw).
+    pub(crate) tessellation: bool,
+    /// Another command buffer, the `VkCommandBuffer` its instance records into.
+    pub(crate) command_buffer: bool,
+    /// A no-copy buffer moved, or the residency, the host aliases, parts or held images, or the
+    /// sampler IDs changed (`Under`).
+    pub(crate) under: bool,
 }
 
 /// The command counts by who adds them ([`CommandCounters`]): open encoders' tallies, and
@@ -1066,10 +1099,35 @@ impl Counting<'_> {
         }
     }
 
-    /// A render encoder's direct draw after its encoder kept a draw, of another call, arguments,
-    /// pipeline state, command buffer or `Under` (`WorkCounts::draws_unlike_kept`).
-    pub(crate) fn draw_unlike_kept(&self) {
-        self.0.add(|counts| &counts.draws_unlike_kept, 1);
+    /// A render encoder's direct draw after its encoder kept a draw, unlike it as `why` says
+    /// (`WorkCounts::draws_unlike_kept`).
+    pub(crate) fn draw_unlike_kept(&self, why: UnlikeKept) {
+        let counts = self.0;
+        counts.add(|counts| &counts.draws_unlike_kept, 1);
+        let arguments = why.counts || why.index_offset;
+        let alone = arguments
+            && !(why.pipeline
+                || why.call
+                || why.index_buffer
+                || why.tessellation
+                || why.command_buffer
+                || why.under);
+        let parts: [(bool, fn(&CommandCounters) -> &AtomicU64); 9] = [
+            (why.pipeline, |c| &c.draws_unlike_kept_pipeline),
+            (why.call, |c| &c.draws_unlike_kept_call),
+            (why.counts, |c| &c.draws_unlike_kept_counts),
+            (why.index_buffer, |c| &c.draws_unlike_kept_index_buffer),
+            (why.index_offset, |c| &c.draws_unlike_kept_index_offset),
+            (why.tessellation, |c| &c.draws_unlike_kept_tessellation),
+            (why.command_buffer, |c| &c.draws_unlike_kept_command_buffer),
+            (why.under, |c| &c.draws_unlike_kept_under),
+            (alone, |c| &c.draws_unlike_kept_arguments_alone),
+        ];
+        for (met, count) in parts {
+            if met {
+                counts.add(count, 1);
+            }
+        }
     }
 
     /// A render encoder's direct draw of its kept draw again after calls, that took every step
@@ -6083,6 +6141,30 @@ pub struct WorkCounts {
     /// the residency, host aliases, parts or held images or the sampler IDs changed
     /// (`render/draw_again.rs`): each takes every step.
     pub draws_unlike_kept: u64,
+    /// Of `draws_unlike_kept`, those through another pipeline state than the kept draw's (or
+    /// none); a draw is counted in each of the parts below it met.
+    pub draws_unlike_kept_pipeline: u64,
+    /// Of `draws_unlike_kept`, those of another call or primitive assembly.
+    pub draws_unlike_kept_call: u64,
+    /// Of `draws_unlike_kept`, those of other vertex or index counts or starts, instance count,
+    /// base vertex or base instance.
+    pub draws_unlike_kept_counts: u64,
+    /// Of `draws_unlike_kept`, those of another index buffer or index type, or whose index buffer
+    /// is read through a copy.
+    pub draws_unlike_kept_index_buffer: u64,
+    /// Of `draws_unlike_kept`, those of the same index buffer at another offset.
+    pub draws_unlike_kept_index_offset: u64,
+    /// Of `draws_unlike_kept`, tessellation draws: of patch or control-point index buffers.
+    pub draws_unlike_kept_tessellation: u64,
+    /// Of `draws_unlike_kept`, those recorded into another `VkCommandBuffer` than the kept draw.
+    pub draws_unlike_kept_command_buffer: u64,
+    /// Of `draws_unlike_kept`, those after a no-copy buffer moved, or the residency, the host
+    /// aliases, parts or held images, or the sampler IDs changed.
+    pub draws_unlike_kept_under: u64,
+    /// Of `draws_unlike_kept`, those unlike only by their counts and starts or their index
+    /// buffer's offset: the same pipeline state, call, assembly, index buffer and type, command
+    /// buffer and the rest the kept draw read.
+    pub draws_unlike_kept_arguments_alone: u64,
     /// Render encoders' direct draws of their kept draw again after calls, that took every step
     /// rather than being rebound (`draws_rebound`): a kept draw that keeps nothing to rebind, or a
     /// rebind that stopped (`render/draw_again/rebound.rs`'s stops). Builds with debug
@@ -7993,6 +8075,25 @@ impl Device {
             draws_unkept_making: commands(|counts| &counts.draws_unkept_making),
             draws_unkept_other: commands(|counts| &counts.draws_unkept_other),
             draws_unlike_kept: commands(|counts| &counts.draws_unlike_kept),
+            draws_unlike_kept_pipeline: commands(|counts| &counts.draws_unlike_kept_pipeline),
+            draws_unlike_kept_call: commands(|counts| &counts.draws_unlike_kept_call),
+            draws_unlike_kept_counts: commands(|counts| &counts.draws_unlike_kept_counts),
+            draws_unlike_kept_index_buffer: commands(|counts| {
+                &counts.draws_unlike_kept_index_buffer
+            }),
+            draws_unlike_kept_index_offset: commands(|counts| {
+                &counts.draws_unlike_kept_index_offset
+            }),
+            draws_unlike_kept_tessellation: commands(|counts| {
+                &counts.draws_unlike_kept_tessellation
+            }),
+            draws_unlike_kept_command_buffer: commands(|counts| {
+                &counts.draws_unlike_kept_command_buffer
+            }),
+            draws_unlike_kept_under: commands(|counts| &counts.draws_unlike_kept_under),
+            draws_unlike_kept_arguments_alone: commands(|counts| {
+                &counts.draws_unlike_kept_arguments_alone
+            }),
             draws_rebind_stopped: commands(|counts| &counts.draws_rebind_stopped),
             resident_uses_made: commands(|counts| &counts.resident_uses_made),
             resident_keys_settled: commands(|counts| &counts.resident_keys_settled),

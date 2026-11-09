@@ -117,6 +117,7 @@ use crate::noted_apart::NotedInto;
 use crate::pipeline::{RenderPipelineState, RenderStateKind, WeakRenderPipelineState};
 use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
+use crate::work_counts::UnlikeKept;
 use metal2vulkan::metal::RenderStages;
 
 /// The encoder's last direct draw, where it is kept (the module docs).
@@ -207,6 +208,11 @@ pub(super) struct KeptIndex {
 }
 
 impl KeptIndex {
+    /// The Metal buffer, by key, and the `VkBuffer` it is read from, its offsets aside.
+    fn buffer(self) -> (ResourceKey, vk::Buffer) {
+        (self.key, self.raw)
+    }
+
     /// `source`'s, where it is read in place; `None` for a copy, which each draw takes.
     pub(super) fn of(source: &DrawSource<'_>) -> Option<KeptIndex> {
         source.in_place().then(|| KeptIndex {
@@ -215,6 +221,39 @@ impl KeptIndex {
             raw: source.raw,
             at: source.at,
         })
+    }
+}
+
+/// How `draw` differs from `kept`, a kept draw's call: in its counts and starts, in its index
+/// buffer's offset, and in its index buffer or index type.
+fn apart(kept: &DrawCall, draw: &DrawCall) -> (bool, bool, bool) {
+    match (kept, draw) {
+        (
+            DrawCall::Indexed {
+                index_type: kept_type,
+                index_buffer: kept_buffer,
+                index_count: kept_count,
+                index_offset: kept_offset,
+                instance_count: kept_instances,
+                base_vertex: kept_base,
+                base_instance: kept_first,
+            },
+            DrawCall::Indexed {
+                index_type,
+                index_buffer,
+                index_count,
+                index_offset,
+                instance_count,
+                base_vertex,
+                base_instance,
+            },
+        ) => (
+            (kept_count, kept_instances, kept_base, kept_first)
+                != (index_count, instance_count, base_vertex, base_instance),
+            kept_offset != index_offset,
+            kept_type != index_type || kept_buffer != index_buffer,
+        ),
+        (kept, draw) => (kept != draw, false, false),
     }
 }
 
@@ -405,7 +444,24 @@ impl RenderLowering {
             && kept.under == self.under();
         if !same {
             if buffers.indirect.is_none() {
-                self.core.counts().draw_unlike_kept();
+                let (counts, index_offset, index_buffer) = apart(&kept.draw, draw);
+                let copied = matches!(index, Some(None));
+                let index = index.flatten();
+                let index_buffer = index_buffer
+                    || copied
+                    || kept.index.map(KeptIndex::buffer) != index.map(KeptIndex::buffer);
+                let why = UnlikeKept {
+                    pipeline: !self.pipeline.as_ref().is_some_and(drawn_by),
+                    call: kept.call != call || kept.assembly != assembly,
+                    counts,
+                    index_buffer,
+                    index_offset: !index_buffer && (index_offset || kept.index != index),
+                    tessellation: buffers.patch_indices.is_some()
+                        || buffers.control_point_indices.is_some(),
+                    command_buffer: kept.command_buffer != self.current.draws,
+                    under: kept.under != self.under(),
+                };
+                self.core.counts().draw_unlike_kept(why);
             }
             return Again::No;
         }

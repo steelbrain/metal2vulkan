@@ -1438,3 +1438,49 @@ fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
     let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
     assert_eq!(rebound.counted(missed), 0);
 }
+
+/// A draw unlike the draw its encoder kept is counted in each part it differed by
+/// (`WorkCounts::draws_unlike_kept_*`): the pass's first draw kept, a draw of other counts
+/// alone, its arguments alone (`draws_unlike_kept_arguments_alone`), and then one of another
+/// primitive type, which only its assembly sets apart from that one.
+#[test]
+fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
+    let scratch = Scratch::new("draw-again-unlike");
+    let device = device(&scratch.0, &[], &Heard::default());
+    let state = adding_state(&device);
+    let draws = |encoder: &mut RenderCommandEncoder| {
+        set_rectangle(encoder, &state);
+        rectangle(encoder);
+        // Its first triangle: other counts alone.
+        let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0);
+        assert_eq!(drawn, Ok(()));
+        // The same three vertices as a strip: another assembly alone.
+        let drawn = encoder.draw_primitives(PrimitiveType::TriangleStrip, 0, 3, 1, 0);
+        assert_eq!(drawn, Ok(()));
+    };
+    warm(&device, draws);
+    let ran = run(&device, draws);
+    let parts: [(&str, fn(&WorkCounts) -> u64, u64); 10] = [
+        ("unlike", |c| c.draws_unlike_kept, 2),
+        ("counts", |c| c.draws_unlike_kept_counts, 1),
+        (
+            "arguments alone",
+            |c| c.draws_unlike_kept_arguments_alone,
+            1,
+        ),
+        ("call", |c| c.draws_unlike_kept_call, 1),
+        ("pipeline", |c| c.draws_unlike_kept_pipeline, 0),
+        ("index buffer", |c| c.draws_unlike_kept_index_buffer, 0),
+        ("index offset", |c| c.draws_unlike_kept_index_offset, 0),
+        ("tessellation", |c| c.draws_unlike_kept_tessellation, 0),
+        ("command buffer", |c| c.draws_unlike_kept_command_buffer, 0),
+        ("under", |c| c.draws_unlike_kept_under, 0),
+    ];
+    for (part, count, expected) in parts {
+        assert_eq!(
+            ran.counted(count),
+            expected,
+            "draws unlike their kept draw: {part}"
+        );
+    }
+}
