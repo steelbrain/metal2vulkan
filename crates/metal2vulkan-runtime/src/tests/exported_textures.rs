@@ -946,7 +946,10 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
     ];
     let mut layouts = Vec::new();
     for pf in backed_formats() {
-        let texel = crate::buffer_texture::texel_bytes(pf).expect("a backed format's texel");
+        // A format of no whole texel per pixel (a packed 4:2:2 one) is left out.
+        let Some(texel) = crate::buffer_texture::texel_bytes(pf) else {
+            continue;
+        };
         let align = device.linear_texture_alignment(pf);
         for width in WIDTHS {
             for pitch in [align, 256] {
