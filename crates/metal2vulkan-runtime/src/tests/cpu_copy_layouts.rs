@@ -19,6 +19,7 @@ use super::blit_holds::{device, Scratch, WAIT};
 use crate::{
     BlitOption, Device, Origin, Region, ResourceOptions, Size, Texture, TextureDescriptor,
 };
+use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 
 /// The byte a caller's bytes hold where no row lands.
@@ -284,7 +285,11 @@ fn two_plane_cpu_copies_wait_for_no_submission_where_a_textures_do() {
 /// as the memory is bound takes block formats off that path
 /// (`RuntimeDriverDefect::HostTransferImagesCopiedAtBind`, MoltenVK): the first read makes a host
 /// shadow of the image's texels and every read after it comes out of that
-/// (`texture/host_shadow.rs`, whose own tests hold the shadow's rules).
+/// (`texture/host_shadow.rs`, whose own tests hold the shadow's rules). On a device that copies
+/// no image on the host and has no staging queue (no `VK_EXT_host_image_copy` and no family of
+/// transfers alone: RADV on the RX 550), each read waits for a submission of its own, as every
+/// texture's does there, and no shadow is made: the shadow serves a format the defect alone kept
+/// off a host path the device has.
 ///
 /// The levels here are small and few, so the staged copies stay under the bound past which a
 /// `replaceRegion` makes a submission of its own (`first_move.rs`, `STAGED_BYTES` and
@@ -345,24 +350,34 @@ fn block_cpu_copies_stage_their_writes_and_read_where_the_device_copies_on_the_h
     );
     // Where the device reads such an image's blocks on the host, so does `getBytes`; where it
     // copies on its staging queue, each write is queued there and each read's submission carries
-    // the write before it; elsewhere the levels' reads share the one submission the first of them
-    // makes its shadow by.
-    match (read_host > 0, device.has_staging_queue()) {
-        (true, _) => assert_eq!(
+    // the write before it; where it copies other images on the host and the defect alone kept
+    // this format off that path, the levels' reads share the one submission the first of them
+    // makes its shadow by; elsewhere each read waits for one.
+    let shadows = device.shared().host_copies.is_some()
+        && (device.properties().driver_defects)
+            .contains(&RuntimeDriverDefect::HostTransferImagesCopiedAtBind);
+    match (read_host > 0, device.has_staging_queue(), shadows) {
+        (true, _, _) => assert_eq!(
             [read_host, read_waited],
             [levels, 0],
             "a block-compressed texture's `getBytes` waited for an internal submission"
         ),
-        (false, true) => assert_eq!(
+        (false, true, _) => assert_eq!(
             [staged, read_staged, read_waited],
             [0, levels, 0],
             "a block-compressed texture's {levels} writes queued for the staging queue and each \
              read's one submission there"
         ),
-        (false, false) => assert_eq!(
+        (false, false, true) => assert_eq!(
             read_waited, 1,
             "a block-compressed texture's {levels} `getBytes` calls took more than the one \
              submission the first of them makes its host shadow by"
+        ),
+        (false, false, false) => assert_eq!(
+            [read_host, read_staged, read_waited],
+            [0, 0, levels],
+            "a block-compressed texture's {levels} `getBytes` calls with no host copy, no \
+             staging queue and no shadow: one submission each"
         ),
     }
 }
@@ -440,7 +455,9 @@ fn bc1_get(texture: &Texture, level: u64) -> Vec<u8> {
 /// either way, and no second submission.
 ///
 /// On a device that copies such an image's blocks on the host there is no shadow to make, and the
-/// test says so: it holds the reads to that path instead.
+/// test says so: it holds the reads to that path instead. On one that copies no image on the host
+/// and has no staging queue (RADV on the RX 550) there is none either, and each read waits for a
+/// submission of its own, as every texture's does there.
 #[test]
 fn block_cpu_reads_come_out_of_the_textures_host_shadow() {
     let scratch = Scratch::new("block-host-shadow");
@@ -477,6 +494,16 @@ fn block_cpu_reads_come_out_of_the_textures_host_shadow() {
          {waited_again} internal submissions",
         device.name()
     );
+    if made == 0 && device.shared().host_copies.is_none() && !device.has_staging_queue() {
+        // No path off the device's queue: each read waits for a submission of its own.
+        assert_eq!(
+            [waited, waited_again],
+            [levels, levels],
+            "a block-compressed texture's `getBytes` on a device with no host copies and no \
+             staging queue: one submission each"
+        );
+        return;
+    }
     if made == 0 {
         // No shadow: the device copies the blocks on the host, so no read waits for a submission.
         assert_eq!(
