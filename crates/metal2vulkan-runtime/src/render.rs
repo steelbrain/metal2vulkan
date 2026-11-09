@@ -5827,18 +5827,20 @@ impl RenderLowering {
         let shadow_fills = (shadow_fills.into_iter()).chain(std::iter::repeat_with(Vec::new));
         let none = || (None, None);
         let reformat_copies = (reformat_copies.into_iter()).chain(std::iter::repeat_with(none));
-        let fills_and_copies = shadow_fills.zip(reformat_copies);
-        let moved_images = (std::iter::repeat_with(Vec::new).take(inlined)).chain(later_moved);
+        let mut fills_and_copies = shadow_fills.zip(reformat_copies);
+        let mut moved_images = (std::iter::repeat_with(Vec::new).take(inlined)).chain(later_moved);
         // The first instance's gathering and drawn area, which the device keeps for a next
         // encoder's with the pass's drawn area and fragment writes and reads
         // (`render/draw_room.rs`).
         let mut first_gathered = None;
-        for (index, ((instance, (shadow_fills, (reformat_in, reformat_out))), moved)) in instances
-            .into_iter()
-            .zip(fills_and_copies)
-            .zip(moved_images)
-            .enumerate()
-        {
+        // Each instance taken alone, its fills, copies and moves beside it: an instance is near
+        // 2 KiB, which each layer of a zipped iterator's items copied again.
+        for (index, instance) in instances.into_iter().enumerate() {
+            let (Some((shadow_fills, (reformat_in, reformat_out))), Some(moved)) =
+                (fills_and_copies.next(), moved_images.next())
+            else {
+                break;
+            };
             let Instance {
                 draws,
                 shape,
