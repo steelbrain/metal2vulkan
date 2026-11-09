@@ -2533,16 +2533,65 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
 /// `restricted-depth-upload`, and the layer's GPU-assisted check reports no copy of a depth
 /// outside `[0, 1]`. Of 37x5 with `allowGPUOptimizedContents` off and on, and of 64x64 with it on
 /// (which Metal keeps losslessly compressed: a shadow of its uncompressed tiles). A
-/// `Depth32Float_Stencil8` texture of 37x5 in the same kind of heap still takes its depth clamped
-/// where the device clamps (`depth_upload_clamps::clamps`): a shadow of Metal's tiles there
-/// announces `restricted-depth-upload`, and its depth reads as the device stores it
-/// (`stored_as`). `HEAPTEX stencil alone` lines print each texture's route and what differed.
+/// `Depth32Float_Stencil8` texture of 37x5 in the same kind of heap, on a device of its own
+/// without the GPU-assisted check (whose reads of a combined image's depth take 5 bytes a texel,
+/// past the copy's depths: `reported_no_depth_outside_0_1`), still takes its depth clamped where
+/// the device clamps (`depth_upload_clamps::clamps`): a shadow of Metal's tiles there announces
+/// `restricted-depth-upload`, and its depth reads as the device stores it (`stored_as`).
+/// `HEAPTEX stencil alone` lines print each texture's route and what differed.
 #[test]
 fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
     use super::depth_upload_clamps::{
         clamps, depth_bits, gpu_assisted_copies, reported_no_depth_outside_0_1, stored_as,
     };
     use super::heap_layouts::tiled_offset;
+    /// A texture of `descriptor` at a new `Shared` placement heap's first byte, a buffer over its
+    /// answer's bytes, the answer's size, and whether it is a shadow of Metal's tiles.
+    fn made(device: &Device, descriptor: &TextureDescriptor) -> (Heap, Texture, Buffer, u64, bool) {
+        let options = descriptor.resource_options;
+        let answer = device.heap_texture_size_and_align(descriptor).unwrap();
+        let heap = heap(device, HeapType::Placement, 1 << 20, options);
+        let before = device.work_counts().heap_textures_tiled;
+        let texture = heap.new_texture_at_offset(descriptor, 0).unwrap();
+        let tiled = device.work_counts().heap_textures_tiled > before;
+        let over = heap.new_buffer_at_offset(answer.size, options, 0).unwrap();
+        (heap, texture, over, answer.size, tiled)
+    }
+    /// `bytes` written over `over`'s.
+    fn write(queue: &CommandQueue, over: &Buffer, bytes: &[u8]) {
+        let source = staged(queue.device(), bytes);
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut copy = command_buffer.blit_command_encoder().unwrap();
+        copy.copy_from_buffer_to_buffer(&source, 0, over, 0, bytes.len() as u64)
+            .unwrap();
+        copy.end_encoding().unwrap();
+        run(&command_buffer);
+    }
+    /// A blit of the texels of `origin` and `size` between `texture`'s `option` and `buffer`
+    /// (`into` the texture, else out of it), rows of `row` bytes there.
+    fn blit(
+        queue: &CommandQueue,
+        into: bool,
+        (texture, option): (&Texture, BlitOption),
+        buffer: &Buffer,
+        (origin, size): (Origin, Size),
+        row: u64,
+    ) {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        let image = row * size.height;
+        match into {
+            true => blit.copy_from_buffer_to_texture(
+                buffer, 0, row, image, size, texture, 0, 0, origin, option,
+            ),
+            false => blit.copy_from_texture_to_buffer(
+                texture, 0, 0, origin, size, buffer, 0, row, image, option,
+            ),
+        }
+        .unwrap();
+        blit.end_encoding().unwrap();
+        run(&command_buffer);
+    }
     // Word `i` of the heap's bytes.
     let word = |i: u64| -> u32 {
         match i % 8 {
@@ -2562,58 +2611,14 @@ fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
             .take(size as usize)
             .collect()
     };
-    let messages = Messages::default();
+    let options = tracked(StorageMode::Shared);
     let cache = ScratchCache::new().unwrap();
-    let (clamps, tiled, restricted, depth_off) = {
+    let messages = Messages::default();
+    let mut tiled = Vec::new();
+    {
         let device = &gpu_assisted_copies(&messages, cache.path());
         let clamps = clamps(device);
-        let queue = device.new_command_queue().unwrap();
-        let options = tracked(StorageMode::Shared);
-        // A texture of `descriptor` at a new heap's first byte, a buffer over its answer's bytes,
-        // the answer's size, and whether it is a shadow of Metal's tiles.
-        let made = |descriptor: &TextureDescriptor| {
-            let answer = device.heap_texture_size_and_align(descriptor).unwrap();
-            let heap = heap(device, HeapType::Placement, 1 << 20, options);
-            let before = device.work_counts().heap_textures_tiled;
-            let texture = heap.new_texture_at_offset(descriptor, 0).unwrap();
-            let tiled = device.work_counts().heap_textures_tiled > before;
-            let over = heap.new_buffer_at_offset(answer.size, options, 0).unwrap();
-            (heap, texture, over, answer.size, tiled)
-        };
-        // `bytes` written over the buffer's.
-        let write = |over: &Buffer, bytes: &[u8]| {
-            let source = staged(device, bytes);
-            let command_buffer = queue.command_buffer().unwrap();
-            let mut copy = command_buffer.blit_command_encoder().unwrap();
-            copy.copy_from_buffer_to_buffer(&source, 0, over, 0, bytes.len() as u64)
-                .unwrap();
-            copy.end_encoding().unwrap();
-            run(&command_buffer);
-        };
-        // A blit of the texels of `origin` and `size` between `texture`'s `option` and `buffer`,
-        // rows of `row` bytes there.
-        let blit = |into: bool,
-                    texture: &Texture,
-                    buffer: &Buffer,
-                    (origin, size): (Origin, Size),
-                    row: u64,
-                    option: BlitOption| {
-            let command_buffer = queue.command_buffer().unwrap();
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            let image = row * size.height;
-            match into {
-                true => blit.copy_from_buffer_to_texture(
-                    buffer, 0, row, image, size, texture, 0, 0, origin, option,
-                ),
-                false => blit.copy_from_texture_to_buffer(
-                    texture, 0, 0, origin, size, buffer, 0, row, image, option,
-                ),
-            }
-            .unwrap();
-            blit.end_encoding().unwrap();
-            run(&command_buffer);
-        };
-        let mut tiled = Vec::new();
+        let queue = &device.new_command_queue().unwrap();
         for ([w, h], allow) in [([37, 5], false), ([37, 5], true), ([64, 64], true)] {
             let what = format!("X32Stencil8 {w}x{h} allow {allow}");
             let mut descriptor =
@@ -2621,14 +2626,15 @@ fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
             descriptor.resource_options = options;
             descriptor.usage = TextureUsage::SHADER_READ;
             descriptor.allow_gpu_optimized_contents = allow;
-            let (_heap, texture, over, size, shadow) = made(&descriptor);
+            let (_heap, texture, over, size, shadow) = made(device, &descriptor);
             tiled.push(shadow);
             let bytes = words(size);
-            write(&over, &bytes);
+            write(queue, &over, &bytes);
             let at = |x: u64, y: u64| tiled_offset(1, [w, h], x, y) as usize;
+            let stencil = (&texture, BlitOption::None);
             let whole = (Origin::new(0, 0, 0), Size::new(w, h, 1));
             let read = staged(device, &vec![0; (w * h) as usize]);
-            blit(false, &texture, &read, whole, w, BlitOption::None);
+            blit(queue, false, stencil, &read, whole, w);
             let read = read_buffer(&read, 0, w * h).unwrap();
             let read_off: Vec<(u64, u8, u8)> = (0..w * h)
                 .map(|i| (i, bytes[at(i % w, i / w)], read[i as usize]))
@@ -2646,8 +2652,8 @@ fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
             }
             let part = (Origin::new(x, y, 0), Size::new(across, down, 1));
             let source = staged(device, &stencils);
-            blit(true, &texture, &source, part, across, BlitOption::None);
-            let after = gpu_read(&queue, &over, 0..size);
+            blit(queue, true, stencil, &source, part, across);
+            let after = gpu_read(queue, &over, 0..size);
             let changed: Vec<(usize, u8, u8)> = (0..size as usize)
                 .filter(|&i| after[i] != want[i])
                 .map(|i| (i, want[i], after[i]))
@@ -2665,38 +2671,37 @@ fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
             assert!(read_off.is_empty(), "{what}: stencils read otherwise");
             assert!(changed.is_empty(), "{what}: bytes otherwise than written");
         }
-        reported_no_depth_outside_0_1(&messages, "HEAPTEX stencil alone X32Stencil8", false);
         assert!(
             !announced(&messages, Degradation::RestrictedDepthUpload),
             "an X32Stencil8 texture announced restricted-depth-upload"
         );
-        // The `Depth32Float_Stencil8` texture's depth plane at its first byte, each texel's depth
-        // where Metal's tiles place it.
+    }
+    reported_no_depth_outside_0_1(&messages, "HEAPTEX stencil alone X32Stencil8", false);
+    // The `Depth32Float_Stencil8` texture's depth plane at its first byte, each texel's depth
+    // where Metal's tiles place it.
+    let messages = Messages::default();
+    let (clamps, shadow, restricted, depth_off) = {
+        let device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let clamps = clamps(device);
+        let queue = &device.new_command_queue().unwrap();
         let [w, h] = [37, 5];
         let mut descriptor =
             TextureDescriptor::texture_2d(PixelFormat::Depth32FloatStencil8, w, h, false);
         descriptor.resource_options = options;
         descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
         descriptor.allow_gpu_optimized_contents = false;
-        let (_heap, texture, over, size, shadow) = made(&descriptor);
-        tiled.push(shadow);
+        let (_heap, texture, over, size, shadow) = made(device, &descriptor);
         let mut bytes = words(size);
         for i in 0..w * h {
             let at = tiled_offset(4, [w, h], i % w, i / w) as usize;
             bytes[at..at + 4].copy_from_slice(&depth_bits(i).to_le_bytes());
         }
-        write(&over, &bytes);
+        write(queue, &over, &bytes);
         let row = 4 * w;
         let read = staged(device, &vec![0; (row * h) as usize]);
+        let depth = (&texture, BlitOption::DepthFromDepthStencil);
         let whole = (Origin::new(0, 0, 0), Size::new(w, h, 1));
-        blit(
-            false,
-            &texture,
-            &read,
-            whole,
-            row,
-            BlitOption::DepthFromDepthStencil,
-        );
+        blit(queue, false, depth, &read, whole, row);
         let read = read_buffer(&read, 0, row * h).unwrap();
         // A texture in place lays its texels out as its driver does, and copies nothing in.
         let depth_off: Vec<(u64, u32, u32)> = (0..w * h)
@@ -2708,18 +2713,18 @@ fn a_heap_stencil_texture_over_a_combined_image_moves_its_stencil_alone() {
             })
             .collect();
         let restricted = announced(&messages, Degradation::RestrictedDepthUpload);
-        (clamps, tiled, restricted, depth_off)
+        (clamps, shadow, restricted, depth_off)
     };
     let label = format!(
-        "HEAPTEX stencil alone Depth32FloatStencil8 37x5: clamps {clamps}, tiled {tiled:?}, \
-         restricted-depth-upload {restricted}, {} depths read otherwise {:x?}",
+        "HEAPTEX stencil alone Depth32FloatStencil8 37x5: clamps {clamps}, X32Stencil8 tiled \
+         {tiled:?}, tiled {shadow}, restricted-depth-upload {restricted}, {} depths read \
+         otherwise {:x?}",
         depth_off.len(),
         &depth_off[..depth_off.len().min(8)]
     );
-    // The layer reads a copy into the combined image's depth at 5 bytes a texel.
-    reported_no_depth_outside_0_1(&messages, &label, true);
+    eprintln!("{label}");
+    layer_reported_nothing_at_all(&messages);
     assert!(depth_off.is_empty(), "{label}");
-    let shadow = tiled.last() == Some(&true);
     assert_eq!(restricted, clamps && shadow, "{label}");
 }
 
