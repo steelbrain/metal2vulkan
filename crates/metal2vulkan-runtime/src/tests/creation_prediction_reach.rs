@@ -11,7 +11,10 @@
 //! - **A multisampled blend into `BGRA10_XR`** in a pass that clears it, which holds the color's
 //!   `half` shadow from that draw on (`render/extended_shadow.rs`): the variant that reads and
 //!   writes the shadow, which the creation now predicts. A device whose pass fetches through
-//!   input attachments holds no shadow, and its creation predicts none.
+//!   input attachments holds no shadow, and its creation predicts none. A device with neither
+//!   fetch form (rasterization-order color attachment access or the fragment shader pixel
+//!   interlock; RADV on the RX 550) refuses the state, typed (`Unsupported` of
+//!   `Feature::FramebufferFetch`), and the test prints that and stops.
 //!
 //! Each reads one creation's makings and the draw's takings as deltas on the test's own device
 //! (`WorkCounts::creation_pipelines_made` and `creation_pipelines_drawn`), once the device's
@@ -27,9 +30,10 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use super::uniform_bind_offsets::idle;
 use crate::{
-    Device, LoadAction, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
+    Device, Error, LoadAction, PipelineOptions, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{
     BlendFactor, PixelFormat, PrimitiveTopologyClass, PrimitiveType, TextureType, TextureUsage,
 };
@@ -40,14 +44,14 @@ use std::path::Path;
 const SIDE: u64 = 8;
 
 /// The fixture's render state of `vertex` and `rt6_white` into one color of `color`, at
-/// `samples`, of the topology class `class`.
+/// `samples`, of the topology class `class`, or the device's refusal of it.
 fn state(
     device: &Device,
     vertex: &str,
     color: ColorAttachmentDescriptor,
     samples: u32,
     class: PrimitiveTopologyClass,
-) -> RenderPipelineState {
+) -> Result<RenderPipelineState, Error> {
     let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/fixtures/public/engine/rt6_render_state.ll");
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
@@ -62,9 +66,7 @@ fn state(
     descriptor.color_attachments[0] = Some(color);
     descriptor.raster_sample_count = samples;
     descriptor.input_primitive_topology = class;
-    device
-        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-        .unwrap()
+    device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())
 }
 
 /// A render target of `format` at `samples`, or `None` where the device makes none.
@@ -145,7 +147,8 @@ fn a_draw_in_a_pass_that_resolves_takes_the_creation_s_pipeline() {
         color,
         4,
         PrimitiveTopologyClass::Unspecified,
-    );
+    )
+    .unwrap();
     let created = idle(&device);
     let mut pass = RenderPassDescriptor::new();
     let attachment = &mut pass.color_attachments[0];
@@ -179,7 +182,8 @@ fn a_point_draw_of_the_point_class_takes_the_creation_s_pipeline() {
         color,
         1,
         PrimitiveTopologyClass::Point,
-    );
+    )
+    .unwrap();
     let created = idle(&device);
     let mut pass = RenderPassDescriptor::new();
     let attachment = &mut pass.color_attachments[0];
@@ -196,7 +200,8 @@ fn a_point_draw_of_the_point_class_takes_the_creation_s_pipeline() {
 
 /// A four-sample source-over blend into a `BGRA10_XR` color the pass clears takes the creation's
 /// pipeline, which is of the variant that holds the color's shadow where the device's pass holds
-/// one.
+/// one. A device with neither fetch form refuses the state as `FramebufferFetch`, printed
+/// (`SKIPPED`); any other refusal, or that one where the device has a fetch form, fails.
 #[test]
 fn a_multisampled_extended_range_blend_takes_the_creation_s_pipeline() {
     let scratch = Scratch::new("creation-reach-xr");
@@ -212,13 +217,27 @@ fn a_multisampled_extended_range_blend_takes_the_creation_s_pipeline() {
     color.source_alpha_blend_factor = BlendFactor::One;
     color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
     color.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
-    let state = state(
+    let fragment = device.compile_device().profile().fragment();
+    let fetches = fragment.rasterization_order_color_access || fragment.pixel_interlock;
+    let state = match state(
         &device,
         "rt6_full",
         color,
         4,
         PrimitiveTopologyClass::Unspecified,
-    );
+    ) {
+        Ok(state) => state,
+        Err(Error::Unsupported(refusal))
+            if !fetches && refusal.feature == Feature::FramebufferFetch =>
+        {
+            eprintln!(
+                "SKIPPED on {}: no framebuffer fetch form, the state refused: {refusal}",
+                device.name()
+            );
+            return;
+        }
+        Err(error) => panic!("the multisampled BGRA10_XR blend's state was refused: {error}"),
+    };
     let created = idle(&device);
     let mut pass = RenderPassDescriptor::new();
     let attachment = &mut pass.color_attachments[0];
