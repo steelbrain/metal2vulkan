@@ -139,14 +139,14 @@
 //!
 //! - **Blocks made ahead** (`memory/ready.rs`). Each pool the encodings and commits place their
 //!   own resources in ([`keep_room`]) and each pool of exportable buffers ([`allocate_exported`])
-//!   gets a block made off the program's thread while it grows, and the pool a color texture's
-//!   host-transfer image places in ([`Memory::host_copy_pool`]) gets its blocks so: each made
-//!   right after a burst of the device's submissions ended, since a block's `vkAllocateMemory`
-//!   holds the device's submissions while it runs on RADV and on NVIDIA's driver, then every page
-//!   of its mapping read once before anything is placed in it, so that no host copy's first touch
-//!   faults on memory whose kernel work waits behind the program's queued GPU work. A call that
-//!   needs room takes the pool's block made ahead, or waits for its making, rather than make a
-//!   block of its own.
+//!   gets a block made off the program's thread while it grows or is near its next block, and the
+//!   pool a color texture's host-transfer image places in ([`Memory::host_copy_pool`]) gets its
+//!   blocks so: each made right after a burst of the device's submissions ended, since a block's
+//!   `vkAllocateMemory` holds the device's submissions while it runs on RADV and on NVIDIA's
+//!   driver, then every page of its mapping read once before anything is placed in it, so that no
+//!   host copy's first touch faults on memory whose kernel work waits behind the program's queued
+//!   GPU work. A call that needs room takes the pool's block made ahead, or waits for its making,
+//!   rather than make a block of its own.
 
 use super::buffer::usage;
 use super::device::lock;
@@ -1244,15 +1244,26 @@ impl<T> Pool<T> {
     }
 
     /// When it last grew: a pooled block was added to it while it held another, at `now` where
-    /// `adding` names one being added. Blocks made ahead are made for a pool that grew
-    /// (`memory/ready.rs`).
+    /// `adding` names one being added. Blocks made ahead are made for a pool that grew, and for
+    /// one near its next block ([`Pool::near_next`], `memory/ready.rs`).
     pub(super) fn grew(&mut self, adding: Option<Instant>) -> Option<Instant> {
         if let Some(now) = adding {
-            if self.blocks.iter().flatten().any(|block| !block.dedicated) {
+            if self.holds_pooled() {
                 self.grew = Some(now);
             }
         }
         self.grew
+    }
+
+    /// Whether it holds a pooled block.
+    fn holds_pooled(&self) -> bool {
+        self.blocks.iter().flatten().any(|block| !block.dedicated)
+    }
+
+    /// Whether it holds a pooled block, its blocks of `bytes`, and lacks room for [`ahead_room`]
+    /// of one: near its next block, which is made ahead (`memory/ready.rs`).
+    fn near_next(&mut self, bytes: u64) -> bool {
+        self.holds_pooled() && !self.has_room(ahead_room(bytes))
     }
 
     /// Every block's payload, emptying the pool.
@@ -2558,8 +2569,8 @@ impl Memory {
     }
 
     /// The pools of exportable buffers ([`Holds::Exports`], [`Holds::DmaBufs`]) that grew within
-    /// [`KEPT_EMPTY_FOR`] (`allocate_exported`'s pooled placements): those whose blocks are made
-    /// ahead while they grow, besides [`Memory::kept`]'s.
+    /// [`KEPT_EMPTY_FOR`] (`allocate_exported`'s pooled placements), or are near their next block
+    /// ([`Pool::near_next`]): those whose blocks are made ahead, besides [`Memory::kept`]'s.
     fn exported_growing(&mut self) -> Vec<(Holds, u32)> {
         let types = self.types.len() as u32;
         let pools = (0..types).flat_map(|type_index| {
@@ -2567,8 +2578,12 @@ impl Memory {
         });
         pools
             .filter(|&(holds, type_index)| {
-                let grew = self.pool(holds, type_index).grew(None);
-                grew.is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR)
+                let bytes = self.pooled_bytes((holds, type_index));
+                let pool = self.pool(holds, type_index);
+                let grew = pool
+                    .grew(None)
+                    .is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
+                grew || pool.near_next(bytes)
             })
             .collect()
     }
@@ -3071,12 +3086,13 @@ impl Memory {
             }
         }
         // A block made ahead for a pool that stopped growing that long ago, where the pool has
-        // room for half a block (`memory/ready.rs`).
+        // room for three quarters of a block, so that it is no longer near its next block
+        // ([`ahead_room`], `memory/ready.rs`).
         let mut at = 0;
         while at < self.readying.len() {
             let (holds, type_index) = self.readying[at].pool();
             let started = self.readying[at].started();
-            let room = self.pooled_bytes((holds, type_index)) / 2;
+            let room = ahead_room(self.pooled_bytes((holds, type_index)));
             let pool = self.pool(holds, type_index);
             let since = pool.grew(None).map_or(started, |grew| grew.max(started));
             let unused = now.saturating_duration_since(since) >= KEPT_EMPTY_FOR
@@ -4587,10 +4603,18 @@ pub(super) fn keep_room(
     }
 }
 
+/// The longest free range below which a pool whose blocks are made ahead gets its next block made
+/// ahead, whether or not it grew lately, of a pool of blocks of `bytes` (`memory/ready.rs`): three
+/// quarters of a block, a quarter of a block before the half block [`keep_room`] keeps.
+pub(super) fn ahead_room(bytes: u64) -> u64 {
+    bytes - bytes / 4
+}
+
 /// Start making a block ahead for `pool` (`memory/ready.rs`), through `functions`, made once a
 /// burst of `quiet`'s queue uses ended, with a buffer of addresses counted in `counts` where its
-/// blocks carry one, where the pool grew within [`KEPT_EMPTY_FOR`], lacks room for a whole block
-/// and holds no block made ahead.
+/// blocks carry one, where the pool holds no block made ahead and grew within [`KEPT_EMPTY_FOR`]
+/// lacking room for a whole block, or, grown or not, is near its next block
+/// ([`Pool::near_next`]).
 fn ready_if_growing(
     memory: &mut Memory,
     pool: (Holds, u32),
@@ -4601,7 +4625,8 @@ fn ready_if_growing(
     let ahead = memory.readying_at(pool).is_some();
     let pool_of = memory.pool(pool.0, pool.1);
     let grew = (pool_of.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
-    if !grew || pool_of.has_room(bytes) || ahead {
+    let near = pool_of.near_next(bytes);
+    if !(grew || near) || pool_of.has_room(bytes) || ahead {
         return;
     }
     let addressed = pool.0.buffers().then(|| Arc::clone(counts));

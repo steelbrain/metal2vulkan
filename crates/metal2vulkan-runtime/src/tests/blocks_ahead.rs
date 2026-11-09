@@ -1,8 +1,8 @@
 //! A pool the runtime's encodings and commits place their own resources in gets its blocks made
-//! ahead, off the program's thread, while it grows (`memory/ready.rs`): once the pool grew, each
-//! creation call that needs a new block there finds one made ahead and makes none itself, so no
-//! `vkAllocateMemory` of a block runs on the program's thread, where on RADV and on NVIDIA's
-//! driver it held the device's submissions beside it.
+//! ahead, off the program's thread, while it grows or is near its next block (`memory/ready.rs`):
+//! from its first growth on, each creation call that needs a new block there finds one made ahead
+//! and makes none itself, so no `vkAllocateMemory` of a block runs on the program's thread, where
+//! on RADV and on NVIDIA's driver it held the device's submissions beside it.
 //!
 //! The first run makes `Private` buffers of a guest's scroll, eight to a block, and waits for every
 //! making to end between two creations: what it holds is where the blocks are made, not how soon
@@ -91,7 +91,7 @@ fn make(device: &Device, held: &mut Vec<Buffer>) -> WorkCounts {
 }
 
 #[test]
-fn a_growing_pool_s_new_blocks_are_made_ahead_and_none_in_place() {
+fn a_growing_pool_s_new_blocks_its_first_growth_s_among_them_are_made_ahead_and_none_in_place() {
     let scratch = Scratch::new("growth");
     let device = device(&scratch.0);
     // The pools the runtime keeps room in are known before the first creation: those of blocks
@@ -100,7 +100,7 @@ fn a_growing_pool_s_new_blocks_are_made_ahead_and_none_in_place() {
     let _settled = device.settle_submit_checks(Duration::from_secs(60));
     let mut held = Vec::new();
     // The first creation makes each pool's first block; the buffers' pool's first growth past it
-    // is made in place, as nothing grew before it. Other pools' blocks are not counted.
+    // is made ahead, the pool near its next block before it. Other pools' blocks are not counted.
     let start = make(&device, &mut held);
     let mut counts = start;
     while grown(&start, &counts) == 0 {
@@ -113,14 +113,19 @@ fn a_growing_pool_s_new_blocks_are_made_ahead_and_none_in_place() {
     let in_place = counts.buffer_blocks_made_in_place - before.buffer_blocks_made_in_place;
     let ahead = counts.buffer_blocks_made_ahead - before.buffer_blocks_made_ahead;
     let waited_for = counts.blocks_ahead_waited_for - before.blocks_ahead_waited_for;
+    let first_in_place = before.buffer_blocks_made_in_place - start.buffer_blocks_made_in_place;
+    let first_ahead = before.buffer_blocks_made_ahead - start.buffer_blocks_made_ahead;
     println!(
         "BLOCKS-AHEAD {}: {} buffers of {BUFFER_BYTES} bytes; over the buffers' pool's last {} \
          blocks, {ahead} made ahead, {in_place} in place, {waited_for} waited for; its first \
-         growth made {} in place",
+         growth made {first_ahead} ahead, {first_in_place} in place",
         device.name(),
         held.len(),
         grown(&before, &counts),
-        before.buffer_blocks_made_in_place - start.buffer_blocks_made_in_place,
+    );
+    assert_eq!(
+        first_in_place, 0,
+        "the pool's first growth was made by a creation call itself"
     );
     assert_eq!(
         in_place, 0,

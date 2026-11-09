@@ -38,6 +38,12 @@
 //!   holds its verdicts knows them as it is made, where the first starts no check (a buffer's
 //!   making starts none), its blocks plain, as a driver's first device's are until a texture over
 //!   host pages starts the check and it answers.
+//! - **A scroll's buffers, made by the runtime**: a `Private` buffer of [`SCROLL_BUFFER_BYTES`],
+//!   as a guest's scroll's memory log placed them, eight to a pooled block, every
+//!   [`SCROLL_EVERY`], at most [`SCROLL_BUFFERS`] a phase: the runtime's pool of buffers grows a
+//!   block every eight creation calls, its first growth of each phase (the first after the
+//!   fragmenting's pause) among them, so that a block a creation call made itself shows as that
+//!   call's making.
 //! - **Exportable, made by the runtime**: an exportable `Private` buffer of
 //!   [`RUNTIME_BUFFER_BYTES`] (`Device::new_exportable_buffer`) every [`RUNTIME_EVERY`], at most
 //!   [`RUNTIME_BUFFERS`] a phase: the pool of exportable buffers grows, its blocks made ahead
@@ -140,6 +146,10 @@ const GIB: u64 = 1 << 30;
 const RUNTIME_BUFFER_BYTES: u64 = 32 * MIB;
 const RUNTIME_BUFFERS: usize = 24;
 const RUNTIME_EVERY: Duration = Duration::from_millis(400);
+/// A guest's `Private` buffer, as a scroll's memory log placed them: eight to a pooled block.
+const SCROLL_BUFFER_BYTES: u64 = 7_471_104;
+const SCROLL_BUFFERS: usize = 64;
+const SCROLL_EVERY: Duration = Duration::from_millis(30);
 /// The images arm's textures: `RGBA8Unorm` of this side (4 MiB), one a frame at 60 Hz, at most
 /// this many a phase (768 MiB).
 const IMAGE_SIDE: u64 = 1024;
@@ -429,6 +439,8 @@ fn monotonic() -> f64 {
 enum Making {
     /// The runtime's `Private` buffers (the module docs).
     Runtime,
+    /// The runtime's `Private` buffers of a guest's scroll (the module docs).
+    Scroll,
     /// The runtime's exportable `Private` buffers (the module docs).
     Exportable,
     /// The runtime's `Private` textures (the module docs).
@@ -463,6 +475,7 @@ fn make(
     let mut times = Vec::new();
     let (every, most) = match making {
         Making::Runtime | Making::Exportable => (RUNTIME_EVERY, RUNTIME_BUFFERS),
+        Making::Scroll => (SCROLL_EVERY, SCROLL_BUFFERS),
         Making::Images => (IMAGE_EVERY, IMAGE_TEXTURES),
         Making::ImagesMixed => (IMAGE_EVERY, MIXED_TEXTURES),
         Making::Raw { bytes, .. } => (
@@ -478,6 +491,11 @@ fn make(
             Making::Runtime => made.buffers.push(
                 device
                     .new_buffer(RUNTIME_BUFFER_BYTES, ResourceOptions::private())
+                    .unwrap(),
+            ),
+            Making::Scroll => made.buffers.push(
+                device
+                    .new_buffer(SCROLL_BUFFER_BYTES, ResourceOptions::private())
                     .unwrap(),
             ),
             Making::Exportable => made.buffers.push(
@@ -657,6 +675,8 @@ enum Arm {
     },
     /// The runtime's exportable buffers.
     Exportable,
+    /// The runtime's buffers of a guest's scroll.
+    Scroll,
     /// The runtime's textures.
     Images,
     /// The runtime's textures of mixed sizes.
@@ -705,6 +725,7 @@ fn arm(label: &str, arm: Arm) {
             Making::Runtime
         }
         Arm::Exportable => Making::Exportable,
+        Arm::Scroll => Making::Scroll,
         Arm::Images => Making::Images,
         Arm::ImagesMixed => Making::ImagesMixed,
         Arm::SystemHeap { bytes, export } => Making::Raw {
@@ -1198,6 +1219,12 @@ fn reclaim_submit_bench_runtime_settled() {
         "made by the runtime, settled",
         Arm::Runtime { settled: true },
     );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_scroll() {
+    arm("a scroll's buffers, made by the runtime", Arm::Scroll);
 }
 
 #[test]

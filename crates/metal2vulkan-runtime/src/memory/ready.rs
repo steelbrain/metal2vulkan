@@ -32,15 +32,23 @@
 //!   pool the encodings and commits place in once the pool grew (a second or later pooled block
 //!   was added to it within `KEPT_EMPTY_FOR`) and lacks room for a whole block, so that a growth
 //!   like a guest's scroll on the 780M (from 20 to 63 live blocks of 64 MiB in about 20 s, about 4
-//!   a second) finds a block made when it needs one; and for the host copies' pool once that
-//!   lacks room for half a block, the first by the device's first creation call, before the
-//!   program queued work. A pool of exportable buffers, which the creation calls themselves place
-//!   in, gets its block started the same way once it grew, so that the creation call that finds
-//!   no room there takes a block made ahead rather than make one on the program's thread (on a
-//!   Radeon 780M a creation call that made such a 64 MiB block itself took 10.0 to 15.0 ms in
-//!   three of four phases of `tests::reclaim_submit_bench`, quiet and fragmented, and none took
-//!   over 0.3 ms with the blocks made ahead); none of its blocks is made by a creation call that
-//!   places nothing there.
+//!   a second) finds a block made when it needs one; and, grown or not, once the pool is near its
+//!   next block (`Pool::near_next`: it holds a pooled block and lacks room for three quarters of
+//!   one, `memory::ahead_room`, a quarter of a block before the half block `keep_room` keeps), so
+//!   that its first growth, and the first after a pause, finds one made too, where a guest's
+//!   scroll on a Radeon 780M made its buffers' pool's first growth in place, on the guest's
+//!   thread (`tests::reclaim_submit_bench`'s scroll arm: of each phase's 8 blocks, the first was
+//!   made in place in three runs out of three, quiet and fragmented, and none is now). Such a
+//!   pool keeps that block at rest for as long as it stays near its next one: one block at most a
+//!   pool, none for a pool with room for three quarters of a block. And for the
+//!   host copies' pool once that lacks room for half a block, the first by the device's first
+//!   creation call, before the program queued work. A pool of exportable buffers, which the
+//!   creation calls themselves place in, gets its block started the same way once it grew or is
+//!   near its next block, so that the creation call that finds no room there takes a block made
+//!   ahead rather than make one on the program's thread (on a Radeon 780M a creation call that
+//!   made such a 64 MiB block itself took 10.0 to 15.0 ms in three of four phases of
+//!   `tests::reclaim_submit_bench`, quiet and fragmented, and none took over 0.3 ms with the
+//!   blocks made ahead); none of its blocks is made by a creation call that places nothing there.
 //! - **Added where room is needed.** A creation call that finds such a pool without room for
 //!   half a block (`memory::keep_room`), and a placement that finds no room (`memory::place`),
 //!   add the pool's block made ahead once its making ended. Where the making is under way they
@@ -60,7 +68,7 @@
 //! - **Bounded.** One making a pool at most, on a thread of its own that ends with the block.
 //!   While it waits to be added, its bytes count against its heap's budget of kept empty blocks
 //!   (`Memory::kept_budget`); one whose pool stopped growing for `KEPT_EMPTY_FOR`, the pool
-//!   having room for half a block, goes (`Memory::sweep_stale`). The device's teardown stops a
+//!   having room for three quarters of a block, goes (`Memory::sweep_stale`). The device's teardown stops a
 //!   making that has not begun, joins every one and frees its block. Its Vulkan calls run in a
 //!   section of the exit guard (`exit_guard.rs`): once the process exits, no block is made.
 //! - **Counted** (`WorkCounts`): the blocks made ahead and added, by kind
