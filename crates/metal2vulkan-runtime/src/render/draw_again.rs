@@ -123,7 +123,7 @@ use crate::noted_apart::NotedInto;
 use crate::pipeline::{RenderPipelineState, RenderStateKind, WeakRenderPipelineState};
 use crate::resource::ResourceKey;
 use crate::tracker::{Use, UseRange};
-use crate::work_counts::UnlikeKept;
+use crate::work_counts::{ArgumentsStop, UnlikeKept};
 use metal2vulkan::metal::RenderStages;
 
 /// The encoder's last direct draw, where it is kept (the module docs).
@@ -485,7 +485,13 @@ impl RenderLowering {
                     let drawn = (assembly, draw, reargued);
                     self.draw_rebound(live, call, drawn, buffers, stamps, checked)
                 }
-                false => self.rebind_stopped(),
+                false => {
+                    if reargued {
+                        let why = ArgumentsStop::Other;
+                        self.core.counts().draw_rebind_stopped_arguments(why);
+                    }
+                    self.rebind_stopped()
+                }
             };
         }
         #[cfg(debug_assertions)]
@@ -607,24 +613,16 @@ fn digest(part: impl std::fmt::Debug) -> u64 {
 
 /// What a draw rebound worked out (`rebound.rs`), which its every step must work out alike: its
 /// commands, set-0 writes, dynamic offsets, push bytes, vertex buffers, uses and resident keys,
-/// by digest ([`digest`]), and what its recording records with ([`Recorded`]).
+/// and the Vulkan draw and index buffer bind its recording records (a draw of other arguments'
+/// worked out again), by digest ([`digest`]), and the draw state its recording records with (a
+/// draw restated's derived again, `restated.rs`).
 #[cfg(debug_assertions)]
-pub(super) struct Rebound([u64; 7], Option<Recorded>);
-
-/// What a draw rebound's kept recording records it with: its draw state (a draw restated's
-/// derived again, `restated.rs`), and its Vulkan draw and index buffer's bind, by its buffer,
-/// offset, index type and bound size (a draw of other arguments' worked out again).
-#[cfg(debug_assertions)]
-type Recorded = (
-    super::DrawState,
-    metal2vulkan::vk::DrawCommand,
-    Option<(vk::Buffer, u64, vk::IndexType, Option<u64>)>,
-);
+pub(super) struct Rebound([u64; 8], Option<super::DrawState>);
 
 #[cfg(debug_assertions)]
 impl Rebound {
     /// The parts' names, in their order.
-    const PARTS: [&str; 7] = [
+    const PARTS: [&str; 8] = [
         "commands",
         "set-0 writes",
         "dynamic offsets",
@@ -632,6 +630,7 @@ impl Rebound {
         "vertex buffers",
         "uses",
         "resident keys",
+        "Vulkan draw and index buffer bind",
     ];
 
     /// What `live` holds of a draw rebound.
@@ -664,14 +663,15 @@ impl Rebound {
                 digest(&live.vertex_buffers),
                 digest(&*live.uses),
                 digest(live.uses.resident()),
+                digest((live.kept.recording()).map(|recording| {
+                    let index = (recording.index).map(|index| {
+                        let size = index.sized.map(|(_, size)| size);
+                        (index.buffer, index.offset, index.index_type, size)
+                    });
+                    (recording.draw, index)
+                })),
             ],
-            (live.kept.recording()).map(|recording| {
-                let index = (recording.index).map(|index| {
-                    let size = index.sized.map(|(_, size)| size);
-                    (index.buffer, index.offset, index.index_type, size)
-                });
-                (recording.state.clone(), recording.draw, index)
-            }),
+            (live.kept.recording()).map(|recording| recording.state.clone()),
         )
     }
 
@@ -686,8 +686,7 @@ impl Rebound {
         }
         assert!(
             now.1 == self.1,
-            "a draw rebound records with another draw state, Vulkan draw or index buffer bind \
-             than its every step"
+            "a draw rebound records with another draw state than its every step"
         );
     }
 }

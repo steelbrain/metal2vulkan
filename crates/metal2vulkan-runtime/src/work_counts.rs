@@ -640,6 +640,11 @@ struct CommandCounters {
     draws_restated: AtomicU64,
     draws_rebound_arguments: AtomicU64,
     draws_rebind_stopped_arguments: AtomicU64,
+    draws_rebind_stopped_arguments_route: AtomicU64,
+    draws_rebind_stopped_arguments_tables: AtomicU64,
+    draws_rebind_stopped_arguments_fetch_window: AtomicU64,
+    draws_rebind_stopped_arguments_reach: AtomicU64,
+    draws_rebind_stopped_arguments_other: AtomicU64,
 }
 
 /// What kept a direct draw that recorded from being kept to draw again
@@ -744,6 +749,22 @@ pub(crate) struct UnlikeKept {
     /// A no-copy buffer moved, or the residency, the host aliases, parts or held images, or the
     /// sampler IDs changed (`Under`).
     pub(crate) under: bool,
+}
+
+/// Where the rebind of a draw of other arguments than its kept draw's stopped
+/// (`WorkCounts::draws_rebind_stopped_arguments_*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArgumentsStop {
+    /// Its route: it may make a primitive where the kept draw may not, or the other way.
+    Route,
+    /// Its plan reads its slots some other way than a rebind works out.
+    Tables,
+    /// A fixed-function vertex buffer's fetch window it moves.
+    FetchWindow,
+    /// Its pulled attributes' reach.
+    Reach,
+    /// Any other step of a rebind.
+    Other,
 }
 
 impl UnlikeKept {
@@ -1213,11 +1234,19 @@ impl Counting<'_> {
         self.0.add(|counts| &counts.draws_rebound_arguments, 1);
     }
 
-    /// A render draw of other arguments than its kept draw's whose rebind stopped at a step that
-    /// reads them (`WorkCounts::draws_rebind_stopped_arguments`).
-    pub(crate) fn draw_rebind_stopped_arguments(&self) {
-        self.0
-            .add(|counts| &counts.draws_rebind_stopped_arguments, 1);
+    /// A render draw of other arguments than its kept draw's whose rebind stopped where `why`
+    /// says (`WorkCounts::draws_rebind_stopped_arguments`).
+    pub(crate) fn draw_rebind_stopped_arguments(&self, why: ArgumentsStop) {
+        let counts = self.0;
+        counts.add(|counts| &counts.draws_rebind_stopped_arguments, 1);
+        let count: fn(&CommandCounters) -> &AtomicU64 = match why {
+            ArgumentsStop::Route => |c| &c.draws_rebind_stopped_arguments_route,
+            ArgumentsStop::Tables => |c| &c.draws_rebind_stopped_arguments_tables,
+            ArgumentsStop::FetchWindow => |c| &c.draws_rebind_stopped_arguments_fetch_window,
+            ArgumentsStop::Reach => |c| &c.draws_rebind_stopped_arguments_reach,
+            ArgumentsStop::Other => |c| &c.draws_rebind_stopped_arguments_other,
+        };
+        counts.add(count, 1);
     }
 
     /// A render draw rebound that was moved (`WorkCounts::draws_moved`).
@@ -6279,8 +6308,8 @@ pub struct WorkCounts {
     /// Of `draws_unlike_kept`, those unlike only by their counts and starts or their index
     /// buffer's offset: the same pipeline state, call, assembly, index buffer and type, command
     /// buffer and the rest the kept draw read, and no vertex, index or instance to draw. Every
-    /// other draw so unlike its kept draw is rebound (`draws_rebound_arguments`) or stops where a
-    /// step reads its arguments (`draws_rebind_stopped_arguments`).
+    /// other draw so unlike its kept draw is rebound (`draws_rebound_arguments`) or takes every
+    /// step where its rebind stops (`draws_rebind_stopped_arguments`, by where).
     pub draws_unlike_kept_arguments_alone: u64,
     /// Render encoders' direct draws of their kept draw again after calls, that took every step
     /// rather than being rebound (`draws_rebound`): a kept draw that keeps nothing to rebind, or a
@@ -6288,13 +6317,31 @@ pub struct WorkCounts {
     /// assertions' checked draws are not counted.
     pub draws_rebind_stopped: u64,
     /// Of `draws_rebind_stopped`, draws that differed from their kept draw only in their
-    /// arguments (`draws_rebound_arguments`) and stopped at a step that reads them some other way
-    /// than a draw rebound works out again: a route they change (a draw of no complete primitive
-    /// after one of some, or the other way), a fixed-function vertex buffer whose fetch window
-    /// they move (another vertex range of a draw without indices, another instance range of a
-    /// per-instance buffer), or a plan that reads them itself (`BindingPlan::redraw_apart_into`:
-    /// a de-indexed draw, or one of a stage's argument or root table). Each takes every step.
+    /// arguments (`draws_rebound_arguments`) and whose rebind stopped, each counted in one of the
+    /// five below by where. Each takes every step. A kept draw is never a de-indexed, mesh or
+    /// patch draw (`render/draw_again.rs`), so none stops for one.
     pub draws_rebind_stopped_arguments: u64,
+    /// Of `draws_rebind_stopped_arguments`, those whose route the arguments change: a draw that
+    /// may make no complete primitive after one that may make some, or the other way.
+    pub draws_rebind_stopped_arguments_route: u64,
+    /// Of `draws_rebind_stopped_arguments`, those whose plan reads its slots some other way than a
+    /// rebind works out (`BindingPlan::slot_rebinds`): a stage's argument or root table, a uniform
+    /// view a written slot may alias, or a slot changed since whose texel range, planes or
+    /// per-bind stride the commands hold.
+    pub draws_rebind_stopped_arguments_tables: u64,
+    /// Of `draws_rebind_stopped_arguments`, those that move a fixed-function vertex buffer's fetch
+    /// window (`BindingPlan::redraw_apart_into`): another vertex range of a draw without indices,
+    /// or another instance range of a per-instance buffer. A base vertex or index offset of an
+    /// indexed draw moves none: its vertices' window is the buffer's whole.
+    pub draws_rebind_stopped_arguments_fetch_window: u64,
+    /// Of `draws_rebind_stopped_arguments`, those whose pulled attribute reaches past 4 GiB of its
+    /// buffer (`render/vertex_reach.rs`), which every step refuses.
+    pub draws_rebind_stopped_arguments_reach: u64,
+    /// Of `draws_rebind_stopped_arguments`, those that stopped at another step of a rebind: a kept
+    /// draw that keeps nothing to rebind, a render state set whose derivation the kept draw's is
+    /// not, a changed shape or runtime samplers' address modes, shadowed textures or a barrier
+    /// other than the kept draw's (`render/draw_again/rebound.rs`'s stops).
+    pub draws_rebind_stopped_arguments_other: u64,
     /// The uses of resources a render encoder made resident (`useResource:usage:stages:`,
     /// `useHeap:stages:`) that its draws' binding plans list, as its draws worked them out for
     /// hazard tracking: a draw keeps the last draw's where its plan is the last draw's, or lists
@@ -8280,6 +8327,21 @@ impl Device {
             draws_rebind_stopped: commands(|counts| &counts.draws_rebind_stopped),
             draws_rebind_stopped_arguments: commands(|counts| {
                 &counts.draws_rebind_stopped_arguments
+            }),
+            draws_rebind_stopped_arguments_route: commands(|counts| {
+                &counts.draws_rebind_stopped_arguments_route
+            }),
+            draws_rebind_stopped_arguments_tables: commands(|counts| {
+                &counts.draws_rebind_stopped_arguments_tables
+            }),
+            draws_rebind_stopped_arguments_fetch_window: commands(|counts| {
+                &counts.draws_rebind_stopped_arguments_fetch_window
+            }),
+            draws_rebind_stopped_arguments_reach: commands(|counts| {
+                &counts.draws_rebind_stopped_arguments_reach
+            }),
+            draws_rebind_stopped_arguments_other: commands(|counts| {
+                &counts.draws_rebind_stopped_arguments_other
             }),
             resident_uses_made: commands(|counts| &counts.resident_uses_made),
             resident_keys_settled: commands(|counts| &counts.resident_keys_settled),

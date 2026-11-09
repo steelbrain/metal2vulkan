@@ -59,8 +59,9 @@
 //!   index buffer's bind (`IndexBind::of`: the index source is the kept draw's buffer, read in
 //!   place, so its bound range is the one every step binds). It then records that bind where its
 //!   record holds another, with its new draw, and the kept draw takes its arguments, index source
-//!   and draw (`WorkCounts::draws_rebound_arguments`). A stop at a step that reads them is counted
-//!   (`WorkCounts::draws_rebind_stopped_arguments`), and the draw takes every step.
+//!   and draw (`WorkCounts::draws_rebound_arguments`). Where its rebind stops, at any step, the
+//!   draw takes every step, counted by where (`WorkCounts::draws_rebind_stopped_arguments_*`: its
+//!   route, its plan's reads of its slots, a fetch window, its attributes' reach, or another).
 //! - **What it records and notes.** Its uses noted as any draw notes them (`note_reaching`, the
 //!   pass's reads, the instance's gathered uses), of the kept draw's access types: none writes or
 //!   reads indirect arguments (`draw_again::unwritten`), so the unordered writes, indirect reads and
@@ -128,6 +129,7 @@ use crate::resource::ResourceKey;
 use crate::shadow::{ShadowUse, UsedAs};
 use crate::texture::Texture;
 use crate::tracker::Use;
+use crate::work_counts::ArgumentsStop;
 
 /// The most slots a draw rebound takes changed: a draw after more takes every step.
 const SLOTS: usize = 8;
@@ -334,23 +336,31 @@ impl RenderLowering {
     ) -> Again {
         // A notice met at each occurrence forgets the draw once recorded, as its every step does.
         let watch = crate::degradation::EachWatch::start();
+        // A draw of other arguments whose rebind stops is counted by where.
+        let stopped = |encoder: &Self, why| {
+            if reargued {
+                encoder.core.counts().draw_rebind_stopped_arguments(why);
+            }
+            encoder.rebind_stopped()
+        };
         // Of other arguments, routed as the kept draw.
         if reargued && !self.routed_as_kept(assembly, draw) {
-            self.core.counts().draw_rebind_stopped_arguments();
-            return self.rebind_stopped();
+            return stopped(self, ArgumentsStop::Route);
         }
         // After a call set the encoder's render state, what it decides derived again
         // (`restated.rs`).
         let restated =
             (self.again.kept.as_ref()).is_some_and(|kept| kept.stated != self.again.stated);
         if restated && !self.restate_kept(live, call, assembly, draw) {
-            return self.rebind_stopped();
+            return stopped(self, ArgumentsStop::Other);
         }
         let Some(changed) = self.bring_in(live, stamps) else {
-            return self.rebind_stopped();
+            return stopped(self, ArgumentsStop::Other);
         };
-        let Some(rebinding) = self.rebind(call, live, &changed, (draw, buffers, reargued)) else {
-            return self.rebind_stopped();
+        let mut stop = ArgumentsStop::Other;
+        let drawn = (draw, buffers, reargued);
+        let Some(rebinding) = self.rebind(call, live, &changed, drawn, &mut stop) else {
+            return stopped(self, stop);
         };
         if reargued {
             self.reargue_kept(live, draw, buffers);
@@ -543,16 +553,18 @@ impl RenderLowering {
     }
 
     /// Work out again in `live` what the slots `changed` decide of the kept draw, `draw` of
-    /// `buffers`: its commands, set-0 writes and dynamic offsets, push bytes, vertex buffers and
-    /// uses, with the checks a draw's steps take of them (the module docs). What it worked out
-    /// where it did ([`Rebinding`]); else `None`, and the draw takes every step, which writes them
-    /// all again.
+    /// `buffers`, of other arguments where `reargued`: its commands, set-0 writes and dynamic
+    /// offsets, push bytes, vertex buffers and uses, with the checks a draw's steps take of them
+    /// (the module docs). What it worked out where it did ([`Rebinding`]); else `None`, and the
+    /// draw takes every step, which writes them all again, where it stopped left in `stop` where
+    /// it was a step the arguments' count names (else it holds what it held).
     fn rebind(
         &mut self,
         call: &'static str,
         live: &mut LiveBind,
         changed: &Changed,
         (draw, buffers, reargued): (&DrawCall, &DrawBuffers<'_>, bool),
+        stop: &mut ArgumentsStop,
     ) -> Option<Rebinding> {
         let slots = changed.list();
         let kept = settles_kept(self, live)
@@ -577,17 +589,27 @@ impl RenderLowering {
         }
         // What the slots decide of its commands, by the plan's rebinds of them, made once for the
         // kept draw (`BindingPlan::rebind_draw_slots_into`).
-        if plan.rebind_draw_slots_with(rebinds?, &live.state, &mut live.commands) != Ok(true) {
+        let rebound = match rebinds {
+            Some(rebinds) => plan.rebind_draw_slots_with(rebinds, &live.state, &mut live.commands),
+            None => Ok(false),
+        };
+        if rebound != Ok(true) {
+            *stop = ArgumentsStop::Tables;
             return None;
         }
         // A draw of other arguments: what they decide of its commands, its Vulkan draw, push
-        // fields and own uses (`BindingPlan::redraw_apart_into`); an error is every step's.
+        // fields and own uses (`BindingPlan::redraw_apart_into`); an error is every step's. Its
+        // plan reads them no other way where a rebind of its slots goes on (above), and it is no
+        // de-indexed, mesh or patch draw's (a kept draw's): where it answers `Ok(false)`, a
+        // fixed-function vertex buffer's fetch window moves.
         if reargued {
             let from = (self.again.kept.as_ref()).map(|kept| kept.draw)?;
             match plan.redraw_apart_into(&live.state, (&from, draw), &mut live.commands) {
                 Ok(true) => {}
                 Ok(false) => {
-                    self.core.counts().draw_rebind_stopped_arguments();
+                    if !plan.vertex_buffers.is_empty() {
+                        *stop = ArgumentsStop::FetchWindow;
+                    }
                     return None;
                 }
                 Err(_) => return None,
@@ -610,10 +632,11 @@ impl RenderLowering {
             !moved || tables_checked(),
             "a draw moved binds a function table its kept draw's checks did not pass"
         );
-        let checked = self
-            .check_vertex_reach(&compiled.vertex_input.pulled, draw)
-            .is_ok()
-            && (moved || tables_checked());
+        let reached = (self.check_vertex_reach(&compiled.vertex_input.pulled, draw)).is_ok();
+        if !reached {
+            *stop = ArgumentsStop::Reach;
+        }
+        let checked = reached && (moved || tables_checked());
         // The pass's fragment writes, a copy of which a stage before the fragments may read
         // (`render/pass_start_reads.rs`): none, so each stage reads its encoder's table.
         if !checked || self.pass_start.fragments_wrote() {

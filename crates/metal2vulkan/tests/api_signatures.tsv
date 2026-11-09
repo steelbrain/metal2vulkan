@@ -2706,6 +2706,11 @@ field	metal2vulkan-runtime::WorkCounts.draws_moved_inside	pub draws_moved_inside
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped	pub draws_rebind_stopped: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments	pub draws_rebind_stopped_arguments: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments_fetch_window	pub draws_rebind_stopped_arguments_fetch_window: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments_other	pub draws_rebind_stopped_arguments_other: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments_reach	pub draws_rebind_stopped_arguments_reach: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments_route	pub draws_rebind_stopped_arguments_route: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments_tables	pub draws_rebind_stopped_arguments_tables: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebound	pub draws_rebound: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebound_arguments	pub draws_rebound_arguments: u64
 field	metal2vulkan-runtime::WorkCounts.draws_restated	pub draws_restated: u64

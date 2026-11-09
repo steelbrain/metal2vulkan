@@ -1445,8 +1445,8 @@ fn draws_after_a_compositor_s_gaps_rebind_what_every_step_binds() {
 /// which is rebound with them (`draws_rebound_arguments`), one of another primitive type, which
 /// only its assembly sets apart from that one, one of other counts alone that makes no primitive
 /// where that one makes some, whose route they change, so its rebind stops
-/// (`draws_rebind_stopped_arguments`), and one of other counts alone that draws nothing, which
-/// takes every step (`draws_unlike_kept_arguments_alone`).
+/// (`draws_rebind_stopped_arguments_route`), and one of other counts alone that draws nothing,
+/// which takes every step (`draws_unlike_kept_arguments_alone`).
 #[test]
 fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
     let scratch = Scratch::new("draw-again-unlike");
@@ -1469,7 +1469,7 @@ fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
     };
     warm(&device, draws);
     let ran = run(&device, draws);
-    let parts: [(&str, fn(&WorkCounts) -> u64, u64); 13] = [
+    let parts: [(&str, fn(&WorkCounts) -> u64, u64); 14] = [
         ("unlike", |c| c.draws_unlike_kept, 2),
         ("counts", |c| c.draws_unlike_kept_counts, 1),
         (
@@ -1492,6 +1492,11 @@ fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
         (
             "stopped at a step of their arguments",
             |c| c.draws_rebind_stopped_arguments,
+            1,
+        ),
+        (
+            "stopped at their route",
+            |c| c.draws_rebind_stopped_arguments_route,
             1,
         ),
         ("stopped", |c| c.draws_rebind_stopped, 1),
