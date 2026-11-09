@@ -534,9 +534,12 @@ impl Device {
             PagesClass::Pointer | PagesClass::Fresh => self.host_unplaced(plan, texels, facts),
             // A texture over the runtime's pooled or exported memory takes its image there
             // (`Device::alias_image`), never over host pages.
-            PagesClass::Pooled | PagesClass::ExportedFd | PagesClass::ExportedDmaBuf => Err(
-                internal("an image in place over the runtime's pooled or exported memory"),
-            ),
+            PagesClass::Pooled
+            | PagesClass::ExportedFd
+            | PagesClass::ExportedDmaBuf
+            | PagesClass::FdBlocks => Err(internal(
+                "an image in place over the runtime's pooled or exported memory",
+            )),
         }
     }
 

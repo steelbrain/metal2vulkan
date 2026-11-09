@@ -295,7 +295,7 @@ pub(super) fn fd_buffer_types(
 }
 
 /// What a new block's memory is allocated exportable as ([`BlockMaker::make_as`]).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 enum Exportable {
     /// Nothing.
     No,
