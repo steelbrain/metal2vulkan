@@ -985,6 +985,14 @@ pub enum DriverFact {
     /// packed 16-bit and 10-bit channels and an sRGB format's alpha at times to the code above the
     /// nearest (`B5G6R5Unorm`'s 0.7529 red, 23.34 codes, stored 24). The load operation's tie of an
     /// 8-bit channel (127.5 codes) stores 127 there (`runtime_lane::clear_reach`, `sample_fills`).
+    /// The same lane on ANV on the Iris Xe of RPL-P (`deviceID` 0xa7a0) at 6cb37f2c86
+    /// (2026-11-08): beside ties stored either way (3,827 texels of 38 formats and placements), its
+    /// fills of `RGB10A2Unorm` and `BGR10A2Unorm` stored the 10-bit channel of 0.8793 (899.51
+    /// codes) as 899 where Metal stores 900, off a midpoint, into a texel of a level and a whole
+    /// 1 x 1 slice alike. There the code a load operation's clear stores depends on the image: 0.1
+    /// in an 8-bit unorm channel (25.5 codes) stores `0x1a` in a private optimal image and `0x19` in
+    /// a linear image in place over host pages, or in a shadow listing an unsigned-integer view
+    /// format (`runtime_lane::pitched_surfaces`, `no_copy_textures`).
     ColorClearTakesEitherCode,
     /// An optimal colour image may keep its compression state apart from the memory it is bound
     /// to, so a write through a buffer or another image over its bytes can leave its texels as
@@ -2066,6 +2074,11 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     nvidia_on(
         DriverFact::ColorClearTakesEitherCode,
         NVIDIA_RTX_5080_LAPTOP,
+    ),
+    mesa_on(
+        DriverFact::ColorClearTakesEitherCode,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
     Measured {
         fact: DriverFact::CompressedImagesHideAliasedWrites,

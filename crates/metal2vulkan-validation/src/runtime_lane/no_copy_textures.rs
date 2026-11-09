@@ -1129,12 +1129,19 @@ fn passes_blend_load_and_store_under(
         );
         let ours_cleared = clear_conversions(&messages.take_notices());
         let codes = clear_codes_apart(&device);
-        assert!(
-            codes == 0 || (private_cleared > 0 && ours_cleared > 0),
-            "{what}: the clears' device-color-conversion notices: the private texture's \
-             {private_cleared}, ours {ours_cleared}"
-        );
         check_by("a pass that clears and blends", &ours, &reference, codes);
+        // Each image's clear of the same value announced alike, and announced where it stood
+        // apart.
+        let apart = texel_rows(&ours, bpr, row) != texel_rows(&reference, bpr, row);
+        let notices = format!("the private texture's {private_cleared}, ours {ours_cleared}");
+        assert!(
+            codes == 0 || private_cleared == ours_cleared,
+            "{what}: the clears' device-color-conversion notices: {notices}"
+        );
+        assert!(
+            !apart || (private_cleared > 0 && ours_cleared > 0),
+            "{what}: a clear apart from the private texture's, unannounced: {notices}"
+        );
         check_by(
             "that pass, in the pages",
             &mapping.read(0..n),

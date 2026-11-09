@@ -770,18 +770,25 @@ fn reads_writes_and_renders_as_metal(layout: Layout) {
             let ours = messages.take_notices();
             let codes = clear_codes_apart(&device) * u32::from(clear);
             let [private_cleared, ours_cleared] = [&private[..], &ours[..]].map(clear_conversions);
-            assert!(
-                codes == 0 || (private_cleared > 0 && ours_cleared > 0),
-                "{what}, {step}: the clears' device-color-conversion notices: the private \
-                 texture's {private_cleared}, ours {ours_cleared}"
-            );
             taken.extend(private.into_iter().chain(ours));
             lay(
                 &layout,
                 &mut expected,
                 &blit_out(&queue, &layout, &reference),
             );
-            expected = surface.check_by(&layout, step, &expected, codes);
+            let pages = surface.check_by(&layout, step, &expected, codes);
+            // Each image's clear of the same value announced alike, and announced where it
+            // stood apart (the bytes between the rows held).
+            let notices = format!("the private texture's {private_cleared}, ours {ours_cleared}");
+            assert!(
+                codes == 0 || private_cleared == ours_cleared,
+                "{what}, {step}: the clears' device-color-conversion notices: {notices}"
+            );
+            assert!(
+                pages == expected || (private_cleared > 0 && ours_cleared > 0),
+                "{what}, {step}: a clear apart from the private texture's, unannounced: {notices}"
+            );
+            expected = pages;
         }
         // A pass that does not store leaves the pages as they were.
         blend_pass(

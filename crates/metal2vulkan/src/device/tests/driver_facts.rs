@@ -465,6 +465,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
         (
             "intel-irisxe-rplp-anv",
             vec![
+                EITHER_CODE,
                 HIDE,
                 HOST,
                 FETCH,

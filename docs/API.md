@@ -3736,7 +3736,9 @@ bound.
   packed 16-bit, half or small-float color attachment to a color whose conversion is in question
   (a normalized channel within 1/1024 of a midpoint between two codes, or anywhere off a whole code
   on a driver that takes either code nearest it, `DriverFact::ColorClearTakesEitherCode`: NVIDIA's
-  on the RTX 5080 Laptop GPU, whose 8- and 16-bit channels' clears went toward zero; an sRGB channel
+  on the RTX 5080 Laptop GPU, whose 8- and 16-bit channels' clears went toward zero, and ANV on the
+  Iris Xe of RPL-P, whose clear's code also depends on the image (a private optimal image's and one
+  in place over host pages can stand a code apart); an sRGB channel
   inside its range, a value the format does not hold exactly): the device converts the clear color,
   where Metal's clear rounds each channel to nearest, a tie to even, and truncates a small float's
   and a shared exponent's mantissas. Vulkan lets the device store either of the two codes nearest a
