@@ -557,8 +557,8 @@ fn a_dma_buf_block_s_planes_name_an_opaque_fd_where_its_images_take_no_dma_buf_i
     };
     let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
     assert_eq!(
-        exports,
-        if both { BOTH } else { dma_buf },
+        exports.as_raw(),
+        if both { BOTH } else { dma_buf }.as_raw(),
         "{name}: the block is exportable as the device's buffer queries answer (both {both})"
     );
     fill(&device, &picture);
