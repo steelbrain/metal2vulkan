@@ -413,6 +413,39 @@ fn finish(committed: Committed, compute: &ComputeCase) -> Result<Run, Failed> {
     })
 }
 
+/// Where the command's output `command` and the dispatch's `dispatch` differ, as their 4-byte
+/// little-endian words: how many differ, and the first [`WORDS_SAID`] of them with their index and
+/// both values, in a few hundred characters whatever the outputs' length, so that a failure's line
+/// says which words a run got otherwise even where the log is cut.
+fn words_apart(command: &[u8], dispatch: &[u8]) -> String {
+    let word = |bytes: &[u8], at: usize| {
+        let mut word = [0; 4];
+        let end = bytes.len().min(at * 4 + 4);
+        if let Some(have) = bytes.get(at * 4..end) {
+            word[..have.len()].copy_from_slice(have);
+        }
+        u32::from_le_bytes(word)
+    };
+    let words = command.len().max(dispatch.len()).div_ceil(4);
+    let apart: Vec<usize> = (0..words)
+        .filter(|&at| word(command, at) != word(dispatch, at))
+        .collect();
+    let said: Vec<String> = (apart.iter().take(WORDS_SAID))
+        .map(|&at| format!("{at}: {:#x} {:#x}", word(command, at), word(dispatch, at)))
+        .collect();
+    format!(
+        "of {} and {} bytes, {} of {words} words apart (index: the command's, the dispatch's) \
+         [{}]",
+        command.len(),
+        dispatch.len(),
+        apart.len(),
+        said.join("; ")
+    )
+}
+
+/// How many words apart [`words_apart`] names.
+const WORDS_SAID: usize = 6;
+
 /// Whether `compute` binds buffers alone, which an indirect command's kernel buffers can hold
 /// (their pointers' targets resident), and dispatches as a command does.
 fn buffers_alone(compute: &ComputeCase) -> bool {
@@ -521,11 +554,9 @@ fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize)
                 (Ok(direct), Ok(indirect)) => {
                     let mut differs = Vec::new();
                     let defined = |output: &[u8]| metal_recorded(&case.case, output.to_vec());
-                    if defined(&direct.output) != defined(&indirect.output) {
-                        differs.push(format!(
-                            "output {:02x?} from the command, {:02x?} from the dispatch",
-                            indirect.output, direct.output
-                        ));
+                    let (command, dispatch) = (defined(&indirect.output), defined(&direct.output));
+                    if command != dispatch {
+                        differs.push(format!("output {}", words_apart(&command, &dispatch)));
                     }
                     if direct.report != indirect.report {
                         differs.push(format!(
