@@ -152,6 +152,24 @@ pub(crate) unsafe fn route(device: ash::Device) -> (ash::Device, Option<Slot>) {
     (routed, Some(slot))
 }
 
+/// Every slot no device holds, taken as a device takes one ([`route`]) and let go as each
+/// [`Slot`] drops: a device test's stand-in for devices holding them (`tests::recorder_slots`),
+/// so that it makes no more devices than the slots it needs, whatever number of devices a driver
+/// makes in one process.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn take_free_slots() -> Vec<Slot> {
+    let free = (0..SLOTS).filter(|&index| {
+        TAKEN[index]
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+    });
+    free.map(|index| {
+        thunks::clear_counts(index);
+        Slot { index }
+    })
+    .collect()
+}
+
 /// `real`, a device's command `command`, through `slot` where the device has one
 /// ([`Slot::route`]), else as it is.
 ///
