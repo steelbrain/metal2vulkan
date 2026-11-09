@@ -1980,6 +1980,10 @@ fn edges_draw_as_bands_or_at_the_nearest_width() {
 /// barycentric weights) draws its lines and its triangle's edges at width 0, which no device's own
 /// lines draw, by the device's lines at the nearest width they draw, announced at each draw with
 /// why and counted, its draws not refused; on a device that tessellates, the refusal is the why.
+/// The triangle's corners lie on pixel centres, so its edges run through centres, where Metal's
+/// lines at width 0 draw (its `horizontal y=16.5 x 4.5 to 27.5 width 0`, 23 pixels): a line along
+/// pixel edges draws nothing on Metal (`horizontal y=16 width 0 (through no centre)`, none) nor on
+/// a device whose lines draw 1/16 as it is (ANV on the Iris Xe of RPL-P, `lineWidthRange` from 0).
 #[test]
 fn a_refused_band_draws_at_the_nearest_width() {
     let cache = ScratchCache::new().unwrap();
@@ -1992,7 +1996,7 @@ fn a_refused_band_draws_at_the_nearest_width() {
         let name = device.name().to_owned();
         let facts = LineFacts::of(&device);
         let mut lane = Lane::new(device);
-        let triangle = [4.0, 4.0, 28.0, 4.0, 16.0, 28.0];
+        let triangle = [4.5, 4.5, 27.5, 4.5, 16.5, 27.5];
         for round in 0..2 {
             for draw in [
                 Draw::line(PrimitiveType::Line, &triangle[..4], 0.0),
