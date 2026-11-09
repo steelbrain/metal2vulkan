@@ -73,7 +73,7 @@
 use crate::draw_source::SizedIndexBind;
 use crate::dynamic_state::{ColorWriteMasks, ExtendedDynamicState};
 use crate::error::{vulkan, Error};
-use crate::exit_guard::Call;
+use crate::exit_guard::{Call, Calls};
 use crate::generated_commands::{
     Commands, ExecutionSetCreateInfo, ExecutionSetPipelineInfo, ExecutionSetToken,
     LayoutCreateInfo, LayoutToken, EXECUTION_SET_PIPELINES, INDIRECT_BINDABLE, TOKEN_DISPATCH,
@@ -441,7 +441,7 @@ pub(super) unsafe fn prime(
         drawn,
         // SAFETY: the caller's.
         memory: unsafe { instance.get_physical_device_memory_properties(physical) },
-        calls: 0,
+        calls: Calls::NONE,
         held: Vec::new(),
     };
     // SAFETY: the caller's.
@@ -487,12 +487,12 @@ pub(super) unsafe fn prime(
 /// [`COLOR_WRITE_MASK_CALLS`] and [`SIZED_INDEX_BIND_CALLS`] where it has
 /// not their commands, and those of [`YCBCR_CONVERSION_CALLS`] where it converts no YCbCr format,
 /// that `calls` (one bit each) does not hold.
-pub(crate) fn missing(calls: u128, has: Has) -> Vec<Call> {
+pub(crate) fn missing(calls: Calls, has: Has) -> Vec<Call> {
     Call::ALL
         .iter()
         .copied()
         .filter(|&call| {
-            calls & call.bit() == 0
+            !calls.holds(call)
                 && !UNPRIMED.contains(&call)
                 && (has.timestamps || !TIMESTAMP_CALLS.contains(&call))
                 && ((has.timestamps && has.host_query_reset)
@@ -545,7 +545,7 @@ struct Primer<'a> {
     drawn: PrimedDraws,
     memory: vk::PhysicalDeviceMemoryProperties,
     /// The table's entry points called, one bit each.
-    calls: u128,
+    calls: Calls,
     /// What was made, released last first.
     held: Vec<Release>,
 }
@@ -553,7 +553,7 @@ struct Primer<'a> {
 impl Primer<'_> {
     /// `call` was made.
     fn made(&mut self, call: Call) {
-        self.calls |= call.bit();
+        self.calls = self.calls.with(call);
     }
 
     /// The command buffer `vkAllocateCommandBuffers` allocates of `info`, the device's loader

@@ -6,7 +6,7 @@
 //! the hook learns it (Linux). Each test uses a guard of its own; only the fork tests use the
 //! process's, which nothing here closes.
 
-use crate::exit_guard::{self, hook, Busy, Call, Guard, InProcess, InProcessDevices};
+use crate::exit_guard::{self, hook, Busy, Call, Calls, Guard, InProcess, InProcessDevices};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Barrier, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -675,12 +675,15 @@ fn a_forked_child_s_exit_does_not_wait_for_its_parent_s_sections() {
 /// Each entry point has a bit of its own.
 #[test]
 fn every_entry_point_has_a_bit_of_its_own() {
-    let mut bits = 0_u128;
     for &call in Call::ALL {
-        let bit = call.bit();
-        assert_eq!(bit.count_ones(), 1, "{call:?} has no bit of the word");
-        assert_eq!(bits & bit, 0, "{call:?} shares a bit");
-        bits |= bit;
+        let alone = Calls::NONE.with(call);
+        let held: Vec<Call> = Call::ALL
+            .iter()
+            .copied()
+            .filter(|&each| alone.holds(each))
+            .collect();
+        assert_eq!(held, [call], "{call:?} shares a bit");
+        assert!(!Calls::NONE.with(call).without(call).holds(call));
     }
 }
 
@@ -2429,26 +2432,28 @@ fn the_priming_check_names_what_was_not_made() {
         sized_index_bind: true,
         ycbcr_conversion: true,
     };
-    let all = Call::ALL.iter().fold(0, |bits, call| bits | call.bit());
+    let all = Call::ALL
+        .iter()
+        .fold(Calls::NONE, |bits, &call| bits.with(call));
     assert!(missing(all, has(true, true)).is_empty());
     let made = Call::ALL
         .iter()
         .filter(|call| !UNPRIMED.contains(call))
-        .fold(0, |bits, call| bits | call.bit());
+        .fold(Calls::NONE, |bits, &call| bits.with(call));
     assert!(missing(made, has(true, true)).is_empty());
     assert_eq!(
-        missing(0, has(true, true)).len(),
+        missing(Calls::NONE, has(true, true)).len(),
         Call::ALL.len() - UNPRIMED.len()
     );
     for &call in Call::ALL {
         if !UNPRIMED.contains(&call) {
-            assert_eq!(missing(made & !call.bit(), has(true, true)), [call]);
+            assert_eq!(missing(made.without(call), has(true, true)), [call]);
         }
     }
     // Without timestamps, their commands are neither made nor missed, nor is their reset on the
     // host.
     let untimed = (TIMESTAMP_CALLS.iter().chain(&HOST_QUERY_RESET_CALLS))
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     assert!(missing(untimed, has(false, true)).is_empty());
     let mut timed = TIMESTAMP_CALLS.to_vec();
     timed.extend(HOST_QUERY_RESET_CALLS);
@@ -2457,7 +2462,7 @@ fn the_priming_check_names_what_was_not_made() {
     // Without `hostQueryReset`, nor is the reset on the host.
     let unreset = HOST_QUERY_RESET_CALLS
         .iter()
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     let without = Has {
         host_query_reset: false,
         ..has(true, true)
@@ -2467,13 +2472,13 @@ fn the_priming_check_names_what_was_not_made() {
     // Without device addresses, nor is a buffer's address.
     let unaddressed = DEVICE_ADDRESS_CALLS
         .iter()
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     assert!(missing(unaddressed, has(true, false)).is_empty());
     assert_eq!(missing(unaddressed, has(true, true)), DEVICE_ADDRESS_CALLS);
     // Without generated commands, nor is the release of their objects.
     let ungenerated = GENERATED_COMMANDS_CALLS
         .iter()
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     let without = Has {
         generated_commands: false,
         ..has(true, true)
@@ -2486,7 +2491,7 @@ fn the_priming_check_names_what_was_not_made() {
     // Without sparse binding, nor is a batch's bind.
     let unbound = SPARSE_CALLS
         .iter()
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     let without = Has {
         sparse_binding: false,
         ..has(true, true)
@@ -2496,7 +2501,7 @@ fn the_priming_check_names_what_was_not_made() {
     // Without the push command, nor is a host step's push.
     let unpushed = PUSH_DESCRIPTOR_CALLS
         .iter()
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     let without = Has {
         push_descriptor: false,
         ..has(true, true)
@@ -2506,7 +2511,7 @@ fn the_priming_check_names_what_was_not_made() {
     // Without calibrated timestamps, nor is a completion turn's calibration reading.
     let uncalibrated = CALIBRATION_CALLS
         .iter()
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     let without = Has {
         calibration: false,
         ..has(true, true)
@@ -2516,7 +2521,7 @@ fn the_priming_check_names_what_was_not_made() {
     // Without messages reported, nor is a pipeline's debug name.
     let unnamed = NAMING_CALLS
         .iter()
-        .fold(made, |bits, call| bits & !call.bit());
+        .fold(made, |bits, &call| bits.without(call));
     let without = Has {
         object_names: false,
         ..has(true, true)
@@ -2548,7 +2553,7 @@ fn the_priming_check_names_what_was_not_made() {
         }),
     ];
     for (calls, without) in groups {
-        let unmade = calls.iter().fold(made, |bits, call| bits & !call.bit());
+        let unmade = calls.iter().fold(made, |bits, &call| bits.without(call));
         assert!(missing(unmade, without(has(true, true))).is_empty());
         assert_eq!(missing(unmade, has(true, true)), calls);
     }

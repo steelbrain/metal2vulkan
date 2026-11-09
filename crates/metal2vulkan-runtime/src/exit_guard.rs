@@ -338,33 +338,75 @@ static SECTIONS: AtomicU64 = AtomicU64::new(0);
 /// The entry points ([`Call`]) called in sections that ended since the hook was last registered
 /// at a device after a load of a shared object ([`register_device`], they were the process's), one
 /// bit each.
-static CALLED: CalledWord = CalledWord([AtomicU64::new(0), AtomicU64::new(0)]);
+static CALLED: CalledWords = CalledWords([const { AtomicU64::new(0) }; CALL_WORDS]);
 
-/// One bit per entry point of the table ([`Call::bit`]), as two atomic halves: the table
-/// outgrew 64 bits with the render host step's entry points.
-struct CalledWord([AtomicU64; 2]);
+/// A set of [`Calls`] as atomic words, one bit per entry point of the table ([`Call::bit`]).
+struct CalledWords([AtomicU64; CALL_WORDS]);
 
-impl CalledWord {
+impl CalledWords {
     /// Set `calls`; the bits set before.
-    fn fetch_or(&self, calls: u128) -> u128 {
-        let low = self.0[0].fetch_or(calls as u64, Ordering::Relaxed);
-        let high = self.0[1].fetch_or((calls >> 64) as u64, Ordering::Relaxed);
-        u128::from(low) | (u128::from(high) << 64)
+    fn fetch_or(&self, calls: Calls) -> Calls {
+        Calls(std::array::from_fn(|at| {
+            self.0[at].fetch_or(calls.0[at], Ordering::Relaxed)
+        }))
     }
 
     /// Clear every bit: a load of a shared object since (a driver or layer loaded again makes
     /// its statics again at each entry point's first call).
     fn clear(&self) {
-        self.0[0].store(0, Ordering::Relaxed);
-        self.0[1].store(0, Ordering::Relaxed);
+        for word in &self.0 {
+            word.store(0, Ordering::Relaxed);
+        }
     }
 
     /// The bits set.
     #[cfg(test)]
-    fn load(&self) -> u128 {
-        let low = self.0[0].load(Ordering::Relaxed);
-        let high = self.0[1].load(Ordering::Relaxed);
-        u128::from(low) | (u128::from(high) << 64)
+    fn load(&self) -> Calls {
+        Calls(std::array::from_fn(|at| self.0[at].load(Ordering::Relaxed)))
+    }
+}
+
+/// The words of 64 bits a set of the table's entry points takes ([`Calls`]): as many as the
+/// table needs, so it grows with the table.
+const CALL_WORDS: usize = Call::ALL.len().div_ceil(64);
+
+/// A set of the table's entry points, one bit each ([`Call::bit`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Calls([u64; CALL_WORDS]);
+
+impl Calls {
+    /// No entry point.
+    pub(crate) const NONE: Calls = Calls([0; CALL_WORDS]);
+
+    /// It and `call`.
+    pub(crate) fn with(self, call: Call) -> Calls {
+        let (at, bit) = call.bit();
+        let mut words = self.0;
+        words[at] |= bit;
+        Calls(words)
+    }
+
+    /// Whether it holds `call`.
+    pub(crate) fn holds(self, call: Call) -> bool {
+        let (at, bit) = call.bit();
+        self.0[at] & bit != 0
+    }
+
+    /// It without `call`.
+    #[cfg(test)]
+    pub(crate) fn without(self, call: Call) -> Calls {
+        let (at, bit) = call.bit();
+        let mut words = self.0;
+        words[at] &= !bit;
+        Calls(words)
+    }
+
+    /// Whether it holds an entry point `other` does not.
+    fn beyond(self, other: Calls) -> bool {
+        self.0
+            .iter()
+            .zip(other.0)
+            .any(|(&own, other)| own & !other != 0)
     }
 }
 
@@ -685,11 +727,10 @@ pub(crate) const HOST_STEP: &[Call] = &[
 ];
 
 impl Call {
-    /// Its bit. The table fills 113 of the word's 128 (widened from 64): when it next outgrows the
-    /// word, widen the word (here, [`CALLED`], `PENDING` and the priming's calls); do not add a
-    /// second table.
-    pub(crate) fn bit(self) -> u128 {
-        1 << self as u32
+    /// Its word of a set ([`Calls`]) and its bit in that word.
+    fn bit(self) -> (usize, u64) {
+        let at = self as usize;
+        (at / 64, 1 << (at % 64))
     }
 }
 
@@ -697,7 +738,7 @@ thread_local! {
     /// The sections in progress on this thread (of every guard).
     static OWN: Cell<usize> = const { Cell::new(0) };
     /// The entry points ([`Call`]) this thread called since its last section ended.
-    static PENDING: Cell<u128> = const { Cell::new(0) };
+    static PENDING: Cell<Calls> = const { Cell::new(Calls::NONE) };
     /// This thread is one of the runtime's own ([`spawn`]).
     static RUNTIME: Cell<bool> = const { Cell::new(false) };
     /// The program's code this thread is running ([`program`]).
@@ -930,10 +971,10 @@ impl Drop for Busy<'_> {
             // After the section's Vulkan calls, which may have registered a destructor.
             let calls = PENDING.with(|pending| {
                 let calls = pending.get();
-                pending.set(0);
+                pending.set(Calls::NONE);
                 calls
             });
-            let first = calls & !CALLED.fetch_or(calls) != 0;
+            let first = calls.beyond(CALLED.fetch_or(calls));
             let ended = SECTIONS.fetch_add(1, Ordering::Relaxed) + 1;
             if (first || ended.is_power_of_two()) && !self.guard.is_closed() {
                 register_again();
@@ -1036,7 +1077,7 @@ pub(crate) fn pipelines_made() {
 /// This thread called `call`; the section it is in registers the hook again as it ends if no
 /// section that ended had called it.
 pub(crate) fn called(call: Call) {
-    PENDING.with(|pending| pending.set(pending.get() | call.bit()));
+    PENDING.with(|pending| pending.set(pending.get().with(call)));
 }
 
 /// Whether the process is exiting: its guard closed.
@@ -1785,5 +1826,5 @@ pub(crate) fn sections() -> u64 {
 /// Whether a section that ended called `call`.
 #[cfg(test)]
 pub(crate) fn was_called(call: Call) -> bool {
-    CALLED.load() & call.bit() != 0
+    CALLED.load().holds(call)
 }
