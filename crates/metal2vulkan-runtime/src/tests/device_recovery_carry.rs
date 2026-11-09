@@ -20,11 +20,14 @@ use std::time::{Duration, Instant};
 /// The bytes the tests write and read of each buffer.
 const BYTES: u64 = 4096;
 
-/// The bytes of each of two buffers the program lets go of before a loss: half a pooled block, the
-/// most a pooled placement takes, so that the second never fits in the block the first and the
-/// test's other buffers share, and takes a block of its own, which the lost generation keeps for
-/// reuse as it empties, or with the buffer parked in it.
-const REUSED: u64 = crate::memory::BLOCK_BYTES / 2;
+/// The bytes of each of [`REUSED_BUFFERS`] buffers the program lets go of before a loss: under half
+/// a pooled block, so that each is placed in a pooled block whatever a driver pads it by, and more
+/// than a block in all, so that one is placed in a block apart from the test's other buffers,
+/// which the lost generation keeps for reuse as it empties, or with the buffer parked in it.
+const REUSED: u64 = crate::memory::BLOCK_BYTES * 3 / 8;
+
+/// How many buffers of [`REUSED`] bytes the program lets go of before a loss.
+const REUSED_BUFFERS: usize = 3;
 
 /// The recoveries one process's objects outlive in [`seven_recoveries_end_with_one_live_vk_device`]:
 /// one less than the live `VkDevice`s an NVIDIA driver lets a process hold.
@@ -139,7 +142,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     };
     event.notify_listener(&listener, 9, Box::new(notification));
     // Memory the lost generation keeps for reuse: buffers the program let go of.
-    let reused: Vec<Buffer> = (0..2)
+    let reused: Vec<Buffer> = (0..REUSED_BUFFERS)
         .map(|_| {
             device
                 .new_buffer(REUSED, ResourceOptions::private())
