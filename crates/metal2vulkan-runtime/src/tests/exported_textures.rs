@@ -882,7 +882,8 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
 /// No texture over a buffer of the runtime's own loses its place in a block allocated exportable
 /// (`memory.rs`'s "Buffers in exportable blocks"): for every pixel format a buffer backs
 /// (`linear_alignment::backed_formats`), at each width of `linear_alignment::WIDTHS`, three rows,
-/// rows the width's bytes rounded up to the format's linear alignment answer and to 256 apart, at
+/// rows the width's bytes rounded up to the format's linear alignment answer and to 256 apart,
+/// 256 bytes more than that and twice it, at
 /// offset 0 and at that answer, of `ShaderRead`, `ShaderRead | ShaderWrite` and
 /// `ShaderRead | RenderTarget` usage, a texture over a `Shared` buffer in such a block lies in place
 /// wherever one over a plain block's buffer of the same layout does (`Buffer::texture_placement`).
@@ -952,8 +953,14 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         };
         let align = device.linear_texture_alignment(pf);
         for width in WIDTHS {
-            for pitch in [align, 256] {
-                let row = (width * texel).next_multiple_of(pitch);
+            let packed = width * texel;
+            let rows = [
+                packed.next_multiple_of(align),
+                packed.next_multiple_of(256),
+                packed.next_multiple_of(256) + 256,
+                packed.next_multiple_of(256) * 2,
+            ];
+            for row in rows {
                 for offset in [0, align] {
                     for usage in usages {
                         let mut descriptor = TextureDescriptor::texture_2d(pf, width, 3, false);
