@@ -1140,9 +1140,49 @@ struct HandlerWait {
     waited: std::time::Duration,
     /// The groups by what sent them, from `Y`'s commit on ([`group_ends`]).
     ends: [u64; 7],
-    /// The kernel submissions made, groups kept and batches grouped since `A`'s commit, once
-    /// `A` was taken in, `B` scheduled and `X` scheduled.
-    steps: [(u64, u64, u64); 3],
+    /// What the device counted since `A`'s commit, once `A` was taken in, `B` scheduled and `X`
+    /// scheduled.
+    steps: [Step; 3],
+    /// How long after `X`'s commit `A`'s completed handler ran; `None` where it ran before.
+    a_completed_after_x: Option<std::time::Duration>,
+}
+
+/// What the device counted since `A`'s commit at one step of [`behind_another_queue_s_handler`].
+#[derive(Debug, Clone, Copy)]
+struct Step {
+    /// Kernel submissions made, groups kept and batches grouped.
+    submissions: u64,
+    kept: u64,
+    grouped: u64,
+    /// Batches committing threads submitted, and the scheduler's passes.
+    at_commit: u64,
+    passes: u64,
+    /// Batches submitted by the earlier batches of their `VkQueue` pending: none, one, two or
+    /// more.
+    pending: [u64; 3],
+    /// The groups by what sent them ([`group_ends`]).
+    ends: [u64; 7],
+}
+
+impl Step {
+    /// The counts from `before` to `after`.
+    fn between(before: &WorkCounts, after: &WorkCounts) -> Step {
+        Step {
+            submissions: after.queue_submissions - before.queue_submissions,
+            kept: after.groups_kept_pending - before.groups_kept_pending,
+            grouped: after.batches_grouped - before.batches_grouped,
+            at_commit: after.batches_submitted_at_commit - before.batches_submitted_at_commit,
+            passes: after.scheduler_passes - before.scheduler_passes,
+            pending: [
+                after.batches_with_none_pending - before.batches_with_none_pending,
+                after.batches_with_one_pending - before.batches_with_one_pending,
+                (after.batches_with_two_or_three_pending + after.batches_with_four_or_more_pending)
+                    - (before.batches_with_two_or_three_pending
+                        + before.batches_with_four_or_more_pending),
+            ],
+            ends: group_ends(before, after),
+        }
+    }
 }
 
 /// The module docs' run with a handler that waits for another queue's command buffer, `A` of
@@ -1183,14 +1223,16 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
         }
         blit.end_encoding().unwrap();
         let before_a = device.work_counts();
-        let step = || {
-            let counts = device.work_counts();
-            (
-                counts.queue_submissions - before_a.queue_submissions,
-                counts.groups_kept_pending - before_a.groups_kept_pending,
-                counts.batches_grouped - before_a.batches_grouped,
-            )
-        };
+        let step = || Step::between(&before_a, &device.work_counts());
+        let a_completed = Arc::new(Mutex::new(None));
+        {
+            let a_completed = Arc::clone(&a_completed);
+            running
+                .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+                    *a_completed.lock().unwrap() = Some(std::time::Instant::now());
+                }))
+                .unwrap();
+        }
         running.commit().unwrap();
         taken_in(&device);
         let a_taken = step();
@@ -1207,6 +1249,7 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
             let _ = completed.send(());
         }))
         .unwrap();
+        let x_committed = std::time::Instant::now();
         x.commit().unwrap();
         taken_in(&device);
         x.wait_until_scheduled().unwrap();
@@ -1254,14 +1297,15 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
             waited,
             ends: group_ends(&before_y, &device.work_counts()),
             steps,
+            a_completed_after_x: (*a_completed.lock().unwrap())
+                .and_then(|at| at.checked_duration_since(x_committed)),
         }
     };
     layer_reported_nothing_at_all(&messages);
     eprintln!(
         "GROUPED-HANDLER-WAIT on {}: Y's handler waited {:?}; groups from Y's commit by what \
-         sent them {:?}; submissions, groups kept and batches grouped once A was taken in, B \
-         and X scheduled {:?}; {seen:?}",
-        seen.device, seen.waited, seen.ends, seen.steps
+         sent them {:?}; A completed {:?} after X's commit; {seen:#?}",
+        seen.device, seen.waited, seen.ends, seen.a_completed_after_x
     );
     seen
 }
