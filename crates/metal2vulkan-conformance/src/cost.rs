@@ -421,6 +421,14 @@ const COMPLEMENT: &str = "which of our own threads ran a command buffer's transi
 /// Measured: it reached 1 where the measurement's most was 0 on `sample-positions-custom-2x` in two
 /// whole-set replays, and both measurement shapes read 0 — a release that lands in the replay's
 /// timing and not in the measurement's is exactly what a quiet period does.
+///
+/// The same quiet period stands behind `memory_frees.kept_stale` (a kept empty block freed after
+/// `KEPT_EMPTY_FOR` without a placement), `blocks_ahead_unused` (a block made ahead freed once
+/// its pool had stopped growing for 10 s) and the two totals that count those frees among others,
+/// `memory_frees.blocks` and `memory_frees_posted`. Measured: a whole-set replay on this M3 Max
+/// put all four at 1 where the measurement's most was 0 on `swizzled-storage-rgba8unorm`,
+/// `rotated-planes-store-0-64x16`, `render-then-sample-exact` and
+/// `pass-start-barrier-private-read`, and the whole-set measurement of the same tree read 0.
 const QUIET: &str = "a pooled memory block freed because it had been kept empty past its quiet \
      period, which is a question about elapsed time rather than about the case's work";
 
@@ -483,7 +491,7 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 41] = [
+const RACY: [(&str, &str); 45] = [
     ("fences_made", POOLED),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
@@ -564,6 +572,14 @@ const RACY: [(&str, &str); 41] = [
          waiter, so it moves with when the GPU finished that work",
     ),
     ("pooled_memory_blocks_freed", QUIET),
+    // The allocator's frees by cause: the quiet-period cause, and the two totals that hold it.
+    // Every other cause (`memory_frees.dedicated`, `.pooled_emptied`, `.kept_for_room`, the
+    // imports' and `.teardown`) stays gated by its own name, so reporting the totals drops no
+    // gate on a free that is a case's own work.
+    ("memory_frees.kept_stale", QUIET),
+    ("memory_frees.blocks", QUIET),
+    ("memory_frees_posted", QUIET),
+    ("blocks_ahead_unused", QUIET),
     ("finales_folded", FOLDED),
     ("command_pools_made", POOLED),
     ("spare_command_pools_", POOLED),

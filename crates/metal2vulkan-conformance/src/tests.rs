@@ -5100,6 +5100,12 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
         "primaries_begun_ahead",
         "completed_where_seen",
         "pooled_memory_blocks_freed",
+        // The same quiet period by the allocator's cause, and the totals holding it: a whole-set
+        // replay read 1 where the measurement read 0 on four cases.
+        "memory_frees.kept_stale",
+        "memory_frees.blocks",
+        "memory_frees_posted",
+        "blocks_ahead_unused",
         "finales_folded",
         // A waiter's own submission of batches the scheduler's thread had not reached yet:
         // `xr-gradient-bgra10xr-srgb-unblended-x4` read 1 alone and 0 or 1 across one whole-set
@@ -5112,6 +5118,17 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
     // does what a case allocates even though what the pool hands back does not.
     assert!(racy("encoder_command_buffers_begun").is_none());
     assert!(racy("pooled_memory_blocks_made").is_none());
+    // A free by any cause but the quiet period stays gated by its own name.
+    for count in [
+        "memory_frees.dedicated",
+        "memory_frees.pooled_emptied",
+        "memory_frees.kept_for_room",
+        "memory_frees.host_import",
+        "memory_frees.own_pages",
+        "memory_frees.teardown",
+    ] {
+        assert!(racy(count).is_none(), "{count}");
+    }
     // `finales_apart` and `scheduled_where_submitted` were left gated by an earlier pass of this
     // round *because nothing had been seen to move them*. That was the wrong test, and these two
     // assertions are the reversal: "nothing has moved it" is a fact about the afternoon the
