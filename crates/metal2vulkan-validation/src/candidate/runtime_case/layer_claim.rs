@@ -46,6 +46,25 @@ pub(crate) fn loader_layer_message(id_name: &str, text: &str) -> bool {
     id_name == LOADER_MESSAGE && text.contains(VALIDATE_LAYERS) && text.contains(NOT_AVAILABLE)
 }
 
+/// How the loader's message about an instance layer the host lists twice begins (two manifests of
+/// one layer name): it names the copy it removed, then the one it kept.
+#[cfg(test)]
+const REMOVING_LAYER: &str = "Removing layer ";
+
+/// The rest of that message, between the two copies.
+#[cfg(test)]
+const DUPLICATE_OF: &str = " because it is a duplicate of ";
+
+/// Whether a message with this id name and text is the loader's own warning that the host lists an
+/// instance layer twice, and which copy it removed: the host's listing of its layers, reported
+/// through the messenger chained at `vkCreateInstance` whichever layers a device asks for, and
+/// nothing a device said; nothing wider. The lane's sink fails on no warning of the general kind,
+/// so it reads this only where every message is checked (`runtime_lane::creation_heard_checked`).
+#[cfg(test)]
+pub(crate) fn loader_duplicate_layer_message(id_name: &str, text: &str) -> bool {
+    id_name == LOADER_MESSAGE && text.starts_with(REMOVING_LAYER) && text.contains(DUPLICATE_OF)
+}
+
 /// The id name of the informational message a device sends as it is made where the loader could
 /// not provide the instance layers its caller asked for; the runtime's `device/create.rs` names it
 /// so.
@@ -559,6 +578,42 @@ mod tests {
         ] {
             assert!(
                 !super::loader_layer_message(id_name, text),
+                "{id_name}: {text}"
+            );
+        }
+    }
+
+    /// The loader's warning that the host lists a layer twice, and nothing wider.
+    #[test]
+    fn the_loader_s_warning_about_a_layer_listed_twice_is_matched_and_nothing_wider() {
+        assert!(super::loader_duplicate_layer_message(
+            "Loader Message",
+            "Removing layer VK_LAYER_KHRONOS_validation (/usr/share/vulkan/explicit_layer.d/\
+             VkLayer_khronos_validation.json) because it is a duplicate of \
+             VK_LAYER_KHRONOS_validation (/tmp/layers/VkLayer_khronos_validation.json)"
+        ));
+        for (id_name, text) in [
+            // The loader's message about a layer it cannot provide.
+            (
+                "Loader Message",
+                "loader_validate_layers: Layer 0 does not exist in the list of available layers",
+            ),
+            // The same words from something that is not the loader.
+            (
+                "VUID-vkCreateInstance-ppEnabledLayerNames-01727",
+                "Removing layer VK_LAYER_A (a.json) because it is a duplicate of VK_LAYER_A (b.json)",
+            ),
+            // Half the words.
+            ("Loader Message", "Removing layer VK_LAYER_A (a.json)"),
+            // The words, not at the start.
+            (
+                "Loader Message",
+                "Failed: Removing layer VK_LAYER_A (a.json) because it is a duplicate of \
+                 VK_LAYER_A (b.json)",
+            ),
+        ] {
+            assert!(
+                !super::loader_duplicate_layer_message(id_name, text),
                 "{id_name}: {text}"
             );
         }

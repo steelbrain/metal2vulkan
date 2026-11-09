@@ -93,14 +93,14 @@ mod render;
 mod sparse;
 mod tile;
 pub use commands::{encoded_execution, pipeline_states, CaseCommands, TemplateState};
-/// The lane's own check of the creation messages a device heard reads it too
-/// (`runtime_lane::creation_heard_checked`).
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) use layer_claim::loader_layer_message;
 pub use layer_claim::{
     layer_reported_nothing, layer_reported_nothing_at_all, nothing_reported_without_the_layer,
     EnabledLayers, LayerClaim, LAYERS_DROPPED,
 };
+/// The lane's own check of the creation messages a device heard reads them too
+/// (`runtime_lane::creation_heard_checked`).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) use layer_claim::{loader_duplicate_layer_message, loader_layer_message};
 pub use render::{
     commit_render, encoded_mesh, encoded_render, mesh_pipeline_state, render_pipeline_descriptor,
     render_pipeline_state, CommittedRender, EncodedRender, MeshInputs, RenderInputs,

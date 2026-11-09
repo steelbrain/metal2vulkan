@@ -1040,10 +1040,13 @@ const METAL_CACHE_KEPT: &str = "metal2vulkan-driver-pipeline-cache-kept";
 
 /// [`creation_checked`] of `heard`, every message `device`'s making delivered to a sink that hears
 /// every message (not the lane's, which keeps notices and failures alone): its notices exactly
-/// its [`creation_kinds`], one each, and its other messages exactly the informational ones the
-/// device sends as it is made, each once and in this order: [`LAYERS_DROPPED`] where the loader could not provide the instance layers the device asked for, which the device
-/// alone can say (the instance's answer, not the loader's listing: a layer the loader lists and
-/// cannot load answers the same); then [`METAL_CACHE_KEPT`] exactly where its driver keeps its
+/// its [`creation_kinds`], one each, and its other messages, after the loader's own at
+/// `vkCreateInstance` (its warning that the host lists a layer twice, the host's listing; and
+/// where the device was made without a layer, its message about each), exactly the informational
+/// ones the device sends as it is made, each once and in this order: [`LAYERS_DROPPED`] where the
+/// loader could not provide the instance layers the device asked for, which the device alone can
+/// say (the instance's answer, not the loader's listing: a layer the loader lists and cannot load
+/// answers the same); then [`METAL_CACHE_KEPT`] exactly where its driver keeps its
 /// internal pipeline cache and that cache is Metal's own ([`metal_cache_kept`], read from the
 /// driver apart from the runtime), an informational message naming the device and ending in its id
 /// name; and nothing else.
@@ -1069,16 +1072,20 @@ pub(crate) fn creation_heard_checked(
     let cache_kept = metal_cache_kept(device);
     let mut expected: Vec<String> = Vec::new();
     let mut rest = &informed[..];
-    // Where the device was made without a layer it asked for, the loader said so first, at
-    // `vkCreateInstance`: one message of its own per layer it could not provide (`layer_claim`).
-    if dropped.is_some() {
-        while let Some((first, after)) = rest.split_first() {
-            if !crate::candidate::runtime_case::loader_layer_message(&first.id_name, &first.text) {
-                break;
-            }
-            expected.push(first.text.clone());
-            rest = after;
+    // The loader speaks first, at `vkCreateInstance`: where the host lists a layer twice, a
+    // warning of which copy it removed, the host's listing and nothing the device said; and where
+    // the device was made without a layer it asked for, one message per layer it could not
+    // provide (`layer_claim`).
+    while let Some((first, after)) = rest.split_first() {
+        let (id_name, text) = (&first.id_name, &first.text);
+        let loader = crate::candidate::runtime_case::loader_duplicate_layer_message(id_name, text)
+            || (dropped.is_some()
+                && crate::candidate::runtime_case::loader_layer_message(id_name, text));
+        if !loader {
+            break;
         }
+        expected.push(first.text.clone());
+        rest = after;
     }
     if let Some(text) = &dropped {
         let tag = format!("[{LAYERS_DROPPED}]");
