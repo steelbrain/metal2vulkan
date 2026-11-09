@@ -46,10 +46,11 @@
 //!   `memory::BLOCK_BYTES` holds (one of 64 MiB; four where its blocks of plain memory are made of
 //!   16 MiB after a slow making, `Memory::plain_block_made`); and, while its placements larger
 //!   than its blocks are recent (the last within `KEPT_EMPTY_FOR`), each of which takes a block of
-//!   its own size (`memory::pooled_block_bytes`), one block of the largest such size, its own
-//!   blocks filling the rest of the block's worth. They are made one after another once a burst
-//!   ended; those it lacks are queued after the blocks its thread still makes, or made on a new
-//!   thread where that ended. So each making stays as short as its block, and the pool's growth
+//!   its own size (`memory::pooled_block_bytes`), one block of the largest such size besides
+//!   them, which a call that needs one of the pool's own blocks leaves to those placements, so
+//!   that a burst of textures that outruns the makings of the pool's own blocks does not take it
+//!   (`tests::blocks_ahead`). They are made one after another once a burst ended; those it lacks are queued after the blocks its thread still makes, or made on a
+//!   new thread where that ended. So each making stays as short as its block, and the pool's growth
 //!   still finds its blocks made: with one block of 16 MiB ahead at a time, a guest's scroll on a
 //!   Radeon 780M whose blocks were made so made 82 to 114 blocks of images on its own threads and
 //!   waited for 110 to 159 of those made ahead. It keeps them for as long as it stays near its
@@ -175,16 +176,30 @@ struct State {
 }
 
 impl State {
-    /// Whether a block of `need` bytes or more is made.
-    fn holds(&self, need: u64) -> bool {
-        self.made.iter().any(|made| made.block.size >= need)
+    /// Whether a block of bytes within `need` is made.
+    fn holds(&self, need: Need) -> bool {
+        self.made.iter().any(|made| need.fits(made.block.size))
     }
 
-    /// Whether a block of `need` bytes or more is made, being made or still to make.
-    fn will_hold(&self, need: u64) -> bool {
+    /// Whether a block of bytes within `need` is made, being made or still to make.
+    fn will_hold(&self, need: Need) -> bool {
         self.holds(need)
-            || self.making.is_some_and(|bytes| bytes >= need)
-            || self.to_make.iter().any(|&bytes| bytes >= need)
+            || self.making.is_some_and(|bytes| need.fits(bytes))
+            || self.to_make.iter().any(|&bytes| need.fits(bytes))
+    }
+}
+
+/// The bytes of a block a call can take: `least` or more, `most` at most.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Need {
+    pub(super) least: u64,
+    pub(super) most: u64,
+}
+
+impl Need {
+    /// Whether a block of `bytes` is within it.
+    fn fits(self, bytes: u64) -> bool {
+        (self.least..=self.most).contains(&bytes)
     }
 }
 
@@ -198,17 +213,17 @@ pub(super) struct Made {
     pub(super) waited_for: bool,
 }
 
-/// A call's wait for a readying's block of `need` bytes or more ([`Readying::waiter`]), with no
+/// A call's wait for a readying's block of bytes within `need` ([`Readying::waiter`]), with no
 /// lock of the memory held: counted among the waiting from its making to its drop, so that the
 /// thread reads no page meanwhile.
 pub(super) struct Waiter {
     shared: Arc<Shared>,
-    need: u64,
+    need: Need,
 }
 
 impl Waiter {
-    /// A wait on `shared` for a block of `need` bytes or more, counted from now.
-    fn new(shared: &Arc<Shared>, need: u64) -> Waiter {
+    /// A wait on `shared` for a block of bytes within `need`, counted from now.
+    fn new(shared: &Arc<Shared>, need: Need) -> Waiter {
         shared.waiting.fetch_add(1, Ordering::SeqCst);
         Waiter {
             shared: Arc::clone(shared),
@@ -217,8 +232,8 @@ impl Waiter {
     }
 
     /// Ask the thread to stop waiting for a burst's end, and wait for a block of the bytes it
-    /// needs made, or for the thread to end.
-    pub(super) fn wait(self) {
+    /// needs made, or for the thread to end: whether such a block was made.
+    pub(super) fn wait(self) -> bool {
         let shared = &self.shared;
         let _ = shared
             .go
@@ -227,6 +242,7 @@ impl Waiter {
         while !state.holds(self.need) && !state.ended {
             state = (shared.changed.wait(state)).unwrap_or_else(PoisonError::into_inner);
         }
+        state.holds(self.need)
     }
 }
 
@@ -248,13 +264,13 @@ pub(super) struct Making {
 impl Readying {
     /// Start making blocks of `sizes` bytes for `pool`, one after another, on a thread of its own:
     /// once a burst of the device's queue uses ended, or at once for a call that waits for a
-    /// block of `need` bytes or more, whose wait it gives back. `None` where the host cannot
-    /// start a thread.
+    /// block of bytes within `need`, whose wait it gives back. `None` where the host cannot start
+    /// a thread.
     pub(super) fn start(
         making: Making,
         pool: (Holds, u32),
         sizes: VecDeque<u64>,
-        need: Option<u64>,
+        need: Option<Need>,
     ) -> Option<(Readying, Option<Waiter>)> {
         let go = match need {
             Some(_) => NOW,
@@ -349,8 +365,8 @@ impl Readying {
         !lock(&self.shared.state).made.is_empty()
     }
 
-    /// Whether a block of `need` bytes or more is made, being made or still to make.
-    pub(super) fn will_hold(&self, need: u64) -> bool {
+    /// Whether a block of bytes within `need` is made, being made or still to make.
+    pub(super) fn will_hold(&self, need: Need) -> bool {
         lock(&self.shared.state).will_hold(need)
     }
 
@@ -364,6 +380,13 @@ impl Readying {
         .collect()
     }
 
+    /// The bytes of each of its blocks made and not yet added, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn made(&self) -> Vec<u64> {
+        let state = lock(&self.shared.state);
+        state.made.iter().map(|made| made.block.size).collect()
+    }
+
     /// What it holds against its heap's budget of kept empty blocks: the bytes of [`held`].
     ///
     /// [`held`]: Self::held
@@ -371,20 +394,20 @@ impl Readying {
         self.held().iter().sum()
     }
 
-    /// Its smallest block made and not yet added of `need` bytes or more, taken.
-    pub(super) fn take_block(&self, need: u64) -> Option<Made> {
+    /// Its smallest block made and not yet added of bytes within `need`, taken.
+    pub(super) fn take_block(&self, need: Need) -> Option<Made> {
         let mut state = lock(&self.shared.state);
         let at = (state.made.iter().enumerate())
-            .filter(|(_, made)| made.block.size >= need)
+            .filter(|(_, made)| need.fits(made.block.size))
             .min_by_key(|(_, made)| made.block.size)
             .map(|(at, _)| at)?;
         state.made.remove(at)
     }
 
-    /// A wait for its block of `need` bytes or more, to run with no lock of the memory held.
+    /// A wait for its block of bytes within `need`, to run with no lock of the memory held.
     /// `None` where `unless_reading` and its thread reads a block's pages now: a page's first
     /// touch may wait behind the program's GPU work (the module docs).
-    pub(super) fn waiter(&self, need: u64, unless_reading: bool) -> Option<Waiter> {
+    pub(super) fn waiter(&self, need: Need, unless_reading: bool) -> Option<Waiter> {
         let waiter = Waiter::new(&self.shared, need);
         // Counted first: a thread that begins its reads after this sees the wait and reads none,
         // and one that began them before is seen here.

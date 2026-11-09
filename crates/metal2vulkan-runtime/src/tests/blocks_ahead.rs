@@ -50,8 +50,10 @@ const CREATIONS: usize = 20;
 const TEXTURE_SIDE: u64 = 1024;
 
 /// The large-blocks run's textures larger than a block of 16 MiB: 20 MiB, each in a block of
-/// 32 MiB ([`LARGE_EVERY`] textures one of them), and how many it makes.
+/// 32 MiB ([`LARGE_EVERY`] textures one of them), and how many it makes; then the textures of
+/// [`TEXTURE_SIDE`] it makes back to back, 96 MiB, more than its own blocks made ahead hold.
 const LARGE_SIDES: (u64, u64) = (2560, 2048);
+const BURST: usize = 24;
 const LARGE_EVERY: usize = 4;
 const LARGE_TEXTURES: usize = 4;
 
@@ -293,53 +295,84 @@ fn a_pool_of_small_blocks_keeps_a_block_s_bytes_ahead_and_no_creation_call_makes
 
 /// A pool of small blocks whose placements larger than its blocks, each taking a block of its
 /// own size (`memory::pooled_block_bytes`), are recent keeps a block of that size made ahead
-/// too: the first such placement waits for the ready thread's making of its block, and each
-/// later one finds its block made; no creation call makes one itself.
+/// too, which the calls that need one of the pool's own blocks leave to them: the first such
+/// placement waits for the ready thread's making of its block, each later one finds its block
+/// made, and a burst of the pool's own blocks' textures that outruns their makings leaves it made;
+/// no creation call makes a block itself. What the pool holds made is read before each of those
+/// placements, not the device's count of waits, which counts other pools' blocks too.
 #[test]
 fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead() {
     let scratch = Scratch::new("large-blocks");
     let device = small_blocks_device(&scratch);
+    let shared = device.shared();
+    let large_block = 2 * MIN_PLAIN_BLOCK_BYTES;
+    let made = || crate::device::lock(&shared.memory).ahead_made(Holds::Images);
     let start = device.work_counts();
     let mut held: Vec<Texture> = Vec::new();
-    let mut first = None;
+    let mut missed = Vec::new();
+    // One texture at a time, every making it started ended before the next.
     for at in 0..LARGE_EVERY * LARGE_TEXTURES {
         let large = at % LARGE_EVERY == LARGE_EVERY - 1;
+        if large && at >= LARGE_EVERY && !made().contains(&large_block) {
+            missed.push(at);
+        }
         let sides = match large {
             true => LARGE_SIDES,
             false => (TEXTURE_SIDE, TEXTURE_SIDE),
         };
         texture(&device, sides, &mut held);
-        if large && first.is_none() {
-            first = Some(device.work_counts());
-        }
     }
-    let (first, counts) = (first.unwrap(), device.work_counts());
+    let before_burst = made();
+    // Back to back with a use of the queues held open, so that a making of the pool's own blocks
+    // waits for a pause the use never leaves unless a call hurries it: the calls that find none of
+    // them made leave the block of 32 MiB made.
+    let after_burst = {
+        let _in_use = InUse::new(&shared.queue_quiet);
+        for _ in 0..BURST {
+            let mut descriptor = TextureDescriptor::texture_2d(
+                PixelFormat::RGBA8Unorm,
+                TEXTURE_SIDE,
+                TEXTURE_SIDE,
+                false,
+            );
+            descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            descriptor.resource_options = ResourceOptions::private();
+            held.push(device.new_texture(&descriptor).unwrap());
+        }
+        made()
+    };
+    makings_ended(&device);
+    let counts = device.work_counts();
     let in_place = counts.image_blocks_made_in_place - start.image_blocks_made_in_place;
-    let waited_after = counts.blocks_ahead_waited_for - first.blocks_ahead_waited_for;
-    let sizes = crate::device::lock(&device.shared().memory).pooled_block_sizes(Holds::Images);
+    let sizes = crate::device::lock(&shared.memory).pooled_block_sizes(Holds::Images);
+    let mib = |sizes: &[u64]| sizes.iter().map(|size| size >> 20).collect::<Vec<_>>();
     println!(
-        "BLOCKS-AHEAD {}: {} textures, one of 20 MiB every {LARGE_EVERY}, in blocks of {} MiB; \
-         blocks of images made ahead {}, in place {in_place}, waited for {} (after the first \
-         20 MiB texture {waited_after}); the pool's blocks {:?} MiB",
+        "BLOCKS-AHEAD {}: {} textures, one of 20 MiB every {LARGE_EVERY} then {BURST} back to \
+         back, in blocks of {} MiB; blocks of images made ahead {}, in place {in_place}; the 20 \
+         MiB textures after the first found no block of 32 MiB made at {missed:?}; made ahead \
+         before the burst {:?} MiB, after it {:?} MiB; the pool's blocks {:?} MiB",
         device.name(),
         held.len(),
         MIN_PLAIN_BLOCK_BYTES >> 20,
         counts.image_blocks_made_ahead - start.image_blocks_made_ahead,
-        counts.blocks_ahead_waited_for - start.blocks_ahead_waited_for,
-        sizes.iter().map(|size| size >> 20).collect::<Vec<_>>(),
+        mib(&before_burst),
+        mib(&after_burst),
+        mib(&sizes),
     );
     assert_eq!(in_place, 0, "a creation call made a block of images itself");
     assert_eq!(
-        sizes
-            .iter()
-            .filter(|&&size| size == 2 * MIN_PLAIN_BLOCK_BYTES)
-            .count(),
+        sizes.iter().filter(|&&size| size == large_block).count(),
         LARGE_TEXTURES,
         "the 20 MiB textures did not each take a block of 32 MiB"
     );
-    assert_eq!(
-        waited_after, 0,
-        "a 20 MiB texture after the first waited for its block's making"
+    assert!(
+        missed.is_empty(),
+        "20 MiB textures found no block of 32 MiB made ahead at {missed:?}"
+    );
+    assert!(
+        after_burst.contains(&large_block),
+        "the burst's calls took the block of 32 MiB made ahead: {:?} MiB",
+        mib(&after_burst)
     );
 }
 

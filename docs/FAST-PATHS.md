@@ -991,12 +991,13 @@ driver's. Each is open work.
   holds a pooled block and lacks room for three quarters of one, its first growth among them), gets
   a block's worth of bytes made ahead (`memory/ready.rs`; the pools of exportable buffers, which
   hold the pictures, among them): as many of its blocks as one 64 MiB block holds, and while its
-  placements larger than a plain pool's smaller blocks are recent, one block of their size among
-  them, one `vkAllocateMemory` each, right after a burst of the device's submissions ended. A
+  placements larger than a plain pool's smaller blocks are recent, one block of their size
+  besides, one `vkAllocateMemory` each, right after a burst of the device's submissions ended. A
   creation call that needs one while its making still waits for that end makes it at once and
   waits for it, as for a block made in place, and one that finds none of its size made waits for
   the ready thread to make it first. A pool near its next block keeps those blocks at rest for as
-  long as it stays so: 64 MiB a pool at most, counted against the kept empty blocks' budget. Metal's command buffers wait for no allocation. Not
+  long as it stays so: 64 MiB a pool at most, and one block of its large placements' size more
+  (32 MiB) while those are recent, counted against the kept empty blocks' budget. Metal's command buffers wait for no allocation. Not
   announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding

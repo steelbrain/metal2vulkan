@@ -2635,17 +2635,28 @@ impl Memory {
             .collect()
     }
 
-    /// The blocks `pool` keeps made ahead (`memory/ready.rs`), its blocks of `bytes`: one of the
-    /// bytes of the largest block its placements larger than its blocks took lately
-    /// ([`Pool::large`]), and as many of `bytes` as the rest of one block of
-    /// [`Memory::block_bytes`] holds, at least one, so that a pool whose blocks of plain memory
-    /// are made smaller ([`Memory::plain_block_made`]) keeps the bytes ahead it kept before.
+    /// The blocks `pool` keeps made ahead (`memory/ready.rs`), its blocks of `bytes`: as many of
+    /// `bytes` as one block of [`Memory::block_bytes`] holds, at least one, so that a pool whose
+    /// blocks of plain memory are made smaller ([`Memory::plain_block_made`]) keeps the bytes
+    /// ahead it kept before; and one of the bytes of the largest block its placements larger than
+    /// its blocks took lately ([`Pool::large`]), where they did.
     fn ahead_sizes(&mut self, pool: (Holds, u32), bytes: u64) -> (Option<u64>, u64) {
         let bytes = bytes.max(1);
         let large =
             (self.pool(pool.0, pool.1).large(Instant::now())).filter(|&large| large > bytes);
-        let rest = self.block_bytes.saturating_sub(large.unwrap_or(0));
-        (large, (rest / bytes).max(1))
+        (large, (self.block_bytes / bytes).max(1))
+    }
+
+    /// The blocks made ahead for `pool` a call that needs a block of `least` bytes or more takes
+    /// ([`ready::Need`]): one below the bytes of its placements larger than its blocks lately
+    /// ([`Pool::large`]) leaves blocks of those bytes to them.
+    fn need(&mut self, pool: (Holds, u32), least: u64) -> ready::Need {
+        let large = self.pool(pool.0, pool.1).large(Instant::now());
+        let most = match large {
+            Some(large) if least < large => large - 1,
+            _ => u64::MAX,
+        };
+        ready::Need { least, most }
     }
 
     /// Of the blocks `pool`, its blocks of `bytes`, keeps made ahead ([`ahead_sizes`]), those
@@ -2655,17 +2666,15 @@ impl Memory {
     /// [`ahead_sizes`]: Self::ahead_sizes
     fn lacking(&mut self, pool: (Holds, u32), bytes: u64, held: &[u64]) -> Vec<u64> {
         let (large, count) = self.ahead_sizes(pool, bytes);
-        let mut held = held.to_vec();
         let mut lacking = Vec::new();
         if let Some(large) = large {
-            match held.iter().position(|&size| size >= large) {
-                Some(at) => {
-                    held.swap_remove(at);
-                }
-                None => lacking.push(large),
+            if !held.iter().any(|&size| size >= large) {
+                lacking.push(large);
             }
         }
-        let have: u64 = held.iter().sum();
+        // Its own blocks: those below its large placements' bytes, which those leave to them.
+        let below = large.unwrap_or(u64::MAX);
+        let have: u64 = held.iter().filter(|&&size| size < below).sum();
         let more = (count * bytes).saturating_sub(have) / bytes.max(1);
         lacking.extend((0..more).map(|_| bytes));
         lacking
@@ -2708,27 +2717,29 @@ impl Memory {
         }
     }
 
-    /// A call's wait for a block of `need` bytes or more made ahead for `pool`, its blocks of
-    /// `bytes` (`memory/ready.rs`), where none is made: the block being made or still to make, or
+    /// A call's wait for a block of `least` bytes or more made ahead for `pool`, its blocks of
+    /// `bytes` (`memory/ready.rs`; within [`need`](Self::need)), where none is made: the block
+    /// being made or still to make, or
     /// else one queued first for the call, its thread started where it has none, the rest of the
     /// pool's blocks kept ahead after it. `None` where the pool host copies place in reads a
     /// block's pages now, as a page's first touch may wait behind the program's GPU work, before
     /// [`keep_room`] gave the makings what they are made through, or where no thread starts.
-    fn wait_for(&mut self, pool: (Holds, u32), bytes: u64, need: u64) -> Option<ready::Waiter> {
+    fn wait_for(&mut self, pool: (Holds, u32), bytes: u64, least: u64) -> Option<ready::Waiter> {
+        let need = self.need(pool, least);
         let making = self.making(pool)?;
         let host_copies = self.host_copy_pool == Some(Some(pool));
         match self.readying_at(pool) {
             Some(at) => {
                 let readying = &mut self.readying[at];
                 let waiter = readying.waiter(need, host_copies)?;
-                match readying.will_hold(need) || readying.queue(making, &[need], true) {
+                match readying.will_hold(need) || readying.queue(making, &[least], true) {
                     true => Some(waiter),
                     false => None,
                 }
             }
             None => {
-                let rest = self.lacking(pool, bytes, &[need]);
-                let sizes = std::iter::once(need).chain(rest).collect();
+                let rest = self.lacking(pool, bytes, &[least]);
+                let sizes = std::iter::once(least).chain(rest).collect();
                 let (readying, waiter) = ready::Readying::start(making, pool, sizes, Some(need))?;
                 self.readying.push(readying);
                 waiter
@@ -2736,13 +2747,14 @@ impl Memory {
         }
     }
 
-    /// Add the smallest block of `need` bytes or more made ahead for `pool` and not yet added to
-    /// it (`memory/ready.rs`): whether one was added. A readying whose thread ended and that holds
-    /// no block more goes.
-    fn add_ready(&mut self, pool: (Holds, u32), need: u64) -> bool {
+    /// Add the smallest block of `least` bytes or more made ahead for `pool` and not yet added to
+    /// it (`memory/ready.rs`; within [`need`](Self::need)): whether one was added. A readying
+    /// whose thread ended and that holds no block more goes.
+    fn add_ready(&mut self, pool: (Holds, u32), least: u64) -> bool {
         let Some(at) = self.readying_at(pool) else {
             return false;
         };
+        let need = self.need(pool, least);
         let made = self.readying[at].take_block(need);
         if self.readying[at].finished() && !self.readying[at].has_block() {
             self.readying.swap_remove(at).end();
@@ -2971,6 +2983,16 @@ impl Memory {
             .filter(|ready| ready.pool().0 == holds)
             .map(ready::Readying::outstanding_bytes)
             .sum()
+    }
+
+    /// The bytes of each block made ahead for the pools of `holds` and not yet added
+    /// (`memory/ready.rs`), for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn ahead_made(&self, holds: Holds) -> Vec<u64> {
+        (self.readying.iter())
+            .filter(|ready| ready.pool().0 == holds)
+            .flat_map(ready::Readying::made)
+            .collect()
     }
 
     /// The bytes a pooled block of plain memory is made of now ([`Memory::plain_block_made`]), for
@@ -4842,21 +4864,28 @@ fn ready_ahead(memory: &Mutex<Memory>, device: &ash::Device, copies: impl FnOnce
 
 /// Add a block of `need` bytes or more made ahead for `pool` to it, `guard` held on `memory`
 /// (`memory/ready.rs`): at once where one is made; else once one is, waited for with the lock
-/// released ([`Memory::wait_for`]). Whether one was added; the lock is released as it returns.
-fn take_ready(
-    memory: &Mutex<Memory>,
-    mut guard: MutexGuard<'_, Memory>,
+/// released ([`Memory::wait_for`]), and waited for again where another call took the block made
+/// meanwhile. Whether one was added: not where no making serves the call, or the one waited for
+/// failed. The lock is released as it returns.
+fn take_ready<'a>(
+    memory: &'a Mutex<Memory>,
+    mut guard: MutexGuard<'a, Memory>,
     pool: (Holds, u32),
     need: u64,
 ) -> bool {
-    if guard.add_ready(pool, need) {
-        return true;
+    loop {
+        if guard.add_ready(pool, need) {
+            return true;
+        }
+        let bytes = guard.pooled_bytes(pool);
+        let Some(waiter) = guard.wait_for(pool, bytes, need) else {
+            return false;
+        };
+        drop(guard);
+        let made = waiter.wait();
+        guard = lock(memory);
+        if !made {
+            return guard.add_ready(pool, need);
+        }
     }
-    let bytes = guard.pooled_bytes(pool);
-    let Some(waiter) = guard.wait_for(pool, bytes, need) else {
-        return false;
-    };
-    drop(guard);
-    waiter.wait();
-    lock(memory).add_ready(pool, need)
 }
