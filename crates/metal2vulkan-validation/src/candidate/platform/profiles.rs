@@ -969,6 +969,7 @@ fn limit_bound(name: &str) -> Option<Bound> {
         | "line_width_granularity_bits"
         | "strict_lines"
         | "non_strict_wide_lines_use_parallelogram"
+        | "early_fragment_multisample_coverage_after_sample_counting"
         | "sub_pixel_precision_bits" => Bound::Execution,
         "min_texel_offset" | "min_texel_gather_offset" => Bound::AtLeast,
         "supports_non_zero_first_instance"

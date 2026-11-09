@@ -38,7 +38,7 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ClearColor, CommandBufferStatus, CommandQueue, Device, Error, Library, LoadAction,
+    ClearColor, CommandBufferStatus, CommandQueue, Degradation, Device, Error, Library, LoadAction,
     PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction, Texture,
     TextureDescriptor, Viewport, VisibilityResultMode,
 };
@@ -369,13 +369,22 @@ fn the_sample_coverage_keeps_the_samples_metal_keeps() {
 /// rasterized coverage, and the depth and the count keep the covered samples (`psc_counter`, which
 /// writes memory, reads `[[sample_mask]]` and writes no color, so Metal runs it once per sample
 /// and the colors keep the clear: probe `sc4`'s `seenvoid`); under early tests the depth and the
-/// count keep every sample; and a pipeline without a fragment function ignores the coverage.
+/// count keep every sample; and a pipeline without a fragment function ignores the coverage. On a
+/// device that does not state `earlyFragmentMultisampleCoverageAfterSampleCounting` (ANV on the
+/// Iris Xe of RPL-P), Vulkan lets the early-tests function's mask come before the query counts:
+/// the draw is counted in `WorkCounts::draws_counted_past_early_masks` and announced
+/// (`visibility-past-early-mask`), its count at most Metal's (a `SAMPLE-COVERAGE-PAST-MASK` line),
+/// its colors and depths still Metal's.
 #[test]
 fn the_sample_coverage_applies_after_the_fragment_function() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let lane = Lane::new(&messages, &cache);
     let name = lane.device.name().to_owned();
+    // Whether the device states that it counts before an early-tests function's mask
+    // (`Degradation::VisibilityPastEarlyMask` where it does not).
+    let counts_after = (lane.device.compile_device().profile().limits())
+        .early_fragment_multisample_coverage_after_sample_counting;
     let mut wrong = Vec::new();
     let mut drawn = 0;
     for samples in [1, 2, 4] {
@@ -403,10 +412,30 @@ fn the_sample_coverage_applies_after_the_fragment_function() {
         }
         let mut early = Case::new(samples, 0.3);
         early.fragment = Some("psc_early");
+        let before = lane.device.work_counts().draws_counted_past_early_masks;
         if let Some(got) = lane.draw(early) {
             drawn += 1;
-            if got.colors != covered || got.depths != every || got.count != total {
+            let past = lane.device.work_counts().draws_counted_past_early_masks - before;
+            // Where the device may count after the function's mask, the draw is counted and
+            // announced, and its count may leave out the samples the mask drops.
+            let count = match counts_after {
+                true => got.count == total,
+                false => got.count <= total,
+            };
+            if got.colors != covered || got.depths != every || !count {
                 wrong.push(format!("{samples} samples, early tests: {got:x?}"));
+            }
+            if past != u64::from(!counts_after) {
+                wrong.push(format!(
+                    "{samples} samples, early tests: {past} draws counted past early masks"
+                ));
+            }
+            if !counts_after {
+                println!(
+                    "SAMPLE-COVERAGE-PAST-MASK {name}: {samples} samples, early tests: counted {} \
+                     of the {total} samples Metal counts",
+                    got.count
+                );
             }
         }
         let mut bare = Case::new(samples, 0.3);
@@ -426,6 +455,13 @@ fn the_sample_coverage_applies_after_the_fragment_function() {
     );
     // One sample is never refused: its three draws.
     assert!(drawn >= 3, "{name}: {drawn} draws");
+    let announced = (messages.take_notices().iter())
+        .filter_map(|m| m.degradation.as_ref())
+        .any(|n| n.degradation == Degradation::VisibilityPastEarlyMask);
+    assert_eq!(
+        announced, !counts_after,
+        "{name}: visibility-past-early-mask announced"
+    );
     eprintln!("{name}: {drawn} of 9 coverage draws are Metal's");
     drop(lane);
     layer_reported_nothing_at_all(&messages);

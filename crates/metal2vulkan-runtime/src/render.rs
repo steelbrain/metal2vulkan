@@ -8308,6 +8308,28 @@ impl RenderLowering {
                 });
             }
         }
+        // A draw under a visibility result whose fragment function writes its sample mask under
+        // early tests, where the device may count after the mask, runs announced
+        // (`visibility.rs`).
+        if graphics.early_fragment_tests && graphics.writes_sample_mask && self.visibility.active()
+        {
+            let device = self.core.device();
+            let limits = device.compile_device().profile().limits();
+            if !limits.early_fragment_multisample_coverage_after_sample_counting {
+                self.core.counts().draw_counted_past_early_mask();
+                device.degrade(Degradation::VisibilityPastEarlyMask, || {
+                    (
+                        format!(
+                            "{call}: a draw whose fragment function writes its sample mask under \
+                             early tests, under a visibility result"
+                        ),
+                        "the device does not state earlyFragmentMultisampleCoverageAfterSampleCounting, \
+                         so its occlusion query may count after the fragment function's sample mask"
+                            .to_owned(),
+                    )
+                });
+            }
+        }
         // The pass's fragment imageblock storage: one cell's and alignment's, and no tile
         // dispatch's aliased layout past the attachments beside it (`fragment_imageblock.rs`).
         let imageblock_use = graphics.fragment_imageblock;

@@ -1380,7 +1380,7 @@ codec_struct! {
         clip_distances, writes_depth, reads_barycentric_coord, reads_primitive_id,
         reads_position_depth,
         fragment_writes_memory, color_outputs, sample_mask, shader_tests, snapshot_reads,
-        color_group, logic_op, line_band, interpolates_at_sample,
+        color_group, logic_op, line_band, interpolates_at_sample, writes_sample_mask,
     }
     TessellationState {
         patch_control_points, domain, control_points, factor_step_function, push_offset,

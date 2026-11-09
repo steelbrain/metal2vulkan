@@ -139,6 +139,15 @@ pub struct GraphicsState {
     /// attachment, which Metal fails for every fragment) keeps such a function from running.
     #[cfg_attr(feature = "serde", serde(default))]
     pub early_fragment_tests: bool,
+    /// The fragment function writes the `SampleMask` output (its stage interface's
+    /// `io.builtins` lists `SampleMaskOut`): its own `[[sample_mask]]` return, or the render
+    /// pipeline's private masks it applies itself (`StageIo::sample_mask`). Under
+    /// [`early_fragment_tests`](GraphicsState::early_fragment_tests), Metal's visibility count of
+    /// the private masks keeps every sample the tests pass; Vulkan counts after the mask only
+    /// where the device states it (`earlyFragmentMultisampleCoverageAfterSampleCounting`,
+    /// [`Limits::early_fragment_multisample_coverage_after_sample_counting`](crate::device::Limits::early_fragment_multisample_coverage_after_sample_counting)).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub writes_sample_mask: bool,
     /// A mesh render pipeline on a device without `VK_EXT_mesh_shader`: its mesh function is
     /// the pipeline's `COMPUTE` module, which writes these records, and a synthesized `VERTEX`
     /// module draws them as a list of [`MeshRecords::topology`](MeshRecords::topology)
@@ -496,6 +505,7 @@ impl GraphicsState {
             storage_attachments: Vec::new(),
             shadow_stencil: None,
             early_fragment_tests: false,
+            writes_sample_mask: false,
             mesh_records: None,
             mesh_corners: None,
             emulated_tessellation: None,

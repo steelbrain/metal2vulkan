@@ -1100,6 +1100,14 @@ pub struct Limits {
     /// non-strict wide line is the parallelogram whose minor-axis edges pass through its
     /// endpoints, Metal's (`setLineWidth:`); `false` where `VK_KHR_maintenance5` is not exposed.
     pub non_strict_wide_lines_use_parallelogram: bool,
+    /// `earlyFragmentMultisampleCoverageAfterSampleCounting`
+    /// (`VkPhysicalDeviceMaintenance5Properties`): under a fragment shader's `EarlyFragmentTests`,
+    /// its fragment shading and multisample coverage operations (its `SampleMask` output among
+    /// them) come after sample counting, so an occlusion query counts every sample the early tests
+    /// pass, as Metal counts under its private masks. Where `false`, Vulkan lets them come before
+    /// (the specification's fragment operations); `false` too where `VK_KHR_maintenance5` is not
+    /// exposed.
+    pub early_fragment_multisample_coverage_after_sample_counting: bool,
     /// `subPixelPrecisionBits`: the bits of a framebuffer coordinate's fraction the rasterizer
     /// keeps (4 at least).
     pub sub_pixel_precision_bits: u32,

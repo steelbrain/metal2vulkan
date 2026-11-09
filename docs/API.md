@@ -3371,6 +3371,17 @@ bound.
   draw counted by a `Counting` visibility result whose fragment function writes more than one color
   attachment, on ANV (`RuntimeDriverDefect::OcclusionCountPerColorOutput`). Cost: the result is
   Metal's count multiplied by the colors the draw writes; a `Boolean` result keeps its contract.
+- `metal2vulkan-degrade-visibility-past-early-mask` (precision). `VisibilityPastEarlyMask`: A
+  draw under a `Counting` or `Boolean` visibility result whose fragment function declares
+  `[[early_fragment_tests]]` and writes its sample mask (the pipeline's private sample mask or
+  coverage, which the function applies itself under early tests, or its own `[[sample_mask]]`
+  return), on a device that does not state `earlyFragmentMultisampleCoverageAfterSampleCounting`
+  (`Limits::early_fragment_multisample_coverage_after_sample_counting`; ANV on the Iris Xe of
+  RPL-P), where Vulkan lets the mask come before the query counts. Announced at the draw's call
+  and counted in `WorkCounts::draws_counted_past_early_masks`. Keeping Metal's count would take a
+  second draw of every counted draw. Cost: the result may leave out the samples the fragment
+  function's sample mask drops, which Metal counts under early tests: a `Counting` result counts
+  fewer, and a `Boolean` one may be 0 where Metal's passed.
 - `metal2vulkan-degrade-device-boolean-visibility` (precision). `DeviceBooleanVisibility`: A pass
   writes a `Boolean` visibility result. Where a sample passed, its word is the device's occlusion
   query result without `VK_QUERY_CONTROL_PRECISE_BIT`, which Vulkan states only as nonzero ("When

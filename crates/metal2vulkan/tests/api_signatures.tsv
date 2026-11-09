@@ -2699,6 +2699,7 @@ field	metal2vulkan-runtime::WorkCounts.draw_shapes_made	pub draw_shapes_made: u6
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_reused	pub draw_shapes_reused: u64
 field	metal2vulkan-runtime::WorkCounts.draw_states_recorded	pub draw_states_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.draws_as_before	pub draws_as_before: u64
+field	metal2vulkan-runtime::WorkCounts.draws_counted_past_early_masks	pub draws_counted_past_early_masks: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_still_making	pub draws_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
 field	metal2vulkan-runtime::WorkCounts.draws_moved	pub draws_moved: u64
@@ -4122,6 +4123,7 @@ field	metal2vulkan::device::ImageCaps.storage_extended_formats	pub storage_exten
 field	metal2vulkan::device::ImageCaps.storage_multisample	pub storage_multisample: bool
 field	metal2vulkan::device::ImageCaps.storage_read_without_format	pub storage_read_without_format: bool
 field	metal2vulkan::device::ImageCaps.storage_write_without_format	pub storage_write_without_format: bool
+field	metal2vulkan::device::Limits.early_fragment_multisample_coverage_after_sample_counting	pub early_fragment_multisample_coverage_after_sample_counting: bool
 field	metal2vulkan::device::Limits.framebuffer_color_sample_counts	pub framebuffer_color_sample_counts: vk::SampleCountFlags
 field	metal2vulkan::device::Limits.framebuffer_depth_sample_counts	pub framebuffer_depth_sample_counts: vk::SampleCountFlags
 field	metal2vulkan::device::Limits.framebuffer_integer_color_sample_counts	pub framebuffer_integer_color_sample_counts: vk::SampleCountFlags
@@ -4512,6 +4514,7 @@ field	metal2vulkan::pipeline::GraphicsState.topology	pub topology: vk::Primitive
 field	metal2vulkan::pipeline::GraphicsState.vertex_writes_memory	pub vertex_writes_memory: bool
 field	metal2vulkan::pipeline::GraphicsState.writes_depth	pub writes_depth: bool
 field	metal2vulkan::pipeline::GraphicsState.writes_point_size	pub writes_point_size: bool
+field	metal2vulkan::pipeline::GraphicsState.writes_sample_mask	pub writes_sample_mask: bool
 field	metal2vulkan::pipeline::GraphicsState.writes_viewport_index	pub writes_viewport_index: bool
 field	metal2vulkan::pipeline::ImageHandleClass.access	pub access: ImageAccess
 field	metal2vulkan::pipeline::ImageHandleClass.arrayed	pub arrayed: bool
@@ -5545,6 +5548,7 @@ macro-member	metal2vulkan-runtime::Degradation::UntimedCommandBuffer	UntimedComm
 macro-member	metal2vulkan-runtime::Degradation::VertexSimdgroupGrouping	VertexSimdgroupGrouping = "vertex-simdgroup-grouping";
 macro-member	metal2vulkan-runtime::Degradation::ViewBaseTexelOffset	ViewBaseTexelOffset = "view-base-texel-offset";
 macro-member	metal2vulkan-runtime::Degradation::VisibilityCountPerColor	VisibilityCountPerColor = "visibility-count-per-color", Precision,
+macro-member	metal2vulkan-runtime::Degradation::VisibilityPastEarlyMask	VisibilityPastEarlyMask = "visibility-past-early-mask", Precision,
 macro-member	metal2vulkan-runtime::Degradation::WideEdgeDepthBias	WideEdgeDepthBias = "wide-edge-depth-bias", Precision,
 macro-member	metal2vulkan-runtime::Degradation::WordResolve	WordResolve = "word-resolve", Precision,
 macro-member	metal2vulkan-runtime::Degradation::WrappedImageLayoutTransitions	WrappedImageLayoutTransitions = "wrapped-image-layout-transitions", Performance,

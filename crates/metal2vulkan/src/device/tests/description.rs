@@ -504,6 +504,31 @@ fn wide_line_parallelograms_read_the_maintenance5_structure() {
     assert!(!read("1.3.0", &format!(r#""a": {{{extension}}}"#)));
 }
 
+/// `earlyFragmentMultisampleCoverageAfterSampleCounting` is read where `VK_KHR_maintenance5` is
+/// exposed, as each captured device states it (RADV on the 780M sets it, ANV on the Iris Xe of
+/// RPL-P does not), and is false without the extension.
+#[test]
+fn early_coverage_after_counting_reads_the_maintenance5_structure() {
+    let after = |name| {
+        profile(name)
+            .limits
+            .early_fragment_multisample_coverage_after_sample_counting
+    };
+    assert!(after("amd-780m-radv"));
+    assert!(!after("intel-irisxe-rplp-anv"));
+    let props = r#""properties": {"VkPhysicalDeviceMaintenance5Properties":
+        {"earlyFragmentMultisampleCoverageAfterSampleCounting": true}}"#;
+    let read = |blocks: &str| {
+        DeviceDescription::from_khronos_json(&doc("1.3.0", r#""a""#, blocks), None)
+            .unwrap()
+            .limits
+            .early_fragment_multisample_coverage_after_sample_counting
+    };
+    let extension = r#""extensions": {"VK_KHR_maintenance5": 1}"#;
+    assert!(read(&format!(r#""a": {{{extension}, {props}}}"#)));
+    assert!(!read(&format!(r#""a": {{{props}}}"#)));
+}
+
 #[test]
 fn profile_documents_imply_version_required_features() {
     // The LunarG baseline lists 1.2 structures but not every member 1.2 requires.

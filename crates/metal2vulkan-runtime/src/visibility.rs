@@ -58,6 +58,17 @@
 //!   color attachment runs, and the device announces `Degradation::VisibilityCountPerColor`: its
 //!   result is the samples times those colors, not divided back. `Boolean` results keep their
 //!   contract: zero where no sample passed.
+//! - **A device that may count after a fragment function's mask** (no
+//!   `earlyFragmentMultisampleCoverageAfterSampleCounting`, ANV): a draw under a visibility
+//!   result whose fragment function declares `[[early_fragment_tests]]` and writes its
+//!   `SampleMask` output (Metal's private sample mask or coverage, which the function applies
+//!   itself there, or its own `[[sample_mask]]` return) runs, counted in
+//!   `WorkCounts::draws_counted_past_early_masks`, and the device announces
+//!   `Degradation::VisibilityPastEarlyMask`: Metal counts every sample the early tests pass, and
+//!   the device's query may leave out those the mask drops. Keeping Metal's count would take a
+//!   second draw of each counted draw without the mask, as every form that masks the colors
+//!   alone (the `SampleMask` output, a discard) is a fragment operation such a device may count
+//!   after.
 //! - **An offset taken again in its mode** stops Metal's validation ("using the same offset ...
 //!   twice in the same command encoder is not allowed"); plain Metal adds the draws since to its
 //!   result: `Counting` sums them (16 and 16 write 32), `Boolean` writes 1 when either passed a

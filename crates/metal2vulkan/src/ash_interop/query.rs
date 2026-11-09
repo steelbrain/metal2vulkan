@@ -1292,6 +1292,10 @@ fn limits(l: &avk::PhysicalDeviceLimits, p: &PropertyChain, chained: &Properties
         non_strict_wide_lines_use_parallelogram: on(p
             .maintenance5
             .non_strict_wide_lines_use_parallelogram),
+        // `false` where `VK_KHR_maintenance5` is not exposed (the structure is not chained).
+        early_fragment_multisample_coverage_after_sample_counting: on(p
+            .maintenance5
+            .early_fragment_multisample_coverage_after_sample_counting),
         sub_pixel_precision_bits: l.sub_pixel_precision_bits,
     }
 }

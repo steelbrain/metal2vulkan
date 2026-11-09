@@ -560,6 +560,7 @@ struct CommandCounters {
     draws_rebound: AtomicU64,
     attachment_reads_through_copies: AtomicU64,
     own_pixel_reads: AtomicU64,
+    draws_counted_past_early_masks: AtomicU64,
     draws_moved: AtomicU64,
     draws_moved_inside: AtomicU64,
     resident_uses_made: AtomicU64,
@@ -1044,6 +1045,14 @@ impl Counting<'_> {
     /// scissors alone (`texture/attached_reads.rs`).
     pub(crate) fn own_pixel_read(&self) {
         self.0.add(|counts| &counts.own_pixel_reads, 1);
+    }
+
+    /// A draw under a visibility result whose fragment function writes its sample mask under early
+    /// tests, on a device that may count after the mask
+    /// (`WorkCounts::draws_counted_past_early_masks`).
+    pub(crate) fn draw_counted_past_early_mask(&self) {
+        self.0
+            .add(|counts| &counts.draws_counted_past_early_masks, 1);
     }
 
     /// `made` uses of what a render encoder made resident that a draw worked out
@@ -7573,6 +7582,14 @@ pub struct WorkCounts {
     /// rectangle: the copy in before their instance moves only the texels inside the rectangle
     /// bounding their scissors, a pixel wider each way (`texture/attached_reads.rs`).
     pub own_pixel_reads: u64,
+    /// Draws under a visibility result (`Counting` or `Boolean`) whose fragment function declares
+    /// `[[early_fragment_tests]]` and writes its `SampleMask` output
+    /// (`GraphicsState::writes_sample_mask`), on a device that does not state
+    /// `earlyFragmentMultisampleCoverageAfterSampleCounting`, each of those that took every step
+    /// (a draw drawn again or rebound, `render/draw_again.rs`, repeats its kept draw's
+    /// announcement and adds nothing here): each announced `Degradation::VisibilityPastEarlyMask`,
+    /// its result possibly short of the samples the mask drops, which Metal counts.
+    pub draws_counted_past_early_masks: u64,
     /// Ended compute and blit encoders whose logs their command buffers kept, as a rebind before
     /// the first submission may encode them again (`replay.rs`), and the bytes of those logs.
     pub replay_logs_kept: u64,
@@ -8286,6 +8303,9 @@ impl Device {
                 &counts.attachment_reads_through_copies
             }),
             own_pixel_reads: commands(|counts| &counts.own_pixel_reads),
+            draws_counted_past_early_masks: commands(|counts| {
+                &counts.draws_counted_past_early_masks
+            }),
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),

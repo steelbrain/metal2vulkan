@@ -2368,6 +2368,25 @@ degradations! {
         VisibilityCountPerColor = "visibility-count-per-color", Precision,
             "the result is Metal's count multiplied by the colors the draw writes; a `Boolean` \
              result keeps its contract";
+        /// A draw under a visibility result (`Counting` or `Boolean`) whose fragment function
+        /// declares `[[early_fragment_tests]]` and writes the `SampleMask` output
+        /// ([`metal2vulkan::pipeline::GraphicsState::writes_sample_mask`]: the render pipeline's
+        /// private sample mask or coverage, which the function applies itself under early tests,
+        /// or its own `[[sample_mask]]` return), on a device that does not state
+        /// `earlyFragmentMultisampleCoverageAfterSampleCounting`
+        /// ([`metal2vulkan::device::Limits::early_fragment_multisample_coverage_after_sample_counting`]:
+        /// ANV on the Iris Xe of RPL-P), where Vulkan lets the fragment shading and its mask come
+        /// before sample counting. Metal counts every sample the early tests pass, the private
+        /// masks applied to the colors alone; the device's query may leave out the samples the
+        /// mask drops. No other form keeps Metal's count at no cost to the draws: the colors'
+        /// masks are the function's `SampleMask` output or a discard, both fragment operations the
+        /// device may count after, so only a second draw of each counted draw, without the masks
+        /// and its writes, would count as Metal does. Announced at the draw's call, and counted
+        /// (`WorkCounts::draws_counted_past_early_masks`); the payload names the draw.
+        VisibilityPastEarlyMask = "visibility-past-early-mask", Precision,
+            "the result may leave out the samples the fragment function's sample mask drops, \
+             which Metal counts under early tests: a `Counting` result counts fewer, and a \
+             `Boolean` one may be 0 where Metal's passed";
         /// A pass writes a `Boolean` visibility result (`visibility.rs`): where a sample passed,
         /// its word is the device's occlusion query result without
         /// `VK_QUERY_CONTROL_PRECISE_BIT`, which Vulkan states only as nonzero ("When any samples

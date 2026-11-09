@@ -882,6 +882,8 @@ fn limits(p: &Props<'_>, api: ApiVersion, extensions: &BTreeSet<String>) -> Resu
         strict_lines: p.bool("strictLines")?,
         non_strict_wide_lines_use_parallelogram: maintenance5
             && p.bool("nonStrictWideLinesUseParallelogram")?,
+        early_fragment_multisample_coverage_after_sample_counting: maintenance5
+            && p.bool("earlyFragmentMultisampleCoverageAfterSampleCounting")?,
         sub_pixel_precision_bits: p.u32("subPixelPrecisionBits")?,
     })
 }
