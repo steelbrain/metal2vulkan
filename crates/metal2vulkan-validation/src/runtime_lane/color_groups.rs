@@ -33,6 +33,7 @@
 //! color of another group. A pipeline of four colors in the five-color pass, which the device
 //! draws in groups, is refused `NotImplemented(ColorAttachmentGroups)`.
 
+use super::framebuffer_fetch::fetches;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -471,8 +472,12 @@ fn scenes(width: Width) {
     });
     depth_scene(&lane, &five);
     load_scene(&lane, &five);
-    fetch_scene(&lane);
-    refusals(&lane, &five);
+    // A device without a fetch form refuses the fetching pipelines, typed ([`fetches`]).
+    let fetching = fetches(&lane.device);
+    if fetching {
+        fetch_scene(&lane);
+    }
+    refusals(&lane, &five, fetching);
     let announced: BTreeSet<Degradation> = (messages.take_notices().iter())
         .filter_map(|message| message.degradation.as_ref())
         .map(|notice| notice.degradation)
@@ -731,8 +736,9 @@ fn fetch_scene(lane: &Lane) {
     });
 }
 
-/// What the restricted device refuses, and the device as it is draws (the module docs).
-fn refusals(lane: &Lane, five: &[usize]) {
+/// What the restricted device refuses, and the device as it is draws (the module docs); on a
+/// device without a fetch form (not `fetching`), `cg_fetch` is refused there as `FramebufferFetch`.
+fn refusals(lane: &Lane, five: &[usize], fetching: bool) {
     let name = lane.device.name().to_owned();
     // The pipeline's limit refusal: its attachments reach index 4 on a device of four.
     let limit = Error::Unsupported(Unsupported::needs(
@@ -774,7 +780,17 @@ fn refusals(lane: &Lane, five: &[usize]) {
         }
         Width::Device => {
             counts.unwrap();
-            fetch.unwrap();
+            match fetching {
+                true => {
+                    fetch.unwrap();
+                }
+                false => match fetch {
+                    Err(Error::Unsupported(refusal))
+                        if refusal.feature == Feature::FramebufferFetch => {}
+                    Err(error) => panic!("cg_fetch on {name} without a fetch form: {error}"),
+                    Ok(_) => panic!("cg_fetch on {name}: made without a fetch form"),
+                },
+            }
         }
     }
 }

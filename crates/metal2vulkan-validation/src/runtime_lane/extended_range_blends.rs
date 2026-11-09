@@ -402,6 +402,9 @@ fn first_texels(got: &[u8], size: usize) -> String {
 #[test]
 fn blends_of_half_outputs_into_extended_range_texels() {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let name = lane.device.name().to_owned();
     let halves = halves();
     let read = kernel(&lane, "xr2p_read_float");
@@ -538,6 +541,9 @@ pub(super) const STORED_CODES: [Degradation; 1] = [Degradation::ExtendedRangeBle
 #[test]
 fn a_blend_onto_an_earlier_draw_announces_the_stored_codes_only_past_its_shadow() {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let halves = halves();
     let pf = PixelFormat::RGB10A82PXR10;
     let form = ExtendedRange::of(pf).expect("an extended-range format");
@@ -619,6 +625,9 @@ fn a_blend_onto_an_earlier_draw_announces_the_stored_codes_only_past_its_shadow(
 #[test]
 fn a_blend_onto_a_clear_between_two_codes_reads_the_clears_half() {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let halves = halves();
     let pf = PixelFormat::RGB10A82PXR10;
     let form = ExtendedRange::of(pf).expect("an extended-range format");
@@ -659,6 +668,9 @@ fn a_blend_onto_a_clear_between_two_codes_reads_the_clears_half() {
 #[test]
 fn a_blend_into_extended_range_announces_its_source_note() {
     let (messages, _cache, lane) = lane();
+    if !fetches(&lane.device) {
+        return;
+    }
     let pf = PixelFormat::RGB10A82PXR10;
     let source = Degradation::ExtendedRangeBlendSource;
     let float_source = Degradation::ExtendedRangeFloatBlendSource;

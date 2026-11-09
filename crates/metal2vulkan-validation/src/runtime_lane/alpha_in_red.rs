@@ -30,6 +30,7 @@
 
 use super::degrade_notices::{made_render_kinds, resolve_kind};
 use super::driver_deviations::stage_notes;
+use super::framebuffer_fetch::fetches;
 use super::pixel_samplers::metal_sampler;
 use super::{
     buffer_with, converted_holds, half_within, layer_reported_nothing_at_all, read_buffer,
@@ -1086,13 +1087,17 @@ const FETCH_MASKS: [(ColorWriteMask, u8); 3] = [
 /// function's write after it stores the alpha as the write mask lets it, at one sample and at four,
 /// as Metal's do: on the device without `A8_UNORM` (its `R8_UNORM` image read through the input
 /// attachment or the interlocked storage form, whichever the device orders fetch with), and with
-/// its own `A8_UNORM` where it has the format.
+/// its own `A8_UNORM` where it has the format. A device without a fetch form skips it
+/// ([`fetches`]).
 #[test]
 fn a8_color_input_reads_alpha_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     for withheld in [true, false] {
         let lane = Lane::new(&messages, &cache, withheld);
+        if !fetches(&lane.device) {
+            continue;
+        }
         let name = lane.device.name().to_owned();
         if withheld {
             assert!(lane.in_red(), "{name}: A8Unorm is not held in red");
@@ -1164,7 +1169,8 @@ fn a8_color_input_reads_alpha_as_metal() {
 /// `A8_UNORM`: the fetch reads the planes in the pixel interlock, declared without a format by the
 /// format's own bit, and the planes are held in `A8_UNORM` itself (`bind::PlanesCopy::Alpha8`), as
 /// no unsigned view reads its class. A target cleared to 0.6 reads `(0, 0, 0, 0.6)` at every
-/// sample, and the write of [`COLOR`] after it resolves to 204, as Metal's (probe `a8`'s uses).
+/// sample, and the write of [`COLOR`] after it resolves to 204, as Metal's (probe `a8`'s uses). A
+/// device without a fetch form skips it ([`fetches`]).
 #[test]
 fn a8_color_input_through_sample_planes_reads_alpha_as_metal() {
     let messages = Messages::default();
@@ -1184,6 +1190,9 @@ fn a8_color_input_through_sample_planes_reads_alpha_as_metal() {
         );
         drop(lane);
         layer_reported_nothing_at_all(&messages);
+        return;
+    }
+    if !fetches(&lane.device) {
         return;
     }
     let pipeline = lane
