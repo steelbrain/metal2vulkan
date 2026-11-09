@@ -22,7 +22,15 @@
 // Each case reports the device and release, whether the semaphore came within the 5 s and after
 // how long, both command buffers' final status and error, and the threads the handlers ran on.
 //
-// WHAT IT MEASURED: see the commit that adds it.
+// WHAT IT MEASURED (M3 Max, macOS 27.0.1, 10 runs of each case, MTL_DEBUG_LAYER unset):
+//   scheduled-two-queues, scheduled-two-queues-b-first, completed-two-queues: the completed
+//   handler reached the waiting handler in every run, 7.6 to 9.3 ms after its wait began (b's
+//   scheduled handler began its wait before a's commit in each b-first run); both command buffers
+//   Completed, no error.
+//   scheduled-one-queue: it never did: the 5 s bound in every run, the two handlers on one
+//   thread; both command buffers Completed, no error, once the wait gave up.
+// So Metal schedules and completes one queue's command buffers whatever a handler of another
+// queue's does, and runs one queue's handlers one at a time.
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o cross_queue_handler_waits cross_queue_handler_waits.m \
