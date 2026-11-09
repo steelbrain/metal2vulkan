@@ -650,7 +650,7 @@ impl<'a> Bare<'a> {
             });
             frame.open.push(open);
             let (commands, ops) = step(counted, || self.pass_ops(pushed, &mut n));
-            frame.ops.push((ops, commands));
+            frame.ops.push((ops, commands, DRAWS));
             // SAFETY: inside the pass begun above.
             let ((), end) = step(counted, || unsafe {
                 device.cmd_end_render_pass(command_buffer)

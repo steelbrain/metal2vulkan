@@ -23,6 +23,14 @@
 //!   from the vertex and fragment stages to both before each pass's calls but the first: the
 //!   encoder's own order of everything before the barrier ahead of everything after it, as an
 //!   encoder's end orders it ahead of the next encoder's.
+//! - **`glass`**: [`GLASS_PASSES`] encoders, each a pass that loads and stores the target, sets
+//!   the pipeline state, sampler, fragment texture 0 and its buffers once, then draws
+//!   [`GLASS_DRAWS`] indexed triangle lists of 6 indices (`UInt16`) that differ from the draw
+//!   before only in their arguments, as a window server's glass layers do: the first half at
+//!   successive first indices over segments of the corners `0..6`, base vertex 0; the second half
+//!   at successive first indices and base vertices over segments of `6j..6j + 6` drawn at base
+//!   vertex `-6j`, so every vertex is a corner of `zwd_quad`'s. The runtime keeps the first draw
+//!   and rebinds each later one with its arguments (`WorkCounts::draws_rebound_arguments`).
 //! - **`bare sets`** and **`bare pushed`**: the same frame in plain Vulkan on the runtime's own
 //!   device, through the driver's commands (loaded with `vkGetDeviceProcAddr`, not the runtime's
 //!   counted ones): per pass a `vkCmdBeginRenderPass` (one render pass object clearing, one
@@ -45,9 +53,10 @@
 //! `one pass` per pass, and a `COMPOSITE-COUNTS` line per runtime shape the work counts a frame
 //! moved (`Device::work_counts`, every count that moved).
 //!
-//! `composite_costs` measures [`ROUNDS`] rounds; `composite_costs_passes_alone` and
-//! `composite_costs_bare_alone` encode [`PROFILED`] frames of `passes` and `bare sets` alone, in
-//! a process of their own, for a profile of each (`perf record -g` of the test's process).
+//! `composite_costs` measures [`ROUNDS`] rounds; `composite_costs_passes_alone`,
+//! `composite_costs_one_pass_alone` and `composite_costs_bare_alone` encode [`PROFILED`] frames of
+//! `passes`, `one pass` and `bare sets` alone, in a process of their own, for a profile of each
+//! (`perf record -g` of the test's process).
 //!
 //! Ignored by default: a measurement, not a check. Run it by name with `--run-ignored all`, in a
 //! build with `--cfg m2v_system_alloc`, whose lib test binary keeps the system allocator as a
@@ -63,7 +72,7 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{
-    BarrierScope, BlendFactor, DataType, PixelFormat, PrimitiveType, RenderStages,
+    BarrierScope, BlendFactor, DataType, IndexType, PixelFormat, PrimitiveType, RenderStages,
     SamplerMinMagFilter, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
@@ -87,6 +96,9 @@ const PROFILED: usize = 3000;
 /// The passes of a frame, and the draws of each.
 const PASSES: usize = 92;
 const DRAWS: usize = 3;
+/// The passes of a `glass` frame, and the draws of each.
+const GLASS_PASSES: usize = 8;
+const GLASS_DRAWS: usize = 80;
 /// Every `RESET`th draw of the frame but a pass's first sets the pipeline state and sampler again.
 const RESET: usize = 4;
 /// The target's side.
@@ -103,6 +115,7 @@ enum Shape {
     Passes,
     OnePass,
     Barriers,
+    Glass,
 }
 
 impl Shape {
@@ -111,16 +124,17 @@ impl Shape {
             Shape::Passes => "passes",
             Shape::OnePass => "one pass",
             Shape::Barriers => "barriers",
+            Shape::Glass => "glass",
         }
     }
 }
 
 /// One frame's steps: each encoder's opening and end, and each pass's binds and draws with the
-/// calls they made; the frame's CPU and wall time.
+/// calls and draws they made; the frame's CPU and wall time.
 #[derive(Default)]
 struct Frame {
     open: Vec<Step>,
-    ops: Vec<(Step, usize)>,
+    ops: Vec<(Step, usize, usize)>,
     end: Vec<Step>,
     cpu: Duration,
     wall: Duration,
@@ -134,6 +148,8 @@ struct Composite {
     sampler: SamplerState,
     textures: Vec<Texture>,
     target: Texture,
+    /// The `glass` draws' indices ([`Composite::glass_ops`]).
+    indices: Buffer,
     /// The no-copy buffer over the chunk, and the chunk's pages, which outlive it (declared after).
     chunk: Buffer,
     _pages: Mapping,
@@ -187,6 +203,21 @@ impl Composite {
         target.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
         target.resource_options = ResourceOptions::private();
         let target = device.new_texture(&target).unwrap();
+        // The first half's segments of the corners, then the second half's of `6j..6j + 6`.
+        let half = GLASS_DRAWS / 2;
+        let indices: Vec<u16> = (0..GLASS_DRAWS)
+            .flat_map(|draw| {
+                let from = match draw < half {
+                    true => 0,
+                    false => 6 * (draw - half + 1) as u16,
+                };
+                from..from + 6
+            })
+            .collect();
+        let indices: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+        let indices = device
+            .new_buffer_with_bytes(&indices, ResourceOptions::shared())
+            .unwrap();
         let pages = Mapping::anonymous(CHUNK.next_multiple_of(host_page()));
         for slot in 0..CHUNK / SLOT {
             let bytes = shape(slot);
@@ -211,6 +242,7 @@ impl Composite {
             sampler,
             textures,
             target,
+            indices,
             chunk,
             _pages: pages,
             device,
@@ -269,6 +301,42 @@ impl Composite {
         calls
     }
 
+    /// One `glass` pass's binds and draws into `encoder` (the module docs): the calls made.
+    fn glass_ops(&self, encoder: &mut RenderCommandEncoder) -> usize {
+        encoder.set_render_pipeline_state(&self.pipeline).unwrap();
+        encoder
+            .set_fragment_sampler_state(Some(&self.sampler), 0)
+            .unwrap();
+        encoder
+            .set_fragment_texture(Some(&self.textures[0]), 0)
+            .unwrap();
+        encoder
+            .set_fragment_buffer(Some(&self.chunk), 256, 0)
+            .unwrap();
+        encoder.set_vertex_buffer(Some(&self.chunk), 0, 0).unwrap();
+        let half = GLASS_DRAWS / 2;
+        for draw in 0..GLASS_DRAWS {
+            let base = match draw < half {
+                true => 0,
+                false => -6 * (draw - half + 1) as i32,
+            };
+            let offset = (12 * draw) as u64;
+            encoder
+                .draw_indexed_primitives(
+                    PrimitiveType::Triangle,
+                    6,
+                    IndexType::UInt16,
+                    &self.indices,
+                    offset,
+                    1,
+                    base,
+                    0,
+                )
+                .unwrap();
+        }
+        5 + GLASS_DRAWS
+    }
+
     /// Encode and commit one frame of `shape`, counting the encoding thread's instructions in
     /// each step where `counted`, then wait for it.
     fn frame(&self, shape: Shape, counted: bool) -> Frame {
@@ -276,6 +344,7 @@ impl Composite {
         let (encoders, passes) = match shape {
             Shape::Passes => (PASSES, 1),
             Shape::OnePass | Shape::Barriers => (1, PASSES),
+            Shape::Glass => (GLASS_PASSES, 1),
         };
         let command_buffer = self.queue.command_buffer().unwrap();
         let cpu = thread_cpu();
@@ -289,7 +358,10 @@ impl Composite {
             frame.open.push(open);
             for pass in 0..passes {
                 let barrier = shape == Shape::Barriers && pass > 0;
-                let (calls, ops) = step(counted, || {
+                let ((calls, draws), ops) = step(counted, || {
+                    if shape == Shape::Glass {
+                        return (self.glass_ops(&mut encoder), GLASS_DRAWS);
+                    }
                     if barrier {
                         encoder.memory_barrier_with_scope(
                             BarrierScope::BUFFERS
@@ -299,9 +371,12 @@ impl Composite {
                             RenderStages::VERTEX | RenderStages::FRAGMENT,
                         );
                     }
-                    self.pass_ops(&mut encoder, &mut n) + usize::from(barrier)
+                    (
+                        self.pass_ops(&mut encoder, &mut n) + usize::from(barrier),
+                        DRAWS,
+                    )
                 });
-                frame.ops.push((ops, calls));
+                frame.ops.push((ops, calls, draws));
             }
             let ((), end) = step(counted, || encoder.end_encoding().unwrap());
             frame.end.push(end);
@@ -417,11 +492,11 @@ fn summarize(frames: &[Frame], counted: Option<&[Frame]>) -> Measured {
             steps.map(|step| step.instructions.unwrap() as f64).sum()
         };
         let pass = sum(&mut counted.iter().flat_map(|f| f.open.iter().chain(&f.end)));
-        let ops = sum(&mut counted.iter().flat_map(|f| f.ops.iter().map(|(s, _)| s)));
-        let calls: usize = counted.iter().flat_map(|f| &f.ops).map(|(_, c)| c).sum();
+        let ops = sum(&mut counted.iter().flat_map(|f| f.ops.iter().map(|(s, _, _)| s)));
+        let calls: usize = counted.iter().flat_map(|f| &f.ops).map(|(_, c, _)| c).sum();
+        let draws: usize = counted.iter().flat_map(|f| &f.ops).map(|(_, _, d)| d).sum();
         let encoders = counted.iter().map(|f| f.open.len()).sum::<usize>() as f64;
-        let draws = (counted.len() * PASSES * DRAWS) as f64;
-        [pass / encoders, ops / calls as f64, ops / draws]
+        [pass / encoders, ops / calls as f64, ops / draws as f64]
     });
     let each = |of: fn(&Frame) -> &Vec<Step>| -> Vec<f64> {
         (frames.iter())
@@ -431,11 +506,11 @@ fn summarize(frames: &[Frame], counted: Option<&[Frame]>) -> Measured {
     let open_end = (frames.iter())
         .flat_map(|frame| (frame.open.iter().zip(&frame.end)).map(|(o, e)| micros(o.wall + e.wall)))
         .collect();
-    let ops = |each: &dyn Fn(usize) -> f64| -> f64 {
+    let ops = |each: &dyn Fn(usize, usize) -> f64| -> f64 {
         median(
             (frames.iter())
                 .flat_map(|frame| &frame.ops)
-                .map(|(step, calls)| micros(step.wall) * 1e3 / each(*calls))
+                .map(|(step, calls, draws)| micros(step.wall) * 1e3 / each(*calls, *draws))
                 .collect(),
         )
     };
@@ -445,8 +520,8 @@ fn summarize(frames: &[Frame], counted: Option<&[Frame]>) -> Measured {
         open_end: median(open_end),
         open: median(each(|f| &f.open)),
         end: median(each(|f| &f.end)),
-        call: ops(&|calls| calls as f64),
-        draw: ops(&|_| DRAWS as f64),
+        call: ops(&|calls, _| calls as f64),
+        draw: ops(&|_, draws| draws as f64),
         instructions,
     }
 }
@@ -489,6 +564,8 @@ fn measure() {
         one.print(&name, Shape::OnePass.label());
         let barriers = composite.measure(Shape::Barriers);
         barriers.print(&name, Shape::Barriers.label());
+        let glass = composite.measure(Shape::Glass);
+        glass.print(&name, Shape::Glass.label());
         println!(
             "COMPOSITE-PASS {name}: (passes - one pass) / {}: {:.2} us of CPU, {:.2} us wall a \
              pass",
@@ -509,7 +586,7 @@ fn measure() {
             }
         }
     }
-    for shape in [Shape::Passes, Shape::OnePass, Shape::Barriers] {
+    for shape in [Shape::Passes, Shape::OnePass, Shape::Barriers, Shape::Glass] {
         let counts = composite.counts(shape);
         let text: Vec<String> = counts
             .iter()
@@ -536,6 +613,16 @@ fn composite_costs_passes_alone() {
     let composite = Composite::new(&cache);
     for _ in 0..PROFILED {
         composite.frame(Shape::Passes, false);
+    }
+}
+
+#[test]
+#[ignore = "a measurement, not a check: run by name with --run-ignored all"]
+fn composite_costs_one_pass_alone() {
+    let cache = ScratchCache::new().unwrap();
+    let composite = Composite::new(&cache);
+    for _ in 0..PROFILED {
+        composite.frame(Shape::OnePass, false);
     }
 }
 
