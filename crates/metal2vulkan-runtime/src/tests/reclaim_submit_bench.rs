@@ -47,6 +47,18 @@
 //!   what holding memory that is not private to the device's process costs each submission.
 //! - **Nothing made**: the copies' buffers alone.
 //!
+//! Two arms ask instead whether memory allocated exportable holds one queue's work behind
+//! another's, as memory that synchronizes implicitly would: **Two queues, private** and **Two
+//! queues, exportable** each allocate [`TWO_QUEUE_BYTES`] of the system heap, as a plain
+//! allocation or exportable as a dma-buf, and bind three buffers in it, each made for that handle
+//! type where the memory is exportable (`VUID-vkBindBufferMemory-memory-02726`). For
+//! [`TWO_QUEUE_ROUNDS`] rounds, a queue the device reserved for the caller fills the first
+//! buffer [`LONG_FILLS`] times, and a millisecond later a command queue's `VkQueue` (lent,
+//! `CommandQueue::with_vk_queue`) copies [`COPY_BYTES`] from the second into the third, each
+//! waited for by its fence: printed, the fills' and the copies' times from submission to their
+//! fence, and the rounds whose copy completed while the fills ran. Copies held behind the fills
+//! take as long as the fills' rest, and complete after them.
+//!
 //! Printed (`RECLAIM-SUBMIT`), per arm and phase: the submissions; for `commit_and_submit` and for
 //! the turnaround each, those of 8 ms or more and of 17 ms or more, the median, 99th percentile and
 //! slowest; the command buffers submitted, those the committing thread submitted
@@ -63,7 +75,10 @@
 //! --release -p metal2vulkan-runtime --lib --run-ignored all reclaim_submit_bench --no-capture`.
 
 use super::host_residency::{device, Scratch};
-use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, HostMemory, ResourceOptions};
+use crate::{
+    Buffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, HostMemory,
+    ResourceOptions, ShaderCacheOptions,
+};
 use ash::vk;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,6 +121,12 @@ const PIECE_BYTES: u64 = 256 * MIB;
 const FLOOR_BYTES: u64 = 3 * GIB / 2;
 /// The slowest submissions and makings printed per phase.
 const SLOWEST: usize = 8;
+/// The two-queue arms' allocation, the bytes of its first buffer, which the reserved queue
+/// fills, the fills in each of its command buffers, and the rounds.
+const TWO_QUEUE_BYTES: u64 = 128 * MIB;
+const LONG_BYTES: u64 = 96 * MIB;
+const LONG_FILLS: u32 = 8;
+const TWO_QUEUE_ROUNDS: usize = 100;
 
 /// A private anonymous mapping, unmapped by the drop.
 struct Anonymous {
@@ -615,6 +636,172 @@ fn arm(label: &str, arm: Arm) {
         unsafe { crate::release::object(device.shared().vk(), memory) };
     }
     drop(pages);
+}
+
+/// Run the two-queue arm `label` (the module docs), its memory exportable where `exportable`.
+fn two_queues(label: &str, exportable: bool) {
+    use vk::BufferUsageFlags as U;
+    let scratch = Scratch::new();
+    let options = DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Discrete,
+                DeviceKind::Integrated,
+                DeviceKind::Virtual,
+            ],
+        },
+        shader_cache: ShaderCacheOptions {
+            directory: Some(scratch.0.clone()),
+            ..ShaderCacheOptions::default()
+        },
+        reserved_queues: 1,
+        ..DeviceOptions::default()
+    };
+    let device = Device::system_default_with(&options).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    // SAFETY: the family is read; nothing is submitted.
+    let lent_family = unsafe { queue.with_vk_queue(|_, _, family| family) };
+    // SAFETY: the handles are used while the device lives.
+    let raw = unsafe { device.raw() };
+    let Some(&reserved) = raw.reserved_queues.first() else {
+        eprintln!("RECLAIM-SUBMIT {label}: the device reserved no queue: not run");
+        return;
+    };
+    let vk_device = raw.device;
+    let index = memory_type(
+        &device,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        vk::MemoryPropertyFlags::DEVICE_LOCAL
+            | vk::MemoryPropertyFlags::HOST_CACHED
+            | vk::MemoryPropertyFlags::DEVICE_COHERENT_AMD
+            | vk::MemoryPropertyFlags::PROTECTED,
+    );
+    let memory = allocate(&device, index, TWO_QUEUE_BYTES, exportable);
+    // The first buffer the reserved queue's family alone uses, the other two the lent queue's.
+    let regions = [
+        (0, LONG_BYTES, U::TRANSFER_DST),
+        (LONG_BYTES, COPY_BYTES, U::TRANSFER_SRC),
+        (LONG_BYTES + COPY_BYTES, COPY_BYTES, U::TRANSFER_DST),
+    ];
+    let buffers: Vec<vk::Buffer> = (regions.iter())
+        .map(|&(offset, size, usage)| {
+            let mut external = vk::ExternalMemoryBufferCreateInfo::default()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let mut info = vk::BufferCreateInfo::default().size(size).usage(usage);
+            if exportable {
+                info = info.push_next(&mut external);
+            }
+            // SAFETY: the device is live and `info` valid; the buffer lies inside the memory, at
+            // an offset of a multiple of 64 KiB, and names the memory's handle type where it has
+            // one (`VUID-vkBindBufferMemory-memory-02726`).
+            unsafe {
+                let buffer = vk_device.create_buffer(&info, None).unwrap();
+                vk_device
+                    .bind_buffer_memory(buffer, memory, offset)
+                    .unwrap();
+                buffer
+            }
+        })
+        .collect();
+    // SAFETY: the pools, command buffers and fences are this device's, recorded once, each
+    // submitted again only once its fence signaled, and destroyed once nothing runs.
+    let (long_times, short_times, overlapped) = unsafe {
+        let pool = |family| {
+            let info = vk::CommandPoolCreateInfo::default().queue_family_index(family);
+            vk_device.create_command_pool(&info, None).unwrap()
+        };
+        let pools = [pool(reserved.family), pool(lent_family)];
+        let record = |pool, commands: &dyn Fn(vk::CommandBuffer)| {
+            let info = vk::CommandBufferAllocateInfo::default()
+                .command_pool(pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            let command_buffer =
+                device.with_loader_word(|| vk_device.allocate_command_buffers(&info).unwrap())[0];
+            let begin = vk::CommandBufferBeginInfo::default();
+            vk_device
+                .begin_command_buffer(command_buffer, &begin)
+                .unwrap();
+            commands(command_buffer);
+            vk_device.end_command_buffer(command_buffer).unwrap();
+            command_buffer
+        };
+        let long = record(pools[0], &|command_buffer| {
+            for fill in 0..LONG_FILLS {
+                vk_device.cmd_fill_buffer(command_buffer, buffers[0], 0, vk::WHOLE_SIZE, fill);
+            }
+        });
+        let short = record(pools[1], &|command_buffer| {
+            let region = vk::BufferCopy::default().size(COPY_BYTES);
+            vk_device.cmd_copy_buffer(command_buffer, buffers[1], buffers[2], &[region]);
+        });
+        let fence = || (vk_device.create_fence(&vk::FenceCreateInfo::default(), None)).unwrap();
+        let fences = [fence(), fence()];
+        let wait =
+            |fence| (vk_device.wait_for_fences(&[fence], true, WAIT.as_nanos() as u64)).unwrap();
+        let (mut long_times, mut short_times, mut overlapped) = (Vec::new(), Vec::new(), 0);
+        for _ in 0..TWO_QUEUE_ROUNDS {
+            vk_device.reset_fences(&fences).unwrap();
+            let long_buffers = [long];
+            let submit = vk::SubmitInfo::default().command_buffers(&long_buffers);
+            let (long_at, long_began) = (monotonic(), Instant::now());
+            (vk_device.queue_submit(reserved.queue, &[submit], fences[0])).unwrap();
+            std::thread::sleep(Duration::from_millis(1));
+            let short_buffers = [short];
+            let submit = vk::SubmitInfo::default().command_buffers(&short_buffers);
+            let (short_at, short_began) = (monotonic(), Instant::now());
+            (queue.with_vk_queue(|lent, vk_queue, _| {
+                lent.queue_submit(vk_queue, &[submit], fences[1])
+            }))
+            .unwrap();
+            wait(fences[1]);
+            short_times.push((short_began.elapsed(), short_at));
+            if !vk_device.get_fence_status(fences[0]).unwrap() {
+                overlapped += 1;
+            }
+            wait(fences[0]);
+            long_times.push((long_began.elapsed(), long_at));
+        }
+        for fence in fences {
+            vk_device.destroy_fence(fence, None);
+        }
+        for pool in pools {
+            vk_device.destroy_command_pool(pool, None);
+        }
+        (long_times, short_times, overlapped)
+    };
+    let (long_median, _, long_slowest, _) = spread(&long_times, SLOWEST);
+    let (median, p99, slowest, slow) = spread(&short_times, SLOWEST);
+    eprintln!(
+        "RECLAIM-SUBMIT {} {label}: reserved queue of family {}, lent queue of family {}; {} \
+         rounds; fills ms median {long_median:.3}, slowest {long_slowest:.3}; copies ms median \
+         {median:.3}, p99 {p99:.3}, slowest {slowest:.3}; copies completed while the fills ran \
+         {overlapped}",
+        device.name(),
+        reserved.family,
+        lent_family,
+        short_times.len(),
+    );
+    eprintln!("RECLAIM-SUBMIT {label}: slowest copies {slow}");
+    for buffer in buffers {
+        // SAFETY: nothing uses the buffer.
+        unsafe { vk_device.destroy_buffer(buffer, None) };
+    }
+    // SAFETY: nothing uses the memory.
+    unsafe { crate::release::object(device.shared().vk(), memory) };
+}
+
+#[test]
+#[ignore = "a measurement of the GPU's queues: run alone on its host by name"]
+fn reclaim_submit_bench_two_queues_private() {
+    two_queues("two queues, private", false);
+}
+
+#[test]
+#[ignore = "a measurement of the GPU's queues: run alone on its host by name"]
+fn reclaim_submit_bench_two_queues_exportable() {
+    two_queues("two queues, exportable", true);
 }
 
 #[test]
