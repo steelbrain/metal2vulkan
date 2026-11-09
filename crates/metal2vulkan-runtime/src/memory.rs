@@ -3826,7 +3826,9 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 /// pools keep room first, so that a device near its count of allocations
 /// (`maxMemoryAllocationCount`) keeps it where those buffers go before anywhere else; the pools
 /// of [`Holds::FdBuffers`] keep none while those buffers lie in plain blocks (until the device's
-/// in-place check answered, or where it refused such blocks).
+/// in-place check answered, or where it refused such blocks). No block is made here while the
+/// device's allocations are within the margin of its `maxMemoryAllocationCount` the runtime's
+/// work ahead leaves to the objects (`allocations.rs`'s `Allocations::room_ahead`).
 pub(super) fn keep_room(
     memory: &Mutex<Memory>,
     device: &ash::Device,
@@ -3872,6 +3874,9 @@ pub(super) fn keep_room(
                 continue;
             }
             drop(guard);
+            if !crate::allocations::room_ahead(device.handle()) {
+                break;
+            }
             let Ok(block) = maker.make(device, pool, maker.block_bytes, addressed) else {
                 break;
             };

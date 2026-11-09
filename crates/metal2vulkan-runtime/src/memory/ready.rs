@@ -47,6 +47,9 @@
 //!   finds the making under way makes its own block. Where no block is made ahead, the call makes
 //!   its own (`WorkCounts::buffer_blocks_made_in_place`, `image_blocks_made_in_place`). A pool's
 //!   blocks change only at those calls, never as a making here ends.
+//! - **Within the allocation margin, none.** A making no call waits for yet makes no block while
+//!   the device's allocations are within the margin of its `maxMemoryAllocationCount` the
+//!   runtime's work ahead leaves to the objects (`allocations.rs`'s `Allocations::room_ahead`).
 //! - **Bounded.** One making a pool at most, on a thread of its own that ends with the block.
 //!   While it waits to be added, its bytes count against its heap's budget of kept empty blocks
 //!   (`Memory::kept_budget`); one whose pool stopped growing for `KEPT_EMPTY_FOR`, the pool
@@ -248,6 +251,11 @@ fn ready(
     wanted: impl Fn() -> bool,
 ) -> Option<Block> {
     let busy = exit_guard::enter()?;
+    // Ahead of any placement, none within the margin of the device's allocations the runtime's
+    // work ahead leaves (`allocations.rs`); a call waiting for it has its allocation made.
+    if !wanted() && !crate::allocations::room_ahead(functions.get().handle()) {
+        return None;
+    }
     let block = maker.make(functions.get(), pool, bytes, addressed).ok()?;
     if let Some(mapped) = block.mapped {
         let length = usize::try_from(block.size).unwrap_or(usize::MAX);

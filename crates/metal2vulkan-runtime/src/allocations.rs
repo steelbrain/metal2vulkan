@@ -20,8 +20,10 @@
 //!   the limit reached while frees are posted waits for them, then asks again, before it is
 //!   refused.
 //! - **A margin the runtime's own work leaves.** [`Allocations::room_ahead`]: the allocations the
-//!   runtime makes ahead of any object (`host_ram.rs`'s ahead import) stop while fewer than a
-//!   quarter of the limit are left, so the objects and their imports have those. Once the
+//!   runtime makes ahead of any object (`host_ram.rs`'s ahead import, and the pooled blocks
+//!   `memory.rs`'s `keep_room` and `memory/ready.rs` make before anything is placed in them) stop
+//!   while fewer than a quarter of the limit are left, so the objects and their imports have
+//!   those. Once the
 //!   device's allocations reach that quarter, it gives back the chunks it imported ahead that no
 //!   object took ([`Allocations::made`]), so they are gone before they could take the last.
 
@@ -201,6 +203,12 @@ pub(crate) fn register(device: vk::Device, limit: u32) -> Registered {
         device,
         allocations,
     }
+}
+
+/// Whether `device` may allocate one more ahead of any object ([`Allocations::room_ahead`]):
+/// always where it is not registered.
+pub(crate) fn room_ahead(device: vk::Device) -> bool {
+    of(device).is_none_or(|allocations| allocations.room_ahead())
 }
 
 /// `device`'s count, where it is registered.
