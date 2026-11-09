@@ -40,6 +40,11 @@ impl ObjectId {
         ObjectId(NEXT.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// The identity whose number ([`get`](Self::get)) is `number`; `None` for 0, no object's.
+    pub(super) fn of_number(number: u64) -> Option<ObjectId> {
+        (number != 0).then_some(ObjectId(number))
+    }
+
     /// The number, never 0.
     pub fn get(self) -> u64 {
         self.0

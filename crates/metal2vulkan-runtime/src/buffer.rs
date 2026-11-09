@@ -3756,13 +3756,16 @@ impl Buffer {
 
     /// The encoder core that holds it from an argument table's retain (`retained::HeldBy`).
     pub(super) fn held_by(&self) -> &HeldBy {
-        &self.s().held_by
+        // The program's buffer's, whatever generation its parts are of: an encoder core's retain
+        // names the buffer, not its parts.
+        &self.0.held_by
     }
 
     /// The buffer's identity for hazard tracking: a heap buffer's is its heap's, as Metal tracks
     /// a heap's resources as one ([`Buffer::tracked`]).
     pub(super) fn identity(&self) -> Identity {
-        match &self.s().bytes {
+        // Every generation's parts keep the buffer's identity (`Buffer::carry`).
+        match &self.0.bytes {
             Bytes::Own(own) => own.identity,
             Bytes::Heap(bytes) => bytes.bytes.identity(),
         }
@@ -3783,7 +3786,8 @@ impl Buffer {
     /// The bytes `range` of the buffer as hazard tracking keys them: its identity
     /// ([`Buffer::identity`]), and the range in its bytes, or for a heap buffer in its heap's.
     pub(super) fn tracked(&self, range: Range<u64>) -> (Identity, Range<u64>) {
-        let shift = match &self.s().bytes {
+        // A heap's buffer is never carried (`Buffer::carry`).
+        let shift = match &self.0.bytes {
             Bytes::Own(_) => 0,
             Bytes::Heap(bytes) => bytes.offset,
         };
@@ -3974,7 +3978,8 @@ impl Buffer {
     /// The buffer's Metal address, read for the runtime's own bookkeeping (a live-table key, a
     /// lookup), which hands it out to no one: [`Buffer::gpu_address`] without its exposure.
     pub(super) fn metal_address(&self) -> GpuAddress {
-        self.s().address
+        // Every generation's parts keep it (`Buffer::carry`).
+        self.0.address
     }
 
     /// Keep a no-copy buffer's import imported for good from now on, its Metal address handed
@@ -4152,7 +4157,8 @@ impl Buffer {
 
     /// `length`: the length the buffer was made with.
     pub fn length(&self) -> u64 {
-        self.s().length
+        // Every generation's parts keep it (`Buffer::carry`).
+        self.0.length
     }
 
     /// `contents`: the CPU address of the buffer's bytes, or `None` for `Private` storage. A
@@ -4188,7 +4194,8 @@ impl Buffer {
     /// pointer; this is unique among the process's buffers, textures and heaps for the buffer's
     /// life and never reused, where a `gpu_address` is taken again once its buffer is freed.
     pub fn object_id(&self) -> ObjectId {
-        self.s().object_id
+        // Every generation's parts keep it (`Buffer::carry`).
+        self.0.object_id
     }
 
     /// `gpuAddress`: the buffer's address in the device's Metal address space. A heap buffer's

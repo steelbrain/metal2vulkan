@@ -2964,19 +2964,21 @@ thread_local! {
     /// The command buffer whose work this thread does now, and its generation ([`NoticesFor`]).
     static NOTICES_FOR: Cell<Scope> = const {
         Cell::new(Scope {
-            command_buffer: None,
-            generation: None,
+            command_buffer: 0,
+            generation: 0,
         })
     };
 }
 
-/// What a thread's [`NoticesFor`] names: the command buffer whose work it does, and that command
-/// buffer's generation of its device, the address of its `DeviceShared`, which a buffer its
-/// device's recovery carried answers its parts of (`Buffer::carried`, `device/carry.rs`).
+/// What a thread's [`NoticesFor`] names: the command buffer whose work it does (its
+/// `ObjectId`'s number), and that command buffer's generation of its device, the address of its
+/// `DeviceShared`, which a buffer its device's recovery carried answers its parts of
+/// (`Buffer::carried`, `device/carry.rs`); 0 for none of either. Two words, as one optional
+/// `ObjectId` is, which each scope of a command buffer's work sets and puts back.
 #[derive(Clone, Copy)]
 struct Scope {
-    command_buffer: Option<ObjectId>,
-    generation: Option<usize>,
+    command_buffer: u64,
+    generation: usize,
 }
 
 /// This thread doing one command buffer's work, from its making until it is dropped: every notice
@@ -2995,8 +2997,8 @@ impl NoticesFor {
     /// The work of the command buffer of ID `command_buffer`, made on `generation`, from now.
     pub(crate) fn new(command_buffer: ObjectId, generation: &DeviceShared) -> NoticesFor {
         let scope = Scope {
-            command_buffer: Some(command_buffer),
-            generation: Some(std::ptr::from_ref(generation).addr()),
+            command_buffer: command_buffer.get(),
+            generation: std::ptr::from_ref(generation).addr(),
         };
         NoticesFor {
             outer: NOTICES_FOR.with(|current| current.replace(scope)),
@@ -3011,7 +3013,7 @@ impl NoticesFor {
         let outer = NOTICES_FOR.with(|current| {
             let outer = current.get();
             current.set(Scope {
-                command_buffer: None,
+                command_buffer: 0,
                 ..outer
             });
             outer
@@ -3024,13 +3026,13 @@ impl NoticesFor {
 
     /// The command buffer whose work this thread does now, if any.
     pub(crate) fn current() -> Option<ObjectId> {
-        NOTICES_FOR.with(|current| current.get().command_buffer)
+        NOTICES_FOR.with(|current| ObjectId::of_number(current.get().command_buffer))
     }
 
     /// The generation whose command buffer's work this thread does now, if any: the address of
     /// its `DeviceShared`.
     pub(crate) fn generation() -> Option<usize> {
-        NOTICES_FOR.with(|current| current.get().generation)
+        NOTICES_FOR.with(|current| Some(current.get().generation).filter(|&at| at != 0))
     }
 }
 
