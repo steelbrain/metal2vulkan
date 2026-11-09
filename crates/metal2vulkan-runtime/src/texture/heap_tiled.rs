@@ -189,11 +189,11 @@ use super::super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, St
 use super::super::{depth_clamp, Device};
 use super::copy_images::{Reused, UseMaker};
 use super::heap::HeapPlane;
-use super::{copy_units, Texture, TextureShared};
+use super::{copy_units, texel_units, Texture, TextureShared};
 use crate::device::functions::Vk;
 use ash::vk;
 use metal2vulkan::bind::{TiledLevelMove, TiledTexelsModule};
-use metal2vulkan::metal::format::{byte_format, is_depth_stencil, srgb_raw_twin};
+use metal2vulkan::metal::format::{aspects, byte_format, is_depth_stencil, srgb_raw_twin};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{Format, ImageAspectFlags};
 use std::sync::{OnceLock, Weak};
@@ -1144,16 +1144,10 @@ pub(crate) fn holds_metal_texels(pf: PixelFormat, format: Format, bytes: usize) 
 fn image_element(pf: PixelFormat, format: Format) -> Option<(u64, [u64; 2])> {
     let units = copy_units(format, pf);
     let element = match pf {
-        PixelFormat::Stencil8 => units
-            .iter()
-            .find(|(aspect, _, _)| *aspect == ImageAspectFlags::STENCIL)
-            .filter(|_| units.len() == 1)
-            .map(|&(_, bytes, block)| (bytes, block)),
-        // A stencil view's image holds a depth aspect it does not name (`heap_plane_layout`).
-        PixelFormat::X32Stencil8 => match units[..] {
-            [(ImageAspectFlags::DEPTH, _, _), (ImageAspectFlags::STENCIL, bytes, block)] => {
-                Some((bytes, block))
-            }
+        // A stencil format's image holds its stencil, beside a depth it does not present where
+        // the image is combined (`X32Stencil8`'s; `texel_units`, `heap_plane_layout`).
+        pf if aspects(pf) == Some(ImageAspectFlags::STENCIL) => match texel_units(format, pf)[..] {
+            [(ImageAspectFlags::STENCIL, bytes, block)] => Some((bytes, block)),
             _ => None,
         },
         PixelFormat::Depth16Unorm | PixelFormat::Depth32Float => match units[..] {
@@ -1361,11 +1355,8 @@ pub(crate) fn metal_heap_layout(
             Untiled::other("its image holds other bytes than Metal's elements"),
         );
     }
-    // A stencil view's tiles are its image's stencil aspect's.
     let mut tiles = TiledTexture::one(tiled);
-    if pf == PixelFormat::X32Stencil8 {
-        tiles.parts[0].aspect = Some(ImageAspectFlags::STENCIL);
-    }
+    tiles.parts[0].aspect = held_aspect(format, pf);
     MetalHeapLayout {
         answer: plain,
         layout: HeapLayout::Tiled(tiles),
@@ -1506,11 +1497,19 @@ fn multisample_tiles(
         return None;
     }
     let mut tiles = TiledTexture::one(plane(unit)?);
-    // A stencil view's samples are its image's stencil aspect's.
-    if pf == PixelFormat::X32Stencil8 {
-        tiles.parts[0].aspect = Some(ImageAspectFlags::STENCIL);
-    }
+    tiles.parts[0].aspect = held_aspect(format, pf);
     Some(tiles)
+}
+
+/// The one aspect of an image of `format` whose elements a texture of `pf` lays out where the image
+/// holds another it presents none of ([`texel_units`]): a stencil format's over a combined image
+/// (`X32Stencil8`'s), its tiles its stencil's, the image's depth holding none of its texels; `None`
+/// where the texture's tiles are each of the image's aspects.
+fn held_aspect(format: Format, pf: PixelFormat) -> Option<ImageAspectFlags> {
+    match texel_units(format, pf)[..] {
+        [(aspect, _, _)] if copy_units(format, pf).len() > 1 => Some(aspect),
+        _ => None,
+    }
 }
 
 /// One direction of the kernel's moves: its shape, where it lies in the shape buffer, and the

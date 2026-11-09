@@ -220,8 +220,8 @@ use super::heap_tiled::{
 use super::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::stand_in::StandIn;
 use super::{
-    copy_units, image_aspects, image_error, pages_hold, DetachedImage, IdUse, Image, ImageObjects,
-    ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Storage, Texture,
+    copy_units, image_aspects, image_error, pages_hold, texel_units, DetachedImage, IdUse, Image,
+    ImageObjects, ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Storage, Texture,
     TextureDescriptor, ViewRecord,
 };
 use crate::address::ObjectsToken;
@@ -867,8 +867,10 @@ impl HeapPlane {
 /// no-copy heap's textures that no image over its memory serves): for each of the format's aspects
 /// (its depth, then its stencil, or its colour; `copy_units`), each level in order, its images'
 /// blocks tightly packed, each plane at a multiple of 4 bytes and of its block's bytes, the buffer
-/// offsets Vulkan copies the aspect at. A texture made in `X32_Stencil8` has its stencil's planes
-/// alone: its image's depth holds no texel of it; a 4:2:2 texture's rows lie at a multiple of 16
+/// offsets Vulkan copies the aspect at. A texture of a format that presents no depth over a
+/// combined image (`X32_Stencil8`) has its stencil's planes alone (`texel_units`): its image's
+/// depth holds no texel of it, so no copy reads the heap's bytes into that depth or writes it back
+/// over them; a 4:2:2 texture's rows lie at a multiple of 16
 /// bytes, the last unpadded, as Metal lays out a heap's (an M4: a buffer over one
 /// read each row there, the bytes between untouched); a one-plane YCbCr texture's rows lie at
 /// [`one_plane_pitch`] and an array's slices at a multiple of 128 bytes ([`one_plane_texel`]).
@@ -882,10 +884,7 @@ pub(crate) fn heap_plane_layout(
 ) -> (Vec<HeapPlane>, u64) {
     let mut planes = Vec::new();
     let mut end = 0u64;
-    for (aspect, bytes, [bw, bh]) in copy_units(format, pf) {
-        if pf == PixelFormat::X32Stencil8 && aspect != ImageAspectFlags::STENCIL {
-            continue;
-        }
+    for (aspect, bytes, [bw, bh]) in texel_units(format, pf) {
         let unit = u64::from(bytes);
         // The least common multiple of 4 and the block's bytes.
         let align = 4 * unit / gcd(4, unit.max(1));

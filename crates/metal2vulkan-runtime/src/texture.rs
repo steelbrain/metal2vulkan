@@ -4638,6 +4638,23 @@ pub(super) fn copy_units(
     units
 }
 
+/// The copy units of an image of `format` that a texture of `pf` holds texels in: [`copy_units`]'s
+/// but the depth aspect where `pf` presents no depth (`X32Stencil8`, or a stencil-only format over
+/// a combined image), whose image's depth holds none of its texels: Metal's texture of such a
+/// format has no depth (an `X32_Stencil8` texture's 32 bits beside its stencil are padding it
+/// never presents), so nothing moves that aspect to or from the texture's bytes.
+pub(super) fn texel_units(
+    format: Format,
+    pf: PixelFormat,
+) -> Vec<(ImageAspectFlags, u32, [u32; 2])> {
+    let depthless = metal2vulkan::metal::format::aspects(pf)
+        .is_some_and(|own| !own.contains(ImageAspectFlags::DEPTH));
+    copy_units(format, pf)
+        .into_iter()
+        .filter(|&(aspect, _, _)| !(depthless && aspect == ImageAspectFlags::DEPTH))
+        .collect()
+}
+
 /// How a new texture of the program's starts ([`Device::new_texture_image`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Initial {
@@ -5460,9 +5477,11 @@ impl Texture {
     /// `shadowed-texture`), on a device that may store a value outside `[0, 1]` there clamped
     /// (`ImageFacts::depth_clamps`): the bytes may hold any `float`, which Metal's texture keeps,
     /// the copies in clamp each into `[0, 1]`, a NaN to 1.0, as the device stores it, and the
-    /// copies back write the stored value (`texture/heap_tiled.rs`).
+    /// copies back write the stored value (`texture/heap_tiled.rs`). Not for a texture of a format
+    /// that presents no depth (`X32Stencil8`), whose copies move its stencil alone
+    /// ([`texel_units`]).
     pub(super) fn degrade_shadowed_depth(&self, call: &'static str) {
-        if !self.float_depth_image() || !self.depth_clamps() {
+        if !self.float_depth_image() || !self.depth_clamps() || !self.holds_depth_texels() {
             return;
         }
         let (device, format) = (self.device(), self.pixel_format());
@@ -5482,6 +5501,16 @@ impl Texture {
     pub(super) fn clamps_depth_upload(&self, aspect: ImageAspectFlags) -> bool {
         self.image().is_ok_and(|image| {
             depth_clamp::clamps_depth(self.device(), image.plan().format, aspect)
+        })
+    }
+
+    /// Whether the texture holds texels in its image's depth ([`texel_units`]): not a texture of
+    /// a format that presents no depth (`X32Stencil8`) over a combined image.
+    fn holds_depth_texels(&self) -> bool {
+        self.image().is_ok_and(|image| {
+            texel_units(image.plan().format, self.pixel_format())
+                .iter()
+                .any(|&(aspect, _, _)| aspect == ImageAspectFlags::DEPTH)
         })
     }
 
