@@ -36,21 +36,24 @@
 //!   memory type that is host-visible and host-coherent but not device-local or cached (where a
 //!   unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of 64 MiB every
 //!   [`RAW_EVERY`] or of 4 MiB sixteen times as often, [`RAW_BYTES`] a phase.
-//! - **System heap, 64 MiB, exportable**: the system heap's 64 MiB allocations, each exportable
-//!   as a dma-buf (`VkExportMemoryAllocateInfo`).
+//! - **System heap, 64 MiB, exportable** and **System heap, 64 MiB, opaque fd**: the system
+//!   heap's 64 MiB allocations, each exportable (`VkExportMemoryAllocateInfo`) as a dma-buf or as
+//!   an opaque file descriptor.
 //! - **Carve-out, 64 MiB**: the same of the first device-local memory type that is not
 //!   host-visible.
 //! - **Made before**: [`HELD_BUFFERS`] `Private` buffers of [`RUNTIME_BUFFER_BYTES`] made before
 //!   the quiet phase, and nothing made in the phases.
-//! - **Exportable, held 32** and **Exportable, held 64**: that many of the system heap's 64 MiB
-//!   allocations, each exportable, made before the quiet phase, and nothing made in the phases:
-//!   what holding memory that is not private to the device's process costs each submission.
+//! - **Exportable, held 32**, **Exportable, held 64** and **Opaque fd, held 64**: that many of
+//!   the system heap's 64 MiB allocations, each exportable as a dma-buf or as an opaque file
+//!   descriptor, made before the quiet phase, and nothing made in the phases: what holding memory
+//!   that is not private to the device's process costs each submission.
 //! - **Nothing made**: the copies' buffers alone.
 //!
-//! Two arms ask instead whether memory allocated exportable holds one queue's work behind
-//! another's, as memory that synchronizes implicitly would: **Two queues, private** and **Two
-//! queues, exportable** each allocate [`TWO_QUEUE_BYTES`] of the system heap, as a plain
-//! allocation or exportable as a dma-buf, and bind three buffers in it, each made for that handle
+//! Three arms ask instead whether memory allocated exportable holds one queue's work behind
+//! another's, as memory that synchronizes implicitly would: **Two queues, private**, **Two
+//! queues, exportable** and **Two queues, opaque fd** each allocate [`TWO_QUEUE_BYTES`] of the
+//! system heap, as a plain allocation or exportable as a dma-buf or an opaque file descriptor,
+//! and bind three buffers in it, each made for that handle
 //! type where the memory is exportable (`VUID-vkBindBufferMemory-memory-02726`). For
 //! [`TWO_QUEUE_ROUNDS`] rounds, a queue the device reserved for the caller fills the first
 //! buffer [`LONG_FILLS`] times, and a millisecond later a command queue's `VkQueue` (lent,
@@ -58,6 +61,13 @@
 //! waited for by its fence: printed, the fills' and the copies' times from submission to their
 //! fence, and the rounds whose copy completed while the fills ran. Copies held behind the fills
 //! take as long as the fills' rest, and complete after them.
+//!
+//! **Export facts** prints, for each of those handle types, what the device answers for the
+//! runtime's buffers (`vkGetPhysicalDeviceExternalBufferProperties`, of a buffer of the runtime's
+//! usage with and without the device-address usage) and for linear and `DRM_FORMAT_MOD_LINEAR`
+//! images of [`FACT_FORMATS`] that are sampled and copied, and rendered to
+//! (`vkGetPhysicalDeviceImageFormatProperties2` with `VkPhysicalDeviceExternalImageFormatInfo`):
+//! the result, and whether such memory is exportable and only as a dedicated allocation.
 //!
 //! Printed (`RECLAIM-SUBMIT`), per arm and phase: the submissions; for `commit_and_submit` and for
 //! the turnaround each, those of 8 ms or more and of 17 ms or more, the median, 99th percentile and
@@ -86,6 +96,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(60);
+/// The handle types an arm's memory is exportable as.
+type Handle = vk::ExternalMemoryHandleTypeFlags;
+const DMA_BUF: Handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+const OPAQUE_FD: Handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
 const PAGE: u64 = 4096;
 const MIB: u64 = 1 << 20;
 const GIB: u64 = 1 << 30;
@@ -121,6 +135,15 @@ const PIECE_BYTES: u64 = 256 * MIB;
 const FLOOR_BYTES: u64 = 3 * GIB / 2;
 /// The slowest submissions and makings printed per phase.
 const SLOWEST: usize = 8;
+/// The formats the export facts ask of images.
+const FACT_FORMATS: [vk::Format; 6] = [
+    vk::Format::R8_UNORM,
+    vk::Format::R8G8_UNORM,
+    vk::Format::B8G8R8A8_UNORM,
+    vk::Format::R8G8B8A8_UNORM,
+    vk::Format::A2B10G10R10_UNORM_PACK32,
+    vk::Format::R16G16B16A16_SFLOAT,
+];
 /// The two-queue arms' allocation, the bytes of its first buffer, which the reserved queue
 /// fills, the fills in each of its command buffers, and the rounds.
 const TWO_QUEUE_BYTES: u64 = 128 * MIB;
@@ -350,11 +373,11 @@ enum Making {
     /// The runtime's `Private` buffers (the module docs).
     Runtime,
     /// Allocations of `bytes` of the memory type `index`, [`RAW_BYTES`] a phase, exportable as
-    /// dma-bufs where `exportable`.
+    /// `export`'s handle type where given.
     Raw {
         index: u32,
         bytes: u64,
-        exportable: bool,
+        export: Option<Handle>,
     },
     Nothing,
 }
@@ -394,8 +417,8 @@ fn make(
             Making::Raw {
                 index,
                 bytes,
-                exportable,
-            } => made.raw.push(allocate(device, index, bytes, exportable)),
+                export,
+            } => made.raw.push(allocate(device, index, bytes, export)),
             Making::Nothing => unreachable!(),
         }
         times.push((began.elapsed(), at));
@@ -404,16 +427,16 @@ fn make(
     times
 }
 
-/// An allocation of `bytes` of `device`'s memory type `index`, exportable as a dma-buf where
-/// `exportable`.
-fn allocate(device: &Device, index: u32, bytes: u64, exportable: bool) -> vk::DeviceMemory {
-    let mut export = vk::ExportMemoryAllocateInfo::default()
-        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+/// An allocation of `bytes` of `device`'s memory type `index`, exportable as `export`'s handle
+/// type where given.
+fn allocate(device: &Device, index: u32, bytes: u64, export: Option<Handle>) -> vk::DeviceMemory {
+    let mut exportable =
+        vk::ExportMemoryAllocateInfo::default().handle_types(export.unwrap_or_default());
     let mut info = vk::MemoryAllocateInfo::default()
         .allocation_size(bytes)
         .memory_type_index(index);
-    if exportable {
-        info = info.push_next(&mut export);
+    if export.is_some() {
+        info = info.push_next(&mut exportable);
     }
     // SAFETY: the device is live, `info` valid and the type the device's.
     unsafe { crate::creation::allocate_memory(device.shared().vk(), &info) }.unwrap()
@@ -535,12 +558,13 @@ enum Arm {
     Runtime,
     SystemHeap {
         bytes: u64,
-        exportable: bool,
+        export: Option<Handle>,
     },
     CarveOut,
     MadeBefore,
-    /// That many exportable 64 MiB allocations of the system heap made before the phases.
-    ExportableHeld(usize),
+    /// That many 64 MiB allocations of the system heap made before the phases, exportable as the
+    /// handle type.
+    ExportableHeld(usize, Handle),
     Nothing,
 }
 
@@ -569,10 +593,10 @@ fn arm(label: &str, arm: Arm) {
     };
     let making = match arm {
         Arm::Runtime => Making::Runtime,
-        Arm::SystemHeap { bytes, exportable } => Making::Raw {
+        Arm::SystemHeap { bytes, export } => Making::Raw {
             index: system_heap(),
             bytes,
-            exportable,
+            export,
         },
         Arm::CarveOut => Making::Raw {
             index: memory_type(
@@ -581,7 +605,7 @@ fn arm(label: &str, arm: Arm) {
                 P::HOST_VISIBLE | P::DEVICE_COHERENT_AMD | P::PROTECTED,
             ),
             bytes: 64 * MIB,
-            exportable: false,
+            export: None,
         },
         Arm::MadeBefore => {
             made.buffers = (0..HELD_BUFFERS)
@@ -589,10 +613,10 @@ fn arm(label: &str, arm: Arm) {
                 .collect();
             Making::Nothing
         }
-        Arm::ExportableHeld(count) => {
+        Arm::ExportableHeld(count, handle) => {
             let index = system_heap();
             made.raw = (0..count)
-                .map(|_| allocate(&device, index, 64 * MIB, true))
+                .map(|_| allocate(&device, index, 64 * MIB, Some(handle)))
                 .collect();
             Making::Nothing
         }
@@ -638,8 +662,9 @@ fn arm(label: &str, arm: Arm) {
     drop(pages);
 }
 
-/// Run the two-queue arm `label` (the module docs), its memory exportable where `exportable`.
-fn two_queues(label: &str, exportable: bool) {
+/// Run the two-queue arm `label` (the module docs), its memory exportable as `export`'s handle
+/// type where given.
+fn two_queues(label: &str, export: Option<Handle>) {
     use vk::BufferUsageFlags as U;
     let scratch = Scratch::new();
     let options = DeviceOptions {
@@ -677,7 +702,7 @@ fn two_queues(label: &str, exportable: bool) {
             | vk::MemoryPropertyFlags::DEVICE_COHERENT_AMD
             | vk::MemoryPropertyFlags::PROTECTED,
     );
-    let memory = allocate(&device, index, TWO_QUEUE_BYTES, exportable);
+    let memory = allocate(&device, index, TWO_QUEUE_BYTES, export);
     // The first buffer the reserved queue's family alone uses, the other two the lent queue's.
     let regions = [
         (0, LONG_BYTES, U::TRANSFER_DST),
@@ -687,9 +712,9 @@ fn two_queues(label: &str, exportable: bool) {
     let buffers: Vec<vk::Buffer> = (regions.iter())
         .map(|&(offset, size, usage)| {
             let mut external = vk::ExternalMemoryBufferCreateInfo::default()
-                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+                .handle_types(export.unwrap_or_default());
             let mut info = vk::BufferCreateInfo::default().size(size).usage(usage);
-            if exportable {
+            if export.is_some() {
                 info = info.push_next(&mut external);
             }
             // SAFETY: the device is live and `info` valid; the buffer lies inside the memory, at
@@ -792,16 +817,111 @@ fn two_queues(label: &str, exportable: bool) {
     unsafe { crate::release::object(device.shared().vk(), memory) };
 }
 
+/// The device's answers for memory exportable as the handle types (the module docs).
+#[test]
+#[ignore = "a measurement's facts: run on its host by name"]
+fn reclaim_submit_bench_export_facts() {
+    use vk::ExternalMemoryFeatureFlags as F;
+    use vk::ImageUsageFlags as I;
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    // SAFETY: the handles are read while the device lives.
+    let raw = unsafe { device.raw() };
+    let (instance, physical) = (raw.instance, raw.physical_device);
+    let features = |properties: vk::ExternalMemoryProperties| {
+        let features = properties.external_memory_features;
+        format!(
+            "exportable {}, dedicated only {}",
+            features.contains(F::EXPORTABLE),
+            features.contains(F::DEDICATED_ONLY)
+        )
+    };
+    for (name, handle) in [("dma-buf", DMA_BUF), ("opaque fd", OPAQUE_FD)] {
+        for address in [false, true] {
+            let info = vk::PhysicalDeviceExternalBufferInfo::default()
+                .usage(crate::buffer::usage(address))
+                .handle_type(handle);
+            let mut properties = vk::ExternalBufferProperties::default();
+            // SAFETY: the physical device is the instance's; `info` and `properties` are valid.
+            unsafe {
+                instance.get_physical_device_external_buffer_properties(
+                    physical,
+                    &info,
+                    &mut properties,
+                )
+            };
+            eprintln!(
+                "RECLAIM-SUBMIT export facts, {name}, buffers with the device-address usage \
+                 {address}: {}",
+                features(properties.external_memory_properties)
+            );
+        }
+        let copied = I::SAMPLED | I::TRANSFER_SRC | I::TRANSFER_DST;
+        for format in FACT_FORMATS {
+            for (tiling, tiling_name) in [
+                (vk::ImageTiling::LINEAR, "linear"),
+                (
+                    vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                    "DRM_FORMAT_MOD_LINEAR",
+                ),
+            ] {
+                for usage in [copied, copied | I::COLOR_ATTACHMENT] {
+                    let mut external =
+                        vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(handle);
+                    let mut modifier = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+                        .drm_format_modifier(0)
+                        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                    let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
+                        .format(format)
+                        .ty(vk::ImageType::TYPE_2D)
+                        .tiling(tiling)
+                        .usage(usage)
+                        .push_next(&mut external);
+                    if tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT {
+                        info = info.push_next(&mut modifier);
+                    }
+                    let mut answer = vk::ExternalImageFormatProperties::default();
+                    let mut properties =
+                        vk::ImageFormatProperties2::default().push_next(&mut answer);
+                    // SAFETY: the physical device is the instance's; `info`, `properties` and
+                    // their chains are valid.
+                    let result = unsafe {
+                        instance.get_physical_device_image_format_properties2(
+                            physical,
+                            &info,
+                            &mut properties,
+                        )
+                    };
+                    let answered = match result {
+                        Ok(()) => features(answer.external_memory_properties),
+                        Err(error) => format!("{error:?}"),
+                    };
+                    eprintln!(
+                        "RECLAIM-SUBMIT export facts, {name}, {tiling_name} {format:?} images \
+                         of usage {usage:?}: {answered}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 #[ignore = "a measurement of the GPU's queues: run alone on its host by name"]
 fn reclaim_submit_bench_two_queues_private() {
-    two_queues("two queues, private", false);
+    two_queues("two queues, private", None);
 }
 
 #[test]
 #[ignore = "a measurement of the GPU's queues: run alone on its host by name"]
 fn reclaim_submit_bench_two_queues_exportable() {
-    two_queues("two queues, exportable", true);
+    two_queues("two queues, exportable", Some(DMA_BUF));
+}
+
+#[test]
+#[ignore = "a measurement of the GPU's queues: run alone on its host by name"]
+fn reclaim_submit_bench_two_queues_opaque_fd() {
+    two_queues("two queues, opaque fd", Some(OPAQUE_FD));
 }
 
 #[test]
@@ -817,7 +937,7 @@ fn reclaim_submit_bench_system_heap_64mib() {
         "system heap, 64 MiB",
         Arm::SystemHeap {
             bytes: 64 * MIB,
-            exportable: false,
+            export: None,
         },
     );
 }
@@ -829,7 +949,7 @@ fn reclaim_submit_bench_system_heap_4mib() {
         "system heap, 4 MiB",
         Arm::SystemHeap {
             bytes: 4 * MIB,
-            exportable: false,
+            export: None,
         },
     );
 }
@@ -841,7 +961,19 @@ fn reclaim_submit_bench_system_heap_64mib_exportable() {
         "system heap, 64 MiB, exportable",
         Arm::SystemHeap {
             bytes: 64 * MIB,
-            exportable: true,
+            export: Some(DMA_BUF),
+        },
+    );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_system_heap_64mib_opaque_fd() {
+    arm(
+        "system heap, 64 MiB, opaque fd",
+        Arm::SystemHeap {
+            bytes: 64 * MIB,
+            export: Some(OPAQUE_FD),
         },
     );
 }
@@ -861,13 +993,19 @@ fn reclaim_submit_bench_made_before() {
 #[test]
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_exportable_held_32() {
-    arm("exportable, held 32", Arm::ExportableHeld(32));
+    arm("exportable, held 32", Arm::ExportableHeld(32, DMA_BUF));
 }
 
 #[test]
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_exportable_held_64() {
-    arm("exportable, held 64", Arm::ExportableHeld(64));
+    arm("exportable, held 64", Arm::ExportableHeld(64, DMA_BUF));
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_opaque_fd_held_64() {
+    arm("opaque fd, held 64", Arm::ExportableHeld(64, OPAQUE_FD));
 }
 
 #[test]
