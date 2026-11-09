@@ -175,6 +175,7 @@ mod neutral;
 mod noted_apart;
 mod owned_kernel;
 mod pass_runs;
+mod pending_audit;
 mod pending_dispatch;
 mod pipeline;
 mod pixel_format_info;

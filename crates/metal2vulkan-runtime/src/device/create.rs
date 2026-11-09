@@ -211,6 +211,14 @@ pub struct DeviceOptions {
     /// grouped path on every run. No Metal counterpart.
     #[doc(hidden)]
     pub assume_submissions_merge: bool,
+    /// Turn each device's pending audit on: a diagnostic that checks, at each begin of a
+    /// `VkCommandBuffer`, reset or give-back of its pool and submission of it again, that the
+    /// GPU completed every submission that carries it, and logs each one that did not (id name
+    /// `metal2vulkan-pending-audit`, `pending_audit.rs`); it changes no work. Off by default;
+    /// `METAL2VULKAN_PENDING_AUDIT`, set, turns it on for every device too. For the tests that
+    /// hold it to a finding. No Metal counterpart.
+    #[doc(hidden)]
+    pub pending_audit: bool,
     /// Color formats each device takes as no color attachment, as a device without the
     /// attachment feature of them does: their tilings' `COLOR_ATTACHMENT` and blend features and
     /// their attachment sample counts are left out of the description the device plans and
@@ -317,6 +325,7 @@ impl std::fmt::Debug for DeviceOptions {
             record_executions,
             fail_in_place_check,
             assume_submissions_merge,
+            pending_audit,
             withheld_attachment_formats,
             pipeline_records,
             extra_queues,
@@ -348,6 +357,7 @@ impl std::fmt::Debug for DeviceOptions {
             .field("record_executions", record_executions)
             .field("fail_in_place_check", fail_in_place_check)
             .field("assume_submissions_merge", assume_submissions_merge)
+            .field("pending_audit", pending_audit)
             .field("withheld_attachment_formats", withheld_attachment_formats)
             .field(
                 "pipeline_records",
@@ -1913,6 +1923,7 @@ pub(super) fn create_on(
         pipeline_records: options.pipeline_records.clone(),
         fail_in_place_check: options.fail_in_place_check,
         assume_submissions_merge: options.assume_submissions_merge,
+        pending_audit: options.pending_audit,
         view_reinterpretation,
         generated_commands,
         host_image_copy,
@@ -2076,6 +2087,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         record_executions,
         fail_in_place_check,
         assume_submissions_merge,
+        pending_audit,
         withheld_attachment_formats,
         pipeline_records: _,
         extra_queues,
@@ -2102,6 +2114,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *record_executions == b.record_executions
         && *fail_in_place_check == b.fail_in_place_check
         && *assume_submissions_merge == b.assume_submissions_merge
+        && *pending_audit == b.pending_audit
         && *withheld_attachment_formats == b.withheld_attachment_formats
         && *extra_queues == b.extra_queues
         && *reserved_queues == b.reserved_queues

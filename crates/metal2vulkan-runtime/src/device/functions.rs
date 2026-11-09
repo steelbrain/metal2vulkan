@@ -12,7 +12,10 @@
 //! their destination (`tracker::Barrier::record`, `image_barrier::MemoryReads`), the push
 //! command where the device has it (`binding::push_descriptor_command`), and
 //! `vkSetDebugUtilsObjectNameEXT` where its instance reports messages (`pipeline/graphics.rs`).
-//! Its copy commands count each place in the runtime that records them ([`CopySites`]).
+//! Its copy commands count each place in the runtime that records them ([`CopySites`]). Where the
+//! device's pending audit is on (`pending_audit.rs`), its `vkBeginCommandBuffer` checks the command
+//! buffer first and its `vkCmdExecuteCommands` notes the secondaries each primary executes: both
+//! tables hold the audit, so every begin and execution made through them reaches it.
 //!
 //! Each `vkCmdCopyBuffer` region over [`SPLIT_ABOVE`] bytes whose size is no multiple of
 //! [`SPLIT_UNIT`] is recorded as two regions of the same command: its bytes up to the last whole
@@ -32,6 +35,7 @@
 
 use crate::exit_guard::{self, Call};
 use crate::image_barrier::MemoryReads;
+use crate::pending_audit::PendingAudit;
 use crate::recorder::Slot;
 use crate::work_counts::{CopySite, CopySites, COPY_SITES};
 use ash::vk;
@@ -74,7 +78,8 @@ fn split(region: &vk::BufferCopy) -> Option<[vk::BufferCopy; 2]> {
 /// A device's functions as the runtime records commands with them: the `ash::Device`, the reads
 /// a global memory barrier recorded into a command buffer of the device's queue family for
 /// encoders names in place of `MEMORY_READ`, the push command and the naming of an object, and
-/// the places that recorded its copy commands (the module docs).
+/// the places that recorded its copy commands, and the device's pending audit where it is on (the
+/// module docs).
 #[derive(Clone)]
 pub(crate) struct Vk {
     device: ash::Device,
@@ -82,19 +87,22 @@ pub(crate) struct Vk {
     push_descriptor: Option<vk::PFN_vkCmdPushDescriptorSetKHR>,
     object_name: Option<vk::PFN_vkSetDebugUtilsObjectNameEXT>,
     copies: Arc<CopySites>,
+    audit: Option<Arc<PendingAudit>>,
 }
 
 impl Vk {
     /// `device`'s functions, whose global memory barriers name `reads`, with `push_descriptor`,
     /// its push command where it has one, and `object_name`, its naming of an object where its
-    /// instance reports messages, whose copy commands count their places in `copies`: for the
-    /// work the runtime records before the device's functions are made (`prime.rs`).
+    /// instance reports messages, whose copy commands count their places in `copies`, auditing
+    /// with `audit` where given: for the work the runtime records before the device's functions
+    /// are made (`prime.rs`), with none.
     pub(super) fn new(
         device: ash::Device,
         reads: MemoryReads,
         push_descriptor: Option<vk::PFN_vkCmdPushDescriptorSetKHR>,
         object_name: Option<vk::PFN_vkSetDebugUtilsObjectNameEXT>,
         copies: Arc<CopySites>,
+        audit: Option<Arc<PendingAudit>>,
     ) -> Vk {
         Vk {
             device,
@@ -102,6 +110,50 @@ impl Vk {
             push_descriptor,
             object_name,
             copies,
+            audit,
+        }
+    }
+
+    /// The device's pending audit, where it is on (`pending_audit.rs`).
+    pub(crate) fn pending_audit(&self) -> Option<&PendingAudit> {
+        self.audit.as_deref()
+    }
+
+    /// `vkBeginCommandBuffer`, the command buffer checked first by the device's pending audit
+    /// where it is on (the module docs).
+    ///
+    /// # Safety
+    ///
+    /// As `ash::Device::begin_command_buffer`'s.
+    pub(crate) unsafe fn begin_command_buffer(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        begin_info: &vk::CommandBufferBeginInfo<'_>,
+    ) -> ash::prelude::VkResult<()> {
+        if let Some(audit) = &self.audit {
+            audit.begins(&self.device, command_buffer, begin_info.flags);
+        }
+        // SAFETY: the caller's contract.
+        unsafe { (self.device).begin_command_buffer(command_buffer, begin_info) }
+    }
+
+    /// `vkCmdExecuteCommands`, noted by the device's pending audit where it is on (the module
+    /// docs).
+    ///
+    /// # Safety
+    ///
+    /// As `ash::Device::cmd_execute_commands`'s.
+    pub(crate) unsafe fn cmd_execute_commands(
+        &self,
+        primary_command_buffer: vk::CommandBuffer,
+        secondary_command_buffers: &[vk::CommandBuffer],
+    ) {
+        if let Some(audit) = &self.audit {
+            audit.executes(primary_command_buffer, secondary_command_buffers);
+        }
+        // SAFETY: the caller's contract.
+        unsafe {
+            (self.device).cmd_execute_commands(primary_command_buffer, secondary_command_buffers);
         }
     }
 
@@ -268,7 +320,8 @@ impl Functions {
     /// The functions of `all`'s device, made from `instance`, whose global memory barriers name
     /// `reads`, with `push_descriptor`, its push command where it has one, and `object_name`, its
     /// naming of an object where its instance reports messages, whose commands go through
-    /// `recording`, its slot where it has one (`recorder`).
+    /// `recording`, its slot where it has one (`recorder`), auditing with `audit` where given
+    /// (`pending_audit.rs`).
     ///
     /// # Safety
     ///
@@ -282,6 +335,7 @@ impl Functions {
         push_descriptor: Option<vk::PFN_vkCmdPushDescriptorSetKHR>,
         object_name: Option<vk::PFN_vkSetDebugUtilsObjectNameEXT>,
         recording: Option<&Slot>,
+        audit: Option<Arc<PendingAudit>>,
     ) -> Functions {
         let handle = all.handle();
         let get = instance.fp_v1_0().get_device_proc_addr;
@@ -327,8 +381,16 @@ impl Functions {
                 push_descriptor,
                 object_name,
                 Arc::clone(&copies),
+                audit.clone(),
             ),
-            sectioned: Vk::new(sectioned, reads, push_descriptor, object_name, copies),
+            sectioned: Vk::new(
+                sectioned,
+                reads,
+                push_descriptor,
+                object_name,
+                copies,
+                audit,
+            ),
             entry_points,
         }
     }
@@ -336,6 +398,11 @@ impl Functions {
     /// The address of each entry point of the exit guard's table, in its order.
     pub(super) fn entry_points(&self) -> &[u64] {
         &self.entry_points
+    }
+
+    /// The device's pending audit, where it is on, which both tables hold (the module docs).
+    pub(crate) fn pending_audit(&self) -> Option<&PendingAudit> {
+        self.all.pending_audit()
     }
 
     /// The device's functions for this thread now (see the module).

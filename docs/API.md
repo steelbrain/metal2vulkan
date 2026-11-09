@@ -1631,6 +1631,16 @@ texture's image of its stored frame and its twin, a two-plane extended-range tex
 depth or stencil texture's tiled twin over a surface plane, and a YCbCr texture's converted image
 and render shadow. A heap texture's shadow, a view's shadow of an image and a texture buffer's
 staging are not logged.
+With `METAL2VULKAN_PENDING_AUDIT` set (or `DeviceOptions::pending_audit`), a device checks, at each
+`vkBeginCommandBuffer`, each `vkResetCommandPool` of a spare command pool, each command pool given
+back to its spares and each submission of a command buffer submitted before (one not begun for
+simultaneous use), that the GPU completed every submission that carries the command buffers
+concerned: a batch's, the device's own and the staging queue's, to the timeline value each signals,
+and a secondary through each primary that executes it. It reads those timelines
+(`vkGetSemaphoreCounterValue`) and logs each command buffer found pending (id name
+`metal2vulkan-pending-audit`, `Info` severity): what was done, the thread, the command buffer, the
+timeline, its counter and the value, with the thread's backtrace for the first 8; and a line as the
+device is made and as it goes, with the checks and findings by kind. It changes no work.
 Whatever the variables, a placement heap's `newTextureWithDescriptor:offset:` that makes no texture
 (`Nil` or `OutOfMemory`) at an offset inside the heap says so (id name
 `metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,

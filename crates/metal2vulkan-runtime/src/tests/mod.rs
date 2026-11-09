@@ -338,6 +338,9 @@ mod padding_unobserved;
 mod pass_end_tiles;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod passing_holds;
+mod pending_audit;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod pending_audit_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pending_rebind;
 mod pipeline;

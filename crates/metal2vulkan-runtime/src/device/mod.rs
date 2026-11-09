@@ -70,6 +70,7 @@ use super::memory::Memory;
 use super::memory_log::MemoryLog;
 use super::mipmap_scratch::MipmapScratch;
 use super::owned_kernel::OwnedKernels;
+use super::pending_audit::PendingAudit;
 use super::recycle::{self, BufferMaking, Recycler};
 use super::released_programs::Keepers;
 use super::render_state::DepthRanges;
@@ -726,6 +727,12 @@ impl DeviceShared {
     /// (`functions.rs`).
     pub(crate) fn vk(&self) -> &Vk {
         self.functions.get()
+    }
+
+    /// The device's pending audit, where it is on (`pending_audit.rs`): read with no call of the
+    /// device's, on any thread; its checks read the device's timelines through [`vk`](Self::vk).
+    pub(crate) fn pending_audit(&self) -> Option<&PendingAudit> {
+        self.functions.pending_audit()
     }
 
     /// Nanoseconds the device's pipeline makings spent inside its driver, graphics then compute
@@ -1564,6 +1571,9 @@ pub(super) struct Parts {
     /// Its submission check of merged submissions holds without its answer
     /// (`DeviceOptions::assume_submissions_merge`).
     pub(super) assume_submissions_merge: bool,
+    /// Its pending audit is on (`DeviceOptions::pending_audit`; `pending_audit.rs`), as it is
+    /// where `METAL2VULKAN_PENDING_AUDIT` is set.
+    pub(super) pending_audit: bool,
     /// Its views may reinterpret an image's components ([`DeviceShared`]'s field), outside
     /// `enabled`'s vocabulary.
     pub(super) view_reinterpretation: bool,
@@ -1665,6 +1675,7 @@ impl Device {
             pipeline_records,
             fail_in_place_check,
             assume_submissions_merge,
+            pending_audit,
             view_reinterpretation,
             generated_commands,
             host_image_copy,
@@ -1992,6 +2003,7 @@ impl Device {
                     push_descriptor,
                     object_name,
                     Default::default(),
+                    None,
                 ),
                 &loader_word,
                 queue_family,
@@ -2250,6 +2262,7 @@ impl Device {
                     push_descriptor,
                     object_name,
                     recording.as_ref(),
+                    PendingAudit::new(pending_audit, instance.sink()),
                 )
             })
         };

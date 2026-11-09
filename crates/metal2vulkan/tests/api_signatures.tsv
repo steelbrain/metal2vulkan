@@ -2089,6 +2089,7 @@ field	metal2vulkan-runtime::DeviceOptions.lowering_refuses	pub lowering_refuses:
 field	metal2vulkan-runtime::DeviceOptions.mac_class	pub mac_class: Option<crate::MacClass>
 field	metal2vulkan-runtime::DeviceOptions.messages	pub messages: Option<MessageSink>
 field	metal2vulkan-runtime::DeviceOptions.optional_device_extensions	pub optional_device_extensions: Vec<CString>
+field	metal2vulkan-runtime::DeviceOptions.pending_audit	pub pending_audit: bool
 field	metal2vulkan-runtime::DeviceOptions.pipeline_records	pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>
 field	metal2vulkan-runtime::DeviceOptions.policy	pub policy: DevicePolicy
 field	metal2vulkan-runtime::DeviceOptions.record_executions	pub record_executions: bool

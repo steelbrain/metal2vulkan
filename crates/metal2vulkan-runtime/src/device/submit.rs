@@ -344,6 +344,12 @@ impl Device {
         // The first work waits as the work's does (a heap's fill another queue did comes before
         // a move of an image placed in it).
         let submits = [submit];
+        // What the submission carries, to its value: the device's pending audit's
+        // (`pending_audit.rs`), where it is on.
+        let carried = (objects.timeline, value);
+        if let Some(audit) = raw.pending_audit() {
+            audit.submitted(raw, carried, &[&buffers[..]]);
+        }
         // Where freed memory waits for the work in flight, it waits for this until it completed
         // (`freed_memory.rs`).
         let _own = (shared.parking.get()).map(|parking| parking.own_submission(self));
@@ -375,6 +381,9 @@ impl Device {
         // A `vkQueueSubmit` that fails leaves what its submissions reference as it was, or loses
         // the device: the work goes back as `taken` drops.
         if let Err(error) = made {
+            if let Some(audit) = raw.pending_audit() {
+                audit.withdrawn(carried, &[&buffers[..]]);
+            }
             shared.loader_word.end_step(word, mark);
             return Err(self.failed(error));
         }

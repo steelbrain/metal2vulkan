@@ -99,11 +99,16 @@
 //! - **Released with the device**, as its teardown begins (`DeviceShared`'s drop, after
 //!   `vkDeviceWaitIdle`): every command buffer holds the device, so none is left to give one
 //!   back.
+//! - **Audited where the device's pending audit is on** (`pending_audit.rs`): a pool given back,
+//!   and a spare pool its taker resets, has each of its command buffers checked against the
+//!   submissions that carry it, its primary begun ahead among them; the begin ahead is checked as
+//!   every begin is (`device/functions.rs`).
 
 use super::descriptor_arena::{Room, SetNeeds};
 use super::device::{lock, DeviceShared};
 use super::error::{vulkan, Error};
 use super::exit_guard::{self, Call};
+use super::pending_audit::Freeing;
 use super::release::{self, Released};
 use ash::vk;
 use std::collections::VecDeque;
@@ -195,6 +200,14 @@ impl CommandPool {
         }
         self.handed = [0, 0];
         self.recording = false;
+    }
+
+    /// Every command buffer made from the pool, of both levels, the primary begun ahead among
+    /// them: what its reset or give-back frees (the device's pending audit, `pending_audit.rs`).
+    fn buffers(&self) -> Vec<vk::CommandBuffer> {
+        let [primaries, secondaries] = &self.made;
+        let made = primaries.iter().chain(secondaries).copied();
+        made.chain(self.begun).collect()
     }
 
     /// Whether the pool made no secondary command buffer (the module docs).
@@ -313,6 +326,9 @@ impl Spares {
             return Ok(None);
         };
         if pool.recording {
+            if let Some(audit) = device.pending_audit() {
+                audit.check(device.vk(), Freeing::PoolReset, &pool.buffers());
+            }
             // SAFETY: the pool is the caller's alone now, and nothing of it is pending: the
             // command buffer that gave it back ended its work or was never submitted.
             let reset = unsafe {
@@ -343,6 +359,13 @@ impl Spares {
         mut pool: CommandPool,
         settled: bool,
     ) {
+        // The audit reads the device's timelines inside a section of the exit guard, on
+        // whatever thread gives the pool back.
+        if let Some(audit) = device.pending_audit() {
+            if let Some(_busy) = exit_guard::enter() {
+                audit.check(device.vk(), Freeing::GiveBack, &pool.buffers());
+            }
+        }
         pool.recording = !settled;
         pool.stock(device);
         keep_command_pool(&mut lock(&self.command_pools), pool);

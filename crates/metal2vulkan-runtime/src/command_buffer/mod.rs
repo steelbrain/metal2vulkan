@@ -2403,6 +2403,20 @@ impl CommandBuffer {
         self.state().uploads.bytes()
     }
 
+    /// Give its command pool back to the device's spares now, whatever its work's state, as a
+    /// command buffer that never completed would: a device test's deliberate early give-back,
+    /// which the device's pending audit finds (`tests::pending_audit_device`). Whether it held
+    /// one.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn give_pool_back_early(&self) -> bool {
+        let Some(pool) = self.state().pool.take() else {
+            return false;
+        };
+        let shared = self.0.device.shared();
+        shared.spares.give_command_pool(shared, pool, false);
+        true
+    }
+
     /// Whether `waiting` holds this command buffer.
     pub(crate) fn is(&self, waiting: &dyn Waiting) -> bool {
         self.0.address() == waiting.address()

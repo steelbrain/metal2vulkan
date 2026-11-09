@@ -242,6 +242,12 @@ impl StagingLock<'_> {
             .command_buffers(&buffers)
             .signal_semaphores(&signal_semaphores)
             .push_next(&mut timeline);
+        // What the submission carries, to its value: the device's pending audit's
+        // (`pending_audit.rs`), where it is on.
+        let carried = (made.timeline, value);
+        if let Some(audit) = raw.pending_audit() {
+            audit.submitted(raw, carried, &[&buffers[..]]);
+        }
         // SAFETY: the queue is used under the staging lock alone; the command buffer is
         // executable; every value waited for was signalled (the host saw it); the signal of the
         // timeline is above its value.
@@ -253,6 +259,9 @@ impl StagingLock<'_> {
         };
         shared.queue_quiet.ended();
         exit_guard::called(Call::QueueSubmit);
+        if let (Err(_), Some(audit)) = (&submitted, raw.pending_audit()) {
+            audit.withdrawn(carried, &[&buffers[..]]);
+        }
         submitted.map_err(|error| device.failed(error))?;
         made.signalled = value;
         made.buffers[at].1 = value;

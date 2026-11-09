@@ -1069,6 +1069,12 @@ impl CommandBufferShared {
             && !first_work.has_first()
             && !first_work.has_staged()
             && images.is_empty();
+        // What the batch's submission carries, to its value, from here: the device's pending
+        // audit's (`pending_audit.rs`), where it is on.
+        let carried = (shared.queues[queue].timeline, at.value);
+        if let Some(audit) = raw.pending_audit() {
+            audit.submitted(raw, carried, &[work.as_slice(), finale.as_slice()]);
+        }
         if grouped {
             scheduler.group.open(queue, &scheduler.waited[queue]);
         } else {
@@ -1101,6 +1107,9 @@ impl CommandBufferShared {
                     .group
                     .submit(device, &mut scheduler.waited[queue], Some(after));
             if let Err(error) = submitted {
+                if let Some(audit) = raw.pending_audit() {
+                    audit.withdrawn(carried, &[work.as_slice(), finale.as_slice()]);
+                }
                 if let Some(fence) = fence {
                     // SAFETY: the failed submission is not pending; inside the section.
                     // Released, not kept: Vulkan leaves a fence's state after a failed
