@@ -255,7 +255,8 @@ pub(crate) fn among<F: Copy + Ord>(
 ///   the UHD 770 (RPL-S), and NVIDIA's 615.71.09 on the RTX 3090 and the RTX 5080 Laptop GPU, and
 ///   lavapipe (`MESA_LLVMPIPE`) from Mesa 26.0.8 through 26.2.4: Mesa 26.0.8 on LLVM 21.1.8, x86_64
 ///   (the linux-gate container) and arm64 (on an M4 mini), and Mesa 26.2.4 on LLVM 23.1.1, x86_64
-///   (Arch's, on an i9-13900), all at fd90c81e3.
+///   (Arch's, on an i9-13900), all at fd90c81e3; and RADV, Mesa 26.2.6 on the RX 7900 XTX, at
+///   92202c5ea (2026-11-09).
 /// - `MetalHalfStorageNans`: every NaN `0x7e00` too, on MoltenVK 1.4.1 on the M3 Max and the M4.
 ///
 /// One row per GPU, as measured.
@@ -592,6 +593,11 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         DriverDeviation::MetalHalfStorageWrites,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverDeviation::MetalHalfStorageWrites,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RX_7900_XTX),
     ),
     mesa_on(
         DriverDeviation::MetalHalfStorageWrites,
