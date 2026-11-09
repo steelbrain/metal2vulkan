@@ -35,7 +35,10 @@
 //!   between rows and the bytes after the image from its first writes, each sweep's bytes the
 //!   pattern changed by a value of its own, reading each byte before it writes it, which must
 //!   still hold what the sweep before left there, while the device makes the image's first move
-//!   (an internal submission naming the texture, waited for) and until it completed. Every byte
+//!   (an internal submission naming the texture, waited for) and until it completed; where it
+//!   passes over the texels (the rounds below that clear or store them), it comes back to the
+//!   bytes beside them in their lines of the device's memory many times a sweep (`Walk`), so that
+//!   a line's write-back meets one of its writes however short its span. Every byte
 //!   must then read the CPU's last write where the CPU wrote it, and the pattern elsewhere: a
 //!   device that writes back bytes it read beside the texels puts back an older value over a
 //!   write the CPU made between its read and its write, wherever in the step those lie
@@ -755,8 +758,12 @@ fn check_class(
             let outcome = {
                 let _busy = exit_guard::enter()?;
                 match texel {
-                    Some(texel) => store_round(device, &pages, (shape, texel, free), round, page),
-                    None => check_round(&pages, (shape, free), round, page, renders.as_mut()),
+                    Some(texel) => {
+                        store_round(device, &pages, (shape, texel, free), round, (page, line))
+                    }
+                    None => {
+                        check_round(&pages, (shape, free), round, (page, line), renders.as_mut())
+                    }
                 }
             };
             let made = |made_sharing: &mut Vec<u64>| {
@@ -1027,12 +1034,14 @@ pub(crate) enum Round {
 /// writes beside its image's first move (and, for an image that renders, `renders` its queue and
 /// draw, beside its feedback loop moves, a pass that clears and stores it and a draw of its last
 /// column), and the bytes compared: a change of a byte of the rows' padding of an image that
-/// renders told apart where `free` ([`Round::Padded`]).
+/// renders told apart where `free` ([`Round::Padded`]). The window starts a page of `page` bytes;
+/// the writer's walk keeps to the bytes beside the texels in lines of `line` bytes most
+/// ([`Walk`]).
 fn check_round(
     pages: &ClassPages,
     (shape, free): (Shape, bool),
     round: usize,
-    page: u64,
+    (page, line): (u64, u64),
     renders: Option<&mut (CommandQueue, CheckDraw)>,
 ) -> Round {
     let window = shape.window(page);
@@ -1061,7 +1070,7 @@ fn check_round(
     let outcome = std::thread::scope(|scope| {
         let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
         let Ok(writer) = exit_guard::spawn_scoped(scope, builder, || {
-            bytes.write_until(&pattern, (texels, free), (&stop, &started))
+            bytes.write_until(&pattern, (texels, free, line), (&stop, &started))
         }) else {
             return None;
         };
@@ -1217,13 +1226,15 @@ impl Drop for Stopping<'_> {
 /// of `device`'s stored into its texels by a kernel, while the CPU writes the bytes beside them
 /// (between rows and after the image) and the image takes its first move; and the bytes
 /// compared: each texel's the kernel's, each other byte the CPU's or the pattern, a change of a
-/// byte of the rows' padding told apart where `free` ([`Round::Padded`]).
+/// byte of the rows' padding told apart where `free` ([`Round::Padded`]). The window starts a
+/// page of `page` bytes; the writer's walk keeps to the bytes beside the texels in lines of
+/// `line` bytes most ([`Walk`]).
 fn store_round(
     device: &Device,
     pages: &ClassPages,
     (shape, texel, free): (Shape, ShadowTexelView, bool),
     round: usize,
-    page: u64,
+    (page, line): (u64, u64),
 ) -> Round {
     let window = shape.window(page);
     let bytes = Bytes {
@@ -1283,7 +1294,7 @@ fn store_round(
     let outcome = std::thread::scope(|scope| {
         let builder = std::thread::Builder::new().name("m2v-in-place-writes".to_owned());
         let Ok(writer) = exit_guard::spawn_scoped(scope, builder, || {
-            bytes.write_until(&pattern, (Some(shape), free), (&stop, &started))
+            bytes.write_until(&pattern, (Some(shape), free, line), (&stop, &started))
         }) else {
             return None;
         };
@@ -1728,22 +1739,175 @@ impl Pattern {
     }
 }
 
-/// What a round's writer wrote ([`Bytes::write_until`]): the sweep it was in as it stopped, how
-/// many of the stride's bytes that sweep reached (each byte before that one written by it, each
-/// after by the sweep before), the first byte it found other than it left it, where it found one
-/// (its offset, what was due and what was read), and the first of its shape's rows' padding it
-/// found so, where it told that padding apart.
+/// What a round's writer wrote ([`Bytes::write_until`]), by its [`Walk`]: of the stride's walk,
+/// the sweep it was in as it stopped and how many of the stride's bytes that sweep reached (each
+/// byte before that one written by it, each after by the sweep before); the bytes beside the
+/// texels in their lines ([`near_bytes`]), in their walk's order, and of that walk the same; the
+/// first byte it found other than it left it, where it found one (its offset, what was due and
+/// what was read); and the first of its shape's rows' padding it found so, where it told that
+/// padding apart.
 pub(crate) struct Written {
     pub(crate) sweep: u64,
     pub(crate) reached: u64,
+    pub(crate) near: Vec<u64>,
+    pub(crate) near_sweep: u64,
+    pub(crate) near_reached: u64,
     pub(crate) changed: Option<(u64, u8, u8)>,
     pub(crate) padding: Option<(u64, u8, u8)>,
+}
+
+/// How many bytes of its walk round the bytes beside the texels in their lines ([`near_bytes`])
+/// a round's writer writes after each byte of its stride's walk ([`Walk`]).
+pub(crate) const NEAR_STEPS: u32 = 8;
+
+/// The bytes of a window of `length` bytes beside `shape`'s texels in the lines of `line` bytes
+/// that hold them, in order, each once: of each row, the bytes of the line its first texel lies
+/// in and of the line its last lies in, but the texels (every line between holds texels alone).
+/// A device that writes back a line it read whole changes these alone of the bytes beside the
+/// texels: what they held when it read them is put back over the CPU's writes since.
+pub(crate) fn near_bytes(shape: Shape, line: u64, length: u64) -> Vec<u64> {
+    let row = shape.width * shape.texel;
+    let mut near: Vec<u64> = (0..shape.height)
+        .flat_map(|y| {
+            let start = y * shape.bytes_per_row;
+            let head = start - start % line;
+            let tail = (start + row).next_multiple_of(line);
+            let first_end = (head + line).min(tail);
+            let last_start = (tail - line).max(first_end);
+            (head..first_end).chain(last_start..tail)
+        })
+        .filter(|&offset| offset < length && !shape.is_texel(offset))
+        .collect();
+    near.sort_unstable();
+    near.dedup();
+    near
+}
+
+/// The order a round's writer writes a window's bytes in ([`Bytes::write_until`]): the stride's
+/// walk over the window ([`Bytes::stride`]), passing over the texels where a shape names them
+/// and the bytes beside them in their lines ([`near_bytes`]), and after each of its bytes
+/// [`NEAR_STEPS`] of a walk round those bytes beside the texels in their lines in order, each
+/// walk sweep after sweep. A byte of the stride's walk comes back once a sweep of the window; a
+/// byte beside the texels in their lines once every pass round them, a few writes for each of
+/// them, so that a device's read and write-back of such a line meets a write of the CPU's
+/// between them however short the span, and wherever the stride's walk is as it comes.
+#[derive(Clone)]
+pub(crate) struct Walk {
+    stride: u64,
+    length: u64,
+    texels: Option<Shape>,
+    near: Vec<u64>,
+    /// Which of the window's bytes are in `near`, a bit each (none where it is empty).
+    is_near: Vec<u64>,
+    sweep: u64,
+    n: u64,
+    near_sweep: u64,
+    near_at: u64,
+    /// The steps round the bytes beside the texels before the stride's walk's next byte.
+    owed: u32,
+}
+
+impl Walk {
+    /// The walk over `bytes`, passing over `texels`' texels where it names a shape, round the
+    /// bytes beside them in lines of `line` bytes.
+    pub(crate) fn new(bytes: &Bytes, texels: Option<Shape>, line: u64) -> Walk {
+        let near = match texels {
+            Some(shape) => near_bytes(shape, line, bytes.length),
+            None => Vec::new(),
+        };
+        let is_near = bits_of(&near, bytes.length);
+        Walk {
+            stride: bytes.stride(),
+            length: bytes.length,
+            texels,
+            near,
+            is_near,
+            sweep: 1,
+            n: 0,
+            near_sweep: 1,
+            near_at: 0,
+            owed: 0,
+        }
+    }
+
+    /// The next byte the writer writes, with the sweep of its walk that writes it.
+    pub(crate) fn step(&mut self) -> (u64, u64) {
+        if self.owed > 0 {
+            self.owed -= 1;
+            let offset = self.near[self.near_at as usize];
+            let sweep = self.near_sweep;
+            self.near_at += 1;
+            if self.near_at == self.near.len() as u64 {
+                (self.near_at, self.near_sweep) = (0, self.near_sweep + 1);
+            }
+            return (offset, sweep);
+        }
+        loop {
+            let offset = nth(self.n, self.stride, self.length);
+            let sweep = self.sweep;
+            self.n += 1;
+            if self.n == self.length {
+                (self.n, self.sweep) = (0, self.sweep + 1);
+            }
+            if self.texels.is_some_and(|shape| shape.is_texel(offset))
+                || holds(&self.is_near, offset)
+            {
+                continue;
+            }
+            if !self.near.is_empty() {
+                self.owed = NEAR_STEPS;
+            }
+            return (offset, sweep);
+        }
+    }
+
+    /// What the walk wrote so far, with the first byte the writer found other than it left it
+    /// and the first of the padding so ([`Written`]).
+    pub(crate) fn written(
+        self,
+        changed: Option<(u64, u8, u8)>,
+        padding: Option<(u64, u8, u8)>,
+    ) -> Written {
+        Written {
+            sweep: self.sweep,
+            reached: self.n,
+            near: self.near,
+            near_sweep: self.near_sweep,
+            near_reached: self.near_at,
+            changed,
+            padding,
+        }
+    }
+}
+
+/// A bit for each of a window's `length` bytes, set for those of `offsets`: none where it is
+/// empty.
+fn bits_of(offsets: &[u64], length: u64) -> Vec<u64> {
+    if offsets.is_empty() {
+        return Vec::new();
+    }
+    let mut bits = vec![0u64; length.div_ceil(64) as usize];
+    for &offset in offsets {
+        bits[(offset / 64) as usize] |= 1 << (offset % 64);
+    }
+    bits
+}
+
+/// Whether `bits` ([`bits_of`]) has the byte at `offset` set.
+fn holds(bits: &[u64], offset: u64) -> bool {
+    (bits.get((offset / 64) as usize)).is_some_and(|word| word & 1 << (offset % 64) != 0)
+}
+
+/// The `n`th byte of a stride's walk at `stride` over a window of `length` bytes.
+fn nth(n: u64, stride: u64, length: u64) -> u64 {
+    let product = u128::from(n) * u128::from(stride);
+    (product % u128::from(length)) as u64
 }
 
 /// What sweep `sweep` of a round's writer changes the pattern by: nothing before the first
 /// (`sweep` 0), then each of the 255 other byte values in turn, so that each sweep's bytes differ
 /// from the pattern and from the sweep's before.
-fn mark(sweep: u64) -> u8 {
+pub(crate) fn mark(sweep: u64) -> u8 {
     match sweep {
         0 => 0,
         _ => ((sweep - 1) % 255) as u8 + 1,
@@ -1766,10 +1930,9 @@ impl Bytes {
             .unwrap_or(1)
     }
 
-    /// The `n`th byte the writer writes, at `stride`.
+    /// The `n`th byte of the stride's walk, at `stride` ([`Walk`]).
     fn nth(&self, n: u64, stride: u64) -> u64 {
-        let product = u128::from(n) * u128::from(stride);
-        (product % u128::from(self.length)) as u64
+        nth(n, stride, self.length)
     }
 
     /// The address of the window's byte at `offset`.
@@ -1794,30 +1957,38 @@ impl Bytes {
 
     /// Write the bytes beside the texels (every byte where `texels` names no shape; where it names
     /// the texture's, its texels are passed over: its pass clears them, or its kernel stores
-    /// them), sweep after sweep, each in the stride's order, until `stop`: sweep `k` writes the
-    /// pattern changed by [`mark`]`(k)`, and reads each byte before it writes it, which must still
-    /// hold what the sweep before left there (the pattern before the first). `started` once the
-    /// first byte is written. What it wrote, and the first byte it found otherwise, where it found
-    /// one (then it stops there); but where `free`, a byte of the shape's rows' padding it found
-    /// otherwise is noted apart, the first of them, and written on as any other.
+    /// them), in the [`Walk`]'s order (round the bytes beside the texels in their lines of
+    /// `line` bytes most), each of its two walks sweep after sweep, until `stop`: sweep `k` of
+    /// either writes the pattern changed by [`mark`]`(k)`, and reads each byte before it writes
+    /// it, which must still hold what that walk's sweep before left there (the pattern before the
+    /// first). `started` once the first byte is written. What it wrote, and the first byte it
+    /// found otherwise, where it found one (then it stops there); but where `free`, a byte of the
+    /// shape's rows' padding it found otherwise is noted apart, the first of them, and written on
+    /// as any other.
     ///
     /// A device that writes back bytes it read beside the texels (a whole line of a cache, say, of
     /// which the texels hold part) leaves there what they held when it read them. Where the writer
     /// wrote one of them between the device's read and its write, the writer's next read of it,
-    /// or the round's compare, finds the older value: the writer rewrites every byte of the line
-    /// again at its next sweep, so any span between the read and the write longer than the
-    /// writer's walk between two bytes of the line holds one of its writes, wherever in the step
-    /// the span lies. A writer that wrote each byte once, as the step began, missed every such
-    /// span past its first writes: the Iris Xe's clear and store of a 100x50 image at a 512-byte
-    /// pitch put back the pattern over its writes to the bytes after a row's last texels, in their
-    /// line, in 77 of 100 such rounds, and its check passed so under validation layers.
+    /// or the round's compare, finds the older value: the writer rewrites the bytes of such a
+    /// line again and again, so any span between the read and the write longer than the
+    /// writer's walk round those bytes holds one of its writes, wherever in the step the span
+    /// lies. A writer that wrote each byte once, as the step began, missed every such span past
+    /// its first writes: the Iris Xe's clear and store of a 100x50 image at a 512-byte pitch put
+    /// back the pattern over its writes to the bytes after a row's last texels, in their line, in
+    /// 77 of 100 such rounds, and its check passed so under validation layers. A writer that came
+    /// back to them only once a sweep of the window missed most spans of the Iris Xe's storage
+    /// writes, which are short: a round of a 61x37 `R8Uint` image at a 256-byte pitch (3 bytes
+    /// beside each row's texels in their line, of a window of 20 KiB) caught the line's write-back
+    /// in 2 of 100 rounds, a 101x51 `RGBA8Uint` one at 512 (44 such bytes a row) in 45 of 100, so
+    /// that three rounds of each shape answered the access passed in one class in two, and in all
+    /// six at once under the load of the runtime's suite beside it.
     fn write_until(
         &self,
         pattern: &Pattern,
-        (texels, free): (Option<Shape>, bool),
+        (texels, free, line): (Option<Shape>, bool, u64),
         (stop, started): (&AtomicBool, &Barrier),
     ) -> Written {
-        let stride = self.stride();
+        let mut walk = Walk::new(self, texels, line);
         let mut first = true;
         let mut started_once = || {
             if first {
@@ -1827,43 +1998,25 @@ impl Bytes {
         };
         let in_padding = |offset| free && texels.is_some_and(|shape| shape.in_padding(offset));
         let mut padding = None;
-        let mut sweep = 1;
         loop {
-            let (before, now) = (mark(sweep - 1), mark(sweep));
-            for n in 0..self.length {
-                let offset = self.nth(n, stride);
-                if texels.is_some_and(|shape| shape.is_texel(offset)) {
-                    continue;
+            let (offset, sweep) = walk.step();
+            let byte = self.byte(offset);
+            let due = pattern.at(offset) ^ mark(sweep - 1);
+            // SAFETY: as in `fill`; the round's thread does not touch the bytes meanwhile.
+            let read = unsafe { byte.read_volatile() };
+            if read != due {
+                if !in_padding(offset) {
+                    started_once();
+                    return walk.written(Some((offset, due, read)), padding);
                 }
-                let byte = self.byte(offset);
-                let due = pattern.at(offset) ^ before;
-                // SAFETY: as in `fill`; the round's thread does not touch the bytes meanwhile.
-                let read = unsafe { byte.read_volatile() };
-                if read != due {
-                    if !in_padding(offset) {
-                        started_once();
-                        return Written {
-                            sweep,
-                            reached: n,
-                            changed: Some((offset, due, read)),
-                            padding,
-                        };
-                    }
-                    padding.get_or_insert((offset, due, read));
-                }
-                // SAFETY: as above.
-                unsafe { byte.write_volatile(pattern.at(offset) ^ now) };
-                started_once();
-                if stop.load(Ordering::Acquire) {
-                    return Written {
-                        sweep,
-                        reached: n + 1,
-                        changed: None,
-                        padding,
-                    };
-                }
+                padding.get_or_insert((offset, due, read));
             }
-            sweep += 1;
+            // SAFETY: as above.
+            unsafe { byte.write_volatile(pattern.at(offset) ^ mark(sweep)) };
+            started_once();
+            if stop.load(Ordering::Acquire) {
+                return walk.written(None, padding);
+            }
         }
     }
 
@@ -1888,31 +2041,49 @@ impl Bytes {
         }
         let in_padding = |offset| free && texels.is_some_and(|(shape, _)| shape.in_padding(offset));
         let mut padding = written.padding;
+        // Each byte the writer wrote must read its walk's last sweep over it, and is set back to
+        // the pattern as it is read.
+        let mut due_and_back = |offset: u64, last: u64| {
+            let due = pattern.at(offset) ^ mark(last);
+            // SAFETY: as in `fill`; the writer was joined.
+            let read = unsafe { self.byte(offset).read_volatile() };
+            if read != due {
+                if !in_padding(offset) {
+                    return Err((offset, due, read));
+                }
+                padding.get_or_insert((offset, due, read));
+            }
+            // SAFETY: as above.
+            unsafe { self.byte(offset).write_volatile(pattern.at(offset)) };
+            Ok(())
+        };
         let stride = self.stride();
+        let is_near = bits_of(&written.near, self.length);
         let reached = match written.sweep {
             1 => written.reached,
             _ => self.length,
         };
         for n in 0..reached {
             let offset = self.nth(n, stride);
-            if texels.is_some_and(|(shape, _)| shape.is_texel(offset)) {
+            if texels.is_some_and(|(shape, _)| shape.is_texel(offset)) || holds(&is_near, offset) {
                 continue;
             }
             let last = match n < written.reached {
                 true => written.sweep,
                 false => written.sweep - 1,
             };
-            let due = pattern.at(offset) ^ mark(last);
-            // SAFETY: as in `fill`; the writer was joined.
-            let read = unsafe { self.byte(offset).read_volatile() };
-            if read != due {
-                if !in_padding(offset) {
-                    return Round::Changed((offset, due, read));
-                }
-                padding.get_or_insert((offset, due, read));
+            if let Err(changed) = due_and_back(offset, last) {
+                return Round::Changed(changed);
             }
-            // SAFETY: as above.
-            unsafe { self.byte(offset).write_volatile(pattern.at(offset)) };
+        }
+        for (at, &offset) in (0u64..).zip(&written.near) {
+            let last = match at < written.near_reached {
+                true => written.near_sweep,
+                false => written.near_sweep - 1,
+            };
+            if let Err(changed) = due_and_back(offset, last) {
+                return Round::Changed(changed);
+            }
         }
         let Some((shape, due)) = texels else {
             return match self.matches(&pattern.bytes, 0, self.length) {

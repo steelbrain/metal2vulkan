@@ -37,8 +37,8 @@ use crate::in_place::{
     NARROW_TEXEL_BYTES, STORED_TEXEL_BYTES, VERDICTS,
 };
 use crate::in_place_check::{
-    carried_store_failures, verdicts, Bytes, Due, Found, Pattern, Round, Shape, Tally, Written,
-    NARROW_STORE_SHAPES, SHAPES, STORE_SHAPES,
+    carried_store_failures, mark, near_bytes, verdicts, Bytes, Due, Found, Pattern, Round, Shape,
+    Tally, Walk, Written, NARROW_STORE_SHAPES, NEAR_STEPS, SHAPES, STORE_SHAPES,
 };
 use crate::linear_plan::BufferLayout;
 use metal2vulkan::device::HostPageTexturePolicy;
@@ -861,6 +861,9 @@ fn a_round_of_storage_writes_tells_a_change_of_free_padding_apart() {
     let idle = || Written {
         sweep: 1,
         reached: 0,
+        near: Vec::new(),
+        near_sweep: 1,
+        near_reached: 0,
         changed: None,
         padding: None,
     };
@@ -943,6 +946,9 @@ fn a_round_of_renders_keeps_its_unobserved_form_only_for_bytes_inside_its_rows_p
         let idle = Written {
             sweep: 1,
             reached: 0,
+            near: Vec::new(),
+            near_sweep: 1,
+            near_reached: 0,
             changed: None,
             padding: None,
         };
@@ -1065,4 +1071,162 @@ fn each_check_of_storage_writes_stores_its_texels_width() {
             "{texel}-byte texels"
         );
     }
+}
+
+/// The check's shapes whose texels share a line of 64 bytes (the Iris Xe's) with bytes beside
+/// them: of renders, of storage writes and of storage writes of 1- and 2-byte texels.
+fn sharing_shapes() -> Vec<Shape> {
+    let stored = STORE_SHAPES.into_iter().chain(NARROW_STORE_SHAPES);
+    (SHAPES.into_iter())
+        .chain(stored.map(|(shape, _)| shape))
+        .filter(|shape| shape.rows(64) == RowEnds::InLines)
+        .collect()
+}
+
+/// Whether the byte at `offset` is one of `shape`'s texels, its texture starting byte 0.
+fn texel(shape: &Shape, offset: u64) -> bool {
+    offset < shape.bytes_per_row * shape.height
+        && offset % shape.bytes_per_row < shape.width * shape.texel
+}
+
+#[test]
+fn a_round_s_writer_comes_back_to_the_bytes_beside_the_texels_in_their_lines_many_times_a_sweep() {
+    let line = 64;
+    let shapes = sharing_shapes();
+    assert!(shapes.len() >= 10, "{}", shapes.len());
+    for shape in shapes {
+        let length = shape.bytes_per_row * shape.height + 8192;
+        let mut window = vec![0u8; length as usize];
+        let bytes = Bytes {
+            start: NonNull::new(window.as_mut_ptr()).unwrap(),
+            length,
+        };
+        // The bytes beside the texels in their lines are exactly the bytes, but texels, of the
+        // lines that hold a texel.
+        let near = near_bytes(shape, line, length);
+        let holds_texel = |offset: u64| {
+            (offset - offset % line..)
+                .take(line as usize)
+                .any(|at| texel(&shape, at))
+        };
+        let due: Vec<u64> = (0..length)
+            .filter(|&offset| !texel(&shape, offset) && holds_texel(offset))
+            .collect();
+        assert_eq!(near, due, "{shape:?}");
+        assert!(!near.is_empty(), "{shape:?}");
+        // Each of them comes back within a pass round them and the stride's bytes between its
+        // steps there, wherever the walk starts: a walk of the window's stride alone came back
+        // to a byte once a sweep of the window, past which a device's short read and write-back
+        // of its line met no write of the writer's.
+        let count = near.len() as u64;
+        let bound = count + count.div_ceil(u64::from(NEAR_STEPS)) + 1;
+        let mut walk = Walk::new(&bytes, Some(shape), line);
+        let mut seen = vec![None; length as usize];
+        for step in 0..4 * bound {
+            let (offset, _) = walk.step();
+            assert!(!texel(&shape, offset), "{shape:?}: a texel at {offset}");
+            if near.binary_search(&offset).is_ok() {
+                if let Some(before) = seen[offset as usize] {
+                    let gap = step - before;
+                    assert!(gap <= bound, "{shape:?}: byte {offset} after {gap} steps");
+                }
+                seen[offset as usize] = Some(step);
+            }
+        }
+        assert!(
+            near.iter().all(|&offset| seen[offset as usize].is_some()),
+            "{shape:?}"
+        );
+        // And the stride's walk still meets every other byte but the texels once a sweep.
+        let mut walk = Walk::new(&bytes, Some(shape), line);
+        let others = (0..length)
+            .filter(|&offset| !texel(&shape, offset) && near.binary_search(&offset).is_err())
+            .count() as u64;
+        let mut met = vec![false; length as usize];
+        for _ in 0..others * (u64::from(NEAR_STEPS) + 1) {
+            met[walk.step().0 as usize] = true;
+        }
+        let missed = (0..length)
+            .filter(|&offset| !texel(&shape, offset) && !met[offset as usize])
+            .count();
+        assert_eq!(missed, 0, "{shape:?}");
+    }
+}
+
+#[test]
+fn a_round_finds_a_byte_beside_the_texels_in_their_line_put_back_as_the_walk_found_it_before() {
+    // The 61x37 shape of 1-byte texels at a 256-byte pitch, of the check's narrow storage shapes:
+    // 3 bytes after each row's 61 texels in their 64-byte line, of which a round of the Iris Xe's
+    // storage writes caught the line's write-back in 2 of 100 rounds with a walk of the stride
+    // alone.
+    let (shape, _) = NARROW_STORE_SHAPES[2];
+    assert_eq!(
+        (shape.width, shape.height, shape.texel, shape.bytes_per_row),
+        (61, 37, 1, 256)
+    );
+    let line = 64;
+    let length = shape.bytes_per_row * shape.height + 8192;
+    let pattern = Pattern::new(5);
+    let mut window: Vec<u8> = (0..length).map(|offset| pattern.at(offset)).collect();
+    let bytes = Bytes {
+        start: NonNull::new(window.as_mut_ptr()).unwrap(),
+        length,
+    };
+    // The writer's walk for some steps, as it writes; then its texels cleared, as a pass does.
+    let mut walk = Walk::new(&bytes, Some(shape), line);
+    let near = near_bytes(shape, line, length);
+    assert_eq!(near.len(), 3 * 37);
+    let steps = 3 * near.len() as u64 * u64::from(NEAR_STEPS + 1) + 17;
+    let mut last = std::collections::HashMap::new();
+    for _ in 0..steps {
+        let (offset, sweep) = walk.step();
+        let previous = last.insert(offset, sweep).unwrap_or(0);
+        assert!(sweep > previous);
+        // SAFETY: the window's byte, which nothing else uses.
+        unsafe {
+            bytes
+                .start
+                .as_ptr()
+                .add(offset as usize)
+                .write(pattern.at(offset) ^ mark(sweep))
+        };
+    }
+    let texels = |window: &mut Vec<u8>| {
+        for y in 0..shape.height {
+            let start = (y * shape.bytes_per_row) as usize;
+            window[start..start + shape.width as usize].fill(0);
+        }
+    };
+    let round = |window: &mut Vec<u8>, walk: Walk, free: bool| {
+        let bytes = Bytes {
+            start: NonNull::new(window.as_mut_ptr()).unwrap(),
+            length,
+        };
+        bytes.compare(
+            &pattern,
+            (Some((shape, Due::Zero)), free),
+            walk.written(None, None),
+        )
+    };
+    let mut kept = window.clone();
+    texels(&mut kept);
+    assert_eq!(round(&mut kept, walk.clone(), true), Round::Kept);
+    // A write-back of the 12th row's line as it read it a pass round the line's bytes before:
+    // the byte after its last texel holds the walk's sweep before over it.
+    let at = 11 * shape.bytes_per_row + 61;
+    let sweep = last[&at];
+    assert!(sweep >= 2);
+    let mut put_back = window.clone();
+    texels(&mut put_back);
+    put_back[at as usize] = pattern.at(at) ^ mark(sweep - 1);
+    let found = (
+        at,
+        pattern.at(at) ^ mark(sweep),
+        pattern.at(at) ^ mark(sweep - 1),
+    );
+    assert_eq!(
+        round(&mut put_back.clone(), walk.clone(), true),
+        Round::Padded(found)
+    );
+    assert_eq!(round(&mut put_back, walk, false), Round::Changed(found));
 }
