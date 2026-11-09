@@ -34,6 +34,7 @@ const TEN_BIT_WORDS: RuntimeDriverDefect = RuntimeDriverDefect::TenBitCodesReadA
 const UNPINNABLE: RuntimeDriverDefect = RuntimeDriverDefect::UnpinnablePagesBreakHostMemory;
 const VOLUME_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::VolumeBlitsUnfiltered;
 const ALIASED_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::AliasedImportBlitsUnordered;
+const VOLUME_RESOLVES: RuntimeDriverDefect = RuntimeDriverDefect::VolumeResolveFirstPlane;
 
 /// Every committed profile's driver has its defects at every release and GPU but those a probe
 /// found clean: MoltenVK the multisampled depth/stencil colour copies, the inexact depths past
@@ -51,7 +52,8 @@ const ALIASED_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::AliasedImportBli
 /// rows past its height, the baked samplers lost after a copy and the 10-bit codes its Y′CbCr
 /// conversion reads as words;
 /// RADV the multisampled copies that convert float NaNs, the 10-bit codes its Y′CbCr conversion
-/// reads as words, and the implicit
+/// reads as words, the color resolve into a 3D image's first plane whatever plane its view begins
+/// at, and the implicit
 /// preprocessing after an execution set on every GPU but the 780M (Phoenix's and Hawk Point's),
 /// measured clean; ANV
 /// the compressed image's short size, the occlusion count per color output, the pushed
@@ -99,9 +101,11 @@ fn the_committed_profiles_drivers_have_their_defects() {
             }
             // The 780M, under Phoenix's `deviceID` and Hawk Point's.
             Some(DriverId::MESA_RADV) if matches!(desc.device_id, 0x15bf | 0x1900) => {
-                vec![NAN_COPIES, TEN_BIT_WORDS]
+                vec![NAN_COPIES, TEN_BIT_WORDS, VOLUME_RESOLVES]
             }
-            Some(DriverId::MESA_RADV) => vec![NAN_COPIES, PREPROCESS, TEN_BIT_WORDS],
+            Some(DriverId::MESA_RADV) => {
+                vec![NAN_COPIES, PREPROCESS, TEN_BIT_WORDS, VOLUME_RESOLVES]
+            }
             Some(DriverId::INTEL_OPEN_SOURCE_MESA) => {
                 vec![COMPRESSION, COUNTS, STALE_PUSHES, ALIASED_BLITS]
             }
@@ -211,12 +215,12 @@ fn hawk_points_780m_is_phoenixs_gpu() {
     assert_eq!(properties.driver_defects, measured.driver_defects);
     assert_eq!(
         of(&hawk_point).into_iter().collect::<Vec<_>>(),
-        [NAN_COPIES, TEN_BIT_WORDS]
+        [NAN_COPIES, TEN_BIT_WORDS, VOLUME_RESOLVES]
     );
     hawk_point.driver_version += 1;
     assert_eq!(
         of(&hawk_point).into_iter().collect::<Vec<_>>(),
-        [NAN_COPIES, TEN_BIT_WORDS]
+        [NAN_COPIES, TEN_BIT_WORDS, VOLUME_RESOLVES]
     );
     let mut neighbour = phoenix;
     neighbour.device_id = 0x1901;

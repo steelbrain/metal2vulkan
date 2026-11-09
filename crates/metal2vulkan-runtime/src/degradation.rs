@@ -512,7 +512,10 @@ degradations! {
              resolve texture after the pass through a staging buffer";
         /// A pass resolves into a texture that cannot be an attachment (its usage lacks
         /// `RenderTarget`), or a layered pass into a texture whose slices from the resolve slice
-        /// hold fewer layers than the pass's.
+        /// hold fewer layers than the pass's, or a pass resolves color into a 3D texture's planes
+        /// past its first, or into more than one, on a device whose resolve into a 2D view of a
+        /// 3D image writes its first plane alone (`RuntimeDriverDefect::VolumeResolveFirstPlane`:
+        /// RADV).
         ResolveScratch = "resolve-scratch", Performance,
             "the pass resolves into a scratch image, whose render area is copied into the \
              texture after the pass";
@@ -4495,6 +4498,10 @@ impl Device {
                         "a layered pass of {} layers resolves into {} slices of it, the layers that fit",
                         scratch.layers, texture.layers
                     )
+                } else if super::resolve::is_volume(texture) && super::resolve::first_plane_only(self) {
+                    "the device's resolve into a 2D view of a 3D image writes its first depth plane, \
+                     whatever plane the view begins at (RuntimeDriverDefect::VolumeResolveFirstPlane)"
+                        .to_owned()
                 } else {
                     "its image cannot be an attachment: the texture's usage lacks `RenderTarget`"
                         .to_owned()

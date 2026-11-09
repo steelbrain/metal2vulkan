@@ -197,6 +197,13 @@
 //!   ([`ResolveSource`]), which an instance of no draws, and each resolve after the pass, resolves
 //!   from in its place. A memoryless attachment there, which takes no copy, is not built
 //!   (`NotImplemented(DepthStencilResolve)`).
+//! - **A render pass that resolves color into a 3D image's first plane alone** (RADV,
+//!   `RuntimeDriverDefect::VolumeResolveFirstPlane`): its color resolve into a 2D view of a 3D
+//!   image writes the image's first depth plane, whatever plane the view begins at. There a
+//!   resolve into a 3D texture's planes past its first, or into more than one, takes the scratch
+//!   image, whose layers are copied into the planes after the pass (the copy's depth from the
+//!   resolve's first plane); a level of the texture reaching past the attachment, whose clear
+//!   there would be of the planes alone, is not built (`NotImplemented(Render)`).
 //! - The multisampled attachment of `MultisampleResolve` is stored `DONT_CARE`: Metal leaves its
 //!   texels undefined (the recorded near-equivalent of a `DontCare` store).
 //!
@@ -1162,7 +1169,9 @@ impl Destination {
     /// `needed` usage, else a scratch image whose render area is copied there after the pass. A
     /// render pass's depth/stencil resolve (`depth_stencil`) on a device that writes its resolve
     /// attachment image's first layer and level alone ([`first_subresource_only`]) takes the
-    /// scratch image where the destination begins at another.
+    /// scratch image where the destination begins at another, and a color resolve on a device
+    /// that writes a 3D image's first plane alone ([`first_plane_only`]) where the destination is
+    /// a 3D texture's planes past its first, or more than one.
     fn attach(
         self,
         maker: &CommandBuffer,
@@ -1177,6 +1186,13 @@ impl Destination {
         // resolved into through a scratch image too, whose overlap with it is copied.
         let misplaced =
             depth_stencil && first_subresource_only(device) && !at_first_subresource(&self.target);
+        // Nor does a color resolve into a 3D texture's planes past its first, or into more than
+        // one, on a device that writes the image's first plane whatever plane the view begins at
+        // ([`first_plane_only`]): the scratch image's layers are copied into the planes.
+        let off_plane = !depth_stencil
+            && first_plane_only(device)
+            && is_volume(&self.target)
+            && (self.target.layer != 0 || self.target.layers != 1);
         // Nor is a linear image the device renders only where every color attachment is linear
         // (`linear_attachment.rs`): the pass's are multisampled, never linear.
         let bound = !depth_stencil && linear_attachment::bound(device, &self.target)?;
@@ -1196,6 +1212,7 @@ impl Destination {
             && self.target.layers == source.layers
             && self.target.extent == source.extent
             && !misplaced
+            && !off_plane
             && !bound
         {
             return Ok(Resolve {
@@ -1206,11 +1223,14 @@ impl Destination {
                 clear: None,
             });
         }
-        // The scratch's copy into a 3D texture's planes, or into a 1D texture, is not built
-        // (`render_pass::not_2d`).
-        if !self.usage.contains(ImageUsageFlags::TRANSFER_DST)
-            || super::render_pass::not_2d(&self.target)
-        {
+        // The scratch's copy into a 1D texture is not built, nor into a 3D texture's planes where
+        // the level reaches past the attachment, whose clear there would be of the plane alone
+        // (`ResolveCopies`).
+        let past =
+            self.target.extent[0] > source.extent[0] || self.target.extent[1] > source.extent[1];
+        let copied_into =
+            !super::render_pass::not_2d(&self.target) || (is_volume(&self.target) && !past);
+        if !self.usage.contains(ImageUsageFlags::TRANSFER_DST) || !copied_into {
             return Err(Error::NotImplemented(RuntimeGap::Render));
         }
         // A twin resolve writes the resolve texture's format, so its scratch image is of that
@@ -1560,6 +1580,21 @@ fn at_first_subresource(target: &Target) -> bool {
     target.layer == 0 && target.level == 0
 }
 
+/// Whether `device`'s render pass resolves a color attachment into a 2D view of a 3D image's
+/// planes by writing the image's first plane, whatever plane the view begins at
+/// (`RuntimeDriverDefect::VolumeResolveFirstPlane`).
+pub(super) fn first_plane_only(device: &Device) -> bool {
+    device
+        .properties()
+        .driver_defects
+        .contains(&RuntimeDriverDefect::VolumeResolveFirstPlane)
+}
+
+/// Whether `target` is planes of a 3D texture's image: its layers are the image's depth planes.
+pub(super) fn is_volume(target: &Target) -> bool {
+    (target.texture.image_plan()).is_ok_and(|plan| plan.image_type == ImageType::TYPE_3D)
+}
+
 /// The copy a pass's depth/stencil resolves read on a device whose render pass resolves from the
 /// attachment image's first layer and level ([`first_subresource_only`]), where the pass's
 /// depth/stencil attachment begins at another: the pass's layers of the attachment, every aspect
@@ -1762,15 +1797,35 @@ impl ResolveCopies {
                 clears.push((to.texture.raw_image()?, bits, range));
             }
             if aspect == image_aspects(from.format) {
+                // Into a 3D texture's planes, the scratch image's layers are the region's depth
+                // from the first plane (`VUID-VkCopyImageInfo2-srcImage-01791`): the image has
+                // one layer.
+                let (dst_subresource, dst_offset, depth) = match is_volume(to) {
+                    true => (
+                        vk::ImageSubresourceLayers {
+                            aspect_mask: aspect.into(),
+                            mip_level: to.level,
+                            base_array_layer: 0,
+                            layer_count: 1,
+                        },
+                        vk::Offset3D {
+                            z: i32::try_from(to.layer)
+                                .map_err(|_| internal("a depth plane past i32"))?,
+                            ..vk::Offset3D::default()
+                        },
+                        count,
+                    ),
+                    false => (layers(to, aspect, count), vk::Offset3D::default(), 1),
+                };
                 let region = vk::ImageCopy {
                     src_subresource: layers(from, aspect, count),
                     src_offset: vk::Offset3D::default(),
-                    dst_subresource: layers(to, aspect, count),
-                    dst_offset: vk::Offset3D::default(),
+                    dst_subresource,
+                    dst_offset,
                     extent: vk::Extent3D {
                         width,
                         height,
-                        depth: 1,
+                        depth,
                     },
                 };
                 copies.push((from.texture.raw_image()?, to.texture.raw_image()?, region));

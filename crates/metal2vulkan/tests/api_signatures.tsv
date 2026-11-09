@@ -13998,6 +13998,7 @@ variant	metal2vulkan::error::RuntimeDriverDefect::TenBitCodesReadAsWords	TenBitC
 variant	metal2vulkan::error::RuntimeDriverDefect::TwoPlaneChromaMisplaced	TwoPlaneChromaMisplaced
 variant	metal2vulkan::error::RuntimeDriverDefect::UnpinnablePagesBreakHostMemory	UnpinnablePagesBreakHostMemory
 variant	metal2vulkan::error::RuntimeDriverDefect::VolumeBlitsUnfiltered	VolumeBlitsUnfiltered
+variant	metal2vulkan::error::RuntimeDriverDefect::VolumeResolveFirstPlane	VolumeResolveFirstPlane
 variant	metal2vulkan::error::RuntimeDriverDefect::WaitForAnyObjectLosesASignal	WaitForAnyObjectLosesASignal
 variant	metal2vulkan::error::RuntimeInput::AlphaTest	AlphaTest
 variant	metal2vulkan::error::RuntimeInput::ColorWrites	ColorWrites

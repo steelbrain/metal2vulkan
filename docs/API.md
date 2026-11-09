@@ -1961,7 +1961,9 @@ bound.
   through a staging buffer.
 - `metal2vulkan-degrade-resolve-scratch` (performance). `ResolveScratch`: A pass resolves into a
   texture that cannot be an attachment (its usage lacks `RenderTarget`), or a layered pass into a
-  texture whose slices from the resolve slice hold fewer layers than the pass's. Cost: the pass
+  texture whose slices from the resolve slice hold fewer layers than the pass's, or a pass resolves
+  color into a 3D texture's planes past its first, or into more than one, on a device whose resolve
+  into a 2D view of a 3D image writes its first plane alone (RADV). Cost: the pass
   resolves into a scratch image, whose render area is copied into the texture after the pass.
 - `metal2vulkan-degrade-shader-resolve` (performance). `ShaderResolve`: A multisample color resolve
   drawn after the pass by the crate-owned resolve: of an extended-range attachment, whose codes no

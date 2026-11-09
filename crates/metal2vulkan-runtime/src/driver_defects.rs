@@ -100,6 +100,20 @@ pub(super) struct Affected {
 ///   known broken through 26.2.4. Nothing is refused but a memoryless attachment at another
 ///   layer (`resolve.rs`).
 ///
+/// `VolumeResolveFirstPlane`:
+/// - Mesa's RADV (`MESA_RADV`): a render pass's color resolve into a 2D view of a 3D image
+///   (made `VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT`) whose first layer is depth plane 3 of a
+///   4x4x4 `R8G8B8A8_UNORM` volume wrote plane 0, the volume's first byte holding the resolve,
+///   three runs alike at each of two commits, on the Radeon 780M (Phoenix, `deviceID` 0x15bf),
+///   where a draw into the same kind of view writes its plane and the validation layer reports
+///   nothing (`runtime_lane::view_attachments::a_resolve_writes_the_volume_plane_it_names`).
+///   Valid usage: such a view "can be used as a framebuffer attachment that refers only to the
+///   specified range of slices" (`VkImageSubresourceRange`), and of a resolve attachment Vulkan
+///   refuses only a 3D view (`VUID-VkRenderingAttachmentInfo-resolveImageView-12471`). Nothing is
+///   refused: a color resolve into a 3D texture's planes past its first, or into more than one,
+///   goes into a scratch image of the pass's layers, copied into the planes after the pass
+///   (`resolve.rs`). Every RADV GPU takes the copy until a probe finds it clean.
+///
 /// `PipelineCacheDataCompiledAtLoad`:
 /// - MoltenVK (`MOLTENVK`): `vkCreatePipelineCache` with initial data reads each shader module's
 ///   converted MSL back (`MVKPipelineCache::readData`) through
@@ -558,6 +572,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::DepthStencilResolveFirstSubresource,
         driver: DriverId::MESA_LLVMPIPE,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::VolumeResolveFirstPlane,
+        driver: DriverId::MESA_RADV,
         clean: &[],
     },
     Affected {

@@ -1086,6 +1086,12 @@ pub enum RuntimeDriverDefect {
     /// (`metal2vulkan_runtime::Device::use_host_ram`), it binds it in the chunk's import, which
     /// the object then waits for, so that every object over a chunk's pages lies in one import.
     AliasedImportBlitsUnordered,
+    /// A render pass's color resolve into a 2D view of a 3D image (made
+    /// `VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT`, the view's layers depth planes of it) writes the
+    /// image's first depth plane, whatever plane the view begins at. Nothing is refused: the
+    /// runtime resolves into a scratch image of the pass's layers, copied into the planes the
+    /// resolve belongs in after the pass.
+    VolumeResolveFirstPlane,
 }
 
 /// One device capability a refusal can name.
