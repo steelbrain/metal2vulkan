@@ -365,6 +365,14 @@ engine/air_2_9_front_end.air.ll	a29_read_texels	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_2_9_front_end.ll	a29_split_floats	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_2_9_front_end.ll	a29_atomics_and_barrier	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/air_2_9_front_end.ll	a29_read_texels	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
+engine/alv_levels.air.ll	alv_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/alv_levels.air.ll	alv_level1	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/alv_levels.air.ll	alv_level2	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/alv_levels.air.ll	alv_implicit	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/alv_levels.ll	alv_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/alv_levels.ll	alv_level1	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/alv_levels.ll	alv_level2	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/alv_levels.ll	alv_implicit	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ani_cube_grad.air.ll	ani_cube_grad	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{CubeArray; AnyOf[[Feature(ImageCubeArray)]]}
 engine/ani_cube_grad.ll	ani_cube_grad	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{CubeArray; AnyOf[[Feature(ImageCubeArray)]]}
 engine/bary_weights.air.ll	bw_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
