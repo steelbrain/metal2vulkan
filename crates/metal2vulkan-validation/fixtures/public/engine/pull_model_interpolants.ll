@@ -8,9 +8,9 @@ target triple = "air64_v28-apple-macosx26.0.0"
 define <{ <4 x float>, <4 x float>, <4 x float>, <2 x float>, float, <4 x half>, half }> @pm_place(i32 noundef %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
   %4 = zext i32 %0 to i64
   %5 = getelementptr inbounds <4 x float>, ptr addrspace(1) %2, i64 %4
-  %6 = load <4 x float>, ptr addrspace(1) %5, align 16, !tbaa !86, !alias.scope !89, !noalias !92
+  %6 = load <4 x float>, ptr addrspace(1) %5, align 16, !tbaa !91, !alias.scope !94, !noalias !97
   %7 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %4
-  %8 = load <4 x float>, ptr addrspace(1) %7, align 16, !tbaa !86, !alias.scope !92, !noalias !89
+  %8 = load <4 x float>, ptr addrspace(1) %7, align 16, !tbaa !91, !alias.scope !97, !noalias !94
   %9 = shufflevector <4 x float> %6, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %10 = extractelement <4 x float> %6, i64 2
   %11 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %6) #10
@@ -31,8 +31,8 @@ declare <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float>) local_unnamed_addr 
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
 define <{ <4 x float>, <4 x float> }> @pm_center(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) readonly captures(none) %1) local_unnamed_addr #2 {
-  %3 = tail call fast <4 x float> @air.interpolate_center_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !94, !noalias !97
-  %4 = tail call fast <4 x float> @air.interpolate_center_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !97, !noalias !94
+  %3 = tail call fast <4 x float> @air.interpolate_center_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !99, !noalias !102
+  %4 = tail call fast <4 x float> @air.interpolate_center_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !102, !noalias !99
   %5 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %3, 0
   %6 = insertvalue <{ <4 x float>, <4 x float> }> %5, <4 x float> %4, 1
   ret <{ <4 x float>, <4 x float> }> %6
@@ -40,8 +40,8 @@ define <{ <4 x float>, <4 x float> }> @pm_center(ptr addrspace(1) readonly captu
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
 define <{ <4 x float>, <4 x float> }> @pm_centroid(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) readonly captures(none) %1) local_unnamed_addr #2 {
-  %3 = tail call fast <4 x float> @air.interpolate_centroid_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !99, !noalias !102
-  %4 = tail call fast <4 x float> @air.interpolate_centroid_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !102, !noalias !99
+  %3 = tail call fast <4 x float> @air.interpolate_centroid_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !104, !noalias !107
+  %4 = tail call fast <4 x float> @air.interpolate_centroid_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !107, !noalias !104
   %5 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %3, 0
   %6 = insertvalue <{ <4 x float>, <4 x float> }> %5, <4 x float> %4, 1
   ret <{ <4 x float>, <4 x float> }> %6
@@ -49,9 +49,9 @@ define <{ <4 x float>, <4 x float> }> @pm_centroid(ptr addrspace(1) readonly cap
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
 define <{ <4 x float>, <4 x float> }> @pm_sample(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %2) local_unnamed_addr #2 {
-  %4 = load i32, ptr addrspace(2) %2, align 4, !tbaa !104, !alias.scope !106, !noalias !109
-  %5 = tail call fast <4 x float> @air.interpolate_sample_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, i32 %4) #11, !alias.scope !112, !noalias !113
-  %6 = tail call fast <4 x float> @air.interpolate_sample_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, i32 %4) #11, !alias.scope !114, !noalias !115
+  %4 = load i32, ptr addrspace(2) %2, align 4, !tbaa !109, !alias.scope !111, !noalias !114
+  %5 = tail call fast <4 x float> @air.interpolate_sample_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, i32 %4) #11, !alias.scope !117, !noalias !118
+  %6 = tail call fast <4 x float> @air.interpolate_sample_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, i32 %4) #11, !alias.scope !119, !noalias !120
   %7 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %5, 0
   %8 = insertvalue <{ <4 x float>, <4 x float> }> %7, <4 x float> %6, 1
   ret <{ <4 x float>, <4 x float> }> %8
@@ -59,8 +59,8 @@ define <{ <4 x float>, <4 x float> }> @pm_sample(ptr addrspace(1) readonly captu
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
 define <{ <4 x float>, <4 x float> }> @pm_sample_id(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) readonly captures(none) %1, i32 noundef %2) local_unnamed_addr #2 {
-  %4 = tail call fast <4 x float> @air.interpolate_sample_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, i32 %2) #11, !alias.scope !116, !noalias !119
-  %5 = tail call fast <4 x float> @air.interpolate_sample_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, i32 %2) #11, !alias.scope !119, !noalias !116
+  %4 = tail call fast <4 x float> @air.interpolate_sample_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, i32 %2) #11, !alias.scope !121, !noalias !124
+  %5 = tail call fast <4 x float> @air.interpolate_sample_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, i32 %2) #11, !alias.scope !124, !noalias !121
   %6 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %4, 0
   %7 = insertvalue <{ <4 x float>, <4 x float> }> %6, <4 x float> %5, 1
   ret <{ <4 x float>, <4 x float> }> %7
@@ -68,9 +68,9 @@ define <{ <4 x float>, <4 x float> }> @pm_sample_id(ptr addrspace(1) readonly ca
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
 define <{ <4 x float>, <4 x float> }> @pm_offset(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2) local_unnamed_addr #2 {
-  %4 = load <2 x float>, ptr addrspace(2) %2, align 8, !tbaa !86, !alias.scope !121, !noalias !124
-  %5 = tail call fast <4 x float> @air.interpolate_offset_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %4) #11, !alias.scope !127, !noalias !128
-  %6 = tail call fast <4 x float> @air.interpolate_offset_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %4) #11, !alias.scope !129, !noalias !130
+  %4 = load <2 x float>, ptr addrspace(2) %2, align 8, !tbaa !91, !alias.scope !126, !noalias !129
+  %5 = tail call fast <4 x float> @air.interpolate_offset_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %4) #11, !alias.scope !132, !noalias !133
+  %6 = tail call fast <4 x float> @air.interpolate_offset_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %4) #11, !alias.scope !134, !noalias !135
   %7 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %5, 0
   %8 = insertvalue <{ <4 x float>, <4 x float> }> %7, <4 x float> %6, 1
   ret <{ <4 x float>, <4 x float> }> %8
@@ -78,23 +78,34 @@ define <{ <4 x float>, <4 x float> }> @pm_offset(ptr addrspace(1) readonly captu
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(read)
 define <{ <4 x float>, <4 x float> }> @pm_offset_sweep(ptr addrspace(1) %0, ptr addrspace(1) %1, <4 x float> noundef %2, ptr addrspace(2) noundef readonly align 16 captures(none) dereferenceable(16) "air-buffer-no-alias" %3) local_unnamed_addr #3 {
-  %5 = load <4 x float>, ptr addrspace(2) %3, align 16, !alias.scope !131, !noalias !134
+  %5 = load <4 x float>, ptr addrspace(2) %3, align 16, !alias.scope !136, !noalias !139
   %6 = shufflevector <4 x float> %5, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %7 = shufflevector <4 x float> %2, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %8 = tail call fast <2 x float> @air.fast_floor.v2f32(<2 x float> %7) #10
   %9 = shufflevector <4 x float> %5, <4 x float> poison, <2 x i32> <i32 2, i32 3>
   %10 = fmul fast <2 x float> %8, %9
   %11 = fadd fast <2 x float> %10, %6
-  %12 = tail call fast <4 x float> @air.interpolate_offset_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %11) #11, !alias.scope !137, !noalias !138
-  %13 = tail call fast <4 x float> @air.interpolate_offset_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %11) #11, !alias.scope !139, !noalias !140
+  %12 = tail call fast <4 x float> @air.interpolate_offset_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %11) #11, !alias.scope !142, !noalias !143
+  %13 = tail call fast <4 x float> @air.interpolate_offset_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %11) #11, !alias.scope !144, !noalias !145
   %14 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %12, 0
   %15 = insertvalue <{ <4 x float>, <4 x float> }> %14, <4 x float> %13, 1
   ret <{ <4 x float>, <4 x float> }> %15
 }
 
+; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
+define <{ <4 x float>, <4 x float> }> @pm_linear(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2) local_unnamed_addr #2 {
+  %4 = load i32, ptr addrspace(2) %1, align 4, !tbaa !109, !alias.scope !146, !noalias !149
+  %5 = tail call fast <4 x float> @air.interpolate_sample_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, i32 %4) #11, !alias.scope !152, !noalias !153
+  %6 = load <2 x float>, ptr addrspace(2) %2, align 8, !tbaa !91, !alias.scope !154, !noalias !155
+  %7 = tail call fast <4 x float> @air.interpolate_offset_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %6) #11, !alias.scope !152, !noalias !153
+  %8 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %5, 0
+  %9 = insertvalue <{ <4 x float>, <4 x float> }> %8, <4 x float> %7, 1
+  ret <{ <4 x float>, <4 x float> }> %9
+}
+
 ; Function Attrs: mustprogress nounwind willreturn
 define <{ <4 x float>, <4 x float> }> @pm_offset_after_discard(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2) local_unnamed_addr #4 {
-  %4 = load <2 x float>, ptr addrspace(2) %2, align 8, !alias.scope !141, !noalias !144
+  %4 = load <2 x float>, ptr addrspace(2) %2, align 8, !alias.scope !156, !noalias !159
   %5 = extractelement <2 x float> %4, i64 0
   %6 = fcmp fast ogt float %5, 1.000000e+00
   br i1 %6, label %7, label %8
@@ -104,8 +115,8 @@ define <{ <4 x float>, <4 x float> }> @pm_offset_after_discard(ptr addrspace(1) 
   br label %8
 
 8:                                                ; preds = %7, %3
-  %9 = tail call fast <4 x float> @air.interpolate_offset_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %4) #11, !alias.scope !147, !noalias !148
-  %10 = tail call fast <4 x float> @air.interpolate_offset_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %4) #11, !alias.scope !149, !noalias !150
+  %9 = tail call fast <4 x float> @air.interpolate_offset_perspective.v4f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %4) #11, !alias.scope !162, !noalias !163
+  %10 = tail call fast <4 x float> @air.interpolate_offset_no_perspective.v4f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %4) #11, !alias.scope !164, !noalias !165
   %11 = insertvalue <{ <4 x float>, <4 x float> }> undef, <4 x float> %9, 0
   %12 = insertvalue <{ <4 x float>, <4 x float> }> %11, <4 x float> %10, 1
   ret <{ <4 x float>, <4 x float> }> %12
@@ -113,34 +124,34 @@ define <{ <4 x float>, <4 x float> }> @pm_offset_after_discard(ptr addrspace(1) 
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(read)
 define <{ <4 x float>, <4 x float>, <4 x float>, <4 x float> }> @pm_narrow(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) %3, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %4, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %5) local_unnamed_addr #5 {
-  %7 = tail call fast <2 x float> @air.interpolate_center_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !151, !noalias !154
+  %7 = tail call fast <2 x float> @air.interpolate_center_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !166, !noalias !169
   %8 = shufflevector <2 x float> %7, <2 x float> poison, <4 x i32> <i32 0, i32 1, i32 poison, i32 poison>
-  %9 = tail call fast float @air.interpolate_center_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !159, !noalias !160
+  %9 = tail call fast float @air.interpolate_center_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !174, !noalias !175
   %10 = insertelement <4 x float> %8, float %9, i64 2
-  %11 = tail call fast half @air.interpolate_center_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3) #11, !alias.scope !161, !noalias !162
+  %11 = tail call fast half @air.interpolate_center_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3) #11, !alias.scope !176, !noalias !177
   %12 = fpext half %11 to float
   %13 = insertelement <4 x float> %10, float %12, i64 3
-  %14 = tail call fast <2 x float> @air.interpolate_centroid_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !151, !noalias !154
+  %14 = tail call fast <2 x float> @air.interpolate_centroid_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !166, !noalias !169
   %15 = shufflevector <2 x float> %14, <2 x float> poison, <4 x i32> <i32 0, i32 1, i32 poison, i32 poison>
-  %16 = tail call fast float @air.interpolate_centroid_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !159, !noalias !160
+  %16 = tail call fast float @air.interpolate_centroid_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1) #11, !alias.scope !174, !noalias !175
   %17 = insertelement <4 x float> %15, float %16, i64 2
-  %18 = tail call fast half @air.interpolate_centroid_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3) #11, !alias.scope !161, !noalias !162
+  %18 = tail call fast half @air.interpolate_centroid_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3) #11, !alias.scope !176, !noalias !177
   %19 = fpext half %18 to float
   %20 = insertelement <4 x float> %17, float %19, i64 3
-  %21 = load i32, ptr addrspace(2) %4, align 4, !tbaa !104, !alias.scope !163, !noalias !164
-  %22 = tail call fast <2 x float> @air.interpolate_sample_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0, i32 %21) #11, !alias.scope !151, !noalias !154
+  %21 = load i32, ptr addrspace(2) %4, align 4, !tbaa !109, !alias.scope !178, !noalias !179
+  %22 = tail call fast <2 x float> @air.interpolate_sample_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0, i32 %21) #11, !alias.scope !166, !noalias !169
   %23 = shufflevector <2 x float> %22, <2 x float> poison, <4 x i32> <i32 0, i32 1, i32 poison, i32 poison>
-  %24 = tail call fast float @air.interpolate_sample_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1, i32 %21) #11, !alias.scope !159, !noalias !160
+  %24 = tail call fast float @air.interpolate_sample_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1, i32 %21) #11, !alias.scope !174, !noalias !175
   %25 = insertelement <4 x float> %23, float %24, i64 2
-  %26 = tail call fast half @air.interpolate_sample_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3, i32 %21) #11, !alias.scope !161, !noalias !162
+  %26 = tail call fast half @air.interpolate_sample_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3, i32 %21) #11, !alias.scope !176, !noalias !177
   %27 = fpext half %26 to float
   %28 = insertelement <4 x float> %25, float %27, i64 3
-  %29 = load <2 x float>, ptr addrspace(2) %5, align 8, !tbaa !86, !alias.scope !165, !noalias !166
-  %30 = tail call fast <2 x float> @air.interpolate_offset_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %29) #11, !alias.scope !151, !noalias !154
+  %29 = load <2 x float>, ptr addrspace(2) %5, align 8, !tbaa !91, !alias.scope !180, !noalias !181
+  %30 = tail call fast <2 x float> @air.interpolate_offset_perspective.v2f32(ptr addrspace(1) readonly captures(none) %0, <2 x float> %29) #11, !alias.scope !166, !noalias !169
   %31 = shufflevector <2 x float> %30, <2 x float> poison, <4 x i32> <i32 0, i32 1, i32 poison, i32 poison>
-  %32 = tail call fast float @air.interpolate_offset_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %29) #11, !alias.scope !159, !noalias !160
+  %32 = tail call fast float @air.interpolate_offset_no_perspective.f32(ptr addrspace(1) readonly captures(none) %1, <2 x float> %29) #11, !alias.scope !174, !noalias !175
   %33 = insertelement <4 x float> %31, float %32, i64 2
-  %34 = tail call fast half @air.interpolate_offset_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3, <2 x float> %29) #11, !alias.scope !161, !noalias !162
+  %34 = tail call fast half @air.interpolate_offset_no_perspective.f16(ptr addrspace(1) readonly captures(none) %3, <2 x float> %29) #11, !alias.scope !176, !noalias !177
   %35 = fpext half %34 to float
   %36 = insertelement <4 x float> %33, float %35, i64 3
   %37 = insertvalue <{ <4 x float>, <4 x float>, <4 x float>, <4 x float> }> undef, <4 x float> %13, 0
@@ -152,12 +163,12 @@ define <{ <4 x float>, <4 x float>, <4 x float>, <4 x float> }> @pm_narrow(ptr a
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(read)
 define <{ <4 x half>, <4 x half>, <4 x half>, <4 x half> }> @pm_half(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) %3, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %4, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %5) local_unnamed_addr #5 {
-  %7 = tail call fast <4 x half> @air.interpolate_center_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2) #11, !alias.scope !167, !noalias !170
-  %8 = tail call fast <4 x half> @air.interpolate_centroid_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2) #11, !alias.scope !167, !noalias !170
-  %9 = load i32, ptr addrspace(2) %4, align 4, !tbaa !104, !alias.scope !173, !noalias !174
-  %10 = tail call fast <4 x half> @air.interpolate_sample_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2, i32 %9) #11, !alias.scope !167, !noalias !170
-  %11 = load <2 x float>, ptr addrspace(2) %5, align 8, !tbaa !86, !alias.scope !175, !noalias !176
-  %12 = tail call fast <4 x half> @air.interpolate_offset_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2, <2 x float> %11) #11, !alias.scope !167, !noalias !170
+  %7 = tail call fast <4 x half> @air.interpolate_center_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2) #11, !alias.scope !182, !noalias !185
+  %8 = tail call fast <4 x half> @air.interpolate_centroid_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2) #11, !alias.scope !182, !noalias !185
+  %9 = load i32, ptr addrspace(2) %4, align 4, !tbaa !109, !alias.scope !188, !noalias !189
+  %10 = tail call fast <4 x half> @air.interpolate_sample_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2, i32 %9) #11, !alias.scope !182, !noalias !185
+  %11 = load <2 x float>, ptr addrspace(2) %5, align 8, !tbaa !91, !alias.scope !190, !noalias !191
+  %12 = tail call fast <4 x half> @air.interpolate_offset_perspective.v4f16(ptr addrspace(1) readonly captures(none) %2, <2 x float> %11) #11, !alias.scope !182, !noalias !185
   %13 = insertvalue <{ <4 x half>, <4 x half>, <4 x half>, <4 x half> }> undef, <4 x half> %7, 0
   %14 = insertvalue <{ <4 x half>, <4 x half>, <4 x half>, <4 x half> }> %13, <4 x half> %8, 1
   %15 = insertvalue <{ <4 x half>, <4 x half>, <4 x half>, <4 x half> }> %14, <4 x half> %10, 2
@@ -167,18 +178,18 @@ define <{ <4 x half>, <4 x half>, <4 x half>, <4 x half> }> @pm_half(ptr addrspa
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(read)
 define <4 x float> @pm_selected(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %2) local_unnamed_addr #3 {
-  %4 = load i32, ptr addrspace(2) %2, align 4, !tbaa !104, !alias.scope !177, !noalias !180
+  %4 = load i32, ptr addrspace(2) %2, align 4, !tbaa !109, !alias.scope !192, !noalias !195
   %5 = icmp eq i32 %4, 0
   %6 = select i1 %5, ptr addrspace(1) %1, ptr addrspace(1) %0
-  %7 = tail call fast <4 x float> @air.interpolate_center_perspective.v4f32(ptr addrspace(1) readonly captures(none) %6) #11, !alias.scope !180, !noalias !177
+  %7 = tail call fast <4 x float> @air.interpolate_center_perspective.v4f32(ptr addrspace(1) readonly captures(none) %6) #11, !alias.scope !195, !noalias !192
   ret <4 x float> %7
 }
 
 ; Function Attrs: mustprogress nofree nounwind willreturn
 define void @pm_read_samples(ptr addrspace(1) %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, <3 x i32> noundef %2) local_unnamed_addr #6 {
-  %4 = tail call i32 @air.get_num_samples_texture_2d_ms(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !183, !noalias !186
+  %4 = tail call i32 @air.get_num_samples_texture_2d_ms(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !198, !noalias !201
   %5 = extractelement <3 x i32> %2, i64 1
-  %6 = tail call i32 @air.get_width_texture_2d_ms(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !183, !noalias !186
+  %6 = tail call i32 @air.get_width_texture_2d_ms(ptr addrspace(1) readonly captures(none) %0) #11, !alias.scope !198, !noalias !201
   %7 = mul i32 %6, %5
   %8 = extractelement <3 x i32> %2, i64 0
   %9 = add i32 %7, %8
@@ -191,7 +202,7 @@ define void @pm_read_samples(ptr addrspace(1) %0, ptr addrspace(1) noundef write
   %16 = extractvalue { <4 x float>, i8 } %15, 0
   %17 = zext i32 %12 to i64
   %18 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %17
-  store <4 x float> %16, ptr addrspace(1) %18, align 16, !tbaa !86, !alias.scope !186, !noalias !183
+  store <4 x float> %16, ptr addrspace(1) %18, align 16, !tbaa !91, !alias.scope !201, !noalias !198
   ret void
 }
 
@@ -302,12 +313,12 @@ attributes #13 = { nounwind willreturn memory(inaccessiblemem: read) }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
 !air.vertex = !{!9}
-!air.fragment = !{!22, !29, !30, !33, !36, !39, !43, !44, !57, !68}
-!air.kernel = !{!74}
-!air.compile_options = !{!80, !81, !82}
-!llvm.ident = !{!83}
-!air.version = !{!84}
-!air.language_version = !{!85}
+!air.fragment = !{!22, !29, !30, !33, !36, !39, !43, !48, !49, !62, !73}
+!air.kernel = !{!79}
+!air.compile_options = !{!85, !86, !87}
+!llvm.ident = !{!88}
+!air.version = !{!89}
+!air.language_version = !{!90}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -352,148 +363,163 @@ attributes #13 = { nounwind willreturn memory(inaccessiblemem: read) }
 !40 = !{!27, !28, !41, !42}
 !41 = !{i32 2, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"position"}
 !42 = !{i32 3, !"air.buffer", !"air.buffer_size", i32 16, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"sweep"}
-!43 = !{ptr @pm_offset_after_discard, !23, !37}
-!44 = !{ptr @pm_narrow, !45, !50}
-!45 = !{!46, !47, !48, !49}
-!46 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"center"}
-!47 = !{!"air.render_target", i32 1, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"centroid"}
-!48 = !{!"air.render_target", i32 2, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"sample"}
-!49 = !{!"air.render_target", i32 3, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"offset"}
-!50 = !{!51, !52, !53, !54, !55, !56}
-!51 = !{i32 0, !"air.fragment_input", !"generated(2p2Dv2_f)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"float2", !"air.arg_name", !"p2"}
-!52 = !{i32 1, !"air.fragment_input", !"generated(1sf)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"float", !"air.arg_name", !"s"}
-!53 = !{i32 2, !"air.fragment_input", !"generated(2hpDv4_Dh)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"half4", !"air.arg_name", !"hp", !"air.arg_unused"}
-!54 = !{i32 3, !"air.fragment_input", !"generated(2hnDh)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"half", !"air.arg_name", !"hn"}
-!55 = !{i32 4, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"sample"}
-!56 = !{i32 5, !"air.buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"float2", !"air.arg_name", !"offset"}
-!57 = !{ptr @pm_half, !58, !63}
-!58 = !{!59, !60, !61, !62}
-!59 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"center"}
-!60 = !{!"air.render_target", i32 1, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"centroid"}
-!61 = !{!"air.render_target", i32 2, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"sample"}
-!62 = !{!"air.render_target", i32 3, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"offset"}
-!63 = !{!64, !65, !66, !67, !55, !56}
-!64 = !{i32 0, !"air.fragment_input", !"generated(2p2Dv2_f)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"float2", !"air.arg_name", !"p2", !"air.arg_unused"}
-!65 = !{i32 1, !"air.fragment_input", !"generated(1sf)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"float", !"air.arg_name", !"s", !"air.arg_unused"}
-!66 = !{i32 2, !"air.fragment_input", !"generated(2hpDv4_Dh)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"half4", !"air.arg_name", !"hp"}
-!67 = !{i32 3, !"air.fragment_input", !"generated(2hnDh)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"half", !"air.arg_name", !"hn", !"air.arg_unused"}
-!68 = !{ptr @pm_selected, !69, !71}
-!69 = !{!70}
-!70 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}
-!71 = !{!27, !72, !73}
-!72 = !{i32 1, !"air.fragment_input", !"generated(1nDv4_f)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"n"}
-!73 = !{i32 2, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"which"}
-!74 = !{ptr @pm_read_samples, !75, !76}
-!75 = !{}
-!76 = !{!77, !78, !79}
-!77 = !{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.read", !"air.arg_type_name", !"texture2d_ms<float, read>", !"air.arg_name", !"target"}
-!78 = !{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"out"}
-!79 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint3", !"air.arg_name", !"at"}
-!80 = !{!"air.compile.denorms_disable"}
-!81 = !{!"air.compile.fast_math_enable"}
-!82 = !{!"air.compile.framebuffer_fetch_enable"}
-!83 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!84 = !{i32 2, i32 8, i32 0}
-!85 = !{!"Metal", i32 4, i32 0, i32 0}
-!86 = !{!87, !87, i64 0}
-!87 = !{!"omnipotent char", !88, i64 0}
-!88 = !{!"Simple C++ TBAA"}
-!89 = !{!90}
-!90 = distinct !{!90, !91, !"air-alias-scope-arg(2)"}
-!91 = distinct !{!91, !"air-alias-scopes(pm_place)"}
-!92 = !{!93}
-!93 = distinct !{!93, !91, !"air-alias-scope-arg(1)"}
+!43 = !{ptr @pm_linear, !23, !44}
+!44 = !{!45, !46, !47}
+!45 = !{i32 0, !"air.fragment_input", !"generated(1nDv4_f)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"n"}
+!46 = !{i32 1, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"sample"}
+!47 = !{i32 2, !"air.buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"float2", !"air.arg_name", !"offset"}
+!48 = !{ptr @pm_offset_after_discard, !23, !37}
+!49 = !{ptr @pm_narrow, !50, !55}
+!50 = !{!51, !52, !53, !54}
+!51 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"center"}
+!52 = !{!"air.render_target", i32 1, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"centroid"}
+!53 = !{!"air.render_target", i32 2, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"sample"}
+!54 = !{!"air.render_target", i32 3, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"offset"}
+!55 = !{!56, !57, !58, !59, !60, !61}
+!56 = !{i32 0, !"air.fragment_input", !"generated(2p2Dv2_f)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"float2", !"air.arg_name", !"p2"}
+!57 = !{i32 1, !"air.fragment_input", !"generated(1sf)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"float", !"air.arg_name", !"s"}
+!58 = !{i32 2, !"air.fragment_input", !"generated(2hpDv4_Dh)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"half4", !"air.arg_name", !"hp", !"air.arg_unused"}
+!59 = !{i32 3, !"air.fragment_input", !"generated(2hnDh)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"half", !"air.arg_name", !"hn"}
+!60 = !{i32 4, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"sample"}
+!61 = !{i32 5, !"air.buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"float2", !"air.arg_name", !"offset"}
+!62 = !{ptr @pm_half, !63, !68}
+!63 = !{!64, !65, !66, !67}
+!64 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"center"}
+!65 = !{!"air.render_target", i32 1, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"centroid"}
+!66 = !{!"air.render_target", i32 2, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"sample"}
+!67 = !{!"air.render_target", i32 3, i32 0, !"air.arg_type_name", !"half4", !"air.arg_name", !"offset"}
+!68 = !{!69, !70, !71, !72, !60, !61}
+!69 = !{i32 0, !"air.fragment_input", !"generated(2p2Dv2_f)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"float2", !"air.arg_name", !"p2", !"air.arg_unused"}
+!70 = !{i32 1, !"air.fragment_input", !"generated(1sf)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"float", !"air.arg_name", !"s", !"air.arg_unused"}
+!71 = !{i32 2, !"air.fragment_input", !"generated(2hpDv4_Dh)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"half4", !"air.arg_name", !"hp"}
+!72 = !{i32 3, !"air.fragment_input", !"generated(2hnDh)", !"air.interpolation_function", !"air.no_perspective", !"air.arg_type_name", !"half", !"air.arg_name", !"hn", !"air.arg_unused"}
+!73 = !{ptr @pm_selected, !74, !76}
+!74 = !{!75}
+!75 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}
+!76 = !{!27, !77, !78}
+!77 = !{i32 1, !"air.fragment_input", !"generated(1nDv4_f)", !"air.interpolation_function", !"air.perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"n"}
+!78 = !{i32 2, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"which"}
+!79 = !{ptr @pm_read_samples, !80, !81}
+!80 = !{}
+!81 = !{!82, !83, !84}
+!82 = !{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.read", !"air.arg_type_name", !"texture2d_ms<float, read>", !"air.arg_name", !"target"}
+!83 = !{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"out"}
+!84 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint3", !"air.arg_name", !"at"}
+!85 = !{!"air.compile.denorms_disable"}
+!86 = !{!"air.compile.fast_math_enable"}
+!87 = !{!"air.compile.framebuffer_fetch_enable"}
+!88 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!89 = !{i32 2, i32 8, i32 0}
+!90 = !{!"Metal", i32 4, i32 0, i32 0}
+!91 = !{!92, !92, i64 0}
+!92 = !{!"omnipotent char", !93, i64 0}
+!93 = !{!"Simple C++ TBAA"}
 !94 = !{!95}
-!95 = distinct !{!95, !96, !"air-alias-scope-arg(0)"}
-!96 = distinct !{!96, !"air-alias-scopes(pm_center)"}
+!95 = distinct !{!95, !96, !"air-alias-scope-arg(2)"}
+!96 = distinct !{!96, !"air-alias-scopes(pm_place)"}
 !97 = !{!98}
 !98 = distinct !{!98, !96, !"air-alias-scope-arg(1)"}
 !99 = !{!100}
 !100 = distinct !{!100, !101, !"air-alias-scope-arg(0)"}
-!101 = distinct !{!101, !"air-alias-scopes(pm_centroid)"}
+!101 = distinct !{!101, !"air-alias-scopes(pm_center)"}
 !102 = !{!103}
 !103 = distinct !{!103, !101, !"air-alias-scope-arg(1)"}
-!104 = !{!105, !105, i64 0}
-!105 = !{!"int", !87, i64 0}
-!106 = !{!107}
-!107 = distinct !{!107, !108, !"air-alias-scope-arg(2)"}
-!108 = distinct !{!108, !"air-alias-scopes(pm_sample)"}
-!109 = !{!110, !111}
-!110 = distinct !{!110, !108, !"air-alias-scope-arg(0)"}
-!111 = distinct !{!111, !108, !"air-alias-scope-arg(1)"}
-!112 = !{!110}
-!113 = !{!111, !107}
-!114 = !{!111}
-!115 = !{!110, !107}
-!116 = !{!117}
-!117 = distinct !{!117, !118, !"air-alias-scope-arg(0)"}
-!118 = distinct !{!118, !"air-alias-scopes(pm_sample_id)"}
-!119 = !{!120}
-!120 = distinct !{!120, !118, !"air-alias-scope-arg(1)"}
+!104 = !{!105}
+!105 = distinct !{!105, !106, !"air-alias-scope-arg(0)"}
+!106 = distinct !{!106, !"air-alias-scopes(pm_centroid)"}
+!107 = !{!108}
+!108 = distinct !{!108, !106, !"air-alias-scope-arg(1)"}
+!109 = !{!110, !110, i64 0}
+!110 = !{!"int", !92, i64 0}
+!111 = !{!112}
+!112 = distinct !{!112, !113, !"air-alias-scope-arg(2)"}
+!113 = distinct !{!113, !"air-alias-scopes(pm_sample)"}
+!114 = !{!115, !116}
+!115 = distinct !{!115, !113, !"air-alias-scope-arg(0)"}
+!116 = distinct !{!116, !113, !"air-alias-scope-arg(1)"}
+!117 = !{!115}
+!118 = !{!116, !112}
+!119 = !{!116}
+!120 = !{!115, !112}
 !121 = !{!122}
-!122 = distinct !{!122, !123, !"air-alias-scope-arg(2)"}
-!123 = distinct !{!123, !"air-alias-scopes(pm_offset)"}
-!124 = !{!125, !126}
-!125 = distinct !{!125, !123, !"air-alias-scope-arg(0)"}
-!126 = distinct !{!126, !123, !"air-alias-scope-arg(1)"}
-!127 = !{!125}
-!128 = !{!126, !122}
-!129 = !{!126}
-!130 = !{!125, !122}
-!131 = !{!132}
-!132 = distinct !{!132, !133, !"air-alias-scope-arg(3)"}
-!133 = distinct !{!133, !"air-alias-scopes(pm_offset_sweep)"}
-!134 = !{!135, !136}
-!135 = distinct !{!135, !133, !"air-alias-scope-arg(0)"}
-!136 = distinct !{!136, !133, !"air-alias-scope-arg(1)"}
-!137 = !{!135}
-!138 = !{!136, !132}
-!139 = !{!136}
-!140 = !{!135, !132}
-!141 = !{!142}
-!142 = distinct !{!142, !143, !"air-alias-scope-arg(2)"}
-!143 = distinct !{!143, !"air-alias-scopes(pm_offset_after_discard)"}
-!144 = !{!145, !146}
-!145 = distinct !{!145, !143, !"air-alias-scope-arg(0)"}
-!146 = distinct !{!146, !143, !"air-alias-scope-arg(1)"}
-!147 = !{!145}
-!148 = !{!146, !142}
-!149 = !{!146}
-!150 = !{!145, !142}
-!151 = !{!152}
-!152 = distinct !{!152, !153, !"air-alias-scope-arg(0)"}
-!153 = distinct !{!153, !"air-alias-scopes(pm_narrow)"}
-!154 = !{!155, !156, !157, !158}
-!155 = distinct !{!155, !153, !"air-alias-scope-arg(1)"}
-!156 = distinct !{!156, !153, !"air-alias-scope-arg(3)"}
-!157 = distinct !{!157, !153, !"air-alias-scope-arg(4)"}
-!158 = distinct !{!158, !153, !"air-alias-scope-arg(5)"}
-!159 = !{!155}
-!160 = !{!152, !156, !157, !158}
-!161 = !{!156}
-!162 = !{!152, !155, !157, !158}
-!163 = !{!157}
-!164 = !{!152, !155, !156, !158}
-!165 = !{!158}
-!166 = !{!152, !155, !156, !157}
-!167 = !{!168}
-!168 = distinct !{!168, !169, !"air-alias-scope-arg(2)"}
-!169 = distinct !{!169, !"air-alias-scopes(pm_half)"}
-!170 = !{!171, !172}
-!171 = distinct !{!171, !169, !"air-alias-scope-arg(4)"}
-!172 = distinct !{!172, !169, !"air-alias-scope-arg(5)"}
-!173 = !{!171}
-!174 = !{!168, !172}
-!175 = !{!172}
-!176 = !{!168, !171}
-!177 = !{!178}
-!178 = distinct !{!178, !179, !"air-alias-scope-arg(2)"}
-!179 = distinct !{!179, !"air-alias-scopes(pm_selected)"}
-!180 = !{!181, !182}
-!181 = distinct !{!181, !179, !"air-alias-scope-arg(0)"}
-!182 = distinct !{!182, !179, !"air-alias-scope-arg(1)"}
-!183 = !{!184}
-!184 = distinct !{!184, !185, !"air-alias-scope-textures"}
-!185 = distinct !{!185, !"air-alias-scopes(pm_read_samples)"}
-!186 = !{!187}
-!187 = distinct !{!187, !185, !"air-alias-scope-arg(1)"}
+!122 = distinct !{!122, !123, !"air-alias-scope-arg(0)"}
+!123 = distinct !{!123, !"air-alias-scopes(pm_sample_id)"}
+!124 = !{!125}
+!125 = distinct !{!125, !123, !"air-alias-scope-arg(1)"}
+!126 = !{!127}
+!127 = distinct !{!127, !128, !"air-alias-scope-arg(2)"}
+!128 = distinct !{!128, !"air-alias-scopes(pm_offset)"}
+!129 = !{!130, !131}
+!130 = distinct !{!130, !128, !"air-alias-scope-arg(0)"}
+!131 = distinct !{!131, !128, !"air-alias-scope-arg(1)"}
+!132 = !{!130}
+!133 = !{!131, !127}
+!134 = !{!131}
+!135 = !{!130, !127}
+!136 = !{!137}
+!137 = distinct !{!137, !138, !"air-alias-scope-arg(3)"}
+!138 = distinct !{!138, !"air-alias-scopes(pm_offset_sweep)"}
+!139 = !{!140, !141}
+!140 = distinct !{!140, !138, !"air-alias-scope-arg(0)"}
+!141 = distinct !{!141, !138, !"air-alias-scope-arg(1)"}
+!142 = !{!140}
+!143 = !{!141, !137}
+!144 = !{!141}
+!145 = !{!140, !137}
+!146 = !{!147}
+!147 = distinct !{!147, !148, !"air-alias-scope-arg(1)"}
+!148 = distinct !{!148, !"air-alias-scopes(pm_linear)"}
+!149 = !{!150, !151}
+!150 = distinct !{!150, !148, !"air-alias-scope-arg(0)"}
+!151 = distinct !{!151, !148, !"air-alias-scope-arg(2)"}
+!152 = !{!150}
+!153 = !{!147, !151}
+!154 = !{!151}
+!155 = !{!150, !147}
+!156 = !{!157}
+!157 = distinct !{!157, !158, !"air-alias-scope-arg(2)"}
+!158 = distinct !{!158, !"air-alias-scopes(pm_offset_after_discard)"}
+!159 = !{!160, !161}
+!160 = distinct !{!160, !158, !"air-alias-scope-arg(0)"}
+!161 = distinct !{!161, !158, !"air-alias-scope-arg(1)"}
+!162 = !{!160}
+!163 = !{!161, !157}
+!164 = !{!161}
+!165 = !{!160, !157}
+!166 = !{!167}
+!167 = distinct !{!167, !168, !"air-alias-scope-arg(0)"}
+!168 = distinct !{!168, !"air-alias-scopes(pm_narrow)"}
+!169 = !{!170, !171, !172, !173}
+!170 = distinct !{!170, !168, !"air-alias-scope-arg(1)"}
+!171 = distinct !{!171, !168, !"air-alias-scope-arg(3)"}
+!172 = distinct !{!172, !168, !"air-alias-scope-arg(4)"}
+!173 = distinct !{!173, !168, !"air-alias-scope-arg(5)"}
+!174 = !{!170}
+!175 = !{!167, !171, !172, !173}
+!176 = !{!171}
+!177 = !{!167, !170, !172, !173}
+!178 = !{!172}
+!179 = !{!167, !170, !171, !173}
+!180 = !{!173}
+!181 = !{!167, !170, !171, !172}
+!182 = !{!183}
+!183 = distinct !{!183, !184, !"air-alias-scope-arg(2)"}
+!184 = distinct !{!184, !"air-alias-scopes(pm_half)"}
+!185 = !{!186, !187}
+!186 = distinct !{!186, !184, !"air-alias-scope-arg(4)"}
+!187 = distinct !{!187, !184, !"air-alias-scope-arg(5)"}
+!188 = !{!186}
+!189 = !{!183, !187}
+!190 = !{!187}
+!191 = !{!183, !186}
+!192 = !{!193}
+!193 = distinct !{!193, !194, !"air-alias-scope-arg(2)"}
+!194 = distinct !{!194, !"air-alias-scopes(pm_selected)"}
+!195 = !{!196, !197}
+!196 = distinct !{!196, !194, !"air-alias-scope-arg(0)"}
+!197 = distinct !{!197, !194, !"air-alias-scope-arg(1)"}
+!198 = !{!199}
+!199 = distinct !{!199, !200, !"air-alias-scope-textures"}
+!200 = distinct !{!200, !"air-alias-scopes(pm_read_samples)"}
+!201 = !{!202}
+!202 = distinct !{!202, !200, !"air-alias-scope-arg(1)"}
