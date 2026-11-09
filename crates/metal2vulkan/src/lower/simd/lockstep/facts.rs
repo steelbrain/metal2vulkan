@@ -3,7 +3,9 @@
 //! object it may start at, a canonical spelling of the address, its offset into the array row its
 //! last non-constant index steps through, whether the address is injective in the thread of a
 //! simdgroup, and the unsigned comparisons the branches dominating the access settled. Value bounds
-//! come from constants, the thread-index builtins, exact arithmetic, and loop counters' exit tests.
+//! come from constants, the thread-index builtins, a multisampled texture's sample count, exact
+//! arithmetic, and loop counters' exit tests (against a constant, or a bound computed before the
+//! loop).
 //!
 //! Every fact is sound in the direction the detector reads it: a pair of accesses is only ever
 //! cleared of a conflict by a fact that holds on every execution, and a fact the walk cannot
@@ -14,12 +16,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::air::abi::{Builtin, ParamRole};
 use crate::air::intrinsics::{
-    AirIntrinsic, AtomicOp, Imageblock, LlvmIntrinsic, MemoryOrder, Sign, SimdMatrix, Sync, TexOp,
-    ThreadScope,
+    AirIntrinsic, AtomicOp, Imageblock, LlvmIntrinsic, MemoryOrder, Query, Sign, SimdMatrix, Sync,
+    TexOp, ThreadScope,
 };
 use crate::air::ir::{
     AddrSpace, AtomicRmwOp, BinOp, BlockId, Body, Callee, CastOp, Const, ConstExpr, ConstId,
-    GlobalId, Idx, InstId, InstKind, IntFlags, Type, TypeId, TypeLayouts, Value,
+    GlobalId, Idx, InstId, InstKind, IntFlags, IntPredicate, Type, TypeId, TypeLayouts, Value,
 };
 use crate::air::Entry;
 use crate::budget::{tree_bytes, Meter};
@@ -32,6 +34,9 @@ const MAX_ROOTS: usize = 8;
 /// The longest chain of address or index steps the walks follow before giving up (a fact they do
 /// not reach is unknown, which keeps the pair conflicting).
 const MAX_CHAIN: u32 = 64;
+/// The deepest operation tree [`AddrFacts::fixed`] reads below a value: it visits both operands
+/// of each operation, so its work is bounded by `2^MAX_FIXED`.
+const MAX_FIXED: u32 = 6;
 
 /// The memory one pass of the analysis orders: threadgroup memory, whose objects never overlap, or
 /// device memory, whose buffers the analysis takes as distinct objects too (see [`Root`]).
@@ -664,6 +669,20 @@ struct Counter {
     /// Every value is the start plus a multiple of the step: no step wraps, or the step
     /// divides the width's range.
     residue: bool,
+    /// A value every value of the counter is below (unsigned), which keeps one value while the
+    /// loop runs: the start is below it, and the branch lets only a next value below it through.
+    below: Option<Value>,
+}
+
+/// A sum `s + q` where `s` is a loop counter below `n` ([`Counter::below`]), `n` one value in
+/// every thread of a simdgroup, and `q` is `p * n` ([`AddrFacts::cells`]): the cell `s` of row
+/// `p` of rows `n` wide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Cells {
+    p: Value,
+    q: Value,
+    /// The largest value `n` takes.
+    n_hi: u64,
 }
 
 /// The address facts of a body's accesses.
@@ -687,7 +706,8 @@ pub(super) struct AddrFacts<'a> {
     /// By PHI or select: the objects it may point into ([`AddrFacts::roots`]), once walked.
     merges: BTreeMap<InstId, Option<Vec<Root>>>,
     /// Each simdgroup lies within one row of its threadgroup (a single row, or rows of a multiple
-    /// of 32 threads), so two of its threads' positions differ in `x` ([`AddrFacts::builtin_inj`]).
+    /// of 32 threads), so two of its threads' positions differ in `x` ([`AddrFacts::builtin_inj`])
+    /// and are equal in `y` and `z` ([`AddrFacts::fixed`]).
     rows: bool,
 }
 
@@ -893,25 +913,25 @@ impl<'a> AddrFacts<'a> {
         Ok([nonneg(rb).then_some(*a), nonneg(ra).then_some(*b)])
     }
 
-    /// The facts of the branch edges that dominate block `x0`, wherever it runs: walking up its
-    /// dominators, each block entered only from a conditional branch (on two distinct targets)
-    /// runs only where that branch's integer comparison chose it. Its operands keep their values
-    /// there: they are computed before the branch, and nothing reaches the block's dominated
-    /// region from their definitions without passing the block again. A comparison that held
-    /// `x < y`, signed or unsigned, gives `below`; one that held `x == c`, `x` differing between
-    /// the threads of a simdgroup and `c` uniform among them, gives `lone`.
-    fn guards(&mut self, x0: BlockId, m: &mut Meter) -> Result<Guards, Error> {
-        let charge = |g: &Guards, m: &mut Meter| {
-            m.charge(crate::budget::vec_bytes(&g.below))?;
-            m.charge(crate::budget::vec_bytes(&g.lone))
+    /// The integer comparisons the branch edges that dominate block `x0` held wherever it runs,
+    /// each `(p, a, b)` for `a p b`: walking up its dominators, each block entered only from a
+    /// conditional branch (on two distinct targets) runs only where that branch's condition
+    /// chose it, and a condition that is a conjunction on the edge taken (`select c, d, false` or
+    /// an `and` taken, `select c, true, d` or an `or` not taken) holds each of its parts there.
+    /// A comparison's operands keep their values there: they are computed before the branch,
+    /// and nothing reaches the block's dominated region from their definitions without passing
+    /// the block again. The list is charged to `m`; the caller releases it.
+    fn edge_facts(
+        &self,
+        x0: BlockId,
+        m: &mut Meter,
+    ) -> Result<Vec<(IntPredicate, Value, Value)>, Error> {
+        let konst = |x: Value| match x {
+            Value::Const(c) => const_int(self.e, c),
+            _ => None,
         };
-        if let Some(found) = self.guards.get(&x0.raw()) {
-            let out = found.clone();
-            charge(&out, m)?;
-            return Ok(out);
-        }
-        use crate::air::ir::IntPredicate as P;
-        let mut out = Guards::default();
+        let mut out = Vec::new();
+        let mut parts: Vec<(Value, bool)> = Vec::new();
         let mut d = Some(x0);
         for _ in 0..MAX_CHAIN {
             m.tick(1)?;
@@ -930,17 +950,76 @@ impl<'a> AddrFacts<'a> {
             if t == f {
                 continue;
             }
-            let Some(InstKind::ICmp { pred, a, b }) = self.kind(*c) else {
-                continue;
-            };
-            let held = if *t == x { *pred } else { inverse(*pred) };
+            m.grow(&mut parts, 1)?;
+            parts.push((*c, *t == x));
+            for _ in 0..MAX_CHAIN {
+                m.tick(1)?;
+                let Some((v, held)) = parts.pop() else {
+                    break;
+                };
+                let both = match self.kind(v) {
+                    Some(InstKind::ICmp { pred, a, b }) => {
+                        let pred = if held { *pred } else { inverse(*pred) };
+                        m.grow(&mut out, 1)?;
+                        out.push((pred, *a, *b));
+                        continue;
+                    }
+                    Some(InstKind::Select { c, t, f, .. }) if held && konst(*f) == Some(0) => {
+                        [*c, *t]
+                    }
+                    Some(InstKind::Select { c, t, f, .. })
+                        if !held && konst(*t).is_some_and(|k| k != 0) =>
+                    {
+                        [*c, *f]
+                    }
+                    Some(InstKind::BinOp {
+                        op: BinOp::And,
+                        a,
+                        b,
+                        ..
+                    }) if held && self.width(v) == Some(1) => [*a, *b],
+                    Some(InstKind::BinOp {
+                        op: BinOp::Or,
+                        a,
+                        b,
+                        ..
+                    }) if !held && self.width(v) == Some(1) => [*a, *b],
+                    _ => continue,
+                };
+                m.grow(&mut parts, 2)?;
+                parts.extend(both.map(|x| (x, held)));
+            }
+            parts.clear();
+        }
+        m.release(crate::budget::vec_bytes(&parts));
+        Ok(out)
+    }
+
+    /// The facts of the branch edges that dominate block `x0`, wherever it runs
+    /// ([`AddrFacts::edge_facts`]): a comparison that held `x < y`, signed or unsigned, gives
+    /// `below`; one that held `x == c`, `x` differing between the threads of a simdgroup and `c`
+    /// uniform among them, gives `lone`.
+    fn guards(&mut self, x0: BlockId, m: &mut Meter) -> Result<Guards, Error> {
+        let charge = |g: &Guards, m: &mut Meter| {
+            m.charge(crate::budget::vec_bytes(&g.below))?;
+            m.charge(crate::budget::vec_bytes(&g.lone))
+        };
+        if let Some(found) = self.guards.get(&x0.raw()) {
+            let out = found.clone();
+            charge(&out, m)?;
+            return Ok(out);
+        }
+        use crate::air::ir::IntPredicate as P;
+        let mut out = Guards::default();
+        let facts = self.edge_facts(x0, m)?;
+        for &(held, a, b) in &facts {
+            m.tick(1)?;
             let fact = match held {
-                P::Ult => (*a, *b, false),
-                P::Ugt => (*b, *a, false),
-                P::Slt => (*a, *b, true),
-                P::Sgt => (*b, *a, true),
+                P::Ult => (a, b, false),
+                P::Ugt => (b, a, false),
+                P::Slt => (a, b, true),
+                P::Sgt => (b, a, true),
                 P::Eq => {
-                    let (a, b) = (*a, *b);
                     let apart = |i: Option<Inj>| i.is_some_and(|i| !i.same);
                     let lone = if self.uniform(b) && apart(self.inj_int(a, 0, m)?) {
                         Some((a, b))
@@ -964,6 +1043,7 @@ impl<'a> AddrFacts<'a> {
             m.grow(&mut out.below, 1)?;
             out.below.push(fact);
         }
+        m.release(crate::budget::vec_bytes(&facts));
         m.charge(tree_bytes(1, std::mem::size_of::<(u32, Guards)>()))?;
         charge(&out, m)?;
         self.guards.insert(x0.raw(), out.clone());
@@ -984,9 +1064,15 @@ impl<'a> AddrFacts<'a> {
     }
 
     /// The block whose value fixes how core `core` differs between threads at any two
-    /// dynamic instances: its own, or for a varying loop counter whose threads' values differ
-    /// by their starts' difference modulo the step ([`AddrFacts::inj_int`]), its start's.
+    /// dynamic instances: its own, for a varying loop counter whose threads' values differ
+    /// by their starts' difference modulo the step ([`AddrFacts::inj_int`]) its start's, and for
+    /// a cell `s + p * n` ([`AddrFacts::cells`]), whose threads' values differ as their rows do
+    /// at whatever iterations, the row's `p * n`'s (computed from `p` and `n`, it keeps one value
+    /// through a loop only where they do).
     fn core_home(&self, core: Value, m: &mut Meter) -> Result<Option<BlockId>, Error> {
+        if let Some(k) = self.cells(core, m)? {
+            return Ok(self.home_of(k.q));
+        }
         if let (Some(InstKind::Phi { incoming, .. }), Some(w), false) = (
             self.kind(core),
             self.width(core).filter(|&w| (2..=64).contains(&w)),
@@ -1465,7 +1551,8 @@ impl<'a> AddrFacts<'a> {
 
     /// The unsigned range of integer `v` in its width, where the IR bounds it: a constant, a
     /// thread-index builtin (a threadgroup has at most 1024 threads and 32 simdgroups, a
-    /// simdgroup 32 threads), a loop counter ([`AddrFacts::counter`]), and exact steps from one
+    /// simdgroup 32 threads), a multisampled texture's sample count (at most 64), a loop counter
+    /// ([`AddrFacts::counter`]), and exact steps from one
     /// (extensions, a truncation that keeps it, a mask, a remainder or right shift by a
     /// constant, and an addition, subtraction, scaling, or left shift by a constant that does
     /// not wrap).
@@ -1578,6 +1665,17 @@ impl<'a> AddrFacts<'a> {
                         _ => None,
                     }
                 }
+                // A multisampled texture's samples per texel: at most 64, Vulkan's largest
+                // sample count.
+                Some(InstKind::Call(call))
+                    if matches!(
+                        &call.callee,
+                        Callee::Air { op: AirIntrinsic::Texture(t), .. }
+                            if t.op == TexOp::Query(Query::NumSamples)
+                    ) =>
+                {
+                    fit((0, 64))
+                }
                 _ => None,
             },
         })
@@ -1585,20 +1683,25 @@ impl<'a> AddrFacts<'a> {
 
     /// Loop counter `phi` (a `w`-bit PHI with `incoming`): one incoming value is the start, the
     /// other `phi + c` for a constant `c > 0` from a latch whose conditional branch back to the
-    /// PHI's block tests the PHI or that next value against a constant `n` in the latch itself.
-    /// A tested value the branch lets through is
+    /// PHI's block tests the PHI or that next value against a bound `n` in the latch itself: a
+    /// constant, or a value computed before the loop is entered (one value while it runs) whose
+    /// range bounds it, its largest value standing for it below. A tested value the branch lets
+    /// through is
     ///
     /// - below `n` (or at most `n`) unsigned;
     /// - below `n` (or at most `n`) signed, `n` not negative, where the start lies below half
     ///   the width's range and the largest tested value plus `c` stays there too (so by
     ///   induction no value is negative);
-    /// - unequal to `n`, stepping by one from a start below `n`, so it reaches `n` before any
-    ///   value past it.
+    /// - unequal to `n`, stepping by one from a start below `n` (every value of a bound's
+    ///   range, or as a branch dominating the loop tested it, [`AddrFacts::held_below`]), so it
+    ///   reaches `n` before any value past it.
     ///
     /// The PHI holds the start, or a next value the branch let through (testing the next
     /// value), or one more step from a PHI it let through (testing the PHI). When no start lets
     /// the branch through, the back edge is never taken and the PHI is its start. The start must
     /// be computed in a block that strictly dominates the PHI's (or be an argument or constant).
+    /// Where the start is below `n` and the branch lets a next value through only below `n`
+    /// (or, stepping by one, unequal to it), every value is below `n` ([`Counter::below`]).
     fn counter(
         &self,
         phi: Value,
@@ -1649,16 +1752,36 @@ impl<'a> AddrFacts<'a> {
             _ => None,
         };
         let tested = |x: Value| x == next || x == phi;
-        let (pred, n, x) = match (konst(*a), konst(*b)) {
-            (None, Some(n)) if tested(*a) => (*pred, n, *a),
-            (Some(n), None) if tested(*b) => (swapped(*pred), n, *b),
+        let (pred, nv, x) = match (tested(*a), tested(*b)) {
+            (true, false) => (*pred, *b, *a),
+            (false, true) => (swapped(*pred), *a, *b),
             _ => return Ok(None),
+        };
+        // The bound's range: one constant, or the range of a value computed before the loop.
+        let (n_lo, n) = match konst(nv) {
+            Some(n) => (n, n),
+            None if self
+                .home_of(nv)
+                .is_none_or(|d| self.e.dom.strictly_dominates(d, header)) =>
+            {
+                match self.range(nv, depth + 1, m)? {
+                    Some(r) => r,
+                    None => return Ok(None),
+                }
+            }
+            None => return Ok(None),
         };
         let stay = if *t == header { pred } else { inverse(pred) };
         let Some((lo, hi)) = self.range(start, depth + 1, m)? else {
             return Ok(None);
         };
         use crate::air::ir::IntPredicate as P;
+        // The start is below every value the bound may take.
+        let starts_below = matches!(stay, P::Ult | P::Ne)
+            && (hi < n_lo
+                || (konst(nv).is_none() && self.held_below(header, (start, hi), nv, m)?));
+        let below = (x == next && starts_below && (stay == P::Ult || (stay == P::Ne && c == 1)))
+            .then_some(nv);
         // The largest tested value the branch lets through (`None`: none).
         let bound = match stay {
             P::Ult => n.checked_sub(1),
@@ -1678,7 +1801,7 @@ impl<'a> AddrFacts<'a> {
                 }
                 b
             }
-            P::Ne if c == 1 && hi < n => n.checked_sub(1),
+            P::Ne if c == 1 && starts_below => n.checked_sub(1),
             _ => return Ok(None),
         };
         // No step past the largest value wraps.
@@ -1700,6 +1823,7 @@ impl<'a> AddrFacts<'a> {
                 step: c,
                 once: true,
                 residue: true,
+                below,
             }));
         }
         let Some(b) = bound else {
@@ -1720,7 +1844,48 @@ impl<'a> AddrFacts<'a> {
             step: c,
             once: false,
             residue: exact || c.is_power_of_two(),
+            below,
         }))
+    }
+
+    /// Whether a branch edge that dominates block `x0` ([`AddrFacts::edge_facts`]) held
+    /// `start < n` (unsigned) for a start at most `hi`: `start < n` itself, `k < n` for a
+    /// constant `k` at least `hi`, `k <= n` for one above it, or `n != 0` for a start of 0.
+    fn held_below(
+        &self,
+        x0: BlockId,
+        (start, hi): (Value, u64),
+        n: Value,
+        m: &mut Meter,
+    ) -> Result<bool, Error> {
+        use crate::air::ir::IntPredicate as P;
+        let Some(w) = self.width(n).filter(|&w| (1..=64).contains(&w)) else {
+            return Ok(false);
+        };
+        let top = u64::MAX >> (64 - w);
+        let konst = |x: Value| match x {
+            Value::Const(k) => const_int(self.e, k).map(|k| (k as u64) & top),
+            _ => None,
+        };
+        let facts = self.edge_facts(x0, m)?;
+        let held = facts.iter().any(|&(p, a, b)| {
+            // The fact as `x p n`.
+            let (p, x) = if b == n {
+                (p, a)
+            } else if a == n {
+                (swapped(p), b)
+            } else {
+                return false;
+            };
+            match p {
+                P::Ult => x == start || konst(x).is_some_and(|k| hi <= k),
+                P::Ule => konst(x).is_some_and(|k| hi < k),
+                P::Ne => hi == 0 && konst(x) == Some(0),
+                _ => false,
+            }
+        });
+        m.release(crate::budget::vec_bytes(&facts));
+        Ok(held)
     }
 
     /// The start of `v` when it is a loop counter whose back edge is never taken
@@ -2172,10 +2337,22 @@ impl<'a> AddrFacts<'a> {
                     b,
                     ..
                 }) if *op != BinOp::Or || flags.contains(IntFlags::DISJOINT) => {
-                    if self.uniform(*b) {
+                    if self.fixed(*b, 0, m)? {
                         self.inj_int(*a, depth + 1, m)?
-                    } else if self.uniform(*a) {
+                    } else if self.fixed(*a, 0, m)? {
                         self.inj_int(*b, depth + 1, m)?
+                    } else if let Some(k) = self.cells(v, m)? {
+                        // Two threads' cells differ by `(p1 - p2) * n + (s1 - s2)`, `s1` and
+                        // `s2` below `n`: by 1 or more where their rows differ, by less than `n`
+                        // where they share one, at whatever iterations.
+                        self.inj_int(k.p, depth + 1, m)?.and_then(|i| {
+                            let spread = i.spread.checked_mul(k.n_hi)?.checked_add(k.n_hi - 1)?;
+                            (spread < 1u64 << (w.min(64) - 1)).then_some(Inj {
+                                step: 1,
+                                spread,
+                                same: i.same,
+                            })
+                        })
                     } else {
                         None
                     }
@@ -2315,6 +2492,106 @@ impl<'a> AddrFacts<'a> {
                     )
                 )
         })
+    }
+
+    /// Whether `v` is one value in every thread of a simdgroup at one dynamic instance: uniform
+    /// among them, a size query of one texture (`get_width`, `get_num_samples` and the others,
+    /// which read only the texture and the level they name), or, where each simdgroup lies within
+    /// one row of its threadgroup (`rows`), a `y` or `z` component of a position (the row's), and
+    /// any integer operation or cast of such values, at most [`MAX_FIXED`] operations deep.
+    fn fixed(&self, v: Value, depth: u32, m: &mut Meter) -> Result<bool, Error> {
+        if self.uniform(v) {
+            return Ok(true);
+        }
+        if depth >= MAX_FIXED {
+            return Ok(false);
+        }
+        m.tick(1)?;
+        Ok(match self.kind(v) {
+            Some(InstKind::Call(call))
+                if matches!(
+                    &call.callee,
+                    Callee::Air { op: AirIntrinsic::Texture(t), .. }
+                        if matches!(t.op, TexOp::Query(_))
+                ) =>
+            {
+                for &x in call.args.iter() {
+                    if !self.fixed(x, depth + 1, m)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            Some(InstKind::ExtractElement {
+                vec: Value::Arg(a),
+                idx: Value::Const(c),
+            }) => {
+                self.rows
+                    && self.is_position(a.raw())
+                    && const_int(self.e, *c).is_some_and(|i| i != 0)
+            }
+            Some(InstKind::BinOp { a, b, .. }) => {
+                self.fixed(*a, depth + 1, m)? && self.fixed(*b, depth + 1, m)?
+            }
+            Some(InstKind::Cast { v: x, .. } | InstKind::Freeze(x)) => {
+                self.fixed(*x, depth + 1, m)?
+            }
+            _ => false,
+        })
+    }
+
+    /// `v` as a cell `s + q` ([`Cells`]): `s` a loop counter below `n` ([`Counter::below`]), `n`
+    /// one value in every thread of a simdgroup ([`AddrFacts::fixed`]) whose range bounds it,
+    /// and `q` the product of `n` and a row `p`; neither operand is one value in every thread
+    /// (where one is, [`AddrFacts::inj_int`] reads the other).
+    fn cells(&self, v: Value, m: &mut Meter) -> Result<Option<Cells>, Error> {
+        let Some(InstKind::BinOp {
+            op: BinOp::Add,
+            a,
+            b,
+            ..
+        }) = self.kind(v)
+        else {
+            return Ok(None);
+        };
+        if self.fixed(*a, 0, m)? || self.fixed(*b, 0, m)? {
+            return Ok(None);
+        }
+        for (s, q) in [(*a, *b), (*b, *a)] {
+            m.tick(1)?;
+            let (
+                Some(InstKind::Phi { incoming, .. }),
+                Some(InstKind::BinOp {
+                    op: BinOp::Mul,
+                    a: x,
+                    b: y,
+                    ..
+                }),
+                Some(w),
+            ) = (
+                self.kind(s),
+                self.kind(q),
+                self.width(s).filter(|&w| (2..=64).contains(&w)),
+            )
+            else {
+                continue;
+            };
+            let Some(n) = self.counter(s, incoming, w, 0, m)?.and_then(|k| k.below) else {
+                continue;
+            };
+            let p = match (*x == n, *y == n) {
+                (_, true) => *x,
+                (true, false) => *y,
+                _ => continue,
+            };
+            if !self.fixed(n, 0, m)? {
+                continue;
+            }
+            if let Some((_, n_hi)) = self.range(n, 0, m)?.filter(|&(_, hi)| hi >= 1) {
+                return Ok(Some(Cells { p, q, n_hi }));
+            }
+        }
+        Ok(None)
     }
 
     /// The pointer index width of address `v`'s space.

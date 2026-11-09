@@ -2238,3 +2238,196 @@ fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
         }
     }
 }
+
+/// A wave64-only device: the committed RDNA3 description, which reconverges maximally, with its
+/// subgroup size range narrowed to 64, where a simdgroup is half a subgroup (`Cluster32`).
+fn wave64() -> Device {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/amd-rdna3-radv.json");
+    let text = std::fs::read_to_string(path).expect("profile");
+    let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
+    assert_ne!(narrowed, text, "the description names minSubgroupSize");
+    let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
+    Device::new(desc, DevicePolicy::default()).expect("device")
+}
+
+/// `kernel void name(texture2d_ms<uint> t [[texture(0)]], device uint *out [[buffer(0)]], uint2
+/// g [[thread_position_in_grid]])`, `wsm_samples`'s `wsm_read_u` as the Metal compiler emits it:
+/// `n = t.get_num_samples()`, and where `g` is inside the texture and `guard` holds (`%iny`, `g.y`
+/// inside, and `%some`, `n != 0`), `for (s = 0; ; s++) { out[s + q] = t.read(g, s).r; if (tested
+/// == n) break; }` with `q = (g.y * width + g.x) * mult`. The compiler's own spelling is `guard`
+/// `select i1 %iny, i1 %some, i1 false`, `mult` `%n` and `tested` `%next` (`s + 1`).
+fn cells_kernel(name: &str, guard: &str, mult: &str, tested: &str) -> String {
+    format!(
+        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @{name}(ptr addrspace(1) %t, ptr addrspace(1) %out, <2 x i32> %g) #0 {{
+entry:
+  %n = tail call i32 @air.get_num_samples_texture_2d_ms(ptr addrspace(1) %t)
+  %x = extractelement <2 x i32> %g, i64 0
+  %w = tail call i32 @air.get_width_texture_2d_ms(ptr addrspace(1) %t)
+  %inx = icmp ult i32 %x, %w
+  br i1 %inx, label %row, label %end
+row:
+  %y = extractelement <2 x i32> %g, i64 1
+  %h = tail call i32 @air.get_height_texture_2d_ms(ptr addrspace(1) %t)
+  %iny = icmp ult i32 %y, %h
+  %some = icmp ne i32 %n, 0
+  %go = {guard}
+  br i1 %go, label %pre, label %end
+pre:
+  %yw = mul i32 %w, %y
+  %p = add i32 %yw, %x
+  %q = mul i32 %p, {mult}
+  br label %loop
+loop:
+  %s = phi i32 [ 0, %pre ], [ %next, %loop ]
+  %smp = tail call ptr addrspace(2) @air.get_read_sampler()
+  %r = tail call {{ <4 x i32>, i8 }} @air.read_texture_2d_ms.u.v4i32(ptr addrspace(1) %t, ptr addrspace(2) %smp, <2 x i32> %g, i32 %s, i32 1)
+  %rv = extractvalue {{ <4 x i32>, i8 }} %r, 0
+  %v = extractelement <4 x i32> %rv, i64 0
+  %i = add i32 %s, %q
+  %iz = zext i32 %i to i64
+  %at = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %iz
+  store i32 %v, ptr addrspace(1) %at, align 4
+  %next = add nuw i32 %s, 1
+  %done = icmp eq i32 {tested}, %n
+  br i1 %done, label %end, label %loop
+end:
+  ret void
+}}
+
+declare i32 @air.get_num_samples_texture_2d_ms(ptr addrspace(1))
+declare i32 @air.get_width_texture_2d_ms(ptr addrspace(1))
+declare i32 @air.get_height_texture_2d_ms(ptr addrspace(1))
+declare ptr addrspace(2) @air.get_read_sampler()
+declare {{ <4 x i32>, i8 }} @air.read_texture_2d_ms.u.v4i32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, i32, i32)
+
+attributes #0 = {{ convergent mustprogress nounwind willreturn }}
+
+!air.kernel = !{{!0}}
+!air.version = !{{!6}}
+!air.language_version = !{{!7}}
+
+!0 = !{{ptr @{name}, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4, !5}}
+!3 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.read", !"air.arg_type_name", !"texture2d_ms<uint, read>", !"air.arg_name", !"t"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
+!5 = !{{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint2", !"air.arg_name", !"g"}}
+!6 = !{{i32 2, i32 8, i32 0}}
+!7 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    )
+}
+
+/// A multisampled texture of four samples in `format` bound at texture 0 for reading, and
+/// buffer 0.
+fn samples_state(format: crate::metal::PixelFormat) -> BindState {
+    let mut state = bind_state(None);
+    let mut facts =
+        crate::bind::TextureFacts::new(crate::metal::TextureType::Type2DMultisample, format);
+    facts.sample_count = 4;
+    facts.usage = crate::metal::TextureUsage::SHADER_READ;
+    if let Some(table) = state.stages.get_mut(&Stage::Kernel) {
+        table.textures.insert(
+            0,
+            crate::bind::BoundTexture::Texture {
+                facts,
+                resource_id: None,
+            },
+        );
+    }
+    state
+}
+
+/// A texel's samples read into a buffer, `out[(y * w + x) * n + s]` over `s < n` with `n` the
+/// texture's sample count (`wsm_samples`'s kernels, as the Metal compiler emits them): the store
+/// meets itself in a later iteration only where two threads of a simdgroup share a pixel, which
+/// the analysis cannot rule out where a simdgroup spans two rows of its threadgroup (a grid deeper
+/// than one gives two threads one `(x, y)`), so on a wave64 device the kernel keeps its barrier, a
+/// `Cluster32` tier, and a multiple of 64 threads. In a row its threads' `x` differ and their `y`
+/// are equal, and each thread's cells `(y * w + x) * n + s` lie below the next pixel's, `s` a
+/// counter that starts at 0 below `n` (the branch before the loop tested `n != 0`, as a `select`
+/// or an `and`) and leaves the loop on reaching it: the kernel records `RowLockstep`, and a
+/// threadgroup of one row (1, 16, 32 or 48 threads) runs its one compiled pipeline, not the
+/// emulated-simdgroups variant. Two rows of 16 still ask for the variant. Negative controls keep
+/// every partial threadgroup on the variant: the row scaled by the width rather than by `n`
+/// (cells of two pixels may meet), the latch testing the counter rather than the next value (the
+/// body runs at `s == n`, the next pixel's first cell), and the loop entered without the `n != 0`
+/// test (at `n == 0` every pixel writes cell 0).
+#[test]
+fn a_texel_s_samples_in_a_row_need_no_emulated_simdgroups_on_wave64() {
+    let compiler = "select i1 %iny, i1 %some, i1 false";
+    let mut kernels: Vec<(String, Vec<u8>, crate::metal::PixelFormat, bool)> = Vec::new();
+    let Some(fixture) = assemble("wsm_samples") else {
+        return;
+    };
+    for (name, format) in [
+        ("wsm_read_f", crate::metal::PixelFormat::RGBA32Float),
+        ("wsm_read_u", crate::metal::PixelFormat::R32Uint),
+    ] {
+        kernels.push((name.into(), fixture.clone(), format, true));
+    }
+    for (name, guard, mult, tested, rows) in [
+        ("cells", compiler, "%n", "%next", true),
+        ("cells_and", "and i1 %iny, %some", "%n", "%next", true),
+        ("cells_by_width", compiler, "%w", "%next", false),
+        ("cells_through_n", compiler, "%n", "%s", false),
+        (
+            "cells_unguarded",
+            "select i1 %iny, i1 true, i1 false",
+            "%n",
+            "%next",
+            false,
+        ),
+    ] {
+        let Some(bc) = assemble_text(name, &cells_kernel(name, guard, mult, tested)) else {
+            return;
+        };
+        kernels.push((name.into(), bc, crate::metal::PixelFormat::R32Uint, rows));
+    }
+    let dev = wave64();
+    let p = dev.profile();
+    for (name, bc, format, rows) in kernels {
+        let (own, _) = typed_module(&bc, &name, p).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(own.simd.1, Tier::Cluster32, "{name}");
+        assert!(
+            own.facts
+                .contains(&RuntimeFact::LocalSizeConstraint { multiple: 64 }),
+            "{name}: {:?}",
+            own.facts
+        );
+        assert_eq!(
+            own.facts.contains(&RuntimeFact::RowLockstep),
+            rows,
+            "{name}"
+        );
+        let state = samples_state(format);
+        let plan = pipeline(&dev, &bc, &name)
+            .plan(&dev, &state.shape())
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let want = if rows {
+            VariantKey::new()
+        } else {
+            emulated_key()
+        };
+        for n in [1, 16, 32, 48] {
+            assert_eq!(
+                plan.dispatch_variant(&threads(n)),
+                Ok(want.clone()),
+                "{name} at {n}"
+            );
+        }
+        let two_rows = Dispatch::Threadgroups {
+            groups: [1, 1, 1],
+            threads_per_group: [16, 2, 1],
+        };
+        assert_eq!(
+            plan.dispatch_variant(&two_rows),
+            Ok(emulated_key()),
+            "{name}"
+        );
+    }
+}
