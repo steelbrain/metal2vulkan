@@ -350,7 +350,7 @@
         "submit_infos": 1,
         "trail_waits": 3,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 3,
+        "wakes_handler_threads": 4,
         "wakes_spared": 19
       },
       "composed": {

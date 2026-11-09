@@ -978,6 +978,7 @@
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 1,
         "heap_tables_worked_out": 12,
+        "image_blocks_made_in_place": 1,
         "indirect_record_bytes_copied": 13488,
         "indirect_record_runs_read": 3,
         "indirect_records_read": 6,
@@ -1003,9 +1004,8 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 2,
+        "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
-        "scheduler_wakes_host": 1,
         "set_zero_sets_reused": 5,
         "shader_modules_made": 2,
         "slot_returns": 1,
@@ -1026,6 +1026,7 @@
       "composed": {
         "addressable_buffers_made": 1,
         "device_memory_allocated": 201326592,
+        "image_blocks_made_in_place": 1,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 1
       },

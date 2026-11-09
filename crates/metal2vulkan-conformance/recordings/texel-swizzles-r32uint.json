@@ -990,7 +990,7 @@
         "functions_translated": 1,
         "gate_waits": 6,
         "gate_waits_slept": 6,
-        "heads_held_for_host_steps": 19,
+        "heads_held_for_host_steps": 18,
         "heap_tables_worked_out": 1,
         "host_steps_recorded": 6,
         "image_blocks_made_in_place": 1,
@@ -1009,7 +1009,7 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 6,
         "scheduled_where_submitted": 6,
-        "scheduler_passes": 25,
+        "scheduler_passes": 24,
         "scheduler_passes_by_waiters": 6,
         "scheduler_sleeps": 20,
         "scheduler_wakes_commit": 6,
@@ -1022,7 +1022,7 @@
         "trail_waits": 6,
         "variant_pipelines_made": 6,
         "wakes_completion_waiters": 6,
-        "wakes_spared": 48
+        "wakes_spared": 47
       },
       "moving": {
         "gate_waits_slept": 5

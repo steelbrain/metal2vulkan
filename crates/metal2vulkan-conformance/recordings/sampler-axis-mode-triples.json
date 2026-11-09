@@ -1193,7 +1193,7 @@
         "resident_textures_looked_at": 9,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 9,
-        "scheduler_passes": 8,
+        "scheduler_passes": 9,
         "scheduler_passes_by_waiters": 9,
         "scheduler_sleeps": 11,
         "scheduler_wakes_commit": 9,

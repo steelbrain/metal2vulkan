@@ -1410,6 +1410,7 @@
         "graphics_pipelines_looked_up": 120,
         "heap_tables_worked_out": 240,
         "host_steps_recorded": 1,
+        "image_blocks_made_in_place": 1,
         "linked_use_questions_asked": 2,
         "new_buffer_bytes_cleared": 4800,
         "object_churn.buffers_evicted": 21,
@@ -1438,7 +1439,6 @@
         "render_passes_made": 11,
         "resident_textures_looked_at": 6,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
@@ -1537,6 +1537,7 @@
         "functions_translated": 2,
         "graphics_pipelines_looked_up": 1,
         "host_steps_recorded": 0,
+        "image_blocks_made_in_place": 1,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 11,
         "stage_entries_specialized": 2

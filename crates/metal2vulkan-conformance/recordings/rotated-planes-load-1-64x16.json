@@ -462,7 +462,7 @@
         "object_churn.images_recycled": 2,
         "object_churn.textures_image": 1,
         "object_churn.textures_shadow": 2,
-        "object_churn.vk_buffers_destroyed": 5,
+        "object_churn.vk_buffers_destroyed": 4,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 2,
         "object_churn.vk_images_destroyed": 1,

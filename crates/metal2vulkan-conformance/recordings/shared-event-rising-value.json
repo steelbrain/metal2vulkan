@@ -244,7 +244,7 @@
         "submit_infos": 3,
         "trail_waits": 3,
         "wakes_completion_waiters": 3,
-        "wakes_spared": 24
+        "wakes_spared": 23
       },
       "moving": {
         "gate_waits_slept": 1

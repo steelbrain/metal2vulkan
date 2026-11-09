@@ -152,7 +152,8 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "degraded": [
-        "metal2vulkan-degrade-drawn-depth-copy"
+        "metal2vulkan-degrade-drawn-depth-copy",
+        "metal2vulkan-degrade-restricted-depth-upload"
       ],
       "bounds": {
         "addressable_buffers_made": 2,
@@ -162,6 +163,7 @@
         "bare_starts": 1,
         "batches_submitted_by_waiters": 1,
         "batches_with_none_pending": 1,
+        "buffer_blocks_made_in_place": 2,
         "command_barriers": 1,
         "command_buffers_begun": 10,
         "command_buffers_begun_batch_barriers": 3,
@@ -210,6 +212,7 @@
         "gate_waits_slept": 1,
         "heap_tables_worked_out": 1,
         "host_steps_recorded": 1,
+        "image_blocks_made_in_place": 1,
         "new_buffer_bytes_cleared": 256,
         "object_churn.buffers_parked": 2,
         "object_churn.buffers_recycled": 2,
@@ -248,6 +251,7 @@
       "composed": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
+        "buffer_blocks_made_in_place": 2,
         "command_buffers_begun": 10,
         "command_buffers_begun_batch_barriers": 3,
         "command_buffers_begun_continuations": 1,
@@ -265,6 +269,7 @@
         "encoder_command_buffers_begun": 6,
         "functions_translated": 1,
         "host_steps_recorded": 1,
+        "image_blocks_made_in_place": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0,

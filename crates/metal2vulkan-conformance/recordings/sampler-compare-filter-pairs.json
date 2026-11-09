@@ -1849,6 +1849,10 @@
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-restricted-depth-range",
+        "metal2vulkan-degrade-restricted-depth-upload"
+      ],
       "bounds": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
@@ -1885,6 +1889,7 @@
         "completion_arms_after_a_wake": 16,
         "completion_waiter_parks": 16,
         "creation_pipelines_made": 1,
+        "depth_uploads_clamped": 1,
         "device_memory_allocated": 201326720,
         "dispatch_pipelines_pooled": 1,
         "dispatch_shapes_made": 16,
@@ -1922,11 +1927,11 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 16,
         "scheduled_where_submitted": 16,
-        "scheduler_passes": 8,
+        "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 16,
-        "scheduler_sleeps": 18,
+        "scheduler_sleeps": 19,
         "scheduler_wakes_commit": 16,
-        "scheduler_wakes_host": 2,
+        "scheduler_wakes_host": 3,
         "shader_modules_made": 1,
         "slot_returns": 16,
         "spare_command_pools_taken": 16,

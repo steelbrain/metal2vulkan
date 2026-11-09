@@ -157,7 +157,8 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "degraded": [
-        "metal2vulkan-degrade-drawn-depth-copy"
+        "metal2vulkan-degrade-drawn-depth-copy",
+        "metal2vulkan-degrade-restricted-depth-upload"
       ],
       "bounds": {
         "addressable_buffers_made": 2,
