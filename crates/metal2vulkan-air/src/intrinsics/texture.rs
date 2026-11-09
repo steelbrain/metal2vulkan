@@ -27,6 +27,11 @@
 //!   offset) without the status is not a form of it.
 //! - **write** `void (tex, coord, [cube: face], [array: layer], texel, [not buffer: lod],
 //!   i32 access)`.
+//! - **block_read** (Metal 4.1's `block_read<W, H>` and `sparse_block_read<W, H>` of a 2D, 2D
+//!   array, or 2D depth texture) `void (tex, smp, <2 x i32> coord, [array: i32 layer],
+//!   <2 x i32> offset, i32 lod, i32 access, ptr out, ptr status, <2 x i32> size)`: the `W x H`
+//!   texels at `coord + offset` written to `out`, and their residency bytes to `status` where it
+//!   is not null. Canonicalization expands each into reads (`canon::block_read`).
 //! - a read's or write's texel is `f32` or `f16`, `s`/`u` `i32` or `i16`, or, for Metal's
 //!   `ulong` textures (1D, 1D array, 2D, 2D array, 3D, and buffer), `u` `i64`.
 //! - a `ulong` texture's atomics are `atomic_{min,max}_explicit` (no `fetch_`) of a `u` `v4i64`
@@ -194,6 +199,9 @@ pub enum TexOp {
     /// `write_imageblock_slice_to_texture`: `void (tex, imageblock ptr, i1, <2 x i16>,
     /// <2 x i16>, coord, [array: layer], lod, i1, i32 access)`.
     WriteImageblockSlice,
+    /// `block_read`: `void (tex, smp, coord, [array: layer], offset, lod, i32 access, ptr out,
+    /// ptr status, <2 x i32> size)`, a block of texels written through `out` (module doc).
+    BlockRead,
 }
 
 /// The texel type a texture operation's name spells.
@@ -292,6 +300,12 @@ pub enum TexRole {
     Expected,
     /// The imageblock pointer a slice write copies from.
     Imageblock,
+    /// The thread pointer a block read writes its texels through, in row order.
+    BlockTexels,
+    /// The thread pointer a block read writes its texels' residency bytes through, or null.
+    BlockStatus,
+    /// A block read's `<2 x i32>` width and height in texels.
+    BlockSize,
     /// A position whose meaning is not modeled (the operand index within the operation).
     Opaque(u8),
     /// The access-qualifier immediate (`i32`).
@@ -318,6 +332,7 @@ pub(super) enum OpName {
         clamped: bool,
     },
     WriteImageblockSlice,
+    BlockRead,
 }
 
 /// Every operation stem, the object kinds (`texture`, `depth`) it takes, and the dimension
@@ -587,6 +602,8 @@ pub(super) const OPS: &[(&str, OpName, &[&str], &[&str])] = {
             &["2d", "2d_array"],
             &[],
         ),
+        // Metal 4.1's (Apple's metal 32023.922 declares no 3D, cube, or depth array one).
+        ("block_read", BlockRead, &["2d", "2d_array"], &["2d"]),
     ]
 };
 
@@ -699,6 +716,7 @@ impl Texture {
             OpName::GetNull => TexOp::GetNull,
             OpName::CalculateLod { clamped } => TexOp::CalculateLod { clamped },
             OpName::WriteImageblockSlice => TexOp::WriteImageblockSlice,
+            OpName::BlockRead => TexOp::BlockRead,
         };
         let t = Texture {
             op,
@@ -800,8 +818,8 @@ impl Texture {
         };
         let lanes = self.texel.map_or(0, |t| t.ty.lanes);
         let spells_texel = match self.op {
-            // A depth sample and read produce a scalar, a depth gather four samples.
-            TexOp::Sample { .. } | TexOp::SampleGrad { .. } | TexOp::Read => {
+            // A depth sample, read, and block read produce scalars, a depth gather four samples.
+            TexOp::Sample { .. } | TexOp::SampleGrad { .. } | TexOp::Read | TexOp::BlockRead => {
                 self.texel.is_some_and(|t| texel_ok(t, lanes == 1))
             }
             // A comparison gather names its scalar depth texel; it returns four.
@@ -870,7 +888,9 @@ impl Texture {
                 Layout::new(status)
             }
             TexOp::Read => Layout::new(status),
-            TexOp::Write | TexOp::Fence | TexOp::WriteImageblockSlice => Layout::new(Operand::Void),
+            TexOp::Write | TexOp::Fence | TexOp::WriteImageblockSlice | TexOp::BlockRead => {
+                Layout::new(Operand::Void)
+            }
             TexOp::Atomic(AtomicOp::Store) => Layout::new(Operand::Void),
             TexOp::Atomic(_) if self.ulong() => Layout::new(Operand::Void),
             TexOp::Atomic(AtomicOp::CmpXchgWeak) => Layout::new(num(Elem::I1, 1)),
@@ -1013,6 +1033,19 @@ impl Texture {
                 l.push(R::Lod, num(ci, 1));
                 l.push(R::Opaque(8), num(Elem::I1, 1));
                 l.push_if(self.states_access, R::Access, access);
+            }
+            TexOp::BlockRead => {
+                let i32v2 = num(Elem::I32, 2);
+                l.push(R::Texture, tex);
+                l.push(R::Sampler, smp);
+                l.push(R::Coord, i32v2);
+                l.push_if(shape.array, R::Layer, i32s);
+                l.push(R::Offset, i32v2);
+                l.push(R::Lod, i32s);
+                l.push_if(self.states_access, R::Access, access);
+                l.push(R::BlockTexels, Operand::Ptr(AddrSpace::Thread));
+                l.push(R::BlockStatus, Operand::Ptr(AddrSpace::Thread));
+                l.push(R::BlockSize, i32v2);
             }
         }
         l

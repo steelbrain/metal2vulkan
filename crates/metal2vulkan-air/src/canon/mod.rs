@@ -79,6 +79,7 @@
 mod adapt;
 mod aggregates;
 mod async_copy;
+mod block_read;
 mod byval;
 mod command_writes;
 mod const_loads;
@@ -387,6 +388,7 @@ fn writes_texture(op: &AirIntrinsic) -> bool {
         | TexOp::SampleGrad { .. }
         | TexOp::Gather { .. }
         | TexOp::Read
+        | TexOp::BlockRead
         | TexOp::Fence
         | TexOp::Query(_)
         | TexOp::IsNull
@@ -605,6 +607,8 @@ pub fn specialize_dynamic(
     // A kernel's simdgroup asynchronous copies complete when their calls return, shared by the
     // simdgroup's lanes, and each wait is a simdgroup barrier.
     let body = async_copy::expand(body, &mut parts, ep, m)?;
+    // Metal 4.1's block reads are the reads of their texels.
+    let body = block_read::expand(body, &mut parts, ep.func, m)?;
 
     // SCCP. The body it read is freed as soon as it has run.
     let solved = solve(&body, &mut parts, &fcs, &name, m)?;

@@ -11357,6 +11357,7 @@ variant	metal2vulkan-air::intrinsics::Tensor::Extent	Extent
 variant	metal2vulkan-air::intrinsics::Tensor::InitStrided	InitStrided { data: AddrSpace }
 variant	metal2vulkan-air::intrinsics::Tensor::Slice	Slice
 variant	metal2vulkan-air::intrinsics::TexOp::Atomic	Atomic(AtomicOp)
+variant	metal2vulkan-air::intrinsics::TexOp::BlockRead	BlockRead
 variant	metal2vulkan-air::intrinsics::TexOp::CalculateLod	CalculateLod { clamped: bool }
 variant	metal2vulkan-air::intrinsics::TexOp::Fence	Fence
 variant	metal2vulkan-air::intrinsics::TexOp::Gather	Gather { component: Option<Component>, compare: bool, offset: bool }
@@ -11369,6 +11370,9 @@ variant	metal2vulkan-air::intrinsics::TexOp::SampleGrad	SampleGrad { compare: bo
 variant	metal2vulkan-air::intrinsics::TexOp::Write	Write
 variant	metal2vulkan-air::intrinsics::TexOp::WriteImageblockSlice	WriteImageblockSlice
 variant	metal2vulkan-air::intrinsics::TexRole::Access	Access
+variant	metal2vulkan-air::intrinsics::TexRole::BlockSize	BlockSize
+variant	metal2vulkan-air::intrinsics::TexRole::BlockStatus	BlockStatus
+variant	metal2vulkan-air::intrinsics::TexRole::BlockTexels	BlockTexels
 variant	metal2vulkan-air::intrinsics::TexRole::CompareRef	CompareRef
 variant	metal2vulkan-air::intrinsics::TexRole::Component	Component
 variant	metal2vulkan-air::intrinsics::TexRole::Coord	Coord

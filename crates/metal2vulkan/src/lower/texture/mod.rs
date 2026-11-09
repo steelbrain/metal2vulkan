@@ -1841,6 +1841,9 @@ pub fn select(
         TexOp::GetNull => return Ok(TextureStrategy::NullHandle),
         // An image memory barrier: it names no image.
         TexOp::Fence => return Ok(TextureStrategy::Fence),
+        // A block read canonicalization did not make reads (`canon::block_read`): its size is
+        // not a literal one Metal takes.
+        TexOp::BlockRead => return Err(refuse()),
         TexOp::WriteImageblockSlice
         | TexOp::Read
         | TexOp::Write
