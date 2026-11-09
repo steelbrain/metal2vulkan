@@ -44,7 +44,7 @@ enum Read {
     QueryLod,
     /// A size query at the constant level 3.
     SizeConstant,
-    /// A size query without a level.
+    /// A size query without a level, of a storage image of the slot.
     Size,
     /// An image write of a storage image of the slot.
     Write,
@@ -108,8 +108,9 @@ fn module(read: Read) -> TypedModule {
         .resource(
             slot(ResourceKind::Texture, 0),
             StorageClass::UniformConstant,
+            // A size query without a level is a storage image's (or a multisampled one's).
             match read {
-                Read::Write => storage,
+                Read::Write | Read::Size => storage,
                 _ => image,
             },
         )
