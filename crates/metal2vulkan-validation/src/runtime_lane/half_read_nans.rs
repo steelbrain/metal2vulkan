@@ -12,9 +12,12 @@
 //! whose texture unit is not Metal's (no `VkProperty::MetalSampler`), the device's NaN, which
 //! its precision note records (`PrecisionNote::DeviceTexelConversion`), and the lane takes any NaN
 //! for Metal's there. The note's bound also leaves a 32-bit float texel's NaN and denormal in a
-//! gather to the device (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU gathers every NaN as
-//! `0x7fffffff` and every denormal as a zero of its sign, where its reads and samples hand back
-//! the stored words), which the lane takes for Metal's too.
+//! gather or a nearest sample to the device, which the lane takes for Metal's too: NVIDIA's
+//! 615.71.09 on the RTX 5080 Laptop GPU gathers every NaN as `0x7fffffff` and every denormal as a
+//! zero of its sign, where its reads and samples hand back the stored words; ANV on the Iris Xe
+//! (Mesa 26.2.6) samples every NaN as `0xffc00000` and every denormal as a zero of its sign, where
+//! its reads and gathers hand back the stored words. Where the texture unit is not Metal's, each
+//! sample's stage records the note and the device announces `device-texel-conversion`.
 //!
 //! The kernels are this lane's own AIR: each reads texel `(x, 0)` of an [`N`] by 1 texture whose
 //! texel `x` holds [`word`]'s channels (a texture buffer's element `x`), samples it at the texel's
@@ -23,7 +26,7 @@
 //! handle carries the class). Each access's every lane is compared with Metal's; a lane that
 //! differs is printed on a `HALF-READ-DIFFERS` line, and the test fails.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::{counts as notice_counts, on_device};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -31,12 +34,13 @@ use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{
     PixelFormat, ResourceUsage, SamplerAddressMode, SamplerMinMagFilter, TextureUsage,
 };
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
-    CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Region, ResourceOptions,
-    SamplerState, Size, Texture, TextureDescriptor,
+    CommandBufferStatus, ComputePipelineState, Degradation, Device, ExecutedPipeline,
+    PipelineOptions, Region, ResourceOptions, SamplerState, Size, Texture, TextureDescriptor,
 };
+use std::collections::BTreeSet;
 
 /// The halves read: quiet and signalling NaNs of both signs and payload edges, then infinities,
 /// denormals, zeros and normals (our probe's).
@@ -356,7 +360,7 @@ fn dispatch(
     (pipeline, op): (&ComputePipelineState, Op),
     texture: &Texture,
     sampler: &SamplerState,
-) -> Vec<[u32; 4]> {
+) -> (Vec<[u32; 4]>, BTreeSet<PrecisionNote>) {
     let input: Vec<u8> = (0..V.len())
         .flat_map(|x| lane(op, x))
         .flat_map(u32::to_le_bytes)
@@ -390,7 +394,17 @@ fn dispatch(
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
     assert_eq!(command_buffer.error(), None);
-    read_buffer(&out, 0, N * 16)
+    let executions = command_buffer.executions();
+    let [execution] = executions.as_slice() else {
+        panic!("{} executions of one dispatch", executions.len());
+    };
+    let ExecutedPipeline::Compute(executed) = execution.pipeline() else {
+        panic!("a dispatch of a render pipeline");
+    };
+    let notes = (executed.stage.precision_notes.iter().copied())
+        .chain(executed.stage.specialized_notes.iter().map(|s| s.note))
+        .collect();
+    let words = read_buffer(&out, 0, N * 16)
         .unwrap()
         .as_chunks::<16>()
         .0
@@ -398,18 +412,22 @@ fn dispatch(
         .map(|v| {
             std::array::from_fn(|k| u32::from_le_bytes(v[4 * k..4 * k + 4].try_into().unwrap()))
         })
-        .collect()
+        .collect();
+    (words, notes)
 }
 
 /// Every access of [`OPS`] to every format of [`FORMATS`] hands back Metal's words: a half-float
 /// texel's NaN as `0x7fc00000` (a NaN of the device's encoding where its texture unit is not
-/// Metal's), a 32-bit float texel's words as stored (a gathered NaN of the device's encoding
-/// there, and a gathered denormal a zero of its sign).
+/// Metal's), a 32-bit float texel's words as stored (a gathered or sampled NaN of the device's
+/// encoding there, and a gathered or sampled denormal a zero of its sign). Where the texture unit
+/// is not Metal's, each sample's stage records `PrecisionNote::DeviceTexelConversion` and the
+/// device announces `device-texel-conversion`.
 #[test]
 fn half_float_reads_hand_back_metals_nans() {
     let mut report = Vec::new();
     let mut differ_total = 0;
-    on_device(|device, _| {
+    on_device(|device, messages| {
+        let _ = messages.take_notices();
         // The device's texel, a half-float NaN its own, where its texture unit is not Metal's.
         let own = !device
             .compile_device()
@@ -427,23 +445,27 @@ fn half_float_reads_hand_back_metals_nans() {
             let pipeline = pipeline_of(device, op);
             for f in FORMATS {
                 let texture = made(device, f, op);
-                let got = dispatch(device, (&pipeline, op), &texture, &nearest);
+                let (got, notes) = dispatch(device, (&pipeline, op), &texture, &nearest);
+                // A sample through the device's texture unit records the note that bounds it.
+                let sampled = matches!(op, Op::SampleConstexpr | Op::SampleSlot);
+                assert!(
+                    !(own && sampled) || notes.contains(&PrecisionNote::DeviceTexelConversion),
+                    "{op:?} {:?}: the stage records no device-texel-conversion: {notes:?}",
+                    f.format
+                );
                 let mut differ = Vec::new();
                 for (x, lanes) in got.iter().enumerate() {
                     let want = metal_lanes(f, op, x);
                     for (k, (&g, &w)) in lanes.iter().zip(&want).enumerate() {
                         let nans = f32::from_bits(g).is_nan() && f32::from_bits(w).is_nan();
                         // The device's NaN: a half-float texel's, and a 32-bit float texel's in a
-                        // gather (`PrecisionNote::DeviceTexelConversion`'s bound).
-                        let device_nan = own && nans && (f.half || matches!(op, Op::Gather));
-                        // A 32-bit float texel's denormal in a gather, flushed to a zero of its
-                        // sign (the same bound).
+                        // gather or a sample (`PrecisionNote::DeviceTexelConversion`'s bound).
+                        let unit = matches!(op, Op::Gather) || sampled;
+                        let device_nan = own && nans && (f.half || unit);
+                        // A 32-bit float texel's denormal in a gather or a sample, flushed to a
+                        // zero of its sign (the same bound).
                         let denormal = f32::from_bits(w).is_subnormal();
-                        let flushed = own
-                            && !f.half
-                            && matches!(op, Op::Gather)
-                            && denormal
-                            && g == w & 0x8000_0000;
+                        let flushed = own && !f.half && unit && denormal && g == w & 0x8000_0000;
                         if g != w && !device_nan && !flushed {
                             differ.push(format!("texel {x} lane {k}: {g:08x} (Metal {w:08x})"));
                         }
@@ -459,6 +481,13 @@ fn half_float_reads_hand_back_metals_nans() {
                     differ.len()
                 ));
             }
+        }
+        if own {
+            let announced = notice_counts(&messages.take_notices());
+            assert!(
+                announced.contains_key(&Degradation::DeviceTexelConversion),
+                "the device announced no device-texel-conversion: {announced:?}"
+            );
         }
     });
     eprintln!("half read NaNs: {report:#?}");

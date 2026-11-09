@@ -1767,9 +1767,12 @@ pub enum PrecisionNote {
     ///   denormal flushed to a zero of its sign, where Metal hands back the texel's own bits
     ///   (NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU gathers every NaN as `0x7fffffff` and
     ///   every denormal as a zero, and reads and samples both as stored);
-    /// - a 32-bit float texel's denormal in a nearest sample: a zero of its sign on a device that
-    ///   flushes it there, where Metal hands back the texel's own bits (RADV's Mesa 26.2.6 on the
-    ///   RX 7900 XTX and the Radeon 780M samples a denormal as a zero, and gathers it as stored);
+    /// - a 32-bit float texel's NaN or denormal in a nearest sample: the device's encoding of a
+    ///   NaN, and a denormal flushed to a zero of its sign on a device that flushes it there,
+    ///   where Metal hands back the texel's own bits (ANV's Mesa 26.2.6 on the Iris Xe samples
+    ///   every NaN as `0xffc00000` and every denormal as a zero of its sign, and reads and gathers
+    ///   both as stored; RADV's Mesa 26.2.6 on the RX 7900 XTX and the Radeon 780M samples a
+    ///   denormal as a zero, and gathers it as stored);
     /// - every other class: the device's value, which Metal's matches.
     ///
     /// A filtered sample's value is the filter's. Validation derives no tolerance from it.
