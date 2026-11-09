@@ -9227,15 +9227,15 @@ impl RenderLowering {
             index.map(DrawSource::metal),
             indirect.map(DrawSource::metal),
         );
-        let made = (&plan, &command, &tables);
-        binding::command_uses_into(call, made, sources, &mut live.uses)?;
+        let parts = (&plan, &command, &tables);
+        binding::command_uses_into(call, parts, sources, &mut live.uses)?;
         // A narrowed slot whose levels a write of the draw's own meets: every one takes its copy,
         // its uses made again (`render/attached_levels.rs`).
         let narrowed_slots = narrowed.len();
         let written = narrowed_slots > 0 && narrowed.written_by(&live.uses);
         if written {
             narrowed.withdraw();
-            binding::command_uses_into(call, made, sources, &mut live.uses)?;
+            binding::command_uses_into(call, parts, sources, &mut live.uses)?;
         }
         self.count_narrowed(narrowed_slots, written);
         let resident_made = live.uses.made() as u64;
