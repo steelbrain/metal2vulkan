@@ -2772,6 +2772,13 @@ impl Memory {
             ),
             Err(_) => None,
         };
+        let page_addresses = match self.page_buffer_types {
+            Ok(_) if self.page_classes != 0 => Some(
+                self.address_types(device, Holds::PageBuffers)?
+                    .unwrap_or(u32::MAX),
+            ),
+            Ok(_) | Err(_) => None,
+        };
         let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
         let buffers = buffer_types(device, usage(false), sharing, None)? & addresses;
         let fd_buffers = match fd {
@@ -2780,13 +2787,11 @@ impl Memory {
             }
             None => 0,
         };
-        let page_buffers = match self.page_buffer_types {
-            Ok(_) if self.page_classes != 0 => {
-                let addresses =
-                    (self.address_types(device, Holds::PageBuffers)?).unwrap_or(u32::MAX);
+        let page_buffers = match page_addresses {
+            Some(addresses) => {
                 buffer_types(device, usage(false), sharing, Some(HOST_PAGES_HANDLE))? & addresses
             }
-            Ok(_) | Err(_) => 0,
+            None => 0,
         };
         let images = color_image_types(device, sharing)?;
         let best = |bits: u32, class: MemoryClass| {
