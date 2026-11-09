@@ -1453,6 +1453,8 @@ engine/kernel_inline_asm.air.ll	asm_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/kernel_inline_asm.ll	asm_in_loop	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_inline_asm.ll	asm_in_helper	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_inline_asm.ll	asm_free	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/kernel_integer_median3.air.ll	median3_ops	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/kernel_integer_median3.ll	median3_ops	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_nested_loop_constant_weight_walk.air.ll	nested_loop_constant_weight_walk	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_nested_loop_constant_weight_walk.ll	nested_loop_constant_weight_walk	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_spin_on_an_unraised_word.air.ll	spin_on_an_unraised_word	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
