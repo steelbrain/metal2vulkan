@@ -12,7 +12,7 @@ use super::device_recovery::{heard_device, outcome, recovery_notices, Heard, Scr
 use super::host_ram_device::{fresh_ram, gate, itself, resolver};
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, Deallocator, Device, HostBacking, HostMemory,
-    ImportRequest, ResourceOptions,
+    ImportRequest, ResourceOptions, WorkCounts,
 };
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
@@ -285,6 +285,10 @@ fn a_recovery_carries_a_use_of_guest_ram_and_the_buffers_over_it() {
     assert_eq!(runs.lock().unwrap().len(), 1);
     host_fill(at, 3);
     assert_eq!(read(&device, &queue, &buffer), vec![3; BYTES as usize]);
+    // The counts are the device's, across its generations.
+    let bound =
+        |counts: &WorkCounts| counts.chunk_bound_buffers_made + counts.run_bound_buffers_made;
+    let bound_before = bound(&device.work_counts_now());
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
@@ -297,7 +301,7 @@ fn a_recovery_carries_a_use_of_guest_ram_and_the_buffers_over_it() {
     assert_eq!(runs.lock().unwrap().len(), 2, "the resolver is asked again");
     let counts = buffer.device().work_counts_now();
     assert_eq!(
-        counts.chunk_bound_buffers_made + counts.run_bound_buffers_made,
+        bound(&counts) - bound_before,
         1,
         "the buffer lies in the RAM there: {counts:?}"
     );

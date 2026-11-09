@@ -709,30 +709,6 @@ impl Device {
     /// The memory of `parts` meets [`HostMemory::new`]'s contract for `length` bytes.
     pub(super) unsafe fn buffer_over_host_parts(
         &self,
-        made: (&'static str, u64, ResourceOptions, Place),
-        parts: HostParts,
-        release: Option<Release>,
-        of_heap: bool,
-        drops_writes: bool,
-        naming: Naming,
-    ) -> Result<Buffer, Error> {
-        let made_of = (!of_heap).then(|| parts.clone());
-        // SAFETY: the caller's contract.
-        let buffer =
-            unsafe { self.host_parts_buffer(made, parts, release, of_heap, drops_writes, naming) }?;
-        if let (Some(made_of), Some(pages)) = (made_of, buffer.host_pages()) {
-            pages.keep_made_of(made_of);
-        }
-        Ok(buffer)
-    }
-
-    /// [`Device::buffer_over_host_parts`]'s buffer.
-    ///
-    /// # Safety
-    ///
-    /// As there.
-    unsafe fn host_parts_buffer(
-        &self,
         (call, length, options, placement): (&'static str, u64, ResourceOptions, Place),
         parts: HostParts,
         release: Option<Release>,
@@ -759,6 +735,9 @@ impl Device {
             .host_import
             .as_ref()
             .map_err(|unsupported| Error::Unsupported(unsupported.clone()))?;
+        // What a buffer (not a heap's own) is made of stays with its pages, given them with the
+        // rest below, from the one look at them.
+        let made_of = (!of_heap).then(|| parts.clone());
         let HostParts {
             pointer,
             source,
@@ -801,7 +780,8 @@ impl Device {
             let key = buffer.identity().key;
             // The GPU's writes through it are reported to the import's logs, as through the
             // buffer it was made for, over the same bytes (`dirty_pages.rs`), and merged back
-            // from the copy where it lies in one.
+            // from the copy where it lies in one. The pages keep what that buffer was made of,
+            // over the same bytes ([`HostPages::made_of`]).
             if let Some(pages) = buffer.host_pages() {
                 pages.logged_as(key);
                 pages.copied_as(key);
@@ -885,7 +865,7 @@ impl Device {
                         self.copied_buffer(copy, release, dirty, CopiedFor::ReadOnly, naming)
                     };
                     return copied.map(|buffer| {
-                        let buffer = kept(buffer, log, kept_runs);
+                        let buffer = kept(buffer, log, kept_runs, made_of);
                         shared.aliases.place(buffer.identity().key, made_over);
                         buffer
                     });
@@ -905,7 +885,7 @@ impl Device {
                     let copied = unsafe {
                         self.copied_buffer(copy, release, dirty, CopiedFor::Refused, naming)
                     };
-                    return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
+                    return copied.map(|buffer| noted(kept(buffer, log, kept_runs, made_of)));
                 }
                 // Only a buffer that imports its pages pins them, and so has their writability
                 // asked: one that lies in a live import pins none, that import's making asked for
@@ -917,7 +897,7 @@ impl Device {
                     let copied = unsafe {
                         self.copied_buffer(copy, release, dirty, CopiedFor::Unwritable, naming)
                     };
-                    return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
+                    return copied.map(|buffer| noted(kept(buffer, log, kept_runs, made_of)));
                 }
                 // SAFETY: the window lies in the pages of the caller's bytes, which stay mapped
                 // (`HostMemory::new`), and the source's pieces hold them
@@ -980,7 +960,7 @@ impl Device {
                                 naming,
                             )
                         };
-                        return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
+                        return copied.map(|buffer| noted(kept(buffer, log, kept_runs, made_of)));
                     }
                     // Pages whose pointer the device refuses (RADV refuses shared memory, a
                     // `memfd` mapping among it), with no dma-buf of them served (no source given,
@@ -991,7 +971,7 @@ impl Device {
                         // SAFETY: the caller's contract.
                         let copied =
                             unsafe { self.copied_buffer(copy, release, dirty, why, naming) };
-                        return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
+                        return copied.map(|buffer| noted(kept(buffer, log, kept_runs, made_of)));
                     }
                     Err((error, _)) => return Err(error),
                 };
@@ -1032,7 +1012,7 @@ impl Device {
             if let Some(dirty) = dirty {
                 pages.keep_dirty(dirty);
             }
-            keep_in(pages, &buffer, log, kept_runs);
+            keep_in(pages, &buffer, log, kept_runs, made_of);
         }
         // A buffer over the bytes another no-copy buffer covers joins it (`host_aliases.rs`), and
         // a later one lies in its import; one whose GPU writes are dropped joins none.
@@ -2279,20 +2259,23 @@ fn kept(
     buffer: Buffer,
     log: Option<Arc<PagesLog>>,
     runs: Option<(Arc<RamOnDevice>, Box<[std::ops::Range<u64>]>)>,
+    made_of: Option<HostParts>,
 ) -> Buffer {
     if let Some(pages) = buffer.host_pages() {
-        keep_in(&pages, &buffer, log, runs);
+        keep_in(&pages, &buffer, log, runs, made_of);
     }
     buffer
 }
 
-/// Give `pages`, the pages `buffer` was just made in, `log` and `runs` to keep, and name the
-/// buffer to their copy where they are one ([`kept`]).
+/// Give `pages`, the pages `buffer` was just made in, `log`, `runs` and what it was `made_of` to
+/// keep ([`HostPages::made_of`]), and name the buffer to their copy where they are one
+/// ([`kept`]).
 fn keep_in(
     pages: &HostPages,
     buffer: &Buffer,
     log: Option<Arc<PagesLog>>,
     runs: Option<(Arc<RamOnDevice>, Box<[std::ops::Range<u64>]>)>,
+    made_of: Option<HostParts>,
 ) {
     let key = buffer.identity().key;
     if let Some(log) = log {
@@ -2302,6 +2285,9 @@ fn keep_in(
     pages.copied_as(key);
     if let Some(runs) = runs {
         pages.keep_runs(runs);
+    }
+    if let Some(made_of) = made_of {
+        pages.keep_made_of(made_of);
     }
 }
 
