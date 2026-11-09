@@ -43,6 +43,10 @@ use metal2vulkan_runtime::{
     TextureDescriptor, Viewport, VisibilityResultMode,
 };
 
+/// The kind the early-tests draws of [`the_sample_coverage_applies_after_the_fragment_function`]
+/// take on a device that does not state `earlyFragmentMultisampleCoverageAfterSampleCounting`.
+pub(super) const PAST_EARLY_MASKS: [Degradation; 1] = [Degradation::VisibilityPastEarlyMask];
+
 /// The target's side.
 const SIDE: u64 = 16;
 
@@ -455,9 +459,10 @@ fn the_sample_coverage_applies_after_the_fragment_function() {
     );
     // One sample is never refused: its three draws.
     assert!(drawn >= 3, "{name}: {drawn} draws");
+    let [past_mask] = PAST_EARLY_MASKS;
     let announced = (messages.take_notices().iter())
         .filter_map(|m| m.degradation.as_ref())
-        .any(|n| n.degradation == Degradation::VisibilityPastEarlyMask);
+        .any(|n| n.degradation == past_mask);
     assert_eq!(
         announced, !counts_after,
         "{name}: visibility-past-early-mask announced"

@@ -117,7 +117,9 @@
 //! together on a driver that merges submissions in `grouped_submissions` ([`GROUPED`]),
 //! visibility
 //! counts of draws writing several colors on a driver that counts each sample once per color in
-//! `color_groups` ([`PER_COLOR_COUNTS`]), passes that load and draw a signed normalized attachment
+//! `color_groups` ([`PER_COLOR_COUNTS`]), visibility counts of early-tests draws whose fragment
+//! function writes its sample mask on a device that may count after it in `sample_coverage`
+//! ([`PAST_EARLY_MASKS`]), passes that load and draw a signed normalized attachment
 //! holding a minimum code, or an `RGB9E5Float` one holding an unnormalized word, in
 //! `snorm_tile_store` ([`SNORM_MINIMUM`], [`SHARED_EXPONENT`]), condition words of command
 //! predication past their buffer that read memory unrelated to it in `predication`
@@ -210,6 +212,7 @@ use super::resource_ids::{
 };
 use super::rotated_textures::ROTATED_LOADS;
 use super::sample_copies::DRAWN_DEPTH;
+use super::sample_coverage::PAST_EARLY_MASKS;
 use super::shader_stencil::SHADOW;
 use super::snorm_tile_store::{SHARED_EXPONENT, SNORM_MINIMUM};
 use super::sparse_textures::SPARSE;
@@ -547,6 +550,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &OWN_COPIES,
         &KEPT_COLORS,
         &PER_COLOR_COUNTS,
+        &PAST_EARLY_MASKS,
         &DRAWN_DEPTH,
         &USAGE_SHADOWS,
         &HEAP_PLANES,
