@@ -98,6 +98,17 @@
 //!   each is in the encoder's part, the pass's reads and the instance's gathered uses already,
 //!   inside the last draw's or one covering it, so it notes, adds and gathers none of them,
 //!   comparing none.
+//! - **Carried.** The kept draw of the command buffer's last render encoder, carried into this
+//!   one (`render/carried.rs`), is rebound as one after draws of other states and calls that set
+//!   the render state, through no record: its tables' stamps are the encoder's first ones, so it
+//!   brings in every slot the encoder's calls bound since its opening, whatever table its bind
+//!   state was read from. It stops where that state holds a slot none of them bound, or a
+//!   threadgroup memory length or acceleration structure (`WorkCounts::draws_carry_stopped_stale`:
+//!   a new encoder inherits no binding), where it samples a texture an attachment of its pass
+//!   renders (`draws_carry_stopped_attached`), or at any other stop (`draws_carry_stopped_other`).
+//!   Its uses are made again whole; it begins its pass's first instance as every step's first draw
+//!   does (`RenderLowering::inline_begin`), and records every state command it sets into that
+//!   instance's command buffer, whose record holds none (`WorkCounts::draws_rebound_carried`).
 //! - **Checked in builds with debug assertions.** As a draw again is: the first rebound draw of a
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
@@ -110,7 +121,9 @@
 //!   memory, meet no geometry write the moved ones do not, add nothing to the pass's reads, are
 //!   noted and touched as the last command's, and are the instance's last gathered uses; of a draw
 //!   inside, its moved uses lie inside the noted ones and add nothing to the pass's reads or the
-//!   instance's gathered uses.
+//!   instance's gathered uses. Of carried draws, the first of a command buffer and every second
+//!   after it take every step instead, counted apart (`DrawAgain::carries`), the draw they keep
+//!   recorded into the instance they began.
 
 use ash::vk;
 use metal2vulkan::bind::{DescriptorRange, DrawCall};
