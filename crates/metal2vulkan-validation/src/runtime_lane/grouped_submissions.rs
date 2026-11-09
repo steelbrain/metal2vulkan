@@ -1142,14 +1142,14 @@ struct HandlerWait {
     ends: [u64; 7],
     /// What the device counted since `A`'s commit, once `A` was taken in, `B` scheduled and `X`
     /// scheduled.
-    steps: [Step; 3],
+    steps: [StepCounts; 3],
     /// How long after `X`'s commit `A`'s completed handler ran; `None` where it ran before.
     a_completed_after_x: Option<std::time::Duration>,
 }
 
 /// What the device counted since `A`'s commit at one step of [`behind_another_queue_s_handler`].
 #[derive(Debug, Clone, Copy)]
-struct Step {
+struct StepCounts {
     /// Kernel submissions made, groups kept and batches grouped.
     submissions: u64,
     kept: u64,
@@ -1164,10 +1164,10 @@ struct Step {
     ends: [u64; 7],
 }
 
-impl Step {
+impl StepCounts {
     /// The counts from `before` to `after`.
-    fn between(before: &WorkCounts, after: &WorkCounts) -> Step {
-        Step {
+    fn between(before: &WorkCounts, after: &WorkCounts) -> StepCounts {
+        StepCounts {
             submissions: after.queue_submissions - before.queue_submissions,
             kept: after.groups_kept_pending - before.groups_kept_pending,
             grouped: after.batches_grouped - before.batches_grouped,
@@ -1238,7 +1238,7 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
         }
         blit.end_encoding().unwrap();
         let before_a = device.work_counts();
-        let step = || Step::between(&before_a, &device.work_counts());
+        let step = || StepCounts::between(&before_a, &device.work_counts());
         let a_completed = Arc::new(Mutex::new(None));
         {
             let a_completed = Arc::clone(&a_completed);
