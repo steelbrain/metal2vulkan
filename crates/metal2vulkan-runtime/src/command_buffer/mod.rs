@@ -2683,8 +2683,11 @@ impl CommandBuffer {
     ///   work otherwise. What the runtime took before it runs is never held back by it for
     ///   another command queue: batches held for one kernel submission go to the driver before
     ///   the scheduler thread runs a handler of a command buffer of another queue than theirs, as
-    ///   Metal schedules a queue's command buffers whatever another queue's handler does. Those of
-    ///   its own queue may wait for it, as Metal runs one queue's handlers one at a time.
+    ///   Metal schedules a queue's command buffers whatever another queue's handler does; and a
+    ///   command buffer taken with no submission (it needs no GPU work) whose `VkQueue` has no
+    ///   work in flight has its completion turn made before the thread that took it runs a
+    ///   handler, so its completion never waits for one. Those of its own queue may wait for it,
+    ///   as Metal runs one queue's handlers one at a time.
     ///
     /// Refused once the command buffer is committed (`Invalid`, `Problem::HandlerAfterCommit`),
     /// as [`add_scheduled_handler`](Self::add_scheduled_handler) is.

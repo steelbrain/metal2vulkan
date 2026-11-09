@@ -107,8 +107,10 @@
 //!   that finishes the batch before it, by the waiter that saw that one complete. Where its queue
 //!   reached that value already and no turn is under way, no waiter is woken for it: the thread
 //!   that took it makes the turn itself once it holds no lock ([`Completion::turn_owed`]), the
-//!   scheduler's or a thread about to block for a command buffer, which runs only plain
-//!   transitions (`CommandBufferShared::finish_here`). A turn takes every queue's batches seen
+//!   scheduler's, a committing thread's or a thread about to block for a command buffer, which
+//!   runs only plain transitions (`CommandBufferShared::finish_here`), and makes it before it
+//!   runs a submission handler or check: one that waited for that completion would otherwise
+//!   wait for its own return. A turn takes every queue's batches seen
 //!   reached, so the one turn at a time on the device keeps every order above. Counted:
 //!   `WorkCounts::completion_turns_where_taken`.
 //! - **Published once a host wait returned for it** ([`seen`]). The host sees a batch's writes once

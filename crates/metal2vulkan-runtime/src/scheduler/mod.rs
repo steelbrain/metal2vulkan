@@ -88,7 +88,10 @@
 //!   submission handlers once it submitted its last batch, or held it in a group (below), in
 //!   submission order among the command buffers its passes took so, once it let go of the lock
 //!   and before it lets go of the command buffers, before its next pass, which they hold back.
-//!   The command buffer's transition to `Scheduled` waits for them.
+//!   The command buffer's transition to `Scheduled` waits for them. They hold back no completion
+//!   of what the passes took: a command buffer taken with no submission whose `VkQueue` has no
+//!   work in flight, whose completion turn is this thread's (`Completion::turn_owed`), is
+//!   finished before they run.
 //! - **Host steps**. A batch that executes commands the GPU may write
 //!   (`CommandBufferShared::needs_host_step`) is held, once otherwise ready, until every
 //!   `VkQueue` completed what was submitted to it by then (its gate, a snapshot of the queues'
@@ -950,8 +953,9 @@ impl Scheduler {
     /// meanwhile, goes to the thread, which it wakes ([`Woken::Host`]); else, where it submitted
     /// alone a batch that may wait in a group ([`Plain::alone`]), it wakes the thread as that
     /// batch's hand-off would have ([`Woken::Commit`], the module docs). Where a passer is counted,
-    /// that pass takes the commit in. Then it makes the completion turn a command buffer that needs
-    /// no GPU work left it (`Completion::turn_owed`).
+    /// that pass takes the commit in. After each pass, before its submission handlers and its
+    /// check, it makes the completion turn a command buffer that needs no GPU work left it
+    /// (`Completion::turn_owed`), so neither waits for that completion.
     ///
     /// It runs the program's code only in the submission checks of the heads it checks and the
     /// submission handlers of the batches it submitted: a scheduled handler is run on its queue's
@@ -972,6 +976,10 @@ impl Scheduler {
                     submitted += pass.submitted;
                     alone += pass.alone;
                     let left_over = pass.left_over;
+                    // The completion turn a command buffer the pass took with no submission left
+                    // this thread, before the handlers and the check, as the scheduler's thread
+                    // makes it before its handlers ([`round`]).
+                    device.shared().completion.turn_owed();
                     let Some(check) = pass.let_go(&shared.turns, device) else {
                         return (submitted, alone, checked, left_over);
                     };
@@ -996,7 +1004,6 @@ impl Scheduler {
         } else if alone > 0 {
             self.wake_for(Woken::Commit);
         }
-        device.shared().completion.turn_owed();
     }
 
     /// What makes the thread look for work again from any thread: a pipeline a held batch's
@@ -1376,12 +1383,12 @@ fn run_work(shared: &Arc<SchedulerShared>, kind: Kind, work: Work) -> bool {
 /// thread no work and none stopped at [`PASS_SUBMISSIONS`] ([`Inbox::pass`]; such a pass marked
 /// the state for the next round), what they leave added to `left` and what they let go of to
 /// `passed` (empty, kept from round to round); then, without the lock, what they let go of: the
-/// switches of storage forms settled ended and the submission handlers run (on this thread,
-/// before its next pass; neither once the process is exiting, as the thread then runs nothing
-/// more, their command buffers
-/// staying `Committed`), the holds dropped (the last reference to a command buffer may be among
-/// them, and with it its device, whose drop stops this thread). False once the process is
-/// exiting.
+/// switches of storage forms settled ended, the completion turn a command buffer they took with
+/// no submission left this thread made (`Completion::turn_owed`), and the submission handlers
+/// run (on this thread, before its next pass; none of these once the process is exiting, as the
+/// thread then runs nothing more, their command buffers staying `Committed`), the holds dropped
+/// (the last reference to a command buffer may be among them, and with it its device, whose drop
+/// stops this thread). False once the process is exiting.
 fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -> bool {
     (shared.inbox).pass(|state, commits| {
         shared.passes.fetch_add(1, Ordering::Relaxed);
@@ -1398,13 +1405,15 @@ fn round(shared: &SchedulerShared, left: &mut Left<Work>, passed: &mut Passed) -
         }
     } else {
         settle(&mut passed.settled);
-        shared.turns.run(&mut passed.handlers, &mut passed.turns);
         // A command buffer that needs no GPU work, taken with no submission behind no work in
-        // flight, is finished by this thread, after its submission handlers and holding no lock
-        // (`Completion::turn_owed`). Every command buffer the passes took is in `spent`.
+        // flight, is finished by this thread, holding no lock (`Completion::turn_owed`), before
+        // it runs a submission handler: a handler that waits for its completion (another
+        // queue's, as Metal delivers) would otherwise wait for its own return. Every command
+        // buffer the passes took is in `spent`.
         if let Some(buffer) = passed.spent.first() {
             buffer.device().shared().completion.turn_owed();
         }
+        shared.turns.run(&mut passed.handlers, &mut passed.turns);
     }
     passed.spent.clear();
     !passed.exiting
