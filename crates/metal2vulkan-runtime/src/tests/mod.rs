@@ -466,6 +466,8 @@ mod sorted_chunks;
 mod spares;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod spares_bench;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod spares_latency;
 mod sparse;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod srgb_fetch_images;

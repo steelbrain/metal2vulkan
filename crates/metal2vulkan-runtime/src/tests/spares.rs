@@ -289,9 +289,9 @@ fn a_spare_command_pool_begins_ahead_out_of_the_spares() {
 }
 
 /// A pool given back keeps, of each level, the command buffers the most one of its last
-/// [`RECENT_USES`] uses handed out, a secondary at least, and gives up the rest to be freed, at
-/// most the number asked at once: a command buffer of many encoders leaves its pool holding them
-/// only until that many smaller ones used it.
+/// [`RECENT_USES`] uses handed out, a secondary at least, and gives up the rest to be freed: a
+/// command buffer of many encoders leaves its pool holding them only until that many smaller ones
+/// used it.
 #[test]
 fn a_pool_given_back_keeps_what_its_recent_uses_handed_out() {
     let primary = vk::CommandBufferLevel::PRIMARY;
@@ -303,31 +303,25 @@ fn a_pool_given_back_keeps_what_its_recent_uses_handed_out() {
     }
     pool.made(secondary, vk::CommandBuffer::from_raw(1000));
     pool.made(secondary, vk::CommandBuffer::from_raw(1001));
-    assert!(
-        pool.given_back(now, usize::MAX).is_empty(),
-        "its own use's are kept"
-    );
+    assert!(pool.given_back(now).is_empty(), "its own use's are kept");
     assert_eq!(pool.held(), 102);
     // Smaller uses: three primaries each, no secondary.
-    let small = |pool: &mut CommandPool, most: usize| {
+    let small = |pool: &mut CommandPool| {
         pool.taken();
         for _ in 0..3 {
             assert!(pool.reuse(primary).is_some());
         }
-        pool.given_back(now, most)
+        pool.given_back(now)
     };
     for use_ in 1..RECENT_USES {
         assert!(
-            small(&mut pool, usize::MAX).is_empty(),
+            small(&mut pool).is_empty(),
             "use {use_}: the large one is among the last"
         );
     }
-    // The large use leaves the last ones: at most 40 go at once, the last made first.
-    let past = small(&mut pool, 40);
-    let expected: Vec<_> = (61..=100u64).map(vk::CommandBuffer::from_raw).collect();
-    assert_eq!(past, expected);
-    let past = small(&mut pool, usize::MAX);
-    let mut expected: Vec<_> = (4..=60u64).map(vk::CommandBuffer::from_raw).collect();
+    // The large use leaves the last ones: every command buffer past them goes.
+    let past = small(&mut pool);
+    let mut expected: Vec<_> = (4..=100u64).map(vk::CommandBuffer::from_raw).collect();
     expected.push(vk::CommandBuffer::from_raw(1001));
     assert_eq!(
         past, expected,
@@ -343,7 +337,7 @@ fn a_pool_given_back_keeps_what_its_recent_uses_handed_out() {
 }
 
 /// The oldest spare no command buffer took for [`IDLE_FOR`] since it was given back, and that
-/// holds a command buffer, is taken out of the spares to shed them, the primary begun ahead
+/// holds a command buffer, is taken out of the spares to shed them all, the primary begun ahead
 /// first, and goes back as the oldest, so that a taker takes a spare that still holds its command
 /// buffers first.
 #[test]
@@ -354,32 +348,30 @@ fn a_spare_left_idle_sheds_its_command_buffers_and_goes_back_the_oldest() {
         let mut pool = CommandPool::new(vk::CommandPool::from_raw(n), 0);
         pool.made(primary, vk::CommandBuffer::from_raw(n * 10));
         pool.made(primary, vk::CommandBuffer::from_raw(n * 10 + 1));
-        assert!(pool.given_back(given, usize::MAX).is_empty());
+        assert!(pool.given_back(given).is_empty());
         pool
     };
     let mut pools = vec![pool(1, start), pool(2, start + IDLE_FOR / 2)];
     pools[0].begun = Some(vk::CommandBuffer::from_raw(19));
     let mut empty = CommandPool::new(vk::CommandPool::from_raw(3), 0);
-    assert!(empty.given_back(start, usize::MAX).is_empty());
+    assert!(empty.given_back(start).is_empty());
     keep_command_pool(&mut pools, empty);
     assert!(take_idle(&mut pools, start + IDLE_FOR / 2).is_none());
     let mut pool = take_idle(&mut pools, start + IDLE_FOR).expect("the pool given back first");
     assert_eq!(pool.raw, vk::CommandPool::from_raw(1));
     assert_eq!(
-        pool.shed(2),
+        pool.shed(),
         [
             vk::CommandBuffer::from_raw(19),
+            vk::CommandBuffer::from_raw(10),
             vk::CommandBuffer::from_raw(11)
         ],
-        "the begun primary first, then the last made"
+        "the begun primary first"
     );
+    assert_eq!(pool.held(), 0);
     keep_idle_command_pool(&mut pools, pool);
     let raws: Vec<_> = pools.iter().map(|pool| pool.raw.as_raw()).collect();
     assert_eq!(raws, [1, 2, 3], "the oldest");
-    let mut pool = take_idle(&mut pools, start + IDLE_FOR).expect("still idle, still holding one");
-    assert_eq!(pool.shed(usize::MAX), [vk::CommandBuffer::from_raw(10)]);
-    assert_eq!(pool.held(), 0);
-    keep_idle_command_pool(&mut pools, pool);
     let idle = take_idle(&mut pools, start + 2 * IDLE_FOR).expect("the second");
     assert_eq!(
         idle.raw,
@@ -391,7 +383,6 @@ fn a_spare_left_idle_sheds_its_command_buffers_and_goes_back_the_oldest() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device {
     use super::RECENT_USES;
-    use crate::spares::FREED_AT_ONCE;
     use crate::tests::freed_memory::device;
     use crate::{Buffer, CommandQueue, Device, ResourceOptions};
     use std::time::{Duration, Instant};
@@ -402,9 +393,13 @@ mod device {
     /// The longest a command buffer, or the spares' count, is waited for.
     const WAIT: Duration = Duration::from_secs(30);
 
-    /// Commit a command buffer of `queue` of `encoders` blit encoders, each filling `target`, and
-    /// wait for it.
-    fn fills(queue: &CommandQueue, target: &Buffer, encoders: usize) {
+    /// The device's free thread (`free_thread.rs`).
+    const FREE_THREAD: &str = "metal2vulkan-frees";
+
+    /// Commit a command buffer of `queue` of `device` of `encoders` blit encoders, each filling
+    /// `target`, and wait for it, then for the frees its pool's give-back posted to the device's
+    /// free thread, so that the next command buffer takes the pool again.
+    fn fills(device: &Device, queue: &CommandQueue, target: &Buffer, encoders: usize) {
         let command_buffer = queue.command_buffer().unwrap();
         for at in 0..encoders {
             let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -413,6 +408,7 @@ mod device {
         }
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
+        device.shared().frees.drain();
     }
 
     /// The command buffers the device's spare command pools hold once `done` holds of it, or
@@ -428,28 +424,36 @@ mod device {
         }
     }
 
+    /// A burst's command buffers go once the pool's recent uses no longer reach them, freed on
+    /// the device's free thread, never on the thread that saw a command buffer complete.
     #[test]
-    fn command_buffers_the_spares_hold_fall_back_after_a_burst() {
+    fn command_buffers_the_spares_hold_fall_back_after_a_burst_freed_on_the_free_thread() {
         let scratch = std::env::temp_dir().join(format!("m2v-spares-{}", std::process::id()));
         std::fs::create_dir_all(&scratch).unwrap();
         let device = device(&scratch);
         let queue = device.new_command_queue().unwrap();
         let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
-        fills(&queue, &target, 1);
+        fills(&device, &queue, &target, 1);
         let before = held_once(&device, |held| held > 0);
-        fills(&queue, &target, BURST);
+        fills(&device, &queue, &target, BURST);
         let burst = held_once(&device, |held| held >= before + BURST / 2);
-        // The burst's use leaves the pool's recent uses after as many more, and the give-backs
-        // from then on free what it made, a few at each.
-        let more = RECENT_USES + BURST.div_ceil(FREED_AT_ONCE);
+        // The burst's use leaves the pool's recent uses after as many more, and the give-back
+        // then frees what it made.
+        let more = RECENT_USES + 1;
         for _ in 0..more {
-            fills(&queue, &target, 1);
+            fills(&device, &queue, &target, 1);
         }
         let after = held_once(&device, |held| held <= before + 2);
+        let freed_on = device.shared().spares.freed_on();
         println!(
             "SPARES {}: command buffers the spares hold: {before} after a command buffer of one \
-             blit encoder, {burst} after one of {BURST}, {after} after {more} more of one",
+             blit encoder, {burst} after one of {BURST}, {after} after {more} more of one; freed \
+             on {freed_on:?}",
             device.name()
+        );
+        assert!(
+            !freed_on.is_empty() && freed_on.iter().all(|name| name == FREE_THREAD),
+            "the spares' command buffers were freed on {freed_on:?}, not on {FREE_THREAD} alone"
         );
         assert!(
             burst >= before + BURST / 2,

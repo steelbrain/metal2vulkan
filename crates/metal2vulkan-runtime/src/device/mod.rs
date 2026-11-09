@@ -1048,7 +1048,9 @@ impl Drop for DeviceShared {
         // queues are idle.
         self.scheduler.release_kept(self.vk());
         self.scheduler.release_idle(self.vk());
-        // No command buffer is left to give back a spare, or to hold one.
+        // No command buffer is left to give back a spare, or to hold one; the spare command pools
+        // whose command buffers the free thread frees are kept again once it did (`spares.rs`).
+        self.frees.drain();
         self.spares.release(self);
         if let Some(internal) = lock(&self.internal).take() {
             internal.destroy(self.vk());
