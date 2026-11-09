@@ -44,7 +44,9 @@
 //!   slowest), which returned their GTT, where the trim of 252 at once took 5.2 to 6.3 ms; on an
 //!   Iris Xe (ANV) 64 to 103 us and 43 to 47 us, the driver keeping their memory for the command
 //!   buffers it makes next; on an RTX 5080 Laptop GPU (NVIDIA 615) 4 to 7 us and 0.4 to 48 us
-//!   (0.22 ms at the slowest); on lavapipe a few microseconds.
+//!   (0.22 ms at the slowest); on an Apple M3 Max (MoltenVK 1.4.2) 0.9 to 1.0 us each (3.5 us at
+//!   the slowest), the process's physical footprint unchanged by them (its first 252 command
+//!   buffers had added 176 KiB to it, which stayed); on lavapipe a few microseconds.
 //! - **Descriptor pools are bounded.** At most [`DESCRIPTOR_POOLS`] descriptor pools of at most
 //!   [`DESCRIPTORS`] descriptors together; a descriptor pool given back past them releases the
 //!   oldest spares first, so the spares follow the shapes in use. The descriptors bound the
