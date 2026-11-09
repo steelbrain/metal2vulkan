@@ -1513,10 +1513,12 @@ fn a_draw_unlike_its_kept_draw_is_counted_by_what_differed() {
 /// Indexed draws that differ from the draw before only in their first index (their index
 /// buffer's offset) are rebound with it (`WorkCounts::draws_rebound_arguments`): their index
 /// buffer bound at their offset and their Vulkan draw, with the same commands of every kind, state
-/// commands, noted uses and pixels as the same draws with a call between each that changes nothing
-/// for them, each of which takes every step; the `at`th draws the `at`th rectangle's indices
+/// commands and pixels as the same draws with a call between each that changes nothing for them,
+/// each of which takes every step; the `at`th draws the `at`th rectangle's indices
 /// ([`rectangle_points`]), as each column's count of draws shows. So are draws that differ only in
-/// their base vertex, of the same indices, the `at`th from the `at`th rectangle's first point.
+/// their base vertex, of the same indices, the `at`th from the `at`th rectangle's first point:
+/// their uses are the draw before's, so each is inside (`WorkCounts::draws_moved_inside`) and
+/// compares none of them, where every step notes them as before.
 #[test]
 fn draws_of_another_first_index_alone_are_rebound_with_their_pixels() {
     let scratch = Scratch::new("draw-again-first-index");
@@ -1562,9 +1564,9 @@ fn draws_of_another_first_index_alone_are_rebound_with_their_pixels() {
     let forgets = |encoder: &mut RenderCommandEncoder| encoder.set_tessellation_factor_scale(1.0);
     let first_indices: Arguments = (|at| 12 * at, |_| 0);
     let base_vertices: Arguments = (|_| 0, |at| 6 * at as i32);
-    for (form, arguments) in [
-        ("first index", first_indices),
-        ("base vertex", base_vertices),
+    for (form, arguments, within) in [
+        ("first index", first_indices, 0),
+        ("base vertex", base_vertices, drawn_alone(HITS)),
     ] {
         warm(&device, |encoder| draws(encoder, arguments, &nothing));
         let rebound = run(&device, |encoder| draws(encoder, arguments, &nothing));
@@ -1585,11 +1587,8 @@ fn draws_of_another_first_index_alone_are_rebound_with_their_pixels() {
             rebound.words, every.words,
             "the pixels of the draws: {form}"
         );
-        let counts: [(&str, fn(&WorkCounts) -> u64); 3] = [
+        let counts: [(&str, fn(&WorkCounts) -> u64); 2] = [
             ("draw_states_recorded", |counts| counts.draw_states_recorded),
-            ("commands_noted_as_before", |counts| {
-                counts.commands_noted_as_before
-            }),
             ("draws_pushing_set_zero", |counts| {
                 counts.draws_pushing_set_zero
             }),
@@ -1601,6 +1600,15 @@ fn draws_of_another_first_index_alone_are_rebound_with_their_pixels() {
                 "{form}: {name}"
             );
         }
+        // A draw inside compares none of its uses; every step notes them as before.
+        let inside = rebound.counted(|counts| counts.draws_moved_inside);
+        assert_eq!(inside, within, "{form}: draws inside");
+        let as_before = |counts: &WorkCounts| counts.commands_noted_as_before;
+        assert_eq!(
+            rebound.counted(as_before) + inside,
+            every.counted(as_before),
+            "{form}: commands_noted_as_before"
+        );
         // Column 0 holds the first draw's rectangle alone; the last column every draw's.
         let last = SIDE as usize - 1;
         assert_ne!(rebound.words[0], rebound.words[last], "the draws' {form}");

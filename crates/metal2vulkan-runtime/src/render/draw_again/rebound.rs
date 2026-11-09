@@ -102,14 +102,14 @@
 //!   kept draw and every second after it work out the rebind, then take every step instead, which
 //!   must keep the draw, with the same commands, set-0 writes, dynamic offsets, push bytes, vertex
 //!   buffers and uses, and record it with the same draw state, Vulkan draw and index buffer bind;
-//!   of other arguments, the draw kept is the kept draw with them, its index source and draw. What a draw moved skips is asserted where it skips it: its function tables
-//!   pass, it meets no shadow where its kept draw met none and no detached buffer, it pushes the
-//!   kept draw's set-0 writes, a set
-//!   0 it pushes or binds none of is the record's, its uses are unwritten in a pass whose
-//!   fragments wrote nothing, and of a draw narrowed, its other uses share no attachment memory,
-//!   meet no geometry write the moved ones do not, add nothing to the pass's reads, are noted and
-//!   touched as the last command's, and are the instance's last gathered uses; of a draw inside,
-//!   its moved uses lie inside the noted ones and add nothing to the pass's reads or the
+//!   of other arguments, the draw kept is the kept draw with them, its index source and draw.
+//!   What a draw moved skips is asserted where it skips it: its function tables pass, it meets no
+//!   shadow where its kept draw met none and no detached buffer, it pushes the kept draw's set-0
+//!   writes, a set 0 it pushes or binds none of is the record's, its uses are unwritten in a pass
+//!   whose fragments wrote nothing, and of a draw narrowed, its other uses share no attachment
+//!   memory, meet no geometry write the moved ones do not, add nothing to the pass's reads, are
+//!   noted and touched as the last command's, and are the instance's last gathered uses; of a draw
+//!   inside, its moved uses lie inside the noted ones and add nothing to the pass's reads or the
 //!   instance's gathered uses.
 
 use ash::vk;
