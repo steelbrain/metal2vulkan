@@ -852,6 +852,54 @@ fn a_quiet_key_is_looked_up_again_once_a_buffer_moves_or_joins() {
     );
 }
 
+/// The keys an ended encoder found go to the device's next encoder (`HostAliases::quiet`): one
+/// that opens while nothing changed looks none of them up again, and takes what they took; one
+/// that opens after a change looks its keys up again, and takes what they take now.
+#[test]
+fn an_ended_encoder_s_keys_go_to_the_next_while_nothing_changes() {
+    let aliases = Aliases::default();
+    let mut all = Vec::new();
+    let (first, second, alone) = (ResourceKey::new(), ResourceKey::new(), ResourceKey::new());
+    // Two keys over one range crowd the device's placements; a third lies alone.
+    aliases.place(first, (0x10_0000, 0x1000));
+    aliases.place(second, (0x10_0000, 0x1000));
+    aliases.place(alone, (0x40_0000, 0x1000));
+    let (quiet_use, crowded_use) = ([write(alone, 0x800..0x840)], [write(second, 0x80..0xc0)]);
+    let crowded_takes = vec![crowded_use[0].clone(), write(first, 0x80..0xc0)];
+    // An encoder with nothing given back looks its two keys up, once each.
+    let mut encoder = aliases.quiet();
+    assert!(!aliases.augment_into(&quiet_use, &mut all, Some(&mut encoder)));
+    assert!(aliases.augment_into(&crowded_use, &mut all, Some(&mut encoder)));
+    assert_eq!(all, crowded_takes);
+    assert_eq!(aliases.lookups(), 2);
+    aliases.give_quiet(encoder);
+    // The next looks up neither, and its crowded key's use takes what it took.
+    for _ in 0..3 {
+        let mut encoder = aliases.quiet();
+        assert!(!aliases.augment_into(&quiet_use, &mut all, Some(&mut encoder)));
+        assert!(aliases.augment_into(&crowded_use, &mut all, Some(&mut encoder)));
+        assert_eq!(all, crowded_takes);
+        aliases.give_quiet(encoder);
+    }
+    assert_eq!(
+        aliases.lookups(),
+        2,
+        "keys given back are not looked up again"
+    );
+    // A buffer placed over the second half of the lone key's bytes: the next encoder looks the
+    // key up again, and its use takes the new key's.
+    let moved = ResourceKey::new();
+    aliases.place(moved, (0x40_0800, 0x1000));
+    let mut encoder = aliases.quiet();
+    assert!(aliases.augment_into(&quiet_use, &mut all, Some(&mut encoder)));
+    assert_eq!(all, vec![quiet_use[0].clone(), write(moved, 0..0x40)]);
+    assert_eq!(
+        aliases.lookups(),
+        3,
+        "keys given back are looked up again after a change"
+    );
+}
+
 /// Keys placed, rebound, removed and joined at random, and uses of random bytes of them: an
 /// encoder that keeps what it found of each key (`host_aliases::Quiet`) carries exactly the uses
 /// a lookup of every use under the lock gives (`HostAliases::augment`), and looks a command up

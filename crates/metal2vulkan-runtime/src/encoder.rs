@@ -649,7 +649,8 @@ impl EncoderCore {
             twin_writes: Vec::new(),
             unattached_as_called: false,
             aliased_uses: Vec::new(),
-            aliases_quiet: Quiet::default(),
+            // The keys an ended encoder found, which hold here while the version stands.
+            aliases_quiet: command_buffer.generation().aliases.quiet(),
             gathers: GatherRuns::default(),
             id: CORES.fetch_add(1, Ordering::Relaxed),
             replaying: false,
@@ -2680,9 +2681,12 @@ impl EncoderCore {
             faults,
             twin_writes,
             routes,
+            aliases_quiet,
             ..
         } = self;
         ended.push(raw);
+        // The keys it found, for the device's next encoder (`host_aliases::Quiet`).
+        (open.command_buffer.generation().aliases).give_quiet(aliases_quiet);
         let keyed = open
             .command_buffer
             .device()

@@ -70,7 +70,9 @@
 //!   ranges meet, and of one use added per range met otherwise. An encoder keeps the keys it
 //!   found, each with what a use of its bytes takes ([`Quiet`]): while no buffer joins a memory,
 //!   is placed, moves or goes, its commands whose uses of bytes name only those take no lock and
-//!   work the uses they take out from what it keeps.
+//!   work the uses they take out from what it keeps. An encoder that ends gives its keys to the
+//!   device's next encoder to open ([`HostAliases::give_quiet`]), so a frame of many passes over
+//!   the same buffers looks each key up once while nothing changes, not once a pass.
 //!   Each range keeps the ranges that meet it, so a use reads them there rather than looking them
 //!   up by address, but where they outnumber the classes of length that lookup visits
 //!   ([`Placements::sharing`]). A remap reported keeps a placement: it orders more than the pages
@@ -144,7 +146,18 @@ pub(super) struct HostAliases<I = HostImport> {
     /// `WorkCounts::host_alias_lookups`).
     lookups: AtomicU64,
     inner: Mutex<Inner<I>>,
+    /// The keys ended encoders found, newest last, for the encoders opening next
+    /// ([`quiet`](Self::quiet)): at most [`SPARE_QUIETS`], each of at most [`QUIET_KEPT`] keys.
+    spare_quiets: Mutex<Vec<Quiet>>,
 }
+
+/// The most sets of keys found the device keeps for encoders to open with ([`Quiet`]): one for
+/// each thread that encodes at once, as a window server's few do.
+const SPARE_QUIETS: usize = 8;
+
+/// The most keys found an ended encoder's set may hold to be kept ([`HostAliases::give_quiet`]):
+/// one of more goes, so what the device keeps stays bounded.
+const QUIET_KEPT: usize = 256;
 
 /// The keys found while the host aliases stood at `version` ([`HostAliases::augment_into`]), each
 /// with the uses a use of its bytes takes then ([`Takes`]): none for a key over which no buffer
@@ -156,7 +169,10 @@ pub(super) struct HostAliases<I = HostImport> {
 /// goes: each use takes the uses it took when its key was found, worked out from what the key
 /// keeps (a draw's uses of a buffer placed in a heap over host pages that another range meets,
 /// as the consumer's upload chunks lie in its guest RAM, the bytes moving draw after draw); a
-/// change of the version forgets them.
+/// change of the version forgets them. An encoder opens with the keys an ended one gave back
+/// ([`HostAliases::quiet`]): they hold for any encoder of the device while the version stands,
+/// since what a key takes is a function of the buffers joined and placed alone, and the first
+/// command that finds the version changed forgets them as it would its own.
 #[derive(Default)]
 pub(super) struct Quiet {
     version: u64,
@@ -287,6 +303,7 @@ impl<I> Default for HostAliases<I> {
             placed: AtomicUsize::new(0),
             version: AtomicU64::new(0),
             lookups: AtomicU64::new(0),
+            spare_quiets: Mutex::new(Vec::new()),
             inner: Mutex::new(Inner {
                 made_over: KeyMap::default(),
                 memories: Memories::default(),
@@ -638,6 +655,31 @@ impl<I> HostAliases<I> {
     /// (`WorkCounts::host_alias_lookups`).
     pub(super) fn lookups(&self) -> u64 {
         self.lookups.load(Ordering::Relaxed)
+    }
+
+    /// The keys an encoder opening starts from ([`Quiet`]): the newest set an ended encoder gave
+    /// back ([`give_quiet`](Self::give_quiet)), else none. Where no buffer joined a memory and no
+    /// placed range is crowded, no command looks a key up ([`augment_into`](Self::augment_into)'s
+    /// first check), so it starts from none, taking no lock.
+    pub(super) fn quiet(&self) -> Quiet {
+        if !self.any.load(Ordering::Relaxed) && !self.crowded.load(Ordering::Relaxed) {
+            return Quiet::default();
+        }
+        lock(&self.spare_quiets).pop().unwrap_or_default()
+    }
+
+    /// Keep `quiet`, the keys an ended encoder found, for the next encoder to open
+    /// ([`quiet`](Self::quiet)): where it holds any, at most [`QUIET_KEPT`] of them, found at the
+    /// version that stands, and fewer than [`SPARE_QUIETS`] sets are kept; else it goes.
+    pub(super) fn give_quiet(&self, quiet: Quiet) {
+        if quiet.keys.is_empty() || quiet.keys.len() > QUIET_KEPT || quiet.version != self.version()
+        {
+            return;
+        }
+        let mut spare = lock(&self.spare_quiets);
+        if spare.len() < SPARE_QUIETS {
+            spare.push(quiet);
+        }
     }
 }
 
