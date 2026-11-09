@@ -3281,13 +3281,16 @@ bound.
   (`GpuRecoveryVictim`), and every later call of the device and of its command queues goes to the
   new `VkDevice`; a queue's lent `VkQueue` (`CommandQueue::with_vk_queue`) comes with the
   `VkDevice` it belongs to, the new one from then on. Announced at each recovery, by the call that made it; the reason names the hang's
-  command buffer (an inference, said so, where two or more `VkQueue`s had work in flight) and how
-  long the recovery took. Announced too, at most once each per recovery whatever an earlier
+  command buffer (an inference, said so, where two or more `VkQueue`s had work in flight), how
+  long the recovery took, and the objects it carried to the new `VkDevice` and left refused, by
+  kind. Announced too, at most once each per recovery whatever an earlier
   recovery announced: where a call waited past 10 seconds for the recovery under way, where its
   command buffers in flight took past 10 seconds to fail, and where its new `VkDevice` could not
-  be made, after which the device answers as a lost one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the objects made
-  before the recovery are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it
-  wait for it, and a device call the loss met while it ran runs again after it.
+  be made, after which the device answers as a lost one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the events,
+  `Private` buffers and buffers in fresh pages made before it go on, a `Private` buffer's contents
+  lost (it reads zero); the other objects made before it are refused (`MadeBeforeRecovery`), where
+  Metal's go on; the calls during it wait for it, and a device call the loss met while it ran runs
+  again after it.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
   private device properties the device has no answer for: no document describes them and nothing the
   device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is

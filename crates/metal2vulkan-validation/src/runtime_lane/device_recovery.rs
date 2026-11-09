@@ -5,7 +5,8 @@
 //! Metal's device survives a GPU recovery: the hung command buffer fails with `GpuHang`, the others
 //! in flight with `GpuRecoveryVictim`, a queue's second hang revokes it (`AccessRevoked`), and the
 //! program goes on with the same device and queues. The runtime makes a new `VkDevice` behind the
-//! device: its command queues go on, objects made before are refused where they meet the new one
+//! device: its command queues go on, the events, `Private` buffers and buffers in fresh pages made
+//! before go on with it, other objects made before are refused where they meet the new one
 //! (`RuntimeGap::MadeBeforeRecovery`), and the lost `VkDevice` goes once they went. The layer
 //! reporting nothing over each test is the check that no handle of the lost `VkDevice` reached the
 //! new one.
@@ -241,7 +242,8 @@ fn a_recovery_fails_the_command_buffers_on_their_way_as_its_victims() {
     });
 }
 
-/// An object made before a recovery is refused where it meets the new `VkDevice`, typed; the same
+/// An object made before a recovery that it does not carry (a pooled `Shared` buffer) is refused
+/// where it meets the new `VkDevice`, typed; the same
 /// object made again serves. The lost `VkDevice` stays while an object made on it lives, so the
 /// device holds two, and goes with the last of them, once a `Device::raw` call that answered its
 /// handles was followed by one that answered the new one's.

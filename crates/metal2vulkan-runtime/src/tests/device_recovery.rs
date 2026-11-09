@@ -34,10 +34,10 @@ const COPIES: u64 = 24;
 const ATTEMPTS: usize = 6;
 
 /// A scratch directory for the device's shader cache, removed when dropped.
-struct Scratch(PathBuf);
+pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Scratch {
-    fn new() -> Scratch {
+    pub(super) fn new() -> Scratch {
         let path = std::env::temp_dir().join(format!("m2v-device-recovery-{}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         Scratch(path)
@@ -52,15 +52,15 @@ impl Drop for Scratch {
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
-fn device(cache: &Path) -> Device {
+pub(super) fn device(cache: &Path) -> Device {
     device_with(cache, None)
 }
 
 /// The degrade notices a device's sink heard, in order.
-type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
+pub(super) type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 
 /// [`device`], its degrade notices kept in `heard`.
-fn heard_device(cache: &Path, heard: &Heard) -> Device {
+pub(super) fn heard_device(cache: &Path, heard: &Heard) -> Device {
     let heard = Arc::clone(heard);
     device_with(
         cache,
@@ -125,11 +125,13 @@ fn busy(device: &Device, queue: &CommandQueue) -> CommandBuffer {
 
 /// The longest the test waits for a command buffer to complete: one that does not fails the test
 /// at its line, its status named, where an unbounded wait would hang it.
-const WAIT: Duration = Duration::from_secs(60);
+pub(super) const WAIT: Duration = Duration::from_secs(60);
 
 /// The command buffer's final status and error, awaited for at most [`WAIT`].
 #[track_caller]
-fn outcome(command_buffer: &CommandBuffer) -> (CommandBufferStatus, Option<CommandBufferError>) {
+pub(super) fn outcome(
+    command_buffer: &CommandBuffer,
+) -> (CommandBufferStatus, Option<CommandBufferError>) {
     if command_buffer.wait_until_completed_for(WAIT).is_err() {
         panic!(
             "a command buffer did not complete in {WAIT:?}: {:?}, {:?}",
@@ -318,7 +320,7 @@ const WAITERS: usize = 3;
 /// The recovery notices `heard` holds from `from` on whose object is `object`: a recovery's own
 /// is "the device", a call's wait for one "a call made during the device's recovery", its command
 /// buffers' failing past the bound "the device's recovery" (`device/line.rs`).
-fn recovery_notices(heard: &Heard, from: usize, object: &str) -> Vec<String> {
+pub(super) fn recovery_notices(heard: &Heard, from: usize, object: &str) -> Vec<String> {
     heard.lock().unwrap()[from..]
         .iter()
         .filter(|notice| notice.degradation == Degradation::DeviceRecovered)
@@ -483,6 +485,7 @@ fn a_call_refused_for_a_loss_under_it_runs_again_on_the_next_generation() {
 fn a_call_that_took_its_arguments_completes_on_a_generation_lost_after() {
     let scratch = Scratch::new();
     let device = device(&scratch.0);
+    // A pooled `Shared` buffer, which a recovery leaves refused (`device/carry.rs`).
     let buffer = device
         .at_serving_taking(4096, |serving, length| {
             serving.recover_for_test().unwrap();

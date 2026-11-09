@@ -726,12 +726,20 @@ meanwhile wait for it.
   second run could not have, runs on the new `VkDevice` where the loss came before it took them,
   and completes on the lost one where the loss came after, its object then one made before the
   recovery.
-- An object made before the recovery is refused where it meets the new `VkDevice` (an encoder's
-  bind, a pipeline made from its functions) and in its own calls that need its lost one:
-  `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. Make it again. Metal's objects go on.
-- The lost `VkDevice` is destroyed once the objects made on it went and, where `Device::raw`
+- The recovery carries the events, the `Private` buffers and the buffers in the runtime's fresh
+  pages to the new `VkDevice`: the same objects, at the same addresses. An event keeps the value
+  the host saw and its listeners' notifications. A buffer in fresh pages keeps its bytes and its
+  `contents` pointer. A `Private` buffer's contents are lost: it reads zero.
+- Any other object made before the recovery is refused where it meets the new `VkDevice` (an
+  encoder's bind, a pipeline made from its functions) and in its own calls that need its lost one:
+  `Error::NotImplemented(RuntimeGap::MadeBeforeRecovery)`. That covers pooled `Shared` and
+  `Managed` buffers (their `contents` pointer is the lost memory's mapping), no-copy buffers,
+  heaps, textures, pipeline states, libraries and exportable memory or events. Make it again.
+  Metal's objects go on. The recovery's notice counts the buffers and events it carried and left.
+- The lost `VkDevice` is destroyed once the objects left on it went and, where `Device::raw`
   answered its handles, a later `raw` call answered the new one's: `WorkCounts::vk_devices_live`
-  reads 2 until then. `vk_devices_made` and `device_recoveries` count the rest.
+  reads 2 until then. A carried object holds nothing of it once none of its command buffers
+  records. `vk_devices_made` and `device_recoveries` count the rest.
 - Each recovery is announced (`device-recovered`), naming the hang's command buffer.
 - `Device::raw` answers the new `VkDevice`'s handles once a later call asks; the handles it
   answered before stay valid until then, and the lost `VkDevice` stays alive until then, so the

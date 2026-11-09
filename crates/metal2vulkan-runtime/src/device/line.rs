@@ -16,8 +16,10 @@
 //!   [`Device::at_serving_taking`]). A *generation* handle holds one generation: the device of
 //!   every object made on it (a buffer's, a pipeline state's), through which the object's Vulkan
 //!   calls reach its own `VkDevice` alone, its drop included. So no object's Vulkan handle ever
-//!   reaches another generation's `VkDevice`, and an object made before a recovery is refused
-//!   where it meets the new generation (`RuntimeGap::MadeBeforeRecovery`, `error.rs`).
+//!   reaches another generation's `VkDevice`: the recovery carries the program's events, `Private`
+//!   buffers and buffers in fresh pages to the new generation, each with new Vulkan objects there
+//!   (`carry.rs`), and any other object made before it is refused where it meets the new
+//!   generation (`RuntimeGap::MadeBeforeRecovery`, `error.rs`).
 //! - **The states.** [`State`]: the line serves one generation (`Live`); once it is lost, the
 //!   first call that needs the device recovers it (`Lost`, then claimed), while every other call
 //!   waits for that recovery, the first to wait past [`RECOVERY_NOTICE`] announcing it and waiting
@@ -29,8 +31,9 @@
 //!   its queues waited idle, each under its lock; then a new `VkDevice` of the same physical
 //!   device, options, queue families and extensions (`create.rs`, the same making as the first),
 //!   whose device-level objects are made as the first generation's were, the shader cache's
-//!   records kept on disk warm. The calls waiting go on with it, the command queues made before
-//!   take a new place on it at their next command buffer (`queue.rs`), and it announces
+//!   records kept on disk warm. It carries the program's objects it can to the new generation
+//!   before that serves (`carry.rs`). The calls waiting go on with it, the command queues made
+//!   before take a new place on it at their next command buffer (`queue.rs`), and it announces
 //!   `Degradation::DeviceRecovered`.
 //! - **Each recovery's notices are its own.** The kinds a device announced go on across its
 //!   generations, each kind announced once for the device, but a recovery's notices
@@ -44,10 +47,11 @@
 //!   `uniqueIdentifier`s, so nothing made after a recovery takes an address or an identity one made
 //!   before holds.
 //! - **At most two `VkDevice`s.** A generation is destroyed when its last handle goes: the lost
-//!   one once the objects made on it went, and, where `Device::raw` of a root handle answered its
+//!   one once the objects left on it went (a carried object lets go of it once none of its
+//!   command buffers records, `carry.rs`), and, where `Device::raw` of a root handle answered its
 //!   handles, once a later such call answered the new one's (`Line::lend`), the new one serving
-//!   meanwhile. Counted: `WorkCounts::vk_devices_live`. A second recovery while objects made
-//!   before the first still live keeps their `VkDevice` as well, counted there too.
+//!   meanwhile. Counted: `WorkCounts::vk_devices_live`. A second recovery while objects left on
+//!   the first's lost generation still live keeps their `VkDevice` as well, counted there too.
 
 use super::create;
 use super::{holds, lock, Device, DeviceOptions, DeviceShared, InstanceShared};
@@ -605,8 +609,10 @@ impl Device {
     /// its queue as Metal counts a hang, so a queue's second revokes it, `AccessRevoked`) and the
     /// rest as its victims (`GpuRecoveryVictim`); the runtime makes a new `VkDevice` of the same
     /// physical device, options, queue families and extensions, and every later call of the
-    /// device, and of its command queues, goes to it. An object made before is refused where it
-    /// meets it (`RuntimeGap::MadeBeforeRecovery`). Announced (`Degradation::DeviceRecovered`).
+    /// device, and of its command queues, goes to it. The events, `Private` buffers and buffers in
+    /// fresh pages made before go on there (`device/carry.rs`); any other object made before is
+    /// refused where it meets it (`RuntimeGap::MadeBeforeRecovery`). Announced
+    /// (`Degradation::DeviceRecovered`).
     /// Returns once the new `VkDevice` serves; where it could not be made, `DeviceLost`, and the
     /// device answers as a lost one from then on.
     ///
@@ -668,9 +674,10 @@ impl Device {
     /// the one serving next, and the call then runs on it whole, a loss of it from then on
     /// following the call, as one after the call returned would. Its checks of the generation's
     /// loss answer so ([`RunsOn`]): the call is not refused for a loss once it took its
-    /// arguments, and answers as on a generation lost after it (its objects of that generation,
-    /// refused where they meet the next: `RuntimeGap::MadeBeforeRecovery`). A line that cannot
-    /// recover refuses it as before.
+    /// arguments, and answers as on a generation lost after it: its objects of that generation,
+    /// carried to the next by their maker where a recovery carries such (`carry.rs`), else refused
+    /// where they meet the next (`RuntimeGap::MadeBeforeRecovery`). A line that cannot recover
+    /// refuses it as before.
     pub(crate) fn at_serving_taking<A, T>(
         &self,
         taken: A,

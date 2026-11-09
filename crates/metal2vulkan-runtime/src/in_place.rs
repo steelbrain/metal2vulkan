@@ -1324,7 +1324,7 @@ impl Device {
     /// recovery's new one (`Degradation::DeviceRecovered`) reads the record so too;
     /// where the lost one's check had not ended, or the device keeps no record (no shader cache
     /// directory, or `DeviceOptions::fail_in_place_check`), they are pending again, and this
-    /// answers `false` until the new one's check ends. Buffers made before a
+    /// answers `false` until the new one's check ends. No-copy buffers made before a
     /// recovery are refused on the new device (`RuntimeGap::MadeBeforeRecovery`), so a program
     /// makes its textures over host pages again after one, and asks again.
     pub fn settle_in_place_checks(&self, timeout: Duration) -> bool {

@@ -2223,14 +2223,17 @@ degradations! {
         /// (`GpuRecoveryVictim`); every later call goes to the new `VkDevice`. Announced at each
         /// recovery, from the call that made it; the payload names the culprit (where two or more
         /// `VkQueue`s had work in flight it is an inference, and says so) and the recovery's
-        /// time. Announced as well, at most once each per recovery, whatever an earlier recovery
-        /// announced: where a call waited past 10 seconds for the recovery under way (it waits
-        /// on), where its command buffers in flight took past 10 seconds to fail (it waits on),
-        /// and where its new `VkDevice` could not be made (the device then answers as a lost
-        /// one).
+        /// time, and the objects it carried to the new `VkDevice` and left refused, by kind
+        /// (`device/carry.rs`). Announced as well, at most once each per recovery, whatever an
+        /// earlier recovery announced: where a call waited past 10 seconds for the recovery under
+        /// way (it waits on), where its command buffers in flight took past 10 seconds to fail (it
+        /// waits on), and where its new `VkDevice` could not be made (the device then answers as
+        /// a lost one).
         DeviceRecovered = "device-recovered", Performance,
-            "the objects made before the recovery are refused (`MadeBeforeRecovery`), where \
-             Metal's go on; the calls during it wait for it";
+            "the events, `Private` buffers and buffers in fresh pages made before it go on, a \
+             `Private` buffer's contents lost (it reads zero); the other objects made before it \
+             are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait \
+             for it";
         /// Apple's private device properties the device has no answer for
         /// (`private_properties.rs`): no document describes them and nothing the device reports
         /// maps to them. Announced once, when `Device::private_properties` is first read; the

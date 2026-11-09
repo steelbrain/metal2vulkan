@@ -2013,15 +2013,22 @@ pub enum RuntimeGap {
     /// bytes it may reach through a root table), and a resolve target set on a texture a draw of
     /// the pass read.
     ColorAttachmentGroups,
-    /// An object made before its device's recovery from the loss of its `VkDevice` (the runtime
-    /// made a new `VkDevice` behind the device, announced as `Degradation::DeviceRecovered`;
-    /// `Device::recover_for_test` runs the same recovery). The object's Vulkan objects are the
-    /// lost `VkDevice`'s, which serves nothing more, and the runtime does not make them again on
-    /// the new one: a call that meets it with the new generation (an encoder's bind, a pipeline's
-    /// making from its functions, a buffer or texture placed in its heap) or that needs its own
-    /// lost `VkDevice` (its placements, its imports again, its event signals) is refused, where
-    /// Metal's object goes on. The same object made again on the device serves; a command
-    /// buffer made before the recovery fails as its victim (`GpuRecoveryVictim`).
+    /// An object made before its device's recovery from the loss of its `VkDevice` that the
+    /// recovery did not carry to the new one (the runtime made a new `VkDevice` behind the device,
+    /// announced as `Degradation::DeviceRecovered`; `Device::recover_for_test` runs the same
+    /// recovery). The recovery carries the events, the `Private` buffers (their contents lost:
+    /// they read zero) and the buffers in the runtime's fresh pages (their contents and
+    /// `contents` pointer kept); every other object's Vulkan objects are the lost `VkDevice`'s,
+    /// which serves nothing more: a pooled `Shared` or `Managed` buffer, whose `contents` pointer
+    /// is its lost memory's mapping, a no-copy buffer, a heap and its resources, a texture, a
+    /// pipeline state, a library, a sampler state, an indirect command buffer, a buffer over the
+    /// caller's `VkBuffer` or exportable memory, and an event made exportable. A call that meets
+    /// such an object with the new generation (an encoder's bind, a pipeline's making from its
+    /// functions, a buffer or texture placed in its heap) or that needs its own lost `VkDevice`
+    /// (its placements, its imports again, its event signals) is refused, where Metal's object
+    /// goes on; the recovery's notice counts the buffers and events it left. The same object made
+    /// again on the device serves; a command buffer made before the recovery fails as its victim
+    /// (`GpuRecoveryVictim`).
     MadeBeforeRecovery,
     /// `Device::recover_for_test` on a device the consumer made (`Device::from_raw`): the runtime
     /// cannot make a new `VkDevice` of the consumer's, so it recovers none, and the device is
