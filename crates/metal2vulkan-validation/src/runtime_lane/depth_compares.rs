@@ -31,8 +31,13 @@
 //! runtime sampler and a nearest sampler the argument buffer holds beside the texture under each of
 //! the eight functions. (A sampler that filters leaves a heap texture's comparison to the device,
 //! which the module records, so it is not asked here.)
+//!
+//! A device whose uploads clamp a depth outside [0, 1] (`degrade_notices::clamps_depth_uploads`:
+//! without `VK_EXT_depth_range_unrestricted`, MoltenVK's included) holds the `Depth32Float`
+//! texels as its upload gives them ([`CLAMPED`]) and announces `restricted-depth-upload`; each
+//! comparison is checked against the texel the texture holds.
 
-use super::degrade_notices::counts;
+use super::degrade_notices::{clamps_depth_uploads, counts};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -737,6 +742,18 @@ fn runtime_sampler(
 /// Jobs (each a coordinate and a reference), each with what Metal's answer to it depends on.
 type Jobs<T> = (Vec<[f32; 4]>, Vec<T>);
 
+/// [`VALUES`] as the upload of a device whose uploads clamp gives them to the depth image
+/// (`bind::clamped_depth`): -1 as 0, 2 and 1000 as 1, every other one as it is.
+const CLAMPED: [f32; 16] = {
+    let mut clamped = VALUES;
+    let mut i = 0;
+    while i < VALUES.len() {
+        clamped[i] = f32::from_bits(metal2vulkan::bind::clamped_depth(VALUES[i].to_bits()));
+        i += 1;
+    }
+    clamped
+};
+
 /// The jobs of a `sample_compare` at each texel's centre, with each job's texel and reference:
 /// every reference around the texel, and the special ones.
 fn sample_jobs(texels: Texels) -> Jobs<(usize, f32)> {
@@ -790,7 +807,9 @@ fn gather_jobs(texels: Texels) -> Jobs<([usize; 4], f32)> {
 /// argument buffer that holds the texture: through the constexpr nearest samplers, and through a
 /// nearest runtime sampler and a nearest sampler the argument buffer holds under each of the eight
 /// functions. Elsewhere the comparisons are the device's: the stages announce `device-sampling`,
-/// and the comparisons that differ from Metal's are printed.
+/// and the comparisons that differ from Metal's are printed. Each is checked against the texel
+/// the texture holds: [`CLAMPED`]'s where the device's uploads clamp, which announce
+/// `restricted-depth-upload` exactly there.
 #[test]
 fn depth_comparisons_compare_as_metal_does() {
     let cache = ScratchCache::new().unwrap();
@@ -804,9 +823,14 @@ fn depth_comparisons_compare_as_metal_does() {
             .enabled()
             .properties
             .contains(&VkProperty::MetalSampler);
+        let clamps = clamps_depth_uploads(&device);
+        let float32 = match clamps {
+            true => &CLAMPED,
+            false => &VALUES,
+        };
         let mut compared = 0;
         let mut wrong = Vec::new();
-        for texels in [Texels::Unorm16(&CODES), Texels::Float32(&VALUES)] {
+        for texels in [Texels::Unorm16(&CODES), Texels::Float32(float32)] {
             let (n, w) = compare(&device, texels);
             eprintln!(
                 "{name}: {:?}: {} of {n} comparisons differ",
@@ -821,6 +845,11 @@ fn depth_comparisons_compare_as_metal_does() {
             announced.contains_key(&Degradation::DeviceSampling),
             own,
             "{name}: device-sampling exactly where the device's sampler is not Metal's"
+        );
+        assert_eq!(
+            announced.contains_key(&Degradation::RestrictedDepthUpload),
+            clamps,
+            "{name}: restricted-depth-upload exactly where the device's uploads clamp"
         );
         if own {
             for w in &wrong {
