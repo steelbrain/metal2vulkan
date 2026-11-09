@@ -127,7 +127,9 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     event.set_signaled_value(5);
     let listener = SharedEventListener::new();
     let (sent, notified) = mpsc::channel();
-    let notification = move |_: &SharedEvent, value: u64| drop(sent.send(value));
+    let notification = move |_: &SharedEvent, value: u64| {
+        let _ = sent.send(value);
+    };
     event.notify_listener(&listener, 9, Box::new(notification));
     let before = pooled.device().work_counts_now();
     let from = heard.lock().unwrap().len();
