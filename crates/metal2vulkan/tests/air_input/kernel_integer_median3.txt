@@ -1,0 +1,279 @@
+target triple = "air64_v28-apple-macosx26.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t4 = type void (ptr addrspace(1), ptr addrspace(1), i32)
+%t6 = type i8 (i8, i8, i8)
+%t8 = type i16 (i16, i16, i16)
+%t9 = type i32 (i32, i32, i32)
+%t11 = type i64 (i64, i64, i64)
+%t13 = type <4 x i8> (<4 x i8>, <4 x i8>, <4 x i8>)
+%t15 = type <2 x i16> (<2 x i16>, <2 x i16>, <2 x i16>)
+%t17 = type <4 x i32> (<4 x i32>, <4 x i32>, <4 x i32>)
+%t19 = type <2 x i64> (<2 x i64>, <2 x i64>, <2 x i64>)
+%t21 = type [2 x i32]
+c17 = %t21 [27, 2]
+
+define %t4 @f0 "median3_ops" memory(ModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture "air-buffer-no-alias"="" ) %a1( Mod nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = mul i32 %a2, i32 3
+  %i1 = zext %i0 to i64
+  %i2 = getelementptr inbounds i64, %a0, %i1
+  %i3 = load i64, %i2, align 8
+  %i4 = add i32 %i0, i32 1
+  %i5 = zext %i4 to i64
+  %i6 = getelementptr inbounds i64, %a0, %i5
+  %i7 = load i64, %i6, align 8
+  %i8 = add i32 %i0, i32 2
+  %i9 = zext %i8 to i64
+  %i10 = getelementptr inbounds i64, %a0, %i9
+  %i11 = load i64, %i10, align 8
+  %i12 = shl i32 %a2, i32 5
+  %i13 = zext %i12 to i64
+  %i14 = getelementptr inbounds i32, %a1, %i13
+  %i15 = trunc %i3 to i8
+  %i16 = trunc %i7 to i8
+  %i17 = trunc %i11 to i8
+  %i18 = tail call i8 @f1 [air Math(Math { f: IMedian3(Signed), precision: Precise, ty: NumTy { elem: I8, lanes: 1 } })](%i15, %i16, %i17)
+  %i19 = sext %i18 to i32
+  store %i19, %i14, align 4
+  %i21 = tail call i8 @f2 [air Math(Math { f: IMedian3(Unsigned), precision: Precise, ty: NumTy { elem: I8, lanes: 1 } })](%i15, %i16, %i17)
+  %i22 = zext %i21 to i32
+  %i23 = getelementptr inbounds i32, %i14, i64 1
+  store %i22, %i23, align 4
+  %i25 = trunc %i3 to i16
+  %i26 = trunc %i7 to i16
+  %i27 = trunc %i11 to i16
+  %i28 = tail call i16 @f3 [air Math(Math { f: IMedian3(Signed), precision: Precise, ty: NumTy { elem: I16, lanes: 1 } })](%i25, %i26, %i27)
+  %i29 = sext %i28 to i32
+  %i30 = getelementptr inbounds i32, %i14, i64 2
+  store %i29, %i30, align 4
+  %i32 = tail call i16 @f4 [air Math(Math { f: IMedian3(Unsigned), precision: Precise, ty: NumTy { elem: I16, lanes: 1 } })](%i25, %i26, %i27)
+  %i33 = zext %i32 to i32
+  %i34 = getelementptr inbounds i32, %i14, i64 3
+  store %i33, %i34, align 4
+  %i36 = trunc %i3 to i32
+  %i37 = trunc %i7 to i32
+  %i38 = trunc %i11 to i32
+  %i39 = tail call i32 @f5 [air Math(Math { f: IMedian3(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 1 } })](%i36, %i37, %i38)
+  %i40 = getelementptr inbounds i32, %i14, i64 4
+  store %i39, %i40, align 4
+  %i42 = tail call i32 @f6 [air Math(Math { f: IMedian3(Unsigned), precision: Precise, ty: NumTy { elem: I32, lanes: 1 } })](%i36, %i37, %i38)
+  %i43 = getelementptr inbounds i32, %i14, i64 5
+  store %i42, %i43, align 4
+  %i45 = tail call i64 @f7 [air Math(Math { f: IMedian3(Signed), precision: Precise, ty: NumTy { elem: I64, lanes: 1 } })](%i3, %i7, %i11)
+  %i46 = trunc %i45 to i32
+  %i47 = getelementptr inbounds i32, %i14, i64 6
+  store %i46, %i47, align 4
+  %i49 = lshr i64 %i45, i64 32
+  %i50 = trunc %i49 to i32
+  %i51 = getelementptr inbounds i32, %i14, i64 7
+  store %i50, %i51, align 4
+  %i53 = tail call i64 @f8 [air Math(Math { f: IMedian3(Unsigned), precision: Precise, ty: NumTy { elem: I64, lanes: 1 } })](%i3, %i7, %i11)
+  %i54 = trunc %i53 to i32
+  %i55 = getelementptr inbounds i32, %i14, i64 8
+  store %i54, %i55, align 4
+  %i57 = lshr i64 %i53, i64 32
+  %i58 = trunc %i57 to i32
+  %i59 = getelementptr inbounds i32, %i14, i64 9
+  store %i58, %i59, align 4
+  %i61 = bitcast %i36 to <4 x i8>
+  %i62 = bitcast %i37 to <4 x i8>
+  %i63 = bitcast %i38 to <4 x i8>
+  %i64 = tail call <4 x i8> @f9 [air Math(Math { f: IMedian3(Signed), precision: Precise, ty: NumTy { elem: I8, lanes: 4 } })](%i61, %i62, %i63)
+  %i65 = bitcast %i36 to <2 x i16>
+  %i66 = bitcast %i37 to <2 x i16>
+  %i67 = bitcast %i38 to <2 x i16>
+  %i68 = tail call <2 x i16> @f10 [air Math(Math { f: IMedian3(Unsigned), precision: Precise, ty: NumTy { elem: I16, lanes: 2 } })](%i65, %i66, %i67)
+  %i69 = insertelement <2 x i64> undef, %i3, i64 0
+  %i70 = xor i64 %i3, i64 18446744073709551615
+  %i71 = insertelement %i69, %i70, i64 1
+  %i72 = bitcast %i71 to <4 x i32>
+  %i73 = insertelement <2 x i64> undef, %i7, i64 0
+  %i74 = xor i64 %i7, i64 18446744073709551615
+  %i75 = insertelement %i73, %i74, i64 1
+  %i76 = bitcast %i75 to <4 x i32>
+  %i77 = insertelement <2 x i64> undef, %i11, i64 0
+  %i78 = xor i64 %i11, i64 18446744073709551615
+  %i79 = insertelement %i77, %i78, i64 1
+  %i80 = bitcast %i79 to <4 x i32>
+  %i81 = tail call <4 x i32> @f11 [air Math(Math { f: IMedian3(Signed), precision: Precise, ty: NumTy { elem: I32, lanes: 4 } })](%i72, %i76, %i80)
+  %i82 = tail call <4 x i32> @f12 [air Math(Math { f: IMedian3(Unsigned), precision: Precise, ty: NumTy { elem: I32, lanes: 4 } })](%i72, %i76, %i80)
+  %i83 = tail call <2 x i64> @f13 [air Math(Math { f: IMedian3(Signed), precision: Precise, ty: NumTy { elem: I64, lanes: 2 } })](%i71, %i75, %i79)
+  %i84 = tail call <2 x i64> @f14 [air Math(Math { f: IMedian3(Unsigned), precision: Precise, ty: NumTy { elem: I64, lanes: 2 } })](%i71, %i75, %i79)
+  %i85 = extractelement %i64, i64 0
+  %i86 = sext %i85 to i32
+  %i87 = getelementptr inbounds i32, %i14, i64 10
+  store %i86, %i87, align 4
+  %i89 = extractelement %i64, i64 1
+  %i90 = sext %i89 to i32
+  %i91 = getelementptr inbounds i32, %i14, i64 11
+  store %i90, %i91, align 4
+  %i93 = extractelement %i64, i64 2
+  %i94 = sext %i93 to i32
+  %i95 = getelementptr inbounds i32, %i14, i64 12
+  store %i94, %i95, align 4
+  %i97 = extractelement %i64, i64 3
+  %i98 = sext %i97 to i32
+  %i99 = getelementptr inbounds i32, %i14, i64 13
+  store %i98, %i99, align 4
+  %i101 = extractelement %i68, i64 0
+  %i102 = zext %i101 to i32
+  %i103 = getelementptr inbounds i32, %i14, i64 14
+  store %i102, %i103, align 4
+  %i105 = extractelement %i68, i64 1
+  %i106 = zext %i105 to i32
+  %i107 = getelementptr inbounds i32, %i14, i64 15
+  store %i106, %i107, align 4
+  %i109 = extractelement %i81, i64 0
+  %i110 = getelementptr inbounds i32, %i14, i64 16
+  store %i109, %i110, align 4
+  %i112 = extractelement %i81, i64 1
+  %i113 = getelementptr inbounds i32, %i14, i64 17
+  store %i112, %i113, align 4
+  %i115 = extractelement %i81, i64 2
+  %i116 = getelementptr inbounds i32, %i14, i64 18
+  store %i115, %i116, align 4
+  %i118 = extractelement %i81, i64 3
+  %i119 = getelementptr inbounds i32, %i14, i64 19
+  store %i118, %i119, align 4
+  %i121 = extractelement %i82, i64 0
+  %i122 = getelementptr inbounds i32, %i14, i64 20
+  store %i121, %i122, align 4
+  %i124 = extractelement %i82, i64 1
+  %i125 = getelementptr inbounds i32, %i14, i64 21
+  store %i124, %i125, align 4
+  %i127 = extractelement %i82, i64 2
+  %i128 = getelementptr inbounds i32, %i14, i64 22
+  store %i127, %i128, align 4
+  %i130 = extractelement %i82, i64 3
+  %i131 = getelementptr inbounds i32, %i14, i64 23
+  store %i130, %i131, align 4
+  %i133 = extractelement %i83, i64 0
+  %i134 = trunc %i133 to i32
+  %i135 = getelementptr inbounds i32, %i14, i64 24
+  store %i134, %i135, align 4
+  %i137 = lshr i64 %i133, i64 32
+  %i138 = trunc %i137 to i32
+  %i139 = getelementptr inbounds i32, %i14, i64 25
+  store %i138, %i139, align 4
+  %i141 = extractelement %i83, i64 1
+  %i142 = trunc %i141 to i32
+  %i143 = getelementptr inbounds i32, %i14, i64 26
+  store %i142, %i143, align 4
+  %i145 = lshr i64 %i141, i64 32
+  %i146 = trunc %i145 to i32
+  %i147 = getelementptr inbounds i32, %i14, i64 27
+  store %i146, %i147, align 4
+  %i149 = extractelement %i84, i64 0
+  %i150 = trunc %i149 to i32
+  %i151 = getelementptr inbounds i32, %i14, i64 28
+  store %i150, %i151, align 4
+  %i153 = lshr i64 %i149, i64 32
+  %i154 = trunc %i153 to i32
+  %i155 = getelementptr inbounds i32, %i14, i64 29
+  store %i154, %i155, align 4
+  %i157 = extractelement %i84, i64 1
+  %i158 = trunc %i157 to i32
+  %i159 = getelementptr inbounds i32, %i14, i64 30
+  store %i158, %i159, align 4
+  %i161 = lshr i64 %i157, i64 32
+  %i162 = trunc %i161 to i32
+  %i163 = getelementptr inbounds i32, %i14, i64 31
+  store %i162, %i163, align 4
+  ret void
+}
+
+declare %t6 @f1 "air.median3.s.i8" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t6 @f2 "air.median3.u.i8" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t8 @f3 "air.median3.s.i16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t8 @f4 "air.median3.u.i16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t9 @f5 "air.median3.s.i32" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t9 @f6 "air.median3.u.i32" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t11 @f7 "air.median3.s.i64" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t11 @f8 "air.median3.u.i64" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t13 @f9 "air.median3.s.v4i8" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t15 @f10 "air.median3.u.v2i16" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t17 @f11 "air.median3.s.v4i32" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t17 @f12 "air.median3.u.v4i32" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t19 @f13 "air.median3.s.v2i64" memory(NoModRef, NoModRef, NoModRef)
+
+declare %t19 @f14 "air.median3.u.v2i64" memory(NoModRef, NoModRef, NoModRef)
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.buffer"
+!md10 = !"air.location_index"
+!md11 = !"air.read"
+!md12 = !"air.address_space"
+!md13 = !"air.arg_type_size"
+!md14 = !"air.arg_type_align_size"
+!md15 = !"air.arg_type_name"
+!md16 = !"ulong"
+!md17 = !"air.arg_name"
+!md18 = !"x"
+!md19 = !"air.read_write"
+!md20 = !"uint"
+!md21 = !"o"
+!md22 = !"air.thread_position_in_grid"
+!md23 = !"t"
+!md24 = !"air.compile.denorms_disable"
+!md25 = !"air.compile.fast_math_enable"
+!md26 = !"air.compile.framebuffer_fetch_enable"
+!md27 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md28 = !"Metal"
+!md29 = i32 2
+!md30 = %t21 c17
+!md31 = i32 1
+!md32 = i32 4
+!md33 = i32 7
+!md34 = i32 31
+!md35 = i32 128
+!md36 = i32 8
+!md37 = i32 16
+!md38 = ptr addrspace(0) @f0
+!md39 = i32 0
+!md40 = !{!md29, !md0, !md30}
+!md41 = !{!md31, !md1, !md32}
+!md42 = !{!md33, !md2, !md29}
+!md43 = !{!md33, !md3, !md34}
+!md44 = !{!md33, !md4, !md34}
+!md45 = !{!md33, !md5, !md34}
+!md46 = !{!md33, !md6, !md35}
+!md47 = !{!md33, !md7, !md36}
+!md48 = !{!md33, !md8, !md37}
+!md49 = !{}
+!md50 = !{!md39, !md9, !md10, !md39, !md31, !md11, !md12, !md31, !md13, !md36, !md14, !md36, !md15, !md16, !md17, !md18}
+!md51 = !{!md31, !md9, !md10, !md31, !md31, !md19, !md12, !md31, !md13, !md32, !md14, !md32, !md15, !md20, !md17, !md21}
+!md52 = !{!md29, !md22, !md15, !md20, !md17, !md23}
+!md53 = !{!md50, !md51, !md52}
+!md54 = !{!md38, !md49, !md53}
+!md55 = !{!md24}
+!md56 = !{!md25}
+!md57 = !{!md26}
+!md58 = !{!md27}
+!md59 = !{!md29, !md36, !md39}
+!md60 = !{!md28, !md32, !md39, !md39}
+!"llvm.module.flags" = !{!md40, !md41, !md42, !md43, !md44, !md45, !md46, !md47, !md48}
+!"air.kernel" = !{!md54}
+!"air.compile_options" = !{!md55, !md56, !md57}
+!"llvm.ident" = !{!md58}
+!"air.version" = !{!md59}
+!"air.language_version" = !{!md60}
