@@ -5515,8 +5515,9 @@ pub struct WorkCounts {
     pub group_ends_held: u64,
     /// Batches submitted (each held in a group counted as it is held) while no earlier batch of
     /// their `VkQueue` was pending: every one submitted before them the host had seen complete
-    /// (their queue's timeline at their values). With the three fields after this one, every
-    /// batch, by how far its queue's work ran behind its submission.
+    /// (their queue's timeline at their values), as of the completed value the hazard tracker took
+    /// for their plan, so a batch counted here is planned after no work in flight. With the three
+    /// fields after this one, every batch, by how far its queue's work ran behind its submission.
     pub batches_with_none_pending: u64,
     /// Batches submitted while one earlier batch of their `VkQueue` was pending.
     pub batches_with_one_pending: u64,

@@ -860,6 +860,43 @@ fn the_state_retires_only_through_the_completed_value() {
     assert_eq!(queue.entries(), 0);
 }
 
+/// A batch's count of the earlier batches of its `VkQueue` the host has not seen complete
+/// ([`Tracker::pending_before`], which `WorkCounts::batches_with_none_pending` and kin count) is
+/// the tracker's own, from the completed value its plan retires by: a read after the write of the
+/// batch before it has a barrier exactly where that batch is counted pending. A count from a
+/// later read of the queue's value could find that batch complete where the plan ordered after it.
+#[test]
+fn a_batch_is_counted_pending_behind_exactly_the_work_its_plan_orders_after() {
+    let write = || one(&[writes(1, bytes(0..256), copy_write())]);
+    let read = || one(&[reads(1, bytes(0..256), copy_read())]);
+    for seen in [0, 1] {
+        let mut queue = Tracker::default();
+        assert_eq!(queue.pending_before(at(1)), 0);
+        assert_eq!(commit(&mut queue, &[write()], 1), [None]);
+        queue.completed(0, seen);
+        let pending = queue.pending_before(at(2));
+        let barriers = commit(&mut queue, &[read()], 2);
+        let ordered = (seen == 0)
+            .then(|| barrier(copy_write(), copy_read()))
+            .flatten();
+        assert_eq!(
+            (pending, barriers),
+            (1 - seen, vec![ordered]),
+            "seen {seen}"
+        );
+    }
+    // Another queue's completion, and an older value, leave a queue's count as it was.
+    let mut queue = Tracker::default();
+    for value in 1..=3 {
+        assert_eq!(commit(&mut queue, &[read()], value), [None]);
+    }
+    queue.completed(0, 2);
+    queue.completed(1, 3);
+    queue.completed(0, 1);
+    assert_eq!(queue.pending_before(at(4)), 1);
+    assert_eq!(queue.pending_before(on(1, 4)), 0);
+}
+
 /// A completion looks only at the resources its batches touched: a thousand batches in flight,
 /// each reading a resource of its own, and the first one's completion retires its resource alone.
 #[test]

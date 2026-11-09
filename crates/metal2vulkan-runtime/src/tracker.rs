@@ -2647,6 +2647,15 @@ impl<K: Copy + Ord + Hash> Tracker<K> {
         }
     }
 
+    /// The batches of `at`'s `VkQueue` before it that the host had not seen complete as of the
+    /// last [`Tracker::completed`] of that queue: the value a plan at `at` retires by, so a plan
+    /// orders after the work of exactly these batches (`WorkCounts::batches_with_none_pending` and
+    /// kin count them).
+    pub(super) fn pending_before(&self, at: Point) -> u64 {
+        let through = self.completed.get(at.queue).copied().unwrap_or(0);
+        at.value.saturating_sub(1).saturating_sub(through)
+    }
+
     /// The barriers before the `encoders` of the batch submitted next, at `at`, and its waits.
     /// The state is unchanged; the plan's lists come from those plans applied before gave back.
     pub(super) fn plan<'a>(

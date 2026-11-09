@@ -577,10 +577,11 @@ impl CommandBufferShared {
             reached.push((value > 0).then_some((vk_queue.timeline, value)));
         }
         reached.extend(device.own_completed());
-        // The batches before it on its queue that the host has not seen complete: each took the
-        // next value (`WorkCounts::batches_with_none_pending` and kin).
-        let completed = shared.queues[queue].completed_value();
-        (shared.counts).batch_submitted_behind(scheduler.values[queue].saturating_sub(completed));
+        // The batches before it on its queue that the host has not seen complete, as of the value
+        // the tracker just took, which its plan orders by: each took the next value
+        // (`WorkCounts::batches_with_none_pending` and kin). A second read of the queue's value
+        // could see a completion the plan did not.
+        (shared.counts).batch_submitted_behind(scheduler.tracker.pending_before(at));
         // One a hang's thread made `Scheduled` early began then (`hang.rs`).
         if index == 0 && self.kernel.start() == 0 {
             self.kernel.begin();
