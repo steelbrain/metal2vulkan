@@ -1087,15 +1087,15 @@ fn a_keep_alive_goes_after_the_imports_of_its_pages() {
     });
 }
 
-/// The refusals: memfd memory with no source is no refusal, made on every device: where the
-/// device refuses its pointer (RADV) a copy of its pages (`copied.rs`), counted as the device's
-/// refusal (`WorkCounts::copied_host_buffers_device_refused`), else an import of the pointer. A
-/// source that fails keeps the device's refusal, called once; chunks that do not cover the pages,
-/// and a chunk whose descriptor is no dma-buf (the memfd itself), are the caller's misuse
-/// (`Invalid`, `DmaBuf`), their descriptors closed. No dma-buf import is counted for any of them.
-/// Where the device imports the pointer, each is made and no source is called.
+/// Without a working source: memfd memory with no source, and with a source that fails, is no
+/// refusal, made on every device: where the device refuses its pointer (RADV) a copy of its pages
+/// (`copied.rs`), counted as the device's refusal (`WorkCounts::copied_host_buffers_device_refused`),
+/// the failing source called once, else an import of the pointer, no source called. Chunks that
+/// do not cover the pages, and a chunk whose descriptor is no dma-buf (the memfd itself), are the
+/// caller's misuse (`Invalid`, `DmaBuf`), their descriptors closed. No dma-buf import is counted
+/// for any of them. Where the device imports the pointer, each is made and no source is called.
 #[test]
-fn shared_memory_is_refused_without_a_working_source() {
+fn shared_memory_without_a_working_source_is_a_copy_and_misuse_refused() {
     const TEST: &str = "dma-buf refusals";
     on_device(|device| {
         let page = host_page();
@@ -1148,8 +1148,31 @@ fn shared_memory_is_refused_without_a_working_source() {
             *counted.lock().unwrap() += 1;
             Err(std::io::Error::other("no dma-buf"))
         });
-        let failed = no_copy(device, &view, 0, 2 * page, failing);
-        check("a failing source", failed, not_importable);
+        // A view of its own, so that it lies in no copy the first buffer left.
+        let other = ram.view(&[(page, 2 * page)]);
+        let failed = no_copy(device, &other, 0, 2 * page, failing)
+            .unwrap_or_else(|error| panic!("{TEST}: a failing source: {error:?}"));
+        let copied = device.work_counts().copied_host_buffers_device_refused
+            - before_copies.copied_host_buffers_device_refused;
+        let backing = failed.host_backing();
+        match refuses {
+            Some(true) => assert_eq!(
+                (backing, copied),
+                (Some(HostBacking::Copied), 2),
+                "{TEST}: a failing source: a copy, for the device's refusal"
+            ),
+            Some(false) => assert_eq!(
+                (backing, copied),
+                (Some(HostBacking::ImportedByPointer), 0),
+                "{TEST}: a failing source: the pointer's import"
+            ),
+            None => eprintln!(
+                "{TEST}: a failing source, on {}: {backing:?}, {copied} copied for the device's \
+                 refusal",
+                device.name()
+            ),
+        }
+        drop(failed);
         let expected_calls = usize::from(refuses == Some(true));
         if refuses.is_some() {
             assert_eq!(*calls.lock().unwrap(), expected_calls, "{TEST}: calls");

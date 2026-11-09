@@ -70,10 +70,14 @@
 //! - **Rebinds** of a heap onto pages imported as dma-bufs make each such texture's image again
 //!   over its own new pages before the rebind settles (`rebind.rs`), and are refused
 //!   (`NotImplemented(RebindTextures)`) where one is not made.
-//! - **Refused** (the pointer's refusal: `Unsupported`, `HostMemory`): a source that fails, chunks
-//!   the device imports as no type the buffer takes, a driver that refuses a chunk, and a sparse
-//!   buffer whose alignment misses the granule asked. Counted: `WorkCounts::dma_buf_imports` (each
-//!   chunk) and `WorkCounts::dma_buf_sparse_buffers`.
+//! - **Not imported**: a source that fails, chunks the device imports as no type the buffer takes,
+//!   a driver that refuses a chunk, and a sparse buffer whose alignment misses the granule asked.
+//!   The pointer's refusal stands: a no-copy buffer or heap whose pointer the device refused is a
+//!   copy of the pages, as where no source is given (`copied.rs`,
+//!   `WorkCounts::copied_host_buffers_device_refused`); a rebind, memory imported only as dma-bufs
+//!   and pages whose window the device's import alignment does not cover are refused
+//!   (`Unsupported`, `HostMemory`). Counted: `WorkCounts::dma_buf_imports` (each chunk) and
+//!   `WorkCounts::dma_buf_sparse_buffers`.
 
 use super::buffer::{usage, Pages};
 use super::buffer_descriptor::HostBuffer;

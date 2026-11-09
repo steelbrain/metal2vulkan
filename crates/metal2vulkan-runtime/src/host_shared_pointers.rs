@@ -26,7 +26,7 @@ impl Device {
     ///
     /// Where it is false, a no-copy buffer over shared memory is imported only from the caller's
     /// dma-buf source ([`HostMemory::with_dma_buf`](crate::HostMemory::with_dma_buf)), and without
-    /// one is a copy of the pages, announced (`copied-host-pages`,
+    /// one that works is a copy of the pages, announced (`copied-host-pages`,
     /// `WorkCounts::copied_host_buffers_device_refused`). A source is what such memory needs to be
     /// imported, whatever its pages' protection: pages the process maps
     /// read-only go to the source without their pointer's import being tried (a dma-buf pins

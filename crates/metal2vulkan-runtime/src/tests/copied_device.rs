@@ -182,7 +182,12 @@ impl Host {
             Some(gate) => memory.with_import_gate(gate),
             None => memory,
         };
-        // SAFETY: as above.
+        self.buffer_over(device, memory)
+    }
+
+    /// A no-copy buffer over its bytes, made with `memory`, which names them.
+    fn buffer_over(&self, device: &Device, memory: HostMemory) -> Buffer {
+        // SAFETY: as for `buffer`.
         unsafe {
             device.new_buffer_with_bytes_no_copy(
                 memory,
@@ -407,40 +412,75 @@ fn copied_buffer_is_made_where_the_caller_s_gate_refuses_the_import() {
 }
 
 /// A no-copy buffer over shared memory (a `memfd` mapped shared, as QEMU's
-/// `memory-backend-memfd,share=on` guest RAM is) made with no source of dma-bufs of its pages: on a
-/// device that refuses the pointer of shared memory (`Device::imports_shared_host_pointers`, RADV)
-/// a copy of the pages, announced and counted as the device's refusal, with every copy's
-/// coherence, where the call was refused before; elsewhere an import of the pointer.
+/// `memory-backend-memfd,share=on` guest RAM is) made with no source of dma-bufs of its pages, and
+/// one made with a source that fails: on a device that refuses the pointer of shared memory
+/// (`Device::imports_shared_host_pointers`, RADV) each a copy of the pages, announced (once) and
+/// counted as the device's refusal, with every copy's coherence, the source called once, where
+/// the call was refused before; elsewhere an import of the pointer, the source never called.
 #[cfg(target_os = "linux")]
 #[test]
 fn copied_buffer_is_made_over_shared_memory_whose_pointer_the_device_refuses() {
-    let host = Host::over_shared_memory(9);
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Pages of their own each, so that neither buffer lies in the other's copy.
+    let hosts = [Host::over_shared_memory(9), Host::over_shared_memory(10)];
     let Some((device, heard)) = device() else {
         return;
     };
     let refuses = !device.imports_shared_host_pointers().unwrap();
-    let before = device.work_counts();
-    let buffer = host.buffer(&device, None);
-    let after = device.work_counts();
-    let device_refused =
-        after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused;
-    eprintln!(
-        "COPIED {}: the device refuses shared memory's pointer: {refuses}; the buffer over it is \
-         {:?}, {device_refused} copied for the device's refusal",
-        device.name(),
-        buffer.host_backing(),
-    );
-    match refuses {
-        true => {
-            assert_eq!(device_refused, 1, "counted as the device's refusal");
-            assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0], "a copy, no import");
-            assert_eq!(announced(&heard), 1, "announced");
-            lies_in_a_copy(&device, &buffer, &host);
+    let calls = Arc::new(AtomicUsize::new(0));
+    for (host, failing) in hosts.iter().zip([false, true]) {
+        let memory = match failing {
+            // SAFETY: as for `Host::buffer`.
+            false => unsafe { HostMemory::new(host.pointer) },
+            true => {
+                let counted = Arc::clone(&calls);
+                let source: crate::DmaBufSource = Arc::new(move |_| {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    Err(std::io::Error::other("no dma-buf"))
+                });
+                // SAFETY: as for `Host::buffer`, and the source answers no chunk.
+                unsafe { HostMemory::with_dma_buf(host.pointer, source) }
+            }
+        };
+        let source = match failing {
+            true => "a source that fails",
+            false => "no source",
+        };
+        let before = device.work_counts();
+        let buffer = host.buffer_over(&device, memory);
+        let after = device.work_counts();
+        let device_refused =
+            after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused;
+        eprintln!(
+            "COPIED {}: the device refuses shared memory's pointer: {refuses}; the buffer over it \
+             with {source} is {:?}, {device_refused} copied for the device's refusal, the source \
+             called {} times",
+            device.name(),
+            buffer.host_backing(),
+            calls.load(Ordering::Relaxed)
+        );
+        match refuses {
+            true => {
+                assert_eq!(
+                    device_refused, 1,
+                    "{source}: counted as the device's refusal"
+                );
+                assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0], "{source}: a copy");
+                assert_eq!(announced(&heard), 1, "{source}: announced once");
+                lies_in_a_copy(&device, &buffer, host);
+                assert_eq!(calls.load(Ordering::Relaxed), usize::from(failing));
+            }
+            false => {
+                assert_eq!(device_refused, 0);
+                assert_eq!(buffer.host_backing(), Some(HostBacking::ImportedByPointer));
+                assert_eq!(
+                    calls.load(Ordering::Relaxed),
+                    0,
+                    "{source}: no source called"
+                );
+            }
         }
-        false => {
-            assert_eq!(device_refused, 0);
-            assert_eq!(buffer.host_backing(), Some(HostBacking::ImportedByPointer));
-        }
+        drop(buffer);
     }
 }
 

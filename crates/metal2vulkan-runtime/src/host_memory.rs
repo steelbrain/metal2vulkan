@@ -282,9 +282,12 @@ impl HostMemory {
     /// A texture over such pages (over the buffer, placed in the heap, or a view of one) is an
     /// image over a dma-buf of its own pages where the device lists
     /// `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`, else a shadow of the
-    /// bytes (announced `shadowed-texture`). Refused as [`HostMemory::new`]'s memory is
-    /// (`Unsupported`, `HostMemory`) where the device imports no chunk or the source fails; chunks
-    /// that break the source's contract are misuse (`Invalid`, `Problem::DmaBuf`). Measured: RADV
+    /// bytes (announced `shadowed-texture`). Where the device imports no chunk or the source
+    /// fails, the pointer's refusal stands: a no-copy buffer or heap is a copy of the pages, as
+    /// [`HostMemory::new`]'s memory is where the device refuses its pointer (`copied-host-pages`,
+    /// `WorkCounts::copied_host_buffers_device_refused`), and a rebind is refused (`Unsupported`,
+    /// `HostMemory`); chunks that break the source's contract are misuse (`Invalid`,
+    /// `Problem::DmaBuf`). Measured: RADV
     /// refuses the pointer of `memfd` and other shared mappings and imports `udmabuf`s of their
     /// pages; NVIDIA and lavapipe import the pointer and never call the source. ANV (Mesa 26.2.6 on
     /// i915) imports the pointer of a `memfd`'s mapping and refuses that of a dma-buf's mapping

@@ -377,7 +377,8 @@ the record the pass is making.
   blit, which then costs time: RADV lists every import in every submission. Nothing of Metal's
   observes it. A no-copy buffer, heap, or buffer's or heap's rebind whose import the caller's gate
   refuses (`HostMemory::with_import_gate`), or whose admitted import fails, and a no-copy buffer
-  or heap whose pointer the device refuses with no source of dma-bufs given, is made over a copy of
+  or heap whose pointer the device refuses with no dma-buf of its pages serving it (no source
+  given, or one that failed or whose dma-bufs the device refused), is made over a copy of
   its bytes in memory of the device's own, announced (`copied-host-pages`,
   [HOWTO](../../docs/HOWTO.md#copied-host-buffers)), wherever the process maps the pages
   readable (a dma-buf's mapping among them); over pages not mapped readable it is refused. A

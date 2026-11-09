@@ -3110,8 +3110,10 @@ bound.
 - `metal2vulkan-degrade-copied-host-pages` (precision). `CopiedHostPages`: A no-copy buffer, a
   no-copy heap or a buffer's rebind was made over a copy of the caller's host pages in memory of
   the device's own, which no import maps (a heap's textures shadows of its bytes):
-  the caller's gate (`HostMemory::with_import_gate`) refused the pages' import, or the import the
-  device and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of memory, or
+  the caller's gate (`HostMemory::with_import_gate`) refused the pages' import, or the device
+  refused the pointer's import and no dma-buf of the pages served it (no source given, or one that
+  failed or whose dma-bufs the device refused; RADV refuses shared memory, a `memfd` mapping among
+  it, `copied_host_buffers_device_refused`), or the import the device and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of memory, or
   another Vulkan error, such as a driver out of the mappings the host kernel allows), or the
   runtime kept pages the kernel cannot pin (a dma-buf's mapping) from NVIDIA's driver, whose failed
   import of them breaks it (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`), and no dma-buf

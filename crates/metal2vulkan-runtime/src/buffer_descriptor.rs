@@ -855,6 +855,9 @@ impl Device {
                 // idle and import them again (`host_residency.rs`), as it may its own import of the
                 // pointer where the driver's pointer imports follow their address; a heap's import
                 // stays, as does an import of a read-only view.
+                // Whether the device was asked the pointer, whose refusal a failed source leaves
+                // standing (the window takes it, and the memory is no dma-buf-only memory).
+                let by_pointer = host.by_pointer;
                 let imported =
                     match unsafe { self.import_by_pointer(importer, pointer, length, host, class) }
                     {
@@ -875,7 +878,14 @@ impl Device {
                                 call, importer, pointer, length, window, source, class, keep,
                             )
                         }
-                        .map_err(|failed| (source_failure(failed, refusal), false)),
+                        .map_err(|failed| {
+                            // No dma-buf of the pages served either (the source failed, or the
+                            // device refused its dma-bufs): the device's refusal of the pointer,
+                            // as where no source is given.
+                            let by_device =
+                                by_pointer && refused(&failed) && refusal == not_importable();
+                            (source_failure(failed, refusal), by_device)
+                        }),
                         // The device's refusal of the pointer, with no source of dma-bufs of the
                         // pages to take instead.
                         Err(error) => {
@@ -896,8 +906,9 @@ impl Device {
                         return copied.map(|buffer| noted(kept(buffer, log, kept_runs)));
                     }
                     // Pages whose pointer the device refuses (RADV refuses shared memory, a
-                    // `memfd` mapping among it), with no dma-buf source of them: a copy,
-                    // announced, as Metal makes a no-copy buffer over any page.
+                    // `memfd` mapping among it), with no dma-buf of them served (no source given,
+                    // a source that failed, dma-bufs the device refused): a copy, announced, as
+                    // Metal makes a no-copy buffer over any page.
                     Err((_, true)) if copyable => {
                         let why = CopiedFor::DeviceRefused;
                         // SAFETY: the caller's contract.
@@ -1791,8 +1802,9 @@ impl Device {
                 }
                 CopiedBecause::DeviceRefused => {
                     "the device refused their pointer's import (VK_EXT_external_memory_host), as \
-                     RADV refuses shared memory, and no source of dma-bufs of them was given \
-                     (HostMemory::with_dma_buf)"
+                     RADV refuses shared memory, and no dma-buf of them served it: no source of \
+                     them was given (HostMemory::with_dma_buf), or it failed, or the device \
+                     refused its dma-bufs"
                 }
                 CopiedBecause::Failed => "their import failed",
                 CopiedBecause::Moved => {
@@ -2280,8 +2292,9 @@ pub(super) fn no_copy_options(options: ResourceOptions) -> (ResourceOptions, boo
 enum CopiedFor {
     /// The caller's gate refused their import (`HostMemory::with_import_gate`).
     Refused,
-    /// The device refused their pointer's import, and the caller gave no source of dma-bufs of
-    /// them (`HostMemory::with_dma_buf`).
+    /// The device refused their pointer's import, and no dma-buf of them served it: the caller
+    /// gave no source of them (`HostMemory::with_dma_buf`), or its source failed, or the device
+    /// refused its dma-bufs.
     DeviceRefused,
     /// The import the device and the gate admitted failed, with this.
     Failed(Error),

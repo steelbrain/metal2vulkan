@@ -199,9 +199,10 @@ Linux) imports a pointer through amdgpu's userptr, which takes anonymous pages o
 `MAP_SHARED` mappings of a `memfd`, a shared memory object or any file (QEMU's
 `memory-backend-memfd,share=on` guest RAM among them). NVIDIA and lavapipe import the same memory.
 A no-copy buffer or heap over memory the device so refuses, made with no source of dma-bufs of its
-pages (below), is a copy of the pages, announced ([Copied host buffers](#copied-host-buffers),
-`WorkCounts::copied_host_buffers_device_refused`); a rebind to such memory without a source is
-refused with `Unsupported`, `HostMemory`.
+pages (below), or with one that fails or whose dma-bufs the device refuses, is a copy of the
+pages, announced ([Copied host buffers](#copied-host-buffers),
+`WorkCounts::copied_host_buffers_device_refused`); a rebind to such memory without a working
+source is refused with `Unsupported`, `HostMemory`.
 
 No driver that pins imported pages imports a mapping the kernel cannot pin (`VM_IO` or `VM_PFNMAP`:
 a mapping of a dma-buf). NVIDIA's driver fails such an import as out of device memory and then fails
@@ -423,8 +424,9 @@ happens where:
   for a buffer or rebind that lies in a live import or copy of the same bytes, memory whose GPU
   writes Metal's private option bit 24 drops, a rebind whose bytes moved in their page under a texture
   (below), or where the device refused the pointer before it;
-- the device refuses the pointer of a no-copy buffer or heap made with no source of dma-bufs of its
-  pages: RADV refuses shared memory, a `memfd` mapping among it (`Device::imports_shared_host_pointers`,
+- the device refuses the pointer of a no-copy buffer or heap, and no dma-buf of its pages serves
+  it (no source given, or one that fails or whose dma-bufs the device refuses): RADV refuses shared
+  memory, a `memfd` mapping among it (`Device::imports_shared_host_pointers`,
   `copied_host_buffers_device_refused`); a rebind to such memory is refused instead;
 - an import the device and the gate admitted fails, of the pointer or of the dma-bufs of the
   caller's source (out of memory, another Vulkan error: `copied_host_buffers_degraded`);
