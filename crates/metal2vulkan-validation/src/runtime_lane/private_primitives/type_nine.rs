@@ -69,7 +69,8 @@ mod loops;
 const SCHEDULED: Duration = Duration::from_micros(5_060);
 
 /// The earliest Metal failed a command buffer its GPU hung at after it read `Scheduled`:
-/// 27.5 ms.
+/// 27.5 ms. The lanes hold the runtime's failure to it from the command buffer's scheduling, its
+/// `kernelEndTime` ([`Answer::since_kernel_end`]), where the runtime's hang counts from.
 const HANG: Duration = Duration::from_micros(27_500);
 
 /// The earliest Metal completed a command buffer its GPU faulted at, or failed as a victim of its
@@ -140,6 +141,18 @@ struct Answer {
     scheduled: Instant,
     /// When its completed handler ran.
     completed: Instant,
+    /// The host times, in seconds of the runtime's clock (`host_time`), its scheduler made it
+    /// `Scheduled` (Metal's `kernelEndTime`), its scheduled handler ran and its completed handler
+    /// ran.
+    host: HostTimes,
+}
+
+/// A command buffer's host times, in seconds of the runtime's clock (`host_time`).
+#[derive(Clone, Copy, Debug)]
+struct HostTimes {
+    kernel_end: f64,
+    scheduled: f64,
+    completed: f64,
 }
 
 impl Answer {
@@ -153,9 +166,18 @@ impl Answer {
         self.scheduled - self.committed
     }
 
-    /// From its scheduled handler to its completed handler.
-    fn since_scheduled(&self) -> Duration {
-        self.completed - self.scheduled
+    /// From the host time its scheduler made it `Scheduled`, Metal's `kernelEndTime`, to its
+    /// completed handler: how long after it was scheduled its failure was seen. Not from its
+    /// scheduled handler, which runs on a handler thread once that thread runs, later than the
+    /// scheduling by as long as the host keeps the thread off its CPU: Metal's timing is its
+    /// GPU's, from its scheduling, and its handlers' run promises none.
+    fn since_kernel_end(&self) -> Duration {
+        Duration::from_secs_f64((self.host.completed - self.host.kernel_end).max(0.0))
+    }
+
+    /// From the host time its scheduler made it `Scheduled` to its scheduled handler's run.
+    fn scheduled_handler_lag(&self) -> Duration {
+        Duration::from_secs_f64((self.host.scheduled - self.host.kernel_end).max(0.0))
     }
 
     /// It completed with no error.
@@ -168,8 +190,9 @@ impl Answer {
 struct Tracked {
     command_buffer: CommandBuffer,
     committed: Option<Instant>,
-    scheduled: Arc<OnceLock<Instant>>,
-    completed: Arc<OnceLock<Instant>>,
+    /// Its scheduled and completed handlers' runs: the instant, and the host time in seconds.
+    scheduled: Arc<OnceLock<(Instant, f64)>>,
+    completed: Arc<OnceLock<(Instant, f64)>>,
 }
 
 impl Tracked {
@@ -179,13 +202,13 @@ impl Tracked {
         let set = Arc::clone(&scheduled);
         command_buffer
             .add_scheduled_handler(Box::new(move |_: &CommandBuffer| {
-                let _ = set.set(Instant::now());
+                let _ = set.set((Instant::now(), metal2vulkan_runtime::host_time()));
             }))
             .unwrap();
         let set = Arc::clone(&completed);
         command_buffer
             .add_completed_handler(Box::new(move |_: &CommandBuffer| {
-                let _ = set.set(Instant::now());
+                let _ = set.set((Instant::now(), metal2vulkan_runtime::host_time()));
             }))
             .unwrap();
         Tracked {
@@ -214,12 +237,19 @@ impl Tracked {
     }
 
     fn answer(&self) -> Answer {
+        let (scheduled, scheduled_host) = *self.scheduled.get().expect("its scheduled handler ran");
+        let (completed, completed_host) = *self.completed.get().expect("its completed handler ran");
         Answer {
             status: self.command_buffer.status(),
             error: self.command_buffer.error(),
             committed: self.committed.unwrap(),
-            scheduled: *self.scheduled.get().expect("its scheduled handler ran"),
-            completed: *self.completed.get().expect("its completed handler ran"),
+            scheduled,
+            completed,
+            host: HostTimes {
+                kernel_end: self.command_buffer.kernel_end_time(),
+                scheduled: scheduled_host,
+                completed: completed_host,
+            },
         }
     }
 }
@@ -530,9 +560,10 @@ fn check(outcome: &Outcome, expected: Expected, label: &str) {
             assert_eq!(drawn.status, CommandBufferStatus::Error, "{label}");
             assert_eq!(drawn.error, Some(CommandBufferError::GpuHang), "{label}");
             assert!(
-                drawn.since_scheduled() >= HANG,
-                "{label}: failed {:?} after it read Scheduled",
-                drawn.since_scheduled()
+                drawn.since_kernel_end() >= HANG,
+                "{label}: failed {:?} after it was scheduled (its scheduled handler {:?} after)",
+                drawn.since_kernel_end(),
+                drawn.scheduled_handler_lag()
             );
             let scheduled = drawn.to_scheduled();
             assert!(
@@ -601,9 +632,10 @@ fn check(outcome: &Outcome, expected: Expected, label: &str) {
             assert_eq!(drawn.status, CommandBufferStatus::Error, "{label}");
             assert_eq!(drawn.error, Some(error), "{label}");
             assert!(
-                drawn.since_scheduled() >= FAULT,
-                "{label}: failed {:?} after it read Scheduled",
-                drawn.since_scheduled()
+                drawn.since_kernel_end() >= FAULT,
+                "{label}: failed {:?} after it was scheduled (its scheduled handler {:?} after)",
+                drawn.since_kernel_end(),
+                drawn.scheduled_handler_lag()
             );
             // The queue's command buffer committed at once reads `Scheduled` during the fault and
             // completes after it.

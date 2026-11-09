@@ -44,7 +44,7 @@ struct Expected {
     error: CommandBufferError,
     /// The earliest after its commit it reads `Scheduled`.
     scheduled: Duration,
-    /// The earliest after it read `Scheduled` it fails.
+    /// The earliest after it was scheduled (its `kernelEndTime`) it fails.
     fails: Duration,
     /// Whether the queue's command buffer committed right after it runs.
     next_runs: bool,
@@ -150,7 +150,8 @@ fn in_turn(
 
 /// Run each of `cases` on a queue of its own (a queue's second fault or hang revokes it) and
 /// check it against Metal's answer: the command buffer fails with the error, reads `Scheduled`
-/// and fails no sooner than Metal's did, runs only its mark before the first pass, every event
+/// no sooner than Metal's did after its commit and fails no sooner than Metal's did after it was
+/// scheduled ([`Answer::since_kernel_end`]), runs only its mark before the first pass, every event
 /// signal firing; the queue's command buffer committed right after completes cleanly after it,
 /// running where Metal's did.
 fn fails_in_turn(cases: &[(&[Nine], Expected)]) {
@@ -173,10 +174,12 @@ fn fails_in_turn(cases: &[(&[Nine], Expected)]) {
                 scheduled >= expected.scheduled,
                 "{label}: read Scheduled {scheduled:?} after its commit"
             );
-            let fails = drawn.since_scheduled();
+            let fails = drawn.since_kernel_end();
             assert!(
                 fails >= expected.fails,
-                "{label}: failed {fails:?} after it read Scheduled"
+                "{label}: failed {fails:?} after it was scheduled (its scheduled handler {:?} \
+                 after)",
+                drawn.scheduled_handler_lag()
             );
             let mut only_before = vec![false; draws.len() + 2];
             only_before[0] = true;
@@ -202,11 +205,12 @@ fn fails_in_turn(cases: &[(&[Nine], Expected)]) {
             );
             let ms = |duration: Duration| duration.as_secs_f64() * 1e3;
             println!(
-                "{label}: {:?} Scheduled at {:.1} ms, failed {:.1} ms after; the one right \
-                 after ran: {next_ran}",
+                "{label}: {:?} Scheduled at {:.1} ms, failed {:.1} ms after (its scheduled \
+                 handler {:.2} ms after it was scheduled); the one right after ran: {next_ran}",
                 drawn.error,
                 ms(scheduled),
                 ms(fails),
+                ms(drawn.scheduled_handler_lag()),
             );
         }
     }
