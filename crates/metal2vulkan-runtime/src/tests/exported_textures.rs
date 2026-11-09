@@ -69,6 +69,8 @@ use crate::{
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The byte the luma plane starts at: a header's 32 bytes in, as the consumer's cache lays it.
@@ -875,4 +877,144 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
         );
     }
     watched.layer_reported_nothing("a second device's buffers and textures");
+}
+
+/// No texture over a buffer of the runtime's own loses its place in a block allocated exportable
+/// (`memory.rs`'s "Buffers in exportable blocks"): for every pixel format a buffer backs
+/// (`linear_alignment::backed_formats`), at each width of `linear_alignment::WIDTHS`, three rows,
+/// rows the width's bytes rounded up to the format's linear alignment answer and to 256 apart, at
+/// offset 0 and at that answer, of `ShaderRead`, `ShaderRead | ShaderWrite` and
+/// `ShaderRead | RenderTarget` usage, a texture over a `Shared` buffer in such a block lies in place
+/// wherever one over a plain block's buffer of the same layout does (`Buffer::texture_placement`).
+/// Where the device lays its buffers in such blocks (`in_place.rs`'s `fd_blocks_take` and
+/// `dma_buf.rs`'s `Device::modifier_takes_linear`), a texture that loses its place fails; elsewhere
+/// the losses are printed, and those the images alone make, asked as the device's check asks them
+/// (its verdicts aside), with the notice of the first few such textures.
+///
+/// Printed (`EXPORTED-TEXTURES`): the verdicts' and the tiling's answers, the textures tried, and
+/// each kind of loss.
+#[test]
+fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one() {
+    use crate::memory::Holds;
+    use crate::texture::linear_alignment::{backed_formats, WIDTHS};
+    let watched = Watched::default();
+    let scratch = Scratch::new("exportable-placements");
+    // Each shadow's notice printed while `noticed` is set: the first few lost by the images.
+    let noticed = Arc::new(AtomicBool::new(false));
+    let device = {
+        let noticed = Arc::clone(&noticed);
+        let print = move |message: &crate::DebugMessage| {
+            if message.degradation.is_some() && noticed.load(Ordering::Relaxed) {
+                eprintln!("EXPORTED-TEXTURES notice: {}", message.text);
+            }
+        };
+        let options = crate::DeviceOptions {
+            shader_cache: crate::ShaderCacheOptions {
+                directory: Some(scratch.0.clone()),
+                ..crate::ShaderCacheOptions::default()
+            },
+            layers: watched.layers(),
+            messages: Some(watched.sink(print)),
+            ..super::pending_rebind::options()
+        };
+        Device::system_default_with(&options).unwrap()
+    };
+    let name = device.name().to_owned();
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let types = crate::device::lock(&device.shared().memory).fd_buffer_types;
+    if let Err(why) = types {
+        eprintln!(
+            "EXPORTED-TEXTURES on {name}: no block of the runtime's buffers exportable: {why}"
+        );
+        return;
+    }
+    let verdict = |class, access, rows| device.in_place_verdict(class, access, rows);
+    let take = crate::in_place::fd_blocks_take(verdict);
+    let covered = device.modifier_takes_linear();
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: the verdicts of exportable blocks: {take:?}; the \
+         DRM_FORMAT_MOD_LINEAR tiling against the linear: {covered:?}"
+    );
+    let length = 1 << 20;
+    let plain = (device.pooled_check_buffer(length, Holds::Buffers)).unwrap();
+    let exportable = (device.pooled_check_buffer(length, Holds::FdBuffers)).unwrap();
+    assert!(exportable.bound_memory() == BoundMemory::Blocks);
+    let usages = [
+        TextureUsage::SHADER_READ,
+        TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+        TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
+    ];
+    let mut layouts = Vec::new();
+    for pf in backed_formats() {
+        let texel = crate::buffer_texture::texel_bytes(pf).expect("a backed format's texel");
+        let align = device.linear_texture_alignment(pf);
+        for width in WIDTHS {
+            for pitch in [align, 256] {
+                let row = (width * texel).next_multiple_of(pitch);
+                for offset in [0, align] {
+                    for usage in usages {
+                        let mut descriptor = TextureDescriptor::texture_2d(pf, width, 3, false);
+                        descriptor.usage = usage;
+                        descriptor.resource_options = ResourceOptions::shared();
+                        layouts.push((descriptor, offset, row));
+                    }
+                }
+            }
+        }
+    }
+    let in_place = |placement: &Result<TexturePlacement, Error>| {
+        matches!(placement, Ok(TexturePlacement::NotHostPages))
+    };
+    let plain_at: Vec<bool> = (layouts.iter())
+        .map(|(d, offset, row)| in_place(&plain.texture_placement(d, *offset, *row)))
+        .collect();
+    let lost = |buffer: &Buffer| -> Vec<usize> {
+        (layouts.iter().enumerate())
+            .filter(|&(at, (d, offset, row))| {
+                plain_at[at] && !in_place(&buffer.texture_placement(d, *offset, *row))
+            })
+            .map(|(at, _)| at)
+            .collect()
+    };
+    let product = lost(&exportable);
+    // As the device's check asks: the images alone, whatever its verdicts.
+    let images = std::thread::scope(|scope| {
+        let thread = scope.spawn(|| {
+            crate::in_place::mark_checking();
+            let lost = lost(&exportable);
+            noticed.store(true, Ordering::Relaxed);
+            for &at in lost.iter().take(3) {
+                let (d, offset, row) = &layouts[at];
+                drop(exportable.new_texture(d, *offset, *row));
+            }
+            noticed.store(false, Ordering::Relaxed);
+            lost
+        });
+        thread.join().unwrap()
+    });
+    let in_place_plain = plain_at.iter().filter(|&&at| at).count();
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: {} textures tried, {in_place_plain} in place over a plain \
+         block's buffer; over an exportable block's, {} of those lose their place, {} by the \
+         images alone",
+        layouts.len(),
+        product.len(),
+        images.len()
+    );
+    let mut kinds = std::collections::BTreeMap::new();
+    for &at in &images {
+        let (d, offset, row) = &layouts[at];
+        let placement = exportable.texture_placement(d, *offset, *row);
+        let key = format!("{:?} {:?}", d.pixel_format, placement);
+        *kinds.entry(key).or_insert(0) += 1;
+    }
+    for (kind, count) in kinds {
+        eprintln!("EXPORTED-TEXTURES on {name}: lost by the images: {count} of {kind}");
+    }
+    if take == crate::in_place::FdBlocksTake::Take && covered.is_ok() {
+        assert!(
+            product.is_empty(),
+            "textures that lose their place: {product:?}"
+        );
+    }
 }

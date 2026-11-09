@@ -233,6 +233,10 @@ pub(super) struct TextureState {
     /// per format at most.
     #[cfg(unix)]
     pub(super) modifier_features: Mutex<HashMap<Format, FormatFeatureFlags2>>,
+    /// Whether a `DRM_FORMAT_MOD_LINEAR` image takes in every format what the device's linear
+    /// image takes, worked out at the first ask (`dma_buf.rs`'s `modifier_takes_linear`).
+    #[cfg(unix)]
+    pub(super) modifier_takes_linear: std::sync::OnceLock<Result<(), String>>,
     /// Every pixel format's `minimumLinearTextureAlignmentForPixelFormat:` answer, worked out at
     /// the first query of any and kept for the device's life (`texture/linear_alignment.rs`).
     pub(super) linear_alignments: std::sync::OnceLock<HashMap<PixelFormat, u64>>,
@@ -283,6 +287,8 @@ impl TextureState {
             format_answers: Mutex::new(HashMap::new()),
             #[cfg(unix)]
             modifier_features: Mutex::new(HashMap::new()),
+            #[cfg(unix)]
+            modifier_takes_linear: std::sync::OnceLock::new(),
             linear_alignments: std::sync::OnceLock::new(),
             heap_types: std::sync::OnceLock::new(),
             requirements: Mutex::new(requirements::RequirementAnswers::new(

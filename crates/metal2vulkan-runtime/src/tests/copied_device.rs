@@ -255,6 +255,18 @@ fn device() -> Option<(Device, Heard)> {
         eprintln!("COPIED: the device imports no host memory here; nothing to test");
         return None;
     }
+    // Where the device may lay its buffers in exportable blocks, its first buffer starts its
+    // in-place check (`in_place.rs`'s `Device::fd_blocks_checked`), whose own imports of host
+    // pages would land in the counts these tests compare: settled first.
+    let exportable = crate::device::lock(&device.shared().memory)
+        .fd_buffer_types
+        .is_ok();
+    if exportable {
+        assert!(
+            device.settle_in_place_checks(Duration::from_secs(120)),
+            "the device's in-place check answered"
+        );
+    }
     Some((device, heard))
 }
 

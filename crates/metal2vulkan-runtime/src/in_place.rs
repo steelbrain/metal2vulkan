@@ -1262,11 +1262,18 @@ impl Device {
     }
 
     /// Whether the runtime's own buffers lie in blocks allocated exportable (`memory.rs`'s
-    /// "Buffers in exportable blocks"), by the device's verdicts ([`fd_blocks_take`]), asked as
-    /// such a buffer is made: a pending verdict starts the check, and the buffer lies in a plain
-    /// block meanwhile, as it does where the verdicts refuse such blocks; each counted
-    /// (`WorkCounts::fd_blocks_awaited`, `WorkCounts::fd_blocks_refused`). Never waits.
+    /// "Buffers in exportable blocks"), by the device's `DRM_FORMAT_MOD_LINEAR` tiling, which
+    /// every image there is (`dma_buf.rs`'s `Device::modifier_takes_linear`), and by its verdicts
+    /// ([`fd_blocks_take`]), asked as such a buffer is made: a pending verdict starts the check,
+    /// and the buffer lies in a plain block meanwhile, as it does where the tiling or the verdicts
+    /// refuse such blocks; each counted (`WorkCounts::fd_blocks_awaited`,
+    /// `WorkCounts::fd_blocks_refused`). Never waits.
     pub(crate) fn fd_blocks_checked(&self) -> bool {
+        #[cfg(unix)]
+        if self.modifier_takes_linear().is_err() {
+            self.shared().counts.fd_blocks_refused();
+            return false;
+        }
         let verdict = |class, access, rows| self.in_place_verdict(class, access, rows);
         match fd_blocks_take(verdict) {
             FdBlocksTake::Take => true,

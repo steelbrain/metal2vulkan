@@ -50,6 +50,21 @@ const SCALE: f32 = 2.0;
 /// reporting to `watched`.
 pub(super) fn device(watched: &Watched, cache: &Path) -> Device {
     let options = DeviceOptions {
+        shader_cache: ShaderCacheOptions {
+            directory: Some(cache.to_owned()),
+            ..ShaderCacheOptions::default()
+        },
+        layers: watched.layers(),
+        messages: Some(watched.sink(|_| {})),
+        ..options()
+    };
+    Device::system_default_with(&options).unwrap()
+}
+
+/// The options of a device of the kind the cfg selects: the CPU's under `m2v_cpu_icd`, else a
+/// GPU's.
+pub(super) fn options() -> DeviceOptions {
+    DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -58,15 +73,8 @@ pub(super) fn device(watched: &Watched, cache: &Path) -> Device {
                 DeviceKind::Virtual,
             ],
         },
-        shader_cache: ShaderCacheOptions {
-            directory: Some(cache.to_owned()),
-            ..ShaderCacheOptions::default()
-        },
-        layers: watched.layers(),
-        messages: Some(watched.sink(|_| {})),
         ..DeviceOptions::default()
-    };
-    Device::system_default_with(&options).unwrap()
+    }
 }
 
 /// A dispatch of a kernel writing into a no-copy buffer, its `VkPipeline` held from being made,

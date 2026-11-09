@@ -1094,7 +1094,7 @@ fn plan_iosurface_plane(
 
 /// The features of an image's tiling each of its usages relies on: what the runtime's views,
 /// samplers, attachments and copies of the texture may use.
-const USAGE_FEATURES: [(ImageUsageFlags, FormatFeatureFlags2); 6] = [
+pub(super) const USAGE_FEATURES: [(ImageUsageFlags, FormatFeatureFlags2); 6] = [
     (
         ImageUsageFlags::SAMPLED,
         FormatFeatureFlags2::SAMPLED_IMAGE

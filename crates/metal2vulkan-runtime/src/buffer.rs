@@ -2318,8 +2318,8 @@ impl Device {
     /// device's own buffers take: `Holds::Buffers` for the in-place check's class of plain
     /// pooled memory (`in_place_check.rs`, `PagesClass::Pooled`), whose image names no handle
     /// type, and `Holds::FdBuffers` for its class of the blocks allocated exportable
-    /// (`PagesClass::FdBlocks`), whose image names one of their handle types (`memory.rs`'s
-    /// "Buffers in exportable blocks"). Refused as [`Device::new_buffer`] refuses its length.
+    /// (`PagesClass::FdBlocks`), whose image names their handle type (`memory.rs`'s "Buffers in
+    /// exportable blocks"). Refused as [`Device::new_buffer`] refuses its length.
     pub(super) fn pooled_check_buffer(&self, length: u64, holds: Holds) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer";
         let modes = Modes::of(ResourceOptions::shared())?;
