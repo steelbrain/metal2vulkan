@@ -116,6 +116,13 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         vec![7; BYTES as usize]
     );
     let address = private.gpu_address();
+    // Which of the device's own kinds of block it lies in, both carried: a plain one, or one
+    // allocated exportable and never exported, once the device's check of those passed.
+    eprintln!(
+        "CARRY-PRIVATE-BLOCK: {}: the `Private` buffer lies in a block allocated exportable: {}",
+        device.name(),
+        private.bound_memory() == crate::memory::BoundMemory::Blocks
+    );
     // A buffer of the program's in fresh pages, wherever the device takes them.
     let fresh = {
         let made_on = private.device().clone();
