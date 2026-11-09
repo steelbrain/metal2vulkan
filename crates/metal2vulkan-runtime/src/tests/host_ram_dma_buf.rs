@@ -354,13 +354,14 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     let refused = made.host_ram_dma_buf_imports_failed - before.host_ram_dma_buf_imports_failed;
     let requests = asked.lock().unwrap().requests.clone();
     println!(
-        "HOST-RAM-DMA-BUF {}: import tax forced held (measured {}); the chunk's route: {dma_bufs} \
-         dma-buf import(s), {refused} refused, the source asked {requests:?}",
+        "HOST-RAM-DMA-BUF {}: import tax forced held (measured {}: {}); the chunk's route: \
+         {dma_bufs} dma-buf import(s), {refused} refused, the source asked {requests:?}",
         device.name(),
         match measured {
             true => "held",
             false => "not held",
         },
+        device.submit_check_report(),
     );
     assert_eq!(
         made.host_ram_chunks_imported - before.host_ram_chunks_imported,
