@@ -1261,11 +1261,10 @@ fn drawn_planes(drawn: &[u64], encoding: ([u8; 4], [u8; 4])) -> Vec<u8> {
         .collect()
 }
 
-/// A 3D texture's depth plane is an attachment and a resolve target, every other plane kept
-/// (an M3 Max and an M4, API validation passing each): plane 2 of a 4x4x4
-/// `RGBA8Unorm` volume filled with 0x11 (`t3d_plane2`), plane 1 of level 1 of an 8x8x8 one
-/// (`t3d_level1_plane1`), plane 1 through an sRGB view (`t3d_view_srgb_plane1`), and plane 3
-/// resolved into from a 4x multisampled attachment (`t3d_resolve_plane3`).
+/// A 3D texture's depth plane is an attachment, every other plane kept (an M3 Max and an M4, API
+/// validation passing each): plane 2 of a 4x4x4 `RGBA8Unorm` volume filled with 0x11
+/// (`t3d_plane2`), plane 1 of level 1 of an 8x8x8 one (`t3d_level1_plane1`), and plane 1 through
+/// an sRGB view (`t3d_view_srgb_plane1`). Its resolves: [`a_resolve_writes_the_volume_plane_it_names`].
 #[test]
 fn a_volume_s_plane_is_an_attachment() {
     on_device(|lane| {
@@ -1307,8 +1306,23 @@ fn a_volume_s_plane_is_an_attachment() {
             1,
             "t3d_view_srgb_plane1",
         );
+    });
+}
 
-        let texture = volume(lane, rgba, RT, [4, 4, 1], (0, 0x11));
+/// A 3D texture's depth plane is a resolve target, every other plane kept: a 4x multisampled
+/// `RGBA8Unorm` attachment cleared and its left half drawn, resolved into each plane of a 4x4x4
+/// volume filled with 0x11, one volume a plane (an M3 Max and an M4 measured plane 3,
+/// `t3d_resolve_plane3`, API validation passing; `resolveDepthPlane` names the one plane the
+/// resolve writes). Prints the planes each resolve wrote (`VOLUME-RESOLVE` lines); the layer's
+/// reports fail it before the bytes are checked.
+#[test]
+fn a_resolve_writes_the_volume_plane_it_names() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let resolved = {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let lane = Lane::new(&device);
+        let rgba = PixelFormat::RGBA8Unorm;
         let msaa = lane.texture(
             rgba,
             TextureUsage::RENDER_TARGET,
@@ -1318,16 +1332,30 @@ fn a_volume_s_plane_is_an_attachment() {
             },
         );
         let multisampled = lane.solid(rgba, 4, false);
-        let mut descriptor = pass(&msaa, (0, 0), LoadAction::Clear, Some(&texture));
-        descriptor.color_attachments[0].resolve_depth_plane = 3;
-        lane.run(&descriptor, |l, e, h| l.left(e, h, &multisampled, COLOR));
-        check(
-            &planes(&texture, 0, 4),
-            &drawn_planes(&[3], UNORM),
-            1,
-            "t3d_resolve_plane3",
-        );
-    });
+        let resolved: Vec<(u64, Vec<u8>)> = (0..4)
+            .map(|plane| {
+                let texture = volume(&lane, rgba, RT, [4, 4, 1], (0, 0x11));
+                let mut descriptor = pass(&msaa, (0, 0), LoadAction::Clear, Some(&texture));
+                descriptor.color_attachments[0].resolve_depth_plane = plane;
+                lane.run(&descriptor, |l, e, h| l.left(e, h, &multisampled, COLOR));
+                let bytes = planes(&texture, 0, 4);
+                let written: Vec<usize> = (0..4)
+                    .filter(|&at| bytes[64 * at..64 * (at + 1)].iter().any(|&b| b != 0x11))
+                    .collect();
+                eprintln!(
+                    "VOLUME-RESOLVE on {}: into plane {plane}, planes written {written:?}",
+                    device.name()
+                );
+                (plane, bytes)
+            })
+            .collect();
+        resolved
+    };
+    layer_reported_nothing_at_all(&messages);
+    for (plane, bytes) in resolved {
+        let what = format!("t3d_resolve_plane{plane}");
+        check(&bytes, &drawn_planes(&[plane], UNORM), 1, &what);
+    }
 }
 
 /// A layered pass renders a 3D attachment's planes from its depth plane, instance `i` into the
