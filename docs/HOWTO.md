@@ -812,6 +812,31 @@ let exported = frame.export_memory_dma_buf()?;
 // plane at `exported.offset` plus its offset in the frame, DRM_FORMAT_MOD_LINEAR.
 ```
 
+A texture over a plane of the frame is an image of the exported memory in place, made for the
+export's handle type (`VkExternalMemoryImageCreateInfo`, as Vulkan requires of an image bound in
+exported memory), where all of these hold for the plane's linear image (its format, extent and
+usage, that handle type; the plain linear image first, else a `DRM_FORMAT_MOD_LINEAR` one):
+
+- the image format query (`vkGetPhysicalDeviceImageFormatProperties2` with
+  `VkPhysicalDeviceExternalImageFormatInfo`) takes the handle type for it, and not in a dedicated
+  allocation alone;
+- the plane's byte in the memory, `exported.offset` plus the plane's offset in the frame, is a
+  multiple of the `alignment` `vkGetImageMemoryRequirements` answers for the image;
+- `vkGetImageSubresourceLayout` answers `offset` 0 and a `rowPitch` equal to the plane's row
+  pitch, and the image's `size` fits in the buffer from the plane on;
+- the device's in-place check of the runtime's memory exported with that handle type passed for
+  the texture's access (a texture made before the check answered is a shadow that moves in place
+  at a later commit).
+
+Elsewhere the texture is a shadow, announced with its cause: the memory is the buffer's dedicated
+allocation (Vulkan binds no image in memory dedicated to a buffer), the format query refuses the
+handle type, the layout differs, or the check did not pass. Measured for a 3840x2160 NV12 frame
+(an `R8Unorm` plane, then an `RG8Unorm` 1920x1080 plane, both rows 3840 bytes) made with
+`aligned_byte(0x20)`, its planes at 256 and 8,294,656 bytes of the memory, each plane's image
+answered row pitch 3840 and offset 0, with an alignment of 64 on lavapipe and 256 on RADV (RX 550,
+opaque file descriptors; that device makes no image over a dma-buf, so its dma-buf planes are
+shadows).
+
 The export settles the zeros the buffer was made with first, so the decoder may write at once.
 After each of its writes, once the consumer waited for them (`vaSyncSurface`), call
 `frame.external_write_done()`: Vulkan leaves what another API wrote undefined until the device
