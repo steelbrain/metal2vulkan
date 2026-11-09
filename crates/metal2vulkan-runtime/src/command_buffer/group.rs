@@ -66,9 +66,17 @@
 //!   It goes then, or once it fills, a batch that cannot join sends it, a head waits for the GPU
 //!   (at a gate, or for a signal to land, which may be the group's), or a thread waits for one of
 //!   its command buffers' completion (`CommandBuffer::wait_until_completed` marks it and wakes the
-//!   scheduler: [`CommandBufferShared::waits_for_completion`]). A group whose batch ends a command
-//!   buffer with a switch of storage forms riding on it is never kept: the switch settles by the
-//!   submission's outcome, before the command buffer is `Scheduled`. A kept batch is seen
+//!   scheduler: [`CommandBufferShared::waits_for_completion`]). Nor is it kept where the thread
+//!   runs, once the pass ends, the submission handlers of a command buffer of another logical
+//!   queue (a batch held, or one submitted: `scheduler::holds_back_another_queue`): it goes
+//!   first, so no handler that waits for another queue's work holds that work back, as Metal
+//!   schedules one queue's command buffers whatever another queue's handler does (probe
+//!   `cross_queue_handler_waits`). The handlers of the batches' own queue keep it held: Metal
+//!   runs one queue's handlers one at a time, so a handler there that waits for a completed
+//!   handler of its own queue never sees it either (the probe's `scheduled-one-queue`). A group
+//!   whose batch ends a command buffer with a switch of storage forms riding on it is never kept:
+//!   the switch settles by the submission's outcome, before the command buffer is `Scheduled`.
+//!   A kept batch is seen
 //!   complete late by its group's later batches' GPU time, as any member, and where the one
 //!   submission left in flight ends before the group reaches the GPU, by that gap besides: at most
 //!   a completion turn's reaction and the group's `vkQueueSubmit`. Counted:
@@ -130,6 +138,12 @@ impl CommandBufferShared {
     /// seen complete meanwhile only lowers the count.
     pub(crate) fn goes_alone_at_commit(&self) -> bool {
         (self.device.shared().queues[self.queue.vk_queue()].pending_beyond_one()).is_none()
+    }
+
+    /// Its queue's identity: the logical queue its batches line up on in the scheduler's order
+    /// (`scheduler/order.rs`).
+    pub(crate) fn logical_queue(&self) -> u64 {
+        self.queue.id()
     }
 
     /// A batch of it was held in the scheduler's group.
@@ -375,7 +389,8 @@ impl Group {
     /// docs): the group has room, two or more submissions of its `VkQueue` are not seen complete,
     /// no batch held ends a command buffer with a switch of storage forms riding on it (it settles
     /// by the submission's outcome), no thread waits for one of their command buffers, and the
-    /// device is not lost.
+    /// device is not lost. The scheduler asks only where no handler it runs next is of another
+    /// logical queue's command buffer (the module docs).
     /// The value of that queue's timeline whose completion leaves one submission in flight, for
     /// the completion turns to wake the scheduler at. Counted once per group, and once more where
     /// a waiter sends a group kept before.

@@ -456,7 +456,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   only a GPU signal still running reaches is held until the signal lands (measured on an M3 Max,
   the conformance case `event-wait-behind-a-running-signal`).
 - `CommandBuffer::add_submission_handler` is called when the runtime takes the command buffer's
-  last batch for its queue (submits it, or holds it for one kernel submission with later ones);
+  last batch for its queue (submits it, or holds it for one kernel submission with later ones;
+  what another queue's command buffers had held then goes to the driver before it runs);
   `add_executed_commands_handler` each time an execution's indirect records are read.
 - `CommandBuffer::add_completion_seen_handler` is called once the command buffer completed, its
   status, error and GPU times final, on the runtime's thread that saw it complete (its queue's

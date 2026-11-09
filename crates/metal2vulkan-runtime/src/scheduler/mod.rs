@@ -1616,11 +1616,13 @@ fn submit_ready(
             // The batches held go before the pass ends, unless they stay held while their
             // `VkQueue` runs two or more earlier submissions and no head waits for the GPU
             // (`Group::keeps`): a completion turn wakes the thread once one is left, a commit or
-            // a waiter for one of their command buffers sooner. Their submission makes no batch
+            // a waiter for one of their command buffers sooner. Never behind the submission
+            // handlers of another logical queue's command buffer, which the thread runs before
+            // its next pass ([`holds_back_another_queue`]). Their submission makes no batch
             // ready: none of them signals a binary semaphore, and their events' signals counted
             // as submitted as they were held.
             drop(busy);
-            if !waiting && !landing {
+            if !waiting && !landing && !holds_back_another_queue(&state.grouped, handlers) {
                 if let Some(value) = state.group.keeps() {
                     awaits.gate_on(state.group.queue(), value, state.values.len());
                     return Ok(More(false));
@@ -1731,6 +1733,23 @@ fn submit_ready(
         }
         spent.push(buffer);
     }
+}
+
+/// Whether the batches held in the group (`grouped`, with their logical queues) would wait, kept
+/// past the pass, behind the submission handlers of a command buffer of another logical queue:
+/// `handlers` holds the command buffers whose handlers the thread runs once its round's passes
+/// end ([`round`]), held in the group or submitted. Such a group goes before they run
+/// (`command_buffer/group.rs`, "Kept while its queue runs earlier work"), as Metal schedules a
+/// queue's command buffers whatever a handler of another queue's does: on an M3 Max under macOS
+/// 27.0.1, a command buffer's completed handler reached another queue's scheduled or completed
+/// handler that waited for it in each of 30 runs, 7.6 to 9.3 ms after the wait began (probe
+/// `cross_queue_handler_waits`). Handlers of the held batches' own queue keep it held: on one
+/// queue Metal delivered no completed handler to a scheduled handler that waited for it (the
+/// probe's `scheduled-one-queue`, the 5 s bound in each of 10 runs), so the runtime promises
+/// nothing there.
+fn holds_back_another_queue(grouped: &[(u64, Held)], handlers: &Handlers) -> bool {
+    (grouped.iter())
+        .any(|&(queue, _)| (handlers.iter()).any(|buffer| buffer.logical_queue() != queue))
 }
 
 /// The process is exiting ([`exit_guard`]): the thread submits no more.

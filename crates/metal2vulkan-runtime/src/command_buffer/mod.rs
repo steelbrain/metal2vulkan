@@ -2680,7 +2680,11 @@ impl CommandBuffer {
     ///   after its handlers (`scheduler/inbox.rs`). A wait in it
     ///   for a command buffer, or for a slot of a full queue, that has not happened yet is refused
     ///   (`WaitWouldDeadlock` of [`DeadlockCause::SubmissionHandler`]); it must not wait for GPU
-    ///   work otherwise.
+    ///   work otherwise. What the runtime took before it runs is never held back by it for
+    ///   another command queue: batches held for one kernel submission go to the driver before
+    ///   the scheduler thread runs a handler of a command buffer of another queue than theirs, as
+    ///   Metal schedules a queue's command buffers whatever another queue's handler does. Those of
+    ///   its own queue may wait for it, as Metal runs one queue's handlers one at a time.
     ///
     /// Refused once the command buffer is committed (`Invalid`, `Problem::HandlerAfterCommit`),
     /// as [`add_scheduled_handler`](Self::add_scheduled_handler) is.
