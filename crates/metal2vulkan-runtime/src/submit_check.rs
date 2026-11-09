@@ -77,9 +77,14 @@
 //!   answered `Holds` from 1.4 against 0.2 us and the next device of the same test `Fails` from
 //!   2.1 against 1.8 (one import of 16 MiB held, the check's form before it held
 //!   [`TAX_IMPORTS`]), and the first's record would have kept its answer for the kernel's
-//!   release. So an import tax `Holds` is recorded only where it passes its bound [`TAX_MARGIN`]
-//!   times over, and again so in each of [`TAX_REPEATS`] tries more; short of that, it answers
-//!   for the device's life alone, and the next device measures again. The same load splits a
+//!   release. And on the RTX 5080 Laptop GPU (NVIDIA 615.71.09, Linux), beside a loop of the
+//!   device tests, one device of six answered `Holds` from 3.4 against 1.9 us where its quiet
+//!   devices answered `Fails` from 2.1 to 2.2 us held and bare alike (2026-11-09), and that
+//!   process took the routes of a taxed device the quiet ones never take. So an import tax
+//!   `Holds` stands only where its try's floors pass its bound [`TAX_MARGIN`] times over: short
+//!   of that it answers `Fails` for the device's life, unrecorded, and the next device measures
+//!   again. Past it, it is recorded only where each of [`TAX_REPEATS`] tries more passes so
+//!   again; short of that, it answers for the device's life alone. The same load splits a
 //!   try's halves: on the M3 Max, in three runs of the runtime's device tests (2026-11-09,
 //!   MoltenVK 1.4.2), one of the six devices that printed their verdicts had all three of its
 //!   import tax tries split, its last 2.5 against 1.2 us over all its phases, where the other five
@@ -202,10 +207,11 @@ pub(crate) const TAX_SUBMITS: usize = 8;
 /// microsecond, about 0.25% of a core at the 2500 submissions a second of a guest's frames.
 pub(crate) const TAX_FLOOR: i64 = 1_000;
 
-/// How many times over an import tax `Holds` passes its bound ([`tax_verdict`]) for it to be
-/// recorded: load beside the check that lengthened every submission with the imports held passed
-/// the bound by a fifth (lavapipe: the module docs), where the taxes the probe measured pass it
-/// six times over and more (its medians: RADV on three GPUs, ANV on i915 with 32 imports held).
+/// How many times over an import tax `Holds` passes its bound ([`tax_verdict`]) for it to stand,
+/// and, repeated, to be recorded: load beside the check that lengthened every submission with the
+/// imports held passed the bound by a fifth on lavapipe and by half on the RTX 5080 (the module
+/// docs), where the taxes the probe measured pass it six times over and more (its medians: RADV on
+/// three GPUs, ANV on i915 with 32 imports held).
 pub(crate) const TAX_MARGIN: i64 = 2;
 
 /// The tries more an import tax `Holds` past [`TAX_MARGIN`] answers again, each past it, before
@@ -298,7 +304,8 @@ pub(crate) struct SubmitChecks {
     took: AtomicU64,
     /// The tries whose blocks or phases disagreed, in this process (the module docs).
     split: AtomicU64,
-    /// The import tax answered `Holds` short of its record, in this process ([`tax_tried`]).
+    /// The import tax answered `Holds` past its margin but short of its record, in this process
+    /// ([`tax_tried`]).
     unearned: AtomicBool,
     /// The merge check holds without its answer, and no record is kept
     /// (`DeviceOptions::assume_submissions_merge`).
@@ -1099,33 +1106,35 @@ pub(crate) fn tried(
 }
 
 /// The import tax's verdict and floors over its tries of `once` ([`tried`]), and whether they may
-/// be recorded: a `Holds` only where its floors pass the bound [`TAX_MARGIN`] times over
-/// ([`tax_clear`]) and each of [`TAX_REPEATS`] tries more answers `Holds` so again (the module
-/// docs, "Load beside it"). A `Holds` short of that answers for the device's life alone, with
-/// the floors of its first try, and the next device measures again; a refused call ends the
-/// repeats, unrecorded. Tries that all split answer `Fails` for the device's life, unrecorded,
-/// where the last one's floors over all its phases fall short of that margin (a cost no try told
-/// from the load beside it), else `Unchecked` so. `None` where the check stops.
+/// be recorded (the module docs, "Load beside it"). A `Holds` stands only where its floors pass
+/// the bound [`TAX_MARGIN`] times over ([`tax_clear`]), and is recorded only where each of
+/// [`TAX_REPEATS`] tries more answers `Holds` so again; short of the repeats it answers for the
+/// device's life alone, with the floors of its first try, and the next device measures again; a
+/// refused call ends the repeats, unrecorded. A `Holds` short of the margin, and tries that all
+/// split where the last one's floors over all its phases fall short of it, answer `Fails` for the
+/// device's life, unrecorded: a cost no try told from the load beside it. Tries that all split
+/// past it answer `Unchecked` so. `None` where the check stops.
 pub(crate) fn tax_tried(
     checks: &SubmitChecks,
     mut once: impl FnMut() -> Option<Option<Timed>>,
 ) -> Option<(Verdict, (i64, i64), bool)> {
     let (verdict, floors, kept) = tried(checks, &mut once)?;
-    if verdict == Verdict::Unchecked && !kept && !tax_clear(floors) {
+    let split = verdict == Verdict::Unchecked && !kept;
+    if (split || verdict == Verdict::Holds) && !tax_clear(floors) {
         return Some((Verdict::Fails, floors, false));
     }
-    if verdict != Verdict::Holds || !kept {
+    if verdict != Verdict::Holds {
         return Some((verdict, floors, kept));
     }
-    let mut earned = tax_clear(floors);
+    let mut earned = true;
     for _ in 0..TAX_REPEATS {
-        if !earned {
-            break;
-        }
         earned = match once()? {
             Some(again) => again.verdict == Some(Verdict::Holds) && tax_clear(again.floors),
             None => false,
         };
+        if !earned {
+            break;
+        }
     }
     if !earned {
         checks.unearned.store(true, Ordering::Relaxed);

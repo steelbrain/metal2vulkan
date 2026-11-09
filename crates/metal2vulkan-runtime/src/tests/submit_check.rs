@@ -216,12 +216,10 @@ fn tax_answers(answers: &[Option<Timed>]) -> (Option<(Verdict, (i64, i64), bool)
 }
 
 /// An import tax `Holds` is recorded only where it passes its bound [`TAX_MARGIN`] times over in
-/// its try and in each of [`TAX_REPEATS`] tries more: lavapipe's under the load of the device
-/// tests (1.4 against 0.2 us, past the bound by a fifth) answers for the device's life after one
-/// try, unrecorded, where the record kept it for the kernel's release; the Radeon 780M's is
-/// recorded after its repeats; one whose repeat answers `Fails`, falls short of the margin,
-/// splits or is refused answers for the device's life with its first try's floors, unrecorded; a
-/// `Fails` is recorded after one try.
+/// its try and in each of [`TAX_REPEATS`] tries more: the Radeon 780M's is recorded after its
+/// repeats; one whose repeat answers `Fails`, falls short of the margin, splits or is refused
+/// answers for the device's life with its first try's floors, unrecorded; a `Fails` is recorded
+/// after one try.
 #[test]
 fn an_import_tax_holds_is_recorded_only_past_its_margin_and_repeated() {
     let holds = |floors| {
@@ -236,10 +234,6 @@ fn an_import_tax_holds_is_recorded_only_past_its_margin_and_repeated() {
             floors,
         })
     };
-    let lavapipe = (1_400, 200);
-    assert_eq!(tax_verdict(lavapipe.0, lavapipe.1), Verdict::Holds);
-    let unrecorded = (Some((Verdict::Holds, lavapipe, false)), 1);
-    assert_eq!(tax_answers(&[holds(lavapipe)]), unrecorded, "under load");
     let radeon = (20_700, 10_400);
     let recorded = (Some((Verdict::Holds, radeon, true)), 1 + TAX_REPEATS);
     assert_eq!(tax_answers(&[holds(radeon)]), recorded, "the Radeon 780M");
@@ -266,6 +260,30 @@ fn an_import_tax_holds_is_recorded_only_past_its_margin_and_repeated() {
     let slow = 80_000;
     assert!(!tax_clear((slow + TAX_MARGIN * (slow / 8), slow)));
     assert!(tax_clear((slow + TAX_MARGIN * (slow / 8) + 1, slow)));
+}
+
+/// An import tax `Holds` short of its margin answers `Fails` for the device's life, unrecorded,
+/// after one try: the RTX 5080 Laptop GPU's under a loop of the device tests (3.4 against 1.9 us,
+/// past the bound by half, where its quiet devices answered `Fails` from 2.1 to 2.2 us both) and
+/// lavapipe's under the device tests (1.4 against 0.2 us, past it by a fifth), each of which
+/// answered `Holds` and took a taxed device's routes the quiet devices never take.
+#[test]
+fn an_import_tax_holds_short_of_its_margin_answers_fails_unrecorded() {
+    let holds = |floors| {
+        Some(Timed {
+            verdict: Some(Verdict::Holds),
+            floors,
+        })
+    };
+    for (floors, name) in [
+        ((3_400, 1_900), "the RTX 5080 under load"),
+        ((1_400, 200), "lavapipe under load"),
+    ] {
+        assert_eq!(tax_verdict(floors.0, floors.1), Verdict::Holds, "{name}");
+        assert!(!tax_clear(floors), "{name}");
+        let fails = (Some((Verdict::Fails, floors, false)), 1);
+        assert_eq!(tax_answers(&[holds(floors)]), fails, "{name}");
+    }
 }
 
 /// Import tax tries that all split answer `Fails` for the device's life, unrecorded, where the

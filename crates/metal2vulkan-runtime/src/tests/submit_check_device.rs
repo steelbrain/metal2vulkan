@@ -129,8 +129,8 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     let identity = first.driver_identity();
     drop(first);
     // The verdicts of the last device that ran the checks, which its record holds where it wrote
-    // one (a device whose tries split, or whose import tax `Holds` fell short of a record, writes
-    // none, and the next runs them again).
+    // one (a device whose tries split, or whose import tax `Holds` fell short of its margin or of
+    // its record, writes none, and the next runs them again).
     let mut ran = answered;
     let start = std::time::Instant::now();
     loop {
