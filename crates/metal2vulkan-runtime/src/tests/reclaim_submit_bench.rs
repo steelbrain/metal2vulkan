@@ -9,19 +9,20 @@
 //! default): a creation that compacts memory for those pages holds every submission back.
 //!
 //! Each arm submits small command buffers for [`QUIET`] with nothing else running and for
-//! [`PRESSED`] once the host's memory is fragmented, as a desktop's is after its builds: half of
-//! it read into the page cache from a sparse file (holes, so nothing is written to disk), and
-//! private anonymous memory of all the host's free memory but [`FRAGMENT_SPARE_BYTES`] (at most
+//! [`PRESSED`] once the host's memory is fragmented, as a desktop's is after its builds: half of it
+//! read into the page cache from a sparse file (holes, so nothing is written to disk), and private
+//! anonymous memory of all the host's free memory but [`FRAGMENT_SPARE_BYTES`] (at most
 //! [`FRAGMENT_MOST_BYTES`]), every page written, so that the free blocks of every order are taken,
 //! of which every other page is then given back (`MADV_DONTNEED`), so that the free memory lies in
-//! single pages between pages in use, `MemAvailable` staying high; beside the phase a thread maps private
-//! anonymous memory advised for huge pages in pieces of [`PIECE_BYTES`], every page written, up
-//! to [`ANON_HIGH_BYTES`] while the host's `MemAvailable` stays above [`FLOOR_BYTES`], drops every
-//! other piece down to [`ANON_LOW_BYTES`] and reads the file again. Each command buffer copies [`COPY_BYTES`] from a no-copy buffer over
-//! private anonymous memory (imported by its pointer, a userptr on amdgpu) into a `Private`
-//! buffer and from that into another, and is submitted on the calling thread
-//! (`CommandBuffer::commit_and_submit`, timed) about every millisecond and waited for. Beside the
-//! submissions, in both phases, a thread makes memory as the arm says, timing each making.
+//! single pages between pages in use, `MemAvailable` staying high; beside the phase a thread maps
+//! private anonymous memory advised for huge pages in pieces of [`PIECE_BYTES`], every page
+//! written, up to [`ANON_HIGH_BYTES`] while the host's `MemAvailable` stays above [`FLOOR_BYTES`],
+//! drops every other piece down to [`ANON_LOW_BYTES`] and reads the file again. Each command buffer
+//! copies [`COPY_BYTES`] from a no-copy buffer over private anonymous memory (imported by its
+//! pointer, a userptr on amdgpu) into a `Private` buffer and from that into another, and is
+//! submitted on the calling thread (`CommandBuffer::commit_and_submit`, timed) about every
+//! millisecond and waited for. Beside the submissions, in both phases, a thread makes memory as the
+//! arm says, timing each making.
 //!
 //! The arms, one test each:
 //! - **Made by the runtime**: a `Private` buffer of [`RUNTIME_BUFFER_BYTES`] every
@@ -44,11 +45,11 @@
 //! median and slowest, and the runtime's blocks made ahead and in place; the host's reclaim over
 //! the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction stalls,
 //! allocation stalls, pages swapped out); the free blocks of each order before and after the
-//! fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions' and makings' `CLOCK_MONOTONIC`
-//! times, to line up with a kernel trace taken beside the run. Ignored: run it in
-//! release under `--cfg m2v_gpu` on Linux, alone on its host (it presses the whole host's
-//! memory), one arm at a time: `cargo nextest run --release -p metal2vulkan-runtime --lib
-//! --run-ignored all reclaim_submit_bench --no-capture`.
+//! fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions' and makings'
+//! `CLOCK_MONOTONIC` times, to line up with a kernel trace taken beside the run. Ignored: run it in
+//! release under `--cfg m2v_gpu` on Linux, alone on its host (it presses the whole host's memory),
+//! one arm at a time: `cargo nextest run --release -p metal2vulkan-runtime --lib --run-ignored all
+//! reclaim_submit_bench --no-capture`.
 
 use super::host_residency::{device, Scratch};
 use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, HostMemory, ResourceOptions};
