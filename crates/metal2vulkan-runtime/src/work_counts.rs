@@ -5075,8 +5075,10 @@ pub struct WorkCounts {
     pub plain_buffer_blocks_made: u64,
     /// The buffers of the runtime's own and the program's made so far in a plain block, not one
     /// allocated exportable, on a device that allocates such blocks, while the device's in-place
-    /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): its first run on a
-    /// driver, before the check's record holds its verdicts. 0 once they are known. A buffer that
+    /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): on its first run
+    /// on a driver, before the check's record holds its verdicts, until a check a texture over
+    /// host pages or `Device::settle_in_place_checks` started answered (a buffer's making starts
+    /// none). 0 once they are known. A buffer that
     /// declares its padding unobserved lies in a plain block wherever, and is not counted.
     pub fd_blocks_awaited: u64,
     /// As `fd_blocks_awaited`, once the device's check of such blocks found a texture over one's

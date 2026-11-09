@@ -89,8 +89,10 @@
 //!   buffer it starts `PREINITIALIZED`. So the buffers lie there only once the device's in-place
 //!   check of such blocks (`in_place.rs`'s `PagesClass::FdBlocks`) passed what a texture over one
 //!   takes that it takes over a plain block's (`in_place.rs`'s `fd_blocks_take`): from the check's
-//!   record as the device is made, else once its check answered, in plain blocks until then
-//!   (`WorkCounts::fd_blocks_awaited`) and where it refused them (`fd_blocks_refused`). A
+//!   record as the device is made, else once its check answered (a check a texture over host
+//!   pages or `Device::settle_in_place_checks` started; a buffer's making starts none), in plain
+//!   blocks until then (`WorkCounts::fd_blocks_awaited`) and where it refused them
+//!   (`fd_blocks_refused`). A
 //!   two-plane texture's planes over such a buffer are read through the texel buffer, the
 //!   device's conversion image not made (`ycbcr_planes_images_kept_exportable_block`): the check
 //!   covers single-plane images alone. On a Radeon 780M (RADV) a block's `vkAllocateMemory` of a

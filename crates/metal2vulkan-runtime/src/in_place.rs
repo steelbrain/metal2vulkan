@@ -142,7 +142,8 @@
 //!   the next device's check runs that class and access again (`encode`), its note saying which
 //!   the cause was. A program that will make such textures
 //!   starts the check earlier, where it likes, through `Device::settle_in_place_checks` (with no
-//!   wait: a zero timeout).
+//!   wait: a zero timeout). A buffer's making starts none: until the verdicts of exportable
+//!   blocks are known the runtime's own buffers lie in plain blocks ([`Device::fd_blocks_checked`]).
 //! - **Visibility.** A command reads the image's texels in the memory a buffer over the same pages
 //!   reads: the pages' host-visible, host-coherent import (a dma-buf's own import is of the same
 //!   memory type). So a CPU write reaches a command through the image as it reaches the buffer's
@@ -1262,11 +1263,16 @@ impl Device {
 
     /// Whether the runtime's own buffers lie in blocks allocated exportable (`memory.rs`'s
     /// "Buffers in exportable blocks"), by the device's verdicts ([`fd_blocks_take`]), asked as
-    /// such a buffer is made: a pending verdict starts the check, and the buffer lies in a plain
-    /// block meanwhile, as it does where the verdicts refuse such blocks; each counted
-    /// (`WorkCounts::fd_blocks_awaited`, `WorkCounts::fd_blocks_refused`). Never waits.
+    /// such a buffer is made: where a verdict is pending the buffer lies in a plain block, as it
+    /// does where the verdicts refuse such blocks; each counted (`WorkCounts::fd_blocks_awaited`,
+    /// `WorkCounts::fd_blocks_refused`). Never waits, and starts no check: the verdicts come from
+    /// the check's record as the device is made, or from a check a texture over host pages or
+    /// `Device::settle_in_place_checks` started. A check a buffer's making started would run
+    /// beside every program from its first buffer, its own buffers, imports and command buffers
+    /// among the program's, where a program that makes no texture over host pages has no use
+    /// for it.
     pub(crate) fn fd_blocks_checked(&self) -> bool {
-        let verdict = |class, access, rows| self.in_place_verdict(class, access, rows);
+        let verdict = |class, access, rows| self.shared().in_place.verdict(class, access, rows);
         match fd_blocks_take(verdict) {
             FdBlocksTake::Take => true,
             FdBlocksTake::Pending => {

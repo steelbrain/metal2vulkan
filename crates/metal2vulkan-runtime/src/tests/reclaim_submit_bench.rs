@@ -35,8 +35,9 @@
 //!   (`WorkCounts::buffer_blocks_made_ahead`), allocated exportable where the device's check of
 //!   such blocks passed (`memory.rs`'s "Buffers in exportable blocks"); the second settles the
 //!   device's in-place check before the phases, as a device of a driver whose check's record
-//!   holds its verdicts knows them as it is made, where the first's check runs beside them, as a
-//!   driver's first device's does.
+//!   holds its verdicts knows them as it is made, where the first starts no check (a buffer's
+//!   making starts none), its blocks plain, as a driver's first device's are until a texture over
+//!   host pages starts the check and it answers.
 //! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
 //!   the device's first memory type that is host-visible and host-coherent but not device-local or
 //!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of

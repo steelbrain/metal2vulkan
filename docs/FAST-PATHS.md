@@ -1020,7 +1020,9 @@ driver's. Each is open work.
   policy takes textures in place by its check and that check of such blocks gave every texture
   over one what it takes over a plain block's buffer (`in_place::fd_blocks_take`,
   `texture/fd_blocks_cover.rs`, the in-place row above; plain blocks until it answered,
-  `WorkCounts::fd_blocks_awaited`): on a Radeon 780M (RADV PHOENIX, Mesa
+  `WorkCounts::fd_blocks_awaited`, the verdicts from the check's record or from a check a texture
+  over host pages or `Device::settle_in_place_checks` started, a buffer's making starting none):
+  on a Radeon 780M (RADV PHOENIX, Mesa
   26.2.4) a plain block's `vkAllocateMemory` holds every submission of the process while the
   kernel fills its pages, under the reservation the process's buffer objects share, and an
   exportable block, a buffer object of its own reservation, holds none. With a 64 MiB block of
@@ -1033,11 +1035,9 @@ driver's. Each is open work.
   its pools growing by 64 MiB blocks made ahead; two runs each), the base took 13 and 12
   turnarounds of 8 ms or more on the quiet host and 103 and 17 on the fragmented one (19 and 4 of
   17 ms or more, the slowest 40.4 and 49.0 ms, the scheduler's thread waiting 350 and 311 ms on
-  the kernel's lock); with the blocks exportable, none on the fragmented host (the slowest 5.9
-  and 6.0 ms, 21 and 24 ms waited) and one each on the quiet one, where 3 blocks were made plain
-  while the device's first check was pending (446 and 447 buffers awaited it); with the check's
-  verdicts known first, as from its record, none in either phase (the slowest 7.1 ms, 4 and 10
-  ms waited). In the arm whose 64 `Private` buffers of 32 MiB were made
+  the kernel's lock); with the check's verdicts known first, as from its record, the blocks
+  exportable and none in either phase (the slowest 7.1 ms, 4 and 10 ms waited). Until the
+  verdicts are known the blocks are plain, as the base's. In the arm whose 64 `Private` buffers of 32 MiB were made
   before the phases, in plain blocks, the first turnaround took 57.0 ms and none after it 1.4 ms;
   with 64 exportable blocks held, the first took 2.4 to 8.1 ms. The trade: each such block held
   costs every
