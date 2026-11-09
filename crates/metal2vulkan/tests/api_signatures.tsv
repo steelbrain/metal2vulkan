@@ -4970,6 +4970,7 @@ fn	metal2vulkan-air::specialize_dynamic	pub fn specialize_dynamic(d: Decoded, r:
 fn	metal2vulkan-air::specialize_linked	pub fn specialize_linked(d: Decoded, r: &SpecRequest, linked: &[LinkedModule], m: &mut Meter) -> Result<Entry, Error>
 fn	metal2vulkan-runtime::host_time	pub fn host_time() -> f64
 fn	metal2vulkan-runtime::process_exiting	pub fn process_exiting() -> bool
+fn	metal2vulkan-runtime::program_instance_made	pub fn program_instance_made()
 fn	metal2vulkan-runtime::sampler_border_color	pub fn sampler_border_color(raw: u64) -> SamplerBorderColor
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::astc_decode_module	pub fn astc_decode_module(device: &Device, decode: AstcDecode, texels: AstcTexels) -> Result<BlockDecodeModule, Error>
