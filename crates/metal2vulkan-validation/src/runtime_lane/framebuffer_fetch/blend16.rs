@@ -33,13 +33,15 @@
 //! itself, exactly, announcing none of the three, which is asserted. Through input attachments
 //! (lavapipe) the device blends; what it announces and how many channels are Metal's is printed.
 //! Each draw prints a `FETCH-BLEND16` line (`FETCH-BLEND16-DIFFERENCE` under a difference) naming
-//! its function and blend.
+//! its function and blend. A device that has neither form (RADV on the RX 550) refuses each
+//! pipeline, typed (`Unsupported` of `Feature::FramebufferFetch`): each refusal is printed and its
+//! draw skipped (`fetch_unavailable`).
 
 mod nans;
 mod narrow;
 mod zero;
 
-use super::{form, library, through_inputs};
+use super::{fetch_unavailable, form, library, through_inputs};
 use crate::runtime_lane::buffer_with;
 use crate::runtime_lane::degrade_notices::counts;
 use crate::runtime_lane::resolves::{lane_with, quiet, Lane};
@@ -371,6 +373,8 @@ fn stores_metals_blend(sweep: &Sweep, blends: &[Blending], tag: &str) {
                 .function_descriptor(),
         )
     };
+    // The draws refused as the device's answer to every fetch (`fetch_unavailable`).
+    let mut skipped = 0;
     for (b, case) in blends
         .iter()
         .flat_map(|&b| sweep.cases.map(|case| (b, case)))
@@ -390,10 +394,19 @@ fn stores_metals_blend(sweep: &Sweep, blends: &[Blending], tag: &str) {
         unwritten.write_mask = ColorWriteMask::NONE;
         descriptor.color_attachments[0] = Some(blended);
         descriptor.color_attachments[1] = Some(unwritten);
-        let state = lane
-            .device
+        let state = match (lane.device)
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-            .unwrap_or_else(|error| panic!("{what}: {error}"));
+        {
+            Ok(state) => state,
+            Err(error) => match fetch_unavailable(&lane, &error) {
+                Some(refusal) => {
+                    println!("{tag} {what}: skipped, the device has no fetch: {refusal}");
+                    skipped += 1;
+                    continue;
+                }
+                None => panic!("{what}: {error}"),
+            },
+        };
         let (texels, sources) = (sweep.data)(case);
         let target = filled(&lane, &texels);
         let mut second = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, SIDE, SIDE, false);
@@ -486,6 +499,9 @@ fn stores_metals_blend(sweep: &Sweep, blends: &[Blending], tag: &str) {
                 wrong.len()
             );
         }
+    }
+    if skipped > 0 {
+        println!("{tag} | {device} | skipped: {skipped} pipelines refused, no fetch form");
     }
     let _ = messages.take_notices();
     quiet(lane, &messages);

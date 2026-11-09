@@ -164,6 +164,7 @@ use super::Messages;
 use crate::air_library::AirLibrary;
 use crate::runtime_lane::{buffer_with, pipelines_settled, read_buffer, WAIT};
 use metal2vulkan::device::{DriverFact, FormatUsage, VkFeature};
+use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::{
     BlendFactor, IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureType,
     TextureUsage,
@@ -417,6 +418,26 @@ fn loading(texture: &Texture, store: StoreAction) -> RenderPassDescriptor {
     target.load_action = LoadAction::Load;
     target.store_action = store;
     descriptor
+}
+
+/// The refusal `error` is where it is the device's answer to every framebuffer fetch: the device
+/// has neither of the two forms a fetch takes, rasterization-order color attachment access (input
+/// attachments) and the fragment shader pixel interlock (the storage form), and `error` refuses
+/// the fetch, typed (`Unsupported` of `Feature::FramebufferFetch`). That is the device's honest
+/// answer (RADV on the RX 550, GCN4, has neither), which a lane prints and skips on; any other
+/// refusal, and this one on a device that has a form, stays the lane's failure.
+fn fetch_unavailable<'a>(lane: &Lane, error: &'a Error) -> Option<&'a Unsupported> {
+    let fragment = lane.device.compile_device().profile().fragment();
+    match error {
+        Error::Unsupported(refusal)
+            if refusal.feature == Feature::FramebufferFetch
+                && !fragment.rasterization_order_color_access
+                && !fragment.pixel_interlock =>
+        {
+            Some(refusal)
+        }
+        _ => None,
+    }
 }
 
 /// The form the device's framebuffer fetch takes, for the printed lines.
@@ -2469,7 +2490,7 @@ fn halves(lanes: &[f32]) -> Vec<u8> {
 /// checks the blend's bytes against Metal's).
 #[test]
 fn a_guests_fetching_pipeline_blends_an_extended_range_attachment() {
-    use metal2vulkan::error::{Feature, Needs};
+    use metal2vulkan::error::Needs;
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask};
     let (messages, cache, lane) = lane();
     let vertices = library(&lane, "rt6_resolves");
@@ -2625,7 +2646,7 @@ fn a_guests_fetching_pipeline_blends_an_extended_range_attachment() {
 /// input attachments. A device whose fetch is neither refuses the pipeline by the format, printed.
 #[test]
 fn a_discarding_fetch_stores_only_what_metals_later_tests_keep() {
-    use metal2vulkan::error::{BindError, Feature, Needs};
+    use metal2vulkan::error::{BindError, Needs};
     use metal2vulkan::metal::state::DepthStencilDescriptor;
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask, CompareFunction};
     let (messages, cache, lane) = lane();
@@ -2898,7 +2919,7 @@ fn a_discarding_fetch_stores_only_what_metals_later_tests_keep() {
 /// refuses the pipeline by the format, printed.
 #[test]
 fn a_state_storing_before_its_tests_makes_its_first_draw_s_pipeline_at_creation() {
-    use metal2vulkan::error::{Feature, Needs};
+    use metal2vulkan::error::Needs;
     use metal2vulkan::metal::state::DepthStencilDescriptor;
     use metal2vulkan::metal::{BlendFactor, ColorWriteMask, CompareFunction};
     let (messages, cache, lane) = lane();
