@@ -2095,12 +2095,15 @@ mod tests {
     /// **only** the three pattern rows whose read blits out of a texture Metal keeps compressed in
     /// a format whose canonical encoding the device's copy may keep apart from Metal's
     /// (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the notes lavapipe announced) name a further
-    /// notice. A row whose notices were a guess would show here as a row loosening a site nothing
-    /// needed.
+    /// notice. The two `Depth32Float` rows apart: each also leaves its `fresh` site unchecked under
+    /// `fresh-pattern-zeroed` and declares that notice ([`zeroed_depth_pattern`]), and the texture
+    /// row declares `restricted-depth-upload` too, the notices MoltenVK announced. A row whose
+    /// notices were a guess would show here as a row loosening a site nothing needed.
     #[test]
     fn a_row_loosens_the_notices_site_and_a_private_texture_s_fresh_site() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
         let fresh = crate::replay::without_compression("fresh");
+        let [zeroed, _] = zeroed_depth_pattern();
         let shared = metal2vulkan_runtime::Degradation::SharedInSystemMemory
             .code()
             .to_owned();
@@ -2108,7 +2111,7 @@ mod tests {
             let allowances = case.allowances();
             for allowance in &allowances {
                 assert!(
-                    allowance.path == notices || *allowance == fresh,
+                    allowance.path == notices || *allowance == fresh || *allowance == zeroed,
                     "{}: {allowance:?}",
                     case.name()
                 );
@@ -2124,9 +2127,16 @@ mod tests {
         }
         for row in TEXTURES {
             let private = row.storage == Storage::Private;
+            let depth = row.shape.format == DEPTH32FLOAT.format;
             let allowances = FreshTexture { row }.allowances();
-            assert_eq!(allowances.len(), 1 + usize::from(private), "{}", row.case);
+            assert_eq!(
+                allowances.len(),
+                1 + usize::from(private) + 3 * usize::from(depth),
+                "{}",
+                row.case
+            );
             assert_eq!(allowances.contains(&fresh), private, "{}", row.case);
+            assert_eq!(allowances.contains(&zeroed), depth, "{}", row.case);
         }
         // Everything else is held to Metal exactly, the venue's own notice apart.
         for (case, storage) in BUFFERS {
@@ -2148,9 +2158,16 @@ mod tests {
                 row.case,
                 "fresh-pattern-552" | "fresh-pattern-553" | "fresh-pattern-93"
             );
+            let depth = row.format == DEPTH32FLOAT.format;
             let allowances = FreshPattern { row }.allowances();
-            assert_eq!(allowances.len(), 2 + usize::from(kept), "{}", row.case);
+            assert_eq!(
+                allowances.len(),
+                2 + usize::from(kept) + 2 * usize::from(depth),
+                "{}",
+                row.case
+            );
             assert!(allowances.contains(&fresh), "{}", row.case);
+            assert_eq!(allowances.contains(&zeroed), depth, "{}", row.case);
         }
     }
 

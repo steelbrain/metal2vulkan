@@ -38,8 +38,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 814 |
 | of the reachable, not exercised | 161 |
 | share of the reachable exercised | 83% |
-| of those exercised, no case reaching it loosens anything | 573 |
-| of those exercised, a case reaching it loosens some site | 241 |
+| of those exercised, no case reaching it loosens anything | 572 |
+| of those exercised, a case reaching it loosens some site | 242 |
 | case modules | 161 |
 | committed recordings | 1233 |
 | distinct SDK items the Metal leg reaches, of any status | 821 |
@@ -535,8 +535,8 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1149 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 11 |
-| tolerances in all | 11 |
+| modules that loosen a measured value | 12 |
+| tolerances in all | 12 |
 | modules declaring a notice (loosening no value) | 127 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
@@ -610,7 +610,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `format_footprints` | 6 | 6 | every field | 21 |
 | `fragment_imageblock_reflection` | 1 | 1 | every field | 74 |
 | `frame_chains` | 1 | 1 | every field | 147 |
-| `fresh_contents` | 87 | 87 | every field | 50 |
+| `fresh_contents` | 87 | 87 | 1 tolerance(s): `Degradation` | 50 |
 | `function_bindings` | 15 | 15 | every field | 65 |
 | `function_facts` | 15 | 15 | every field | 38 |
 | `half_output_blends` | 6 | 6 | every field | 125 |
