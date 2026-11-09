@@ -220,8 +220,8 @@ use super::heap_tiled::{
 use super::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::stand_in::StandIn;
 use super::{
-    copy_units, image_aspects, image_error, pages_hold, texel_units, DetachedImage, IdUse, Image,
-    ImageObjects, ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Storage, Texture,
+    image_aspects, image_error, pages_hold, texel_units, DetachedImage, IdUse, Image, ImageObjects,
+    ImagePlacement, ImageSwap, KeptResolves, Owner, Raw, Remade, Storage, Texture,
     TextureDescriptor, ViewRecord,
 };
 use crate::address::ObjectsToken;
@@ -258,9 +258,7 @@ use metal2vulkan::device::{DriverFact, HeapCompressionPolicy};
 use metal2vulkan::error::{Feature, LinearNeed, Unsupported};
 use metal2vulkan::metal::format::{footprint, is_depth_stencil, ycbcr_format, Footprint};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
-use metal2vulkan::vk::{
-    Format, FormatFeatureFlags2, ImageAspectFlags, ImageUsageFlags, SampleCountFlags,
-};
+use metal2vulkan::vk::{Format, FormatFeatureFlags2, ImageUsageFlags, SampleCountFlags};
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
