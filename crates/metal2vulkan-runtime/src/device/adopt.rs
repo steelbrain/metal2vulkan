@@ -352,6 +352,7 @@ impl Device {
             record_executions: false,
             pipeline_records: raw.pipeline_records,
             fail_in_place_check: false,
+            assume_submissions_merge: false,
             announce_each: raw.announce_each,
             lowering_refuses: raw.lowering_refuses,
             view_reinterpretation,

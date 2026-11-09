@@ -202,6 +202,15 @@ pub struct DeviceOptions {
     /// lanes that hold the shadow to a failed check. No Metal counterpart.
     #[doc(hidden)]
     pub fail_in_place_check: bool,
+    /// Take each device's submission check of merged submissions (`submit_check.rs`,
+    /// `Check::Merge`) as holding without its answer, and keep no record of its checks: under
+    /// `CompletionPolicy::Grouped` its batches then wait in groups whatever the timing it
+    /// measured, where a driver that runs one `vkQueueSubmit` of several `VkSubmitInfo`s as
+    /// several kernel submissions runs them as correctly, saving none. Its import tax and follows
+    /// checks answer as ever. Off by default. A test hook, for the lanes that hold a device to the
+    /// grouped path on every run. No Metal counterpart.
+    #[doc(hidden)]
+    pub assume_submissions_merge: bool,
     /// Color formats each device takes as no color attachment, as a device without the
     /// attachment feature of them does: their tilings' `COLOR_ATTACHMENT` and blend features and
     /// their attachment sample counts are left out of the description the device plans and
@@ -307,6 +316,7 @@ impl std::fmt::Debug for DeviceOptions {
             lowering_refuses,
             record_executions,
             fail_in_place_check,
+            assume_submissions_merge,
             withheld_attachment_formats,
             pipeline_records,
             extra_queues,
@@ -337,6 +347,7 @@ impl std::fmt::Debug for DeviceOptions {
             .field("lowering_refuses", lowering_refuses)
             .field("record_executions", record_executions)
             .field("fail_in_place_check", fail_in_place_check)
+            .field("assume_submissions_merge", assume_submissions_merge)
             .field("withheld_attachment_formats", withheld_attachment_formats)
             .field(
                 "pipeline_records",
@@ -1901,6 +1912,7 @@ pub(super) fn create_on(
         record_executions: options.record_executions,
         pipeline_records: options.pipeline_records.clone(),
         fail_in_place_check: options.fail_in_place_check,
+        assume_submissions_merge: options.assume_submissions_merge,
         view_reinterpretation,
         generated_commands,
         host_image_copy,
@@ -2063,6 +2075,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         lowering_refuses,
         record_executions,
         fail_in_place_check,
+        assume_submissions_merge,
         withheld_attachment_formats,
         pipeline_records: _,
         extra_queues,
@@ -2088,6 +2101,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *lowering_refuses == b.lowering_refuses
         && *record_executions == b.record_executions
         && *fail_in_place_check == b.fail_in_place_check
+        && *assume_submissions_merge == b.assume_submissions_merge
         && *withheld_attachment_formats == b.withheld_attachment_formats
         && *extra_queues == b.extra_queues
         && *reserved_queues == b.reserved_queues

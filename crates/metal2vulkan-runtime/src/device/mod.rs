@@ -1561,6 +1561,9 @@ pub(super) struct Parts {
     /// Its check of the first move over host pages fails whatever the moves did
     /// (`DeviceOptions::fail_in_place_check`).
     pub(super) fail_in_place_check: bool,
+    /// Its submission check of merged submissions holds without its answer
+    /// (`DeviceOptions::assume_submissions_merge`).
+    pub(super) assume_submissions_merge: bool,
     /// Its views may reinterpret an image's components ([`DeviceShared`]'s field), outside
     /// `enabled`'s vocabulary.
     pub(super) view_reinterpretation: bool,
@@ -1661,6 +1664,7 @@ impl Device {
             record_executions,
             pipeline_records,
             fail_in_place_check,
+            assume_submissions_merge,
             view_reinterpretation,
             generated_commands,
             host_image_copy,
@@ -2407,7 +2411,9 @@ impl Device {
                 fail_in_place_check,
                 limits.non_coherent_atom_size,
             ),
-            submit_checks: Arc::new(crate::submit_check::SubmitChecks::new()),
+            submit_checks: Arc::new(crate::submit_check::SubmitChecks::new(
+                assume_submissions_merge,
+            )),
             host_import,
             #[cfg(unix)]
             opaque_fd,

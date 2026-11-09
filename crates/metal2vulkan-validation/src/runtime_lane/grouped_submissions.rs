@@ -1207,9 +1207,11 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
     let cache = ScratchCache::new().unwrap();
     let seen = {
         // The default completion, which the lane's options leave for Metal's exact one: the held
-        // group is its.
+        // group is its. The device's merge check holds without its timing, so every run holds
+        // the group, on every device.
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Grouped;
+            options.assume_submissions_merge = true;
         })
         .unwrap();
         let merging = merges(&device);
@@ -1346,13 +1348,21 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
 /// behind it until the handler gave up. `A` is made longer until it outlasts the handler's start,
 /// as [`behind_while_a_runs`] does. Nothing is asked of two command buffers of one queue: Metal
 /// runs one queue's handlers one at a time, so a handler that waits for a completed handler of its
-/// own queue never sees it there either (the probe's `scheduled-one-queue`).
+/// own queue never sees it there either (the probe's `scheduled-one-queue`). The device groups
+/// under the default completion with its merge check held (`DeviceOptions::assume_submissions_merge`),
+/// so the group is held on every run, not only where the check's timing read a merge; on a device
+/// whose queues take two `VkQueue`s (`shared` false) no group can hold the two, and the handler's
+/// wait alone is checked.
 #[test]
 fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
     let mut stretch = 1;
     let seen = loop {
         let seen = behind_another_queue_s_handler(stretch);
-        if !(seen.merging && seen.shared) || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
+        assert!(
+            seen.merging,
+            "the merge check did not hold as assumed: {seen:?}"
+        );
+        if !seen.shared || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
             break seen;
         }
         stretch *= 2;
@@ -1364,7 +1374,7 @@ fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
         seen.reached,
         "X's completed handler never reached Y's: {seen:?}"
     );
-    if seen.merging && seen.shared {
+    if seen.shared {
         assert!(
             seen.a_ran,
             "A ended before Y's handler began, at every run: {seen:?}"

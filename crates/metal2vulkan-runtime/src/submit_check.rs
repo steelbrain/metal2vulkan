@@ -98,7 +98,10 @@
 //!   (`shader_cache/store.rs`), named by the driver's identity, the kernel's release (the import
 //!   tax is the kernel's work on RADV), the check's version and the runtime's ([`record_name`]):
 //!   a device of the same driver, release and kernel reads them as it is made and runs no check.
-//!   A failed write leaves the verdicts for the device's life.
+//!   A failed write leaves the verdicts for the device's life. A device made with
+//!   `DeviceOptions::assume_submissions_merge` (a test hook) reads and writes no record: its merge
+//!   check holds from its making, the merge's floors only reported, and its other checks answer
+//!   for its life.
 //! - **Out of the device's way.** Before each step that allocates, frees, maps or unmaps pages,
 //!   or submits (each round, each import and its release, each submission of a phase, each copy
 //!   and remap), the thread steps aside for the device's allocations and frees on other threads
@@ -290,6 +293,9 @@ pub(crate) struct SubmitChecks {
     split: AtomicU64,
     /// The import tax answered `Holds` short of its record, in this process ([`tax_tried`]).
     unearned: AtomicBool,
+    /// The merge check holds without its answer, and no record is kept
+    /// (`DeviceOptions::assume_submissions_merge`).
+    merge_assumed: bool,
     /// The import tax's tries, in this process: each makes and releases [`TAX_IMPORTS`] imports
     /// once ([`tax_holds`]).
     pub(crate) tax_tries: AtomicU64,
@@ -308,9 +314,10 @@ pub(crate) struct SubmitChecks {
 }
 
 impl SubmitChecks {
-    /// A device's, every verdict pending.
-    pub(crate) fn new() -> SubmitChecks {
-        SubmitChecks {
+    /// A device's, every verdict pending; the merge check's `Holds` from the start where
+    /// `merge_assumed` (`DeviceOptions::assume_submissions_merge`).
+    pub(crate) fn new(merge_assumed: bool) -> SubmitChecks {
+        let checks = SubmitChecks {
             verdicts: Default::default(),
             measured: Default::default(),
             started: AtomicBool::new(false),
@@ -319,6 +326,7 @@ impl SubmitChecks {
             took: AtomicU64::new(0),
             split: AtomicU64::new(0),
             unearned: AtomicBool::new(false),
+            merge_assumed,
             tax_tries: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
             waiters: AtomicU32::new(0),
@@ -326,7 +334,11 @@ impl SubmitChecks {
             ending: Condvar::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Default::default(),
+        };
+        if merge_assumed {
+            checks.set(Check::Merge, Verdict::Holds);
         }
+        checks
     }
 
     /// `check`'s verdict now.
@@ -663,9 +675,15 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<([Verdic
 
 impl Device {
     /// As the device is made: its verdicts where a record holds them (settled then), else its
-    /// checks start on a thread of their own. A record that does not decode is no record.
+    /// checks start on a thread of their own. A record that does not decode is no record. Where
+    /// the merge check holds without its answer (`DeviceOptions::assume_submissions_merge`), no
+    /// record is read: the checks run, and keep none.
     pub(crate) fn recall_submit_checks(&self) {
         let shared = self.shared();
+        if shared.submit_checks.merge_assumed {
+            self.start_submit_checks();
+            return;
+        }
         let identity = self.driver_identity();
         let name = record_name(&identity);
         let looked = (shared.shader_cache.content_store())
@@ -812,8 +830,12 @@ impl Device {
             0 => String::new(),
             tries => format!(", {tries} import tax tries"),
         };
+        let assumed = match checks.merge_assumed {
+            true => " assumed",
+            false => "",
+        };
         format!(
-            "merge {:?} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
+            "merge {:?}{assumed} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
              {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
              follows {:?}, \
              {took}{split}{unearned}{tax_tries} (floors)",
@@ -1012,7 +1034,7 @@ fn run(parts: &Parts, made: Made) {
     checks.set_measured(measured);
     parts.counts.submit_checks_ran();
     let verdicts = Check::ALL.map(|check| checks.verdict(check));
-    if kept && !verdicts.contains(&Verdict::Pending) {
+    if kept && !checks.merge_assumed && !verdicts.contains(&Verdict::Pending) {
         let identity = &parts.identity;
         let bytes = encode(identity, verdicts, measured);
         // A failed write leaves the verdicts to the device's life alone.
@@ -1028,7 +1050,9 @@ fn run(parts: &Parts, made: Made) {
 fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
     let checks = &parts.checks;
     let (merges, (merged, apart), merge_kept) = tried(checks, || merge(parts, objects))?;
-    checks.set(Check::Merge, merges);
+    if !checks.merge_assumed {
+        checks.set(Check::Merge, merges);
+    }
     let (taxed, (held, bare), tax_kept) = tax_tried(checks, || {
         checks.tax_tries.fetch_add(1, Ordering::Relaxed);
         tax(parts, objects)

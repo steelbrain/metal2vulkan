@@ -181,7 +181,7 @@ fn tries_that_all_disagree_are_unchecked_and_unrecorded() {
         verdict,
         floors: (1, 2),
     };
-    let checks = SubmitChecks::new();
+    let checks = SubmitChecks::new(false);
     let mut tries = 0;
     let second = tried(&checks, || {
         tries += 1;
@@ -205,7 +205,7 @@ fn tries_that_all_disagree_are_unchecked_and_unrecorded() {
 /// What the import tax's tries answer ([`tax_tried`]) where each answers the next of `answers`
 /// (the last again past them), and how many it made.
 fn tax_answers(answers: &[Option<Timed>]) -> (Option<(Verdict, (i64, i64), bool)>, usize) {
-    let checks = SubmitChecks::new();
+    let checks = SubmitChecks::new(false);
     let mut tries = 0;
     let answered = tax_tried(&checks, || {
         let answer = answers[tries.min(answers.len() - 1)];

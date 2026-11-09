@@ -2074,6 +2074,7 @@ field	metal2vulkan-runtime::DeviceHandles.queue_families	pub queue_families: &'a
 field	metal2vulkan-runtime::DeviceHandles.queue_family	pub queue_family: u32
 field	metal2vulkan-runtime::DeviceHandles.reserved_queues	pub reserved_queues: &'a [ReservedQueue]
 field	metal2vulkan-runtime::DeviceOptions.announce_each	pub announce_each: BTreeSet<crate::Degradation>
+field	metal2vulkan-runtime::DeviceOptions.assume_submissions_merge	pub assume_submissions_merge: bool
 field	metal2vulkan-runtime::DeviceOptions.device_extensions	pub device_extensions: Vec<CString>
 field	metal2vulkan-runtime::DeviceOptions.extra_queues	pub extra_queues: Vec<vk::QueueFlags>
 field	metal2vulkan-runtime::DeviceOptions.fail_in_place_check	pub fail_in_place_check: bool
