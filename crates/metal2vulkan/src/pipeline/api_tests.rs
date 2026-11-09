@@ -614,6 +614,7 @@ mod serde_round_trips {
                 samples: 4,
             }),
             early_fragment_tests: true,
+            writes_sample_mask: true,
             // An emulated mesh function's records.
             mesh_records: Some(crate::pipeline::MeshRecords {
                 vertices: 3,
