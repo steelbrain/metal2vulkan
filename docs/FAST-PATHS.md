@@ -990,8 +990,8 @@ driver's. Each is open work.
   of the device's own, would hold the frames it meets as long (the row above), so none is. Metal's
   command buffers wait for no allocation. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
-  ones, its buffers' blocks there allocated exportable: about 1 µs a submission for each such
-  block held.** Where the device has unified memory and a heap that is not
+  ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
+  unobserved: about 1 µs a submission for each such block held.** Where the device has unified memory and a heap that is not
   device-local, `Private` and `Memoryless` placements take that heap's types first (`memory.rs`'s
   `candidates`; `Memoryless` its lazily allocated types before all): RADV backs a Radeon 780M's
   device-local types from the 2 GiB carve-out the kernel reserves for every process's GPU memory,
@@ -1011,12 +1011,16 @@ driver's. Each is open work.
   had taken 132 and 126 ms with the placements device-local; with unified memory the heaps keep
   one budget of an eighth of them all (the row above), which keeps every block: the later clips
   made none and took 122 and 119 ms. There the blocks of the runtime's buffers (the program's,
-  those of buffer descriptors and its own; not a heap's) are allocated exportable as an opaque
-  file descriptor and never exported (`memory.rs`'s "Buffers in exportable blocks"), every image
-  over one the device's linear image made for it, where its policy takes textures in
-  place by its check and that check of such blocks gave every texture over one what it takes
-  over a plain block's buffer (`in_place::fd_blocks_take`, the in-place row above; plain blocks
-  until it answered, `WorkCounts::fd_blocks_awaited`): on a Radeon 780M (RADV PHOENIX, Mesa
+  those of buffer descriptors and its own; not a heap's, nor a buffer that declares its padding
+  unobserved, `BufferDescriptor::padding_unobserved`, which lies in a plain block wherever, as a
+  texture over it whose rows lie apart may take a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch
+  there, which RADV makes over exportable memory only as a dedicated allocation) are allocated
+  exportable as an opaque file descriptor and never exported (`memory.rs`'s "Buffers in
+  exportable blocks"), every image over one the device's linear image made for it, where its
+  policy takes textures in place by its check and that check of such blocks gave every texture
+  over one what it takes over a plain block's buffer (`in_place::fd_blocks_take`,
+  `texture/fd_blocks_cover.rs`, the in-place row above; plain blocks until it answered,
+  `WorkCounts::fd_blocks_awaited`): on a Radeon 780M (RADV PHOENIX, Mesa
   26.2.4) a plain block's `vkAllocateMemory` holds every submission of the process while the
   kernel fills its pages, under the reservation the process's buffer objects share, and an
   exportable block, a buffer object of its own reservation, holds none. With a 64 MiB block of
@@ -1025,16 +1029,25 @@ driver's. Each is open work.
   quiet host and 12 of 13701 on one whose free memory lay in single pages (2 of 17 ms or more,
   the slowest 63.9 ms, the scheduler's thread waiting 305 ms on that reservation in all), against
   0 of 7153 and 0 of 14266 with the blocks exportable as an opaque file descriptor (the slowest
-  2.7 and 4.5 ms, 2.6 ms waited); RUNTIME_ARMS. The trade: each such block held costs every
+  2.7 and 4.5 ms, 2.6 ms waited). In the arm whose 64 `Private` buffers of 32 MiB were made
+  before the phases, in plain blocks, the first turnaround took 57.0 ms and none after it 1.4 ms;
+  with 64 exportable blocks held, the first took 2.4 to 8.1 ms. The trade: each such block held
+  costs every
   submission, which names each, about 1 µs: with 64 held, `vkQueueSubmit` took 0.175 and
   0.168 ms where it took 0.105 and 0.109 ms with none, and a turnaround's median 0.341 ms
   against 0.294 ms. Two queues over one such allocation run beside each other as over a plain
   one (a fill of 96 MiB eight times on a compute queue, a copy of 64 KiB on the graphics queue a
   millisecond later: 96 of 100 copies completed while the fills ran, against 97 and 98). A driver
-  that treated such memory as its private memory would behave as before plus that cost. A
-  two-plane texture's planes over such a buffer are read through the texel buffer, not an image
+  that treated such memory as its private memory would behave as today plus that cost. Plain
+  blocks remain, their making holding the submissions as before
+  (`WorkCounts::plain_buffer_blocks_made`): those of the buffers that declare their padding
+  unobserved, of images and of heaps, and of the few buffers the runtime places apart. A memory
+  type whose buffers lie in both kinds keeps a pool of each, each keeping a block partly filled
+  or empty (the row above), so up to 64 MiB more stays held than with one. A two-plane
+  texture's planes over a buffer in such a block are read through the texel buffer, not an image
   of the device's conversion (`WorkCounts::ycbcr_planes_images_kept_exportable_block`): the
-  check covers single-plane images alone. Devices whose
+  check covers single-plane images alone; over a buffer that declares its padding unobserved,
+  in a plain block, they take the conversion image as before. Devices whose
   every type is device-local (ANV, MoltenVK, lavapipe) and those without unified memory place as
   before, in plain blocks. No switch: no answer of Metal's changes. Not announced.
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
