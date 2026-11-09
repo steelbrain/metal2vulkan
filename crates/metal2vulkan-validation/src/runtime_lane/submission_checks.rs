@@ -578,7 +578,8 @@ impl Drop for InFlight {
 /// A submission whose `SharedEvent` wait another command buffer's GPU signal meets is checked
 /// only once that signal landed, as Metal holds such a command buffer until then
 /// (`event-wait-behind-a-running-signal`): the companion event the signaller signals first reads 1
-/// in the check, and a head is counted as awaiting its checks' signals. Its buffer detached once
+/// in the check, and a head is counted as awaiting its checks' signals while the signal is held
+/// (the gate opens once the scheduler's pass counted it, or after [`WAIT`]). Its buffer detached once
 /// the signaller is scheduled, while its signal is held in flight at the signaller's gate (the
 /// companion still reads 0 after the detach), the submission fails with code 8 and its fill does
 /// not run. So too for a waiter committed with `commit_and_submit` while the signal is in flight:
@@ -599,6 +600,15 @@ fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
                 0,
                 "shared {shared}, at commit {at_commit}: the signal landed before its gate opened"
             );
+            // The scheduler's pass counts the head while the signal is held at the gate, which
+            // only `finish` opens: a waiter committed with `commit_and_submit` just now may not
+            // have met that pass yet.
+            let deadline = Instant::now() + WAIT;
+            while device.work_counts().heads_awaiting_check_signals == awaiting
+                && Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_micros(200));
+            }
             let at_check = run.finish();
             let awaited = device.work_counts().heads_awaiting_check_signals - awaiting;
             assert_eq!(
