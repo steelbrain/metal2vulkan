@@ -568,11 +568,6 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
-      "moving": {
-        "memory_frees.blocks": 0,
-        "memory_frees.kept_stale": 0,
-        "memory_frees_posted": 0
-      },
       "composed": {
         "argument_samplers_taken": 2,
         "commands_recorded.cmd_clear_color_image": 1,
@@ -587,9 +582,6 @@
         "functions_translated": 3,
         "image_blocks_made_in_place": 1,
         "linked_use_questions_asked": 4,
-        "memory_frees.blocks": 0,
-        "memory_frees.kept_stale": 0,
-        "memory_frees_posted": 0,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 3,
         "stage_entries_shared": 10,

@@ -422,9 +422,6 @@
         "image_blocks_made_in_place": 2,
         "images_started_on_the_host": 1,
         "linked_use_questions_asked": 2,
-        "memory_frees.blocks": 1,
-        "memory_frees.kept_stale": 1,
-        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 4624,
         "object_churn.buffers_evicted": 4,
         "object_churn.buffers_parked": 3,
@@ -486,10 +483,7 @@
         "wakes_spared": 7
       },
       "moving": {
-        "gate_waits_slept": 0,
-        "memory_frees.blocks": 0,
-        "memory_frees.kept_stale": 0,
-        "memory_frees_posted": 0
+        "gate_waits_slept": 0
       },
       "composed": {
         "argument_samplers_taken": 1,
@@ -534,9 +528,6 @@
         "host_copy_blocks_made_in_place": 1,
         "image_blocks_made_in_place": 2,
         "linked_use_questions_asked": 2,
-        "memory_frees.blocks": 0,
-        "memory_frees.kept_stale": 0,
-        "memory_frees_posted": 0,
         "owned_kernel_spirv_bytes": 6880,
         "owned_kernels_made": 1,
         "queues_sharing_a_vk_queue": 0,

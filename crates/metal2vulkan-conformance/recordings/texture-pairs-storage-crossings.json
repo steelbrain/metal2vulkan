@@ -6814,9 +6814,11 @@
       ],
       "bounds": {
         "addressable_buffers_made": 2,
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 335544320,
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 1,
+        "image_blocks_made_in_place": 2,
         "images_started_on_the_host": 12,
         "memory_blocks_live": 1,
         "new_buffer_bytes_cleared": 512,
@@ -6825,6 +6827,7 @@
         "object_churn.images_evicted": 32,
         "object_churn.images_own_memory": 44,
         "object_churn.images_parked": 32,
+        "object_churn.images_recycled": 3,
         "object_churn.making_sites_dropped": 8,
         "object_churn.textures_image": 44,
         "object_churn.textures_texels": 4,
@@ -6839,9 +6842,11 @@
         "requirement_limits_asked": 15
       },
       "composed": {
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 335544320,
         "host_copy_blocks_made_in_place": 1,
-        "host_copy_blocks_readied": 1,
+        "host_copy_blocks_readied": 0,
+        "image_blocks_made_in_place": 2,
         "requirement_images_made": 15,
         "requirement_limits_asked": 15
       },

@@ -596,6 +596,7 @@
         "draws_unkept_writing": 1,
         "driver_diagnostics_withheld": 1,
         "encoder_command_buffers_begun": 11,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 2,
         "finales_folded": 2,
         "functions_shared": 5,

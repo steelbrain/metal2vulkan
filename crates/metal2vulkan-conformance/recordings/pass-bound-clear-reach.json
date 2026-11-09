@@ -1473,6 +1473,7 @@
         "stage_entries_specialized": 2,
         "stage_tables_read": 32,
         "submit_infos": 1,
+        "submit_stalls_on_work": 1,
         "trail_waits": 1,
         "untouched_passes_skipped": 1,
         "variant_pipelines_made": 1,

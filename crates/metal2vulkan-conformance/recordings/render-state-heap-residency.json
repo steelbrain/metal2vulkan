@@ -412,9 +412,6 @@
         "image_blocks_made_in_place": 1,
         "inline_passes": 1,
         "linked_use_questions_asked": 2,
-        "memory_frees.blocks": 1,
-        "memory_frees.kept_stale": 1,
-        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 288,
         "object_churn.buffers_parked": 3,
         "object_churn.buffers_recycled": 3,
@@ -452,11 +449,6 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
-      "moving": {
-        "memory_frees.blocks": 0,
-        "memory_frees.kept_stale": 0,
-        "memory_frees_posted": 0
-      },
       "composed": {
         "addressable_buffers_made": 1,
         "argument_samplers_taken": 1,
@@ -492,9 +484,6 @@
         "functions_translated": 2,
         "image_blocks_made_in_place": 1,
         "linked_use_questions_asked": 2,
-        "memory_frees.blocks": 0,
-        "memory_frees.kept_stale": 0,
-        "memory_frees_posted": 0,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 2,
         "stage_entries_shared": 5,

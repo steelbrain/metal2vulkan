@@ -203,7 +203,7 @@
         "commits_handed_off": 3,
         "commits_taken_in": 3,
         "completed_waits": 8,
-        "completed_where_seen": 1,
+        "completed_where_seen": 2,
         "completion_arms": 3,
         "completion_arms_after_a_wake": 2,
         "completion_reads_ran_ahead": 1,
@@ -216,7 +216,7 @@
         "finales_folded": 3,
         "gate_waits": 2,
         "gate_waits_slept": 2,
-        "heads_held_for_event_values": 3,
+        "heads_held_for_event_values": 4,
         "image_blocks_made_in_place": 1,
         "object_churn.buffers_evicted": 25,
         "object_churn.buffers_parked": 1,
@@ -239,7 +239,7 @@
         "trail_waits": 2,
         "wakes_completion_waiters": 2,
         "wakes_handler_threads": 3,
-        "wakes_spared": 19
+        "wakes_spared": 21
       },
       "moving": {
         "completion_arms": 2,

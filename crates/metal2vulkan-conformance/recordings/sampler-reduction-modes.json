@@ -591,6 +591,7 @@
         "resident_textures_looked_at": 3,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 3,
+        "scheduler_passes": 2,
         "scheduler_passes_by_waiters": 3,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 3,
