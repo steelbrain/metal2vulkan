@@ -464,6 +464,10 @@ calls! {
     DeviceWaitIdle => c"vkDeviceWaitIdle",
     CreateCommandPool => c"vkCreateCommandPool",
     AllocateCommandBuffers => c"vkAllocateCommandBuffers",
+    // A spare command pool's command buffers past its recent uses, or an idle spare's, freed as a
+    // command buffer gives a pool back, and the pool trimmed (`spares.rs`).
+    FreeCommandBuffers => c"vkFreeCommandBuffers",
+    TrimCommandPool => c"vkTrimCommandPool",
     BeginCommandBuffer => c"vkBeginCommandBuffer",
     CmdPipelineBarrier => c"vkCmdPipelineBarrier",
     CmdResetQueryPool => c"vkCmdResetQueryPool",

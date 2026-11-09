@@ -464,6 +464,8 @@ mod short_row_kinds;
 mod snapshot_area;
 mod sorted_chunks;
 mod spares;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod spares_bench;
 mod sparse;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod srgb_fetch_images;

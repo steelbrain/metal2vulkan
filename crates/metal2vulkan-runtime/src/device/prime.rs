@@ -782,6 +782,13 @@ impl Primer<'_> {
             .with(|queue| unsafe { device.queue_wait_idle(queue) })
             .map_err(vulkan)?;
         self.made(Call::QueueWaitIdle);
+        // A spare pool's command buffers freed and the pool trimmed as a command buffer gives it
+        // back (`spares.rs`).
+        // SAFETY: the command buffer is the priming's pool's, its one submission completed, and
+        // the pool is the priming's alone.
+        unsafe { release::object(device, release::PoolBuffers(pool, &buffers)) };
+        self.made(Call::FreeCommandBuffers);
+        self.made(Call::TrimCommandPool);
         if let Some(queries) = queries {
             let mut results = [[0u64; 2]; 2];
             // SAFETY: the pool's two queries were written by the submission, which completed;

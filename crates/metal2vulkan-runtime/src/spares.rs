@@ -8,15 +8,32 @@
 //! - **Command pools are kept, never released while the device lives**. Every command pool a
 //!   command buffer gives back is kept, whatever its status, and every command buffer dropped with
 //!   one gives it back too: the runtime calls `vkDestroyCommandPool` on a command buffer's pool
-//!   only as the device is torn down, after its queues are idle.
-//!   The spares stay bounded all the same: a command buffer makes a pool only where no spare of its
-//!   queue's family is free, so the device holds at most as many as its command buffers held at
-//!   once (Metal bounds those by each queue's `maxCommandBufferCount`), each holding what its
-//!   largest command buffer recorded. Before, a pool given back past 8 spares, or one that made
-//!   more than 64 command buffers, was released on the handler thread that completed its command
-//!   buffer; on NVIDIA's driver 615.71.09 that `vkDestroyCommandPool` intermittently never returned
-//!   (the driver spinning, with its own `[vkrt] Analysis` thread), so the command buffer never
-//!   completed and its queue stalled.
+//!   only as the device is torn down, after its queues are idle. A command buffer makes a pool only
+//!   where no spare of its queue's family is free, so the device holds at most as many as its
+//!   command buffers held at once (Metal bounds those by each queue's `maxCommandBufferCount`).
+//!   Before, a pool given back past 8 spares, or one that made more than 64 command buffers, was
+//!   released on the handler thread that completed its command buffer; on NVIDIA's driver
+//!   615.71.09 that `vkDestroyCommandPool` intermittently never returned (the driver spinning,
+//!   with its own `[vkrt] Analysis` thread), so the command buffer never completed and its queue
+//!   stalled.
+//! - **A pool's command buffers follow its recent uses.** A pool given back keeps, of each level,
+//!   as many command buffers as the most that one of its last [`RECENT_USES`] uses handed out (a
+//!   secondary at least, below), and frees the rest; and the oldest spare no command buffer took
+//!   for [`IDLE_FOR`] frees the command buffers it holds as a later give-back finds it
+//!   ([`take_idle`]), then goes back among the spares as the oldest. A give-back frees at most
+//!   [`FREED_AT_ONCE`] command buffers, the rest at the next ones: `vkFreeCommandBuffers`, then
+//!   `vkTrimCommandPool`, which returns what the driver keeps of freed command buffers
+//!   (`release.rs`'s `PoolBuffers`), on the thread giving the pool back, inside a section of the
+//!   exit guard. Kept by their peak, a device's pools held, for its life, what the largest command
+//!   buffer each ever served recorded, and each burst of command buffers at once added pools and
+//!   filled them: on RADV each command buffer holds 96 KiB of GTT (buffer objects of 80 and 16
+//!   KiB) until its pool is trimmed. Counted: `Spares::command_buffers_held` (the crate's tests).
+//!   A give-back that frees [`FREED_AT_ONCE`] took, in `tests::spares_bench`: on a Radeon 780M
+//!   (RADV) 18 to 35 us to free them and 0.63 to 0.70 ms at the median to trim (3.0 ms at the
+//!   slowest), which returned their GTT, where the trim of 252 at once took 5.2 to 6.3 ms; on an
+//!   Iris Xe (ANV) 64 to 103 us and 43 to 47 us, the driver keeping their memory for the command
+//!   buffers it makes next; on an RTX 5080 Laptop GPU (NVIDIA 615) 4 to 7 us and 0.4 to 48 us
+//!   (0.22 ms at the slowest); on lavapipe a few microseconds.
 //! - **Descriptor pools are bounded.** At most [`DESCRIPTOR_POOLS`] descriptor pools of at most
 //!   [`DESCRIPTORS`] descriptors together; a descriptor pool given back past them releases the
 //!   oldest spares first, so the spares follow the shapes in use. The descriptors bound the
@@ -113,6 +130,7 @@ use super::release::{self, Released};
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// The most spare descriptor pools a device keeps (of each list, a command buffer's arenas' and
 /// the fitted arenas'): a few frames' worth of a window server's (the module docs).
@@ -120,6 +138,18 @@ pub(super) const DESCRIPTOR_POOLS: usize = 256;
 
 /// The most descriptors the spare descriptor pools hold together.
 pub(super) const DESCRIPTORS: u64 = 1 << 18;
+
+/// The uses of a command pool whose command buffers it keeps: given back, it keeps of each level
+/// as many as the most one of its last this many uses handed out (the module docs).
+pub(super) const RECENT_USES: usize = 8;
+
+/// How long a spare command pool stays untaken before every command buffer it holds is freed (the
+/// module docs).
+pub(super) const IDLE_FOR: Duration = Duration::from_secs(10);
+
+/// The most command buffers a give-back frees (the module docs): their trim's time is the giving
+/// thread's.
+pub(super) const FREED_AT_ONCE: usize = 32;
 
 /// The index of `level`'s list in a [`CommandPool`]: primary 0, secondary 1.
 fn level_index(level: vk::CommandBufferLevel) -> usize {
@@ -141,6 +171,11 @@ pub(super) struct CommandPool {
     /// did not complete, or left one it was handed unended (the module docs), so its taker
     /// resets it.
     pub(super) recording: bool,
+    /// The command buffers each of its last [`RECENT_USES`] uses handed out, by level, the newest
+    /// last ([`given_back`](Self::given_back)).
+    uses: VecDeque<[usize; 2]>,
+    /// When a command buffer last gave it back, or `None` before one did.
+    given: Option<Instant>,
 }
 
 impl CommandPool {
@@ -153,7 +188,59 @@ impl CommandPool {
             handed: [0, 0],
             begun: None,
             recording: false,
+            uses: VecDeque::new(),
+            given: None,
         }
+    }
+
+    /// A command buffer gives the pool back at `now`, having handed out what
+    /// [`handed_out`](Self::handed_out) says: its use is noted, and of the command buffers of
+    /// each level past the most one of its last [`RECENT_USES`] uses handed out (of secondaries,
+    /// past one at least), at most `most`, the last made, are taken out of it, to be freed (the
+    /// module docs). Those it handed out come first, so none of them is among those.
+    pub(super) fn given_back(&mut self, now: Instant, most: usize) -> Vec<vk::CommandBuffer> {
+        if self.uses.len() == RECENT_USES {
+            self.uses.pop_front();
+        }
+        self.uses.push_back(self.handed);
+        self.given = Some(now);
+        let mut past = Vec::new();
+        for at in 0..2 {
+            let used = self.uses.iter().map(|used| used[at]).max().unwrap_or(0);
+            let keep = match at == level_index(vk::CommandBufferLevel::SECONDARY) {
+                true => used.max(1),
+                false => used,
+            };
+            let made = self.made[at].len();
+            let from = made - made.saturating_sub(keep).min(most - past.len());
+            past.extend(self.made[at].drain(from..));
+        }
+        past
+    }
+
+    /// Whether no command buffer took it since one gave it back [`IDLE_FOR`] or longer before
+    /// `now`, and it holds a command buffer (the module docs).
+    fn idle(&self, now: Instant) -> bool {
+        let holds = self.begun.is_some() || self.made.iter().any(|made| !made.is_empty());
+        let since = self.given.map(|given| now.saturating_duration_since(given));
+        holds && since.is_some_and(|since| since >= IDLE_FOR)
+    }
+
+    /// At most `most` of the command buffers it holds, taken out of it to be freed, the primary
+    /// begun ahead first, then the last made: a spare left idle (the module docs).
+    pub(super) fn shed(&mut self, most: usize) -> Vec<vk::CommandBuffer> {
+        let mut shed: Vec<vk::CommandBuffer> = self.begun.take().into_iter().collect();
+        for made in self.made.iter_mut().rev() {
+            let from = made.len() - made.len().min(most.saturating_sub(shed.len()));
+            shed.extend(made.drain(from..));
+        }
+        shed
+    }
+
+    /// The command buffers it holds, the primary begun ahead among them.
+    #[cfg(test)]
+    pub(super) fn held(&self) -> usize {
+        self.made[0].len() + self.made[1].len() + usize::from(self.begun.is_some())
     }
 
     /// The pool's primary begun ahead (the module docs), handed out: taken by the first encoder
@@ -351,8 +438,10 @@ impl Spares {
     /// Keep `pool` of `device`, of a command buffer whose work ended or that was never
     /// submitted: nothing of it is pending, and nothing else holds it; `settled` where the
     /// command buffer completed and ended every command buffer of it handed out, so none is
-    /// recording (the module docs). A pool that made no secondary command buffer makes one
-    /// first. Never released here.
+    /// recording (the module docs). Its command buffers past its recent uses are freed first, and
+    /// a pool that made no secondary command buffer makes one. Then the oldest spare no command
+    /// buffer took for [`IDLE_FOR`] frees its own ([`take_idle`]), [`FREED_AT_ONCE`] in all.
+    /// Never released here.
     pub(super) fn give_command_pool(
         &self,
         device: &DeviceShared,
@@ -366,9 +455,33 @@ impl Spares {
                 audit.check(device.vk(), Freeing::GiveBack, &pool.buffers());
             }
         }
+        let now = Instant::now();
         pool.recording = !settled;
+        let past = pool.given_back(now, FREED_AT_ONCE);
+        // SAFETY: nothing of the pool is pending (the caller's), and it is this thread's alone.
+        unsafe { free_command_buffers(device, pool.raw, &past) };
         pool.stock(device);
-        keep_command_pool(&mut lock(&self.command_pools), pool);
+        let room = FREED_AT_ONCE - past.len();
+        let idle = {
+            let mut pools = lock(&self.command_pools);
+            keep_command_pool(&mut pools, pool);
+            (room > 0).then(|| take_idle(&mut pools, now)).flatten()
+        };
+        if let Some(mut pool) = idle {
+            let shed = pool.shed(room);
+            // SAFETY: nothing of a spare is pending, and it is out of the spares, this thread's.
+            unsafe { free_command_buffers(device, pool.raw, &shed) };
+            keep_idle_command_pool(&mut lock(&self.command_pools), pool);
+        }
+    }
+
+    /// The command buffers the spare command pools hold, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn command_buffers_held(&self) -> usize {
+        lock(&self.command_pools)
+            .iter()
+            .map(CommandPool::held)
+            .sum()
     }
 
     /// Begin a primary ahead in the spare command pool `raw` of `device`, where it is still a
@@ -472,6 +585,37 @@ pub(super) unsafe fn release_in_section<T: Released>(device: &DeviceShared, obje
     };
     // SAFETY: the caller's.
     unsafe { release::object(device.vk(), object) };
+}
+
+/// Free `buffers`, made from `pool` of `device`, and trim the pool, so that the driver returns
+/// what it keeps of them (`release.rs`'s `PoolBuffers`, inside a section of the exit guard). Once
+/// the process is exiting, they are left to its end.
+///
+/// # Safety
+///
+/// None of `buffers` is pending, and the caller holds `pool` alone.
+unsafe fn free_command_buffers(
+    device: &DeviceShared,
+    pool: vk::CommandPool,
+    buffers: &[vk::CommandBuffer],
+) {
+    if !buffers.is_empty() {
+        // SAFETY: the caller's.
+        unsafe { release_in_section(device, release::PoolBuffers(pool, buffers)) };
+    }
+}
+
+/// The oldest of the spare command pools `pools` left idle at `now` ([`CommandPool::idle`]),
+/// taken out, to free its command buffers (the module docs).
+pub(super) fn take_idle(pools: &mut Vec<CommandPool>, now: Instant) -> Option<CommandPool> {
+    let at = pools.iter().position(|pool| pool.idle(now))?;
+    Some(pools.remove(at))
+}
+
+/// Keep `pool`, a spare whose command buffers its idleness freed, among the spare command pools
+/// `pools` as the oldest: a taker takes the newest, which still holds its command buffers.
+pub(super) fn keep_idle_command_pool(pools: &mut Vec<CommandPool>, pool: CommandPool) {
+    pools.insert(0, pool);
 }
 
 /// The newest of the spare command pools `pools` made for queue family `family` that holds a

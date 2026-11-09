@@ -144,6 +144,29 @@ pub(crate) unsafe fn generated(commands: &Commands, object: Generated) -> bool {
     true
 }
 
+/// Command buffers of one command pool, freed together (`vkFreeCommandBuffers`), the pool then
+/// trimmed (`vkTrimCommandPool`), so that the driver returns what it keeps of them: a spare pool's
+/// past its recent uses (`spares.rs`).
+pub(crate) struct PoolBuffers<'a>(
+    pub(crate) vk::CommandPool,
+    pub(crate) &'a [vk::CommandBuffer],
+);
+
+impl Released for PoolBuffers<'_> {
+    const CALL: Call = Call::FreeCommandBuffers;
+
+    unsafe fn destroy(self, device: &ash::Device, _: Door) {
+        let PoolBuffers(pool, buffers) = self;
+        // SAFETY: the caller's: none of the command buffers is pending, and it holds the pool
+        // alone.
+        unsafe {
+            device.free_command_buffers(pool, buffers);
+            device.trim_command_pool(pool, vk::CommandPoolTrimFlags::empty());
+        }
+        exit_guard::called(Call::TrimCommandPool);
+    }
+}
+
 /// `Released` for handles a device's `vkDestroy*` or `vkFree*` releases.
 macro_rules! released {
     ($($handle:ty => $method:ident, $call:ident;)*) => {
