@@ -980,8 +980,9 @@ fn a8_without_a8_unorm_renders_masks_clears_and_blends_as_metal() {
 }
 
 /// A 4-sample render over the lower left half of the target resolves as `R8Unorm`'s does, at the
-/// edge too, and as Metal's away from it (229 below it, 0 above), where every texel's samples
-/// agree: on the device without `A8_UNORM` (its `R8_UNORM` image's resolve), and with its own
+/// edge too but where the device rounds the average its own way (`device-rounded-resolve`, within
+/// one code of Metal's), which may round the edge's tie a code apart, and as Metal's away from it
+/// (229 below it, 0 above), where every texel's samples agree: on the device without `A8_UNORM` (its `R8_UNORM` image's resolve), and with its own
 /// where it has the format, which the device's average resolves as it does `R8Unorm` (probe `a8`:
 /// an `A8Unorm` resolve is `RGBA8Unorm`'s alpha). Where the fill's stage records
 /// `device-color-conversion`, a texel below it may hold the code above Metal's, counted.
@@ -1034,7 +1035,22 @@ fn a8_resolve_leg(lane: &Lane, what: &str) {
     };
     let a8 = resolved(PixelFormat::A8Unorm);
     let r8 = resolved(PixelFormat::R8Unorm);
-    assert_eq!(a8, r8, "{what}: A8Unorm's resolve against R8Unorm's");
+    // An edge texel's samples disagree, and where the device rounds the average its own way
+    // (`device-rounded-resolve`: within one code of Metal's) it may round `A8Unorm`'s tie apart
+    // from `R8Unorm`'s (RADV on the RX 550: 114 and 115 of 114.5). Every other texel is the same.
+    let rounded = kind == Some(Degradation::DeviceRoundedResolve);
+    let mut ties = 0usize;
+    for (i, (&a, &r)) in a8.iter().zip(&r8).enumerate() {
+        let edge = i % SIDE as usize == i / SIDE as usize;
+        if edge && rounded && a.abs_diff(r) == 1 {
+            ties += 1;
+            continue;
+        }
+        assert_eq!(
+            a, r,
+            "{what}: A8Unorm's resolve against R8Unorm's at texel {i}: {a8:?}, {r8:?}"
+        );
+    }
     // Where the fill's stage leaves its color's conversion to the device
     // (`device-color-conversion`: the device's rounding of the product, where Metal rounds the
     // exact one to nearest), 0.9 may store a code above Metal's 229.
@@ -1063,8 +1079,8 @@ fn a8_resolve_leg(lane: &Lane, what: &str) {
         }
     }
     println!(
-        "A8-RESOLVE {what}: as R8Unorm's ({kind:?}), {device_codes} texels a code from Metal's \
-         (the device's color conversion: {converts})"
+        "A8-RESOLVE {what}: as R8Unorm's ({kind:?}) but {ties} edge texels a code apart, \
+         {device_codes} texels a code from Metal's (the device's color conversion: {converts})"
     );
 }
 
