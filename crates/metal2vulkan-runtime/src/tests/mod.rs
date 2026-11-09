@@ -81,6 +81,8 @@ mod copied_log_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copied_present_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod copies_beside_a_held_wait;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copies_only_reads;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copy_bounds;

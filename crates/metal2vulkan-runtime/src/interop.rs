@@ -421,7 +421,11 @@ impl Event {
     /// the semaphore to `counter`, in a submission that first waits for the semaphore to reach
     /// `after` where given, to a queue of the event's device, soon: every later signal of the
     /// event and every wait for a value it reaches waits for it, the runtime's command buffers'
-    /// on their queues included, and a reservation never signalled stalls them for good. Those
+    /// on their queues included, and a reservation never signalled stalls them for good. So
+    /// does a texture's `get_bytes` or `replace_region` behind such a wait on a device that
+    /// copies textures through a submission of its own on its first `VkQueue` (one with no
+    /// `VK_EXT_host_image_copy` and no queue family of transfers alone, such as RADV on an
+    /// RX 550): a thread submits the signal before it makes such a call. Those
     /// command buffers may be submitted before the signal is, so the caller's submission depends
     /// on none of them: it waits for no such command buffer's completion, and goes to a queue no
     /// command queue submits to (an extra or reserved queue,

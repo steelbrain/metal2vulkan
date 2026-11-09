@@ -6,8 +6,14 @@
 //!
 //! - **Why a copy engine.** A copy on the device's first `VkQueue` waits behind every command
 //!   buffer submitted there before it: behind a 2 s kernel, a 1080p `get_bytes` returned after
-//!   1.99 s on an RTX 3090, and forever behind a command buffer waiting on an event only a later
-//!   command of the calling thread signals (the consumer's guest hang). Metal's `getBytes` and
+//!   1.99 s on an RTX 3090. It never waits for a wait no submitted signal meets: the scheduler
+//!   holds a command buffer whose event wait only a later commit's signal meets on the host,
+//!   unsubmitted (`scheduler/mod.rs`), so a copy beside it returns. On an RX 550 (RADV, Mesa
+//!   26.2.6), which has no copy engine and copies every texture through the first `VkQueue`, a
+//!   read, 4097 one-texel writes and a read beside such a command buffer took 0.15 s, for an
+//!   event and for a shared event (`tests::copies_beside_a_held_wait`). A plain event's wait for a
+//!   signal the caller reserved (`Event::reserve_vk_signal`) goes to its `VkQueue` before that
+//!   signal is submitted, and there the same copies waited until it was. Metal's `getBytes` and
 //!   `replaceRegion` of shared storage are CPU copies that wait for no GPU work. Another queue of
 //!   the graphics family is not enough: on the 3090 (615.71.09) a readback there waited 1.88 s for
 //!   a 2 s kernel running on the first, where the copy engine's took 7.8 to 13.5 ms with the
