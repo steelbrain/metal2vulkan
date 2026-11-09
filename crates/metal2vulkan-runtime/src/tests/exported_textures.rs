@@ -880,10 +880,10 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
 
 /// No texture over a buffer of the runtime's own loses its place in a block allocated exportable
 /// (`memory.rs`'s "Buffers in exportable blocks"): for every pixel format a buffer backs
-/// (`linear_alignment::backed_formats`), at each width of `linear_alignment::WIDTHS`, three rows,
-/// rows the width's bytes rounded up to the format's linear alignment answer and to 256 apart,
-/// 256 bytes more than that and twice it, at
-/// offset 0 and at that answer, of `ShaderRead`, `ShaderRead | ShaderWrite` and
+/// (`linear_alignment::backed_formats`), at each width of `linear_alignment::WIDTHS`, rows the
+/// width's bytes rounded up to the format's linear alignment answer and to 256 apart, 256 bytes
+/// more than that and twice it, three rows at offset 0 and at that answer and four at offset 0,
+/// of `ShaderRead`, `ShaderRead | ShaderWrite` and
 /// `ShaderRead | RenderTarget` usage, a texture over a `Shared` buffer in such a block lies in place
 /// wherever one over a plain block's buffer of the same layout does (`Buffer::texture_placement`).
 /// Where the device lays its buffers in such blocks (`in_place.rs`'s `fd_blocks_take`, which
@@ -960,9 +960,10 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
                 packed.next_multiple_of(256) * 2,
             ];
             for row in rows {
-                for offset in [0, align] {
+                for (offset, height) in [(0, 3), (align, 3), (0, 4)] {
                     for usage in usages {
-                        let mut descriptor = TextureDescriptor::texture_2d(pf, width, 3, false);
+                        let mut descriptor =
+                            TextureDescriptor::texture_2d(pf, width, height, false);
                         descriptor.usage = usage;
                         descriptor.resource_options = ResourceOptions::shared();
                         layouts.push((descriptor, offset, row));
@@ -977,6 +978,19 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
     let plain_at: Vec<bool> = (layouts.iter())
         .map(|(d, offset, row)| in_place(&plain.texture_placement(d, *offset, *row)))
         .collect();
+    // Why the first few textures of rows past the device's own pitch are shadows over a plain
+    // block's buffer, their notices printed.
+    noticed.store(true, Ordering::Relaxed);
+    let past = (layouts.iter().enumerate())
+        .filter(|&(at, (d, _, row))| {
+            let texel = crate::buffer_texture::texel_bytes(d.pixel_format).unwrap_or(1);
+            !plain_at[at] && *row > (d.width * texel).next_multiple_of(256)
+        })
+        .take(3);
+    for (_, (d, offset, row)) in past {
+        drop(plain.new_texture(d, *offset, *row));
+    }
+    noticed.store(false, Ordering::Relaxed);
     let lost = |buffer: &Buffer| -> Vec<usize> {
         (layouts.iter().enumerate())
             .filter(|&(at, (d, offset, row))| {
