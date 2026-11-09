@@ -1972,6 +1972,9 @@ pub(crate) struct RamSource {
     /// ([`Device::count_host_ram_imports_against`]); 0 for the heaps'.
     #[cfg(test)]
     import_heaps: std::sync::atomic::AtomicU64,
+    /// Whether the driver refused a dma-buf a RAM's source made of a span of its pages
+    /// (`Device::ram_span_as_dma_buf`): from then on no span asks a source, for the device's life.
+    dma_bufs_refused: AtomicBool,
 }
 
 impl RamSource {
@@ -2001,6 +2004,16 @@ impl RamSource {
     /// Whether the device still uses `ram`: its use has not ended.
     fn uses(&self, ram: &Arc<RamOnDevice>) -> bool {
         lock(&self.rams).iter().any(|used| Arc::ptr_eq(used, ram))
+    }
+
+    /// Whether the driver refused a span's dma-buf ([`RamSource::refuse_dma_bufs`]).
+    pub(crate) fn refuses_dma_bufs(&self) -> bool {
+        self.dma_bufs_refused.load(Ordering::Relaxed)
+    }
+
+    /// Remember that the driver refused a span's dma-buf, for the device's life.
+    pub(crate) fn refuse_dma_bufs(&self) {
+        self.dma_bufs_refused.store(true, Ordering::Relaxed);
     }
 }
 
@@ -2420,7 +2433,8 @@ impl Device {
     /// (its submission checks' import tax, `submit_check.rs`), the pointer where that fails; the
     /// pointer first elsewhere, the dma-buf where the pointer is refused. Counted:
     /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf),
-    /// `host_ram_dma_buf_imports_failed` (each that failed: NVIDIA's driver refuses a udmabuf) and
+    /// `host_ram_dma_buf_imports_failed` (each that failed: NVIDIA's driver refuses a udmabuf,
+    /// which the device then remembers, and no later span asks the source) and
     /// `host_ram_pointer_imports_failed` (each pointer import that failed).
     ///
     /// # Safety

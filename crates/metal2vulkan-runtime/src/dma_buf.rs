@@ -536,8 +536,14 @@ impl Device {
     /// which keeps the import and the source. Refused, everything made released, as
     /// [`Device::import_from_source`] is, where the device makes no such buffer, the source fails
     /// or answers more than one chunk, or the driver refuses the dma-buf: each of the last three
-    /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`), as NVIDIA's refusal of a udmabuf
-    /// is (`ERROR_OUT_OF_DEVICE_MEMORY`, 615.71.09).
+    /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`). The driver's refusal, its own
+    /// answer to the dma-buf the source made (NVIDIA's 615.71.09 refuses every udmabuf as out of
+    /// device memory, and lets go of the descriptor it was handed: `memory.rs`'s
+    /// `import_dma_buf`), is remembered for the device's life (`RamSource::refuse_dma_bufs`):
+    /// from then on every span is refused here unasked and uncounted, and takes its pointer, so
+    /// that no later chunk pays a dma-buf, a failed import and a descriptor for nothing. A
+    /// transient failure of the driver's (memory that ran out) is remembered so too; the source's
+    /// failures are that span's alone.
     ///
     /// # Safety
     ///
@@ -549,31 +555,13 @@ impl Device {
         span: Range<u64>,
         source: &DmaBufSource,
     ) -> Result<(vk::Buffer, Placement), Error> {
+        let shared = self.shared();
         if !importer.imports_dma_bufs()
             || !self.imports_dma_buf_buffers(vk::BufferCreateFlags::empty())
+            || shared.host_ram.refuses_dma_bufs()
         {
             return Err(not_importable());
         }
-        // SAFETY: the caller's.
-        let imported = unsafe { self.ram_span_dma_buf(importer, span, source) };
-        if imported.is_err() {
-            self.shared().counts.host_ram_dma_buf_import_failed();
-        }
-        imported
-    }
-
-    /// [`Device::ram_span_as_dma_buf`] on a device that makes such buffers: the source asked for
-    /// the span's dma-buf, and the driver's import of it.
-    ///
-    /// # Safety
-    ///
-    /// As [`Device::ram_span_as_dma_buf`]'s.
-    unsafe fn ram_span_dma_buf(
-        &self,
-        importer: &Importer,
-        span: Range<u64>,
-        source: &DmaBufSource,
-    ) -> Result<(vk::Buffer, Placement), Error> {
         let start = NonNull::new(span.start as *mut u8).ok_or_else(not_importable)?;
         let length = span.end - span.start;
         let request = DmaBufRequest {
@@ -581,12 +569,41 @@ impl Device {
             length,
             granule: length,
         };
-        let chunks = source(request).map_err(|_| not_importable())?;
-        if chunks.len() != 1 || !answers(&chunks, &request, importer.page) {
-            return Err(invalid("use_host_ram", Problem::DmaBuf));
+        let chunks = match source(request) {
+            Ok(chunks) if chunks.len() == 1 && answers(&chunks, &request, importer.page) => chunks,
+            answered => {
+                shared.counts.host_ram_dma_buf_import_failed();
+                return Err(match answered {
+                    Ok(_) => invalid("use_host_ram", Problem::DmaBuf),
+                    Err(_) => not_importable(),
+                });
+            }
+        };
+        // SAFETY: the caller's.
+        let imported = unsafe { self.ram_span_import(importer, chunks, request, source) };
+        if imported.is_err() {
+            shared.counts.host_ram_dma_buf_import_failed();
+            shared.host_ram.refuse_dma_bufs();
         }
+        imported
+    }
+
+    /// The driver's import of `chunks`, the one dma-buf `source` answered `request` with
+    /// ([`Device::ram_span_as_dma_buf`]): the `VkBuffer` over it and its placement.
+    ///
+    /// # Safety
+    ///
+    /// As [`Device::ram_span_as_dma_buf`]'s, for the request's span.
+    unsafe fn ram_span_import(
+        &self,
+        importer: &Importer,
+        chunks: Vec<DmaBufChunk>,
+        request: DmaBufRequest,
+        source: &DmaBufSource,
+    ) -> Result<(vk::Buffer, Placement), Error> {
+        let length = request.length;
         let window = ImportWindow {
-            start: span.start,
+            start: request.start.as_ptr() as u64,
             size: length,
             offset: 0,
         };
@@ -603,7 +620,8 @@ impl Device {
             )
         }?;
         self.shared().counts.dma_buf_imported(pages.memories.len());
-        let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, length, start);
+        let placement =
+            Placement::dma_buf(Arc::new(pages), memory, type_index, length, request.start);
         Ok((buffer.raw, placement))
     }
 

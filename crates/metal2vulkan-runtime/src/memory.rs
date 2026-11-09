@@ -1931,6 +1931,11 @@ pub(super) struct Memory {
     /// the lock released where the driver's import runs.
     #[cfg(test)]
     pub(crate) import_hold: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// A test's stand-in for a driver that refuses every dma-buf import with this answer, as
+    /// NVIDIA's 615.71.09 refuses a udmabuf ([`import_dma_buf`]): answered where the driver's
+    /// import would run, the driver never asked.
+    #[cfg(test)]
+    pub(crate) import_refusal: Option<vk::Result>,
     /// A test's stand-in for every heap's budget of kept empty blocks ([`Memory::kept_budget`]).
     #[cfg(test)]
     pub(crate) kept_budget_stand_in: Option<u64>,
@@ -2092,6 +2097,8 @@ impl Memory {
             keeps_none: false,
             #[cfg(test)]
             import_hold: None,
+            #[cfg(test)]
+            import_refusal: None,
             #[cfg(test)]
             kept_budget_stand_in: None,
         }
@@ -3721,7 +3728,10 @@ pub(super) fn import_dma_buf(
         )
     };
     #[cfg(test)]
-    let hold = lock(memory).import_hold.clone();
+    let (hold, refusal) = {
+        let memory = lock(memory);
+        (memory.import_hold.clone(), memory.import_refusal)
+    };
     let mut failure = ImportFailure::NoMemoryType;
     for type_index in types {
         // The descriptor the driver takes, which it owns once the import succeeds and may
@@ -3755,6 +3765,13 @@ pub(super) fn import_dma_buf(
         #[cfg(test)]
         if let Some(hold) = &hold {
             hold();
+        }
+        // A test's stand-in for a driver that refuses the import: the clone, never handed over,
+        // is closed as it goes.
+        #[cfg(test)]
+        if let Some(refused) = refusal {
+            failure = ImportFailure::Vulkan(refused);
+            continue;
         }
         // SAFETY: `info` and its chain live for the call; the type index is the device's and
         // allows the dma-buf (and the image, unbound and made for dma-bufs, whose size this

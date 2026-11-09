@@ -13,7 +13,9 @@
 //!   dma-buf of it, the source asked once for the chunk's whole span at the RAM's addresses, with
 //!   a granule of its length (`WorkCounts::host_ram_dma_buf_imports`), or, where the driver
 //!   refuses that dma-buf (NVIDIA's refuses a udmabuf), by its pointer, the refusal counted
-//!   (`host_ram_dma_buf_imports_failed`); where the tax is not held (forced so), the pointer is
+//!   (`host_ram_dma_buf_imports_failed`) and remembered: the next chunk goes to its pointer, the
+//!   source unasked (shown on every device through a stand-in for the driver's refusal, and on
+//!   NVIDIA's by the driver itself); where the tax is not held (forced so), the pointer is
 //!   imported where the driver takes it, the source never asked, and the dma-buf only where it
 //!   refuses it. Either way the buffer is bound in the chunk (`chunk_bound_buffers_made`), reports
 //!   `InHostRam`, and a second buffer over the chunk imports nothing more.
@@ -474,8 +476,31 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
         outside.is_empty(),
         "the source was asked at the view's addresses: {outside:?}"
     );
+    // A driver's refusal is the device's to remember (NVIDIA's of every udmabuf): a buffer over
+    // the RAM's second chunk takes that chunk's pointer, the source unasked and nothing counted
+    // again.
+    let third = (refused == 1).then(|| {
+        let (counted, requested) = (device.work_counts(), asked.lock().unwrap().requests.len());
+        let third = buffer(&device, view, start, 64 * MIB + AT, LENGTH);
+        let after = device.work_counts();
+        assert_eq!(
+            asked.lock().unwrap().requests.len(),
+            requested,
+            "the source asked again after the driver refused"
+        );
+        assert_eq!(
+            after.host_ram_dma_buf_imports_failed,
+            counted.host_ram_dma_buf_imports_failed
+        );
+        assert_eq!(
+            after.host_ram_chunks_imported - counted.host_ram_chunks_imported,
+            1
+        );
+        assert_eq!(third.host_backing(), Some(HostBacking::InHostRam));
+        third
+    });
     // Once the use and the objects go, the keep-alive goes.
-    drop((texture, first, second, used, ram));
+    drop((texture, first, second, third, used, ram));
     let began = Instant::now();
     while !dropped.load(Ordering::SeqCst) {
         assert!(
@@ -484,6 +509,79 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Where the driver refuses a chunk's dma-buf (a test's stand-in for NVIDIA's refusal of every
+/// udmabuf, `Memory::import_refusal`, on every device that imports dma-bufs; the import tax forced
+/// held), the device remembers the refusal: the RAM's first chunk asks the source, its dma-buf is
+/// refused and counted (`WorkCounts::host_ram_dma_buf_imports_failed`), and the chunk takes its
+/// pointer; the second chunk goes to its pointer at once, the source unasked and nothing counted
+/// again. On a device that refuses pointers to shared memory (RADV's) neither chunk is imported,
+/// and the source is still asked once.
+#[test]
+fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer() {
+    let scratch = Scratch::new();
+    let Some(device) = held_device(&scratch, None) else {
+        return;
+    };
+    if !imports_dma_bufs(&device) {
+        eprintln!("HOST-RAM-DMA-BUF: the device imports no dma-bufs; nothing to test");
+        return;
+    }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
+    let pointers = device.imports_shared_host_pointers().unwrap();
+    let (ram, start, view, asked, _dropped) = ram(true);
+    let used = device.use_host_ram(&ram).unwrap();
+    let counts = |device: &Device| {
+        let counts = device.work_counts();
+        let requests = asked.lock().unwrap().requests.clone();
+        let imported = (
+            counts.host_ram_chunks_imported,
+            counts.host_ram_dma_buf_imports,
+        );
+        (imported, counts.host_ram_dma_buf_imports_failed, requests)
+    };
+    let (before, failed_before, _) = counts(&device);
+    let first = try_buffer(&device, view, start, AT, LENGTH);
+    let ((chunks, dma_bufs), failed, requests) = counts(&device);
+    let second = try_buffer(&device, view, start, 64 * MIB + AT, LENGTH);
+    let ((chunks_after, dma_bufs_after), failed_after, requests_after) = counts(&device);
+    println!(
+        "HOST-RAM-DMA-BUF {}: the driver refuses the dma-bufs: the first chunk {} ({} refused, the \
+         source asked {}), the second {} ({} refused, the source asked {} in all)",
+        device.name(),
+        match &first {
+            Ok(_) => "made",
+            Err(_) => "refused",
+        },
+        failed - failed_before,
+        requests.len(),
+        match &second {
+            Ok(_) => "made",
+            Err(_) => "refused",
+        },
+        failed_after - failed,
+        requests_after.len(),
+    );
+    assert_eq!(requests, [(start, 64 * MIB, 64 * MIB)]);
+    assert_eq!(failed - failed_before, 1, "the first chunk's refusal");
+    assert_eq!(
+        requests_after, requests,
+        "the source asked for the second chunk"
+    );
+    assert_eq!(failed_after, failed, "the second chunk's dma-buf tried");
+    assert_eq!((dma_bufs, dma_bufs_after), (before.1, before.1));
+    if pointers {
+        // Each chunk by its pointer.
+        assert_eq!((chunks - before.0, chunks_after - chunks), (1, 1));
+        for buffer in [&first, &second] {
+            let backing = buffer.as_ref().map(Buffer::host_backing).ok().flatten();
+            assert_eq!(backing, Some(HostBacking::InHostRam));
+        }
+    }
+    drop((first, second, used, ram));
 }
 
 /// Where the pointer goes first (the import tax not held, forced so on the device), a chunk whose

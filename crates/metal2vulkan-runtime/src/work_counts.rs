@@ -6968,7 +6968,8 @@ pub struct WorkCounts {
     /// refuses a udmabuf of host pages as out of device memory). Each was then imported by its
     /// pointer where the dma-buf went first, where the device's held pointer imports add to every
     /// submission's cost, which that import then adds (`host_ram_pointer_imports_failed` where
-    /// it failed too).
+    /// it failed too). The driver's refusal is remembered for the device's life: no later span
+    /// asks a source, and none is counted here again.
     pub host_ram_dma_buf_imports_failed: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
     /// object over them, so that no making waited for their import: the few chunks past the one
