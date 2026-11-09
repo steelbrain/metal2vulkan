@@ -52,18 +52,18 @@
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
-use super::host_ram_device::runs_alone;
-use super::host_residency::{device, udmabuf, udmabuf_list, Scratch};
+use super::host_ram_device::{copies_heard, runs_alone};
+use super::host_residency::{device, device_with, udmabuf, udmabuf_list, Scratch};
 use crate::submit_check::{Check, Verdict};
 use crate::{
     Buffer, CommandBufferStatus, Device, DmaBufChunk, DmaBufRequest, DmaBufRunsSource,
-    DmaBufSource, Error, HostBacking, HostMemory, HostRam, KeepAlive, Origin, ResourceOptions,
-    RunResolver, Size, TextureDescriptor,
+    DmaBufSource, Error, HostBacking, HostMemory, HostRam, KeepAlive, MessageSink, Origin,
+    ResourceOptions, RunResolver, Size, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -275,12 +275,13 @@ fn fill_pattern(view: u64, end: u64) {
 
 /// A device of the cfg's kind, its checks answered, whose uses of a RAM import each chunk at
 /// the first object over it (`Device::hold_host_ram_imports`), as one the device's thread has
-/// not reached is; `None` where `/dev/udmabuf` cannot be opened or it imports no host memory.
-fn held_device(scratch: &Scratch) -> Option<Device> {
+/// not reached is, its messages given to `messages`; `None` where `/dev/udmabuf` cannot be
+/// opened or it imports no host memory.
+fn held_device(scratch: &Scratch, messages: Option<MessageSink>) -> Option<Device> {
     if !udmabuf_openable() {
         return None;
     }
-    let device = device(&scratch.0);
+    let device = device_with(&scratch.0, messages);
     if device.shared().host_import.is_err() {
         eprintln!("HOST-RAM-DMA-BUF: the device imports no host memory here; nothing to test");
         return None;
@@ -335,7 +336,7 @@ fn udmabuf_openable() -> bool {
 #[test]
 fn a_ram_with_a_source_takes_the_route_its_device_s_checks_choose() {
     let scratch = Scratch::new();
-    let Some(device) = held_device(&scratch) else {
+    let Some(device) = held_device(&scratch, None) else {
         return;
     };
     let taxed = device.pointer_imports_tax_submissions();
@@ -482,7 +483,7 @@ fn a_ram_with_a_source_takes_the_route_its_device_s_checks_choose() {
 #[test]
 fn where_the_pointer_goes_first_a_refused_one_takes_the_dma_buf() {
     let scratch = Scratch::new();
-    let Some(device) = held_device(&scratch) else {
+    let Some(device) = held_device(&scratch, None) else {
         return;
     };
     (device.shared().submit_checks).force(Check::ImportTax, Verdict::Fails);
@@ -525,12 +526,15 @@ fn where_the_pointer_goes_first_a_refused_one_takes_the_dma_buf() {
 }
 
 /// With no source, a chunk whose pointer the device refuses is not imported, and the object over
-/// it takes its own import, refused as its pointer is (`Unsupported`, `HostMemory`), nothing
-/// taken as a dma-buf; a device that takes the pointer binds the object in the chunk.
+/// it is a copy of its pages ([`HostBacking::Copied`], counted in
+/// `WorkCounts::copied_host_buffers_device_refused` and announced, `copied-host-pages`), nothing
+/// taken as a dma-buf; a device that takes the pointer binds the object in the chunk, announcing
+/// nothing.
 #[test]
-fn without_a_source_a_refused_pointer_refuses_the_object() {
+fn without_a_source_a_refused_pointer_copies_the_object() {
     let scratch = Scratch::new();
-    let Some(device) = held_device(&scratch) else {
+    let heard = Arc::new(AtomicUsize::new(0));
+    let Some(device) = held_device(&scratch, Some(copies_heard(&heard))) else {
         return;
     };
     let (ram, start, view, asked, _dropped) = ram(false);
@@ -555,13 +559,20 @@ fn without_a_source_a_refused_pointer_refuses_the_object() {
     match (failed, made) {
         (0, Ok(buffer)) => {
             assert_eq!(buffer.host_backing(), Some(HostBacking::InHostRam));
+            assert_eq!(heard.load(Ordering::Relaxed), 0, "nothing announced");
             assert_eq!(
                 after.host_ram_chunks_imported - before.host_ram_chunks_imported,
                 1
             );
         }
-        (_, Err(Error::Unsupported(refusal))) => {
-            assert_eq!(refusal.feature, metal2vulkan::error::Feature::HostMemory);
+        (1.., Ok(buffer)) => {
+            assert_eq!(buffer.host_backing(), Some(HostBacking::Copied));
+            assert_eq!(heard.load(Ordering::Relaxed), 1, "the copy announced");
+            assert_eq!(
+                after.copied_host_buffers_device_refused
+                    - before.copied_host_buffers_device_refused,
+                1
+            );
             assert_eq!(
                 after.host_ram_chunks_imported,
                 before.host_ram_chunks_imported

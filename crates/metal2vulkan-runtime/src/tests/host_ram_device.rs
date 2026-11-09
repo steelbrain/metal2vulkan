@@ -58,8 +58,8 @@
 //!
 //! - **Shared RAM a device refuses.** On a device that refuses pointers to shared memory (RADV),
 //!   a RAM of a `memfd` mapped shared with no dma-buf source imports no chunk, and an object over
-//!   it is refused (`Unsupported`, `HostMemory`); the device's thread reaches its first chunk and
-//!   faults none of it in. Where the device imports such memory, the thread faults each chunk it
+//!   it is a copy of its pages (`HostBacking::Copied`); the device's thread reaches its first chunk
+//!   and faults none of it in. Where the device imports such memory, the thread faults each chunk it
 //!   imports ahead in first (on Linux).
 //!
 //! Every other test holds the device's thread back (`Device::hold_host_ram_imports`), so that
@@ -71,14 +71,13 @@
 use super::dispatch_pending::state;
 use crate::host_ram::AHEAD_CHUNKS;
 use crate::{
-    Buffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, Error, EventRef,
+    Buffer, CommandBufferStatus, Degradation, Device, DeviceKind, DeviceOptions, Error, EventRef,
     HeapDescriptor, HeapType, HostBacking, HostMemory, HostRam, ImportGate, ImportRequest,
-    KeepAlive, Problem, ResourceOptions, RunResolver, Size,
+    KeepAlive, MessageSink, Problem, ResourceOptions, RunResolver, Size,
 };
-use metal2vulkan::error::{Feature, Unsupported};
 use std::ops::Range;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -160,6 +159,11 @@ fn device() -> Option<Device> {
 
 /// A device of the cfg's kind, as the product makes it; `None` where it imports no host memory.
 pub(super) fn ahead_device() -> Option<Device> {
+    ahead_device_with(None)
+}
+
+/// [`ahead_device`], its messages given to `messages`.
+fn ahead_device_with(messages: Option<MessageSink>) -> Option<Device> {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -169,6 +173,7 @@ pub(super) fn ahead_device() -> Option<Device> {
                 DeviceKind::Virtual,
             ],
         },
+        messages,
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -186,6 +191,17 @@ pub(super) fn ahead_device() -> Option<Device> {
         "the submission checks never answered"
     );
     Some(device)
+}
+
+/// A sink counting into `heard` the `copied-host-pages` notices it hears.
+pub(super) fn copies_heard(heard: &Arc<AtomicUsize>) -> MessageSink {
+    let heard = Arc::clone(heard);
+    MessageSink::new(move |message| {
+        let notice = message.degradation.as_ref();
+        if notice.is_some_and(|notice| notice.degradation == Degradation::CopiedHostPages) {
+            heard.fetch_add(1, Ordering::Relaxed);
+        }
+    })
 }
 
 /// A resolver answering `answer` of each window it is asked, each window into `asked`.
@@ -276,7 +292,7 @@ fn settles(flag: &AtomicBool) -> bool {
 /// `memory-backend-memfd,share=on` RAM is (anonymous shared memory off Linux), on a device that
 /// imports pointers to shared memory (`Device::imports_shared_host_pointers`), and private
 /// anonymous memory, as QEMU's `memory-backend-ram` RAM is, on one that refuses them (RADV:
-/// [`a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_objects`] checks
+/// [`a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objects`] checks
 /// shared RAM there); its first byte, and whether its keep-alive was dropped.
 pub(super) fn fresh_ram(device: &Device, length: u64) -> (Arc<HostRam>, u64, Arc<AtomicBool>) {
     fresh_ram_in(device, length, RamPages::Huge)
@@ -796,14 +812,16 @@ fn the_window_ahead_moves_with_the_objects_and_imports_no_more() {
 /// On a device that refuses pointers to shared memory (`Device::imports_shared_host_pointers`
 /// false: RADV, whose amdgpu userptr takes private anonymous pages alone), a RAM of shared memory
 /// (a `memfd` mapped shared, as QEMU's `memory-backend-memfd,share=on` RAM is) imports no chunk,
-/// ahead or for an object, and an object over it is refused as its own import of the pointer is
-/// (`Unsupported`, `HostMemory`), the RAM given no dma-buf source: the chunk's import by its
-/// pointer is refused (`WorkCounts::host_ram_pointer_imports_failed`) and none goes as a dma-buf
-/// (`host_ram_dma_buf_imports`). The use still ends, the RAM's keep-alive going after it. A device
-/// that imports such pointers says so and passes.
+/// ahead or for an object, and an object over it is a copy of its pages, the RAM given no dma-buf
+/// source ([`HostBacking::Copied`], counted in `WorkCounts::copied_host_buffers_device_refused`
+/// and announced, `copied-host-pages`): the chunk's import by its pointer is refused
+/// (`host_ram_pointer_imports_failed`) and none goes as a dma-buf (`host_ram_dma_buf_imports`).
+/// The use still ends, the RAM's keep-alive going after it. A device that imports such pointers
+/// says so and passes.
 #[test]
-fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_objects() {
-    let Some(device) = ahead_device() else {
+fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_copies_its_objects() {
+    let heard = Arc::new(AtomicUsize::new(0));
+    let Some(device) = ahead_device_with(Some(copies_heard(&heard))) else {
         return;
     };
     if device.imports_shared_host_pointers().unwrap() {
@@ -825,16 +843,21 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_obje
         resolver(&runs, itself),
         gate(&gates, true),
     );
+    let made = made.unwrap();
     assert_eq!(
-        made.err(),
-        Some(Error::Unsupported(Unsupported::not_representable(
-            Feature::HostMemory
-        ))),
+        made.host_backing(),
+        Some(HostBacking::Copied),
         "an object over the shared RAM"
     );
     // The device's thread met the same refusal for the RAM's first chunk, or meets it now.
     std::thread::sleep(Duration::from_millis(300));
     let after = device.work_counts();
+    assert_eq!(
+        after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused,
+        1,
+        "the object copied for the device's refusal"
+    );
+    assert_eq!(heard.load(Ordering::Relaxed), 1, "the copy announced");
     assert_eq!(
         after.host_ram_chunks_imported - before.host_ram_chunks_imported,
         0,
@@ -850,8 +873,7 @@ fn a_ram_of_shared_memory_a_device_refuses_imports_no_chunk_and_refuses_its_obje
     );
     assert!(failed >= 1, "the chunk's pointer import was refused");
     assert_eq!(dma_bufs, 0, "no dma-buf without a source");
-    drop(used);
-    drop(ram);
+    drop((made, used, ram));
     assert!(settles(&dropped), "the RAM's keep-alive dropped");
 }
 

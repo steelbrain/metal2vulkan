@@ -33,7 +33,7 @@
 
 use crate::{
     Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, DmaBufChunk, DmaBufRequest,
-    DmaBufSource, HostMemory, ResourceOptions, ShaderCacheOptions, WorkCounts,
+    DmaBufSource, HostMemory, MessageSink, ResourceOptions, ShaderCacheOptions, WorkCounts,
 };
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
@@ -199,6 +199,11 @@ impl Drop for Scratch {
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`, its submission checks answered.
 pub(super) fn device(cache: &Path) -> Device {
+    device_with(cache, None)
+}
+
+/// [`device`], its messages given to `messages`.
+pub(super) fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -212,6 +217,7 @@ pub(super) fn device(cache: &Path) -> Device {
             directory: Some(cache.to_owned()),
             ..ShaderCacheOptions::default()
         },
+        messages,
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();

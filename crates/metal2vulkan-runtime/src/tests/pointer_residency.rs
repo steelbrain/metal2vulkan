@@ -4,7 +4,8 @@
 //! The memory is guest RAM as QEMU's `memory-backend-memfd,share=on` makes it, a sealed `memfd`
 //! mapped shared, imported by its pointer (`HostMemory::new`), as ANV, NVIDIA and lavapipe import
 //! it; on a device that refuses that pointer (RADV, which imports the `memfd`'s dma-bufs,
-//! `tests/host_residency.rs`), private anonymous pages, which RADV imports by their pointer. Where
+//! `tests/host_residency.rs`, and makes a no-copy buffer over it with no source a copy of its
+//! pages), private anonymous pages, which RADV imports by their pointer. Where
 //! the device's check found its pointer imports follow their address (`submit_check.rs`,
 //! `Device::pointer_imports_follow_their_address`: ANV on i915, RADV and lavapipe answer so), the
 //! device releases such an import while idle and imports it again at the same pointer at its next
@@ -34,7 +35,7 @@
 use super::host_residency::{
     counting, device, gpu_fill, gpu_read, host_page, read, release, residency, Ram, Scratch,
 };
-use crate::{Buffer, Device, Error, HostMemory, ResourceOptions};
+use crate::{Buffer, Device, Error, HostBacking, HostMemory, ResourceOptions};
 use metal2vulkan::error::Feature;
 use std::ptr::NonNull;
 
@@ -178,9 +179,10 @@ impl Drop for Pages {
 }
 
 /// A no-copy buffer over `bytes.len()` bytes of new pages holding `bytes`, imported by its
-/// pointer: guest RAM's view, or, where the device refuses its pointer, private anonymous pages
-/// (the module docs). `None`, printed, where the device refuses both, which a device with the fact
-/// never does. The buffer drops before the pages.
+/// pointer: guest RAM's view, or, where the device refuses its pointer (the call refused, or the
+/// buffer a copy of the pages, `HostBacking::Copied`), private anonymous pages (the module docs).
+/// `None`, printed, where the device refuses both, which a device with the fact never does. The
+/// buffer drops before the pages.
 fn no_copy(test: &str, device: &Device, bytes: &[u8]) -> Option<(Pages, Buffer)> {
     let mut refused = Vec::new();
     for pages in [Pages::shared(bytes.len()), Pages::private(bytes.len())] {
@@ -196,6 +198,9 @@ fn no_copy(test: &str, device: &Device, bytes: &[u8]) -> Option<(Pages, Buffer)>
             )
         };
         match made {
+            Ok(buffer) if buffer.host_backing() == Some(HostBacking::Copied) => {
+                refused.push(format!("{}: copied", pages.kind()));
+            }
             Ok(buffer) => {
                 let imported = device.work_counts().host_imports_live - before;
                 assert_eq!(imported, 1, "{test}: one import of the pointer");
