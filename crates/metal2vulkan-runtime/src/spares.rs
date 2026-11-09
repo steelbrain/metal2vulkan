@@ -56,7 +56,9 @@
 //!   command buffers are freed and the pool is not trimmed: the driver keeps each one it freed,
 //!   reset, for the pool's later allocations (Mesa's common command pool, `vk_command_pool.c`), a
 //!   pool holding for the device's life as many command buffers' objects as it held at once, but
-//!   none of their recordings beyond each one's first batch buffer object.
+//!   none of their recordings beyond each one's first batch buffer object. On the Iris Xe that
+//!   left the process's memory as trimming did: a burst's command buffers freed and trimmed, freed
+//!   untrimmed, or kept returned none of what the burst grew (`driver_defects.rs`).
 //! - **Descriptor pools are bounded.** At most [`DESCRIPTOR_POOLS`] descriptor pools of at most
 //!   [`DESCRIPTORS`] descriptors together; a descriptor pool given back past them releases the
 //!   oldest spares first, so the spares follow the shapes in use. The descriptors bound the

@@ -570,7 +570,13 @@ pub(super) struct Affected {
 ///   failed so at its 16th command buffer in each of 4 runs that trimmed, and passed in each of 3
 ///   that did not. Read in Mesa main's source of 2026-11-09. Nothing is refused: a spare pool's
 ///   command buffers are freed without trimming the pool there, so its later command buffers take
-///   them again; what each holds of its recording the driver releases as it frees it. Under the
+///   them again; what each holds of its recording the driver releases as it frees it. That cost no
+///   memory measured on the Iris Xe (a probe, 2 runs of each way): after a command buffer of 1024
+///   blit encoders whose command buffers then went past its pool's recent uses, the process's
+///   resident memory (156.9 to 157.8 MB, 82.6 MB of it anonymous, 73 MB more than before the
+///   burst) and its buffer objects (`drm-total-system0` in the DRM file's fdinfo, 398,320 KiB in
+///   every run) were the same whether the command buffers were kept (as before the frees), freed
+///   and trimmed, or freed untrimmed: the trim returned none of what the burst grew. Under the
 ///   xe kernel driver ANV names no such objects (`uses_relocs`), but no GPU of it is measured, so
 ///   every ANV GPU takes the path.
 pub(super) const AFFECTED: &[Affected] = &[
