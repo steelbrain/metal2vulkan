@@ -364,6 +364,8 @@ mod depth_stencil_churn;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod depth_texel_reads;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod depth_upload_clamps;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod detach;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod detach_textures;

@@ -465,6 +465,16 @@ impl HostLayout {
         self.row_bytes * self.rows * self.images
     }
 
+    /// The tightly packed layout of the same rows and images: host bytes
+    /// [`pack`](Self::pack) wrote, read as the host buffer.
+    pub(super) fn packed(&self) -> HostLayout {
+        HostLayout {
+            bytes_per_row: self.row_bytes,
+            bytes_per_image: self.row_bytes * self.rows,
+            ..*self
+        }
+    }
+
     /// Whether the host buffer's layout is the tightly packed one: each row at its packed
     /// offset, so the packed bytes are the host buffer's first [`packed_len`](Self::packed_len),
     /// and a copy may read or write them in place.

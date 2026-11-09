@@ -2423,72 +2423,32 @@ fn a_heap_depth_texture_keeps_a_cpu_write_made_after_its_copy_in() {
 }
 
 /// A heap's `Depth32Float` texture whose bytes hold depths outside `[0, 1]` (1.5, -0.5, 2.0, a
-/// NaN, an infinity and `0xeeeeeeee`, beside `-0.0` and depths inside) takes them into its image
-/// with no copy outside that range, under the validation layer's GPU-assisted check of buffer to
-/// image copies (`gpuav_buffer_copies`, which reports
-/// `VUID-vkCmdCopyBufferToImage-pRegions-07931` for each such value on a device without
-/// `VK_EXT_depth_range_unrestricted`). Where the device would store such a depth clamped
-/// (`ImageFacts::depth_clamps`: no such extension enabled, and no
-/// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`), its shadow's copy in clamps each into
-/// `[0, 1]`, a NaN to 1.0 and `-0.0` kept, and a blit of the texture into a buffer reads the
-/// clamped values; elsewhere it reads the bytes as they are. A `-0.0` reads as the device stores
-/// it, with its sign or as `0.0` (ANV's depth images keep no zero's sign). Both where the texture is a shadow of
+/// NaN, an infinity and `0xeeeeeeee`, beside `-0.0` and depths inside,
+/// `depth_upload_clamps::depth_bits`) takes them into its image with no copy outside that range,
+/// under the validation layer's GPU-assisted check of buffer to image copies
+/// (`depth_upload_clamps::gpu_assisted_copies`, whose messages
+/// `depth_upload_clamps::reported_no_depth_outside_0_1` checks). Where the device would store such
+/// a depth clamped (`depth_upload_clamps::clamps`), its shadow's copy in clamps each into `[0, 1]`,
+/// a NaN to 1.0 and `-0.0` kept, and a blit of the texture into a buffer reads the clamped values;
+/// elsewhere it reads the bytes as they are. A `-0.0` reads as the device stores it, with its sign
+/// or as `0.0` (ANV's depth images keep no zero's sign). Both where the texture is a shadow of
 /// Metal's tiles, as on ANV and MoltenVK; one in place (lavapipe) lays its texels out as its
-/// driver does and copies nothing in. The texture is a `Shared` placement
-/// heap's 37x5 one, its bytes written through a buffer over them where Metal's tiles place each
-/// texel (`heap_layouts::tiled_offset`). `HEAPTEX depth range` prints whether it was a shadow of
-/// Metal's tiles (`WorkCounts::heap_textures_tiled`), the route that copies it in, and the
-/// layer's other messages; of those, only the layer's warnings about the settings the check
-/// takes pass (`VALIDATION-SETTINGS`, `WARNING-Setting-Limit-Adjusted`).
+/// driver does and copies nothing in. The texture is a `Shared` placement heap's 37x5 one, its
+/// bytes written through a buffer over them where Metal's tiles place each texel
+/// (`heap_layouts::tiled_offset`). `HEAPTEX depth range` prints whether it was a shadow of Metal's
+/// tiles (`WorkCounts::heap_textures_tiled`), the route that copies it in, and the layer's other
+/// messages.
 #[test]
 fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
+    use super::depth_upload_clamps::{
+        clamps, depth_bits, gpu_assisted_copies, reported_no_depth_outside_0_1, stored_as,
+    };
     use super::heap_layouts::tiled_offset;
-    use super::VALIDATION_LAYER;
-    use metal2vulkan_runtime::{LayerSetting, LayerSettingValue, MessageSeverity};
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    // Texel `i`'s bits: a depth outside [0, 1] or a NaN, else one inside naming it.
-    let bits = |i: u64| match i % 8 {
-        0 => 1.5f32.to_bits(),
-        1 => (-0.5f32).to_bits(),
-        2 => 0x7fc0_0000,
-        3 => f32::INFINITY.to_bits(),
-        4 => ((i + 1) as f32 / (1u32 << 23) as f32).to_bits(),
-        5 => (-0.0f32).to_bits(),
-        6 => 2.0f32.to_bits(),
-        _ => 0xeeee_eeee,
-    };
-    // The value the copy in leaves of `bits` where it clamps.
-    let clamped = |bits: u32| -> u32 {
-        let one = 1.0f32.to_bits();
-        match bits {
-            _ if bits & 0x7fff_ffff > 0x7f80_0000 => one,
-            0x8000_0000 => bits,
-            _ if bits > 0x8000_0000 => 0,
-            _ if bits > one => one,
-            _ => bits,
-        }
-    };
     let (clamps, tiled, read) = {
-        let device = &validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
-            let on = |name: &std::ffi::CStr| {
-                let value = LayerSettingValue::Bool(true);
-                LayerSetting::new(VALIDATION_LAYER.to_owned(), name.to_owned(), value)
-            };
-            options.layer_settings.extend([
-                on(c"gpuav_enable"),
-                on(c"gpuav_buffer_copies"),
-                LayerSetting::new(
-                    VALIDATION_LAYER.to_owned(),
-                    c"gpuav_shader_instrumentation".to_owned(),
-                    LayerSettingValue::Bool(false),
-                ),
-            ]);
-        })
-        .unwrap();
-        let facts = &device.properties().driver_facts;
-        let clamps = !device.enables_extension(ash::ext::depth_range_unrestricted::NAME)
-            && !facts.contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange);
+        let device = &gpu_assisted_copies(&messages, cache.path());
+        let clamps = clamps(device);
         let queue = device.new_command_queue().unwrap();
         let options = tracked(StorageMode::Shared);
         let [w, h] = [37, 5];
@@ -2505,7 +2465,7 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
         let mut bytes = vec![0; answer.size as usize];
         for i in 0..w * h {
             let at = tiled_offset(4, [w, h], i % w, i / w) as usize;
-            bytes[at..at + 4].copy_from_slice(&bits(i).to_le_bytes());
+            bytes[at..at + 4].copy_from_slice(&depth_bits(i).to_le_bytes());
         }
         let source = staged(device, &bytes);
         let command_buffer = queue.command_buffer().unwrap();
@@ -2535,30 +2495,8 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
         run(&command_buffer);
         (clamps, tiled, read_buffer(&into, 0, row * h).unwrap())
     };
-    let reported = messages.take();
-    let (range, other): (Vec<_>, Vec<_>) = (reported.iter())
-        .partition(|message| message.id_name.contains("07931") || message.text.contains("07931"));
-    eprintln!(
-        "HEAPTEX depth range: clamps {clamps}, tiled {tiled}; {} copies outside [0, 1] reported, \
-         and {} other messages: {other:#?}",
-        range.len(),
-        other.len()
-    );
-    assert!(
-        range.is_empty(),
-        "a copy of a depth outside [0, 1]: {range:#?}"
-    );
-    // The layer's warnings about the settings the GPU-assisted check takes aside (that it runs
-    // beside the core checks, and the descriptor limits it lowers for its own), nothing else.
-    let settings = ["VALIDATION-SETTINGS", "WARNING-Setting-Limit-Adjusted"];
-    let unexpected: Vec<_> = (other.iter())
-        .filter(|message| {
-            let setting = settings.contains(&message.id_name.as_str());
-            !(message.severity == MessageSeverity::Warning && setting)
-        })
-        .collect();
-    assert!(unexpected.is_empty(), "reported: {unexpected:#?}");
-    layer_reported_nothing_at_all(&messages);
+    let label = format!("HEAPTEX depth range: clamps {clamps}, tiled {tiled}");
+    reported_no_depth_outside_0_1(&messages, &label);
     // A texture in place lays its texels out as its driver does, and copies nothing in: only a
     // shadow of Metal's tiles reads each texel where they place it.
     let off: Vec<(u64, u32, u32)> = (0..37 * 5)
@@ -2566,13 +2504,7 @@ fn a_heap_depth_texture_s_copy_in_takes_no_depth_outside_0_1() {
         .filter_map(|i| {
             let at = (4 * i) as usize;
             let got = u32::from_le_bytes(read[at..at + 4].try_into().unwrap());
-            let want = match clamps {
-                true => clamped(bits(i)),
-                false => bits(i),
-            };
-            // A zero's sign is the device's to keep or drop.
-            let zero = (want | got) & 0x7fff_ffff == 0;
-            (got != want && !zero).then_some((i, bits(i), got))
+            (!stored_as(depth_bits(i), got, clamps)).then_some((i, depth_bits(i), got))
         })
         .collect();
     assert!(

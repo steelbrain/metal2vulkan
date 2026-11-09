@@ -17,11 +17,15 @@
 //!   Vulkan cannot state (`blit_plan.rs`) goes through a scratch buffer of the encoder, two
 //!   commands.
 //! - **Depth.** A copy from a buffer into 32-bit float depth copies the bytes as Metal holds
-//!   them, any `float`, on every device, as `Texture::replace_region` does: Vulkan leaves a copied
-//!   value outside `[0, 1]` undefined without `VK_EXT_depth_range_unrestricted`
-//!   (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and such a copy into a depth image announces
-//!   `restricted-depth-upload` where the device's driver is not measured to keep such a value
-//!   (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`).
+//!   them, any `float`, as `Texture::replace_region` does, on a device that keeps such a value in
+//!   a depth image (`VK_EXT_depth_range_unrestricted` enabled, or a driver measured to keep it,
+//!   `DriverFact::DepthImageKeepsValuesOutsideUnitRange`). Elsewhere Vulkan takes no copied value
+//!   outside `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) and the device stores one
+//!   clamped: the copy's bytes go through a scratch buffer of the encoder (or the staging buffer
+//!   its plan copies its rows into), where a dispatch clamps each depth into `[0, 1]`, a NaN to
+//!   1.0, before the copy into the image (`depth_clamp.rs`), as does a copy into a depth from a
+//!   colour texture through the scratch buffer below; the copy announces
+//!   `restricted-depth-upload`.
 //! - **Textures over buffers**. A copy that names a texture over a buffer runs on the buffer's
 //!   bytes at Metal's layout, whatever else holds the texels (an aliasing image, or a shadow image
 //!   the next encoder that uses it copies in from the bytes): one buffer-to-buffer copy of its
@@ -68,6 +72,7 @@ use super::copy_plan::{
 };
 use super::deferred::Deferred;
 use super::degradation::Degradation;
+use super::depth_clamp;
 use super::error::{internal, invalid, Error, Problem, RuntimeGap};
 use super::fresh_unwritten::FreshUnwritten;
 use super::image_plan::copies_between;
@@ -477,8 +482,9 @@ impl BlitCommandEncoder {
     /// (`Invalid`: with a [`CopyProblem`], a region past the level, an offset or `bytes_per_row`
     /// off the copy unit of another depth or stencil format or of a texture over a buffer, a
     /// layout that runs past the buffer but for that read); a buffer or texture of another
-    /// device (`Invalid`). 32-bit float depth is copied as `Texture::replace_region` copies it,
-    /// as Metal holds it.
+    /// device (`Invalid`). 32-bit float depth is copied as `Texture::replace_region` copies it:
+    /// as Metal holds it, or clamped into `[0, 1]` where the device's depth image would store it
+    /// so (the module docs).
     pub fn copy_from_buffer_to_texture(
         &mut self,
         source_buffer: &Buffer,
@@ -1050,7 +1056,30 @@ impl BlitCommandEncoder {
             true => Covered::into_image(image, &regions),
             false => Vec::new(),
         };
+        // A 32-bit float depth into a depth image that may store one outside [0, 1] clamped, the
+        // depths clamped first (`depth_clamp.rs`).
+        let clamps = into_texture && texture.clamps_depth_upload(first.image.aspect);
         match plan.staging {
+            None if clamps => {
+                let from = (buffer, raw_buffer, plan.span.clone());
+                let (scratch, through, staged) = self.clamped_depth_copies(from, &regions)?;
+                let uses = [reads(&scratch, 0..scratch.length()), image_use];
+                self.command_reading(&uses, (&[], &covered), |device, raw| {
+                    // SAFETY: the encoder's command buffer is recording; the scratch buffer and
+                    // the image are live and retained until it completes, the image is in the
+                    // `GENERAL` layout, and the regions lie in both.
+                    unsafe {
+                        device.cmd_copy_buffer_to_image(
+                            raw,
+                            through,
+                            image,
+                            vk::ImageLayout::GENERAL,
+                            &staged,
+                        );
+                    }
+                })?;
+                self.core().retain(scratch);
+            }
             None => {
                 let boxes = (&fresh_reads[..], &covered[..]);
                 self.command_reading(&[buffer_use, image_use], boxes, |device, raw| {
@@ -1142,6 +1171,9 @@ impl BlitCommandEncoder {
                         writes_by(&scratch, whole.clone(), rows.write()),
                     ];
                     self.command_in(rows.stages(), &uses, move_rows)?;
+                    if clamps {
+                        self.clamp_depths(&scratch, &regions)?;
+                    }
                     let uses = [reads(&scratch, whole), image_use];
                     self.command_reading(&uses, (&[], &covered), copy_image)?;
                 } else {
@@ -1735,9 +1767,15 @@ impl BlitCommandEncoder {
                     }
                 })?;
                 uses.push(reads(&scratch, 0..length));
-                for (to, _) in &staging.into {
+                for (to, regions) in &staging.into {
                     destination.degrade_depth_upload(call, to.aspect, true);
                     destination.degrade_depth_denormals(call, to.aspect, false);
+                    // A depth the scratch takes from a colour texture's texels, which may lie
+                    // outside [0, 1], clamped first where the image may store one so
+                    // (`depth_clamp.rs`).
+                    if depth_clamp::clamps_depth(self.core().device(), to.format, to.aspect) {
+                        self.clamp_depths(&scratch, regions)?;
+                    }
                 }
                 Some((scratch, through))
             }

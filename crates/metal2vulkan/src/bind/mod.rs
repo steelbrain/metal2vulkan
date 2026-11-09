@@ -90,7 +90,9 @@
 //! [`shadow_copy_in_module`] copies a merged texture's texels in and keeps them with one dispatch.
 //! A copy of many
 //! equal rows between two buffers is one dispatch of [`rows_copy_module`] where a copy's region
-//! per row costs more. A blit through a `BGRA10_XR` texture Metal keeps losslessly compressed
+//! per row costs more. A copy of 32-bit float depths into a depth image of a device that takes
+//! none outside `[0, 1]` clamps them first through [`depth_clamp_module`] ([`clamped_depth`] on
+//! the CPU). A blit through a `BGRA10_XR` texture Metal keeps losslessly compressed
 //! writes Metal's canonical encoding of its texels through [`extended_canonical_module`] where
 //! the policy asks for it. A blit between a buffer
 //! and a two-plane extended-range texture moves its color words through [`plane_words_module`],
@@ -137,6 +139,7 @@ pub(crate) mod block_decode;
 pub(crate) mod check_draw;
 pub(crate) mod chroma_decode;
 pub(crate) mod color_resolve;
+pub(crate) mod depth_clamp;
 pub(crate) mod depth_stencil_copy;
 pub(crate) mod depth_stencil_resolve;
 pub(crate) mod dispatch;
@@ -204,6 +207,7 @@ pub use color_resolve::{
     color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,
     ResolveSource, SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS,
 };
+pub use depth_clamp::{clamped_depth, depth_clamp_module, DepthClampModule};
 pub use depth_stencil_copy::{
     depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
     DepthSplitModule, DepthStandInForm, DepthStencilCopy, DepthStencilCopyModules, StencilBit,

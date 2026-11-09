@@ -69,6 +69,7 @@ use super::copy_plan::{
     CopyProblem, CopyRefusal, CopyUnit, HostLayout, ImageRegion, TextureRegion,
 };
 use super::degradation::Degradation;
+use super::depth_clamp;
 use super::device::lock;
 use super::dma_buf::ModifierMemory;
 use super::error::{internal, invalid, nil, vulkan, Error, MemoryKind, Problem, RuntimeGap};
@@ -5203,7 +5204,8 @@ impl Texture {
     /// Announce what `call`'s upload into `aspect` of the texture's image may store otherwise than
     /// Metal's, in the depth of a 32-bit float depth image: on a device without
     /// `VK_EXT_depth_range_unrestricted` enabled whose driver is not measured to keep a value
-    /// outside `[0, 1]` there (`ImageFacts::depth_clamps`), `restricted-depth-upload`. On any
+    /// outside `[0, 1]` there (`ImageFacts::depth_clamps`), `restricted-depth-upload`, the upload's
+    /// depths clamped into `[0, 1]` ([`clamps_depth_upload`](Self::clamps_depth_upload)). On any
     /// other, an upload that may store a negative value or a NaN (`signed`) in a render target's
     /// depth, which a depth test reads, `signed-depth-test`
     /// ([`degrade_signed_depth`](Self::degrade_signed_depth)).
@@ -5220,8 +5222,8 @@ impl Texture {
         if self.depth_clamps() {
             device.degrade(Degradation::RestrictedDepthUpload, || {
                 let why = format!(
-                    "{call} wrote its depth image on a device without \
-                     VK_EXT_depth_range_unrestricted"
+                    "{call} wrote its depth image clamped into [0, 1], a NaN as 1.0, on a device \
+                     without VK_EXT_depth_range_unrestricted"
                 );
                 (format!("a {format:?} texture"), why)
             });
@@ -5249,6 +5251,15 @@ impl Texture {
             );
             (format!("a {format:?} texture"), why)
         });
+    }
+
+    /// Whether an upload into `aspect` of the texture's image clamps its 32-bit float depths into
+    /// `[0, 1]` (`depth_clamp.rs`): its depth image's, on a device that may store a value outside
+    /// there clamped.
+    pub(super) fn clamps_depth_upload(&self, aspect: ImageAspectFlags) -> bool {
+        self.image().is_ok_and(|image| {
+            depth_clamp::clamps_depth(self.device(), image.plan().format, aspect)
+        })
     }
 
     /// Whether the texture's image holds a 32-bit float depth.
@@ -6182,11 +6193,12 @@ impl Texture {
     /// accounts for), and a nonzero `bytes_per_row` below the level's row, where the driver
     /// asserts and the call moves nothing.
     ///
-    /// 32-bit float depth is copied as Metal holds it, any `float`, on every device: without
-    /// `VK_EXT_depth_range_unrestricted` Vulkan leaves a copied value outside `[0, 1]` undefined
-    /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and a device may store such a value clamped:
-    /// an upload into a depth image there announces `restricted-depth-upload` unless the device's
-    /// driver is measured to keep it (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`).
+    /// 32-bit float depth is copied as Metal holds it, any `float`, on a device that keeps such a
+    /// value in a depth image (`VK_EXT_depth_range_unrestricted` enabled, or a driver measured to
+    /// keep it, `DriverFact::DepthImageKeepsValuesOutsideUnitRange`). Elsewhere Vulkan takes no
+    /// copied value outside `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) and the device
+    /// stores one clamped: the bytes are clamped into `[0, 1]` on the CPU first, a NaN to 1.0,
+    /// whichever way the copy goes, and the upload announces `restricted-depth-upload`.
     pub fn replace_region(
         &self,
         region: Region,
@@ -6301,6 +6313,21 @@ impl Texture {
         let signed = image_region.aspect == ImageAspectFlags::DEPTH
             && host.holds_negative_or_nan(bytes.slice());
         self.degrade_depth_upload(CALL, image_region.aspect, signed);
+        // A 32-bit float depth into a depth image that may store one outside [0, 1] clamped: the
+        // bytes packed and clamped as the device stores them, so no copy on (a host copy's
+        // included) takes a depth outside there (`depth_clamp.rs`).
+        let clamped;
+        let (bytes, host) = match self.clamps_depth_upload(image_region.aspect) {
+            true => {
+                let mut packed = vec![0; host.packed_len() as usize];
+                bytes.pack(&host, &mut packed);
+                depth_clamp::clamp_depth_bytes(&mut packed);
+                self.device().shared().counts.depth_upload_clamped();
+                clamped = packed;
+                (Upload::Slice(&clamped), host.packed())
+            }
+            false => (bytes, host),
+        };
         // Bytes that hold a denormal depth, announced as the copy below stores them.
         let denormal =
             image_region.aspect == ImageAspectFlags::DEPTH && host.holds_denormal(bytes.slice());

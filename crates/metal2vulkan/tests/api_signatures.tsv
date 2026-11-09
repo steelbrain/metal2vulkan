@@ -78,6 +78,10 @@ assoc-const	metal2vulkan::bind::ChromaSampleModule::SHAPE_WORDS	pub const SHAPE_
 assoc-const	metal2vulkan::bind::ChromaSampleModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
 assoc-const	metal2vulkan::bind::ColorResolveModules::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	pub const SOURCE_BINDING: u32
+assoc-const	metal2vulkan::bind::DepthClampModule::DEPTHS_BINDING	pub const DEPTHS_BINDING: u32
+assoc-const	metal2vulkan::bind::DepthClampModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
+assoc-const	metal2vulkan::bind::DepthClampModule::PUSH_BYTES	pub const PUSH_BYTES: u32
+assoc-const	metal2vulkan::bind::DepthClampModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::SET	pub const SET: u32
@@ -554,6 +558,10 @@ assoc-const-value	metal2vulkan::bind::ChromaSampleModule::SHAPE_WORDS	5
 assoc-const-value	metal2vulkan::bind::ChromaSampleModule::TEXELS_BINDING	2
 assoc-const-value	metal2vulkan::bind::ColorResolveModules::SET	0
 assoc-const-value	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	0
+assoc-const-value	metal2vulkan::bind::DepthClampModule::DEPTHS_BINDING	0
+assoc-const-value	metal2vulkan::bind::DepthClampModule::LOCAL_SIZE	64
+assoc-const-value	metal2vulkan::bind::DepthClampModule::PUSH_BYTES	16
+assoc-const-value	metal2vulkan::bind::DepthClampModule::SET	0
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	1
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::SET	0
@@ -2648,6 +2656,7 @@ field	metal2vulkan-runtime::WorkCounts.creations_left_making	pub creations_left_
 field	metal2vulkan-runtime::WorkCounts.dedicated_memory_blocks_live	pub dedicated_memory_blocks_live: u64
 field	metal2vulkan-runtime::WorkCounts.depth_attachments_moved	pub depth_attachments_moved: u64
 field	metal2vulkan-runtime::WorkCounts.depth_instances_held	pub depth_instances_held: u64
+field	metal2vulkan-runtime::WorkCounts.depth_uploads_clamped	pub depth_uploads_clamped: u64
 field	metal2vulkan-runtime::WorkCounts.descriptor_keys_built	pub descriptor_keys_built: u64
 field	metal2vulkan-runtime::WorkCounts.detached_storage_reaches	pub detached_storage_reaches: u64
 field	metal2vulkan-runtime::WorkCounts.device_checks	pub device_checks: DeviceCheckWork
@@ -3413,6 +3422,8 @@ field	metal2vulkan::bind::ContinuedResult.first	pub first: u32
 field	metal2vulkan::bind::ContinuedResult.low_half	pub low_half: bool
 field	metal2vulkan::bind::ContinuedResult.offset	pub offset: u64
 field	metal2vulkan::bind::ContinuedResult.sum	pub sum: bool
+field	metal2vulkan::bind::DepthClampModule.requirements	pub requirements: Requirements
+field	metal2vulkan::bind::DepthClampModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthSplitModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::DepthSplitModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthStencilCopyModules.fragment	pub fragment: Arc<[u32]>
@@ -4909,7 +4920,9 @@ fn	metal2vulkan::bind::astc_decode_module	pub fn astc_decode_module(device: &Dev
 fn	metal2vulkan::bind::check_draw_modules	pub fn check_draw_modules(device: &Device) -> Result<CheckDrawModules, Error>
 fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: &Device, decode: ChromaDecode) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::chroma_sample_module	pub fn chroma_sample_module(device: &Device) -> Result<ChromaSampleModule, Error>
+fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
 fn	metal2vulkan::bind::color_resolve_modules	pub fn color_resolve_modules(device: &Device, format: ColorResolveFormat, samples: u32, source: ResolveSource, feature: Feature) -> Result<ColorResolveModules, Error>
+fn	metal2vulkan::bind::depth_clamp_module	pub fn depth_clamp_module(device: &Device) -> Result<DepthClampModule, Error>
 fn	metal2vulkan::bind::depth_split_module	pub fn depth_split_module(device: &Device, form: DepthStandInForm, feature: Feature) -> Result<DepthSplitModule, Error>
 fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
 fn	metal2vulkan::bind::depth_stencil_resolve_modules	pub fn depth_stencil_resolve_modules(device: &Device, draw: DepthStencilResolveDraw, feature: Feature) -> Result<DepthStencilResolveModules, Error>
@@ -8807,6 +8820,8 @@ method	metal2vulkan::bind::CompensatedViewport::with_mirrors	pub fn with_mirrors
 method	metal2vulkan::bind::CompensatedViewport::with_vertex_clamp	pub fn with_vertex_clamp(self, vertex_clamp: [f32; 2]) -> CompensatedViewport
 method	metal2vulkan::bind::ContinuedResult::in_low_half	#[must_use] pub fn in_low_half(self) -> ContinuedResult
 method	metal2vulkan::bind::ContinuedResult::new	pub fn new(offset: u64, first: u32, count: u32, sum: bool) -> ContinuedResult
+method	metal2vulkan::bind::DepthClampModule::groups	pub fn groups(width: u32, rows: u32, images: u32) -> [u32; 3]
+method	metal2vulkan::bind::DepthClampModule::shape	pub fn shape(first: u32, width: u32, row_words: u32, image_words: u32) -> [u8; 16]
 method	metal2vulkan::bind::DepthStencilResolveDraw::new	pub fn new(pick: DepthPick, samples: u32, write: ResolveWrite) -> DepthStencilResolveDraw
 method	metal2vulkan::bind::Dispatch::threads_per_group	pub fn threads_per_group(&self) -> [u32; 3]
 method	metal2vulkan::bind::DrawMergeModule::push_constants	pub fn push_constants(header: u64, status: u64) -> Vec<u8>
@@ -9908,6 +9923,7 @@ struct	metal2vulkan::bind::ColorResolveModules	#[derive(Clone, Debug, PartialEq,
 struct	metal2vulkan::bind::CompensatedViewport	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq)] #[non_exhaustive] pub struct CompensatedViewport
 struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
 struct	metal2vulkan::bind::ContinuedResult	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ContinuedResult
+struct	metal2vulkan::bind::DepthClampModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthClampModule
 struct	metal2vulkan::bind::DepthSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthSplitModule
 struct	metal2vulkan::bind::DepthStencilCopyModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthStencilCopyModules
 struct	metal2vulkan::bind::DepthStencilResolveDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct DepthStencilResolveDraw

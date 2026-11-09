@@ -654,6 +654,9 @@ surface! {
         fn extended_canonical_module;
         fn extended_range_canonical;
         struct ExtendedCanonicalModule N;
+        fn depth_clamp_module;
+        fn clamped_depth;
+        struct DepthClampModule N;
         fn dynamic_views_module;
         struct DynamicViewsModule N;
         fn shadow_merge_module;

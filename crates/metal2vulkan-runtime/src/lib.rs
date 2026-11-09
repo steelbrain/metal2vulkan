@@ -70,6 +70,7 @@ mod copy_plan;
 mod creation;
 mod deferred;
 mod degradation;
+mod depth_clamp;
 mod depth_copy;
 mod depth_stand_in;
 mod depth_stencil;

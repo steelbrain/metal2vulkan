@@ -266,6 +266,7 @@ pub(crate) struct Counters {
     private_textures_zero_filled: AtomicU64,
     host_texel_copies: AtomicU64,
     heap_shadow_cpu_copies: AtomicU64,
+    depth_uploads_clamped: AtomicU64,
     texel_shadows_made: AtomicU64,
     texel_shadow_bytes: AtomicU64,
     texel_shadow_reads: AtomicU64,
@@ -3916,6 +3917,12 @@ impl Counters {
         self.heap_shadow_cpu_copies.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// An upload's 32-bit float depths were clamped into `[0, 1]` before a copy into a depth
+    /// image (`depth_clamp.rs`).
+    pub(crate) fn depth_upload_clamped(&self) {
+        self.depth_uploads_clamped.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A texture's host shadow of `bytes` was made at a CPU read of it
     /// (`texture/host_shadow.rs`).
     pub(crate) fn texel_shadow_made(&self, bytes: u64) {
@@ -5695,6 +5702,11 @@ pub struct WorkCounts {
     /// image of it, and a two-plane texture's first level), made in those bytes on the host, the
     /// texels' truth, with no submission and no staging (`texture/heap.rs`).
     pub heap_shadow_cpu_copies: u64,
+    /// Uploads into a 32-bit float depth image whose depths were clamped into `[0, 1]` before
+    /// the copy, on a device whose depth images may store a value outside there clamped
+    /// (`depth_clamp.rs`): one a `replace_region`'s clamp on the CPU, and one a blit copy's
+    /// dispatches of `bind::depth_clamp_module` before its copy into an image. Zero elsewhere.
+    pub depth_uploads_clamped: u64,
     /// Host shadows of textures' texels made at a CPU read of them (`texture/host_shadow.rs`):
     /// one a texture whose CPU reads the driver keeps off the host and that the program reads
     /// back, made by the submission its first read waits for either way. A texture the program
@@ -7960,6 +7972,7 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_texel_copies: counters.host_texel_copies.load(Ordering::Relaxed),
             heap_shadow_cpu_copies: counters.heap_shadow_cpu_copies.load(Ordering::Relaxed),
+            depth_uploads_clamped: counters.depth_uploads_clamped.load(Ordering::Relaxed),
             texel_shadows_made: counters.texel_shadows_made.load(Ordering::Relaxed),
             texel_shadow_bytes: counters.texel_shadow_bytes.load(Ordering::Relaxed),
             texel_shadow_reads: counters.texel_shadow_reads.load(Ordering::Relaxed),

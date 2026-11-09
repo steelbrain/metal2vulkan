@@ -98,6 +98,10 @@ pub(super) enum OwnedModule {
     /// written in place over a buffer's words, after a blit through a texture Metal keeps
     /// losslessly compressed (`extended_canonical.rs`).
     ExtendedCanonical,
+    /// `bind::depth_clamp_module`: 32-bit float depths clamped into `[0, 1]` in place over a
+    /// buffer's words, before a copy takes them into a depth image of a device that takes no
+    /// other (`depth_clamp.rs`).
+    DepthClamp,
     /// `bind::shadow_merge_image_module` of one read of a texel (`ShadowMergeRead`): a shadowed
     /// texture's writes merged into its buffer's bytes, reading its shadow's texels through its
     /// unsigned-integer view or its own 8-bit unsigned normalized view, its sampled image
@@ -339,6 +343,12 @@ impl OwnedModule {
                 let push_bytes = metal2vulkan::bind::PagesCopyModule::PUSH_BYTES;
                 Ok((module.spirv.to_vec(), 3, push_bytes))
             }
+            OwnedModule::DepthClamp => {
+                let module = metal2vulkan::bind::depth_clamp_module(device.compile_device())
+                    .map_err(Error::Compile)?;
+                let push_bytes = metal2vulkan::bind::DepthClampModule::PUSH_BYTES;
+                Ok((module.spirv.to_vec(), 1, push_bytes))
+            }
             OwnedModule::ExtendedCanonical => {
                 let module = metal2vulkan::bind::extended_canonical_module(device.compile_device())
                     .map_err(Error::Compile)?;
@@ -574,6 +584,7 @@ pub(super) struct OwnedKernels {
     pages_gather: Option<OwnedKernel>,
     pages_scatter: Option<OwnedKernel>,
     extended_canonical: Option<OwnedKernel>,
+    depth_clamp: Option<OwnedKernel>,
     ycbcr_refresh: Option<OwnedKernel>,
     ycbcr_converts: HashMap<(YCbCrConversion, bool), OwnedKernel>,
     ycbcr_samples: HashMap<(YCbCrSampler, YCbCrCodes), OwnedKernel>,
@@ -622,6 +633,7 @@ impl OwnedKernels {
             self.pages_gather,
             self.pages_scatter,
             self.extended_canonical,
+            self.depth_clamp,
             self.ycbcr_refresh,
             self.two_plane_texels,
             self.plane_bytes_copy,
@@ -808,6 +820,7 @@ impl OwnedKernels {
                 &mut self.pages_scatter
             }
             OwnedModule::ExtendedCanonical => &mut self.extended_canonical,
+            OwnedModule::DepthClamp => &mut self.depth_clamp,
             OwnedModule::YCbCrRefresh => &mut self.ycbcr_refresh,
 
             OwnedModule::TwoPlaneTexels => &mut self.two_plane_texels,

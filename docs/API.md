@@ -2227,10 +2227,11 @@ bound.
   written. Cost: a function reading the state through its ID in an argument buffer reads the
   neutral sampler, where Metal's reads the state.
 - `metal2vulkan-degrade-restricted-depth-upload` (precision). `RestrictedDepthUpload`: An upload
-  (`replace_region`, a blit from a buffer) into the 32-bit float depth of a texture's depth image,
-  on a device without `VK_EXT_depth_range_unrestricted` enabled, where Vulkan leaves a value outside
-  `[0, 1]` undefined, whose driver is not measured to keep one
-  (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`). And a render pass's NaN clear depth on such
+  (`replace_region`, a blit from a buffer, a copy from a colour texture) into the 32-bit float depth
+  of a texture's depth image, on a device without `VK_EXT_depth_range_unrestricted` enabled, where
+  Vulkan takes no copied value outside `[0, 1]`, whose driver is not measured to keep one
+  (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`): the upload clamps each value into
+  `[0, 1]`, a NaN to 1.0, as the device stores it. And a render pass's NaN clear depth on such
   a device, which Metal stores as `0x7fc00000`, cleared to 1.0. And a heap's texture of such a depth
   whose shadow's copies in move the heap's bytes into its image, announced as it is made: the
   copies in clamp each value into `[0, 1]`, a NaN to 1.0, as the device stores it, and its copies

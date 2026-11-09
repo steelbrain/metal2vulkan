@@ -440,25 +440,11 @@ fn tight_byte(
 }
 
 /// The word `v` of a level's element into the image: where the level clamps its 32-bit float
-/// depths ([`TiledLevelMove::clamps_depth`]), in `[0, 1]` by its bits (the module docs), else as
-/// it is.
+/// depths ([`TiledLevelMove::clamps_depth`]), in `[0, 1]` by its bits (the module docs,
+/// [`clamped_depth`](super::clamped_depth)), else as it is.
 fn clamped_depth(f: &mut FunctionBuilder<'_>, l: Level, v: Value) -> BResult<Value> {
     let zero = u32_value(f, 0)?;
-    let one = u32_value(f, 0x3f80_0000)?;
-    let sign = u32_value(f, 0x8000_0000)?;
-    let infinity = u32_value(f, 0x7f80_0000)?;
-    let magnitude = u32_value(f, 0x7fff_ffff)?;
-    let abs = f.binary(BinOp::BitwiseAnd, v, magnitude)?;
-    let nan = f.binary(BinOp::UGreaterThan, abs, infinity)?;
-    // Above 1.0's bits: a positive above 1.0, and every value with its sign bit, of which -0.0
-    // alone stays.
-    let above = f.binary(BinOp::UGreaterThan, v, one)?;
-    let signed = f.binary(BinOp::UGreaterThanEqual, v, sign)?;
-    let minus_zero = f.binary(BinOp::IEqual, v, sign)?;
-    let r = f.select(above, one, v)?;
-    let r = f.select(signed, zero, r)?;
-    let r = f.select(minus_zero, v, r)?;
-    let r = f.select(nan, one, r)?;
+    let r = super::depth_clamp::clamped_depth_word(f, v)?;
     let clamps = f.binary(BinOp::INotEqual, l.clamps_depth, zero)?;
     f.select(clamps, r, v)
 }
