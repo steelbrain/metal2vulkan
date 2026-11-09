@@ -147,7 +147,7 @@ fn module(read: Read) -> TypedModule {
     let half = scalar(&mut f, f32_, 0.5f32.to_bits().into());
     let uv = f.composite_construct(vec2, &[half, half]).expect("uv");
     let texel = f.composite_construct(uvec2, &[zero, zero]).expect("texel");
-    let at = |f: &mut FunctionBuilder<'_>, lod: Option<Value>| ImageOperands {
+    let at = |lod: Option<Value>| ImageOperands {
         lod,
         ..ImageOperands::default()
     };
@@ -168,11 +168,11 @@ fn module(read: Read) -> TypedModule {
             let ops = match read {
                 Read::ExplicitConstant => {
                     let lod = scalar(&mut f, f32_, 1.5f32.to_bits().into());
-                    at(&mut f, Some(lod))
+                    at(Some(lod))
                 }
                 Read::ExplicitComputed => {
                     let lod = computed_float(&mut f);
-                    at(&mut f, Some(lod))
+                    at(Some(lod))
                 }
                 Read::Gradients => ImageOperands {
                     grad: Some((uv, uv)),
@@ -217,7 +217,7 @@ fn module(read: Read) -> TypedModule {
                 }
                 _ => None,
             };
-            f.fetch(img, texel, &at(&mut f, lod)).expect("fetch")
+            f.fetch(img, texel, &at(lod)).expect("fetch")
         }
         Read::LevelsElsewhere | Read::SizeConstant | Read::Size => {
             let img = f.load(tv, MemAccess::default()).expect("t");
