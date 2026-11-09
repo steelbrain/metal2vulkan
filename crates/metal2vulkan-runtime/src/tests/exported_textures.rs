@@ -453,19 +453,27 @@ fn exports_both(device: &Device) -> bool {
         && opaque.compatible_handle_types.contains(BOTH)
 }
 
-/// Whether `device`'s image format query takes a dma-buf's handle type, exportable and not only
-/// as a dedicated allocation, for an image of `format` with the narrowest usage a sampled texture
-/// over a buffer has (sampled, both transfers): linear, or `DRM_FORMAT_MOD_LINEAR` where the
-/// device makes such images, shared among its queue families as the runtime's are.
-fn dma_buf_images_shared(device: &Device, format: vk::Format) -> bool {
+/// Whether `device` takes a dma-buf's handle type for an image of `plane`'s format and extent in a
+/// shared block, with the narrowest usage a sampled texture over a buffer has (sampled, both
+/// transfers): linear, or `DRM_FORMAT_MOD_LINEAR` where the device makes such images, shared among
+/// its queue families as the runtime's are. Its image format query reports the type exportable
+/// and not only as a dedicated allocation, and such an image, made, does not require one
+/// (`VkMemoryDedicatedRequirements`: RADV requires it of every shareable image not of linear
+/// tiling).
+fn dma_buf_images_shared(device: &Device, plane: Plane) -> bool {
     let shared = device.shared();
+    let raw_device = shared.vk();
+    let format = vk_format(plane);
+    let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
     let usage = vk::ImageUsageFlags::SAMPLED
         | vk::ImageUsageFlags::TRANSFER_SRC
         | vk::ImageUsageFlags::TRANSFER_DST;
     let families = &shared.queue_families;
+    let modifiers = [crate::dma_buf::DRM_FORMAT_MOD_LINEAR];
     let takes = |tiling: vk::ImageTiling| {
-        let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default()
-            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let modifier_tiling = tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT;
+        let mut external =
+            vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(dma_buf);
         let mut modifier = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
             .drm_format_modifier(crate::dma_buf::DRM_FORMAT_MOD_LINEAR);
         modifier = match families.len() > 1 {
@@ -480,7 +488,7 @@ fn dma_buf_images_shared(device: &Device, format: vk::Format) -> bool {
             .tiling(tiling)
             .usage(usage)
             .push_next(&mut external);
-        if tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT {
+        if modifier_tiling {
             info = info.push_next(&mut modifier);
         }
         let mut answer = vk::ExternalImageFormatProperties::default();
@@ -496,9 +504,53 @@ fn dma_buf_images_shared(device: &Device, format: vk::Format) -> bool {
             )
         };
         let features = answer.external_memory_properties.external_memory_features;
-        queried.is_ok()
-            && features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
-            && !features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        if queried.is_err()
+            || !features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+            || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        {
+            return false;
+        }
+        let mut handles = vk::ExternalMemoryImageCreateInfo::default().handle_types(dma_buf);
+        let mut listed =
+            vk::ImageDrmFormatModifierListCreateInfoEXT::default().drm_format_modifiers(&modifiers);
+        let [width, height] = plane.size;
+        let mut image = shared
+            .sharing()
+            .image(
+                vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(format)
+                    .extent(vk::Extent3D {
+                        width: width as u32,
+                        height: height as u32,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(tiling)
+                    .usage(usage)
+                    .initial_layout(vk::ImageLayout::UNDEFINED),
+            )
+            .push_next(&mut handles);
+        if modifier_tiling {
+            image = image.push_next(&mut listed);
+        }
+        // SAFETY: the device is live; `image` and its chain are within what its format query
+        // answered for such an image.
+        let Ok(raw) = (unsafe { crate::creation::image(raw_device, &image) }) else {
+            return false;
+        };
+        let mut dedicated = vk::MemoryDedicatedRequirements::default();
+        let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+        let query = vk::ImageMemoryRequirementsInfo2::default().image(raw);
+        // SAFETY: `raw` is a live image of the device; destroyed right after, with no memory
+        // bound and no command using it.
+        unsafe {
+            raw_device.get_image_memory_requirements2(&query, &mut requirements);
+            crate::release::object(raw_device, raw);
+        }
+        dedicated.requires_dedicated_allocation == vk::FALSE
     };
     takes(vk::ImageTiling::LINEAR)
         || (device.makes_modifier_images() && takes(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT))
@@ -569,7 +621,7 @@ fn a_dma_buf_block_s_planes_name_an_opaque_fd_where_its_images_take_no_dma_buf_i
     let counts = device.work_counts();
     let (mut in_place, mut opaque) = (0, 0);
     for plane in PLANES {
-        let shared_dma_buf = dma_buf_images_shared(&device, vk_format(plane));
+        let shared_dma_buf = dma_buf_images_shared(&device, plane);
         let descriptor = descriptor(plane, options);
         let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
         let texture = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
