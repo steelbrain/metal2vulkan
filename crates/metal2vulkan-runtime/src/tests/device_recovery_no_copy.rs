@@ -297,7 +297,7 @@ fn a_recovery_carries_a_use_of_guest_ram_and_the_buffers_over_it() {
     // The counts are the device's, across its generations.
     let bound =
         |counts: &WorkCounts| counts.chunk_bound_buffers_made + counts.run_bound_buffers_made;
-    let bound_before = bound(&device.work_counts_now());
+    let bound_before = bound(&device.work_counts());
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
     let said = recovery_notices(&heard, from, "the device");
