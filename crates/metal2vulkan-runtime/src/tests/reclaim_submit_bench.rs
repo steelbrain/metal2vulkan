@@ -857,6 +857,117 @@ fn two_queues(label: &str, export: Option<Handle>) {
     unsafe { crate::release::object(device.shared().vk(), memory) };
 }
 
+/// What the device asks of the memory of images of [`FACT_FORMATS`], 1920x3, sampled, copied and
+/// rendered to, of linear tiling and of `DRM_FORMAT_MOD_LINEAR` (its one plane at the linear
+/// image's row pitch), made for no external memory, for an opaque file descriptor and for a
+/// dma-buf: printed, `vkGetImageMemoryRequirements2`'s dedicated requirement and preference, the
+/// alignment and size, or the creation's error. Each image is made and destroyed, never bound.
+#[test]
+#[ignore = "a measurement's facts: run on its host by name"]
+fn reclaim_submit_bench_image_requirements() {
+    use vk::ImageUsageFlags as I;
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let vk_device = device.shared().vk();
+    let usage = I::SAMPLED | I::TRANSFER_SRC | I::TRANSFER_DST | I::COLOR_ATTACHMENT;
+    let handles = [
+        (
+            "no external memory",
+            vk::ExternalMemoryHandleTypeFlags::empty(),
+        ),
+        ("opaque fd", OPAQUE_FD),
+        ("dma-buf", DMA_BUF),
+    ];
+    for format in FACT_FORMATS {
+        let info = |tiling| {
+            vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(format)
+                .extent(vk::Extent3D {
+                    width: 1920,
+                    height: 3,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(tiling)
+                .usage(usage)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+        };
+        // The linear image's row pitch with no external memory, which the modifier's plane takes.
+        // SAFETY: the device is live and `info` valid; the image is destroyed unbound.
+        let pitch = unsafe {
+            let image = vk_device
+                .create_image(&info(vk::ImageTiling::LINEAR), None)
+                .unwrap();
+            let subresource =
+                vk::ImageSubresource::default().aspect_mask(vk::ImageAspectFlags::COLOR);
+            let layout = vk_device.get_image_subresource_layout(image, subresource);
+            vk_device.destroy_image(image, None);
+            layout.row_pitch
+        };
+        for (name, handle) in handles {
+            for modifier in [false, true] {
+                let planes = [vk::SubresourceLayout {
+                    row_pitch: pitch,
+                    ..Default::default()
+                }];
+                let mut explicit = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+                    .drm_format_modifier(0)
+                    .plane_layouts(&planes);
+                let mut external =
+                    vk::ExternalMemoryImageCreateInfo::default().handle_types(handle);
+                let tiling = match modifier {
+                    true => vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                    false => vk::ImageTiling::LINEAR,
+                };
+                let mut created = info(tiling);
+                if modifier {
+                    created = created.push_next(&mut explicit);
+                }
+                if !handle.is_empty() {
+                    created = created.push_next(&mut external);
+                }
+                // SAFETY: the device is live and enables the modifier and export extensions
+                // where it lays its buffers in exportable blocks; the image is destroyed unbound.
+                let answer = unsafe {
+                    match vk_device.create_image(&created, None) {
+                        Err(error) => format!("{error:?}"),
+                        Ok(image) => {
+                            let mut dedicated = vk::MemoryDedicatedRequirements::default();
+                            let mut requirements =
+                                vk::MemoryRequirements2::default().push_next(&mut dedicated);
+                            let asked = vk::ImageMemoryRequirementsInfo2::default().image(image);
+                            vk_device.get_image_memory_requirements2(&asked, &mut requirements);
+                            vk_device.destroy_image(image, None);
+                            let memory = requirements.memory_requirements;
+                            format!(
+                                "requires a dedicated allocation {}, prefers one {}, alignment \
+                                 {}, size {}, types {:#x}",
+                                dedicated.requires_dedicated_allocation != 0,
+                                dedicated.prefers_dedicated_allocation != 0,
+                                memory.alignment,
+                                memory.size,
+                                memory.memory_type_bits
+                            )
+                        }
+                    }
+                };
+                let tiling = match modifier {
+                    true => "DRM_FORMAT_MOD_LINEAR",
+                    false => "linear",
+                };
+                eprintln!(
+                    "RECLAIM-SUBMIT image requirements, {tiling} {} rows {pitch} apart, {name}: \
+                     {answer}",
+                    format.as_raw()
+                );
+            }
+        }
+    }
+}
+
 /// The device's answers for memory exportable as the handle types (the module docs).
 #[test]
 #[ignore = "a measurement's facts: run on its host by name"]
