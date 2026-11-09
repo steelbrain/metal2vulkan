@@ -497,7 +497,8 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
 /// specialization is 1, which no normalized state's is (`Resources::nearest_pixel_sampler`), or,
 /// for an integer texture's centre, where the slot's word states pixel coordinates. An argument
 /// buffer's sampler records no `DeviceDenormals`: `ArgumentPixelSamplerScaling`, which the runtime
-/// announces only while a pixel state lives, records its centre's reading.
+/// announces only while a pixel state lives, records its centre's reading. The depth comparison
+/// records `RestrictedDepthRange`, as MoltenVK exposes no `VK_EXT_depth_range_unrestricted`.
 #[test]
 fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
     use crate::pipeline::sym::SpecKey;
@@ -526,7 +527,12 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
             None,
             &[N::FastMathRewrites, N::CubeGradientFootprint],
         ),
-        ("sampling", "sample_compare_depth", None, &[]),
+        (
+            "sampling",
+            "sample_compare_depth",
+            None,
+            &[N::RestrictedDepthRange],
+        ),
         ("handles", "sampler_select", None, &[]),
         (
             "handles",
