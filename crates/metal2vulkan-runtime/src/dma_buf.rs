@@ -535,7 +535,9 @@ impl Device {
     /// whole span, made for dma-bufs and bound to the import at its start, and its placement,
     /// which keeps the import and the source. Refused, everything made released, as
     /// [`Device::import_from_source`] is, where the device makes no such buffer, the source fails
-    /// or answers more than one chunk, or the driver refuses the dma-buf.
+    /// or answers more than one chunk, or the driver refuses the dma-buf: each of the last three
+    /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`), as NVIDIA's refusal of a udmabuf
+    /// is (`ERROR_OUT_OF_DEVICE_MEMORY`, 615.71.09).
     ///
     /// # Safety
     ///
@@ -552,6 +554,26 @@ impl Device {
         {
             return Err(not_importable());
         }
+        // SAFETY: the caller's.
+        let imported = unsafe { self.ram_span_dma_buf(importer, span, source) };
+        if imported.is_err() {
+            self.shared().counts.host_ram_dma_buf_import_failed();
+        }
+        imported
+    }
+
+    /// [`Device::ram_span_as_dma_buf`] on a device that makes such buffers: the source asked for
+    /// the span's dma-buf, and the driver's import of it.
+    ///
+    /// # Safety
+    ///
+    /// As [`Device::ram_span_as_dma_buf`]'s.
+    unsafe fn ram_span_dma_buf(
+        &self,
+        importer: &Importer,
+        span: Range<u64>,
+        source: &DmaBufSource,
+    ) -> Result<(vk::Buffer, Placement), Error> {
         let start = NonNull::new(span.start as *mut u8).ok_or_else(not_importable)?;
         let length = span.end - span.start;
         let request = DmaBufRequest {

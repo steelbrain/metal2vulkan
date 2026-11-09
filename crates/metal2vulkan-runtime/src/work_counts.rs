@@ -374,6 +374,7 @@ pub(crate) struct Counters {
     host_ram_run_list_imports: AtomicU64,
     host_ram_run_list_import_nanos: AtomicU64,
     host_ram_pointer_imports_failed: AtomicU64,
+    host_ram_dma_buf_imports_failed: AtomicU64,
     host_ram_chunks_imported_ahead: AtomicU64,
     host_ram_chunks_faulted_ahead: AtomicU64,
     host_ram_chunks_given_back: AtomicU64,
@@ -3316,6 +3317,12 @@ impl Counters {
     /// failed (`host_ram.rs`).
     pub(crate) fn host_ram_pointer_import_failed(&self) {
         (self.host_ram_pointer_imports_failed).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An import of a chunk of a guest RAM, or of an object's run inside one, as a dma-buf of the
+    /// RAM's source failed on a device that imports dma-bufs (`dma_buf.rs`).
+    pub(crate) fn host_ram_dma_buf_import_failed(&self) {
+        (self.host_ram_dma_buf_imports_failed).fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device's thread imported a chunk of a guest RAM ahead of every object over it
@@ -6955,6 +6962,14 @@ pub struct WorkCounts {
     /// pointer went first (`host_ram_dma_buf_imports`); without one the object over it takes its
     /// own import.
     pub host_ram_pointer_imports_failed: u64,
+    /// The imports of guest RAM, chunks and objects' runs alike, as one dma-buf each of the RAM's
+    /// source (`HostRam::with_dma_buf`) that failed on a device that imports dma-bufs: the source
+    /// failed or answered other lengths, or the driver refused the dma-buf (NVIDIA's 615.71.09
+    /// refuses a udmabuf of host pages as out of device memory). Each was then imported by its
+    /// pointer where the dma-buf went first, where the device's held pointer imports add to every
+    /// submission's cost, which that import then adds (`host_ram_pointer_imports_failed` where
+    /// it failed too).
+    pub host_ram_dma_buf_imports_failed: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
     /// object over them, so that no making waited for their import: the few chunks past the one
     /// an object last took. The thread imports while the device's allocations leave a quarter of
@@ -8788,6 +8803,9 @@ impl Device {
                 .load(Ordering::Relaxed),
             host_ram_pointer_imports_failed: counters
                 .host_ram_pointer_imports_failed
+                .load(Ordering::Relaxed),
+            host_ram_dma_buf_imports_failed: counters
+                .host_ram_dma_buf_imports_failed
                 .load(Ordering::Relaxed),
             host_ram_chunks_imported_ahead: counters
                 .host_ram_chunks_imported_ahead

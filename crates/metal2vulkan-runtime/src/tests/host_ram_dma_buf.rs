@@ -8,12 +8,15 @@
 //! addresses, so a request the source is asked at a view's address would be refused.
 //!
 //! - **The route.** Where the device's held pointer imports tax every submission (the import tax,
-//!   `submit_check.rs`: RADV), the chunk an object lies in is imported as one dma-buf of it, the
-//!   source asked once for the chunk's whole span at the RAM's addresses, with a granule of its
-//!   length (`WorkCounts::host_ram_dma_buf_imports`); elsewhere the pointer is imported where the
-//!   driver takes it, the source never asked, and the dma-buf only where it refuses it. Either
-//!   way the buffer is bound in the chunk (`chunk_bound_buffers_made`), reports `InHostRam`, and
-//!   a second buffer over the chunk imports nothing more.
+//!   `submit_check.rs`: RADV; forced so on the device, so that the route runs on every device and
+//!   in every run, whatever its check measured), the chunk an object lies in is imported as one
+//!   dma-buf of it, the source asked once for the chunk's whole span at the RAM's addresses, with
+//!   a granule of its length (`WorkCounts::host_ram_dma_buf_imports`), or, where the driver
+//!   refuses that dma-buf (NVIDIA's refuses a udmabuf), by its pointer, the refusal counted
+//!   (`host_ram_dma_buf_imports_failed`); where the tax is not held (forced so), the pointer is
+//!   imported where the driver takes it, the source never asked, and the dma-buf only where it
+//!   refuses it. Either way the buffer is bound in the chunk (`chunk_bound_buffers_made`), reports
+//!   `InHostRam`, and a second buffer over the chunk imports nothing more.
 //! - **The bytes.** The GPU reads the CPU's bytes through the buffer, and its fill reaches the
 //!   file's pages, leaving the page past the buffer as it was.
 //! - **A texture over it** reads the buffer's texels; over a dma-buf chunk its image is made over
@@ -334,13 +337,13 @@ fn udmabuf_openable() -> bool {
 }
 
 #[test]
-fn a_ram_with_a_source_takes_the_route_its_device_s_checks_choose() {
+fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     let scratch = Scratch::new();
     let Some(device) = held_device(&scratch, None) else {
         return;
     };
-    let taxed = device.pointer_imports_tax_submissions();
-    let imports_dma_bufs = imports_dma_bufs(&device);
+    let measured = device.pointer_imports_tax_submissions();
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
     let (ram, start, view, asked, dropped) = ram(true);
     fill_pattern(view, AT + 4 * LENGTH);
     let used = device.use_host_ram(&ram).unwrap();
@@ -348,16 +351,16 @@ fn a_ram_with_a_source_takes_the_route_its_device_s_checks_choose() {
     let first = buffer(&device, view, start, AT, LENGTH);
     let made = device.work_counts();
     let dma_bufs = made.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
+    let refused = made.host_ram_dma_buf_imports_failed - before.host_ram_dma_buf_imports_failed;
     let requests = asked.lock().unwrap().requests.clone();
     println!(
-        "HOST-RAM-DMA-BUF {}: import tax {}; the chunk's route: {} dma-buf import(s), the source \
-         asked {requests:?}",
+        "HOST-RAM-DMA-BUF {}: import tax forced held (measured {}); the chunk's route: {dma_bufs} \
+         dma-buf import(s), {refused} refused, the source asked {requests:?}",
         device.name(),
-        match taxed {
+        match measured {
             true => "held",
             false => "not held",
         },
-        dma_bufs,
     );
     assert_eq!(
         made.host_ram_chunks_imported - before.host_ram_chunks_imported,
@@ -368,17 +371,21 @@ fn a_ram_with_a_source_takes_the_route_its_device_s_checks_choose() {
         1
     );
     assert_eq!(first.host_backing(), Some(HostBacking::InHostRam));
-    let chunk = (start, 64 * MIB, 64 * MIB);
-    match (taxed && imports_dma_bufs, dma_bufs) {
-        // Taxed: the dma-buf first, of the whole chunk at the RAM's addresses.
-        (true, _) => {
-            assert_eq!(dma_bufs, 1, "a taxing device imported the chunk's pointer");
-            assert_eq!(requests, [chunk]);
+    // The dma-buf first, of the whole chunk at the RAM's addresses: imported, or refused by the
+    // driver and the pointer imported; never asked of a device that imports no dma-bufs.
+    match imports_dma_bufs(&device) {
+        true => {
+            assert_eq!(requests, [(start, 64 * MIB, 64 * MIB)]);
+            assert!(
+                matches!((dma_bufs, refused), (1, 0) | (0, 1)),
+                "the chunk's dma-buf imported, or refused and counted: {dma_bufs} imported, \
+                 {refused} refused"
+            );
         }
-        // Untaxed, or no dma-buf import: the pointer, the source unasked; or the dma-buf where the
-        // pointer was refused.
-        (false, 0) => assert!(requests.is_empty(), "{requests:?}"),
-        (false, _) => assert_eq!(requests, [chunk]),
+        false => {
+            assert!(requests.is_empty(), "{requests:?}");
+            assert_eq!((dma_bufs, refused), (0, 0));
+        }
     }
     // The GPU reads the CPU's bytes, and its fill reaches the file's pages, the page past the
     // buffer as it was.

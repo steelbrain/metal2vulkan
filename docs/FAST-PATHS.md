@@ -1271,8 +1271,10 @@ driver's. Each is open work.
   Rust's I/O safety check, so an import now hands the driver a clone and never closes a clone it
   has handed over (`memory.rs`), which lets go of one descriptor per failed import. Giving a
   well-behaved driver its descriptor back would need a measured driver fact; the pages' other route
-  (importing the pointer) is the one NVIDIA takes for writable pages and is unaffected. A device
-  that imports dma-bufs (RADV) is **unaudited** for the clone.
+  (importing the pointer) is the one NVIDIA takes for writable pages and is unaffected: a guest
+  RAM's chunk whose dma-buf it refused is imported by its pointer, the refusal counted
+  (`WorkCounts::host_ram_dma_buf_imports_failed`). A device that imports dma-bufs (RADV) is
+  **unaudited** for the clone.
 
 - **A pointer import of pages the kernel cannot pin on NVIDIA** (a dma-buf's mapping, `VM_PFNMAP`)
   fails as out of device memory (615.71.09), where Vulkan requires

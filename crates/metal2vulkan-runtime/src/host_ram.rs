@@ -21,7 +21,9 @@
 //!   shared mapping). A dma-buf costs each submission what one import does, whatever its length.
 //!   A `VkBuffer` bound in such a chunk is made for dma-bufs; a texture over it is an image over a
 //!   dma-buf of its own pages from the same source (`dma_buf.rs`), asked at the RAM's addresses
-//!   of them (`Placement::dma_buf_address`). Counted: `WorkCounts::host_ram_dma_buf_imports`.
+//!   of them (`Placement::dma_buf_address`). Counted: `WorkCounts::host_ram_dma_buf_imports`,
+//!   and `host_ram_dma_buf_imports_failed` where the driver refused the dma-buf (NVIDIA's refuses
+//!   a udmabuf), which then takes the pointer.
 //! - **Few listed imports** ([`Plan::listed`]). Where the device imports dma-bufs, the RAM has a
 //!   source and the device's held imports add to the cost of every submission (RADV lists every
 //!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1,
@@ -2417,7 +2419,8 @@ impl Device {
     /// that first where the device's held pointer imports add to the cost of every submission
     /// (its submission checks' import tax, `submit_check.rs`), the pointer where that fails; the
     /// pointer first elsewhere, the dma-buf where the pointer is refused. Counted:
-    /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf) and
+    /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf),
+    /// `host_ram_dma_buf_imports_failed` (each that failed: NVIDIA's driver refuses a udmabuf) and
     /// `host_ram_pointer_imports_failed` (each pointer import that failed).
     ///
     /// # Safety
