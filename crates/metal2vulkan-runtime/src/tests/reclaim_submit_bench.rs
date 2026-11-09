@@ -44,7 +44,7 @@
 //! median and slowest, and the runtime's blocks made ahead and in place; the host's reclaim over
 //! the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction stalls,
 //! allocation stalls, pages swapped out); the free blocks of each order before and after the
-//! fragmenting (`/proc/buddyinfo`); and the slowest submissions' and makings' `CLOCK_MONOTONIC`
+//! fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions' and makings' `CLOCK_MONOTONIC`
 //! times, to line up with a kernel trace taken beside the run. Ignored: run it in
 //! release under `--cfg m2v_gpu` on Linux, alone on its host (it presses the whole host's
 //! memory), one arm at a time: `cargo nextest run --release -p metal2vulkan-runtime --lib
@@ -555,6 +555,7 @@ fn arm(label: &str, arm: Arm) {
         (PRESSED, making),
         &mut made,
     );
+    buddies("after the pressed phase");
     drop(pressing);
     drop((source, middle, out, made.buffers));
     for memory in made.raw {
