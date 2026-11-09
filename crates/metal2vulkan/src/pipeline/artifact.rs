@@ -11,7 +11,7 @@ use crate::cache::{Hash256, PipelineKey, SpecializationKey};
 use crate::device::requirements::Requirements;
 use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::graphics::GraphicsState;
-use crate::pipeline::interface::{PipelineInterface, SnapshotRefusal};
+use crate::pipeline::interface::{LevelReads, PipelineInterface, SampledLevels, SnapshotRefusal};
 use crate::pipeline::layout::PipelineLayout;
 use crate::pipeline::sym::{SlotRef, SpecKey};
 use crate::pipeline::vertex::VertexInputState;
@@ -134,6 +134,10 @@ fn stage_footprint(stage: &StageModule) -> u64 {
                 + stage.snapshot_textures.capacity(),
         )
         + vector_bytes::<(u32, SnapshotRefusal)>(stage.snapshot_refusals.capacity())
+        + vector_bytes::<LevelReads>(stage.level_reads.capacity())
+        + (stage.level_reads.iter())
+            .map(|reads| vector_bytes::<SampledLevels>(reads.sampled.capacity()))
+            .sum::<u64>()
 }
 
 /// A compiled compute pipeline.
@@ -213,6 +217,9 @@ pub struct StageModule {
     /// (`StageInterface::snapshot_refusals`): every [`SnapshotRefusal`] that holds for it, sorted
     /// by slot and then by refusal. Empty for every other stage.
     pub snapshot_refusals: Vec<(u32, SnapshotRefusal)>,
+    /// The levels of its bound view each texture slot's reads reach, one entry a slot, sorted by
+    /// slot (`StageInterface::level_reads`). Empty for a kernel and a stage the link makes.
+    pub level_reads: Vec<LevelReads>,
     /// The private memory a thread of the stage keeps, in bytes
     /// (`StageInterface::private_bytes`): what `PrecisionNote::FunctionStorageAssumed`'s
     /// announcement names. 0 for a stage the link makes itself.

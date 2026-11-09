@@ -2732,6 +2732,8 @@ fn compile_kept<K>(
     let writes_memory = crate::spirv::requirements::writes_memory(&module)?;
     // A fragment function's texture slots read only at the fragment's own pixel.
     let mut own_pixel_textures = crate::spirv::requirements::own_pixel_textures(&module, m)?;
+    // The levels of its bound view each texture slot's reads reach.
+    let level_reads = crate::spirv::requirements::level_reads(&module, m)?;
     // Those a draw can read through a snapshot an earlier draw of the same primitives took, of a
     // function that writes no memory, and why each other one is left out. A variant compiled to
     // read them so states its own, and judges none: its only texel access of each is the entry's
@@ -2877,7 +2879,7 @@ fn compile_kept<K>(
         &function_tables,
         (reaches_command_buffers, command_writes),
         (writes_textures, numbered_samplers),
-        (own_pixel_textures, snapshot_textures),
+        (own_pixel_textures, snapshot_textures, level_reads),
     );
     let mut requirements = module.requirements.clone();
     // Pairs only the device's simdgroup lockstep orders.
@@ -3162,7 +3164,11 @@ fn stage_interface(
     function_tables: &std::collections::BTreeSet<u32>,
     (reaches_command_buffers, command_writes): (bool, crate::pipeline::interface::CommandWrites),
     (writes_textures, numbered_samplers): (bool, Vec<crate::pipeline::interface::NumberedSampler>),
-    (own_pixel_textures, snapshots): (Vec<u32>, crate::spirv::requirements::Judged),
+    (own_pixel_textures, snapshots, level_reads): (
+        Vec<u32>,
+        crate::spirv::requirements::Judged,
+        Vec<crate::pipeline::interface::LevelReads>,
+    ),
 ) -> StageInterface {
     use crate::pipeline::interface::{BufferKind, BufferSlot};
     use crate::pipeline::sym::{PushField, SlotClass};
@@ -3229,6 +3235,7 @@ fn stage_interface(
         own_pixel_textures,
         snapshot_textures: snapshots.slots,
         snapshot_refusals: snapshots.refusals,
+        level_reads,
         private_bytes: plan.private_bytes,
     }
 }

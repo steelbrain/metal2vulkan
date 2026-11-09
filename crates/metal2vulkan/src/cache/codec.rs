@@ -46,11 +46,11 @@ use crate::pipeline::graphics::{
     TessellationState,
 };
 use crate::pipeline::interface::{
-    AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, MeshRecords,
-    NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc, PushPlacement,
-    RecordField, RecordValue, SamplerSlot, SlotInterface, SnapshotRefusal, StageDescriptor,
-    StageInterface, StageSpec, TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument,
-    Window,
+    AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
+    MeshRecords, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
+    PushPlacement, RecordField, RecordValue, SampledLevels, SamplerSlot, SlotInterface,
+    SnapshotRefusal, StageDescriptor, StageInterface, StageSpec, TessellationStage, TextureAccess,
+    TextureSlot, ThreadgroupArgument, Window,
 };
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -1112,8 +1112,10 @@ codec_struct! {
         emulated_payload,
         payload, reaches_command_buffers, command_writes, writes_textures, numbered_samplers,
         own_pixel_textures,
-        snapshot_textures, snapshot_refusals, private_bytes,
+        snapshot_textures, snapshot_refusals, level_reads, private_bytes,
     }
+    LevelReads { slot, any, named, sampled }
+    SampledLevels { sampler, highest_lod_bits, computed }
     TessellationStage { domain, control_points, emulated }
     TessellationDescriptor {
         max_tessellation_factor, partition_mode, factor_format, factor_step_function,
@@ -1339,7 +1341,7 @@ codec_struct! {
     StageModule {
         stage, entry_point, spirv, specialization, required_subgroup_size, stage_flags,
         reconvergence, precision_notes, strategies, constant_blob, rounded_colors,
-        specialized_notes, own_pixel_textures, snapshot_textures, snapshot_refusals,
+        specialized_notes, own_pixel_textures, snapshot_textures, snapshot_refusals, level_reads,
         private_bytes, stats,
     }
     SpecializedNote { note, when }

@@ -389,6 +389,7 @@ surface! {
         struct BufferSlot N;
         struct CommandWrites E;
         enum DescriptorView N;
+        struct LevelReads N;
         struct MeshRecords N;
         enum NumberedSampler N;
         enum PatchDomain N;
@@ -398,6 +399,8 @@ surface! {
         struct PushPlacement N;
         struct RecordField N;
         enum RecordValue N;
+        struct SampledLevels N;
+        struct SamplerLevels N;
         struct SamplerSlot N;
         enum SlotInterface N;
         enum SnapshotRefusal N;

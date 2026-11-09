@@ -1373,6 +1373,21 @@ leaving memory unmodified, the invariance of fragment generation under write mas
 Corollary 1), and the ordered pixel interlock. One draw alone cannot be exact: nothing orders a
 fragment shader's read of a texel before the same draw's color write of it.
 
+### Levels a slot reads
+
+Each texture slot of a stage states the levels of its bound view its reads reach, counted from the
+view's first level (`StageModule::level_reads`, one `LevelReads` a slot): whether some read may
+reach any level (`any`: a level the function computes, a level-count query used beyond the
+containment of a constant level, a level-of-detail query, a sample through no sampler or with a
+minimum level of detail, a storage access, or a use the analysis does not follow), the highest
+constant level a fetch, size query or gather names (`named`), and its samples by the sampler each
+reads through (`sampled`). A sample's level is its sampler's to bound: ask
+`LevelReads::highest_level` with `SampledLevels::level` of the sampler you bind
+(`SamplerLevels::of` its `vk::SamplerDesc`, and `SamplerLevels::finite_texels` of the view's
+format). A view of the same first level and more levels than the answer reads what the whole view
+reads. The runtime counts with it which levels a draw reads of a texture its own render pass
+instance renders.
+
 ### Indirect command buffers
 
 An indirect command buffer's commands are records in ordinary buffer storage

@@ -2549,6 +2549,12 @@ field	metal2vulkan-runtime::WorkCounts.argument_objects_retained	pub argument_ob
 field	metal2vulkan-runtime::WorkCounts.argument_samplers_taken	pub argument_samplers_taken: u64
 field	metal2vulkan-runtime::WorkCounts.argument_tables_held_at_bind	pub argument_tables_held_at_bind: u64
 field	metal2vulkan-runtime::WorkCounts.argument_tables_retained	pub argument_tables_retained: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots	pub attached_read_slots: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_any_level	pub attached_read_slots_any_level: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_below	pub attached_read_slots_below: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_first_level	pub attached_read_slots_first_level: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_one_level	pub attached_read_slots_one_level: u64
+field	metal2vulkan-runtime::WorkCounts.attached_read_slots_reaching	pub attached_read_slots_reaching: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_clears_recorded	pub attachment_clears_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_read_clears	pub attachment_read_clears: u64
 field	metal2vulkan-runtime::WorkCounts.attachment_read_splits	pub attachment_read_splits: u64
@@ -4526,6 +4532,10 @@ field	metal2vulkan::pipeline::ImageHandleClass.sampled_type	pub sampled_type: Sa
 field	metal2vulkan::pipeline::InputAttachmentUse.color_index	pub color_index: u32
 field	metal2vulkan::pipeline::InputAttachmentUse.format_class	pub format_class: SampledType
 field	metal2vulkan::pipeline::InputAttachmentUse.input_attachment_index	pub input_attachment_index: u32
+field	metal2vulkan::pipeline::LevelReads.any	pub any: bool
+field	metal2vulkan::pipeline::LevelReads.named	pub named: Option<u32>
+field	metal2vulkan::pipeline::LevelReads.sampled	pub sampled: Vec<SampledLevels>
+field	metal2vulkan::pipeline::LevelReads.slot	pub slot: u32
 field	metal2vulkan::pipeline::LineBandState.primitive	pub primitive: BandPrimitive
 field	metal2vulkan::pipeline::LineBandState.push_offset	pub push_offset: u32
 field	metal2vulkan::pipeline::LinkedFunction.constants	pub constants: FunctionConstantValues
@@ -4734,6 +4744,14 @@ field	metal2vulkan::pipeline::ResourceSlot.kind	pub kind: ResourceKind
 field	metal2vulkan::pipeline::ResourceSlot.stage	pub stage: Stage
 field	metal2vulkan::pipeline::RuntimeDependency.fact	pub fact: RuntimeFact
 field	metal2vulkan::pipeline::RuntimeDependency.mechanism	pub mechanism: Mechanism
+field	metal2vulkan::pipeline::SampledLevels.computed	pub computed: bool
+field	metal2vulkan::pipeline::SampledLevels.highest_lod_bits	pub highest_lod_bits: Option<u32>
+field	metal2vulkan::pipeline::SampledLevels.sampler	pub sampler: crate::pipeline::sym::SamplerRef
+field	metal2vulkan::pipeline::SamplerLevels.bias	pub bias: f32
+field	metal2vulkan::pipeline::SamplerLevels.finite_texels	pub finite_texels: bool
+field	metal2vulkan::pipeline::SamplerLevels.linear	pub linear: bool
+field	metal2vulkan::pipeline::SamplerLevels.max_lod	pub max_lod: f32
+field	metal2vulkan::pipeline::SamplerLevels.min_lod	pub min_lod: f32
 field	metal2vulkan::pipeline::SamplerSlot.compare	pub compare: bool
 field	metal2vulkan::pipeline::SamplerSlot.coordinate_sensitive	pub coordinate_sensitive: bool
 field	metal2vulkan::pipeline::ShaderTestsUse.depth	pub depth: StandInUse
@@ -4769,6 +4787,7 @@ field	metal2vulkan::pipeline::StageInputLayoutDescriptor.step_rate	pub step_rate
 field	metal2vulkan::pipeline::StageInputLayoutDescriptor.stride	pub stride: Option<u32>
 field	metal2vulkan::pipeline::StageModule.constant_blob	pub constant_blob: Option<Arc<[u8]>>
 field	metal2vulkan::pipeline::StageModule.entry_point	pub entry_point: String
+field	metal2vulkan::pipeline::StageModule.level_reads	pub level_reads: Vec<LevelReads>
 field	metal2vulkan::pipeline::StageModule.own_pixel_textures	pub own_pixel_textures: Vec<u32>
 field	metal2vulkan::pipeline::StageModule.precision_notes	pub precision_notes: Vec<PrecisionNote>
 field	metal2vulkan::pipeline::StageModule.private_bytes	pub private_bytes: u64
@@ -9468,6 +9487,7 @@ method	metal2vulkan::pipeline::GraphicsState::new	pub fn new(topology: vk::Primi
 method	metal2vulkan::pipeline::HandleClass::sampler	pub fn sampler(use_: crate::metal::sampler::SamplerUse) -> HandleClass
 method	metal2vulkan::pipeline::HandleClass::sampler_use	pub fn sampler_use(self) -> Option<crate::metal::sampler::SamplerUse>
 method	metal2vulkan::pipeline::InputAttachmentUse::new	pub fn new(color_index: u32, input_attachment_index: u32, format_class: SampledType) -> InputAttachmentUse
+method	metal2vulkan::pipeline::LevelReads::highest_level	pub fn highest_level(&self, sampled: impl Fn(&SampledLevels) -> Option<u32>) -> Option<u32>
 method	metal2vulkan::pipeline::LinkedFunction::name	pub fn name(&self) -> &str
 method	metal2vulkan::pipeline::LinkedFunction::new	pub fn new(function: Function) -> LinkedFunction
 method	metal2vulkan::pipeline::LinkedFunction::with_constants	pub fn with_constants(mut self, constants: FunctionConstantValues) -> LinkedFunction
@@ -9516,6 +9536,10 @@ method	metal2vulkan::pipeline::ResourceSlot::separate_sampler_use	pub fn separat
 method	metal2vulkan::pipeline::ResourceSlot::separate_texture	pub fn separate_texture(stage: Stage, texture: u32, c: CombinedSampler) -> Option<ResourceSlot>
 method	metal2vulkan::pipeline::ResourceSlot::separate_texture_of	pub fn separate_texture_of(&self) -> Option<(u32, CombinedSampler)>
 method	metal2vulkan::pipeline::RuntimeDependency::new	pub fn new(fact: RuntimeFact, mechanism: Mechanism) -> RuntimeDependency
+method	metal2vulkan::pipeline::SampledLevels::highest_lod	pub fn highest_lod(&self) -> Option<f32>
+method	metal2vulkan::pipeline::SampledLevels::level	pub fn level(&self, s: SamplerLevels) -> Option<u32>
+method	metal2vulkan::pipeline::SamplerLevels::finite_texels	pub fn finite_texels(format: vk::Format) -> bool
+method	metal2vulkan::pipeline::SamplerLevels::of	pub fn of(desc: &vk::SamplerDesc, finite_texels: bool) -> SamplerLevels
 method	metal2vulkan::pipeline::SamplerRef::constexpr_address_modes	pub fn constexpr_address_modes(self) -> Option<[crate::metal::SamplerAddressMode; 3]>
 method	metal2vulkan::pipeline::SnapshotForm::format	pub fn format(self) -> vk::Format
 method	metal2vulkan::pipeline::SnapshotForm::of	pub fn of(format: vk::Format, ty: SampledType) -> SnapshotForm
@@ -10195,6 +10219,7 @@ struct	metal2vulkan::pipeline::FunctionHandle	#[cfg_attr(feature = "serde", deri
 struct	metal2vulkan::pipeline::GraphicsState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct GraphicsState
 struct	metal2vulkan::pipeline::ImageHandleClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ImageHandleClass
 struct	metal2vulkan::pipeline::InputAttachmentUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct InputAttachmentUse
+struct	metal2vulkan::pipeline::LevelReads	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct LevelReads
 struct	metal2vulkan::pipeline::LineBandState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct LineBandState
 struct	metal2vulkan::pipeline::LinkedFunction	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct LinkedFunction
 struct	metal2vulkan::pipeline::LinkedFunctions	#[derive(Clone, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct LinkedFunctions
@@ -10216,6 +10241,8 @@ struct	metal2vulkan::pipeline::RenderPipelineDescriptor	#[derive(Clone, Debug, P
 struct	metal2vulkan::pipeline::RenderPipelineKeys	#[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct RenderPipelineKeys
 struct	metal2vulkan::pipeline::ResourceSlot	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ResourceSlot
 struct	metal2vulkan::pipeline::RuntimeDependency	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct RuntimeDependency
+struct	metal2vulkan::pipeline::SampledLevels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct SampledLevels
+struct	metal2vulkan::pipeline::SamplerLevels	#[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerLevels
 struct	metal2vulkan::pipeline::SamplerSlot	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct SamplerSlot
 struct	metal2vulkan::pipeline::ShaderTestsUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ShaderTestsUse
 struct	metal2vulkan::pipeline::ShadowStencilUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ShadowStencilUse

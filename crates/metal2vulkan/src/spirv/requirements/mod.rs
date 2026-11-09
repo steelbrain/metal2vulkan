@@ -88,10 +88,12 @@ fn independence_needed(widths: &BTreeSet<u8>) -> Independence {
     }
 }
 
+mod level_reads;
 mod own_pixel;
 mod snapshot;
 mod writes;
 
+pub use level_reads::level_reads;
 pub use own_pixel::own_pixel_textures;
 pub use snapshot::{snapshot_copies_alone, snapshot_textures, Judged};
 pub use writes::writes_memory;

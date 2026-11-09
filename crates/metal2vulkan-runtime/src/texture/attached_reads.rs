@@ -250,27 +250,42 @@ impl Texture {
     /// [`attached_in`](Self::attached_in) of the color attachments of `layout` that `keep`
     /// keeps.
     fn attached_where(&self, layout: &PassLayout, keep: impl Fn(&ColorTarget) -> bool) -> bool {
-        let Ok(image) = self.image() else {
-            return false;
-        };
+        self.attached_levels(layout, keep).next().is_some()
+    }
+
+    /// The lowest level of the texture, counted from its own first level, that a color attachment
+    /// of `layout` renders at a layer it presents, as [`attached_in`](Self::attached_in) tells,
+    /// and the texture's level count.
+    pub(crate) fn lowest_attached_level(&self, layout: &PassLayout) -> Option<(u32, u32)> {
+        let lowest = self.attached_levels(layout, |_| true).min()?;
+        Some((lowest, self.0.record.level_count))
+    }
+
+    /// The levels, counted from the texture's own first level, that the color attachments of
+    /// `layout` that `keep` keeps render of it at a layer it presents: of its image, at one of
+    /// its levels, and at one of its layers (any layer of a 3D image's).
+    fn attached_levels<'s>(
+        &'s self,
+        layout: &'s PassLayout,
+        keep: impl Fn(&ColorTarget) -> bool + 's,
+    ) -> impl Iterator<Item = u32> + 's {
+        let image = self.image().ok();
         let record = &self.0.record;
         let levels = record.base_level..record.base_level + record.level_count;
         let layers = record.base_layer..record.base_layer + record.layer_count;
-        let volume = image.plan().image_type == ImageType::TYPE_3D;
-        layout
-            .colors
-            .iter()
-            .flatten()
-            .filter(|c| keep(c))
-            .any(|color| {
+        let volume = image.is_some_and(|image| image.plan().image_type == ImageType::TYPE_3D);
+        let colors = image.map(|_| layout.colors.iter().flatten());
+        (colors.into_iter().flatten())
+            .filter(move |c| keep(c))
+            .filter_map(move |color| {
                 let target = &color.target;
-                let same = target
-                    .texture
-                    .image()
-                    .is_ok_and(|other| other.identity.key == image.identity.key);
+                let same = (target.texture.image())
+                    .is_ok_and(|other| image.is_some_and(|i| other.identity.key == i.identity.key));
                 let rendered = target.layer..target.layer + target.layers;
-                same && levels.contains(&target.level)
-                    && (volume || (rendered.start < layers.end && layers.start < rendered.end))
+                let presented =
+                    volume || (rendered.start < layers.end && layers.start < rendered.end);
+                (same && levels.contains(&target.level) && presented)
+                    .then(|| target.level - record.base_level)
             })
     }
 }

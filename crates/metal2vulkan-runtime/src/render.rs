@@ -396,6 +396,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tile_dispatch::{ScratchEdges, TileDispatch};
 
 mod arguments;
+mod attached_levels;
 mod bound;
 mod call_checks;
 mod color_groups;
@@ -9290,6 +9291,9 @@ impl RenderLowering {
         let (draw_shadows, own_pixel) = self.draw_shadows(resident, uses, reading);
         if own_pixel {
             self.core.counts().own_pixel_read();
+        }
+        if let Some((plan, compiled)) = reading {
+            self.count_attached_levels(&device, plan, compiled);
         }
         if self.replaying && !self.gathered().covers(&draw_shadows) {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));

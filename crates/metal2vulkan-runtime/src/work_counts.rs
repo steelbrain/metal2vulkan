@@ -646,6 +646,32 @@ struct CommandCounters {
     draws_rebind_stopped_arguments_fetch_window: AtomicU64,
     draws_rebind_stopped_arguments_reach: AtomicU64,
     draws_rebind_stopped_arguments_other: AtomicU64,
+    attached_read_slots: AtomicU64,
+    attached_read_slots_by: [AtomicU64; AttachedLevels::COUNT],
+}
+
+/// How the levels a draw's slot reads of a texture a color attachment of its render pass instance
+/// renders meet the attached level (`render/attached_levels.rs`, `WorkCounts::attached_read_slots`
+/// and kin): the first that holds, in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttachedLevels {
+    /// The texture has one level.
+    OneLevel,
+    /// The attachment renders the texture's own first level.
+    FirstLevel,
+    /// A read of the slot may reach any level of its view (`LevelReads::any`), or the module
+    /// states no reads of the slot.
+    AnyLevel,
+    /// A read reaches the lowest attached level or one past it, through the sampler the draw binds
+    /// or at a level it names, or the draw binds the slot through no write whose sampler it knows.
+    Reaching,
+    /// Every read reaches only levels before the lowest attached one.
+    Below,
+}
+
+impl AttachedLevels {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 5;
 }
 
 /// What kept a direct draw that recorded from being kept to draw again
@@ -1053,6 +1079,14 @@ impl Counting<'_> {
     pub(crate) fn draw_counted_past_early_mask(&self) {
         self.0
             .add(|counts| &counts.draws_counted_past_early_masks, 1);
+    }
+
+    /// A slot of a draw that takes every step samples a texture a color attachment of its render
+    /// pass instance renders, its reads' levels meeting the attached one as `levels` says
+    /// (`render/attached_levels.rs`).
+    pub(crate) fn attached_read_slot(&self, levels: AttachedLevels) {
+        self.0.add(|counts| &counts.attached_read_slots, 1);
+        (self.0).add(|counts| &counts.attached_read_slots_by[levels as usize], 1);
     }
 
     /// `made` uses of what a render encoder made resident that a draw worked out
@@ -7590,6 +7624,30 @@ pub struct WorkCounts {
     /// announcement and adds nothing here): each announced `Degradation::VisibilityPastEarlyMask`,
     /// its result possibly short of the samples the mask drops, which Metal counts.
     pub draws_counted_past_early_masks: u64,
+    /// The slots of draws that take every step (not a draw again or rebound,
+    /// `render/draw_again.rs`) that sample a texture a color attachment of their render pass
+    /// instance renders at a level and layer the slot's view presents, and so read its copy
+    /// (`texture/attached_reads.rs`): one per such slot of each draw. The five counts after it
+    /// split them by how the levels the slot's reads reach (`StageModule::level_reads`, through
+    /// the samplers the draw binds) meet the lowest attached level, counted from the view's
+    /// first (`render/attached_levels.rs`).
+    pub attached_read_slots: u64,
+    /// Of `attached_read_slots`, those of a texture of one level.
+    pub attached_read_slots_one_level: u64,
+    /// Those of a texture of several levels whose own first level an attachment renders.
+    pub attached_read_slots_first_level: u64,
+    /// Those a read of which may reach any level of the view (`LevelReads::any`: a level the
+    /// function computes, a level-count query beyond a constant's containment, a level-of-detail
+    /// query, a sample through no sampler or with a minimum level of detail).
+    pub attached_read_slots_any_level: u64,
+    /// Those a read of which reaches the lowest attached level or one past it: a sample through
+    /// the sampler the draw binds (its `maxLod`, or an explicit level of detail clamped into its
+    /// range), a fetch or size query at a constant level, or a sample through a sampler the draw
+    /// binds apart from the texture (a separate sampler), whose levels are not counted.
+    pub attached_read_slots_reaching: u64,
+    /// Those every read of which reaches only levels before the lowest attached one: a view of
+    /// the texture's levels from its first up to the attached one would read the same levels.
+    pub attached_read_slots_below: u64,
     /// Ended compute and blit encoders whose logs their command buffers kept, as a rebind before
     /// the first submission may encode them again (`replay.rs`), and the bytes of those logs.
     pub replay_logs_kept: u64,
@@ -7672,6 +7730,9 @@ impl Device {
         let directory = self.shared().shader_cache.directory_time();
         let churn = counters.churn.snapshot();
         let commands = |count: fn(&CommandCounters) -> &AtomicU64| counters.commands.sum(count);
+        let attached = |levels: AttachedLevels| {
+            (counters.commands).sum(|counts| &counts.attached_read_slots_by[levels as usize])
+        };
         let group_end = |end: GroupEnd| counters.group_ends[end as usize].load(Ordering::Relaxed);
         let first_work_order = self.shared().textures.first_moves.submissions_waited();
         let held_for =
@@ -8306,6 +8367,12 @@ impl Device {
             draws_counted_past_early_masks: commands(|counts| {
                 &counts.draws_counted_past_early_masks
             }),
+            attached_read_slots: commands(|counts| &counts.attached_read_slots),
+            attached_read_slots_one_level: attached(AttachedLevels::OneLevel),
+            attached_read_slots_first_level: attached(AttachedLevels::FirstLevel),
+            attached_read_slots_any_level: attached(AttachedLevels::AnyLevel),
+            attached_read_slots_reaching: attached(AttachedLevels::Reaching),
+            attached_read_slots_below: attached(AttachedLevels::Below),
             draws_moved: commands(|counts| &counts.draws_moved),
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),
