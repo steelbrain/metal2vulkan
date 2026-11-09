@@ -165,8 +165,10 @@ pub(super) type Rows = (u64, u64, u64);
 /// The verdicts the device's check gives, each a line of its report before what it found
 /// changed: seven classes (`Pointer`, `Fresh`, `DmaBuf`, `Pooled`, `ExportedFd`, `ExportedDmaBuf`,
 /// `FdBlocks`), seven accesses, two row ends. The report gives every class on every device, one
-/// the device cannot check `Unchecked` (`FdBlocks` where the device allocates no block of its
-/// buffers exportable). Held to the report's own count ([`verdicts_in`]).
+/// the device has nothing of to check reading `Unchecked`: `FdBlocks` does on a device that
+/// allocates no block of its buffers exportable, every discrete device among them (it has no
+/// unified memory), because it makes no such block, not because a check failed. Held to the
+/// report's own count ([`verdicts_in`]).
 const VERDICTS: usize = 98;
 
 /// The verdicts of a device's check `report`, counted from its own lines: the report gives one line
