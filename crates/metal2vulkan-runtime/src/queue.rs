@@ -81,6 +81,14 @@
 //! command buffers hold. A recovery retires every queue's place; the queue takes a new one on the
 //! new generation, as it took its first, at its next command buffer (or lent `VkQueue`), and its
 //! label and its count of the GPU errors its command buffers caused (`revocation.rs`) go on.
+//!
+//! **The runtime's own queues.** The device's in-place check of render targets takes its passes on
+//! a queue of its own (`in_place_check.rs`), made as a program's is but for Metal's device ID
+//! rules: Metal's device makes its texture pool and takes its sampler ID at the program's first
+//! command queue (`resource_ids.rs`), and the check runs on its thread while the program makes its
+//! objects, so a queue of its that counted as the program's would keep the pool's first range
+//! beside a texture reservation the program made after it, and ignore a sampler reservation.
+//! Every place of such a queue, a recovery's new one included, touches neither rule.
 
 use super::attachment_stand_in::BackingPool;
 use super::command_buffer::hang::QueueHangs;
@@ -114,6 +122,8 @@ pub(crate) struct QueueLine {
     device: Device,
     /// Which constructor made it.
     kind: Kind,
+    /// Whether the program made it, for Metal's device ID rules.
+    made_for: MadeFor,
     /// Its `maxCommandBufferCount`.
     count: usize,
     common: Arc<QueueCommon>,
@@ -162,6 +172,17 @@ enum Kind {
     Unshared,
     /// `new_command_queue_for_presenting`: never moves.
     Presenting,
+}
+
+/// Whom a queue was made for, and so whether its places count toward Metal's device ID rules
+/// (the module docs, `resource_ids.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MadeFor {
+    /// A constructor the program called: Metal's device makes its texture pool and takes its
+    /// sampler ID at its first queue.
+    Program,
+    /// The runtime's own (`Device::own_command_queue_now`): touches neither rule.
+    Runtime,
 }
 
 /// [`QueueShared::sharing`]: one of its command buffers ran long (`queue_share::LONG_HEAD`).
@@ -339,7 +360,19 @@ impl Device {
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
-        Ok(self.command_queue(count, Kind::RoundRobin))
+        Ok(self.command_queue(count, Kind::RoundRobin, MadeFor::Program))
+    }
+
+    /// No Metal counterpart: a queue the runtime makes for its own work (the module docs), as
+    /// [`new_command_queue`](Self::new_command_queue)'s on the generation that serves, but that
+    /// makes no texture pool and takes no sampler ID of Metal's device (`resource_ids.rs`).
+    /// Refused as that call is on a lost device (`DeviceLost`).
+    pub(crate) fn own_command_queue_now(&self) -> Result<CommandQueue, Error> {
+        if self.is_lost() {
+            return Err(self.lost_refusal());
+        }
+        let count = DEFAULT_MAX_COMMAND_BUFFER_COUNT;
+        Ok(self.command_queue(count, Kind::RoundRobin, MadeFor::Runtime))
     }
 
     /// No Metal counterpart: a command queue of at most `count` uncompleted command buffers, as
@@ -390,7 +423,7 @@ impl Device {
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
-        Ok(self.command_queue(count, Kind::Unshared))
+        Ok(self.command_queue(count, Kind::Unshared, MadeFor::Program))
     }
 
     /// No Metal counterpart: a queue for presenting, of at most 64 uncompleted command buffers as
@@ -420,21 +453,23 @@ impl Device {
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
-        Ok(self.command_queue(DEFAULT_MAX_COMMAND_BUFFER_COUNT, Kind::Presenting))
+        let count = DEFAULT_MAX_COMMAND_BUFFER_COUNT;
+        Ok(self.command_queue(count, Kind::Presenting, MadeFor::Program))
     }
 
-    /// A queue of at most `count` uncompleted command buffers made by `kind`'s constructor, with
-    /// its place on this generation, known to the device's line, whose recoveries retire it
-    /// (`device/line.rs`).
-    fn command_queue(&self, count: usize, kind: Kind) -> CommandQueue {
+    /// A queue of at most `count` uncompleted command buffers made by `kind`'s constructor for
+    /// `made_for`, with its place on this generation, known to the device's line, whose
+    /// recoveries retire it (`device/line.rs`).
+    fn command_queue(&self, count: usize, kind: Kind, made_for: MadeFor) -> CommandQueue {
         let common = Arc::new(QueueCommon {
             label: Mutex::new(None),
             errors: QueueErrors::default(),
         });
-        let place = self.queue_place(count, kind, &common);
+        let place = self.queue_place((count, kind, made_for), &common);
         let queue = CommandQueue(Arc::new(QueueLine {
             device: self.root(),
             kind,
+            made_for,
             count,
             common,
             cell: Mutex::new(Place::Serving(place)),
@@ -476,14 +511,22 @@ impl Device {
     }
 
     /// A queue's place on this generation (the module docs), of at most `count` uncompleted
-    /// command buffers, made by `kind`'s constructor, `common` what its places share: on the
-    /// `VkQueue` [`place_queue`](Self::place_queue) gives. One on a round robin's `VkQueue` counts
-    /// itself there (an unshared one counted itself already), and the first starts the device's
-    /// check of its GPU's idling between `VkQueue`s (`queue_share.rs`).
-    fn queue_place(&self, count: usize, kind: Kind, common: &Arc<QueueCommon>) -> QueueGen {
+    /// command buffers, made by `kind`'s constructor for `made_for`, `common` what its places
+    /// share: on the `VkQueue` [`place_queue`](Self::place_queue) gives. One the program made
+    /// takes Metal's device sampler ID and makes its texture pool, as Metal's first queue does
+    /// (`resource_ids.rs`); the runtime's own touches neither. One on a round robin's `VkQueue`
+    /// counts itself there (an unshared one counted itself already), and the first starts the
+    /// device's check of its GPU's idling between `VkQueue`s (`queue_share.rs`).
+    fn queue_place(
+        &self,
+        (count, kind, made_for): (usize, Kind, MadeFor),
+        common: &Arc<QueueCommon>,
+    ) -> QueueGen {
         let (id, vk_queue) = self.place_queue(kind);
-        self.take_device_sampler();
-        self.make_texture_pool();
+        if made_for == MadeFor::Program {
+            self.take_device_sampler();
+            self.make_texture_pool();
+        }
         self.keep_room();
         let shared = self.shared();
         if vk_queue < shared.round_robin() {
@@ -528,7 +571,7 @@ impl QueueLine {
                 return place.clone();
             }
         }
-        let place = device.queue_place(self.count, self.kind, &self.common);
+        let place = device.queue_place((self.count, self.kind, self.made_for), &self.common);
         let retired = std::mem::replace(&mut *cell, Place::Serving(place.clone()));
         drop(cell);
         drop(retired);

@@ -159,7 +159,7 @@ pub(super) fn shadow_device(cache: &Path) -> Device {
 }
 
 /// The options of [`device`].
-fn options(cache: &Path) -> DeviceOptions {
+pub(super) fn options(cache: &Path) -> DeviceOptions {
     DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],

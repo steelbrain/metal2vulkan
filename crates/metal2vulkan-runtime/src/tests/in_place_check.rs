@@ -2,7 +2,8 @@
 //! address space: its buffers, one per class of pages, lie outside it (`address.rs`, "Outside the
 //! space"), so no pin or pick of the program's depends on whether or when the check runs, and the
 //! space's state changes no verdict. Nor does it take a texture ID: its textures are the
-//! runtime's own (`resource_ids.rs`), so the program's IDs are Metal's whether or when it runs.
+//! runtime's own (`resource_ids.rs`), and its queue touches no ID rule of Metal's device
+//! (`queue.rs`), so the program's IDs and reservations are Metal's whether or when it runs.
 //! And it checks fresh pages wherever the device takes them, also where its held imports cost its
 //! submissions and no long buffer of the product's lies in them.
 //!
@@ -11,17 +12,20 @@
 //! directory, so no record holds its verdicts and its check runs; the two devices the placement
 //! test compares find there only a record of the same submission-check answers ([`answering`]).
 
-use super::blit_holds::{device, Scratch};
+use super::blit_holds::{device, options, Scratch};
 use crate::address::{PAGE, SPACE_BASE, SPACE_END};
 use crate::fresh_pages::FRESH_PAGES_PAST;
 use crate::in_place::{verdict_index, Access, PagesClass, RowEnds, Verdict as InPlaceVerdict};
 use crate::submit_check::{encode, record_name, Check, Measured, Verdict};
 use crate::{
-    AddressPlacement, Buffer, BufferContents, BufferDescriptor, Device, Error, GpuAddress,
-    ResourceId, ResourceIdKind, ResourceOptions, Texture, TextureDescriptor,
+    AddressPlacement, Buffer, BufferContents, BufferDescriptor, DebugMessage, Device,
+    DeviceOptions, Error, GpuAddress, MessageSink, ResourceId, ResourceIdKind, ResourceOptions,
+    SamplerState, SamplerStateOptions, Texture, TextureDescriptor,
 };
+use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The longest a check may take.
@@ -392,40 +396,92 @@ fn the_in_place_check_takes_no_texture_id() {
     );
 }
 
-/// A texture reservation made as soon as the device is made, as a consumer's first call reserves
-/// its guest's IDs, is kept whatever the device's check does meanwhile on its thread, and so is
-/// one made once the check has run to its end: the plain textures made after it take IDs past the
-/// reserved range, and no late-reservation diagnostic is given. A texture of the check's that took
-/// a plain ID would start the pool before the reservation, which is then ignored (Metal's pool
-/// logs "reserve() must be called before any allocation takes place"), and the plain textures
-/// take the reserved IDs from 1.
+/// The device the cfg selects over `cache`, as [`device`]'s, with a sink that keeps the code of
+/// every message it gives.
+fn hearing(cache: &Path) -> (Device, Arc<Mutex<Vec<String>>>) {
+    let heard: Arc<Mutex<Vec<String>>> = Arc::default();
+    let kept = Arc::clone(&heard);
+    let options = DeviceOptions {
+        messages: Some(MessageSink::new(move |message: &DebugMessage| {
+            kept.lock().unwrap().push(message.id_name.clone());
+        })),
+        ..options(cache)
+    };
+    (Device::system_default_with(&options).unwrap(), heard)
+}
+
+/// A plain sampler state of the program's, its LOD clamped from `lod`, so that each `lod` gives
+/// a state of its own; its ID readable (`support_argument_buffers`).
+fn sampler_state(device: &Device, lod: u32) -> SamplerState {
+    let mut descriptor = SamplerDescriptor::new();
+    descriptor.lod_min_clamp = lod as f32;
+    let mut options = SamplerStateOptions::default();
+    options.support_argument_buffers = true;
+    (device.new_sampler_state_with_options(&descriptor, options)).unwrap()
+}
+
+/// Whether the device's check made the queue its render passes take (`Access::Renders`): a
+/// class it checked for rendering, passed or failed, made it first.
+fn check_rendered(device: &Device) -> bool {
+    let verdicts = device.shared().in_place.verdicts();
+    (PagesClass::ALL.into_iter()).any(|class| {
+        RowEnds::ALL.into_iter().any(|rows| {
+            let verdict = verdicts[verdict_index(class, Access::Renders, rows)];
+            matches!(verdict, InPlaceVerdict::Passed | InPlaceVerdict::Failed)
+        })
+    })
+}
+
+/// The program's reservations hold whatever the device's check did before them: its render
+/// passes take a queue of the runtime's own (`queue.rs`), which touches no ID rule of Metal's
+/// device. Once the check has run to its end, a reservation of texture IDs 1 to 64 and of sampler
+/// IDs 1 to 16 holds: plain textures made after it take IDs past 64, plain sampler states IDs
+/// past 16, and no late-reservation line is given. A check queue that counted as the program's
+/// first queue would have made the texture pool, so the reservation kept the pool's first range
+/// beside its own and the plain textures took 1 to 15 again; and it would have taken the device's
+/// sampler ID, so the sampler reservation was ignored, with a late-reservation line, and the
+/// plain states took the reserved IDs. A reservation made as soon as the device is made, as a
+/// consumer's first call reserves its guest's IDs, holds as well, whatever the check does on its
+/// thread meanwhile.
 #[test]
-fn a_texture_reservation_made_with_the_device_is_kept_whatever_its_check_does() {
-    const RESERVED: u64 = 64;
-    for settled in [false, true] {
+fn reservations_hold_whatever_the_in_place_check_did() {
+    const TEXTURES: u64 = 64;
+    const SAMPLERS: u64 = 16;
+    for settled in [true, false] {
         let scratch = Scratch::new("in-place-check-reservation");
-        let device = device(&scratch.0);
+        let (device, heard) = hearing(&scratch.0);
         if settled {
             assert!(device.settle_in_place_checks(WAIT), "the check answered");
         }
-        let ids = &device.shared().resource_ids;
-        let started = crate::device::lock(ids).started(crate::resource_ids::IdSpace::Texture);
-        let reserved: Vec<ResourceId> = (1..=RESERVED).map(ResourceId).collect();
-        device
-            .reserve_resource_ids(ResourceIdKind::Texture, &reserved)
-            .unwrap();
-        let made: Vec<Texture> = (0..16).map(|_| texture(&device)).collect();
-        let ids: Vec<u64> = made.iter().map(|t| t.gpu_resource_id().0).collect();
+        let rendered = check_rendered(&device);
+        let reserve = |kind, last: u64| {
+            let ids: Vec<ResourceId> = (1..=last).map(ResourceId).collect();
+            device.reserve_resource_ids(kind, &ids).unwrap();
+        };
+        reserve(ResourceIdKind::Texture, TEXTURES);
+        reserve(ResourceIdKind::SamplerState, SAMPLERS);
+        let textures: Vec<Texture> = (0..32).map(|_| texture(&device)).collect();
+        let states: Vec<SamplerState> = (0..8).map(|lod| sampler_state(&device, lod)).collect();
+        let texture_ids: Vec<u64> = textures.iter().map(|t| t.gpu_resource_id().0).collect();
+        let sampler_ids: Vec<u64> = states.iter().map(|s| s.gpu_resource_id().0).collect();
+        let late = (heard.lock().unwrap().iter())
+            .filter(|code| *code == "metal2vulkan-late-reservation")
+            .count();
         eprintln!(
-            "IN-PLACE-CHECK-RESERVATION on {}, the check settled first {settled}: the texture \
-             IDs had started before the reservation: {started}; the plain textures took {ids:?}",
+            "IN-PLACE-CHECK-RESERVATION on {}, the check settled first {settled}, its render \
+             queue made before the reservation {rendered}: plain textures took {texture_ids:?}, \
+             plain sampler states {sampler_ids:?}; late-reservation lines {late}",
             device.name()
         );
-        assert!(!started, "the texture IDs started before the reservation");
         assert!(
-            ids.iter().all(|&id| id > RESERVED),
-            "plain textures took reserved IDs: {ids:?}"
+            texture_ids.iter().all(|&id| id > TEXTURES),
+            "plain textures took reserved IDs: {texture_ids:?}"
         );
+        assert!(
+            sampler_ids.iter().all(|&id| id > SAMPLERS),
+            "plain sampler states took reserved IDs: {sampler_ids:?}"
+        );
+        assert_eq!(late, 0, "a reservation was ignored as late");
     }
 }
 

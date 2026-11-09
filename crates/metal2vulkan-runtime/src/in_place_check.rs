@@ -91,11 +91,14 @@
 //!   the program makes its resources, so a range of the space it took would refuse a pin of the
 //!   program's there, or move a range the runtime picks for it. Its pages, their import, the
 //!   image and the move do not depend on the address, so neither does a verdict.
-//! - **Its textures take no resource ID** (`IdUse::Runtime`, `resource_ids.rs`): the check runs
-//!   on its thread while the program makes its textures, so a plain ID one of its textures held
-//!   would move the program's next texture's ID past Metal's, and a texture reservation after it
-//!   would be ignored. The ID does not touch the image, its pages or its move, so neither does a
-//!   verdict.
+//! - **Its textures take no resource ID** (`IdUse::Runtime`, `resource_ids.rs`), and its queue
+//!   touches no ID rule of Metal's device (`Device::own_command_queue_now`, `queue.rs`): the
+//!   check runs on its thread while the program makes its textures, so a plain ID one of its
+//!   textures held would move the program's next texture's ID past Metal's, and a texture
+//!   reservation after it would be ignored; a queue of the program's would make the texture pool,
+//!   keeping its first range beside a later texture reservation, and take the device's sampler
+//!   ID, ignoring a later sampler reservation. The ID does not touch the image, its pages or its
+//!   move, so neither does a verdict.
 //! - **Its cost** is the pattern's fill and compare of each window, at the speed of a copy and a
 //!   comparison of memory (a 3840x2160 surface's 33 MB among them), and each image's making and
 //!   first move (and pass, or kernel's stores): the writes themselves run only while those do.
@@ -688,7 +691,7 @@ fn check_class(
         | Access::NarrowBufferWrites => None,
         Access::Renders => {
             let made = exit_guard::enter().map(|_busy| {
-                let queue = device.new_command_queue_now()?;
+                let queue = device.own_command_queue_now()?;
                 Ok::<_, crate::Error>((queue, CheckDraw::new(device)?))
             });
             match made? {

@@ -43,7 +43,8 @@
 //!   it leaves, and Metal hands out that range's IDs again while textures hold them (20 reserved
 //!   gives 21 to 31, 1 to 15, 1 to 15 again, 16 to 19, 32 on). The runtime hands them out as Metal
 //!   does: both textures answer the ID, the slot is the later one's (Slots), and each gives it back
-//!   as it goes, as Metal's do ([`Pool`]).
+//!   as it goes, as Metal's do ([`Pool`]). A queue the runtime makes for its own work (its
+//!   in-place check's, `queue.rs`) is no Metal queue: it makes no pool and takes no sampler ID.
 //! - **The device's sampler ID** (the consumer's M3 Max report at 701572bbf, the M4 probes, plain
 //!   and under API validation alike). Metal's device keeps a sampler ID for itself for good as it
 //!   makes its first command queue, indirect command buffer, or texture whose memory is its own (of
