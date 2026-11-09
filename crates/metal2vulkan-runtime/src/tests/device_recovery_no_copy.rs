@@ -129,8 +129,9 @@ fn live_vk_devices(device: &Device, live: u64) -> u64 {
 /// buffer over the same bytes, which lies in its import there as here, and a buffer whose import
 /// the caller's gate refuses, a copy there as here, the gate asked again. Each keeps its
 /// `contents` pointer, its Metal address and its bytes; the host's writes reach the GPU and the
-/// GPU's the pages after it. The lost `VkDevice` goes at its rest, as none of them holds it, and
-/// the deallocator runs once, at the buffer's release.
+/// GPU's the pages after it. The lost `VkDevice` goes at its rest, as none of them holds it; a
+/// second recovery carries them on likewise; and the deallocator runs once, at the buffer's
+/// release.
 #[test]
 fn a_recovery_carries_no_copy_buffers_over_the_same_pages() {
     let scratch = Scratch::new();
@@ -212,6 +213,25 @@ fn a_recovery_carries_no_copy_buffers_over_the_same_pages() {
     assert_eq!(read(&device, &queue, &buffer), vec![9; BYTES as usize]);
     // Nothing holds the lost generation: it went at its rest, its imports of the pages with it,
     // and the deallocator waits for the buffer's release.
+    assert_eq!(live_vk_devices(&device, 1), 1);
+    assert!(ran.lock().unwrap().is_empty(), "{:?}", ran.lock().unwrap());
+    // A second recovery carries them on again, from the generation the first made: the
+    // deallocator waits for one more import, and still for the release.
+    let from = heard.lock().unwrap().len();
+    device.recover_for_test().unwrap();
+    let said = recovery_notices(&heard, from, "the device");
+    assert!(
+        said.len() == 1 && said[0].contains("3 buffers with their contents"),
+        "{said:?}"
+    );
+    assert_eq!(
+        asked.lock().unwrap().len(),
+        3,
+        "the gate is asked at each recovery"
+    );
+    assert_eq!(buffer.contents(), Some(at));
+    assert_eq!(read(&device, &queue, &buffer), vec![9; BYTES as usize]);
+    assert_eq!(read(&device, &queue, &copied), vec![8; BYTES as usize]);
     assert_eq!(live_vk_devices(&device, 1), 1);
     assert!(ran.lock().unwrap().is_empty(), "{:?}", ran.lock().unwrap());
     drop(buffer);
