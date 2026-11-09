@@ -15,8 +15,9 @@
 //!   shadow that verdict names, never one by its width), a render target, an IOSurface plane, a
 //!   buffer of fresh pages where the device puts
 //!   a long buffer in them, texels past the buffer's length, a buffer of no host pages, a texture
-//!   buffer (another shape), detached bytes, `HostPageTexturePolicy::Shadow`, and a check that
-//!   failed (`DeviceOptions::fail_in_place_check`). A discrete GPU's device copy and a copied
+//!   buffer (another shape), detached bytes, `HostPageTexturePolicy::Shadow` (under which a
+//!   `Shared` buffer lies in no block of the runtime's own pages), and a check that failed
+//!   (`DeviceOptions::fail_in_place_check`). A discrete GPU's device copy and a copied
 //!   buffer's bytes are not reached here.
 //! - **Refusals** are the making's own: a pitch below the row, texels past the allocation, and an
 //!   IOSurface plane's client direction give the same error to both.
@@ -533,6 +534,19 @@ fn the_answer_is_the_route_the_texture_takes() {
         !exact.settle_in_place_checks(Duration::ZERO),
         "no check under the policy"
     );
+    // No block of the runtime's own pages under the policy, whose verdicts stay pending
+    // (`in_place.rs`'s `blocks_take`): a `Shared` buffer lies in the device's own memory, its
+    // texture the device's linear image, whatever the submission checks found.
+    let _settled = exact.settle_submit_checks(SETTLE);
+    let own = exact
+        .new_buffer(1 << 20, ResourceOptions::shared())
+        .unwrap();
+    assert!(!own.in_page_block(), "a block of pages under the policy");
+    let ask = || own.texture_placement(&shared, 0, side * 4);
+    let make = || own.new_texture(&shared, 0, side * 4);
+    let (answer, _) = made_as_asked(&exact, "the exact form's own buffer", ask, make);
+    assert_eq!(answer, TexturePlacement::NotHostPages);
+    assert_eq!(exact.work_counts().page_buffer_blocks_made, 0);
 
     // A check that failed: a texture that reads and one that renders, each named by its access.
     let failing_scratch = Scratch::new("texture-placement-failing");
