@@ -329,6 +329,11 @@ fn carried_objects_serve_on_the_new_vk_device() {
             let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 4096) };
             assert!(bytes.iter().all(|&byte| byte == round));
         }
+        // The handles `Device::raw` answered as the lane checked the device's making
+        // (`creation_kinds` reads the driver's pipeline cache through them) keep the first
+        // generation's `VkDevice` until a later call answers the serving one's.
+        // SAFETY: the handles are read and not used.
+        let _ = unsafe { device.raw() };
         let began = Instant::now();
         while device.work_counts().vk_devices_live > 1 && began.elapsed() < Duration::from_secs(60)
         {

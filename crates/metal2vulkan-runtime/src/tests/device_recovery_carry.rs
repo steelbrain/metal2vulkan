@@ -213,22 +213,24 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     // It holds the lost `VkDevice`, which keeps no memory for work.
     assert_eq!(live_vk_devices(&device, 2), 2);
     let after = pooled.device().work_counts_now();
+    let blocks =
+        |counts: &crate::WorkCounts| counts.memory_blocks_live + counts.empty_memory_blocks_live;
+    eprintln!(
+        "CARRY-LOST-MEMORY: {}: the lost generation held {} blocks before the loss, {} at rest, \
+         {} freed as it came to rest",
+        device.name(),
+        blocks(&before),
+        blocks(&after),
+        after.memory_frees.teardown - before.memory_frees.teardown
+    );
     assert_eq!(after.empty_memory_blocks_live, 0, "{after:?}");
     assert!(
-        after.device_memory_allocated + REUSED <= before.device_memory_allocated,
-        "the lost generation holds {} bytes, {} before the loss",
-        after.device_memory_allocated,
-        before.device_memory_allocated
+        blocks(&after) < blocks(&before),
+        "the lost generation holds {} blocks, {} before the loss",
+        blocks(&after),
+        blocks(&before)
     );
-    eprintln!(
-        "CARRY-LOST-MEMORY: {}: the lost generation held {} bytes in {} blocks before the loss, \
-         {} in {} at rest",
-        device.name(),
-        before.device_memory_allocated,
-        before.memory_blocks_live,
-        after.device_memory_allocated,
-        after.memory_blocks_live
-    );
+    assert!(after.memory_frees.teardown > before.memory_frees.teardown);
     drop(pooled);
     assert_eq!(live_vk_devices(&device, 1), 1);
 }
