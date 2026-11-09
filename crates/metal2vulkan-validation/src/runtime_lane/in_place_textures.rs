@@ -163,8 +163,9 @@ pub(super) fn writes_passed(
 pub(super) type Rows = (u64, u64, u64);
 
 /// The verdicts the device's check gives, each a line of its report before what it found
-/// changed: four classes, seven accesses, two row ends.
-const VERDICTS: usize = 56;
+/// changed: six classes (`Pointer`, `Fresh`, `DmaBuf`, `Pooled`, `ExportedFd`, `ExportedDmaBuf`),
+/// seven accesses, two row ends.
+const VERDICTS: usize = 84;
 
 /// The devices made again where load beside the submission checks split their import tax's tries
 /// ([`answered_device`]).
