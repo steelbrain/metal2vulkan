@@ -114,6 +114,15 @@
 //!   offset 0 with Metal's `rowPitch`; and its `size` stays inside the buffer. The device's
 //!   linear image is tried first, then the `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch, whose
 //!   own alignment decides.
+//! - **The runtime's buffers' exportable blocks.** Where the device allocates the blocks its
+//!   buffers lie in exportable and never exports them (`memory.rs`'s "Buffers in exportable
+//!   blocks"), a texture over such a buffer takes the device's linear image made for a handle
+//!   type of the block the device's image format query takes for it, else the
+//!   `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch made for one it takes for that, each so
+//!   starting `UNDEFINED`, under the check of such blocks ([`PagesClass::FdBlocks`]). Its
+//!   verdicts decide, before any buffer lies there, whether the device's buffers do
+//!   ([`fd_blocks_take`]): where every texture over such a buffer takes in place what it takes
+//!   over a plain block's, whose linear image starts `PREINITIALIZED` and needs no verdict.
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
 //!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart), and the
 //!   first such texture starts the check on a thread of its own. Once its class's verdicts are

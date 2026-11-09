@@ -65,27 +65,40 @@
 //!   it, where the device needs or prefers one for the export.
 //!
 //! - **Buffers in exportable blocks** ([`Holds::FdBuffers`], [`fd_buffer_types`]). On a device
-//!   with unified memory whose memory types of a heap that is not device-local (the system
-//!   heap, where `Private` memory lies first, [`candidates`]) export an opaque file descriptor of
-//!   a pooled buffer's memory (`vkGetPhysicalDeviceExternalBufferProperties`, for the program's
-//!   buffers' usage and a buffer of addresses' usage: exportable, and not only from a dedicated
-//!   allocation), the buffers the runtime's buffer path makes (`buffer.rs`'s
+//!   with unified memory whose policy takes textures over exported memory in place
+//!   (`HostPageTexturePolicy::InPlace`) and whose memory types of a heap that is not device-local
+//!   (the system heap, where `Private` memory lies first, [`candidates`]) export an opaque file
+//!   descriptor of a pooled buffer's memory (`vkGetPhysicalDeviceExternalBufferProperties`, for
+//!   the program's buffers' usage and a buffer of addresses' usage: exportable, and not only from
+//!   a dedicated allocation), the buffers the runtime's buffer path makes (`buffer.rs`'s
 //!   `placed_new_buffer`: the program's, those of buffer descriptors, and the runtime's own, not a
-//!   heap's own buffer nor the in-place check's buffer of pooled memory) are made with
-//!   `VkExternalMemoryBufferCreateInfo` naming that handle type and lie in blocks of their own,
-//!   whose blocks of those memory types are allocated exportable as it (`VkExportMemoryAllocateInfo`)
-//!   and never exported; their buffers of addresses are made for it too, as a buffer bound in
-//!   such memory must name its handle type (`VUID-vkBindBufferMemory-memory-02726`), and an image
-//!   bound in it names it as well (`VUID-vkBindImageMemory-memory-02728`, [`Memory::bound_memory`]:
-//!   a texture over such a buffer takes the in-place check's class of the runtime's memory
-//!   exported as opaque file descriptors). On a Radeon 780M (RADV) a block's `vkAllocateMemory`
-//!   of a buffer object private to the process takes the reservation of the process's GPU
-//!   address space, which every submission also takes, for as long as the kernel fills its
-//!   pages: each 64 MiB block of the system heap held the scheduler's `vkQueueSubmit` 9 ms on a
-//!   quiet host, and up to 22 ms on one whose free memory lay in single pages; memory allocated
-//!   exportable is a buffer object of its own reservation, whose making held no submission. Such
-//!   memory costs each submission about 0.9 us more for each such block (`docs/FAST-PATHS.md`).
-//!   Every other block of buffers, of images and of a heap is allocated as before.
+//!   heap's own buffer, a copied host buffer's copy nor the in-place check's buffer of plain
+//!   pooled memory) are made with `VkExternalMemoryBufferCreateInfo` naming that handle type and
+//!   lie in blocks of their own, whose blocks of those memory types are allocated exportable
+//!   (`VkExportMemoryAllocateInfo`) as it, and as a dma-buf too where the device exports such
+//!   memory as one as well, each handle type compatible with the other
+//!   (`VUID-VkExportMemoryAllocateInfo-handleTypes-00656`), [`Memory::fd_handles`]; never
+//!   exported. Their buffers of addresses are made for those handle types, as a buffer bound in
+//!   such memory must name one (`VUID-vkBindBufferMemory-memory-02726`), and an image bound in it
+//!   names one its image format query takes for it (`VUID-vkBindImageMemory-memory-02728`,
+//!   [`BoundMemory::Blocks`]: `texture.rs`'s `alias_unbound`), and so starts `UNDEFINED`
+//!   (`VUID-VkImageCreateInfo-pNext-01443`) where over a plain block's buffer the device's linear
+//!   image starts `PREINITIALIZED`. So the buffers lie there only once the device's in-place
+//!   check of such blocks (`in_place.rs`'s `PagesClass::FdBlocks`) passed what a texture over one
+//!   takes that it takes over a plain block's (`in_place.rs`'s `fd_blocks_take`): from the check's
+//!   record as the device is made, else once its check answered, in plain blocks until then
+//!   (`WorkCounts::fd_blocks_awaited`) and where it refused them (`fd_blocks_refused`). A
+//!   two-plane texture's planes over such a buffer are read through the texel buffer, the
+//!   device's conversion image not made (`ycbcr_planes_images_kept_exportable_block`): the check
+//!   covers single-plane images alone. On a Radeon 780M (RADV) a block's `vkAllocateMemory` of a
+//!   buffer object private to the process takes the reservation of the process's GPU address
+//!   space, which every submission also takes, for as long as the kernel fills its pages: 64 MiB
+//!   blocks of the system heap held the scheduler's submissions about 9 ms each on a quiet host
+//!   and up to 56 ms on one whose free memory lay in single pages, where memory allocated
+//!   exportable as an opaque file descriptor is a buffer object of its own reservation, whose
+//!   making held none (`tests::reclaim_submit_bench`). Each such block held costs each
+//!   submission about 1 us (`docs/FAST-PATHS.md`). Every other block of buffers, of images and of
+//!   a heap is allocated as before.
 //!
 //! - **Blocks made ahead** (`memory/ready.rs`). Each pool the encodings and commits place their
 //!   own resources in ([`keep_room`]) gets a block made off the program's thread while it grows,

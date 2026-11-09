@@ -16,7 +16,12 @@
 //!   its textures taking the device's linear image made for that handle type, else the
 //!   `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch made for it, both made `UNDEFINED` as an image
 //!   that names a handle type is; unchecked where the device exports no such memory or only as a
-//!   buffer's dedicated allocation, to which no image is bound), fills a window of it with a
+//!   buffer's dedicated allocation, to which no image is bound; and a buffer of the runtime's own
+//!   in a block of the kind its buffers take where the device allocates their blocks exportable
+//!   (`memory.rs`'s `Holds::FdBuffers`), whatever this class's verdicts, which decide whether its
+//!   buffers lie there (`in_place.rs`'s `fd_blocks_take`), that declares those bytes unobserved
+//!   too, its textures taking the images a texture over such a buffer takes, made `UNDEFINED`;
+//!   unchecked where the device allocates no such blocks), fills a window of it with a
 //!   pattern, and
 //!   makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture takes
 //!   the image in place exactly as the product's would ([`checking`](crate::in_place::checking)
