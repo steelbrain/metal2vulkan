@@ -2030,9 +2030,12 @@ fn a_refused_band_draws_at_the_nearest_width() {
                 let routes = routed(&before, &lane.device.work_counts());
                 let ([_, announced, _, _, _], reasons) = announced_lines(&messages);
                 assert_eq!((routes, announced), ([0, 0, 1], 1), "{what}");
-                assert!(
-                    drawn.ids.chunks(4).any(|t| t[3] != 0),
-                    "{what}: drew nothing"
+                let pixels = drawn.ids.chunks(4).filter(|t| t[3] != 0).count();
+                assert!(pixels > 0, "{what}: drew nothing");
+                println!(
+                    "LINES-NEAREST {what}: {pixels} pixels at the nearest width {} (Metal's line \
+                     at width 0 through these centres: 23)",
+                    facts.nearest(0.0)
                 );
                 if facts.tessellates {
                     assert!(
