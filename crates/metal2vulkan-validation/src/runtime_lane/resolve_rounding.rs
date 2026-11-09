@@ -1363,8 +1363,9 @@ fn a_maps_form_pass_resolves_bgra8_as_announced() {
 /// it, resolves to the clear's codes: the bytes the device's clear of a 1x texture of the format
 /// stores (Metal's bytes, `renders.rs`' `COLOR_CLEARS`, where its conversion is Metal's, printed),
 /// as every sample holds the clear, which Metal's rule and the device's average give back,
-/// whatever form the device keeps the clear in. Where the passes announce
-/// `device-color-conversion`, the device converts the clear its own way, which may differ between
+/// whatever form the device keeps the clear in. Where the device announced
+/// `device-color-conversion` (once a device: these passes' or the earlier format's), the device
+/// converts the clear its own way, which may differ between
 /// its 1x and its 4x images (the Radeon 780M under RADV: a 1x clear of 0.214 stores `0x80`, the 4x
 /// one resolves to `0x7f`): there each channel of the resolve is one of the two codes nearest the
 /// clear's value, the sRGB curve's for a colour channel and the value itself for alpha.
@@ -1419,8 +1420,9 @@ fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
         messages.take_notices();
         clear(&single, None);
         clear(&msaa, Some(&resolved));
+        // A device announces each kind once: an earlier format's clear may have announced it.
         let notices = super::degrade_notices::counts(&messages.take_notices());
-        let converted = notices.contains_key(&Degradation::DeviceColorConversion);
+        let converted = (messages.taken_kinds()).contains(&Degradation::DeviceColorConversion);
         // The clear's value in codes, in the texel's byte order: the sRGB curve's for a colour
         // channel, alpha as it is.
         let encode = |v: f64| match v <= 0.0031308 {
