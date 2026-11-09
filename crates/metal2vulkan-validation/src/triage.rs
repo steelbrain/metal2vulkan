@@ -1892,6 +1892,12 @@ entry:
                 "the executors' depth-stencil state; classification creates no pipeline",
             ),
             (
+                "src/executor_contract/depth_range.rs",
+                "the executors' depth-range rule over a case's depth bytes and the device's \
+                 VK_EXT_depth_range_unrestricted; classification reads no depth and opens no \
+                 device",
+            ),
+            (
                 "src/executor_contract/render_target_array.rs",
                 "the executors' render target array length; classification draws no pass",
             ),

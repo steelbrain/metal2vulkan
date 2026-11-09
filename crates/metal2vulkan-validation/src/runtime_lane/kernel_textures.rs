@@ -17,12 +17,20 @@
 //! UNORM twin), the runtime's differences from Metal are the device's answers under the precision
 //! notes its executed stages record (`device-texel-conversion`, `device-sampling`,
 //! `native-half-conversion` and their kin): the case passes only where those stages record one,
-//! its differing words counted and printed with the notes.
+//! its differing words counted and printed with the notes. A case that gives a depth image a depth
+//! outside `[0, 1]` on a device without `VK_EXT_depth_range_unrestricted` is one the candidate
+//! does not run (`not_supported`, `ToolingRequirement::DepthOutsideUnitRange`): no such device
+//! holds the depth (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so the runtime clamps the upload
+//! and announces `restricted-depth-upload`, and the case passes where its run on a device of its
+//! own announces that and completes clean with an output of Metal's length, its differing words
+//! counted and printed (`read-a-cube-a-depth-slice-and-a-missing-volume`, whose `Depth32Float`
+//! array holds 1000.0 to 1111.0, on MoltenVK and ANV).
 //!
 //! A device whose pipeline creation compile needs storage textures' formats makes such states
 //! under stand-ins (`runtime::pipeline`'s creation): their query answers are held to the compile
 //! of their cases' own formats.
 
+use super::degrade_notices::counts;
 use super::{
     buffer_with, encode_case, in_shard, layer_reported_nothing, layer_reported_nothing_at_all,
     pipeline_state, public_case, public_cases, read_buffer, run_case, validated_device,
@@ -33,6 +41,7 @@ use crate::candidate::engine::{compute_shape, ENGINE_EXECUTOR_ABI};
 use crate::candidate::tests::engine_compute;
 use crate::case::{AuthoredCase, Stage};
 use crate::gpu::TEST_DEVICE;
+use crate::requirement::ToolingRequirement;
 use metal2vulkan::bind::{SamplerDescriptor, StatusReport};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::error::Feature;
@@ -44,7 +53,8 @@ use metal2vulkan::pipeline::{FunctionDescriptor, PrecisionNote};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan::Budget;
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, ComputeCommandEncoder, Device, Error, ExecutedPipeline,
+    Buffer, CommandBufferStatus, ComputeCommandEncoder, Degradation, Device, Error,
+    ExecutedPipeline,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -100,6 +110,61 @@ pub(super) fn fresh_candidate(
         .unwrap_or("an unnamed device")
         .to_owned();
     Ok((device, run.output, run.status))
+}
+
+/// Whether `why`, the candidate's answer for a case, is its typed refusal of a depth outside `[0, 1]`
+/// given to a depth image on a device without `VK_EXT_depth_range_unrestricted`
+/// (`ToolingRequirement::DepthOutsideUnitRange`).
+fn depth_range_refusal(why: &str) -> bool {
+    why.starts_with("not_supported")
+        && why.contains(&format!(
+            "tooling_requirement:{}",
+            ToolingRequirement::DepthOutsideUnitRange.as_str()
+        ))
+}
+
+/// `case`'s run on a device of its own, which clamps its depths outside `[0, 1]`: the number of
+/// its output's words that differ from Metal's, where the run completes with a clean execution
+/// report and an output of Metal's length, announces `restricted-depth-upload`, and the
+/// validation layer reports nothing; else what it did instead.
+fn clamped_run(messages: &Messages, case: &PublicCase) -> Result<usize, String> {
+    let cache = ScratchCache::new().unwrap();
+    let device = validated_device(TEST_DEVICE, messages, cache.path()).unwrap();
+    let _ = messages.take_notices();
+    let run = run_case(&device, case);
+    drop(device);
+    let announced = counts(&messages.take_notices());
+    let reported = messages.take();
+    let run = run.map_err(|why| format!("the clamped run: {why}"))?;
+    if !reported.is_empty() {
+        return Err(format!(
+            "the clamped run: the validation layer reported {reported:#?}"
+        ));
+    }
+    if run.report != StatusReport::default() {
+        return Err(format!(
+            "the clamped run's execution report is {:?}",
+            run.report
+        ));
+    }
+    if !announced.contains_key(&Degradation::RestrictedDepthUpload) {
+        return Err(format!(
+            "the clamped run announced no restricted-depth-upload: {announced:?}"
+        ));
+    }
+    if run.output.len() != case.metal_output.len() {
+        return Err(format!(
+            "the clamped run gave {} bytes, Metal {}",
+            run.output.len(),
+            case.metal_output.len()
+        ));
+    }
+    Ok(run
+        .output
+        .chunks(4)
+        .zip(case.metal_output.chunks(4))
+        .filter(|(r, m)| r != m)
+        .count())
 }
 
 /// The precision notes the stages `run` executed record, specialized ones included.
@@ -202,7 +267,7 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
     let leaked = messages.take();
     // Where the runtime is not Metal: the candidate afresh, then the runtime on a device of its
     // own.
-    let (mut as_candidate, mut native) = (Vec::new(), Vec::new());
+    let (mut as_candidate, mut native, mut clamped) = (Vec::new(), Vec::new(), Vec::new());
     for (name, case, output, notes) in differing {
         let (candidate_device, candidate, candidate_report) = match fresh_candidate(case) {
             Ok(run) => run,
@@ -223,6 +288,20 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
                      candidate holds no form of it here: {why}",
                     output.len().div_ceil(4)
                 ));
+                continue;
+            }
+            // The candidate holds no form of a case that gives a depth image a depth outside
+            // `[0, 1]` on this device: the runtime's clamp, announced (the module docs).
+            Err(why) if depth_range_refusal(&why) => {
+                match clamped_run(&messages, case) {
+                    Ok(words) => clamped.push(format!(
+                        "{name}: {words} of {} words differ from Metal's, its depths outside \
+                         [0, 1] clamped and announced; the candidate holds no form of it here: \
+                         {why}",
+                        case.metal_output.len().div_ceil(4)
+                    )),
+                    Err(e) => failed.push(format!("{name}: {e}")),
+                }
                 continue;
             }
             Err(why) => {
@@ -262,9 +341,11 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
     }
     eprintln!(
         "{label} on {device_name}: {matched} match Metal, {} match the fresh candidate \
-         ({ENGINE_EXECUTOR_ABI}), {} the device's under their notes, {} refused, {} failed, of {}",
+         ({ENGINE_EXECUTOR_ABI}), {} the device's under their notes, {} with their depths \
+         clamped, {} refused, {} failed, of {}",
         as_candidate.len(),
         native.len(),
+        clamped.len(),
         refused.len(),
         failed.len(),
         cases.len()
@@ -274,6 +355,9 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
     }
     for line in &native {
         eprintln!("the device's: {line}");
+    }
+    for line in &clamped {
+        eprintln!("clamped: {line}");
     }
     for why in &refused {
         eprintln!("refused: {why}");
