@@ -1362,6 +1362,51 @@ fn stencil_covers_the_samples_at_the_positions() {
     depths_quiet(lane, &messages);
 }
 
+/// A `Depth32Float` texture and a `Stencil8` one as one pass's two attachments at the custom
+/// positions (`dz_s8_custom4_separate`) each store what a `Depth32Float_Stencil8` texture's
+/// aspect stores there (`dsz_custom4_x`: the edge's samples left of the first column's middle
+/// 0.5 and 0x5a, the rest 1 and 0x11). No Metal probe ran this pair at custom positions; the
+/// expectation joins two measured answers: Metal tests and stores each aspect of separate
+/// textures in its own texture (`depth_stencil_scratch.rs`, whose combined scratch image is made
+/// for the positions), and a combined texture's aspects at these positions. A device that
+/// refuses the separate multisampled textures reports its refusal.
+#[test]
+fn separate_depth_and_stencil_take_the_positions() {
+    let (messages, _cache, lane) = depth_lane();
+    let device = lane.device.name().to_owned();
+    let name = "dz_s8_custom4_separate";
+    if !lane.located(4) {
+        eprintln!("{name} on {device}: no custom positions at 4");
+        depths_quiet(lane, &messages);
+        return;
+    }
+    let depth = lane.texture(PixelFormat::Depth32Float, 4, false);
+    let stencil = lane.texture(PixelFormat::Stencil8, 4, false);
+    let mut pass = DepthPass::new();
+    pass.positions = positions_of(&P4);
+    pass.depth = Some(depth.clone());
+    pass.stencil = Some(stencil.clone());
+    pass.plane = Plane::Edge;
+    match lane.run(&pass, |_| Ok(())) {
+        Ok(()) => {}
+        Err(Error::Unsupported(u)) => {
+            eprintln!("{name} on {device}: refused, {u:?}");
+            depths_quiet(lane, &messages);
+            return;
+        }
+        Err(error) => panic!("{name} on {device}: {error:?}"),
+    }
+    let covers = edge_covers(&P4);
+    let depths: Vec<f32> = covers.iter().map(|&c| if c { 0.5 } else { 1.0 }).collect();
+    assert_depths(&lane.depths(&depth, 4), &depths, 0.0, name);
+    let stencils: Vec<u8> = (covers.iter())
+        .map(|&c| if c { 0x5a } else { 0x11 })
+        .collect();
+    assert_eq!(lane.stencils(&stencil, 4), stencils, "{name} on {device}");
+    eprintln!("{name} on {device}: Metal's");
+    depths_quiet(lane, &messages);
+}
+
 /// A `Stencil8` texture alone keeps its samples across passes at other positions (Metal probe
 /// 11): loaded and not drawn, at Q4 (`s8_custom4_then_other_load`) and at the device's positions
 /// (`s8_custom4_then_default_load`), every sample is the one stored at P4; the edge drawn again at
