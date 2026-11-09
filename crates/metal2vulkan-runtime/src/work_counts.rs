@@ -5073,6 +5073,17 @@ pub struct WorkCounts {
     /// blocks of buffers whose `vkAllocateMemory` holds the process's submissions on RADV (the
     /// module docs of `memory.rs`, "Buffers in exportable blocks").
     pub plain_buffer_blocks_made: u64,
+    /// The blocks the program's host-visible buffers lie in (`memory.rs`'s `Holds::PageBuffers`)
+    /// made so far, pooled or dedicated, of pages the runtime mapped and imported by their
+    /// pointer, which a recovery imports again on the device's next generation, so that the
+    /// buffers there keep their bytes and `contents` pointers (the module docs of `memory.rs`,
+    /// "Buffers in the runtime's own pages"): 0 on a device that takes no such blocks (the memory
+    /// log names why), and until its submission check found a held import costs its
+    /// submissions nothing.
+    pub page_buffer_blocks_made: u64,
+    /// The blocks of those buffers made so far as any block of buffers: of a memory type the
+    /// device imports no such pages as, or where the system or the driver refused them.
+    pub page_buffer_blocks_plain: u64,
     /// The buffers of the runtime's own and the program's made so far in a plain block, not one
     /// allocated exportable, on a device that allocates such blocks, while the device's in-place
     /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): on its first run
@@ -8167,6 +8178,8 @@ impl Device {
             fd_buffer_blocks_made: fd_blocks.exportable,
             fd_buffer_blocks_plain: fd_blocks.plain,
             plain_buffer_blocks_made: fd_blocks.plain_buffers,
+            page_buffer_blocks_made: fd_blocks.pages,
+            page_buffer_blocks_plain: fd_blocks.pages_plain,
             image_blocks_made_ahead: ahead.images_ahead,
             image_blocks_made_in_place: ahead.images_in_place,
             blocks_ahead_waited_for: ahead.waited_for,

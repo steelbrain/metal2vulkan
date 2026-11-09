@@ -1469,12 +1469,14 @@ impl Device {
         // `placed_new_buffer`), asked as their making asks it but counting nothing.
         let exportable = lock(memory).fd_buffer_types.is_ok();
         let own = lock(memory).own_buffers(exportable && self.fd_blocks_taken());
+        // And whether its host-visible ones take blocks of its own pages.
+        let pages = lock(memory).page_blocks(self.fresh_pages_pay_now());
         crate::memory::keep_room(
             memory,
             shared.vk(),
             &shared.counts,
             (&shared.functions, &shared.queue_quiet),
-            (copies, own),
+            (copies, own, pages),
         );
     }
 
@@ -2209,6 +2211,20 @@ impl Device {
                 dma_buf_images,
             )
         };
+        // The program's host-visible buffers lie in blocks of pages the runtime maps and imports
+        // by their pointer, in the memory types the device imports such pages as, once its
+        // submission check found that a held import costs its submissions nothing (`memory.rs`'s
+        // "Buffers in the runtime's own pages").
+        let (page_types, page_unit) = match &host_import {
+            Ok(importer) => {
+                let unit = importer.page.max(importer.alignment);
+                // SAFETY: `raw` is the importer's device.
+                let types = unsafe { crate::fresh_pages::own_page_types(importer, &raw, unit) };
+                (types, unit)
+            }
+            Err(_) => (Err("the device imports no host pointer"), 1),
+        };
+        memory.page_buffer_blocks(&raw, page_types, page_unit)?;
         // How the device exports a buffer's memory as an opaque file descriptor, and as a dma-buf,
         // where it enables the extensions each needs and exports a buffer's memory so
         // (`exported_memory.rs`).

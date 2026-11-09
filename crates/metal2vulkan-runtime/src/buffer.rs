@@ -40,6 +40,7 @@ use super::host_ram::RamOnDevice;
 use super::host_residency::{Again, Residency};
 use super::memory::{
     BoundMemory, Holds, Mapped, MemoryClass, Placement, BLOCK_BYTES, FD_BLOCKS_HANDLE,
+    HOST_PAGES_HANDLE,
 };
 use super::program_objects::ProgramObject;
 use super::rebind::{ImportHold, Unexact};
@@ -2771,9 +2772,18 @@ impl Device {
         // The kind of block it lies in: one of the runtime's own lies where the device's own
         // buffers do, whose blocks may be exportable as an opaque file descriptor once the
         // device's check of them passed, so that its `VkBuffer` names that handle type there
-        // (`VUID-vkBindBufferMemory-memory-02726`; `memory.rs`'s `Holds::FdBuffers`); one whose
+        // (`VUID-vkBindBufferMemory-memory-02726`; `memory.rs`'s `Holds::FdBuffers`); a
+        // host-visible one in a block of pages the runtime mapped and imported, where the device
+        // takes such blocks for its class and its check found a held import costs its
+        // submissions nothing, so that its `VkBuffer` names host allocations
+        // (`VUID-vkBindBufferMemory-memory-02985`; `memory.rs`'s `Holds::PageBuffers`); one whose
         // maker declares its padding unobserved lies in a plain block.
         let holds = match of {
+            NewBufferOf::Runtime(_)
+                if lock(&shared.memory).page_buffers(class, self.fresh_pages_pay_now()) =>
+            {
+                Holds::PageBuffers
+            }
             NewBufferOf::Runtime(_) => {
                 let exportable = lock(&shared.memory).fd_buffer_types.is_ok();
                 let checked = exportable && self.fd_blocks_checked();
@@ -2782,15 +2792,20 @@ impl Device {
             NewBufferOf::Heap | NewBufferOf::Unobserved => Holds::Buffers,
             NewBufferOf::Check(holds) => holds,
         };
+        let handle = match holds {
+            Holds::FdBuffers => Some(FD_BLOCKS_HANDLE),
+            Holds::PageBuffers => Some(HOST_PAGES_HANDLE),
+            _ => None,
+        };
         let mut external =
-            vk::ExternalMemoryBufferCreateInfo::default().handle_types(FD_BLOCKS_HANDLE);
+            vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle.unwrap_or_default());
         // Its device address is its block's (`place_buffer_with`).
         let mut info = shared.sharing().buffer(
             vk::BufferCreateInfo::default()
                 .size(size)
                 .usage(usage(false)),
         );
-        if holds == Holds::FdBuffers {
+        if handle.is_some() {
             info = info.push_next(&mut external);
         }
         // A heap's own buffer lies where its textures can too, and is never parked. A long
@@ -3574,6 +3589,19 @@ impl Buffer {
                 lie: Lie::Fixed(fixed),
                 ..
             }) => fixed.pages.memory.placement.over_own_pages(),
+            Bytes::Own(_) | Bytes::Heap(_) => false,
+        }
+    }
+
+    /// Whether the buffer lies in a block of pages the runtime mapped and imported, among other
+    /// buffers (`memory.rs`'s `Holds::PageBuffers`): an image over its bytes is made for host
+    /// allocations, as over fresh pages, under their class's verdicts (`texture/route.rs`).
+    pub(super) fn in_page_block(&self) -> bool {
+        match &self.s().bytes {
+            Bytes::Own(OwnBytes {
+                lie: Lie::Fixed(fixed),
+                ..
+            }) => fixed.pages.memory.placement.in_page_block(),
             Bytes::Own(_) | Bytes::Heap(_) => false,
         }
     }
@@ -4619,7 +4647,7 @@ impl Buffer {
         let placement = &fixed.pages.memory.placement;
         let bound = lock(&from.memory).bound_memory(placement);
         let runtime_s = matches!(bound, BoundMemory::Own | BoundMemory::Blocks);
-        if !runtime_s && !placement.over_own_pages() {
+        if !runtime_s && !placement.over_own_pages() && !placement.in_page_block() {
             // Exportable memory, which another API imports (`exported_memory.rs`). A block of the
             // runtime's own buffers allocated exportable is never exported (`Holds::FdBuffers`).
             return Err(Left::Caller);
@@ -4672,10 +4700,31 @@ impl Buffer {
                 return Err(Left::Failed);
             }
             (raw, placement, Contents::Kept)
+        } else if placement.in_page_block() {
+            // A block of pages the runtime mapped and imported for the program's buffers
+            // (`memory.rs`'s `Holds::PageBuffers`): the same pages imported again, once for every
+            // buffer carried from the block, the buffer at its offset in them: the `contents`
+            // pointer and the bytes as they are.
+            let pages = lock(&from.memory).page_block_pages(placement);
+            let Some(pages) = pages else {
+                return Err(Left::Failed);
+            };
+            let Ok(Some((raw, placement))) = to.buffer_in_carried_pages(size, pages, placement)
+            else {
+                return Err(Left::Failed);
+            };
+            if to.address_space_for(at).place(at, length).is_err() {
+                let shared = to.shared();
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(shared.vk(), raw) };
+                lock(&shared.memory).free(shared.vk(), &placement);
+                return Err(Left::Failed);
+            }
+            (raw, placement, Contents::Kept)
         } else {
-            // Pooled host-visible memory, or a `Managed` buffer's host copy: its `contents`
-            // pointer is their mapping, which new memory cannot keep (the module docs of
-            // `device/carry.rs`).
+            // Pooled host-visible memory the device allocated, or a `Managed` buffer's host copy:
+            // its `contents` pointer is their mapping, which new memory cannot keep (the module
+            // docs of `device/carry.rs`).
             return Err(Left::Pooled);
         };
         let range_token = KeptToken::default();

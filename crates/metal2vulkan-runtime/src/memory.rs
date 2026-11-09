@@ -227,6 +227,24 @@ pub(super) enum MemoryClass {
     Memoryless,
 }
 
+/// The classes of buffers that may lie in blocks of [`Holds::PageBuffers`]: host-visible ones.
+const PAGE_CLASSES: [MemoryClass; 3] = [
+    MemoryClass::Shared,
+    MemoryClass::WriteCombined,
+    MemoryClass::Managed,
+];
+
+/// `class`'s bit in [`Memory`]'s classes of buffers in blocks of [`Holds::PageBuffers`]: none for
+/// a class that is not host-visible.
+fn page_class_bit(class: MemoryClass) -> u8 {
+    match class {
+        MemoryClass::Shared => 1,
+        MemoryClass::WriteCombined => 2,
+        MemoryClass::Managed => 4,
+        MemoryClass::Private | MemoryClass::Memoryless => 0,
+    }
+}
+
 /// What a block of the runtime's holds: buffers (a heap's bytes and every buffer of addresses
 /// among them), or images, never both. On an RTX 5080 a new texture's image bound into the block
 /// that held the running work's buffers, 1024 bytes past a buffer's, waited in
@@ -243,6 +261,10 @@ pub(super) enum MemoryClass {
 /// whose blocks of them in memory of a heap that is not device-local are allocated exportable as
 /// an opaque file descriptor ([`FD_BLOCKS_HANDLE`]), never exported (the module docs, "Buffers
 /// in exportable blocks").
+///
+/// A sixth, [`Holds::PageBuffers`], holds the program's host-visible buffers on a device that
+/// imports host pages at no cost to its submissions: blocks of pages the runtime maps and imports
+/// by their pointer (the module docs, "Buffers in the runtime's own pages").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Holds {
     Buffers,
@@ -257,23 +279,32 @@ pub(super) enum Holds {
     /// Its blocks of the memory types [`fd_buffer_types`] names are allocated so, its others as
     /// any block of buffers.
     FdBuffers,
+    /// The `Shared`, write-combined and `Managed` (with unified memory) buffers `buffer.rs`'s
+    /// `placed_new_buffer` makes for the program and for the runtime, on a device that takes such
+    /// blocks ([`Memory::page_buffer_blocks`]): each made with `VkExternalMemoryBufferCreateInfo`
+    /// naming host allocations, so that it may be bound in a block of pages the runtime mapped
+    /// and imported by their pointer (`VUID-vkBindBufferMemory-memory-02985`). Its blocks of the
+    /// memory types [`Memory::page_buffer_blocks`] names are made so, its others as any block of
+    /// buffers.
+    PageBuffers,
 }
 
 impl Holds {
     /// The kinds, in the order of the device's pools ([`Memory::pool`]).
-    const ALL: [Holds; 5] = [
+    const ALL: [Holds; 6] = [
         Holds::Buffers,
         Holds::Images,
         Holds::Exports,
         Holds::DmaBufs,
         Holds::FdBuffers,
+        Holds::PageBuffers,
     ];
 
     /// The handle type its blocks are allocated exportable as for another API's import; `None`
     /// for blocks never exported, [`Holds::FdBuffers`]' among them.
     fn handle(self) -> Option<vk::ExternalMemoryHandleTypeFlags> {
         match self {
-            Holds::Buffers | Holds::Images | Holds::FdBuffers => None,
+            Holds::Buffers | Holds::Images | Holds::FdBuffers | Holds::PageBuffers => None,
             Holds::Exports => Some(EXPORT_HANDLE),
             Holds::DmaBufs => Some(DMA_BUF_HANDLE),
         }
@@ -281,7 +312,7 @@ impl Holds {
 
     /// Whether its blocks hold buffers, and so may carry a buffer of addresses.
     fn buffers(self) -> bool {
-        matches!(self, Holds::Buffers | Holds::FdBuffers)
+        matches!(self, Holds::Buffers | Holds::FdBuffers | Holds::PageBuffers)
     }
 }
 
@@ -477,6 +508,12 @@ pub(super) const DMA_BUF_HANDLE: vk::ExternalMemoryHandleTypeFlags =
 /// image made for either handle type asks a dedicated allocation
 /// (`VkMemoryDedicatedRequirements`).
 pub(super) const FD_BLOCKS_HANDLE: vk::ExternalMemoryHandleTypeFlags = EXPORT_HANDLE;
+
+/// The handle type of the blocks of [`Holds::PageBuffers`]: host allocations, the pages the
+/// runtime maps and imports by their pointer, which every buffer and image bound in them names
+/// (`VUID-vkBindBufferMemory-memory-02985`, `VUID-vkBindImageMemory-memory-02989`).
+pub(super) const HOST_PAGES_HANDLE: vk::ExternalMemoryHandleTypeFlags =
+    vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
 
 /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` (`VK_EXT_zero_initialize_device_memory`), which
 /// `ash 0.38` predates.
@@ -897,6 +934,27 @@ impl<T> Pool<T> {
         Some(index)
     }
 
+    /// Place `[offset, offset + size)` of block `index` as given, whatever the block: a carried
+    /// buffer's range in the block of its pages imported again ([`place_carried`]). Whether the
+    /// range was free.
+    pub(super) fn claim(&mut self, index: usize, (offset, size): (u64, u64)) -> bool {
+        let Some(block) = self.blocks.get_mut(index).and_then(Option::as_mut) else {
+            return false;
+        };
+        let was_empty = block.empty();
+        if block.ranges.allocate_at(offset, size).is_err() {
+            return false;
+        }
+        block.emptied = None;
+        block.longest = None;
+        block.placed_to = block.placed_to.max(offset + size);
+        self.room = None;
+        if was_empty {
+            self.kept_bytes -= block.size;
+        }
+        true
+    }
+
     /// Forget every longest free range held, which the pool's alignment growing can move.
     fn forget_longest(&mut self) {
         for block in self.blocks.iter_mut().flatten() {
@@ -1288,6 +1346,13 @@ pub(super) struct Block {
     /// It was allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until
     /// written ([`Memory::zero_image_blocks`]).
     zeroed: bool,
+    /// Its memory is its `pages` imported, a block of [`Holds::PageBuffers`]: made so for its pool
+    /// (`BlockMaker::make_pages`), or carried ([`place_carried`]).
+    pooled_pages: bool,
+    /// It is a carried buffer's pages imported again on the device's next generation
+    /// ([`place_carried`]): the buffers carried from one block of the lost generation lie in it at
+    /// their offsets, and nothing else is placed in it, so it goes once they do.
+    carried: bool,
 }
 
 /// The external memory a placement's memory is, as an image bound in it names it
@@ -1386,7 +1451,8 @@ impl Block {
     /// (`VkMemoryDedicatedAllocateInfo`, which binds that buffer alone).
     fn reusable(&self) -> bool {
         !self.imported
-            && self.pages.is_none()
+            && !self.carried
+            && (self.pages.is_none() || self.pooled_pages)
             && self.view.is_none()
             && !self.exported.is_some_and(|exported| exported.dedicated)
     }
@@ -1395,11 +1461,12 @@ impl Block {
     /// went ([`FreeCause::Dedicated`]) that is an import of its own is counted as that import
     /// instead: the caller's host memory ([`import_host`]) or a buffer's fresh pages
     /// ([`import_own_pages`]), each a dedicated block of one placement. Any other cause stands:
-    /// a block freed at the device's teardown is counted there whatever it held.
+    /// a block freed at the device's teardown is counted there whatever it held, and a block of
+    /// [`Holds::PageBuffers`] as any block of buffers.
     fn cause(&self, given: FreeCause) -> FreeCause {
         match (given, self.imported, self.pages.is_some()) {
             (FreeCause::Dedicated, true, _) => FreeCause::HostImport,
-            (FreeCause::Dedicated, false, true) => FreeCause::OwnPages,
+            (FreeCause::Dedicated, false, true) if !self.pooled_pages => FreeCause::OwnPages,
             _ => given,
         }
     }
@@ -1516,8 +1583,11 @@ pub(super) struct Placement {
     /// asked for one ([`allocate_addressed`]) on a device that enables
     /// `bufferDeviceAddress`.
     pub(super) address: Option<u64>,
-    /// It lies in pages the runtime mapped and imported ([`import_own_pages`]).
+    /// It lies in pages the runtime mapped and imported for it alone ([`import_own_pages`]).
     own_pages: bool,
+    /// It lies in a block of [`Holds::PageBuffers`] that is pages the runtime mapped and imported
+    /// ([`BlockMaker::make_pages`], [`place_carried`]), with other placements.
+    pooled_pages: bool,
     /// It lies in an import of a read-only view of the caller's pages (`read_only_view.rs`).
     read_only_view: bool,
     /// It lies past its class's own memory types, in one it overflowed into where none of them
@@ -1558,6 +1628,7 @@ impl Placement {
             mapped: mapped.map(Mapped),
             address: None,
             own_pages: false,
+            pooled_pages: false,
             read_only_view: false,
             overflowed: false,
             fresh: false,
@@ -1591,6 +1662,7 @@ impl Placement {
             mapped: Some(mapped),
             address: None,
             own_pages: false,
+            pooled_pages: false,
             read_only_view: false,
             overflowed: false,
             fresh: false,
@@ -1624,6 +1696,7 @@ impl Placement {
             mapped: Some(Mapped(mapped)),
             address: None,
             own_pages: false,
+            pooled_pages: false,
             read_only_view: false,
             overflowed: false,
             fresh: false,
@@ -1671,6 +1744,15 @@ impl Placement {
     /// ([`import_own_pages`]), to which no image is bound (`fresh_pages.rs`).
     pub(super) fn over_own_pages(&self) -> bool {
         self.own_pages
+    }
+
+    /// Whether the placement lies in a block of [`Holds::PageBuffers`] that is pages the runtime
+    /// mapped and imported, among other placements ([`BlockMaker::make_pages`]): an image bound
+    /// there is made for host allocations, as over fresh pages (`fresh_pages.rs`), and a
+    /// buffer's carry to its device's next generation imports the pages again there
+    /// ([`place_carried`]).
+    pub(super) fn in_page_block(&self) -> bool {
+        self.pooled_pages
     }
 
     /// Whether the placement lies in an import of a read-only view of the caller's pages, which
@@ -1742,6 +1824,7 @@ impl Placement {
             mapped: self.mapped,
             address: self.address,
             own_pages: self.own_pages,
+            pooled_pages: self.pooled_pages,
             read_only_view: self.read_only_view,
             overflowed: self.overflowed,
             fresh: self.fresh,
@@ -1771,6 +1854,19 @@ pub(super) struct Memory {
     /// why none are ([`fd_buffer_types`]).
     pub(super) fd_buffer_types: Result<u32, &'static str>,
     fd_blocks: FdBlocks,
+    /// The memory types whose [`Holds::PageBuffers`] blocks are pages the runtime maps and
+    /// imports, as bits, or why there are none ([`Memory::page_buffer_blocks`]).
+    page_buffer_types: Result<u32, &'static str>,
+    /// What such a block's pages' length is a multiple of: the host's page and the device's
+    /// import alignment.
+    page_unit: u64,
+    /// The classes whose buffers lie in those blocks: `Shared`, `WriteCombined` and `Managed`, as
+    /// bits by [`page_class_bit`], those whose best memory type for a buffer made for host
+    /// allocations is among those types ([`Memory::page_buffer_blocks`]).
+    page_classes: u8,
+    /// As `address_types`, of a buffer of addresses made for [`HOST_PAGES_HANDLE`], which the
+    /// blocks of [`Holds::PageBuffers`] carry.
+    page_address_types: Option<u32>,
     /// The pools the runtime's encodings and commits place their own resources in, once asked
     /// ([`Memory::kept`], [`keep_room`]).
     kept: Option<Arc<[(Holds, u32)]>>,
@@ -1884,7 +1980,8 @@ impl AheadBlocks {
     }
 }
 
-/// The counts of the blocks of [`Holds::FdBuffers`] made so far, and of [`Holds::Buffers`].
+/// The counts of the blocks of [`Holds::FdBuffers`] made so far, of [`Holds::Buffers`] and of
+/// [`Holds::PageBuffers`].
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FdBlocks {
     /// Allocated exportable as an opaque file descriptor: of a memory type [`fd_buffer_types`]
@@ -1895,6 +1992,13 @@ pub(super) struct FdBlocks {
     pub(super) plain: u64,
     /// The blocks of [`Holds::Buffers`], pooled or dedicated: plain blocks of buffers.
     pub(super) plain_buffers: u64,
+    /// The blocks of [`Holds::PageBuffers`], pooled or dedicated, that are pages the runtime
+    /// mapped and imported ([`BlockMaker::make_pages`]); a carried one ([`place_carried`]) is not
+    /// counted.
+    pub(super) pages: u64,
+    /// Those allocated as any block of buffers: of a memory type it makes no such blocks of, or
+    /// where the system or the driver refused the pages.
+    pub(super) pages_plain: u64,
 }
 
 /// The counts of the blocks of the pool host copies place in ([`Memory::host_copy_pool`]).
@@ -1938,6 +2042,10 @@ impl Memory {
             fd_address_types: None,
             fd_buffer_types: Err("the device was not asked for exportable buffer memory"),
             fd_blocks: FdBlocks::default(),
+            page_buffer_types: Err("the device was not asked for imports of its own pages"),
+            page_unit: 1,
+            page_classes: 0,
+            page_address_types: None,
             kept: None,
             unified,
             buffer_families: families.clone(),
@@ -2008,6 +2116,73 @@ impl Memory {
         self.fd_buffer_types = types;
     }
 
+    /// Make the blocks of [`Holds::PageBuffers`] of the memory types `types` names (as bits) of
+    /// pages the runtime maps and imports by their pointer from now on, each a multiple of
+    /// `unit` bytes long, where it names any, else note why not (the memory log says which), as
+    /// the device is made: `buffer.rs`'s `placed_new_buffer` then makes its `Shared`,
+    /// write-combined and `Managed` buffers of a class whose best memory type for a buffer made for
+    /// host allocations is among them for that handle type and places them there, once the
+    /// device's check found that a held host-pointer import costs its submissions nothing
+    /// ([`Memory::page_buffers`]). Refused where the query of those buffers' memory types fails.
+    pub(super) fn page_buffer_blocks(
+        &mut self,
+        device: &ash::Device,
+        types: Result<u32, &'static str>,
+        unit: u64,
+    ) -> Result<(), Error> {
+        let host_visible = (self.types.iter().enumerate())
+            .filter(|(_, ty)| (ty.property_flags).contains(vk::MemoryPropertyFlags::HOST_VISIBLE))
+            .fold(0, |bits, (index, _)| bits | 1 << index);
+        let types = types.and_then(|types| match types & host_visible {
+            0 => Err("the device imports anonymous pages as no host-visible memory type"),
+            types => Ok(types),
+        });
+        let mut classes = 0;
+        if let Ok(types) = types {
+            let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
+            let buffers = buffer_types(device, usage(false), sharing, Some(HOST_PAGES_HANDLE))?;
+            for class in PAGE_CLASSES {
+                let best = candidates(&self.types, buffers, class, self.unified)
+                    .first()
+                    .copied();
+                if best.is_some_and(|best| types & 1 << best != 0) {
+                    classes |= page_class_bit(class);
+                }
+            }
+        }
+        if let Some(log) = &self.log {
+            log.line(match (types, classes) {
+                (Ok(types), 0) => format!(
+                    "the program's buffers lie in plain blocks: no class's best memory type for \
+                     them is among those of the runtime's own pages, {types:#x}"
+                ),
+                (Ok(types), classes) => format!(
+                    "the program's host-visible buffers (classes {classes:#x}) lie in blocks of \
+                     the runtime's own pages of memory types {types:#x} where a held import costs \
+                     the device's submissions nothing"
+                ),
+                (Err(why), _) => format!("the program's buffers lie in plain blocks: {why}"),
+            });
+        }
+        self.page_buffer_types = types;
+        self.page_unit = unit.max(1);
+        self.page_classes = classes;
+        Ok(())
+    }
+
+    /// Whether the buffers `buffer.rs`'s `placed_new_buffer` makes of `class` take blocks of
+    /// [`Holds::PageBuffers`] ([`Memory::page_buffer_blocks`]), where `pay` says the device's
+    /// check found a held host-pointer import costs its submissions nothing (`submit_check.rs`).
+    pub(super) fn page_buffers(&self, class: MemoryClass, pay: bool) -> bool {
+        pay && self.page_classes & page_class_bit(class) != 0
+    }
+
+    /// Whether the buffers of any class take blocks of [`Holds::PageBuffers`], as
+    /// [`Memory::page_buffers`].
+    pub(super) fn page_blocks(&self, pay: bool) -> bool {
+        pay && self.page_classes != 0
+    }
+
     /// The kind of block the buffers `buffer.rs`'s `placed_new_buffer` makes for the program and
     /// for the runtime take: [`Holds::FdBuffers`] where the device allocates any of them
     /// exportable ([`Memory::fd_buffer_blocks`]) and its check of such blocks passed (`checked`,
@@ -2026,7 +2201,8 @@ impl Memory {
         }
     }
 
-    /// The counts of the blocks of [`Holds::FdBuffers`] made so far, and of [`Holds::Buffers`].
+    /// The counts of the blocks of [`Holds::FdBuffers`] made so far, of [`Holds::Buffers`] and of
+    /// [`Holds::PageBuffers`].
     pub(super) fn fd_blocks(&self) -> FdBlocks {
         self.fd_blocks
     }
@@ -2391,26 +2567,33 @@ impl Memory {
     /// The memory types a buffer of addresses of a block that holds `holds` takes, as bits,
     /// asked once: `None` without `bufferDeviceAddress`, where blocks carry no buffer of
     /// addresses. Of [`Holds::FdBuffers`] on a device that allocates its blocks exportable, a
-    /// buffer made for their handle type ([`FD_BLOCKS_HANDLE`]).
+    /// buffer made for their handle type ([`FD_BLOCKS_HANDLE`]); of [`Holds::PageBuffers`] on one
+    /// that makes them of its own pages, for host allocations ([`HOST_PAGES_HANDLE`]).
     fn address_types(&mut self, device: &ash::Device, holds: Holds) -> Result<Option<u32>, Error> {
         if !self.device_address {
             return Ok(None);
         }
-        let fd = holds == Holds::FdBuffers && self.fd_buffer_types.is_ok();
-        let known = match fd {
-            true => self.fd_address_types,
-            false => self.address_types,
+        let handle = match holds {
+            Holds::FdBuffers if self.fd_buffer_types.is_ok() => Some(FD_BLOCKS_HANDLE),
+            Holds::PageBuffers if self.page_buffer_types.is_ok() => Some(HOST_PAGES_HANDLE),
+            _ => None,
         };
-        if let Some(types) = known {
+        let known = match handle {
+            Some(FD_BLOCKS_HANDLE) => &mut self.fd_address_types,
+            Some(_) => &mut self.page_address_types,
+            None => &mut self.address_types,
+        };
+        if let Some(types) = *known {
             return Ok(Some(types));
         }
         let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
-        let handle = fd.then_some(FD_BLOCKS_HANDLE);
         let types = buffer_types(device, usage(true), sharing, handle)?;
-        match fd {
-            true => self.fd_address_types = Some(types),
-            false => self.address_types = Some(types),
-        }
+        let known = match handle {
+            Some(FD_BLOCKS_HANDLE) => &mut self.fd_address_types,
+            Some(_) => &mut self.page_address_types,
+            None => &mut self.address_types,
+        };
+        *known = Some(types);
         Ok(Some(types))
     }
 
@@ -2495,6 +2678,14 @@ impl Memory {
                     "made a dedicated block of an fd-exportable buffer"
                 }
                 (true, Holds::FdBuffers) => "made a dedicated block of a buffer",
+                (false, Holds::PageBuffers) if block.pooled_pages => {
+                    "made a pooled block of buffers of the runtime's own pages"
+                }
+                (false, Holds::PageBuffers) => "made a pooled block of buffers",
+                (true, Holds::PageBuffers) if block.pooled_pages => {
+                    "made a dedicated block of a buffer of the runtime's own pages"
+                }
+                (true, Holds::PageBuffers) => "made a dedicated block of a buffer",
             };
             self.say_block(what, &block);
         }
@@ -2502,6 +2693,8 @@ impl Memory {
             Holds::FdBuffers if block.fd => self.fd_blocks.exportable += 1,
             Holds::FdBuffers => self.fd_blocks.plain += 1,
             Holds::Buffers => self.fd_blocks.plain_buffers += 1,
+            Holds::PageBuffers if block.pooled_pages => self.fd_blocks.pages += 1,
+            Holds::PageBuffers => self.fd_blocks.pages_plain += 1,
             Holds::Images | Holds::Exports | Holds::DmaBufs => {}
         }
         self.allocated += size;
@@ -2527,6 +2720,8 @@ impl Memory {
             block_bytes: self.block_bytes,
             host_visible,
             fd_types: self.fd_buffer_types.unwrap_or(0),
+            page_types: self.page_buffer_types.unwrap_or(0),
+            page_unit: self.page_unit,
             device_address: self.device_address,
             families: self.buffer_families.clone(),
             zero_images: self.zero_images,
@@ -2538,8 +2733,10 @@ impl Memory {
     /// those a buffer the runtime places takes (`buffer::usage(false)`, its address from a buffer
     /// of addresses, [`allocate_addressed`]), in the blocks of [`Holds::Buffers`] and, where the
     /// device allocates blocks of [`Holds::FdBuffers`] exportable, in those too, of a buffer made
-    /// for [`FD_BLOCKS_HANDLE`]; of images, the best `Private` type among those a color image of
-    /// optimal tiling takes, which every such image takes (the Vulkan specification's
+    /// for [`FD_BLOCKS_HANDLE`], and where the device makes blocks of [`Holds::PageBuffers`] of its
+    /// own pages, in those of `WriteCombined` and `Shared` memory that do, of a buffer made for
+    /// host allocations; of images, the best `Private` type among those a color image of optimal
+    /// tiling takes, which every such image takes (the Vulkan specification's
     /// `VkMemoryRequirements`).
     fn kept(&mut self, device: &ash::Device) -> Result<Arc<[(Holds, u32)]>, Error> {
         if let Some(kept) = &self.kept {
@@ -2563,6 +2760,14 @@ impl Memory {
             }
             None => 0,
         };
+        let page_buffers = match self.page_buffer_types {
+            Ok(_) if self.page_classes != 0 => {
+                let addresses =
+                    (self.address_types(device, Holds::PageBuffers)?).unwrap_or(u32::MAX);
+                buffer_types(device, usage(false), sharing, Some(HOST_PAGES_HANDLE))? & addresses
+            }
+            Ok(_) | Err(_) => 0,
+        };
         let images = color_image_types(device, sharing)?;
         let best = |bits: u32, class: MemoryClass| {
             candidates(&self.types, bits, class, self.unified)
@@ -2581,9 +2786,18 @@ impl Memory {
         let fd_pools = (classes.into_iter())
             .filter_map(|class| best(fd_buffers, class))
             .map(|type_index| (Holds::FdBuffers, type_index));
+        let page_classes = self.page_classes;
+        let page_pools = [MemoryClass::WriteCombined, MemoryClass::Shared]
+            .into_iter()
+            .filter(|&class| page_classes & page_class_bit(class) != 0)
+            .filter_map(|class| best(page_buffers, class))
+            .map(|type_index| (Holds::PageBuffers, type_index));
         let image_pool =
             best(images, MemoryClass::Private).map(|type_index| (Holds::Images, type_index));
-        for pool in buffer_pools.chain(fd_pools).chain(image_pool) {
+        let pools = (buffer_pools.chain(fd_pools))
+            .chain(page_pools)
+            .chain(image_pool);
+        for pool in pools {
             if !kept.contains(&pool) {
                 kept.push(pool);
             }
@@ -2624,7 +2838,8 @@ impl Memory {
                 .as_ref()
                 .filter(|_| addressed)
                 .map(|addresses| addresses.address + offset),
-            own_pages: payload.pages.is_some(),
+            own_pages: payload.pages.is_some() && !payload.pooled_pages,
+            pooled_pages: payload.pooled_pages,
             read_only_view: payload.view.is_some(),
             overflowed: false,
             fresh: false,
@@ -2654,7 +2869,11 @@ impl Memory {
         if payload.addresses.is_some() {
             return Ok(());
         }
-        let handle = payload.fd.then_some(FD_BLOCKS_HANDLE);
+        let handle = match (payload.fd, payload.pooled_pages) {
+            (true, _) => Some(FD_BLOCKS_HANDLE),
+            (false, true) => Some(HOST_PAGES_HANDLE),
+            (false, false) => None,
+        };
         let (raw, required) = address_buffer(device, payload.size, sharing, handle)?;
         if required > payload.size {
             // SAFETY: the buffer is unused.
@@ -2813,8 +3032,9 @@ impl Memory {
         after: Option<Box<dyn Send>>,
     ) -> Option<Box<dyn Send>> {
         self.freed_by[block.cause(cause) as usize] += 1;
-        // An import was never among the heap's blocks ([`Memory::add_import`]).
-        if !block.imported && block.pages.is_none() {
+        // An import was never among the heap's blocks ([`Memory::add_import`]); a block of the
+        // runtime's own pages for the program's buffers was ([`Memory::add_block`]).
+        if !block.imported && (block.pages.is_none() || block.pooled_pages) {
             self.left_heap(block.type_index, block.size);
         }
         // Freed on the free thread where it may be: no import of the caller's memory (a view of
@@ -2987,6 +3207,15 @@ impl Memory {
         (pool.payload(index)?.pages.as_ref()).map(Arc::clone)
     }
 
+    /// The pages `placement`'s block of [`Holds::PageBuffers`] is, where it is such pages
+    /// ([`Placement::in_page_block`]): what a buffer's carry to its device's next generation
+    /// imports again there ([`place_carried`]).
+    pub(super) fn page_block_pages(&self, placement: &Placement) -> Option<Arc<OwnPages>> {
+        let index = placement.block.filter(|_| placement.pooled_pages)?;
+        let pool = self.pool_ref(placement.holds, placement.type_index);
+        (pool.payload(index)?.pages.as_ref()).map(Arc::clone)
+    }
+
     /// Whether `placement` lies in device-local memory.
     pub(super) fn is_device_local(&self, placement: &Placement) -> bool {
         self.type_flags(placement.type_index)
@@ -3085,6 +3314,12 @@ struct BlockMaker {
     host_visible: u32,
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits.
     fd_types: u32,
+    /// The memory types whose [`Holds::PageBuffers`] blocks are pages the runtime maps and
+    /// imports, as bits ([`Memory::page_buffer_blocks`]).
+    page_types: u32,
+    /// What the length of such a block's pages is a multiple of: the host's page and the device's
+    /// import alignment.
+    page_unit: u64,
     /// As [`Memory`]'s.
     device_address: bool,
     /// The families its buffers of addresses are shared among: [`Memory`]'s buffers'.
@@ -3100,7 +3335,10 @@ impl BlockMaker {
     /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]), and exportable as
     /// the handle type of the exportable buffers it holds ([`Holds::handle`]), or as the runtime's
     /// own buffers' handle type ([`FD_BLOCKS_HANDLE`]) where it is a block of
-    /// [`Holds::FdBuffers`] of a memory type [`fd_buffer_types`] names.
+    /// [`Holds::FdBuffers`] of a memory type [`fd_buffer_types`] names. A block of
+    /// [`Holds::PageBuffers`] of a memory type [`Memory::page_buffer_blocks`] names is pages the
+    /// runtime maps and imports ([`BlockMaker::make_pages`]), allocated as any block of buffers
+    /// where the system or the driver refuses them.
     fn make(
         &self,
         device: &ash::Device,
@@ -3108,6 +3346,11 @@ impl BlockMaker {
         size: u64,
         addressed: Option<&Counters>,
     ) -> Result<Block, Error> {
+        if holds == Holds::PageBuffers && self.page_types & 1 << type_index != 0 {
+            if let Some(block) = self.make_pages(device, type_index, size, addressed)? {
+                return Ok(block);
+            }
+        }
         let zeroed = holds == Holds::Images && self.zero_images;
         let export = match holds.handle() {
             Some(handle) => Exportable::For(
@@ -3123,6 +3366,87 @@ impl BlockMaker {
             None => Exportable::No,
         };
         self.make_as(device, type_index, size, addressed, export, zeroed)
+    }
+
+    /// A block of [`Holds::PageBuffers`] of `size` bytes of memory type `type_index`: new
+    /// anonymous pages the runtime maps (`fresh_pages.rs`'s `OwnPages`), `size` rounded up to the
+    /// import's unit, imported by their pointer, its host address theirs, with a buffer of
+    /// addresses made for host allocations where `addressed` gives the counts of such buffers made
+    /// (`VUID-vkBindBufferMemory-memory-02985`). `None` where the system maps no such pages, the
+    /// buffer of addresses would need more bytes than they have, or the driver refuses their
+    /// import: the block is then made as any block of buffers ([`BlockMaker::make`]).
+    fn make_pages(
+        &self,
+        device: &ash::Device,
+        type_index: u32,
+        size: u64,
+        addressed: Option<&Counters>,
+    ) -> Result<Option<Block>, Error> {
+        let Some(pages) = (size.checked_next_multiple_of(self.page_unit)).and_then(OwnPages::map)
+        else {
+            return Ok(None);
+        };
+        let (pointer, length) = (pages.pointer(), pages.length());
+        let addresses = if addressed.is_some() && self.device_address {
+            let sharing = Sharing::new(&self.families);
+            let made = address_buffer(device, length, sharing, Some(HOST_PAGES_HANDLE))?;
+            if made.1 > length {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(device, made.0) };
+                return Ok(None);
+            }
+            Some(made)
+        } else {
+            None
+        };
+        let release_addresses = || {
+            if let Some((raw, _)) = addresses {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(device, raw) };
+            }
+        };
+        // SAFETY: the pages stay mapped until every block that imports them is freed (the block
+        // holds them), and their pointer and length are multiples of the import alignment, which
+        // the unit is; the type allows anonymous pages ([`Memory::page_buffer_blocks`]).
+        let imported =
+            unsafe { import_pointer(device, pointer, length, &[type_index], self.device_address) };
+        let Ok((memory, type_index)) = imported else {
+            release_addresses();
+            return Ok(None);
+        };
+        let addresses = match addresses {
+            // SAFETY: the memory was just imported with the device-address flag, of a type the
+            // buffer takes (`allocate_addressed`), and as long as it requires.
+            Some((raw, _)) => match unsafe { bind_addresses(device, raw, memory) } {
+                Ok(addresses) => {
+                    if let Some(counts) = addressed {
+                        counts.buffer_made(usage(true));
+                    }
+                    Some(addresses)
+                }
+                Err(error) => {
+                    // SAFETY: nothing uses the memory yet.
+                    unsafe { release::object(device, memory) };
+                    return Err(error);
+                }
+            },
+            None => None,
+        };
+        Ok(Some(Block {
+            memory,
+            size,
+            mapped: Some(Mapped(pointer)),
+            addresses,
+            imported: false,
+            pages: Some(Arc::new(pages)),
+            view: None,
+            type_index,
+            exported: None,
+            fd: false,
+            zeroed: false,
+            pooled_pages: true,
+            carried: false,
+        }))
     }
 
     /// [`make`](Self::make), its memory allocated exportable as `export` says, the dedicated
@@ -3237,6 +3561,8 @@ impl BlockMaker {
             },
             fd: matches!(export, Exportable::Fd),
             zeroed,
+            pooled_pages: false,
+            carried: false,
         })
     }
 }
@@ -3475,6 +3801,8 @@ pub(super) unsafe fn import_host(
         exported: None,
         fd: false,
         zeroed: false,
+        pooled_pages: false,
+        carried: false,
     };
     let host = pointer.as_ptr() as usize;
     let mut memory = lock(memory);
@@ -3512,10 +3840,108 @@ pub(super) fn import_own_pages(
         exported: None,
         fd: false,
         zeroed: false,
+        pooled_pages: false,
+        carried: false,
     };
     let mut memory = lock(memory);
     memory.say_block("imported fresh pages for a buffer", &block);
     Ok(memory.add_import(block, type_index, size))
+}
+
+/// The placement of a buffer carried from a block of [`Holds::PageBuffers`] of the device's lost
+/// generation (`device/carry.rs`): `[offset, offset + size)` of `pages`, that block's, imported
+/// here as memory of type `type_index` once for every buffer carried from it, in a block of its
+/// own in `memory`'s pool of that kind, whose host address is the pages' (so the buffer's
+/// `contents` pointer and bytes are as they were), with the block's device address of `offset`
+/// where `addressed` gives the counts of buffers of addresses made. Nothing else is placed in
+/// that block, and it goes once the buffers carried there do (`Block::carried`): the lost
+/// generation's buffers left in the pages keep their ranges there. The import is made with
+/// `memory`'s lock released. Refused with the driver's failure, and where the range was taken
+/// already (an invariant: each range of the lost block is one buffer's).
+pub(super) fn place_carried(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    (pages, type_index): (Arc<OwnPages>, u32),
+    (offset, size): (u64, u64),
+    addressed: Option<&Counters>,
+) -> Result<Placement, Error> {
+    let pool = (Holds::PageBuffers, type_index);
+    let carried_in = |memory: &Memory| {
+        let pool = memory.pool_ref(pool.0, pool.1);
+        (pool.blocks.iter().enumerate()).find_map(|(index, block)| {
+            let block = block.as_ref()?;
+            let theirs = block.payload.carried
+                && (block.payload.pages.as_ref()).is_some_and(|own| Arc::ptr_eq(own, &pages));
+            theirs.then_some(index)
+        })
+    };
+    let found = carried_in(&lock(memory));
+    let index = match found {
+        Some(index) => index,
+        None => {
+            let device_address = lock(memory).device_address;
+            let (pointer, length) = (pages.pointer(), pages.length());
+            // SAFETY: the pages stay mapped until every block that imports them is freed (the
+            // block holds them), and their pointer and length are multiples of the import
+            // alignment, as they were where the lost generation imported them as this type.
+            let (raw, type_index) =
+                unsafe { import_pointer(device, pointer, length, &[type_index], device_address) }
+                    .map_err(|failure| match failure {
+                    ImportFailure::Vulkan(error) => vulkan(error),
+                    ImportFailure::NoMemoryType => Error::OutOfMemory(MemoryKind::Device),
+                })?;
+            let block = Block {
+                memory: raw,
+                size: length,
+                mapped: Some(Mapped(pointer)),
+                addresses: None,
+                imported: false,
+                pages: Some(Arc::clone(&pages)),
+                view: None,
+                type_index,
+                exported: None,
+                fd: false,
+                zeroed: false,
+                pooled_pages: true,
+                carried: true,
+            };
+            let mut guard = lock(memory);
+            match carried_in(&guard) {
+                // Another carry imported them meanwhile: this import, never added, goes.
+                Some(index) => {
+                    drop(guard);
+                    // SAFETY: nothing is placed in the block, and no command reads it.
+                    unsafe { block.release(device) };
+                    index
+                }
+                None => {
+                    guard.say_block("imported a carried buffer's pages again", &block);
+                    guard.add_block(pool, block, length, true, 0)
+                }
+            }
+        }
+    };
+    let mut guard = lock(memory);
+    if !guard.pool(pool.0, pool.1).claim(index, (offset, size)) {
+        // An empty block of carried pages goes with the refusal.
+        let of = guard.pool(pool.0, pool.1);
+        let empty = (of.blocks.get(index))
+            .is_some_and(|block| block.as_ref().is_some_and(PoolBlock::empty));
+        if let Some(block) = empty.then(|| of.take(index)).flatten() {
+            // SAFETY: nothing is placed in the block, and no command reads it.
+            drop(unsafe { guard.let_go(device, block, FreeCause::Dedicated, None) });
+        }
+        return Err(internal("a carried buffer's range of its pages is taken"));
+    }
+    if let Some(counts) = addressed {
+        if let Err(error) = guard.address_block(device, pool, index, counts) {
+            drop(guard.release_range(device, pool, index, offset, size, None));
+            return Err(error);
+        }
+    }
+    let placement = guard.placement(pool, index, offset, size, addressed.is_some());
+    guard.say_placement("placed a carried buffer", &placement, None);
+    Ok(placement)
 }
 
 /// The memory of `size` bytes of host memory at `pointer`, imported as the first of `types` the
@@ -3909,11 +4335,14 @@ pub(super) fn keep_none(memory: &Mutex<Memory>, device: &ash::Device) {
 /// ended. The kept empty blocks past their quiet period go here too, once a second at most
 /// ([`Memory::sweep_stale`]).
 ///
-/// `own` is the kind of block the runtime's own buffers take now ([`Memory::own_buffers`]). Its
-/// pools keep room first, so that a device near its count of allocations
-/// (`maxMemoryAllocationCount`) keeps it where those buffers go before anywhere else; the pools
-/// of [`Holds::FdBuffers`] keep none while those buffers lie in plain blocks (until the device's
-/// in-place check answered, or where it refused such blocks). No block is made here while the
+/// `own` is the kind of block the runtime's own buffers take now ([`Memory::own_buffers`]), and
+/// `pages` whether its host-visible ones take blocks of [`Holds::PageBuffers`]
+/// ([`Memory::page_buffers`]). Their pools keep room first, so that a device near its count of
+/// allocations (`maxMemoryAllocationCount`) keeps it where those buffers go before anywhere else;
+/// the pools of [`Holds::FdBuffers`] keep none while those buffers lie in plain blocks (until the
+/// device's in-place check answered, or where it refused such blocks), nor those of
+/// [`Holds::PageBuffers`] while they do (until the device's submission check answered, or where
+/// it found held imports cost its submissions). No block is made here while the
 /// device's allocations are within the margin of its `maxMemoryAllocationCount` the runtime's
 /// work ahead leaves to the objects (`allocations.rs`'s `Allocations::room_ahead`).
 pub(super) fn keep_room(
@@ -3921,7 +4350,7 @@ pub(super) fn keep_room(
     device: &ash::Device,
     counts: &Arc<Counters>,
     (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
-    (copies, own): (impl FnOnce() -> bool, Holds),
+    (copies, own, pages): (impl FnOnce() -> bool, Holds, bool),
 ) {
     ready_ahead(memory, device, (functions, quiet), copies);
     let (kept, maker) = {
@@ -3932,9 +4361,12 @@ pub(super) fn keep_room(
         };
         (kept, memory.maker())
     };
-    // The pools in that order, read in place: a creation call allocates nothing for them.
-    let first = kept.iter().filter(|&&(holds, _)| holds == own);
-    let rest = (kept.iter()).filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers);
+    // The pools in that order, read in place: a creation call allocates nothing for them. The
+    // blocks of the runtime's own pages come first where its buffers take them now, else not at all.
+    let page = |holds: Holds| holds == Holds::PageBuffers;
+    let first = (kept.iter()).filter(|&&(holds, _)| holds == own || (page(holds) && pages));
+    let rest = (kept.iter())
+        .filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers && !page(holds));
     let room = maker.block_bytes / 2;
     for &pool in first.chain(rest) {
         let addressed = pool.0.buffers().then_some(&**counts);

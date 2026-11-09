@@ -130,8 +130,9 @@ impl Device {
     /// The route of a texture of Metal `usage` (as the image is planned for it) and `levels` over
     /// `texels`, `past` where they run past the buffer's length (the module docs): the shadow for
     /// a tiled texture of more than one level, whatever holds the bytes. Over host pages (a no-copy
-    /// buffer's, or a no-copy heap's buffer's, imported by their pointer or as dma-bufs; or fresh
-    /// pages the runtime imported for a long buffer of its own, `fresh_pages.rs`): a device copy
+    /// buffer's, or a no-copy heap's buffer's, imported by their pointer or as dma-bufs; fresh
+    /// pages the runtime imported for a long buffer of its own, `fresh_pages.rs`; or a block of
+    /// pages it imported for the program's buffers, `memory.rs`'s `Holds::PageBuffers`): a device copy
     /// where one serves; else the shadow where the bytes were detached; else as the device's
     /// policy, the texture's usage and the device's check of the pages' class for each access take
     /// it (`in_place.rs`), asking the verdicts (a pending one starts the check): over a copied host
@@ -166,7 +167,12 @@ impl Device {
             },
             Some(CallerMemory::HostPages) if texels.buffer.over_dma_buf() => PagesClass::DmaBuf,
             Some(CallerMemory::HostPages) => PagesClass::Pointer,
-            None if texels.buffer.in_fresh_pages() => PagesClass::Fresh,
+            // Fresh pages the runtime imported, or a block of pages it imported for the program's
+            // buffers (`memory.rs`'s `Holds::PageBuffers`): the same memory, its image made for
+            // host allocations.
+            None if texels.buffer.in_fresh_pages() || texels.buffer.in_page_block() => {
+                PagesClass::Fresh
+            }
             _ => {
                 // Whether an image may hold the texels: none where their rows (or slices) lie
                 // with the buffer's bytes between them, unless the buffer declares those bytes

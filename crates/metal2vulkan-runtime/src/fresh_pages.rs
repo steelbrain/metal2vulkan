@@ -53,6 +53,7 @@
 use super::buffer::usage;
 use super::device::lock;
 use super::error::{vulkan, Error};
+use super::host_memory::Importer;
 use super::memory::{self, MemoryClass, Placement, BLOCK_BYTES};
 use crate::release;
 use crate::Device;
@@ -75,9 +76,10 @@ pub(super) fn takes_fresh_pages(size: u64, class: MemoryClass) -> bool {
     host_visible && size > FRESH_PAGES_PAST && cfg!(unix)
 }
 
-/// Anonymous private pages the runtime mapped for a buffer of its own, read-write and zero, and
-/// unmapped as this goes: after the memory imported from them is freed (`memory.rs`'s `Block`),
-/// on every generation of the device that imported them (`device/carry.rs`).
+/// Anonymous private pages the runtime mapped for a buffer of its own, or for a block of the
+/// program's buffers (`memory.rs`'s `Holds::PageBuffers`), read-write and zero, and unmapped as
+/// this goes: after the memory imported from them is freed (`memory.rs`'s `Block`), on every
+/// generation of the device that imported them (`device/carry.rs`).
 #[derive(Debug)]
 pub(crate) struct OwnPages {
     pointer: NonNull<u8>,
@@ -94,7 +96,7 @@ impl OwnPages {
     /// `length` bytes of new anonymous private pages, read-write, at a host page; `None` where
     /// the system maps none.
     #[cfg(unix)]
-    fn map(length: u64) -> Option<OwnPages> {
+    pub(super) fn map(length: u64) -> Option<OwnPages> {
         let bytes = usize::try_from(length).ok()?;
         // SAFETY: a new private anonymous mapping, at an address the kernel picks.
         let pointer = unsafe {
@@ -116,7 +118,7 @@ impl OwnPages {
 
     /// No pages are mapped on this system.
     #[cfg(not(unix))]
-    fn map(_length: u64) -> Option<OwnPages> {
+    pub(super) fn map(_length: u64) -> Option<OwnPages> {
         None
     }
 
@@ -139,6 +141,30 @@ impl Drop for OwnPages {
         unsafe {
             libc::munmap(self.pointer.as_ptr().cast(), self.length as usize);
         }
+    }
+}
+
+/// The memory types `device` imports new anonymous pages the runtime maps as, as bits, asked of
+/// `unit` bytes of them (`vkGetMemoryHostPointerPropertiesEXT`), unmapped after: where the blocks
+/// of the program's host-visible buffers may be such pages (`memory.rs`'s `Holds::PageBuffers`).
+/// Else why not: the system maps no such pages, or the driver answers none.
+///
+/// # Safety
+///
+/// `device` is `importer`'s device, and `unit` a multiple of its import alignment.
+pub(super) unsafe fn own_page_types(
+    importer: &Importer,
+    device: &ash::Device,
+    unit: u64,
+) -> Result<u32, &'static str> {
+    let Some(pages) = OwnPages::map(unit) else {
+        return Err("the system maps no anonymous pages for them");
+    };
+    // SAFETY: the caller's; the pages are host memory of this process at a host page, which the
+    // import alignment divides.
+    match unsafe { importer.memory_types(device, pages.pointer()) } {
+        Ok(0) | Err(_) => Err("the device's driver imports anonymous pages as no memory type"),
+        Ok(types) => Ok(types),
     }
 }
 
@@ -226,6 +252,73 @@ impl Device {
             return Err(vulkan(error));
         }
         shared.counts.fresh_page_buffer_made(placement.size());
+        Ok(Some((raw, placement)))
+    }
+
+    /// A `VkBuffer` of `size` bytes, made for host allocations as the program's buffers in a
+    /// block of the runtime's own pages are (`memory.rs`'s `Holds::PageBuffers`), bound at `lost`'s
+    /// offset in `pages`: the block of the device's lost generation that `lost`, the placement of
+    /// a buffer its recovery carries here, lies in, imported here once for every buffer carried
+    /// from it (`memory::place_carried`). The buffer and its placement, its bytes and host address
+    /// as they were. `None` where the buffer here takes another memory type, more bytes or
+    /// another alignment than its placement has. Refused where the buffer, the import or the
+    /// bind fails.
+    pub(super) fn buffer_in_carried_pages(
+        &self,
+        size: u64,
+        pages: Arc<OwnPages>,
+        lost: &Placement,
+    ) -> Result<Option<(vk::Buffer, Placement)>, Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let mut external = vk::ExternalMemoryBufferCreateInfo::default()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
+        // Its device address is its block's, as there (`buffer.rs`'s `placed_new_buffer`).
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(usage(false))
+                .push_next(&mut external),
+        );
+        // SAFETY: the device is live and `info` and its chain valid.
+        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+        shared.counts.buffer_made(info.usage);
+        // SAFETY: `raw` is a live buffer of this device.
+        let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
+        let (type_index, offset, placed) = (lost.type_index(), lost.offset, lost.size());
+        let fits = requirements.memory_type_bits & 1 << type_index != 0
+            && requirements.size <= placed
+            && offset % requirements.alignment.max(1) == 0;
+        let addressed = lost.address.is_some().then_some(&*shared.counts);
+        let placed = match fits {
+            true => memory::place_carried(
+                &shared.memory,
+                raw_device,
+                (pages, type_index),
+                (offset, placed),
+                addressed,
+            )
+            .map(Some),
+            false => Ok(None),
+        };
+        let placement = match placed {
+            Ok(Some(placement)) => placement,
+            refused => {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(raw_device, raw) };
+                return refused.map(|_| None);
+            }
+        };
+        // SAFETY: the placement is the pages' memory at the buffer's offset in them, at least the
+        // buffer's size, of a type it takes and at its alignment; the buffer is unbound.
+        if let Err(error) = unsafe {
+            crate::creation::bind_buffer(raw_device, raw, placement.memory, placement.offset)
+        } {
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, raw) };
+            lock(&shared.memory).free(raw_device, &placement);
+            return Err(vulkan(error));
+        }
         Ok(Some((raw, placement)))
     }
 }
