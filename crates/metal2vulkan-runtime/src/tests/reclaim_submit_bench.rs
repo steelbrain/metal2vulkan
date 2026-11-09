@@ -55,8 +55,7 @@
 //! system heap, as a plain allocation or exportable as a dma-buf or an opaque file descriptor,
 //! and bind three buffers in it, each made for that handle
 //! type where the memory is exportable (`VUID-vkBindBufferMemory-memory-02726`). For
-//! [`TWO_QUEUE_ROUNDS`] rounds, a queue the device reserved for the caller fills the first
-//! buffer [`LONG_FILLS`] times, and a millisecond later a command queue's `VkQueue` (lent,
+//! [`TWO_QUEUE_ROUNDS`] rounds, a second queue fills the first buffer [`LONG_FILLS`] times, and a millisecond later a command queue's `VkQueue` (lent,
 //! `CommandQueue::with_vk_queue`) copies [`COPY_BYTES`] from the second into the third, each
 //! waited for by its fence: printed, the fills' and the copies' times from submission to their
 //! fence, and the rounds whose copy completed while the fills ran. Copies held behind the fills
@@ -144,7 +143,7 @@ const FACT_FORMATS: [vk::Format; 6] = [
     vk::Format::A2B10G10R10_UNORM_PACK32,
     vk::Format::R16G16B16A16_SFLOAT,
 ];
-/// The two-queue arms' allocation, the bytes of its first buffer, which the reserved queue
+/// The two-queue arms' allocation, the bytes of its first buffer, which the second queue
 /// fills, the fills in each of its command buffers, and the rounds.
 const TWO_QUEUE_BYTES: u64 = 128 * MIB;
 const LONG_BYTES: u64 = 96 * MIB;
@@ -681,6 +680,7 @@ fn two_queues(label: &str, export: Option<Handle>) {
             ..ShaderCacheOptions::default()
         },
         reserved_queues: 1,
+        extra_queues: vec![vk::QueueFlags::COMPUTE],
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -689,8 +689,15 @@ fn two_queues(label: &str, export: Option<Handle>) {
     let lent_family = unsafe { queue.with_vk_queue(|_, _, family| family) };
     // SAFETY: the handles are used while the device lives.
     let raw = unsafe { device.raw() };
-    let Some(&reserved) = raw.reserved_queues.first() else {
-        eprintln!("RECLAIM-SUBMIT {label}: the device reserved no queue: not run");
+    // The second queue: one the device reserved for the caller, else a compute queue it made for
+    // the caller beside its own (a Radeon 780M's graphics family has one queue, which the round
+    // robin takes); the buffers it uses are the caller's, each used by one family alone.
+    let reserved =
+        (raw.reserved_queues.first()).map(|queue| ("reserved", queue.family, queue.queue));
+    let extra =
+        (raw.extra_queues.first()).map(|queue| ("extra compute", queue.family, queue.queue));
+    let Some((kind, second_family, second)) = reserved.or(extra) else {
+        eprintln!("RECLAIM-SUBMIT {label}: the device made no second queue: not run");
         return;
     };
     let vk_device = raw.device;
@@ -703,7 +710,7 @@ fn two_queues(label: &str, export: Option<Handle>) {
             | vk::MemoryPropertyFlags::PROTECTED,
     );
     let memory = allocate(&device, index, TWO_QUEUE_BYTES, export);
-    // The first buffer the reserved queue's family alone uses, the other two the lent queue's.
+    // The first buffer the second queue's family alone uses, the other two the lent queue's.
     let regions = [
         (0, LONG_BYTES, U::TRANSFER_DST),
         (LONG_BYTES, COPY_BYTES, U::TRANSFER_SRC),
@@ -736,7 +743,7 @@ fn two_queues(label: &str, export: Option<Handle>) {
             let info = vk::CommandPoolCreateInfo::default().queue_family_index(family);
             vk_device.create_command_pool(&info, None).unwrap()
         };
-        let pools = [pool(reserved.family), pool(lent_family)];
+        let pools = [pool(second_family), pool(lent_family)];
         let record = |pool, commands: &dyn Fn(vk::CommandBuffer)| {
             let info = vk::CommandBufferAllocateInfo::default()
                 .command_pool(pool)
@@ -771,7 +778,7 @@ fn two_queues(label: &str, export: Option<Handle>) {
             let long_buffers = [long];
             let submit = vk::SubmitInfo::default().command_buffers(&long_buffers);
             let (long_at, long_began) = (monotonic(), Instant::now());
-            (vk_device.queue_submit(reserved.queue, &[submit], fences[0])).unwrap();
+            (vk_device.queue_submit(second, &[submit], fences[0])).unwrap();
             std::thread::sleep(Duration::from_millis(1));
             let short_buffers = [short];
             let submit = vk::SubmitInfo::default().command_buffers(&short_buffers);
@@ -799,12 +806,12 @@ fn two_queues(label: &str, export: Option<Handle>) {
     let (long_median, _, long_slowest, _) = spread(&long_times, SLOWEST);
     let (median, p99, slowest, slow) = spread(&short_times, SLOWEST);
     eprintln!(
-        "RECLAIM-SUBMIT {} {label}: reserved queue of family {}, lent queue of family {}; {} \
+        "RECLAIM-SUBMIT {} {label}: {kind} queue of family {}, lent queue of family {}; {} \
          rounds; fills ms median {long_median:.3}, slowest {long_slowest:.3}; copies ms median \
          {median:.3}, p99 {p99:.3}, slowest {slowest:.3}; copies completed while the fills ran \
          {overlapped}",
         device.name(),
-        reserved.family,
+        second_family,
         lent_family,
         short_times.len(),
     );
