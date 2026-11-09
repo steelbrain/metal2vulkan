@@ -22,7 +22,11 @@
 //!   `A8_UNORM` go through a buffer, which the validation layer holds them to
 //!   (`VUID-vkCmdCopyImage-srcImage-01548`).
 //! - [`mipmaps_through_a_view_are_the_formats`]: `generate_mipmaps` of the view writes the levels a
-//!   plain `A8Unorm` texture of the same bytes takes.
+//!   plain `A8Unorm` texture of the same bytes takes, each the device's filter of the level above
+//!   (`device-filtered-mipmaps`): a texel the box of four texels above it averages to, or, off a
+//!   code, one of the two codes around that average, as Vulkan's conversion to a normalized code
+//!   lets the device take either ([`box_filtered`]). Which of the two may differ between the
+//!   formats (RADV on the RX 550 rounds `R8_UNORM`'s ties up and `A8_UNORM`'s down).
 
 use super::degrade_notices::on_device;
 use super::Messages;
@@ -540,6 +544,24 @@ fn levels(queue: &CommandQueue, texture: &Texture) -> Vec<Vec<u8>> {
     out
 }
 
+/// Whether `level`, a level of one-byte codes, is the box filter of `above`, the level twice its
+/// side: each texel is the average of the four texels above it where that is a code, else one of
+/// the two codes around it.
+fn box_filtered(above: &[u8], level: &[u8]) -> bool {
+    let side = (above.len() as f64).sqrt() as usize;
+    let half = side / 2;
+    level.len() == half * half
+        && (0..half * half).all(|i| {
+            let (x, y) = (2 * (i % half), 2 * (i / half));
+            let sum: u32 = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
+                .iter()
+                .map(|&(x, y)| u32::from(above[y * side + x]))
+                .sum();
+            // `4 * code` within four of the sum: below one code of the average.
+            (4 * u32::from(level[i])).abs_diff(sum) < 4
+        })
+}
+
 /// `generate_mipmaps` of `texture` in a command buffer that completes.
 fn mipmaps(queue: &CommandQueue, texture: &Texture) {
     let command_buffer = queue.command_buffer().unwrap();
@@ -572,8 +594,26 @@ fn mipmaps_through_a_view_are_the_formats() {
         mipmaps(&queue, &view);
         mipmaps(&queue, &plain);
         let (through, expected) = (levels(&queue, &base), levels(&queue, &plain));
+        assert_eq!(through.len(), expected.len(), "the view's levels");
+        for (what, chain) in [
+            ("through the view", &through),
+            ("of the plain texture", &expected),
+        ] {
+            let mut above = codes();
+            for (level, got) in (1..).zip(chain) {
+                assert!(
+                    box_filtered(&above, got),
+                    "mipmaps {what}: level {level}: {got:?} of {above:?}"
+                );
+                above.clone_from(got);
+            }
+        }
+        let apart: usize = (through.iter().zip(&expected))
+            .map(|(a, b)| a.iter().zip(b).filter(|(a, b)| a != b).count())
+            .sum();
         println!(
-            "READ-THROUGH on {}: mipmaps through the view: {} of {} levels equal",
+            "READ-THROUGH on {}: mipmaps through the view: {} of {} levels equal the plain \
+             texture's, {apart} texels apart",
             device.name(),
             through
                 .iter()
@@ -582,7 +622,6 @@ fn mipmaps_through_a_view_are_the_formats() {
                 .count(),
             expected.len()
         );
-        assert_eq!(through, expected, "the view's mipmaps differ");
         messages.take_notices();
     });
 }
