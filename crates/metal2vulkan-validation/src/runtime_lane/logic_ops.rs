@@ -12,6 +12,15 @@
 //! Metal converts the colors, and a float attachment's against the same draw without the
 //! operation. Copy and no-op draw on every device; the others where the device has `logicOp`,
 //! and are refused naming it elsewhere (MoltenVK).
+//!
+//! Where the device converts a color its own way, the operation takes the device's code: a drawn
+//! channel's where the pipeline's fragment stage records `PrecisionNote::DeviceColorConversion`,
+//! and a cleared channel's where the device announces `device-color-conversion` for the clears
+//! (Vulkan lets a device store either code nearest a normalized value). There each channel holds
+//! the operation of either code nearest the drawn value and either code nearest the cleared one.
+//! Measured on the Radeon 780M (RADV PHOENIX), whose pipelines into `RGB10A2Unorm` record the
+//! note: the drawn green 562.65 stores 562 (Metal 563) with and without the operation, and the
+//! cleared blue 613.8 stores 613 (Metal 614).
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
@@ -21,11 +30,16 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::error::{Capability, Feature, Needs, PrivateRenderField};
 use metal2vulkan::metal::{BlendFactor, PixelFormat, PrimitiveType, TextureUsage};
-use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, PrecisionNote, RenderPipelineDescriptor, StageSource,
+};
+use metal2vulkan::vk;
+use metal2vulkan::Budget;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ClearColor, CommandQueue, Device, Error, Library, LoadAction, PipelineOptions, Region,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction, TextureDescriptor,
+    ClearColor, CommandQueue, Degradation, Device, Error, Library, LoadAction, PipelineOptions,
+    Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction,
+    TextureDescriptor,
 };
 
 /// The target's side.
@@ -117,6 +131,53 @@ fn operate(raw: u64, s: u32, d: u32, bits: u32) -> u32 {
     r & ((1u64 << bits) as u32 - 1)
 }
 
+/// The codes a channel of `bits` (two's complement where `signed`) may hold for `x`: Metal's
+/// ([`code`]), or, where the device converts it its own way (`either`), either code nearest the
+/// scaled value.
+fn codes(x: f64, bits: u32, signed: bool, either: bool) -> Vec<u32> {
+    if !either {
+        return vec![code(x, bits, signed)];
+    }
+    let mask = (1u64 << bits) as u32 - 1;
+    let scaled = match signed {
+        true => x.clamp(-1.0, 1.0) * f64::from((1u32 << (bits - 1)) - 1),
+        false => x.clamp(0.0, 1.0) * f64::from(mask),
+    };
+    let mut both: Vec<u32> = [scaled.floor(), scaled.ceil()]
+        .iter()
+        .map(|&c| (c as i32) as u32 & mask)
+        .collect();
+    both.dedup();
+    both
+}
+
+/// Whether `got` is a texel Metal's rule allows in normalized format `pf` under operation `raw`:
+/// each channel the operation of a drawn code and a stored one, each Metal's or, where the device
+/// converts it its own way (`drawn_either`, `cleared_either`), either code nearest its value.
+fn allowed(
+    pf: PixelFormat,
+    raw: u64,
+    drawn: [f32; 4],
+    got: &[u8],
+    (drawn_either, cleared_either): (bool, bool),
+) -> bool {
+    let (channels, bytes) = layout(pf).expect("a normalized format");
+    let mut word = 0u64;
+    for (i, &b) in got.iter().take(bytes).enumerate() {
+        word |= u64::from(b) << (8 * i);
+    }
+    let mut shift = 0;
+    channels.iter().all(|&(bits, signed, channel)| {
+        let held = ((word >> shift) & ((1u64 << bits) - 1)) as u32;
+        shift += bits;
+        let sources = codes(f64::from(drawn[channel]), bits, signed, drawn_either);
+        let stored = codes(CLEARED[channel], bits, signed, cleared_either);
+        sources
+            .iter()
+            .any(|&s| stored.iter().any(|&d| operate(raw, s, d, bits) == held))
+    })
+}
+
 /// The bytes Metal stores in a texel of normalized format `pf` under operation `raw`.
 fn expected(pf: PixelFormat, raw: u64, drawn: [f32; 4]) -> Vec<u8> {
     let (channels, bytes) = layout(pf).expect("a normalized format");
@@ -165,6 +226,38 @@ impl Lane {
         blended: bool,
         raw: Option<u64>,
     ) -> Result<RenderPipelineState, Error> {
+        self.device.new_render_pipeline_state(
+            &self.descriptor(pf, blended, raw),
+            &PipelineOptions::default(),
+        )
+    }
+
+    /// Whether [`Lane::pipeline`]'s fragment stage records `PrecisionNote::DeviceColorConversion`,
+    /// as the device's compile layer compiles it: the device converts the drawn color its own way.
+    fn converts(&self, pf: PixelFormat, blended: bool, raw: u64) -> bool {
+        let compiled = self
+            .device
+            .compile_device()
+            .compile_render_pipeline(
+                &self.descriptor(pf, blended, Some(raw)),
+                &Budget::standard(),
+            )
+            .unwrap();
+        compiled.stages.iter().any(|stage| {
+            stage.stage == vk::ShaderStage::FRAGMENT
+                && stage
+                    .precision_notes
+                    .contains(&PrecisionNote::DeviceColorConversion)
+        })
+    }
+
+    /// [`Lane::pipeline`]'s descriptor.
+    fn descriptor(
+        &self,
+        pf: PixelFormat,
+        blended: bool,
+        raw: Option<u64>,
+    ) -> RenderPipelineDescriptor {
         let mut d = RenderPipelineDescriptor::new(self.function("a8r_vertex"));
         d.fragment = Some(self.function("a8r_fill"));
         let mut a = ColorAttachmentDescriptor::new(pf);
@@ -180,13 +273,17 @@ impl Lane {
             d.private.logic_operation_enabled = true;
             d.private.logic_operation = raw;
         }
-        self.device
-            .new_render_pipeline_state(&d, &PipelineOptions::default())
+        d
     }
 
-    /// One pass into a `pf` target cleared to [`CLEARED`], drawing `color` through `pipeline`:
-    /// the first texel's bytes.
-    fn draw(&self, pf: PixelFormat, pipeline: &RenderPipelineState, color: [f32; 4]) -> Vec<u8> {
+    /// One pass into a `pf` target cleared to [`CLEARED`], drawing `color` through `pipeline`
+    /// where one is given: the first texel's bytes.
+    fn draw(
+        &self,
+        pf: PixelFormat,
+        pipeline: Option<&RenderPipelineState>,
+        color: [f32; 4],
+    ) -> Vec<u8> {
         let texel = match pf {
             PixelFormat::RGBA16Float => 8,
             PixelFormat::R16Unorm => 2,
@@ -206,10 +303,12 @@ impl Lane {
         a.store_action = StoreAction::Store;
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut e = command_buffer.render_command_encoder(&pass).unwrap();
-        e.set_render_pipeline_state(pipeline).unwrap();
-        e.set_fragment_buffer(Some(&color), 0, 0).unwrap();
-        e.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
-            .unwrap();
+        if let Some(pipeline) = pipeline {
+            e.set_render_pipeline_state(pipeline).unwrap();
+            e.set_fragment_buffer(Some(&color), 0, 0).unwrap();
+            e.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                .unwrap();
+        }
         e.end_encoding().unwrap();
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
@@ -232,7 +331,10 @@ impl Lane {
 /// Every operation (raw 0 to 16, 16 taken as its low four bits) into each format of [`FORMATS`],
 /// blended by one and one and not: a normalized target stores Metal's operation of the codes, a
 /// float one the draw without the operation (the module docs). On a device without `logicOp`,
-/// copy and no-op draw so, and every other operation is refused naming the feature.
+/// copy and no-op draw so, and every other operation is refused naming the feature. Where the
+/// device converts a drawn color (the pipeline's note) or the clears (their announcement, taken
+/// from a pass of each normalized format's clear alone, before any pipeline is made) its own way,
+/// that channel's code is either one nearest its value (the module docs).
 #[test]
 fn the_logic_operation_stores_metal_s_codes() {
     let messages = Messages::default();
@@ -240,7 +342,17 @@ fn the_logic_operation_stores_metal_s_codes() {
     let lane = Lane::new(&messages, &cache);
     let name = lane.device.name().to_owned();
     let has = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+    messages.take_notices();
+    for pf in FORMATS.into_iter().filter(|&pf| layout(pf).is_some()) {
+        lane.draw(pf, None, DRAWN);
+    }
+    messages.take_notices();
+    let cleared_either = messages
+        .taken_kinds()
+        .contains(&Degradation::DeviceColorConversion);
     let (mut wrong, mut checked, mut refused) = (Vec::new(), 0usize, 0usize);
+    // The draws whose texel is not Metal's, each where the device converts its own way.
+    let (mut theirs, mut noted) = (0usize, 0usize);
     for pf in FORMATS {
         let drawn = match pf {
             PixelFormat::RGBA8Snorm => DRAWN_SIGNED,
@@ -252,7 +364,7 @@ fn the_logic_operation_stores_metal_s_codes() {
             // and lavapipe blends no snorm format).
             let without = float.then(|| {
                 let plain = lane.pipeline(pf, blended, None).unwrap();
-                lane.draw(pf, &plain, drawn)
+                lane.draw(pf, Some(&plain), drawn)
             });
             for raw in 0..=16u64 {
                 let blendless = matches!(raw & 15, 2 | 4);
@@ -285,17 +397,27 @@ fn the_logic_operation_stores_metal_s_codes() {
                     }
                     Err(e) => panic!("{name}: {pf:?} blended {blended} operation {raw}: {e}"),
                 };
-                let got = lane.draw(pf, &pipeline, drawn);
+                let got = lane.draw(pf, Some(&pipeline), drawn);
                 let want = match &without {
                     Some(without) => without.clone(),
                     None => expected(pf, raw, drawn),
                 };
                 checked += 1;
-                if got != want {
-                    wrong.push(format!(
-                        "{pf:?} blended {blended} operation {raw}: {got:02x?}, Metal {want:02x?}"
-                    ));
+                if got == want {
+                    continue;
                 }
+                let drawn_either = !float && lane.converts(pf, blended, raw);
+                noted += usize::from(drawn_either);
+                let either = (drawn_either, cleared_either);
+                if !float && allowed(pf, raw, drawn, &got, either) {
+                    theirs += 1;
+                    continue;
+                }
+                wrong.push(format!(
+                    "{pf:?} blended {blended} operation {raw}: {got:02x?}, Metal {want:02x?} \
+                     (drawn color noted converted {drawn_either}, clears announced \
+                     {cleared_either})"
+                ));
             }
         }
     }
@@ -305,7 +427,11 @@ fn the_logic_operation_stores_metal_s_codes() {
         wrong.len(),
         wrong.join("\n")
     );
-    eprintln!("{name}: {checked} logic-operated draws store Metal's texels, {refused} refused");
+    eprintln!(
+        "{name}: {checked} logic-operated draws store Metal's texels or the device's conversion's \
+         ({theirs} the device's: {noted} of them through a pipeline noted DeviceColorConversion, \
+         clears announced {cleared_either}), {refused} refused"
+    );
     drop(lane);
     layer_reported_nothing_at_all(&messages);
 }
