@@ -519,6 +519,43 @@ fn imports_dma_buf(device: &Device) -> Option<bool> {
     }
 }
 
+/// Whether `device` makes a heap texture over dma-buf pages an image over a dma-buf of its own
+/// pages: it imports dma-bufs (RADV) and lists `VK_EXT_image_drm_format_modifier` and
+/// `VK_EXT_queue_family_foreign`, which the runtime enables beside the imports. Where it imports
+/// dma-bufs but lists not both (RADV on the RX 550, POLARIS12), such a texture is a shadow of the
+/// heap's bytes, counted as a fallback and announced (`shadowed-texture`, naming the two); where
+/// it imports the pointer, no texture takes either route.
+fn makes_dma_buf_images(device: &Device) -> bool {
+    if imports_dma_buf(device) != Some(true) {
+        return false;
+    }
+    // SAFETY: only an instance-level query of the device's physical device, while it lives.
+    let raw = unsafe { device.raw() };
+    // SAFETY: a physical device of the instance.
+    let listed = unsafe {
+        raw.instance
+            .enumerate_device_extension_properties(raw.physical_device)
+    }
+    .expect("the device's extensions");
+    let lists = |name: &std::ffi::CStr| {
+        listed
+            .iter()
+            .any(|extension| extension.extension_name_as_c_str() == Ok(name))
+    };
+    let names = [
+        ash::ext::image_drm_format_modifier::NAME,
+        ash::ext::queue_family_foreign::NAME,
+    ];
+    let listed: Vec<_> = names.into_iter().filter(|name| lists(name)).collect();
+    if listed.len() < names.len() {
+        eprintln!(
+            "DMA-BUF-IMAGES on {}: lists {listed:?} of {names:?}: heap textures are shadows",
+            device.name()
+        );
+    }
+    listed.len() == names.len()
+}
+
 /// The device's counts of chunks imported and of sparse buffers assembled so far.
 fn dma_buf_counts(device: &Device) -> (u64, u64) {
     let counts = device.work_counts();
@@ -1267,7 +1304,7 @@ fn the_source_runs_with_no_runtime_lock_held() {
         drop(texture);
         drop(buffer);
         // A heap over other pages, and a texture placed in it: the heap's call, and the texture
-        // image's (RADV).
+        // image's where the device makes one (else it is a shadow).
         let heap_size = 1 << 20;
         let heap_ram = Memfd::new(heap_size);
         let heap_view = heap_ram.view(&[(0, heap_size)]);
@@ -1291,7 +1328,8 @@ fn the_source_runs_with_no_runtime_lock_held() {
         placed.resource_options = shared();
         let counted = image_counts(device);
         let texture = heap.new_texture_at_offset(&placed, 0).unwrap();
-        check_images(TEST, device, counted, 1, 0);
+        let image = makes_dma_buf_images(device);
+        check_images(TEST, device, counted, u64::from(image), u64::from(!image));
         drop(texture);
         drop(heap);
         // A rebind of a buffer over private memory onto the view.
@@ -1628,9 +1666,9 @@ fn image_counts(device: &Device) -> (u64, u64) {
 }
 
 /// Check what making textures over dma-buf pages counted since `before`: `images` images and
-/// `fallbacks` fallbacks where the device imports dma-bufs (RADV, whose list holds
-/// `VK_EXT_image_drm_format_modifier` and `VK_EXT_queue_family_foreign`); none where it imports
-/// the pointer (NVIDIA, lavapipe), whose heap textures are images bound to the pointer's import.
+/// `fallbacks` fallbacks where the device imports dma-bufs (RADV; the caller's counts follow
+/// [`makes_dma_buf_images`]); none where it imports the pointer (NVIDIA, lavapipe), whose heap
+/// textures are images bound to the pointer's import.
 fn check_images(test: &str, device: &Device, before: (u64, u64), images: u64, fallbacks: u64) {
     let now = image_counts(device);
     let counted = (now.0 - before.0, now.1 - before.1);
@@ -2118,11 +2156,24 @@ fn a_heap_texture_over_dma_buf_pages_takes_its_shadow_where_the_source_fails() {
             .collect();
         match imports_dma_buf(&device) {
             Some(true) => {
-                assert_eq!(*answered.lock().unwrap(), 2, "{TEST}: the source's calls");
+                // The source is asked for the texture only where the device would make its
+                // image; else the shadow names the extensions it lacks.
+                let image = makes_dma_buf_images(&device);
+                let calls = if image { 2 } else { 1 };
+                assert_eq!(
+                    *answered.lock().unwrap(),
+                    calls,
+                    "{TEST}: the source's calls"
+                );
                 assert_eq!(notices.len(), 1, "{TEST}: {notices:?}");
                 let reason = &notices[0].reason;
+                let why = if image {
+                    "no dma-buf for a texture"
+                } else {
+                    "VK_EXT_image_drm_format_modifier"
+                };
                 assert!(
-                    reason.contains("dma-buf") && reason.contains("no dma-buf for a texture"),
+                    reason.contains("dma-buf") && reason.contains(why),
                     "{TEST}: {reason}"
                 );
                 eprintln!("{TEST}: on {}: shadowed-texture: {reason}", device.name());
@@ -2163,12 +2214,13 @@ fn heap_over(device: &Device, ram: &Memfd, view: &View, calls: &Calls) -> Heap {
 /// reads the CPU's bytes at its offset and its GPU fill lands at the file's offsets. The heap
 /// places a texture Metal may keep losslessly compressed (a 64 x 64 `RGBA8Unorm` texture only
 /// read, `heap-texture-lossless-layout`), which a heap over pages imported by their pointer binds
-/// as a linear image to its memory: where the heap's pages are imported as dma-bufs (RADV), the
-/// texture is an image of the driver's `DRM_FORMAT_MOD_LINEAR` layout at its offset, over a
-/// dma-buf of its own pages, counted, the source asked once for it; a blit's write into it reads
-/// back, and lands in the heap's pages at the texture's offset (rows 256 bytes apart, the driver's
-/// pitch for the image). Elsewhere the pointer is imported, nothing is counted or asked, and the
-/// write reads back too.
+/// as a linear image to its memory: where the heap's pages are imported as dma-bufs and the device
+/// makes such images ([`makes_dma_buf_images`]), the texture is an image of the driver's
+/// `DRM_FORMAT_MOD_LINEAR` layout at its offset, over a dma-buf of its own pages, counted, the
+/// source asked once for it; a blit's write into it reads back, and lands in the heap's pages at
+/// the texture's offset (rows 256 bytes apart, the driver's pitch for the image). Where it makes
+/// none, the texture is a shadow of the heap's bytes, counted as a fallback, the source not asked.
+/// Elsewhere the pointer is imported, nothing is counted or asked, and the write reads back too.
 #[test]
 fn a_no_copy_heap_s_texture_over_dma_buf_pages_is_an_image_over_its_own_pages() {
     const TEST: &str = "dma-buf heap texture";
@@ -2205,10 +2257,19 @@ fn a_no_copy_heap_s_texture_over_dma_buf_pages_is_an_image_over_its_own_pages() 
         let asked_before = calls.lock().unwrap().len();
         let counted = image_counts(device);
         let texture = heap.new_texture_at_offset(&descriptor, offset).unwrap();
-        check_images(TEST, device, counted, 1, 0);
+        let image = makes_dma_buf_images(device);
+        check_images(TEST, device, counted, u64::from(image), u64::from(!image));
         let asked = calls.lock().unwrap()[asked_before..].to_vec();
         let texels = (256, 256, 64);
-        check_texture_request(TEST, device, &asked, view.at, offset as usize, texels, true);
+        check_texture_request(
+            TEST,
+            device,
+            &asked,
+            view.at,
+            offset as usize,
+            texels,
+            image,
+        );
         let bytes = (4 * extent.0 * extent.1) as usize;
         let written = counting(bytes, 71);
         blit_into(&queue, &texture, extent, 4, &written);
@@ -2219,7 +2280,7 @@ fn a_no_copy_heap_s_texture_over_dma_buf_pages_is_an_image_over_its_own_pages() 
         let at = 2 * page + offset as usize;
         let file = ram.whole.read(at..at + bytes);
         match imports_dma_buf(device) {
-            Some(true) => assert!(file == written, "{TEST}: the heap's pages"),
+            Some(true) if image => assert!(file == written, "{TEST}: the heap's pages"),
             _ => eprintln!(
                 "{TEST}: on {}: the heap's pages hold the texels row by row: {}",
                 device.name(),
@@ -2234,9 +2295,11 @@ fn a_no_copy_heap_s_texture_over_dma_buf_pages_is_an_image_over_its_own_pages() 
 /// A rebind of bytes over dma-buf pages to other such pages: a no-copy buffer's texture, a shadow
 /// of the bytes, copies the new pages' texels, the new source asked once for the bytes alone,
 /// nothing counted; a no-copy heap's texture is made again as an image over a dma-buf of its own
-/// new pages (RADV), counted, the new source asked once for the bytes and once for the texture.
-/// Each then reads the new pages' bytes, and a blit's write through it lands there, the old pages
-/// keeping theirs. Elsewhere the textures are made again as before, nothing counted or asked.
+/// new pages where the device makes such images ([`makes_dma_buf_images`]), counted, the new source
+/// asked once for the bytes and once for the texture (a shadow's, once for the bytes, nothing
+/// counted). Each then reads the new pages' bytes, and a blit's write through it lands there (an
+/// image's in the new pages, the old pages keeping theirs). Elsewhere the textures are made again
+/// as before, nothing counted or asked.
 #[test]
 fn a_rebind_makes_textures_over_dma_buf_pages_again_over_the_new_pages() {
     const TEST: &str = "dma-buf texture rebind";
@@ -2247,6 +2310,7 @@ fn a_rebind_makes_textures_over_dma_buf_pages_again_over_the_new_pages() {
         let page = host_page();
         let queue = device.new_command_queue().unwrap();
         let radv = imports_dma_buf(device) == Some(true);
+        let image = makes_dma_buf_images(device);
         // A no-copy buffer's texture.
         let length = 2 * page;
         let ram = Memfd::new(8 * page);
@@ -2316,9 +2380,9 @@ fn a_rebind_makes_textures_over_dma_buf_pages_again_over_the_new_pages() {
             )
         }
         .unwrap();
-        check_images(TEST, device, counted, 1, 0);
+        check_images(TEST, device, counted, u64::from(image), 0);
         let asked = calls.lock().unwrap().len();
-        let expected = if radv { 2 } else { 0 };
+        let expected = usize::from(radv) + usize::from(image);
         assert_eq!(asked, expected, "{TEST}: the heap's new source's calls");
         let texels = counting(heap_bytes, 131);
         blit_into(&queue, &texture, extent, 4, &texels);
@@ -2326,7 +2390,7 @@ fn a_rebind_makes_textures_over_dma_buf_pages_again_over_the_new_pages() {
             blit_texels(&queue, &texture, extent, 4) == texels,
             "{TEST}: the heap's texture over the new pages"
         );
-        if radv {
+        if image {
             assert!(
                 ram.whole.read(heap_size..heap_size + heap_bytes) == texels,
                 "{TEST}: the heap's new pages"
