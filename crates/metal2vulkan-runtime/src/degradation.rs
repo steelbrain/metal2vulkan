@@ -2229,10 +2229,10 @@ degradations! {
         /// waits on), and where its new `VkDevice` could not be made (the device then answers as
         /// a lost one).
         DeviceRecovered = "device-recovered", Performance,
-            "the events, `Private` buffers and buffers in fresh pages made before it go on, a \
-             `Private` buffer's contents lost (it reads zero); the other objects made before it \
-             are refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait \
-             for it";
+            "the events, uses of guest RAM, no-copy buffers, `Private` buffers and buffers in \
+             fresh pages made before it go on, a `Private` buffer's contents lost (it reads \
+             zero); the other objects made before it are refused (`MadeBeforeRecovery`), where \
+             Metal's go on; the calls during it wait for it";
         /// Apple's private device properties the device has no answer for
         /// (`private_properties.rs`): no document describes them and nothing the device reports
         /// maps to them. Announced once, when `Device::private_properties` is first read; the

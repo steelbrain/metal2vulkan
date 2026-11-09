@@ -472,6 +472,14 @@ impl Device {
     /// a wait in it for that command buffer returns at once, as Metal's does. A refused call never
     /// runs it.
     ///
+    /// Where the device's recovery makes it a new `VkDevice` (`Degradation::DeviceRecovered`), the
+    /// buffer goes on there, as Metal's goes on across its GPU's recovery: made again over the
+    /// same pages, as this call or its last rebind made it (the caller's gate, resolver and
+    /// dma-buf source asked again), its `contents` pointer and its bytes as they were. Its
+    /// deallocator then runs at its release once no `VkDevice`'s import of the pages is left. A
+    /// buffer detached at the recovery stays the lost device's, refused where it meets the new one
+    /// (`RuntimeGap::MadeBeforeRecovery`).
+    ///
     /// The pages are imported here, as Metal wires them when it makes the buffer: the GPU uses
     /// the pages mapped at the pointer now, and memory the device cannot import is refused here,
     /// as Metal answers nil. The import costs work per page here (on macOS about 11 to 20 ms per

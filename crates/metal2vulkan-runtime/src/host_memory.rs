@@ -150,7 +150,10 @@ pub struct HostMemory {
 /// other paths. Asked at most once per object, as a no-copy buffer or heap is made over the
 /// pages, and once at each rebind of either to new pages (but for bytes moved in their page under
 /// a texture, which take a copy without asking), on the calling thread, holding no lock of the
-/// runtime's, before the import gate ([`ImportGate`]);
+/// runtime's, before the import gate ([`ImportGate`]); and once again for a buffer at each
+/// recovery of its device, which makes it again over the same pages on the new `VkDevice`
+/// (`Degradation::DeviceRecovered`), on the thread that recovers, before the new device serves,
+/// so it makes no call on the device;
 /// only on a device that uses a RAM
 /// ([`Device::use_host_ram`](crate::Device::use_host_ram)), and only where the object would import
 /// the pages itself (not one that lies in a live import of the same bytes, nor one whose GPU
@@ -171,7 +174,10 @@ pub type RunResolver = Arc<dyn Fn(u64, u64) -> Option<Vec<Range<u64>>> + Send + 
 /// runtime asks the kernel whether the process may write the pages (Linux): pages it refuses are a
 /// copy whatever their permission, and a copy of pages the process maps read-only drops the GPU's
 /// writes, as Metal drops them. Called on the
-/// thread that makes the buffer, heap or rebind, holding no lock of the runtime's. Not asked for a
+/// thread that makes the buffer, heap or rebind, holding no lock of the runtime's; asked again for
+/// a buffer at each recovery of its device, which makes it again over the same pages on the new
+/// `VkDevice` (`Degradation::DeviceRecovered`), on the thread that recovers, before the new device
+/// serves, so it makes no call on the device. Not asked for a
 /// buffer or rebind that lies in a live import or copy (one made over the same bytes), nor where
 /// the device refused the import before it (no host-pointer import, an import alignment the range
 /// cannot meet), nor for memory whose GPU writes Metal's private option bit 24 drops, nor for a
@@ -518,7 +524,8 @@ pub type Deallocator = Box<dyn FnOnce(NonNull<u8>, u64) + Send + 'static>;
 
 /// What keeps the caller's host memory mapped (a runtime extension: Metal has none): given with a
 /// no-copy buffer's or heap's memory, it is dropped once the device's import of the pages is
-/// freed, which may be after the deallocator ran, or at the buffer's release, after its
+/// freed (for a buffer its device's recovery made again over them, every `VkDevice`'s import of
+/// them), which may be after the deallocator ran, or at the buffer's release, after its
 /// deallocator, where the import's pages stay mapped without it: another buffer made over the
 /// same bytes lies in the import, or the import keeps such a buffer's keep-alive already (the
 /// module docs). With one, the deallocator runs when the buffer

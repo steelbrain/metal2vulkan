@@ -107,7 +107,9 @@ use std::time::Duration;
 /// ([`HostMemory::with_dma_buf`](crate::HostMemory::with_dma_buf)).
 ///
 /// Called on the thread making the object, with no lock of the runtime's held: for a buffer or
-/// heap (or its rebind), only where the device refuses the pointer and imports dma-bufs for it;
+/// heap (or its rebind, or a buffer's making again over the same pages at its device's recovery,
+/// on the thread that recovers, before the new `VkDevice` serves, so it makes no call on the
+/// device), only where the device refuses the pointer and imports dma-bufs for it;
 /// then once for each image the runtime makes over a texture's own pages in them (over the
 /// buffer, placed in the heap, a view of one, or remade by a rebind). A source the runtime never
 /// calls is dropped with the call; one it called is kept with the imports it made, until they go.
