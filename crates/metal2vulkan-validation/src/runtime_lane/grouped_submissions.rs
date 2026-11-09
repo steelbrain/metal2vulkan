@@ -34,6 +34,15 @@
 //! and each submission handler runs as its batch is taken, held or submitted, before the command
 //! buffer reads `Scheduled` and before its scheduled handler.
 //!
+//! A submission handler that waits for another queue's command buffer
+//! ([`behind_another_queue_s_handler`]): `X`, committed on one queue behind running work (`A`,
+//! then `B`), then `Y` on another queue, whose submission handler waits for `X`'s completed
+//! handler. Where the two queues submit to one `VkQueue` on a driver that merges, `X` is held and
+//! kept, `Y` joins its group, and the group goes to the driver before `Y`'s handler runs, so the
+//! handler sees `X` complete, as a scheduled handler of one Metal queue sees another queue's
+//! completed handler (probe `cross_queue_handler_waits`). Elsewhere `X` goes before the handler
+//! in any case.
+//!
 //! The event scenarios ([`event_scenario`]) signal and wait for a plain event (`MTLEvent`), whose
 //! wait chains on the `VkQueue`: a wait for a signal a held batch carries is a Vulkan wait only
 //! the group's end meets, so it sends the group and goes after it. A shared event's wait is
@@ -1108,4 +1117,174 @@ fn the_exact_completion_keeps_no_group_behind_running_work() {
         (0, 0, [0; 7]),
         "{seen:?}"
     );
+}
+
+/// What [`behind_another_queue_s_handler`] saw.
+#[derive(Debug)]
+struct HandlerWait {
+    /// The device's name.
+    device: String,
+    /// Whether the driver merges, and whether the two queues submit to one `VkQueue`.
+    merging: bool,
+    shared: bool,
+    /// The groups kept while `X` was taken in (behind `A` and `B`).
+    kept: u64,
+    /// As `Y`'s submission handler began: whether `A` still ran, and the batches that had gone
+    /// in groups and the kernel submissions made since `Y`'s commit.
+    a_ran: bool,
+    grouped: u64,
+    submissions: u64,
+    /// Whether `X`'s completed handler reached `Y`'s waiting submission handler, and after how
+    /// long.
+    reached: bool,
+    waited: std::time::Duration,
+    /// The groups by what sent them, from `Y`'s commit on ([`group_ends`]).
+    ends: [u64; 7],
+}
+
+/// The module docs' run with a handler that waits for another queue's command buffer, `A` of
+/// `stretch` times the fills its calibration takes.
+fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let seen = {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let merging = merges(&device);
+        let (first, second) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let large = device
+            .new_buffer(RUNNING_FILL, ResourceOptions::private())
+            .unwrap();
+        let buffers: Vec<Buffer> = (0..3)
+            .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
+            .collect();
+        let fill = |queue: &metal2vulkan_runtime::CommandQueue, at: usize| {
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(&buffers[at], 0..BYTES, at as u8 + 1)
+                .unwrap();
+            blit.end_encoding().unwrap();
+            command_buffer
+        };
+        // Each queue's first command buffer, and the device's first work, before `A`.
+        let warm = fill(&second, 2);
+        warm.commit().unwrap();
+        warm.wait_until_completed_for(WAIT).unwrap();
+        let fills = running_fills(&first, &large, std::time::Duration::from_millis(100)) * stretch;
+        let running = first.command_buffer().unwrap();
+        let mut blit = running.blit_command_encoder().unwrap();
+        for at in 0..fills {
+            blit.fill_buffer(&large, 0..RUNNING_FILL, at as u8).unwrap();
+        }
+        blit.end_encoding().unwrap();
+        running.commit().unwrap();
+        taken_in(&device);
+        let behind = fill(&first, 0);
+        behind.commit().unwrap();
+        taken_in(&device);
+        behind.wait_until_scheduled().unwrap();
+        // `X`, held behind `A` and `B` where the driver merges.
+        let before_x = device.work_counts();
+        let x = fill(&first, 1);
+        let (completed, x_completed) = std::sync::mpsc::channel::<()>();
+        x.add_completed_handler(Box::new(move |_: &CommandBuffer| {
+            let _ = completed.send(());
+        }))
+        .unwrap();
+        x.commit().unwrap();
+        taken_in(&device);
+        x.wait_until_scheduled().unwrap();
+        let kept = device.work_counts().groups_kept_pending - before_x.groups_kept_pending;
+        // `Y`, whose submission handler waits for `X`'s completed handler.
+        let before_y = device.work_counts();
+        let y = fill(&second, 2);
+        let shared = first.vk_queue_sharing().0 == second.vk_queue_sharing().0;
+        let (report, reported) = std::sync::mpsc::channel();
+        {
+            let running = running.clone();
+            y.add_submission_handler(Box::new(move |taken: &CommandBuffer| {
+                let counts = taken.device().work_counts();
+                let a_ran = running.status() != CommandBufferStatus::Completed;
+                let start = std::time::Instant::now();
+                let reached = x_completed.recv_timeout(WAIT).is_ok();
+                let _ = report.send((a_ran, counts, reached, start.elapsed()));
+            }))
+            .unwrap();
+        }
+        y.commit().unwrap();
+        let (a_ran, counts, reached, waited) = reported
+            .recv_timeout(WAIT * 2)
+            .expect("Y's submission handler ran");
+        for (name, command_buffer) in [("A", &running), ("B", &behind), ("X", &x), ("Y", &y)] {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None, "{name}");
+        }
+        for (at, buffer) in buffers.iter().enumerate() {
+            let wrong = (bytes_of(buffer).iter())
+                .filter(|&&byte| byte != at as u8 + 1)
+                .count();
+            assert_eq!(wrong, 0, "buffer {at}: bytes off its fill");
+        }
+        HandlerWait {
+            device: device.name().to_owned(),
+            merging,
+            shared,
+            kept,
+            a_ran,
+            grouped: counts.batches_grouped - before_y.batches_grouped,
+            submissions: counts.queue_submissions - before_y.queue_submissions,
+            reached,
+            waited,
+            ends: group_ends(&before_y, &device.work_counts()),
+        }
+    };
+    layer_reported_nothing_at_all(&messages);
+    eprintln!(
+        "GROUPED-HANDLER-WAIT on {}: Y's handler waited {:?}; groups from Y's commit by what \
+         sent them {:?}; {seen:?}",
+        seen.device, seen.waited, seen.ends
+    );
+    seen
+}
+
+/// A submission handler of one queue's command buffer `Y` that waits for the completed handler of
+/// `X`, committed before it on another queue, sees it, as Metal's scheduled handler does (probe
+/// `cross_queue_handler_waits`, the module docs): where the two queues submit to one `VkQueue`
+/// on a driver that merges, `X` waits held behind running work (`A`, then `B`), `Y` joins its
+/// group, and the group goes to the driver before `Y`'s handler runs, where it once stayed kept
+/// behind it until the handler gave up. `A` is made longer until it outlasts the handler's start,
+/// as [`behind_while_a_runs`] does. Nothing is asked of two command buffers of one queue: Metal
+/// runs one queue's handlers one at a time, so a handler that waits for a completed handler of its
+/// own queue never sees it there either (the probe's `scheduled-one-queue`).
+#[test]
+fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
+    let mut stretch = 1;
+    let seen = loop {
+        let seen = behind_another_queue_s_handler(stretch);
+        if !(seen.merging && seen.shared) || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
+            break seen;
+        }
+        stretch *= 2;
+        eprintln!(
+            "GROUPED-HANDLER-WAIT: A ended before Y's handler began: A {stretch} times as long"
+        );
+    };
+    assert!(
+        seen.reached,
+        "X's completed handler never reached Y's: {seen:?}"
+    );
+    if seen.merging && seen.shared {
+        assert!(
+            seen.a_ran,
+            "A ended before Y's handler began, at every run: {seen:?}"
+        );
+        assert_eq!(seen.kept, 1, "X was not kept behind A and B: {seen:?}");
+        assert_eq!(
+            (seen.grouped, seen.submissions),
+            (2, 1),
+            "X and Y did not go in one submission before Y's handler: {seen:?}"
+        );
+    }
 }
