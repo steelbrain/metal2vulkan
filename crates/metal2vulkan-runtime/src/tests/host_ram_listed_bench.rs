@@ -44,6 +44,7 @@ use crate::{
 use std::ops::Range;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -106,6 +107,11 @@ fn udmabuf_parameter(name: &str, default: u64) -> u64 {
 /// the RAM's addresses, as long as the host's udmabuf limit allows, and its source of run lists
 /// udmabuf's lists, of at most the host's `list_limit` runs; its first byte.
 pub(super) fn ram(length: u64) -> (Arc<HostRam>, u64) {
+    ram_timed(length, Arc::default())
+}
+
+/// [`ram`], the nanoseconds its source of run lists spent making them added to `listing_nanos`.
+pub(super) fn ram_timed(length: u64, listing_nanos: Arc<AtomicU64>) -> (Arc<HostRam>, u64) {
     // SAFETY: a new anonymous file, owned at once, then sized and sealed.
     let fd = unsafe {
         let fd = libc::memfd_create(
@@ -146,12 +152,15 @@ pub(super) fn ram(length: u64) -> (Arc<HostRam>, u64) {
     });
     let memfd = Arc::clone(&fd);
     let listing: DmaBufRunsSource = Arc::new(move |requests: &[DmaBufRequest]| {
+        let began = Instant::now();
         let runs: Vec<(u64, u64)> = (requests.iter())
             .map(|request| (request.start.as_ptr() as u64 - start, request.length))
             .collect();
-        let fd = udmabuf_list(&memfd, &runs)?;
+        let fd = udmabuf_list(&memfd, &runs);
+        let took = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        listing_nanos.fetch_add(took, Ordering::Relaxed);
         let length = runs.iter().map(|&(_, length)| length).sum();
-        Ok(DmaBufChunk { fd, length })
+        Ok(DmaBufChunk { fd: fd?, length })
     });
     let keep: KeepAlive = Box::new(Mapping {
         start,
@@ -264,7 +273,7 @@ fn resident_bytes(start: u64, length: u64) -> u64 {
 }
 
 /// The thread's CPU time.
-fn thread_cpu() -> Duration {
+pub(super) fn thread_cpu() -> Duration {
     let mut now = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
