@@ -163,7 +163,8 @@ const RELEASED: &str = "what a release got round to destroying, which runs on wh
 /// can: `addressable_buffers_made`, `pooled_memory_blocks_made`, `arena_pools_made`,
 /// `device_memory_allocated`, `creation_pipelines_made`, `variant_pipelines_made`,
 /// `shader_modules_made` and `pipeline_layouts_made` read at or above their in-set reading in every
-/// case that ran alone, so company only lowers them.
+/// case that ran alone, so company only lowers them. (`device_memory_allocated` is reported anyway,
+/// for a reason of its own: [`BLOCK_SIZE`].)
 ///
 /// That is a fact about those eight counts and not a law about `_made` counts, and the contrast the
 /// measurement now takes is what tells one from the other. Two counts an earlier version of this
@@ -458,6 +459,21 @@ const FOLDED: &str =
      of its own, which the submission path decides from what the queue did with work submitted \
      before this case";
 
+/// Why `device_memory_allocated` is reported and never gated: the runtime makes its later pooled
+/// blocks of plain memory smaller on a device where making one took longer than 8 ms
+/// (`memory.rs`'s `MAKING_BOUND`), so the bytes a case allocates follow how long an earlier making
+/// took, which is how fast the device made memory at that moment and not the case's work.
+///
+/// Its partner `pooled_memory_blocks_made` stays gated, on a measurement: with that size held at
+/// its 16 MiB floor from the start, eight runs of the whole set (1233 cases) on the M3 Max moved
+/// none of its gated bounds and none of its ceilings, and put no case over a bound, where this
+/// count's gated bound moved in one case (201326592 in the record, 50331648 measured). A size that
+/// changes partway through a run, between 64 MiB and that floor, is unmeasured.
+const BLOCK_SIZE: &str = "bytes in blocks whose size follows how long the device's earlier \
+     makings of such blocks took (smaller after one took longer than 8 ms), which is how fast \
+     the device made memory at that moment and not the case's work. Measured: with the size \
+     held at its 16 MiB floor, one case read 50331648 where its record holds 201326592";
+
 /// Why a count of an object made because no spare was free is reported and never gated.
 const POOLED: &str = "an object made because no spare was free, where a spare comes back on \
      another thread: which case has to make one depends on when that thread returned the one \
@@ -491,8 +507,9 @@ const POOLED: &str = "an object made because no spare was free, where a spare co
 /// replays of a larger case set — which reads like a regression and is not one. See [`BORROWED`].
 /// `slot_returns` beside it stays gated: it counts work items, one a command buffer, and has held
 /// still alone and in both case sets.
-const RACY: [(&str, &str); 45] = [
+const RACY: [(&str, &str); 46] = [
     ("fences_made", POOLED),
+    ("device_memory_allocated", BLOCK_SIZE),
     // What is alive, parked or waiting at the instant the counts were read.
     ("memory_blocks_live", INSTANTANEOUS),
     ("empty_memory_blocks_live", INSTANTANEOUS),
@@ -630,8 +647,8 @@ const RACY: [(&str, &str); 45] = [
 /// It passed the direction test — 385 cases, 0 below — and fails the other test a bound has to
 /// pass: it counts *bytes*, so the two shapes differ by 268,435,456 where the largest of these
 /// object counts differs by 8. A bound of 256 MiB on a case that allocates nothing in company is a
-/// number no regression can reach, and a bound that cannot fail is worse than no bound. It stays
-/// reported, with both readings, where a reader can see it.
+/// number no regression can reach, and a bound that cannot fail is worse than no bound. It is
+/// reported, never gated, for that and for a reason of its own ([`BLOCK_SIZE`]).
 ///
 /// **A count of bytes can never take a row here**, which is the general form of the paragraph
 /// above and is held by `tests::no_monotone_bound_is_a_count_of_bytes` rather than left to whoever

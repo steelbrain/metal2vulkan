@@ -12,7 +12,8 @@
 //!   ([`Memory::plain_block_made`]), a placement larger than such a block taking one of the power
 //!   of two that holds it: on RADV such a block shares the reservation of the process's buffer
 //!   objects, and its making holds every submission of the process for as long as it runs (a
-//!   Radeon 780M whose free memory lies in single pages took 9 to 23 ms for 64 MiB at the median).
+//!   Radeon 780M whose free memory lay in single pages took 9 to 27 ms at the median for 64 MiB;
+//!   `docs/FAST-PATHS.md`'s known gaps).
 //!   The blocks of exportable buffers keep their size: each is a buffer object of its own
 //!   reservation, whose making holds no submission.
 //! - **Kept for reuse.** A block that empties is kept for the next placements rather than freed:

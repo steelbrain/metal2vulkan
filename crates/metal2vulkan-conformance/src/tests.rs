@@ -5118,6 +5118,10 @@ fn a_count_that_says_which_thread_arrived_first_is_never_gated() {
     // does what a case allocates even though what the pool hands back does not.
     assert!(racy("encoder_command_buffers_begun").is_none());
     assert!(racy("pooled_memory_blocks_made").is_none());
+    // The bytes those blocks hold are reported: their size follows how long the device's earlier
+    // makings took, and with it held at its 16 MiB floor one case's reading went from 201326592 to
+    // 50331648 over the whole set, where no gated bound of the block count moved.
+    assert!(racy("device_memory_allocated").is_some());
     // A free by any cause but the quiet period stays gated by its own name.
     for count in [
         "memory_frees.dedicated",
@@ -6331,12 +6335,13 @@ fn a_count_whose_ceiling_is_the_lone_run_is_gated_there() {
     }
     // A count with no row is reported whichever way it differs, so the table is the whole of the
     // exception.
-    let record = alone("WorkCounts {\n    device_memory_allocated: 268435456,\n}").fold_alone_into(
-        &held("device_memory_allocated", 0),
-        "eight runs alone".to_owned(),
-    );
+    let record = alone("WorkCounts {\n    owned_kernel_spirv_bytes: 268435456,\n}")
+        .fold_alone_into(
+            &held("owned_kernel_spirv_bytes", 0),
+            "eight runs alone".to_owned(),
+        );
     assert_eq!(
-        record.composed.get("device_memory_allocated"),
+        record.composed.get("owned_kernel_spirv_bytes"),
         Some(&268_435_456)
     );
     assert_eq!(record.gated(), 0);
