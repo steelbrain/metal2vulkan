@@ -30,10 +30,10 @@
 
 use super::blit_holds::{device, Host, Scratch, WAIT};
 use crate::error::{Error, Invalid, Problem, RuntimeGap};
-use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, Device, IoSurfacePlane, MemoryExport,
-    Origin, ResourceOptions, Size, Texture, TextureDescriptor,
+    Origin, ResourceOptions, Size, Texture, TextureDescriptor, TexturePlacement,
+    TextureShadowReason,
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -138,16 +138,32 @@ fn frame(
 /// `plane`'s sampled texture over `buffer` at `at`, and whether it is the linear image aliasing
 /// the buffer's memory: no shadow counted as it is made.
 fn plane_texture(device: &Device, buffer: &Buffer, (plane, at): (Plane, u64)) -> (Texture, bool) {
+    let before = device.work_counts().shadowed_textures;
+    let texture = buffer
+        .new_texture_with_iosurface_plane(&plane_descriptor(buffer, plane), plane_at(plane, at))
+        .unwrap();
+    let aliases = device.work_counts().shadowed_textures == before;
+    (texture, aliases)
+}
+
+/// The descriptor of `plane`'s texture over `buffer`, which only reads.
+fn plane_descriptor(buffer: &Buffer, plane: Plane) -> TextureDescriptor {
     let [w, h] = plane.size;
     let mut descriptor = TextureDescriptor::texture_2d(plane.format, w, h, false);
     descriptor.usage = TextureUsage::SHADER_READ;
     descriptor.resource_options = buffer.resource_options();
-    let before = device.work_counts().shadowed_textures;
-    let texture = buffer
-        .new_texture_with_iosurface_plane(&descriptor, IoSurfacePlane::new(at, plane.row, true))
-        .unwrap();
-    let aliases = device.work_counts().shadowed_textures == before;
-    (texture, aliases)
+    descriptor
+}
+
+/// `plane` at byte `at` of its buffer, as an IOSurface plane.
+fn plane_at(plane: Plane, at: u64) -> IoSurfacePlane {
+    IoSurfacePlane::new(at, plane.row, true)
+}
+
+/// Where `plane`'s texture over `buffer` at byte `at` lies if made now.
+fn plane_placement(buffer: &Buffer, (plane, at): (Plane, u64)) -> TexturePlacement {
+    let descriptor = plane_descriptor(buffer, plane);
+    (buffer.texture_placement_with_iosurface_plane(&descriptor, plane_at(plane, at))).unwrap()
 }
 
 /// The texels of `plane`'s `texture` as a blit copies them into a buffer, rows one after another.
@@ -445,27 +461,24 @@ fn a_frame_a_second_device_writes_through_its_dma_buf_reads_in_the_runtime_s_tex
             device.settle_in_place_checks(WAIT),
             "{name}: the check answered"
         );
-        // The check's verdicts for a texture that reads over the memory, each row end.
-        let reads = RowEnds::ALL.map(|rows| {
-            let verdict =
-                (device.shared().in_place).verdict(PagesClass::ExportedDmaBuf, Access::Reads, rows);
-            verdict == Verdict::Passed
-        });
         for plane in PLANES {
+            // Once the check answered: as the plain frame's where its verdict for the memory
+            // passed, else the shadow its verdict decided.
+            let placement = plane_placement(&buffer, (plane, plane.at));
             let (texture, aliases) = plane_texture(&device, &buffer, (plane, plane.at));
             let (_, plain_aliases) = plane_texture(&device, &plain, (plane, plane.at));
             eprintln!(
                 "DMA-BUF-EXPORT on {name}: {options:?} {plane:?}: aliases its buffer {aliases} \
-                 (a plain frame's {plain_aliases}; the check's reads over exported dma-bufs \
-                 passed {reads:?})"
+                 (a plain frame's {plain_aliases}), placed {placement:?}"
             );
-            if reads.iter().all(|&passed| passed) {
-                assert_eq!(aliases, plain_aliases, "{options:?} {plane:?}: no shadow");
-            } else if !reads.iter().any(|&passed| passed) {
-                assert!(
+            match placement {
+                TexturePlacement::Shadow(
+                    TextureShadowReason::Unchecked { .. } | TextureShadowReason::CheckFailed { .. },
+                ) => assert!(
                     !aliases,
                     "{options:?} {plane:?}: a shadow where the check did not pass"
-                );
+                ),
+                _ => assert_eq!(aliases, plain_aliases, "{options:?} {plane:?}: no shadow"),
             }
             let want: Vec<u8> = (plane.at..plane.at + plane.row * plane.size[1])
                 .map(decoded_byte)
