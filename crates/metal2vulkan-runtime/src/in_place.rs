@@ -86,19 +86,15 @@
 //! - **The runtime's exported memory.** A texture over a buffer whose memory the runtime exports
 //!   (`exported_memory.rs`: a block that exportable buffers of one handle type share) takes the
 //!   device's linear image, else the `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch, each made for
-//!   a handle type the memory's own record names (`memory.rs`'s `Memory::bound_memory`), as an
-//!   image bound in exported memory must name one (`VUID-vkBindImageMemory-memory-02728`): so it
+//!   the handle type the memory's own record names (`memory.rs`'s `Memory::bound_memory`), as an
+//!   image bound in exported memory must name it (`VUID-vkBindImageMemory-memory-02728`): so it
 //!   starts `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) whichever it is, and the same rule
-//!   takes it, under the check of that exported memory ([`PagesClass::ExportedFd`],
-//!   [`PagesClass::ExportedDmaBuf`]), moving in place once the verdicts pass as over the pooled
-//!   memory. A block of dma-bufs exportable as an opaque file descriptor too
-//!   (`exported_memory.rs`'s `FdExport::new`) has its image name the dma-buf handle type, else
-//!   the opaque one; the check's own textures over that memory take the same image, so its
-//!   verdicts are of the image a texture takes. Where the device's image format query
-//!   (`VkPhysicalDeviceExternalImageFormatInfo`) takes none of those handle types for such an
-//!   image of the texture's format, usage and tiling but with a dedicated allocation, or the
-//!   image made requires one (`VkMemoryDedicatedRequirements`), or where the memory is the
-//!   buffer's dedicated allocation (`VUID-vkBindImageMemory-memory-10926`), the texture is a
+//!   takes it, under the check of that handle type's exported memory
+//!   ([`PagesClass::ExportedFd`], [`PagesClass::ExportedDmaBuf`]), moving in place once the
+//!   verdicts pass as over the pooled memory. Where the device's image format query
+//!   (`VkPhysicalDeviceExternalImageFormatInfo`) takes the handle type for no such image of the
+//!   texture's format, usage and tiling but with a dedicated allocation, or where the memory is
+//!   the buffer's dedicated allocation (`VUID-vkBindImageMemory-memory-10926`), the texture is a
 //!   shadow, its notice naming why. Where such an image lies is decided as for any texture over a
 //!   buffer (`linear_plan::aliases`), of the image made for the handle type, for each texture (each
 //!   plane of a picture) apart: the texels' offset in the memory (the buffer's first byte lies at
@@ -217,17 +213,13 @@ impl PagesClass {
         }
     }
 
-    /// The class of the runtime's memory exported as `exports` (`memory.rs`'s
-    /// `Memory::bound_memory`): a block of dma-bufs whatever else it is exportable as (an opaque
-    /// file descriptor too, `exported_memory.rs`'s `FdExport::new`), else one of opaque file
-    /// descriptors; `None` for memory the runtime exports as neither.
-    pub(crate) fn exported(exports: vk::ExternalMemoryHandleTypeFlags) -> Option<PagesClass> {
-        if exports.contains(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT) {
-            Some(PagesClass::ExportedDmaBuf)
-        } else if exports == vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD {
-            Some(PagesClass::ExportedFd)
-        } else {
-            None
+    /// The class of the runtime's memory exported as `handle` (`memory.rs`'s
+    /// `Memory::bound_memory`): `None` for a handle type the runtime exports no memory as.
+    pub(crate) fn exported(handle: vk::ExternalMemoryHandleTypeFlags) -> Option<PagesClass> {
+        match handle {
+            vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD => Some(PagesClass::ExportedFd),
+            vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT => Some(PagesClass::ExportedDmaBuf),
+            _ => None,
         }
     }
 
@@ -952,7 +944,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 14;
+pub(crate) const CHECK_VERSION: u32 = 13;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";

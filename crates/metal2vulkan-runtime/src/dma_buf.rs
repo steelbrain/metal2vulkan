@@ -1624,18 +1624,14 @@ impl Device {
 /// ([`Device::dma_buf_image`]); host pages imported by their pointer, where a texture's image in
 /// place lays its rows out at Metal's pitch (`texture/in_place_image.rs`); or a buffer's memory of
 /// the runtime's own, where a texture over the buffer lays its rows out at Metal's pitch
-/// (`texture.rs`'s `alias_image`): with no external memory, or exported as the handle types its
-/// record names (`memory.rs`'s `Memory::bound_memory`, `exported_memory.rs`), the image naming
-/// one of them, `named` (`VUID-vkBindImageMemory-memory-02728`).
+/// (`texture.rs`'s `alias_image`): with no external memory, or exported as the handle type its
+/// record names (`memory.rs`'s `Memory::bound_memory`, `exported_memory.rs`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ModifierMemory {
     DmaBuf,
     Host,
     Own,
-    Exported {
-        named: vk::ExternalMemoryHandleTypeFlags,
-        exports: vk::ExternalMemoryHandleTypeFlags,
-    },
+    Exported(vk::ExternalMemoryHandleTypeFlags),
 }
 
 impl std::fmt::Debug for ModifierMemory {
@@ -1644,12 +1640,7 @@ impl std::fmt::Debug for ModifierMemory {
             ModifierMemory::DmaBuf => f.write_str("DmaBuf"),
             ModifierMemory::Host => f.write_str("Host"),
             ModifierMemory::Own => f.write_str("Own"),
-            ModifierMemory::Exported { named, exports } => write!(
-                f,
-                "Exported({:#x} of {:#x})",
-                named.as_raw(),
-                exports.as_raw()
-            ),
+            ModifierMemory::Exported(handle) => write!(f, "Exported({:#x})", handle.as_raw()),
         }
     }
 }
@@ -1662,7 +1653,7 @@ impl ModifierMemory {
             ModifierMemory::DmaBuf => Some(DMA_BUF),
             ModifierMemory::Host => Some(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT),
             ModifierMemory::Own => None,
-            ModifierMemory::Exported { named, .. } => Some(named),
+            ModifierMemory::Exported(handle) => Some(handle),
         }
     }
 
@@ -1672,13 +1663,8 @@ impl ModifierMemory {
             ModifierMemory::DmaBuf => "dma-bufs",
             ModifierMemory::Host => "host allocations",
             ModifierMemory::Own => "the runtime's own memory",
-            ModifierMemory::Exported { named: DMA_BUF, .. } => {
-                "the runtime's memory exported as dma-bufs"
-            }
-            ModifierMemory::Exported { exports, .. } if exports.contains(DMA_BUF) => {
-                "the runtime's memory exported as dma-bufs, named as opaque file descriptors"
-            }
-            ModifierMemory::Exported { .. } => {
+            ModifierMemory::Exported(DMA_BUF) => "the runtime's memory exported as dma-bufs",
+            ModifierMemory::Exported(_) => {
                 "the runtime's memory exported as opaque file descriptors"
             }
         }
@@ -1689,7 +1675,7 @@ impl ModifierMemory {
     /// for an import.
     pub(super) fn needs(self) -> vk::ExternalMemoryFeatureFlags {
         match self {
-            ModifierMemory::Exported { .. } => vk::ExternalMemoryFeatureFlags::EXPORTABLE,
+            ModifierMemory::Exported(_) => vk::ExternalMemoryFeatureFlags::EXPORTABLE,
             ModifierMemory::DmaBuf | ModifierMemory::Host | ModifierMemory::Own => {
                 vk::ExternalMemoryFeatureFlags::IMPORTABLE
             }
@@ -1702,7 +1688,7 @@ impl ModifierMemory {
     /// the image's own pages is its dedicated import.
     pub(super) fn shared_memory(self) -> bool {
         match self {
-            ModifierMemory::Host | ModifierMemory::Exported { .. } => true,
+            ModifierMemory::Host | ModifierMemory::Exported(_) => true,
             ModifierMemory::DmaBuf | ModifierMemory::Own => false,
         }
     }

@@ -1439,12 +1439,8 @@ fn a_refused_linear_image_names_the_need_that_failed() {
             && import.contains("importable false, dedicated only true"),
         "{import}"
     );
-    let opaque = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
     let export = describe(LinearRefusal::External(
-        ModifierMemory::Exported {
-            named: opaque,
-            exports: opaque,
-        },
+        ModifierMemory::Exported(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD),
         vk::ExternalMemoryFeatureFlags::EXPORTABLE | vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY,
     ));
     assert!(

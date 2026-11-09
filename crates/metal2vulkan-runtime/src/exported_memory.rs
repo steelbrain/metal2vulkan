@@ -27,11 +27,7 @@
 //!   or the driver prefers or requires one (`VkMemoryDedicatedRequirements`), it is the buffer's
 //!   dedicated allocation (`VkMemoryDedicatedAllocateInfo`, `VkExportMemoryAllocateInfo`), freed
 //!   with it. Else it lies in a block that exportable buffers of its handle type share, allocated
-//!   exportable (`memory.rs`'s `Holds::Exports`, `Holds::DmaBufs`): as that handle type, and a
-//!   block of dma-bufs as an opaque file descriptor too where the device's buffer queries answer
-//!   both exportable together, each compatible with the other ([`FdExport::new`]), so that an
-//!   image bound there may name either; the buffer's export is a dma-buf of the same memory
-//!   either way. It lies at a multiple of 256 bytes as
+//!   exportable (`memory.rs`'s `Holds::Exports`, `Holds::DmaBufs`), at a multiple of 256 bytes as
 //!   any buffer of the runtime's memory (`buffer.rs`'s `placed`), as other buffers lie in pooled
 //!   blocks: a block holds a 4K NV12 picture's 12.4 MB five times, and one that empties is kept
 //!   for the next such buffers (`memory.rs`). On an RTX 5080 Laptop GPU a `Private` exportable
@@ -58,7 +54,7 @@
 //!   buffer, whose host may read its contents at once, has it made then and waits for it alone. A
 //!   texture over the buffer is a linear image of its memory in `GENERAL` (or a shadow of its
 //!   bytes, which copies them), a host-accessible alias that reads what the buffer holds, made
-//!   for a handle type the memory is exportable as, which an image bound in exported memory names
+//!   for the memory's handle type, which an image bound in exported memory names
 //!   (`VUID-vkBindImageMemory-memory-02728`), so made `UNDEFINED`, and taken where the device's
 //!   check of that exported memory passed (`in_place.rs`, "The runtime's exported memory"); a
 //!   shadow over a dedicated allocation, to which no image may be bound
@@ -130,33 +126,6 @@ pub(super) struct FdExport {
     functions: ash::khr::external_memory_fd::Device,
     /// The device exports a buffer's memory as one only from the buffer's dedicated allocation.
     dedicated_only: bool,
-    /// The handle types a block that such buffers share is allocated exportable as
-    /// (`VkExportMemoryAllocateInfo`): the handle type, and for a dma-buf also an opaque file
-    /// descriptor where the device exports a buffer's memory as both together ([`FdExport::new`]).
-    pub(super) exports: vk::ExternalMemoryHandleTypeFlags,
-}
-
-/// What `vkGetPhysicalDeviceExternalBufferProperties` answers for a buffer of `usage` exported as
-/// `handle`: its external memory features and the handle types compatible with it.
-///
-/// # Safety
-///
-/// `physical` is a physical device of `instance`, made at Vulkan 1.1 or later.
-unsafe fn buffer_export(
-    instance: &ash::Instance,
-    physical: vk::PhysicalDevice,
-    usage: vk::BufferUsageFlags,
-    handle: vk::ExternalMemoryHandleTypeFlags,
-) -> vk::ExternalMemoryProperties {
-    let query = vk::PhysicalDeviceExternalBufferInfo::default()
-        .usage(usage)
-        .handle_type(handle);
-    let mut properties = vk::ExternalBufferProperties::default();
-    // SAFETY: the caller's contract.
-    unsafe {
-        instance.get_physical_device_external_buffer_properties(physical, &query, &mut properties)
-    };
-    properties.external_memory_properties
 }
 
 impl FdExport {
@@ -164,18 +133,6 @@ impl FdExport {
     /// type: where it enables what that handle type needs (`functions`, loaded then; `None`
     /// where it lacks an extension) and `vkGetPhysicalDeviceExternalBufferProperties` answers the
     /// handle type exportable from a buffer's memory. `None` where it lacks either.
-    ///
-    /// A dma-buf's shared blocks are exportable as an opaque file descriptor too where that query
-    /// answers each handle type compatible with the other and an opaque file descriptor
-    /// exportable from a buffer's memory not only as a dedicated allocation: the export set's
-    /// compatibility is this query's (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`: "as
-    /// reported by VkExternalImageFormatProperties, or VkExternalBufferProperties"), an image
-    /// bound in such a block may name either (`VUID-vkBindImageMemory-memory-02728`: one type in
-    /// common), its own compatible types bounding only those it names
-    /// (`VUID-VkImageCreateInfo-pNext-00990`), and a device whose images of a dma-buf's handle
-    /// type take only a dedicated allocation (RADV's) binds one naming an opaque file descriptor
-    /// there (`texture.rs`'s `alias_unbound`). The dma-buf a buffer's export answers is the same
-    /// memory's either way (`vkGetMemoryFdKHR` of the dma-buf handle type).
     ///
     /// # Safety
     ///
@@ -188,33 +145,25 @@ impl FdExport {
     ) -> Option<FdExport> {
         let functions = functions?;
         let handle = export.handle();
+        let query = vk::PhysicalDeviceExternalBufferInfo::default()
+            .usage(usage)
+            .handle_type(handle);
+        let mut properties = vk::ExternalBufferProperties::default();
         // SAFETY: the caller's contract.
-        let memory = unsafe { buffer_export(instance, physical, usage, handle) };
+        unsafe {
+            instance.get_physical_device_external_buffer_properties(
+                physical,
+                &query,
+                &mut properties,
+            )
+        };
+        let memory = properties.external_memory_properties;
         let features = memory.external_memory_features;
-        let exportable = features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+        let exports = features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
             && memory.compatible_handle_types.contains(handle);
-        if !exportable {
-            return None;
-        }
-        let mut exports = handle;
-        if export == MemoryExport::DmaBuf && memory.compatible_handle_types.contains(EXPORT_HANDLE)
-        {
-            // SAFETY: the caller's contract.
-            let opaque = unsafe { buffer_export(instance, physical, usage, EXPORT_HANDLE) };
-            let opaque_features = opaque.external_memory_features;
-            if opaque_features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
-                && !opaque_features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
-                && opaque
-                    .compatible_handle_types
-                    .contains(handle | EXPORT_HANDLE)
-            {
-                exports |= EXPORT_HANDLE;
-            }
-        }
-        Some(FdExport {
+        exports.then_some(FdExport {
             functions,
             dedicated_only: features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY),
-            exports,
         })
     }
 }
@@ -352,11 +301,8 @@ impl Device {
         // SAFETY: `raw` is a live buffer of this device, at Vulkan 1.1 or later.
         unsafe { raw_device.get_buffer_memory_requirements2(&query, &mut requirements) };
         let requirements = requirements.memory_requirements;
-        // A dedicated allocation is exportable as the handle type alone (no image is bound in it);
-        // a shared block as its pool's blocks are (`memory.rs`'s `Memory::export_dma_bufs_as`).
         let exported = Exported {
             handle,
-            exports: handle,
             dedicated: exports.dedicated_only
                 || dedicated.prefers_dedicated_allocation == vk::TRUE
                 || dedicated.requires_dedicated_allocation == vk::TRUE,

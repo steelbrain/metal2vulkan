@@ -283,11 +283,8 @@ the record the pass is making.
 - A buffer descriptor's `exported_as` (`MemoryExport::OpaqueFd` or `MemoryExport::DmaBuf`) makes
   such a buffer of either handle type with the descriptor's other fields: `aligned_byte` lays that
   byte on a multiple of 256 bytes of the exported memory, and `padding_unobserved` lets textures
-  over it alias it with rows apart. A texture over such a buffer is a linear image made for a
-  handle type the memory is exportable as, as Vulkan requires of an image bound in exported memory
-  (a block of dma-bufs is exportable as an opaque file descriptor too where the device's buffer
-  queries answer both together, and its image names that where the device takes no dma-buf for
-  it: RADV's linear images); such an image
+  over it alias it with rows apart. A texture over such a buffer is a linear image made for the
+  memory's handle type, as Vulkan requires of an image bound in exported memory; such an image
   starts `UNDEFINED`, so it takes the memory in place where the device's in-place check of that
   exported memory passed, and a texture made before the check answered is a shadow that moves in
   place at a later commit (docs/HOWTO.md, section 7, says where each plane must lie). Memory the
