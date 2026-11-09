@@ -304,7 +304,7 @@ fn phase(
         counts.empty_memory_blocks_live,
         meminfo("MemAvailable") >> 20,
     );
-    times.sort_by(|a, b| b.0.cmp(&a.0));
+    times.sort_by_key(|&(took, _)| std::cmp::Reverse(took));
     let slowest: Vec<String> = (times.iter().take(SLOWEST))
         .map(|&(took, at)| format!("{:.1} ms at {at:.3}", ms(took)))
         .collect();
