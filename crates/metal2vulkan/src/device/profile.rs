@@ -1247,6 +1247,21 @@ pub enum DriverWorkaround {
     /// on every GPU, the others unmeasured. Such a profile rounds a `half` in another form
     /// (`lower::arith::narrow::controlled_modes`).
     HalfConversionPairFolded,
+    /// The driver's compiler fuses an `f32` addition, subtraction, multiply or fused multiply-add
+    /// into the `OpFConvert` to 16 bits of its result, rounding the exact result to `half` once,
+    /// though both are decorated `NoContraction` (which forbids combining the operation with
+    /// another instruction into a single operation), in an entry declaring `RoundingModeRTE`,
+    /// `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits. Metal rounds the `float`
+    /// result to `half`, so where that result lies on a `half` midpoint the two differ by one
+    /// unit in the last place of the `half`. Measured on the Radeon 780M (RADV PHOENIX): ACO
+    /// compiled the product's `OpFMul` and the narrowing as one `v_fma_mixlo_f16`, and the
+    /// product of 2.6822087e-7 and 1.0000001 answered `0x0005` where Metal's `half` of the
+    /// `float` product is `0x0004` (`runtime_lane::half_conversions`); a sum's narrowing was one
+    /// `v_fma_mixlo_f16` too. Keyed on RADV (`VK_DRIVER_ID_MESA_RADV`) on every GPU, the others
+    /// unmeasured. Such a profile keeps the conversion under the float controls, and a module that
+    /// rounds such an operation's result through it records `PrecisionNote::NativeHalfConversion`
+    /// (`lower::arith::narrow::rounds_arithmetic`).
+    HalfConversionFusedWithArithmetic,
     /// The driver refuses a fragment shader that reads both barycentric builtins,
     /// `BaryCoordKHR` and `BaryCoordNoPerspKHR`, at pipeline creation, where Metal compiles a
     /// fragment function that declares both `[[barycentric_coord, center_perspective]]` and

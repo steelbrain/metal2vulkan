@@ -8,8 +8,10 @@
 //! elsewhere.
 //!
 //! The kernels read two `float`s from buffer 0 and store one result after them: a `half` sum of
-//! the two narrowed, and the first narrowed alone. `llvm-as` assembles the module; without it the
-//! compiling tests skip visibly.
+//! the two narrowed, and the first narrowed alone; and, under the float controls, a `float` sum,
+//! product and fused multiply-add of the two rounded to `half`, which a driver may fuse into the
+//! narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`). `llvm-as` assembles the
+//! module; without it the compiling tests skip visibly.
 
 use crate::air::{self, SpecRequest};
 use crate::device::requirements::VkProperty;
@@ -47,23 +49,51 @@ const KERNELS: [(&str, &str); 2] = [
     ),
 ];
 
+/// Kernels that round `float` arithmetic to `half`: the sum and the product of the two `float`s, and
+/// their fused multiply-add (the second added to the product of the two), each narrowed and widened
+/// back, and the first narrowed alone.
+const ARITHMETIC: [(&str, &str); 4] = [
+    (
+        "float_sum",
+        "  %s = fadd float %a, %b\n  %h = fptrunc float %s to half\n  %r = fpext half %h to float\n",
+    ),
+    (
+        "float_product",
+        "  %s = fmul float %a, %b\n  %h = fptrunc float %s to half\n  %r = fpext half %h to float\n",
+    ),
+    (
+        "float_fma",
+        "  %s = call float @air.fma.f32(float %a, float %b, float %b)\n  %h = fptrunc float %s to half\n  %r = fpext half %h to float\n",
+    ),
+    (
+        "float_narrow",
+        "  %h = fptrunc float %a to half\n  %r = fpext half %h to float\n",
+    ),
+];
+
 /// The module of every kernel.
 fn module() -> String {
+    module_of(&KERNELS)
+}
+
+/// The module of `kernels`.
+fn module_of(kernels: &[(&str, &str)]) -> String {
     let mut s = String::from(
         "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n",
     );
-    for (name, body) in &KERNELS {
+    for (name, body) in kernels {
         s.push_str(&format!(
             "define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0) {{\nentry:\n  %p1 = getelementptr inbounds float, ptr addrspace(1) %0, i64 1\n  %p2 = getelementptr inbounds float, ptr addrspace(1) %0, i64 2\n  %a = load float, ptr addrspace(1) %0, align 4\n  %b = load float, ptr addrspace(1) %p1, align 4\n{body}  store float %r, ptr addrspace(1) %p2, align 4\n  ret void\n}}\n\n"
         ));
     }
-    let refs: Vec<String> = (0..KERNELS.len()).map(|i| format!("!{}", 20 + i)).collect();
+    let refs: Vec<String> = (0..kernels.len()).map(|i| format!("!{}", 20 + i)).collect();
+    s.push_str("declare float @air.fma.f32(float, float, float)\n\n");
     s.push_str(&format!(
         "!llvm.module.flags = !{{!0}}\n!air.kernel = !{{{}}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\n",
         refs.join(", ")
     ));
     s.push_str("!0 = !{i32 7, !\"air.max_device_buffers\", i32 31}\n!10 = !{}\n!11 = !{!12}\n!12 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"io\"}\n!17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n");
-    for (i, (name, _)) in KERNELS.iter().enumerate() {
+    for (i, (name, _)) in kernels.iter().enumerate() {
         s.push_str(&format!("!{} = !{{ptr @{name}, !10, !11}}\n", 20 + i));
     }
     s
@@ -820,6 +850,49 @@ fn a_controlled_conversion_rounds_half_where_the_float_controls_allow() {
             "{stem}: {controlled:?}"
         );
     }
+}
+
+/// Under the float controls (`QuantizeForm::Controlled`), a `half` rounded from `float` arithmetic
+/// (a sum, a product, a fused multiply-add) records `NativeHalfConversion` where the driver fuses
+/// the operation into the narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`, every
+/// RADV profile) and not elsewhere (ANV); a loaded `float` narrowed alone records it on neither
+/// (`narrow::rounds_arithmetic`). Each passes L3.
+#[test]
+fn a_controlled_rounding_of_arithmetic_is_noted_where_the_driver_fuses_it() {
+    use crate::device::profile::DriverWorkaround;
+    let Some(bc) = assemble("native-half-arithmetic", &module_of(&ARITHMETIC)) else {
+        return;
+    };
+    let mut seen = (0, 0);
+    for (stem, p) in &committed_profiles().expect("profiles") {
+        if quantize_form(p) != QuantizeForm::Controlled {
+            continue;
+        }
+        let fuses = p
+            .workarounds()
+            .contains(&DriverWorkaround::HalfConversionFusedWithArithmetic);
+        if fuses {
+            seen.0 += 1;
+        } else {
+            seen.1 += 1;
+        }
+        for (name, _) in &ARITHMETIC {
+            let what = format!("{name} on {stem}");
+            let a = compile(&bc, name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let noted = a.precision.contains(&PrecisionNote::NativeHalfConversion);
+            assert_eq!(
+                noted,
+                fuses && *name != "float_narrow",
+                "{what}: {:?}",
+                a.precision
+            );
+        }
+    }
+    assert!(
+        seen.0 > 0 && seen.1 > 0,
+        "fusing and other controlled profiles: {seen:?}"
+    );
 }
 
 /// A kernel that reads a `half` from buffer 0 and stores it widened to `float` after the two

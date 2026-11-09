@@ -1065,6 +1065,42 @@ fn nvidia_carries_the_folded_half_conversion_pair() {
     assert!(!carries(&desc));
 }
 
+/// `DriverWorkaround::HalfConversionFusedWithArithmetic` is keyed on RADV whatever its GPU and on
+/// nothing else: every committed RADV profile carries it (the Radeon 780M, 680M and RX 7800 XT)
+/// and no other committed profile does; the 780M's description under another driver does not.
+/// Such a profile keeps the conversion under the float controls (`QuantizeForm::Controlled`).
+#[test]
+fn radv_carries_the_fused_half_conversion() {
+    use crate::device::profile::DriverWorkaround;
+    let defect = DriverWorkaround::HalfConversionFusedWithArithmetic;
+    let profile_of = |desc: &DeviceDescription| {
+        Device::new(desc.clone(), DevicePolicy::default())
+            .unwrap()
+            .profile()
+            .clone()
+    };
+    let mut radv = 0;
+    for (stem, text) in committed_profiles() {
+        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+        let on_radv = desc.driver_id == Some(vk::DriverId::MESA_RADV);
+        let p = profile_of(&desc);
+        assert_eq!(p.workarounds().contains(&defect), on_radv, "{stem}");
+        if on_radv {
+            radv += 1;
+            assert_eq!(
+                crate::lower::arith::narrow::quantize_form(&p),
+                crate::spirv::builder::QuantizeForm::Controlled,
+                "{stem}"
+            );
+        }
+    }
+    assert!(radv >= 3, "{radv} RADV profiles");
+    let mut desc = profile("amd-780m-radv");
+    assert!(profile_of(&desc).workarounds().contains(&defect));
+    desc.driver_id = Some(vk::DriverId::AMD_OPEN_SOURCE);
+    assert!(!profile_of(&desc).workarounds().contains(&defect));
+}
+
 /// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` is keyed on ANV, whatever its GPU
 /// and release; every committed ANV profile carries it, and no other profile does. The UHD 770's
 /// description under RADV or NVIDIA's driver loses it.

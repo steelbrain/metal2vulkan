@@ -13093,6 +13093,7 @@ variant	metal2vulkan::device::DriverWorkaround::DiscardDropsSimdgroupStores	Disc
 variant	metal2vulkan::device::DriverWorkaround::DontInlineKeepsCalls	DontInlineKeepsCalls
 variant	metal2vulkan::device::DriverWorkaround::EarlyTestsDropMultisampledImageWrites	EarlyTestsDropMultisampledImageWrites
 variant	metal2vulkan::device::DriverWorkaround::FunctionsInlinedAtEveryCall	FunctionsInlinedAtEveryCall
+variant	metal2vulkan::device::DriverWorkaround::HalfConversionFusedWithArithmetic	HalfConversionFusedWithArithmetic
 variant	metal2vulkan::device::DriverWorkaround::HalfConversionPairFolded	HalfConversionPairFolded
 variant	metal2vulkan::device::DriverWorkaround::InterpolationNeedsTheWholeQuad	InterpolationNeedsTheWholeQuad
 variant	metal2vulkan::device::DriverWorkaround::LoadsForwardedIntoLoops	LoadsForwardedIntoLoops

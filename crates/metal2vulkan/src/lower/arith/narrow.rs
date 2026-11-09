@@ -8,7 +8,10 @@
 //! the modes the device's independence ties to them), it is that conversion and its widening, each
 //! decorated `NoContraction`, in an entry declaring those modes ([`QuantizeForm::Controlled`],
 //! [`controlled_modes`]): exact on every such device whose driver keeps the pair (not NVIDIA's,
-//! `DriverWorkaround::HalfConversionPairFolded`), with no fact and no note. Elsewhere, where the
+//! `DriverWorkaround::HalfConversionPairFolded`), with no fact and no note, but for the result of
+//! `float` arithmetic on a driver that fuses the operation into the narrowing (RADV's,
+//! `DriverWorkaround::HalfConversionFusedWithArithmetic`, [`rounds_arithmetic`]), which the module
+//! records as `PrecisionNote::NativeHalfConversion`. Elsewhere, where the
 //! profile has `shaderFloat16`, it is the device's conversion to 16 bits and its widening
 //! ([`QuantizeForm::Converted`]), recording `PrecisionNote::NativeHalfConversion`; without it, the
 //! device's `OpQuantizeToF16` alone ([`QuantizeForm::Device`]), whose result below the smallest
@@ -432,6 +435,84 @@ pub fn rounds_unmeasured(m: &TypedModule, meter: &mut Meter) -> Result<bool, Err
             && has_bit(&widened, r)
             && !m.measured_roundings().contains(&r)
             && !texel(a)
+    });
+    drop((def, widened));
+    meter.release(bytes);
+    Ok(found)
+}
+
+/// Whether module `m` rounds to `half` the result of `float` arithmetic through a conversion pair
+/// (an `OpFConvert` of an `f32` to 16 bits whose result another widens back, as
+/// [`rounds_by_conversion`] finds them): an `f32` addition, subtraction, multiply or fused
+/// multiply-add (`OpFAdd`, `OpFSub`, `OpFMul`, `OpFmaKHR` or `GLSL.std.450 Fma`) whose result the
+/// pair narrows. A driver that fuses that operation into the narrowing
+/// (`DriverWorkaround::HalfConversionFusedWithArithmetic`) rounds its exact result to `half` once,
+/// where Metal rounds the `float` result: the neighbouring `half` where that result lies on a
+/// `half` midpoint, within `PrecisionNote::NativeHalfConversion`'s bound, which the module then
+/// records. One pass over the instructions to find each value's definition and two over the
+/// conversions, with a word and a bit per value of the module charged to `meter` while they run.
+pub fn rounds_arithmetic(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
+    let width = |v: Value| -> Option<u8> {
+        let ty = m.value(v).ok()?.ty;
+        let ty = match m.types().get(ty).ok()? {
+            Type::Vector { elem, .. } => *elem,
+            _ => ty,
+        };
+        match m.types().get(ty).ok()? {
+            Type::Float { width } => Some(*width),
+            _ => None,
+        }
+    };
+    let words = m.values().len().div_ceil(64);
+    let bytes = 8 * m.values().len() + 8 * words;
+    meter.charge(bytes)?;
+    // Each instruction result's definition.
+    let mut def: Vec<Option<&Inst>> = vec![None; m.values().len()];
+    for n in m.blocks().iter().flat_map(|b| &b.insts) {
+        if let Some(slot) = n.result.and_then(|r| def.get_mut(r.index())) {
+            *slot = Some(&n.inst);
+        }
+    }
+    let arithmetic = |v: Value| {
+        matches!(
+            def.get(v.index()).copied().flatten(),
+            Some(
+                Inst::Binary {
+                    op: BinOp::FAdd | BinOp::FSub | BinOp::FMul,
+                    ..
+                } | Inst::Fma { .. }
+                    | Inst::Glsl {
+                        op: GlslOp::Fma,
+                        ..
+                    }
+            )
+        )
+    };
+    let fconverts = || {
+        m.blocks()
+            .iter()
+            .flat_map(|b| &b.insts)
+            .filter_map(|n| match (&n.inst, n.result) {
+                (
+                    Inst::Convert {
+                        op: ConvOp::FConvert,
+                        a,
+                        ..
+                    },
+                    Some(r),
+                ) => Some((*a, r)),
+                _ => None,
+            })
+    };
+    // The narrowings some conversion widens back.
+    let mut widened = vec![0u64; words];
+    for (a, r) in fconverts() {
+        if width(a) == Some(16) && width(r) == Some(32) {
+            set_bit(&mut widened, a);
+        }
+    }
+    let found = fconverts().any(|(a, r)| {
+        width(a) == Some(32) && width(r) == Some(16) && has_bit(&widened, r) && arithmetic(a)
     });
     drop((def, widened));
     meter.release(bytes);

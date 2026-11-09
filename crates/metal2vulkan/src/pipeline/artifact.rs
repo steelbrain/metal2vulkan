@@ -1841,7 +1841,12 @@ pub enum PrecisionNote {
     /// note): NVIDIA, whose driver folds the conversion's round trip even under those controls
     /// (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK, lavapipe, and any device
     /// without them. Without them Vulkan leaves the conversion's rounding mode and its 16-bit
-    /// denormals to the device. The recorded
+    /// denormals to the device. Also recorded under those controls on RADV where the `half` is the
+    /// result of an `f32` addition, subtraction, multiply or fused multiply-add: its compiler fuses
+    /// the operation into the conversion and rounds the exact result once
+    /// (`DriverWorkaround::HalfConversionFusedWithArithmetic`), one unit in the last place from
+    /// Metal's `half` of the `float` result where that result lies on a `half` midpoint. The
+    /// recorded
     /// bound, against Metal's `half(float)` (to nearest even on the half grid, half denormals kept,
     /// infinity from 65520 up, `0x7E00` for a NaN):
     /// - a finite result within one unit in the last place of the `half`: NVIDIA's 615.71.09

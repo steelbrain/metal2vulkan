@@ -2792,6 +2792,14 @@ fn compile_kept<K>(
         && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic);
     let native_widening =
         widens && quantize != crate::spirv::builder::QuantizeForm::Controlled && !measured_widening;
+    // A `half` rounded from `float` arithmetic through the conversion under the float controls,
+    // on a driver that fuses the operation into the narrowing
+    // (`DriverWorkaround::HalfConversionFusedWithArithmetic`): its exact result rounded once,
+    // where Metal rounds the `float` result; the module records the native note.
+    let fused = quantize == crate::spirv::builder::QuantizeForm::Controlled
+        && p.workarounds()
+            .contains(&crate::device::profile::DriverWorkaround::HalfConversionFusedWithArithmetic)
+        && crate::lower::arith::narrow::rounds_arithmetic(&module, m)?;
     // Its NaN's bits, and those of a `half` held widened that a widening to `float` or a `half`
     // `fabs` moves: Metal's where the device's widening and narrowing are measured to answer
     // them (`DriverDeviation::MetalNanMoves`) and the module moves its `half` values only as
@@ -2826,7 +2834,7 @@ fn compile_kept<K>(
         ),
         (device_quantize, PrecisionNote::NativeHalfQuantize),
         (
-            (converts && !measured_conversion) || native_widening,
+            (converts && !measured_conversion) || native_widening || fused,
             PrecisionNote::NativeHalfConversion,
         ),
     ];

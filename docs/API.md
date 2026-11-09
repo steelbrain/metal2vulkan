@@ -4101,7 +4101,11 @@ bound.
   `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV and RADV round through the
   conversion under them, exactly, with no note): NVIDIA, whose driver folds the conversion's round
   trip even under those controls (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK,
-  lavapipe, and any device without them. Also recorded where a `half` read from its bits is the
+  lavapipe, and any device without them. Also recorded under those controls on RADV where the
+  `half` is the result of a `float` addition, subtraction, multiply or fused multiply-add: its
+  compiler fuses the operation into the conversion and rounds the exact result once
+  (`DriverWorkaround::HalfConversionFusedWithArithmetic`), one `half` ulp from Metal's where the
+  `float` result lies on a `half` midpoint. Also recorded where a `half` read from its bits is the
   device's widening, or a `half` encoded to its bits (where they are not the bits it was read from)
   is the device's narrowing, and that conversion is neither under those controls nor measured to be
   Metal's: the conversion on NVIDIA and lavapipe, and `GLSL.std.450 UnpackHalf2x16` and

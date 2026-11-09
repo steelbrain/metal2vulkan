@@ -13,9 +13,12 @@
 //! The module rounds each `half` through the device's conversion of the `float` to 16 bits. Where
 //! the profile takes the deviation (MoltenVK on the Apple M3 Max's macOS 27 identity) the
 //! conversion kernels record no `PrecisionNote::NativeHalfConversion` and every lane is Metal's
-//! word; the `tanh` kernel records it there, as a `half` function computed in `float`. Elsewhere a
-//! kernel that rounds through the conversion records the note, and its lanes are the device's,
-//! which the test prints as `HALF-CONVERSIONS` lines.
+//! word; the `tanh` kernel records it there, as a `half` function computed in `float`. Under the
+//! float controls (ANV, RADV) the conversion is Metal's and records no note, but where the driver
+//! fuses the sum, the product or the fused multiply-add into it and rounds the exact result once
+//! (RADV, `DriverWorkaround::HalfConversionFusedWithArithmetic`), which records it. Elsewhere a
+//! kernel that rounds through the conversion records the note. A kernel that records it may answer
+//! the device's lanes, which the test prints as `HALF-CONVERSIONS` lines.
 
 use super::degrade_notices::on_device;
 use super::driver_deviations::stage_notes;
