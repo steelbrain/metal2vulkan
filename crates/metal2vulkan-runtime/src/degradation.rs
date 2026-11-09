@@ -514,8 +514,8 @@ degradations! {
         /// `RenderTarget`), or a layered pass into a texture whose slices from the resolve slice
         /// hold fewer layers than the pass's, or a pass resolves color into a 3D texture's planes
         /// past its first, or into more than one, on a device whose resolve into a 2D view of a
-        /// 3D image writes its first plane alone (`RuntimeDriverDefect::VolumeResolveFirstPlane`:
-        /// RADV).
+        /// 3D image is written where the view begins only at its first plane
+        /// (`RuntimeDriverDefect::VolumeResolveFirstPlane`: RADV, NVIDIA's).
         ResolveScratch = "resolve-scratch", Performance,
             "the pass resolves into a scratch image, whose render area is copied into the \
              texture after the pass";
@@ -4501,8 +4501,8 @@ impl Device {
                         scratch.layers, texture.layers
                     )
                 } else if super::resolve::is_volume(texture) && super::resolve::first_plane_only(self) {
-                    "the device's resolve into a 2D view of a 3D image writes its first depth plane, \
-                     whatever plane the view begins at (RuntimeDriverDefect::VolumeResolveFirstPlane)"
+                    "the device's resolve into a 2D view of a 3D image is written where the view \
+                     begins only at its first depth plane (RuntimeDriverDefect::VolumeResolveFirstPlane)"
                         .to_owned()
                 } else {
                     "its image cannot be an attachment: the texture's usage lacks `RenderTarget`"

@@ -197,13 +197,14 @@
 //!   ([`ResolveSource`]), which an instance of no draws, and each resolve after the pass, resolves
 //!   from in its place. A memoryless attachment there, which takes no copy, is not built
 //!   (`NotImplemented(DepthStencilResolve)`).
-//! - **A render pass that resolves color into a 3D image's first plane alone** (RADV,
-//!   `RuntimeDriverDefect::VolumeResolveFirstPlane`): its color resolve into a 2D view of a 3D
-//!   image writes the image's first depth plane, whatever plane the view begins at. There a
+//! - **A render pass whose color resolve into a 3D image's planes holds at its first alone** (RADV,
+//!   NVIDIA's, `RuntimeDriverDefect::VolumeResolveFirstPlane`): its color resolve into a 2D view of
+//!   a 3D image is written where the view begins only at the image's first depth plane (RADV writes
+//!   the first plane whatever plane the view begins at, NVIDIA's no plane from plane 1). There a
 //!   resolve into a 3D texture's planes past its first, or into more than one, takes the scratch
 //!   image, whose layers are copied into the planes after the pass (the copy's depth from the
-//!   resolve's first plane); a level of the texture reaching past the attachment, whose clear
-//!   there would be of the planes alone, is not built (`NotImplemented(Render)`).
+//!   resolve's first plane); a level of the texture reaching past the attachment, whose clear there
+//!   would be of the planes alone, is not built (`NotImplemented(Render)`).
 //! - The multisampled attachment of `MultisampleResolve` is stored `DONT_CARE`: Metal leaves its
 //!   texels undefined (the recorded near-equivalent of a `DontCare` store).
 //!
@@ -1170,8 +1171,8 @@ impl Destination {
     /// render pass's depth/stencil resolve (`depth_stencil`) on a device that writes its resolve
     /// attachment image's first layer and level alone ([`first_subresource_only`]) takes the
     /// scratch image where the destination begins at another, and a color resolve on a device
-    /// that writes a 3D image's first plane alone ([`first_plane_only`]) where the destination is
-    /// a 3D texture's planes past its first, or more than one.
+    /// whose resolve into a 3D image holds at its first plane alone ([`first_plane_only`]) where the
+    /// destination is a 3D texture's planes past its first, or more than one.
     fn attach(
         self,
         maker: &CommandBuffer,
@@ -1187,7 +1188,7 @@ impl Destination {
         let misplaced =
             depth_stencil && first_subresource_only(device) && !at_first_subresource(&self.target);
         // Nor does a color resolve into a 3D texture's planes past its first, or into more than
-        // one, on a device that writes the image's first plane whatever plane the view begins at
+        // one, on a device that writes it where the view begins only at the image's first plane
         // ([`first_plane_only`]): the scratch image's layers are copied into the planes.
         let off_plane = !depth_stencil
             && first_plane_only(device)
@@ -1581,7 +1582,7 @@ fn at_first_subresource(target: &Target) -> bool {
 }
 
 /// Whether `device`'s render pass resolves a color attachment into a 2D view of a 3D image's
-/// planes by writing the image's first plane, whatever plane the view begins at
+/// planes where the view begins only at the image's first plane
 /// (`RuntimeDriverDefect::VolumeResolveFirstPlane`).
 pub(super) fn first_plane_only(device: &Device) -> bool {
     device

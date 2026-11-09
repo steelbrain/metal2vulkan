@@ -113,6 +113,14 @@ pub(super) struct Affected {
 ///   refused: a color resolve into a 3D texture's planes past its first, or into more than one,
 ///   goes into a scratch image of the pass's layers, copied into the planes after the pass
 ///   (`resolve.rs`). Every RADV GPU takes the copy until a probe finds it clean.
+/// - NVIDIA's (`NVIDIA_PROPRIETARY`): the same resolve, of a 4x multisampled `R8G8B8A8_UNORM`
+///   attachment, into the 2D view of a 4x4x4 or a 4x4x8 volume whose first layer is depth plane 1
+///   wrote no plane, every byte of the volume as before; into the view beginning at plane 0, 2 or
+///   3 it wrote that plane alone, in any order of the four and three times over into plane 1, on
+///   the RTX 5080 Laptop GPU (`deviceID` 0x2c19, 615.71.09; 3 runs of
+///   `runtime_lane::view_attachments::a_resolve_writes_the_volume_plane_it_names` and a probe of
+///   the orders), where a draw into plane 1 through such a view writes it and the validation layer
+///   reports nothing. The same copy; every NVIDIA GPU takes it until a probe finds it clean.
 ///
 /// `PipelineCacheDataCompiledAtLoad`:
 /// - MoltenVK (`MOLTENVK`): `vkCreatePipelineCache` with initial data reads each shader module's
@@ -577,6 +585,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::VolumeResolveFirstPlane,
         driver: DriverId::MESA_RADV,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::VolumeResolveFirstPlane,
+        driver: DriverId::NVIDIA_PROPRIETARY,
         clean: &[],
     },
     Affected {

@@ -1087,10 +1087,11 @@ pub enum RuntimeDriverDefect {
     /// the object then waits for, so that every object over a chunk's pages lies in one import.
     AliasedImportBlitsUnordered,
     /// A render pass's color resolve into a 2D view of a 3D image (made
-    /// `VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT`, the view's layers depth planes of it) writes the
-    /// image's first depth plane, whatever plane the view begins at. Nothing is refused: the
-    /// runtime resolves into a scratch image of the pass's layers, copied into the planes the
-    /// resolve belongs in after the pass.
+    /// `VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT`, the view's layers depth planes of it) is
+    /// written where the view begins only at the image's first depth plane: RADV writes the first
+    /// plane whatever plane the view begins at, and NVIDIA's driver writes no plane where the view
+    /// begins at plane 1. Nothing is refused: the runtime resolves into a scratch image of the
+    /// pass's layers, copied into the planes the resolve belongs in after the pass.
     VolumeResolveFirstPlane,
 }
 
