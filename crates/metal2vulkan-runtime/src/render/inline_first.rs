@@ -408,7 +408,8 @@ impl RenderLowering {
             counts.pass_not_inline(NotInline::Draws);
             return Ok(None);
         }
-        let device = self.core.device().clone();
+        // Borrowed from the core, which the pass's hold below takes once the objects are found.
+        let device = self.core.device();
         // As its colors' loads stand at the open, before a memoryless color's below.
         let area = inline_area(&self.layout);
         // A memoryless color loaded `DontCare` reads zero where a draw reaches a tile, as the
@@ -441,17 +442,10 @@ impl RenderLowering {
         // `GENERAL`.
         let (none, general) = (Feedback::NONE, vk::ImageLayout::GENERAL);
         let shape = &instance.shape;
-        let pass = render_target::final_pass(&device, &self.layout, shape, at, none, general)?;
+        let pass = render_target::final_pass(device, &self.layout, shape, at, none, general)?;
         let views = instance.views;
-        let framebuffer = render_target::framebuffer_over(
-            &device,
-            &pass,
-            &self.layout,
-            shape,
-            views,
-            none,
-            area,
-        )?;
+        let framebuffer =
+            render_target::framebuffer_over(device, &pass, &self.layout, shape, views, none, area)?;
         let held = self.core.hold_pass()?;
         Ok(Some(InlineBegin {
             pass,
@@ -476,14 +470,14 @@ impl RenderLowering {
             splits,
             area: [width, height],
         } = begin;
-        let device = self.core.device().clone();
-        let raw = device.shared().vk();
+        let shared = self.core.device().shared();
+        let raw = shared.vk();
         if self.current.draws != vk::CommandBuffer::null() {
             // SAFETY: the secondary is recording, only this encoder records it, and nothing
             // recorded into it: no draw, and no query (the pass has no visibility buffer).
             let ended = unsafe { self.core.command_buffer().end_raw(self.current.draws) };
             if ended.is_ok() {
-                device.shared().counts.unrun_instance_ended();
+                shared.counts.unrun_instance_ended();
             }
         }
         let clear_values = render_target::clear_values(&self.layout);
@@ -500,7 +494,7 @@ impl RenderLowering {
         // to its end, which retains them), the render area is the framebuffer's extent, and
         // every image rests in `GENERAL`.
         unsafe { raw.cmd_begin_render_pass(held, &info, vk::SubpassContents::INLINE) };
-        device.shared().counts.render_pass_begun(PassBegun::Inline);
+        shared.counts.render_pass_begun(PassBegun::Inline);
         self.current.draws = held;
         self.current.inline = true;
         self.current.rerecord = None;
@@ -512,6 +506,6 @@ impl RenderLowering {
             later: Vec::new(),
             stood: 0,
         }));
-        device.shared().counts.inline_pass();
+        shared.counts.inline_pass();
     }
 }
