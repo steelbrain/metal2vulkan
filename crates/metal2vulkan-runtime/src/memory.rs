@@ -1209,7 +1209,7 @@ pub(super) enum FreeCause {
     /// `fresh_pages.rs`) and freed as its placement went.
     OwnPages = 5,
     /// Freed as the device was destroyed, its queues idle ([`Memory::destroy`]), or kept no
-    /// longer once it was lost and its recovery carried its objects on ([`Memory::keep_none`]).
+    /// longer once it was lost and its recovery carried its objects on ([`keep_none`]).
     Teardown = 6,
 }
 
@@ -1833,7 +1833,7 @@ pub(super) struct Memory {
     /// ([`Memory::sweep_stale`]).
     next_sweep: Instant,
     /// The device was lost and its recovery carried its objects on (`device/carry.rs`): it keeps
-    /// no empty block for placements it never makes again ([`Memory::keep_none`]).
+    /// no empty block for placements it never makes again ([`keep_none`]).
     keeps_none: bool,
 }
 
@@ -2678,7 +2678,7 @@ impl Memory {
             // SAFETY: nothing is placed in a kept empty block, and no command reads it.
             drop(unsafe { self.let_go(device, stale, FreeCause::KeptStale, None) });
         }
-        // A lost device keeps none ([`Memory::keep_none`]).
+        // A lost device keeps none ([`keep_none`]).
         if self.keeps_none {
             for kept in self.pool(holds, type_index).take_kept() {
                 // SAFETY: as above.
@@ -3004,17 +3004,17 @@ impl Memory {
     /// Free every empty block it keeps, and the blocks made ahead whose making ended, and from
     /// now on every block as it empties: a lost device whose recovery carried its objects on,
     /// none of its command buffers left to record (`device/carry.rs`), on which no placement is
-    /// made again. What it frees is counted as the device's teardown.
-    pub(super) fn keep_none(&mut self, device: &ash::Device) {
+    /// made again. What it frees is counted as the device's teardown. The blocks still being
+    /// made ahead, for the caller to stop with the lock released ([`keep_none`]).
+    fn keep_none(&mut self, device: &ash::Device) -> Vec<ready::Readying> {
         self.keeps_none = true;
-        let mut at = 0;
         let mut ready = Vec::new();
-        while at < self.readying.len() {
-            if !self.readying[at].finished() {
-                at += 1;
-                continue;
+        let mut making = Vec::new();
+        for readying in self.readying.drain(..) {
+            match readying.finished() {
+                true => ready.extend(readying.take().map(|made| made.block)),
+                false => making.push(readying),
             }
-            ready.extend(self.readying.swap_remove(at).take().map(|made| made.block));
         }
         let kept: Vec<Block> = (self.pools.iter_mut())
             .flat_map(Pool::take_kept)
@@ -3025,6 +3025,7 @@ impl Memory {
             // reads it.
             drop(unsafe { self.let_go(device, block, FreeCause::Teardown, None) });
         }
+        making
     }
 
     /// Free every block, those that wait too: the device is being destroyed, its queues idle,
@@ -3853,6 +3854,19 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
     };
     let waited = frees.is_some_and(|frees| frees.wait());
     released > 0 || waited
+}
+
+/// Let `memory` keep no block from now on ([`Memory::keep_none`]): those it keeps empty freed, and
+/// those still being made ahead stopped, each waited for with the lock released (its making
+/// reads its pages), and freed.
+pub(super) fn keep_none(memory: &Mutex<Memory>, device: &ash::Device) {
+    let making = lock(memory).keep_none(device);
+    for readying in making {
+        if let Some(block) = readying.stop() {
+            // SAFETY: nothing is placed in a block made ahead, and no command reads it.
+            drop(unsafe { lock(memory).let_go(device, block, FreeCause::Teardown, None) });
+        }
+    }
 }
 
 /// Keep room for any pooled placement (half a block) in each pool the runtime's encodings and

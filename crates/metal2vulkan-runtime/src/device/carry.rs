@@ -209,7 +209,7 @@ impl DeviceShared {
     /// kernels, the GPU pools' blocks, the mipmap scratch), its parked buffers and images and the
     /// empty blocks it keeps go, and it parks and keeps none from now on. So the objects left on
     /// it hold the bare `VkDevice` and their own memory alone, and a carried object's memory there
-    /// goes back to the device (`Recycler::close`, `Memory::keep_none`). Its teardown destroys the
+    /// goes back to the device (`Recycler::close`, `memory::keep_none`). Its teardown destroys the
     /// rest, and the `VkDevice`, as ever (`DeviceShared`'s drop). Left to the process's end while
     /// it exits.
     fn keep_nothing(&self) {
@@ -231,7 +231,7 @@ impl DeviceShared {
         self.gpu_pools.destroy(self.vk(), &mut lock(&self.memory));
         lock(&self.recycled_buffers).close(self.vk(), &mut lock(&self.memory));
         lock(&self.textures.recycled).close(self.vk(), &mut lock(&self.memory));
-        lock(&self.memory).keep_none(self.vk());
+        crate::memory::keep_none(&self.memory, self.vk());
     }
 }
 
