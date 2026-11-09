@@ -2780,8 +2780,8 @@ impl Memory {
     }
 
     /// The bytes of each live pooled block that holds `holds`, of every memory type, for the
-    /// crate's tests.
-    #[cfg(test)]
+    /// crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(super) fn pooled_block_sizes(&self, holds: Holds) -> Vec<u64> {
         let count = self.types.len() as u32;
         (0..count)
