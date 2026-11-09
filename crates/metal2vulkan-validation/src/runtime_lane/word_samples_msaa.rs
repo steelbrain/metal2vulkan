@@ -70,6 +70,14 @@ pub(super) const WORD_RESOLVE: [Degradation; 1] = [Degradation::WordResolve];
 
 /// The target's width (the probe's), and the pixels the lane draws: its first row.
 const WIDTH: u64 = 16;
+/// The threads of the sample reads' threadgroup: whole simdgroups, and whole subgroups of every
+/// size a kernel's simdgroups run on (32, or the 64 or 128 of wider subgroups split into
+/// simdgroups). A threadgroup of fewer is a partial subgroup on some device (the row's 16 threads
+/// on every one, 32 on the RX 550's 64-wide subgroups), which a kernel with simdgroup semantics
+/// runs on its emulated-simdgroups variant (announced), a route this lane does not read: the
+/// sample reads have them, from the simdgroup barriers that order each thread's stores in its
+/// loop over the samples for Metal's lockstep.
+const GROUP: u64 = 128;
 const PIXELS: usize = 16;
 
 /// Metal's answers for one format and sample count, over the probe's first [`PIXELS`] pixels:
@@ -782,16 +790,9 @@ impl Lane {
         encoder.set_compute_pipeline_state(&state).unwrap();
         encoder.set_buffer(Some(&out), 0, 0).unwrap();
         encoder.set_texture(Some(t), 0).unwrap();
-        // One threadgroup of whole simdgroups, the threads past the row returning: a threadgroup
-        // of the row's 16 threads is a partial simdgroup, which a device whose simdgroups are its
-        // subgroups runs on the kernel's emulated-simdgroups variant (announced), a route this
-        // lane does not read.
-        let width = u64::from(state.thread_execution_width());
+        // One threadgroup of whole subgroups ([`GROUP`]), the threads past the row returning.
         encoder
-            .dispatch_threadgroups(
-                Size::new(1, 1, 1),
-                Size::new(WIDTH.div_ceil(width) * width, 1, 1),
-            )
+            .dispatch_threadgroups(Size::new(1, 1, 1), Size::new(GROUP, 1, 1))
             .unwrap();
         encoder.end_encoding().unwrap();
         command_buffer.commit().unwrap();
