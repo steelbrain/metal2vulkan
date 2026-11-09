@@ -738,6 +738,10 @@ pub(crate) const AMD_RADEON_780M: u32 = 0x15bf;
 /// The `deviceID` of the Radeon RX 7900 XTX (Navi 31) its rows were measured on, under RADV.
 pub(crate) const AMD_RX_7900_XTX: u32 = 0x744c;
 
+/// The `deviceID` of the Radeon RX 550 (Polaris 12, Lexa Pro) its rows were measured on, under
+/// RADV.
+const AMD_RX_550: u32 = 0x699f;
+
 /// The `deviceID` of the Intel UHD Graphics 770 of Raptor Lake-S (the committed capture
 /// `intel-uhd770-rpls-anv`).
 pub(crate) const INTEL_UHD_770_RPL_S: u32 = 0xa780;
@@ -992,7 +996,14 @@ pub enum DriverFact {
     /// 1 x 1 slice alike. There the code a load operation's clear stores depends on the image: 0.1
     /// in an 8-bit unorm channel (25.5 codes) stores `0x1a` in a private optimal image and `0x19` in
     /// a linear image in place over host pages, or in a shadow listing an unsigned-integer view
-    /// format (`runtime_lane::pitched_surfaces`, `no_copy_textures`).
+    /// format (`runtime_lane::pitched_surfaces`, `no_copy_textures`). The same lane on RADV on the
+    /// Radeon RX 550 (Polaris 12, `deviceID` 0x699f), Mesa 26.2.6, at 90c9936538 (2026-11-08):
+    /// 93 fills of 11 8- and 10-bit unorm and snorm formats, in a texel of a level and a whole
+    /// 1 x 1 slice alike, stored a channel's code below the nearest, its scaled value up to 0.37
+    /// of a code past the midpoint (`RGB10A2Unorm`'s 0.549235, 561.87 codes, stored 561). Every
+    /// channel of those fills is the colour first cut to a `half` toward zero, then rounded to
+    /// nearest (0.549235 cuts to 0.548828, 561.45 codes), as its `R16Float` clears store it
+    /// (0.001 as `0x1418`, where Metal stores `0x1419`).
     ColorClearTakesEitherCode,
     /// An optimal colour image may keep its compression state apart from the memory it is bound
     /// to, so a write through a buffer or another image over its bytes can leave its texels as
@@ -2079,6 +2090,11 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         DriverFact::ColorClearTakesEitherCode,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    mesa_on(
+        DriverFact::ColorClearTakesEitherCode,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RX_550),
     ),
     Measured {
         fact: DriverFact::CompressedImagesHideAliasedWrites,
