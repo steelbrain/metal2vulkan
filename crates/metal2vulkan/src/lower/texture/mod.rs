@@ -60,11 +60,11 @@
 //! view, never another cube's face.
 //!
 //! **Clamp-to-edge reads** (MSL 4.1 §6.13). Metal 4.1's `read(sampler s, ...)` through a constexpr
-//! `address::clamp_to_edge` sampler of default state clamps its signed coordinate (plus its offset)
-//! into the level it reads before the access, so only its level, layer, face, or sample index can
-//! be out of bounds, contained as above ([`Edge`]). The evidence is the specification's text: no OS
-//! at hand runs Metal 4.1 to measure it. A read through another constexpr sampler state or an
-//! argument sampler is refused.
+//! `address::clamp_to_edge` sampler of default state reads the base level wherever its level is
+//! one of the texture's (the sampler has no mip filter), its signed coordinate (plus its offset)
+//! clamped into that level before the access, so only its level, layer, face, or sample index can
+//! be out of bounds, contained as above ([`Edge`]). A read through another constexpr sampler
+//! state or an argument sampler is refused.
 //!
 //! **Storage levels**. A storage access reaches its view's base level only
 //! (`OpImageRead`/`OpImageWrite` take no `Lod`). A storage slot that is read or written at a level
@@ -403,9 +403,11 @@ fn read_words(r: &Read) -> u32 {
 }
 
 /// A Metal 4.1 `read(sampler s, ...)` through a constexpr clamp-to-edge sampler (MSL 4.1
-/// §6.13): its signed plane coordinate, plus `offset` where it has one, is clamped into the image
-/// at the read's level before the access, so only a level, layer, face, or sample index is out of
-/// bounds (each as a plain read's).
+/// §6.13): its signed plane coordinate, plus `offset` where it has one, is clamped into the
+/// image's base level, which it reads where its level is one of the image's, so only a level,
+/// layer, face, or sample index is out of bounds (each as a plain read's). Measured on the M3 Max
+/// (macOS 27.0.1, a 2D texture of two levels): a level of 1 reads level 0, clamped into level 0's
+/// extent; a level of 2 reads zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edge {
     /// The per-component offset (2D, 2D array, and 3D; Metal requires `-8..=7`), where not zero.
@@ -3014,9 +3016,16 @@ fn select_read_as(
         None => (texel, None),
     };
     let edge = read_edge(cx, ops, m)?;
+    // A cube's read through the clamp-to-edge sampler clamps nothing: the M3 reads zero at a
+    // coordinate past the face's extent at the read's level, and the base level's texel at one
+    // within it. That read is not built, so it is refused.
+    if edge.is_some() && shape.dim == ImageDim::Cube {
+        return Err(refuse());
+    }
     // Metal 4.1's `sparse_read(sampler s, ...)` is an edge read whose status word the function
-    // observes. What clamp-to-edge addressing does to its residency the specification does not
-    // say, and no OS at hand runs Metal 4.1 to measure it, so it is refused.
+    // observes. What clamp-to-edge addressing does to the residency of a sparse texture's texels
+    // the specification does not say, and the M3 measured it only over a texture that is not
+    // sparse (resident throughout), so it is refused.
     if edge.is_some() && status_use(cx, at).is_some() {
         return Err(refuse());
     }
@@ -3234,11 +3243,13 @@ const EDGE_SAMPLER_WORD: u64 = 0x007B_FF00_0008_0049;
 /// s, ...)` passes `s` and its offset: "Clamp-to-edge applies only when the texture coordinate
 /// (after adding the offset) falls out of bounds. It doesn't apply to other parameters such as
 /// face, array, or lod" (MSL 4.1 §6.13). That is exact for a constexpr sampler whose state is
-/// [`EDGE_SAMPLER_WORD`]'s, an [`Edge`]. What another address mode or another field does to a read
-/// the specification does not say, and no OS at hand runs Metal 4.1 to measure it; an argument
-/// sampler's state is the binder's; so either is refused. The specification's overloads take `int`
-/// coordinates and offsets; a narrower lane, which lowering holds zero-extended, has no overload
-/// whose meaning it could take, so it is refused too.
+/// [`EDGE_SAMPLER_WORD`]'s, an [`Edge`], whose level the M3 measured. The M3 also reads through
+/// the other address modes, border colors, and mip filters (`repeat` and `mirrored_repeat` as
+/// clamp-to-edge, `clamp_to_zero` and `clamp_to_border` the border color, and a mip filter at the
+/// read's level), but those reads are not built, and an argument sampler's state is
+/// the binder's, so either is refused. The specification's overloads take `int` coordinates and
+/// offsets; a narrower lane, which lowering holds zero-extended, has no overload whose meaning it
+/// could take, so it is refused too.
 fn read_edge(cx: &SelectCx<'_>, ops: &Operands<'_>, m: &mut Meter) -> Result<Option<Edge>, Error> {
     let offset = ops.get(TexRole::Offset).filter(|o| !is_zero(cx, *o));
     let edge = match ops.get(TexRole::Sampler) {

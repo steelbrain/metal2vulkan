@@ -2214,7 +2214,9 @@ fn edge_reads_short() -> String {
 /// `address::clamp_to_edge` sampler of default state, read at `int` coordinates, is modelled: a
 /// read through an argument sampler, a repeating one, or a clamp-to-edge one with another field
 /// (linear filtering) or 16-bit coordinates is refused on every profile, never read as out of
-/// bounds; the clamp-to-edge one translates.
+/// bounds, and so is a cube's read through the clamp-to-edge sampler, which the M3 reads unclamped
+/// (zero past the face at the read's level, the base level's texel within it) and which is not
+/// built; the clamp-to-edge one translates.
 #[test]
 fn a_read_through_a_sampler_other_than_clamp_to_edge_is_refused() {
     let Some(sampled) = assemble_text("sampled_reads", SAMPLED_READS) else {
@@ -2231,6 +2233,7 @@ fn a_read_through_a_sampler_other_than_clamp_to_edge_is_refused() {
             (&sampled, "read_arg_sampler"),
             (&edge, "read_repeat"),
             (&edge, "read_linear"),
+            (&edge, "edge_cube"),
             (&short, "edge_2d"),
         ] {
             match typed_module(bc, entry, &p) {
@@ -2249,10 +2252,11 @@ fn a_read_through_a_sampler_other_than_clamp_to_edge_is_refused() {
 }
 
 /// Metal 4.1's `sparse_read(sampler s, ...)` through a clamp-to-edge sampler is an edge read
-/// whose status word the function observes. What clamp-to-edge addressing does to its residency
-/// the specification does not say, and no OS at hand runs Metal 4.1, so it is refused on every
-/// profile, never given the slot residency of a plain read. The same read with its status word
-/// unused is a clamp-to-edge read, and translates.
+/// whose status word the function observes. What clamp-to-edge addressing does to the residency
+/// of a sparse texture's texels the specification does not say, and the M3 measured it only over
+/// a texture that is not sparse, so it is refused on every profile, never given the slot
+/// residency of a plain read. The same read with its status word unused is a clamp-to-edge read,
+/// and translates.
 #[test]
 fn a_sparse_read_through_a_clamp_to_edge_sampler_is_refused() {
     let Some(bc) = assemble_text("sparse_edge_reads", SPARSE_EDGE_READS) else {
@@ -2280,9 +2284,11 @@ fn int(x: i32) -> u32 {
 
 /// A read through a constexpr clamp-to-edge sampler (MSL 4.1 §6.13) reads a coordinate past the
 /// texture, negative or past its extent, at its edge: the coordinate (plus the offset) is clamped
-/// into the level read, lane by lane, as a signed `int`. A level, layer, face, or sample index out
-/// of range is out of bounds as in a plain read, zero with the format's alpha. The evidence is the
-/// specification's text, not a measurement: no OS at hand runs Metal 4.1.
+/// into the base level, lane by lane, as a signed `int`, and the base level is read wherever the
+/// read's level is one of the texture's (the sampler has no mip filter). A level, layer, face, or
+/// sample index out of range is out of bounds as in a plain read, zero with the format's alpha.
+/// Measured on the M3 Max (macOS 27.0.1, Apple metal 32023.922) over 2D, 2D array, 3D, and
+/// `read_write` 2D textures of two levels.
 #[test]
 fn a_clamp_to_edge_read_clamps_its_coordinate_into_the_texture() {
     let Some(bc) = assemble_text("edge_reads", EDGE_READS) else {
@@ -2302,8 +2308,8 @@ fn a_clamp_to_edge_read_clamps_its_coordinate_into_the_texture() {
                 ([MAX, 0, 0, 0], Some((0, 0, 0, [0, 0, 0]))),
                 ([int(i32::MIN), 7, 0, 0], Some((0, 0, 0, [0, 3, 0]))),
                 ([int(i32::MAX), 1, 0, 0], Some((0, 0, 0, [3, 1, 0]))),
-                ([5, 5, 1, 0], Some((1, 0, 0, [1, 1, 0]))),
-                ([int(-5), 9, 1, 0], Some((1, 0, 0, [0, 1, 0]))),
+                ([5, 5, 1, 0], Some((0, 0, 0, [3, 3, 0]))),
+                ([int(-5), 9, 1, 0], Some((0, 0, 0, [0, 3, 0]))),
                 ([0, 0, 2, 0], None),
                 ([1, 1, MAX, 0], None),
             ],
@@ -2343,7 +2349,7 @@ fn a_clamp_to_edge_read_clamps_its_coordinate_into_the_texture() {
             rows: vec![
                 ([int(-1), 5, 1, 0], Some((0, 1, 0, [0, 3, 0]))),
                 ([2, 2, 3, 0], None),
-                ([9, int(-9), 2, 1], Some((1, 2, 0, [1, 0, 0]))),
+                ([9, int(-9), 2, 1], Some((0, 2, 0, [3, 0, 0]))),
                 ([0, 0, 0, 2], None),
                 ([1, 1, MAX, 0], None),
             ],
@@ -2356,20 +2362,7 @@ fn a_clamp_to_edge_read_clamps_its_coordinate_into_the_texture() {
             out: Out::Vec4,
             rows: vec![
                 ([int(-1), 4, 2, 0], Some((0, 0, 0, [0, 3, 2]))),
-                ([7, 7, 7, 1], Some((1, 0, 0, [1, 1, 1]))),
-                ([0, 0, 0, 2], None),
-            ],
-        },
-        ReadCase {
-            entry: "edge_cube",
-            texel: Texel::Float,
-            shape: ([4, 4, 1], 6, 2, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([int(-1), 9, 2, 0], Some((0, 2, 0, [0, 3, 0]))),
-                ([1, 1, 6, 0], None),
-                ([5, 5, 5, 1], Some((1, 5, 0, [1, 1, 0]))),
+                ([7, 7, 7, 1], Some((0, 0, 0, [3, 3, 3]))),
                 ([0, 0, 0, 2], None),
             ],
         },

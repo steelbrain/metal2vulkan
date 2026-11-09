@@ -423,16 +423,16 @@ fn image(
     image: &ImageRef,
     level: Option<ValueId>,
 ) -> BResult<Loaded> {
-    image_in(cx, fb, image, level, None)
+    image_in(cx, fb, image, (level, false), None)
 }
 
 /// [`image`], a heap element read in numeric class `class` where given: through the group's
-/// array of that class (`HeapPlan::cross`).
+/// array of that class (`HeapPlan::cross`). The level is a level view's ([`level_element`]).
 fn image_in(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     image: &ImageRef,
-    level: Option<ValueId>,
+    (level, base): (Option<ValueId>, bool),
     class: Option<TexelClass>,
 ) -> BResult<Loaded> {
     let index = match *image {
@@ -473,7 +473,7 @@ fn image_in(
             flagged: None,
         });
     };
-    let (img, within) = level_element(cx, fb, at, ptr, n, level)?;
+    let (img, within) = level_element(cx, fb, at, ptr, n, (level, base))?;
     Ok(Loaded {
         decl,
         img,
@@ -498,14 +498,16 @@ pub(crate) fn slot_image(
 /// the level is below the bound texture's level count (`PushField::TextureLevels`). A constant
 /// level below `n` indexes the array as is (that element is a neutral where the texture lacks the
 /// level); any other level is clamped below the count first (element 0, a neutral, for a count of
-/// 0), so the access never leaves the array, and indexes it `NonUniform`.
+/// 0), so the access never leaves the array, and indexes it `NonUniform`. Where `base` (a
+/// clamp-to-edge read, which reads the base level wherever its level is the texture's), element
+/// 0 whatever the level, which decides whether it is within alone.
 fn level_element(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     slot: crate::pipeline::sym::SlotRef,
     ptr: SValue,
     n: u32,
-    level: Option<ValueId>,
+    (level, base): (Option<ValueId>, bool),
 ) -> BResult<(SValue, SValue)> {
     let count = cx.push_field(fb, crate::pipeline::sym::PushField::TextureLevels(slot))?;
     let l = match level {
@@ -514,6 +516,10 @@ fn level_element(
     };
     let within = fb.binary(BinOp::ULessThan, l, count)?;
     let element = match fb.const_scalar(l)? {
+        _ if base => {
+            let first = u32s(fb, 1, 0)?;
+            fb.access_chain(ptr, &[first])?
+        }
         Some(k) if k < u64::from(n) => fb.access_chain(ptr, &[l])?,
         _ => {
             let one = u32s(fb, 1, 1)?;
@@ -708,8 +714,8 @@ fn compose(
     Ok(coord)
 }
 
-/// The size a clamp-to-edge read clamped its coordinate into: the image's size at the read's
-/// level clamped into its levels (with the level count and that level), or its size.
+/// The size a clamp-to-edge read clamped its coordinate into: the image's size at its base level
+/// (with the level count and the base level, 0), or its size.
 #[derive(Clone, Copy)]
 struct EdgeSize {
     size: SValue,
@@ -717,9 +723,10 @@ struct EdgeSize {
 }
 
 /// The coordinate of clamp-to-edge read `r` of `img` (MSL 4.1 §6.13): its plane, a signed
-/// coordinate plus its offset, clamped lane-wise into `[0, size - 1]` of the image's size at
-/// `level` (clamped into the image's levels: an out-of-range level reads Metal's out-of-bounds
-/// texel by its own check), then the layer and face as [`coordinate`] composes them, unclamped.
+/// coordinate plus its offset, clamped lane-wise into `[0, size - 1]` of the image's size at its
+/// base level, then the layer and face as [`coordinate`] composes them, unclamped. The sampler
+/// has no mip filter, so a level within the image's reads the base level, measured on the M3
+/// (`Edge`); a `level` past them reads Metal's out-of-bounds texel by its own check.
 fn edge_coordinate(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -732,12 +739,12 @@ fn edge_coordinate(
         return Err(cx.fail("a clamp-to-edge coordinate of a read without its sampler"));
     };
     let edge = match level {
-        Some(l) if decl.usage == ImageUsage::Sampled => {
+        Some(_) if decl.usage == ImageUsage::Sampled => {
             let levels = fb.query(ImageQuery::Levels, img)?;
-            let clamped = clamp_below(fb, l, levels, 1)?;
+            let base = u32s(fb, 1, 0)?;
             EdgeSize {
-                size: fb.query(ImageQuery::SizeLod(clamped), img)?,
-                levels: Some((levels, clamped)),
+                size: fb.query(ImageQuery::SizeLod(base), img)?,
+                levels: Some((levels, base)),
             }
         }
         _ => EdgeSize {
@@ -2377,7 +2384,7 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         live,
         within,
         flagged,
-    } = image_in(cx, fb, &r.image, view, r.heap_class)?;
+    } = image_in(cx, fb, &r.image, (view, r.edge.is_some()), r.heap_class)?;
     let plain = match (volume, r.edge) {
         (true, _) => Some(u32s(fb, coord_len(&decl), 0)?),
         (false, None) => Some(coordinate(cx, fb, &decl, &r.at)?),
@@ -2397,11 +2404,17 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         ImageRef::Slot(index) => sparse_spec(cx, index, r.residency),
         ImageRef::Heap { .. } => None,
     };
-    // A clamp-to-edge read's plane coordinate is clamped into the image first.
+    // A clamp-to-edge read's plane coordinate is clamped into the image's base level first, which
+    // it reads where its level is the image's; past them it accesses its own level, out of bounds
+    // on a device whose robustness answers the read.
     let (mut coord, edge) = match (plain, r.edge) {
         (Some(c), _) => (c, None),
         (None, Some(_)) => {
             let (c, at) = edge_coordinate(cx, fb, &decl, img, r, level)?;
+            if let (Some((levels, base)), Some(l)) = (at.levels, level) {
+                let within = fb.binary(BinOp::ULessThan, l, levels)?;
+                level = Some(fb.select(within, base, l)?);
+            }
             (c, Some(at))
         }
         (None, None) => return Err(cx.fail("a read without its coordinate")),
@@ -2414,7 +2427,7 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
     let mut in_range = None;
     if (r.checked() || spec.is_some()) && !volume {
         let size = match (edge, level) {
-            // The clamp-to-edge size query's, at the level it clamped.
+            // The clamp-to-edge size query's, at the base level it clamped into.
             (Some(at), l) => {
                 if let (Some((levels, clamped)), Some(l)) = (at.levels, l) {
                     let ok = fb.binary(BinOp::ULessThan, l, levels)?;
