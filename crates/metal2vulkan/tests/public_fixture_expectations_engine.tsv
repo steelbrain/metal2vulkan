@@ -2529,6 +2529,8 @@ engine/smw_writers.ll	smw_store	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/smw_writers.ll	smw_depth	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/smw_writers.ll	smw_mask	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/smw_writers.ll	smw_early	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
+engine/snapshot_discard.air.ll	sd_read_discarding	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/snapshot_discard.ll	sd_read_discarding	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/spc_bool_index.air.ll	spc_bool_index	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/spc_bool_index.ll	spc_bool_index	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/spc_num_samples.air.ll	spc_num_samples	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
