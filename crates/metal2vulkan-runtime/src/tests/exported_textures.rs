@@ -935,10 +935,6 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         "EXPORTED-TEXTURES on {name}: the verdicts of exportable blocks: {take:?}; such a block \
          holds every image a plain one does: {covered:?}"
     );
-    let length = 1 << 20;
-    let plain = (device.pooled_check_buffer(length, Holds::Buffers)).unwrap();
-    let exportable = (device.pooled_check_buffer(length, Holds::FdBuffers)).unwrap();
-    assert!(exportable.bound_memory() == BoundMemory::Blocks);
     let usages = [
         TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
@@ -972,99 +968,117 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
             }
         }
     }
-    let in_place = |placement: &Result<TexturePlacement, Error>| {
-        matches!(placement, Ok(TexturePlacement::NotHostPages))
-    };
-    let plain_at: Vec<bool> = (layouts.iter())
-        .map(|(d, offset, row)| in_place(&plain.texture_placement(d, *offset, *row)))
-        .collect();
-    // Why the first few textures of rows past the device's own pitch are shadows over a plain
-    // block's buffer, their notices printed.
-    noticed.store(true, Ordering::Relaxed);
-    let past = (layouts.iter().enumerate())
-        .filter(|&(at, (d, _, row))| {
-            let texel = crate::buffer_texture::texel_bytes(d.pixel_format).unwrap_or(1);
-            !plain_at[at] && *row > (d.width * texel).next_multiple_of(256)
-        })
-        .take(3);
-    for (_, (d, offset, row)) in past {
-        drop(plain.new_texture(d, *offset, *row));
-    }
-    noticed.store(false, Ordering::Relaxed);
-    let lost = |buffer: &Buffer| -> Vec<usize> {
-        (layouts.iter().enumerate())
-            .filter(|&(at, (d, offset, row))| {
-                plain_at[at] && !in_place(&buffer.texture_placement(d, *offset, *row))
+    // Over buffers that keep the bytes between rows, and over buffers that declare them
+    // unobserved (`BufferDescriptor::padding_unobserved`), as a consumer's caches do.
+    for unobserved in [false, true] {
+        let padding = match unobserved {
+            true => "padding unobserved",
+            false => "padding kept",
+        };
+        let length = 1 << 20;
+        let plain = (device.pooled_check_buffer(length, Holds::Buffers)).unwrap();
+        let exportable = (device.pooled_check_buffer(length, Holds::FdBuffers)).unwrap();
+        assert!(exportable.bound_memory() == BoundMemory::Blocks);
+        if unobserved {
+            plain.declare_padding_unobserved();
+            exportable.declare_padding_unobserved();
+        }
+        let in_place = |placement: &Result<TexturePlacement, Error>| {
+            matches!(placement, Ok(TexturePlacement::NotHostPages))
+        };
+        let plain_at: Vec<bool> = (layouts.iter())
+            .map(|(d, offset, row)| in_place(&plain.texture_placement(d, *offset, *row)))
+            .collect();
+        // Why the first few textures of rows past the device's own pitch are shadows over a plain
+        // block's buffer, their notices printed.
+        noticed.store(true, Ordering::Relaxed);
+        let past = (layouts.iter().enumerate())
+            .filter(|&(at, (d, _, row))| {
+                let texel = crate::buffer_texture::texel_bytes(d.pixel_format).unwrap_or(1);
+                !plain_at[at] && *row > (d.width * texel).next_multiple_of(256)
             })
-            .map(|(at, _)| at)
-            .collect()
-    };
-    let product = lost(&exportable);
-    // Of the textures in place over a plain block's buffer, those whose image there is a
-    // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`), which an
-    // exportable block takes none of.
-    let mut pitched = Vec::new();
-    for (at, (d, offset, row)) in layouts.iter().enumerate() {
-        if !plain_at[at] {
-            continue;
+            .take(3);
+        for (_, (d, offset, row)) in past {
+            drop(plain.new_texture(d, *offset, *row));
         }
-        let before = device.work_counts().pooled_pitched_images;
-        drop(plain.new_texture(d, *offset, *row));
-        if device.work_counts().pooled_pitched_images > before {
-            pitched.push(at);
-        }
-    }
-    // As the device's check asks: the images alone, whatever its verdicts.
-    let images = std::thread::scope(|scope| {
-        let thread = scope.spawn(|| {
-            crate::in_place::mark_checking();
-            let lost = lost(&exportable);
-            noticed.store(true, Ordering::Relaxed);
-            for &at in lost.iter().take(3) {
-                let (d, offset, row) = &layouts[at];
-                drop(exportable.new_texture(d, *offset, *row));
+        noticed.store(false, Ordering::Relaxed);
+        let lost = |buffer: &Buffer| -> Vec<usize> {
+            (layouts.iter().enumerate())
+                .filter(|&(at, (d, offset, row))| {
+                    plain_at[at] && !in_place(&buffer.texture_placement(d, *offset, *row))
+                })
+                .map(|(at, _)| at)
+                .collect()
+        };
+        let product = lost(&exportable);
+        // Of the textures in place over a plain block's buffer, those whose image there is a
+        // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`), which an
+        // exportable block takes none of.
+        let mut pitched = Vec::new();
+        for (at, (d, offset, row)) in layouts.iter().enumerate() {
+            if !plain_at[at] {
+                continue;
             }
-            noticed.store(false, Ordering::Relaxed);
-            lost
+            let before = device.work_counts().pooled_pitched_images;
+            drop(plain.new_texture(d, *offset, *row));
+            if device.work_counts().pooled_pitched_images > before {
+                pitched.push(at);
+            }
+        }
+        // As the device's check asks: the images alone, whatever its verdicts.
+        let images = std::thread::scope(|scope| {
+            let thread = scope.spawn(|| {
+                crate::in_place::mark_checking();
+                let lost = lost(&exportable);
+                noticed.store(true, Ordering::Relaxed);
+                for &at in lost.iter().take(3) {
+                    let (d, offset, row) = &layouts[at];
+                    drop(exportable.new_texture(d, *offset, *row));
+                }
+                noticed.store(false, Ordering::Relaxed);
+                lost
+            });
+            thread.join().unwrap()
         });
-        thread.join().unwrap()
-    });
-    let in_place_plain = plain_at.iter().filter(|&&at| at).count();
-    eprintln!(
-        "EXPORTED-TEXTURES on {name}: {} textures tried, {in_place_plain} in place over a plain \
-         block's buffer; over an exportable block's, {} of those lose their place, {} by the \
-         images alone",
-        layouts.len(),
-        product.len(),
-        images.len()
-    );
-    eprintln!(
-        "EXPORTED-TEXTURES on {name}: of those in place over a plain block's buffer, {} take a \
-         DRM_FORMAT_MOD_LINEAR image at Metal's pitch, the rest the device's linear image",
-        pitched.len()
-    );
-    for &at in pitched.iter().take(8) {
-        let (d, offset, row) = &layouts[at];
+        let in_place_plain = plain_at.iter().filter(|&&at| at).count();
         eprintln!(
-            "EXPORTED-TEXTURES on {name}: pitched over a plain block: {:?} {}x{} at {offset}, \
-             rows {row} apart, {:?}",
-            d.pixel_format, d.width, d.height, d.usage
+            "EXPORTED-TEXTURES on {name}, {padding}: {} textures tried, {in_place_plain} in place over a plain \
+             block's buffer; over an exportable block's, {} of those lose their place, {} by the \
+             images alone",
+            layouts.len(),
+            product.len(),
+            images.len()
         );
-    }
-    let mut kinds = std::collections::BTreeMap::new();
-    for &at in &images {
-        let (d, offset, row) = &layouts[at];
-        let placement = exportable.texture_placement(d, *offset, *row);
-        let key = format!("{:?} {:?}", d.pixel_format, placement);
-        *kinds.entry(key).or_insert(0) += 1;
-    }
-    for (kind, count) in kinds {
-        eprintln!("EXPORTED-TEXTURES on {name}: lost by the images: {count} of {kind}");
-    }
-    if take == crate::in_place::FdBlocksTake::Take && covered.is_ok() {
-        assert!(
-            product.is_empty(),
-            "textures that lose their place: {product:?}"
+        eprintln!(
+            "EXPORTED-TEXTURES on {name}, {padding}: of those in place over a plain block's buffer, {} take a \
+             DRM_FORMAT_MOD_LINEAR image at Metal's pitch, the rest the device's linear image",
+            pitched.len()
         );
+        for &at in pitched.iter().take(8) {
+            let (d, offset, row) = &layouts[at];
+            eprintln!(
+                "EXPORTED-TEXTURES on {name}, {padding}: pitched over a plain block: {:?} \
+                 {}x{} at {offset}, rows {row} apart, {:?}",
+                d.pixel_format, d.width, d.height, d.usage
+            );
+        }
+        let mut kinds = std::collections::BTreeMap::new();
+        for &at in &images {
+            let (d, offset, row) = &layouts[at];
+            let placement = exportable.texture_placement(d, *offset, *row);
+            let key = format!("{:?} {:?}", d.pixel_format, placement);
+            *kinds.entry(key).or_insert(0) += 1;
+        }
+        for (kind, count) in kinds {
+            eprintln!(
+                "EXPORTED-TEXTURES on {name}, {padding}: lost by the images: {count} of {kind}"
+            );
+        }
+        if take == crate::in_place::FdBlocksTake::Take && covered.is_ok() {
+            assert!(
+                product.is_empty(),
+                "textures that lose their place: {product:?}"
+            );
+        }
     }
 }
