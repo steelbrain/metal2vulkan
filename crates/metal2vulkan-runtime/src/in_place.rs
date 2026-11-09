@@ -1243,18 +1243,15 @@ impl Device {
         self.current().shared().in_place.line()
     }
 
-    /// The device's check's verdicts now, one line per class for a texture that reads
-    /// (`Pointer: Passed`), then one per class for one that renders (`Pointer renders: Passed`),
-    /// then one per class for one a shader writes (`Pointer writes: Passed`), then one per class
-    /// for one a shader writes over a buffer's rows whose padding may change (`Pointer buffer
-    /// writes: Passed`, `in_place::Padding`), then the same two for one of 1- or 2-byte texels
-    /// (`Pointer narrow writes: Passed`, `Pointer narrow buffer writes: Passed`), each for texels
-    /// that share a line with bytes beside them (`RowEnds::InLines`); then the same eighteen for
-    /// texels that share none (`Pointer, rows on lines: Passed`, `Pointer renders, rows on lines:
-    /// Passed`, `Pointer writes, rows on lines: Passed`, `Pointer buffer writes, rows on lines:
-    /// Passed`, `Pointer narrow writes, rows on lines: Passed`, `Pointer narrow buffer writes,
-    /// rows on lines: Passed`); and what it found changed where one failed (or where only a row's
-    /// padding changed). A runtime extension for the lanes that report it.
+    /// The device's check's verdicts now, one line per class, access and row end (`RowEnds`):
+    /// first those for texels that share a line with bytes beside them, then those for texels that
+    /// share none (`, rows on lines`); within each, the accesses in turn (`Access::ALL`), and for
+    /// each access one line per class, the classes always in one order (`PagesClass::ALL`). A
+    /// line names its class, then its access but for a texture that reads, then its row end where
+    /// the texels share no line: `Pointer: Passed`, `Pointer renders: Passed`, `Pointer writes,
+    /// rows on lines: Passed`. Then the check's notes: what it found changed where a verdict failed
+    /// (or where only a row's padding changed, `in_place::Padding`), and why one is unchecked. A
+    /// runtime extension for the lanes that report it.
     #[doc(hidden)]
     pub fn in_place_check_report(&self) -> Vec<String> {
         self.current().in_place_check_report_now()
