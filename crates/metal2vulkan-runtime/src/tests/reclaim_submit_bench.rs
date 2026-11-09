@@ -29,9 +29,14 @@
 //! arm says, timing each making.
 //!
 //! The arms, one test each:
-//! - **Made by the runtime**: a `Private` buffer of [`RUNTIME_BUFFER_BYTES`] every
-//!   [`RUNTIME_EVERY`], at most [`RUNTIME_BUFFERS`] a phase: the runtime's pools grow, their
-//!   blocks made ahead where it makes them ahead (`WorkCounts::buffer_blocks_made_ahead`).
+//! - **Made by the runtime** and **Made by the runtime, settled**: a `Private` buffer of
+//!   [`RUNTIME_BUFFER_BYTES`] every [`RUNTIME_EVERY`], at most [`RUNTIME_BUFFERS`] a phase: the
+//!   runtime's pools grow, their blocks made ahead where it makes them ahead
+//!   (`WorkCounts::buffer_blocks_made_ahead`), allocated exportable where the device's check of
+//!   such blocks passed (`memory.rs`'s "Buffers in exportable blocks"); the second settles the
+//!   device's in-place check before the phases, as a device of a driver whose check's record
+//!   holds its verdicts knows them as it is made, where the first's check runs beside them, as a
+//!   driver's first device's does.
 //! - **System heap, 64 MiB** and **System heap, 4 MiB**: allocations of the device's first
 //!   memory type that is host-visible and host-coherent but not device-local or cached (where a
 //!   unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of 64 MiB every
@@ -77,8 +82,9 @@
 //! the turnaround each, those of 8 ms or more and of 17 ms or more, the median, 99th percentile and
 //! slowest; the command buffers submitted, those the committing thread submitted
 //! (`WorkCounts::batches_submitted_at_commit`) and the time spent in `vkQueueSubmit`
-//! (`WorkCounts::batch_submit_nanos`); the makings, their median and slowest, and the runtime's
-//! blocks made ahead and in place; the host's reclaim over the phase (`/proc/vmstat`: pages kswapd
+//! (`WorkCounts::batch_submit_nanos`); the makings, their median and slowest, the runtime's
+//! blocks made ahead and in place, its buffers' blocks made exportable and plain, and its buffers
+//! laid in plain blocks while the check was pending or once it refused such blocks; the host's reclaim over the phase (`/proc/vmstat`: pages kswapd
 //! and direct reclaim scanned, compaction stalls, allocation stalls, pages swapped out); the
 //! memory the fragmenting took, the host's free memory and the cgroup's room it was sized from;
 //! the free blocks of each order before and after the fragmenting and after the phase
@@ -524,7 +530,9 @@ fn phase(
          {turn_p99:.3}, slowest {turn_slowest:.3}; command buffers submitted {submitted}, by the \
          committing thread {}, in vkQueueSubmit {:.1} ms, {:.3} ms each; {} makings, ms median \
          {make_median:.1}, slowest {make_slowest:.1}; blocks made ahead {}, in place {}; \
-         reclaim: {}; blocks live {}, empty {}; MemAvailable {} MiB",
+         blocks of the runtime's buffers made exportable {}, made plain {}; buffers in plain \
+         blocks awaiting the check {}, by its refusal {}; reclaim: {}; blocks live {}, empty {}; \
+         MemAvailable {} MiB",
         device.name(),
         submits.len(),
         over(&submits, 8.0),
@@ -537,6 +545,10 @@ fn phase(
         makes.len(),
         counts.buffer_blocks_made_ahead - earlier.buffer_blocks_made_ahead,
         counts.buffer_blocks_made_in_place - earlier.buffer_blocks_made_in_place,
+        counts.fd_buffer_blocks_made - earlier.fd_buffer_blocks_made,
+        counts.fd_buffer_blocks_plain - earlier.fd_buffer_blocks_plain,
+        counts.fd_blocks_awaited - earlier.fd_blocks_awaited,
+        counts.fd_blocks_refused - earlier.fd_blocks_refused,
         reclaim.join(", "),
         counts.memory_blocks_live,
         counts.empty_memory_blocks_live,
@@ -565,7 +577,10 @@ fn memory_type(
 /// The memory an arm makes: its system heap's or its carve-out's.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Arm {
-    Runtime,
+    /// The runtime's buffers, made with the device's in-place check settled first where `settled`.
+    Runtime {
+        settled: bool,
+    },
     SystemHeap {
         bytes: u64,
         export: Option<Handle>,
@@ -602,7 +617,13 @@ fn arm(label: &str, arm: Arm) {
         )
     };
     let making = match arm {
-        Arm::Runtime => Making::Runtime,
+        Arm::Runtime { settled } => {
+            if settled {
+                let known = device.settle_in_place_checks(WAIT);
+                eprintln!("RECLAIM-SUBMIT {label}: the in-place check settled first: {known}");
+            }
+            Making::Runtime
+        }
         Arm::SystemHeap { bytes, export } => Making::Raw {
             index: system_heap(),
             bytes,
@@ -969,7 +990,16 @@ fn reclaim_submit_bench_two_queues_both() {
 #[test]
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_runtime() {
-    arm("made by the runtime", Arm::Runtime);
+    arm("made by the runtime", Arm::Runtime { settled: false });
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_runtime_settled() {
+    arm(
+        "made by the runtime, settled",
+        Arm::Runtime { settled: true },
+    );
 }
 
 #[test]

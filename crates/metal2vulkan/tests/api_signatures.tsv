@@ -2763,6 +2763,8 @@ field	metal2vulkan-runtime::WorkCounts.encoders_reencoded	pub encoders_reencoded
 field	metal2vulkan-runtime::WorkCounts.event_signals_behind_merge	pub event_signals_behind_merge: u64
 field	metal2vulkan-runtime::WorkCounts.event_waits_met	pub event_waits_met: u64
 field	metal2vulkan-runtime::WorkCounts.exported_dma_buf_images	pub exported_dma_buf_images: u64
+field	metal2vulkan-runtime::WorkCounts.fd_blocks_awaited	pub fd_blocks_awaited: u64
+field	metal2vulkan-runtime::WorkCounts.fd_blocks_refused	pub fd_blocks_refused: u64
 field	metal2vulkan-runtime::WorkCounts.fd_buffer_blocks_made	pub fd_buffer_blocks_made: u64
 field	metal2vulkan-runtime::WorkCounts.fd_buffer_blocks_plain	pub fd_buffer_blocks_plain: u64
 field	metal2vulkan-runtime::WorkCounts.feedback_loop_alias_images	pub feedback_loop_alias_images: u64
@@ -3314,6 +3316,7 @@ field	metal2vulkan-runtime::WorkCounts.ycbcr_planes_bound	pub ycbcr_planes_bound
 field	metal2vulkan-runtime::WorkCounts.ycbcr_planes_images	pub ycbcr_planes_images: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_planes_images_bound	pub ycbcr_planes_images_bound: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_planes_images_kept_conversion	pub ycbcr_planes_images_kept_conversion: u64
+field	metal2vulkan-runtime::WorkCounts.ycbcr_planes_images_kept_exportable_block	pub ycbcr_planes_images_kept_exportable_block: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_planes_images_kept_layout	pub ycbcr_planes_images_kept_layout: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_planes_images_kept_memory	pub ycbcr_planes_images_kept_memory: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_refreshes	pub ycbcr_refreshes: u64

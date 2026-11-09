@@ -44,7 +44,9 @@
 //!   (`WorkCounts::fd_buffer_blocks_made`), which the runtime never exports (`export_memory_fd`
 //!   refuses it, `NotExportable`), and each plane is in place, its image naming one of the
 //!   block's handle types, the layer reporting nothing; elsewhere its memory is a plain block,
-//!   each plane in place or the shadow the check decided. Each reads the same bytes.
+//!   each plane in place or the shadow the check decided. Each reads the same bytes. A second
+//!   device of the driver, its shader cache the first's, reads the verdicts from the check's
+//!   record as it is made, and lays its first buffer where they say, none waiting for the check.
 //!
 //! Printed (`EXPORTED-TEXTURES`): what the device exported, and for each plane its image's
 //! alignment, row pitch and size as `vkGetImageMemoryRequirements` and `vkGetImageSubresourceLayout`
@@ -815,4 +817,70 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
         "buffers and textures in blocks allocated exportable name one of their handle types \
          (VUID-vkBindBufferMemory-memory-02726, VUID-vkBindImageMemory-memory-02728)",
     );
+}
+
+/// A device of a driver whose in-place check ran before reads its verdicts from the check's record
+/// as it is made: its first buffer lies in a block allocated exportable where its check passed
+/// such blocks, none waiting for the check (`WorkCounts::fd_blocks_awaited`), and its planes are
+/// in place as the first device's were.
+#[test]
+fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
+    let watched = Watched::default();
+    let scratch = Scratch::new("own-buffer-record");
+    let take = {
+        let first = device(&watched, &scratch.0);
+        assert!(
+            first.settle_in_place_checks(WAIT),
+            "the first device's check answered"
+        );
+        let verdict = |class, access, rows| first.in_place_verdict(class, access, rows);
+        let take = crate::in_place::fd_blocks_take(verdict);
+        let types = crate::device::lock(&first.shared().memory).fd_buffer_types;
+        types.is_ok() && take == crate::in_place::FdBlocksTake::Take
+    };
+    let second = device(&watched, &scratch.0);
+    let name = second.name().to_owned();
+    assert!(
+        second.settle_in_place_checks(Duration::ZERO),
+        "known from the record at once"
+    );
+    let handles = crate::device::lock(&second.shared().memory).fd_handles;
+    let options = ResourceOptions::private();
+    let picture = (second.new_buffer_with_descriptor(
+        BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
+            .with_aligned_byte(LUMA_AT)
+            .with_padding_unobserved(),
+    ))
+    .unwrap();
+    let counts = second.work_counts();
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: the second device's first buffer: {:?}; exportable blocks \
+         made {}, awaited {}, refused {}",
+        picture.bound_memory(),
+        counts.fd_buffer_blocks_made,
+        counts.fd_blocks_awaited,
+        counts.fd_blocks_refused
+    );
+    assert_eq!(
+        counts.fd_blocks_awaited, 0,
+        "no buffer waited for the check"
+    );
+    match take {
+        true => assert!(picture.bound_memory() == BoundMemory::Blocks(handles)),
+        false => assert!(picture.bound_memory() == BoundMemory::Own),
+    }
+    fill(&second, &picture);
+    for plane in PLANES {
+        let descriptor = descriptor(plane, options);
+        let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
+        let texture = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+        if take {
+            assert_eq!(placement, TexturePlacement::NotHostPages, "{plane:?}");
+        }
+        assert!(
+            read(&second, &texture, plane) == want(plane),
+            "{plane:?}: the texels"
+        );
+    }
+    watched.layer_reported_nothing("a second device's buffers and textures");
 }
