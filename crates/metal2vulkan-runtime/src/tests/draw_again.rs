@@ -525,12 +525,9 @@ fn a_draw_after_a_no_copy_buffer_moved_takes_every_step() {
             rectangle(encoder);
         }
     });
-    // Three runs of three draws: one draw again in the first (its first draw begins the pass's
-    // instance), two in each other.
-    assert_eq!(
-        moving.counted(as_before),
-        drawn_alone(1) + 2 * drawn_alone(2)
-    );
+    // Three runs of three draws, two drawing again in each: the first run's first draw, which
+    // begins the pass's instance, is kept as any.
+    assert_eq!(moving.counted(as_before), 3 * drawn_alone(2));
     assert_eq!(moving.commands, reference.commands);
     assert_eq!(moving.words, reference.words, "the pixels of the draws");
 }
