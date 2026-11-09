@@ -74,7 +74,9 @@
 //!   (`DriverFact::SubpixelSnapIsMetals`) is announced (`Degradation::DeviceSubpixelSnap`, at each
 //!   draw).
 //! - **Nearest**: the device's own lines at the width nearest Metal's they draw (`w'`, 1/16 at 0,
-//!   clamped into `lineWidthRange` where it enables `wideLines`, else 1), where neither route above
+//!   clamped into `lineWidthRange` and put on `lineWidthGranularity`'s grid from the range's
+//!   bottom, the nearer step and never 0, where it enables `wideLines`, else 1), where neither
+//!   route above
 //!   draws `w'`, announced (`Degradation::LinesAtNearestWidth`, with why): a mesh draw's lines and
 //!   edges, and a tessellated patch draw's edges, which the band does not draw; lines and edges
 //!   without `tessellationShader`, or of a pipeline state or a draw whose band variant the
@@ -344,10 +346,10 @@ fn route(
     let granularity = f32::from_bits(limits.line_width_granularity_bits);
     let wide_lines = enabled.features.contains(&VkFeature::WideLines);
     // The width nearest the one Metal draws (`w'`, 1/16 at 0) the device's lines draw: in their
-    // range, else 1.
+    // range and on their granularity's grid ([`drawn_width`]), else 1.
     let nearest = |why| LineRoute::Nearest {
         width: match wide_lines {
-            true => w.max(1.0 / 16.0).max(low).min(high),
+            true => drawn_width(w.max(1.0 / 16.0), [low, high], granularity),
             false => 1.0,
         },
         why,
@@ -392,6 +394,22 @@ fn route(
     // Metal draws `w' = 0` as 1/16 (the module docs).
     let half = w.max(1.0 / 16.0) / 2.0;
     LineRoute::Band { half, primitive }
+}
+
+/// The width nearest `w` that lines of `lineWidthRange` `[low, high]` and `lineWidthGranularity`
+/// `granularity` draw as it is: `w` clamped into the range, then the nearer step of the
+/// granularity's grid from `low` (a tie the wider), and not 0 where the range starts at 0 (a line
+/// of width 0 covers no pixel centre). Vulkan rounds a width between two the device draws to "the
+/// nearest supported width" (the specification's line segments), either one at a tie, so a width
+/// off the grid is the driver's to round: on RADV's grid of 1/8 from 0, 1/16 may draw as 0.
+fn drawn_width(w: f32, [low, high]: [f32; 2], granularity: f32) -> f32 {
+    let w = w.max(low).min(high);
+    if granularity <= 0.0 {
+        return w;
+    }
+    let first = if low > 0.0 { 0.0 } else { 1.0 };
+    let steps = ((w - low) / granularity + 0.5).floor().max(first);
+    (low + steps * granularity).min(high)
 }
 
 impl ShapeInputs<'_> {

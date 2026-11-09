@@ -3312,7 +3312,8 @@ bound.
   at a width other than 1 (Apple's `setLineWidth:`), or of a triangle's edges in fill mode `Lines`
   or of a mesh draw, that neither the device's own lines at that width nor the band variant draws,
   drawn by the device's own lines at the width nearest it they draw: the width clamped into
-  `lineWidthRange` where the device enables `wideLines`, else 1. That is a mesh draw's lines and
+  `lineWidthRange` and put on the nearer step of `lineWidthGranularity`'s grid from its bottom
+  (never 0) where the device enables `wideLines`, else 1. That is a mesh draw's lines and
   edges and a tessellated patch draw's edges where the device's lines do not draw the width (every
   such draw on MoltenVK), lines and edges on a device without `tessellationShader` whose lines do
   not draw them or of a pipeline state or a draw whose band variant the translator refuses (and

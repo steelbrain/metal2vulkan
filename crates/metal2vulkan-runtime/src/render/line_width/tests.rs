@@ -59,16 +59,31 @@ fn device(stem: &str) -> Device {
 }
 
 /// The width nearest the one Metal draws for `w` (`w`, 1/16 at 0) the device's lines draw: that
-/// clamped into `lineWidthRange` where the device enables `wideLines`, else 1 (the module docs,
-/// written apart from the route).
+/// clamped into `lineWidthRange`, then the nearest step of `lineWidthGranularity`'s grid from the
+/// range's bottom (a tie the wider, never 0), where the device enables `wideLines`, else 1 (the
+/// module docs, written apart from the route).
 fn nearest(profile: &DeviceProfile, w: f32) -> f32 {
-    let [low, high] = profile.limits().line_width_range_bits.map(f32::from_bits);
+    let limits = profile.limits();
+    let [low, high] = limits.line_width_range_bits.map(f32::from_bits);
+    let step = f32::from_bits(limits.line_width_granularity_bits);
     let w = if w == 0.0 { 1.0 / 16.0 } else { w };
-    match profile.enabled().features.contains(&VkFeature::WideLines) {
-        true if w < low => low,
-        true if w > high => high,
-        true => w,
-        false => 1.0,
+    if !profile.enabled().features.contains(&VkFeature::WideLines) {
+        return 1.0;
+    }
+    let w = w.clamp(low, high);
+    if step <= 0.0 {
+        return w;
+    }
+    // The grid's steps either side of `w`, the wider at a tie, and the first above 0.
+    let below = low + ((w - low) / step).floor() * step;
+    let above = below + step;
+    let nearer = match w - below < above - w {
+        true => below,
+        false => above,
+    };
+    match nearer > 0.0 {
+        true => nearer.min(high),
+        false => (low + step).min(high),
     }
 }
 

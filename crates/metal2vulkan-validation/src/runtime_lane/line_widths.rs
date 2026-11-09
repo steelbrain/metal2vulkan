@@ -259,13 +259,27 @@ impl LineFacts {
     }
 
     /// The width nearest the one Metal draws for `width` (1/16 at 0) that the device's lines
-    /// draw: in their range, 1 without `wideLines` (the runtime's docs, written apart from it).
+    /// draw: in their range, on their granularity's grid from its bottom (the nearer step, a tie
+    /// the wider, never 0), 1 without `wideLines` (the runtime's docs, written apart from it).
     fn nearest(self, width: f32) -> f32 {
         let w = metal_width(width).max(1.0 / 16.0);
         let [low, high] = self.range;
-        match self.wide_lines {
-            true => w.clamp(low, high),
-            false => 1.0,
+        if !self.wide_lines {
+            return 1.0;
+        }
+        let w = w.clamp(low, high);
+        let step = self.granularity;
+        if step <= 0.0 {
+            return w;
+        }
+        let below = low + ((w - low) / step).floor() * step;
+        let nearer = match w - below < step / 2.0 {
+            true => below,
+            false => below + step,
+        };
+        match nearer > 0.0 {
+            true => nearer.min(high),
+            false => (low + step).min(high),
         }
     }
 
