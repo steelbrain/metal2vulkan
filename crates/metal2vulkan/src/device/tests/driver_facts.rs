@@ -417,6 +417,7 @@ const HEAP_MULTISAMPLE_COLORS: DriverFact =
     DriverFact::MultisampleColorImagesLieAsMetalHeapTextures;
 const LINE_TIES: DriverFact = DriverFact::LineTiesAreMetals;
 const SUBPIXEL_SNAP: DriverFact = DriverFact::SubpixelSnapIsMetals;
+const CLEARED_DEPTH: DriverFact = DriverFact::ClearedDepthAtStandardPositions;
 
 /// Each committed profile's driver has the runtime's driver facts its rows name, on its vendor and
 /// GPU, at its release as at any other.
@@ -680,13 +681,14 @@ fn nvidia_s_every_1024th_signalling_submit_stall_holds_on_the_gpu_measured() {
 /// range, as RADV does on every GPU, and takes no answer measured on the 780M alone (its block
 /// decodes, `DONT_CARE` stores, interlocked split, sampled fetch), at another release too. Under
 /// the RX 7900 XTX's (0x744c) it takes the one answer measured there too, BC1 to BC3's block
-/// decode, and none of the 780M's others. Whether its submissions merge and whether its pointer
-/// imports follow their address are no facts of the table: the runtime's device checks answer
-/// them on each device (`submit_check.rs` in the runtime), so a GPU no row names takes those
-/// paths too.
+/// decode, and none of the 780M's others; under the RX 550's (0x699f) the one answer measured
+/// there, a cleared depth at the standard positions. Whether its submissions merge and whether
+/// its pointer imports follow their address are no facts of the table: the runtime's device
+/// checks answer them on each device (`submit_check.rs` in the runtime), so a GPU no row names
+/// takes those paths too.
 #[test]
 fn a_radv_gpu_no_row_names_takes_radv_s_driver_wide_fact_alone() {
-    use crate::device::driver_facts::AMD_RX_7900_XTX;
+    use crate::device::driver_facts::{AMD_RX_550, AMD_RX_7900_XTX};
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
     let text = std::fs::read_to_string(dir.join("amd-780m-radv.json")).expect("amd-780m-radv");
     let phoenix = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
@@ -697,7 +699,12 @@ fn a_radv_gpu_no_row_names_takes_radv_s_driver_wide_fact_alone() {
         answers.union(&measured).copied().collect()
     );
     let xtx = BTreeSet::from([DriverFact::RobustIndexFetchReadsZero, COLOR_BLOCKS]);
-    for (device_id, facts) in [(AMD_RX_7900_XTX, &xtx), (0x1114, &measured)] {
+    let rx550 = BTreeSet::from([DriverFact::RobustIndexFetchReadsZero, CLEARED_DEPTH]);
+    for (device_id, facts) in [
+        (AMD_RX_7900_XTX, &xtx),
+        (AMD_RX_550, &rx550),
+        (0x1114, &measured),
+    ] {
         let mut unlisted = phoenix.clone();
         unlisted.device_id = device_id;
         assert_eq!(&unlisted.driver_facts(), facts, "{device_id:#x}");

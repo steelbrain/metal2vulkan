@@ -60,6 +60,12 @@
 //!   So is a cleared attachment the pass's first instance leaves out where no whole-subresource
 //!   clear may stand for its load operation (`render.rs`'s `cleared_ahead`), over the render area
 //!   where it stores nothing.
+//! - A depth a pass at custom sample positions clears, on a driver that stores and tests a
+//!   depth its pass clears at the standard positions there
+//!   (`DriverFact::ClearedDepthAtStandardPositions`), is cleared before the pass the same way
+//!   wherever its clear reaches, over the render area where the pass does not store it, a
+//!   memoryless one too, and the pass then loads it: a pass that loads the depth takes the
+//!   positions (`sample_positions.rs`).
 //! - A pass whose first instance records inline clears none before it: that instance, begun at a
 //!   draw that records (of a vertex and an instance at least), renders over the reach its colors
 //!   share, and its load operations' clear reaches it (`render/inline_first.rs`). Unmeasured on
@@ -76,6 +82,7 @@ use super::tracker::{Barrier, Use};
 use super::values::StorageMode;
 use super::Device;
 use ash::vk;
+use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::format::ClearRoute;
 use metal2vulkan::metal::PixelFormat;
 
@@ -717,10 +724,22 @@ impl ReachClears {
                 value: vk::ClearValue { color: color.clear },
             });
         }
+        // A depth the pass clears at custom sample positions on a driver that stores and tests
+        // it at the standard ones there (`DriverFact::ClearedDepthAtStandardPositions`): cleared
+        // before the pass, memoryless or unstored too, so that the pass loads it, which takes the
+        // positions. One the pass does not store is cleared over the render area alone.
+        let positioned = !layout.sample_positions.is_empty()
+            && device
+                .properties()
+                .driver_facts
+                .contains(&DriverFact::ClearedDepthAtStandardPositions);
+        let positioned_depth = |ds: &super::render_pass::DepthStencilTarget| {
+            positioned && ds.depth.is_some_and(|a| a.load == LoadAction::Clear)
+        };
         if let Some(ds) = layout
             .depth_stencil
             .as_ref()
-            .filter(|ds| ds.separate.is_none() && !memoryless(&ds.target))
+            .filter(|ds| ds.separate.is_none() && (!memoryless(&ds.target) || positioned_depth(ds)))
         {
             let cleared_aspect = |aspect: Option<&super::render_pass::AspectTarget>| {
                 aspect.is_some_and(|a| {
@@ -731,7 +750,7 @@ impl ReachClears {
                 cleared_aspect(ds.depth.as_ref()),
                 cleared_aspect(ds.stencil.as_ref()),
             );
-            let extent = cleared(layout, ds.target.extent, called);
+            let reached = cleared(layout, ds.target.extent, called);
             let mut value = vk::ClearDepthStencilValue::default();
             for aspect in [ds.depth.as_ref(), ds.stencil.as_ref()]
                 .into_iter()
@@ -748,12 +767,15 @@ impl ReachClears {
                 Some((loads, tiles)) => (Some(tiles), [loads.depth, loads.stencil]),
                 None => (None, [false, false]),
             };
+            let forced = positioned_depth(ds);
             let parts = [
-                ([depth && !bound[0], stencil && !bound[1]], None),
-                ([depth && bound[0], stencil && bound[1]], tiles),
+                ([depth && !bound[0], stencil && !bound[1]], None, reached),
+                ([depth && bound[0], stencil && bound[1]], tiles, reached),
+                ([forced && !depth, false], None, area),
             ];
-            for ([depth, stencil], tiles) in parts {
-                if !(depth || stencil) || (extent == area && tiles.is_none()) {
+            for ([depth, stencil], tiles, extent) in parts {
+                let reaches = extent != area || tiles.is_some() || (forced && depth);
+                if !(depth || stencil) || !reaches {
                     continue;
                 }
                 let rects = tiles.map_or_else(|| vec![rect(extent)], |t| t.rects(extent));

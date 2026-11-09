@@ -742,6 +742,9 @@ pub(crate) const AMD_RADEON_780M: u32 = 0x15bf;
 /// The `deviceID` of the Radeon RX 7900 XTX (Navi 31) its rows were measured on, under RADV.
 pub(crate) const AMD_RX_7900_XTX: u32 = 0x744c;
 
+/// The `deviceID` of the Radeon RX 550 (Polaris 12) its rows were measured on, under RADV.
+pub(crate) const AMD_RX_550: u32 = 0x699f;
+
 /// The `deviceID` of the Intel UHD Graphics 770 of Raptor Lake-S (the committed capture
 /// `intel-uhd770-rpls-anv`).
 pub(crate) const INTEL_UHD_770_RPL_S: u32 = 0xa780;
@@ -1483,6 +1486,18 @@ pub enum DriverFact {
     /// the runtime announces `device-subpixel-snap` at each draw whose lines or edges the band
     /// draws (`render/line_width.rs`).
     SubpixelSnapIsMetals,
+    /// A pass at custom sample positions whose load operation clears its depth attachment
+    /// (`VK_ATTACHMENT_LOAD_OP_CLEAR`) stores and tests each sample's depth at the standard
+    /// position of its index, at every draw of the pass, while it covers each sample at its custom
+    /// one: the depth is the triangle's plane where the standard position lies. A pass that loads
+    /// the depth (`VK_ATTACHMENT_LOAD_OP_LOAD`) takes the custom positions, whatever cleared it
+    /// before (a render pass of the attachment alone, by its load operation or by
+    /// `vkCmdClearAttachments`). Vulkan rasterizes a depth attachment made with
+    /// `VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT` at the pass's locations, as
+    /// Metal does. On a driver with it, the depth a pass at custom positions clears is cleared
+    /// before the pass by a render pass of its own, which the pass then loads (`clear_reach.rs` in
+    /// the runtime), memoryless and unstored ones too.
+    ClearedDepthAtStandardPositions,
 }
 
 impl DriverFact {
@@ -1870,6 +1885,20 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// lavapipe, x86, LLVM 21.1.8; and MoltenVK 1.4.1 on the M4, whose `runtime_lane::sample_positions`
 /// passed rendering the texture's own image (at 53ae2b964). There the RTX 3090 passed through the
 /// stand-in.
+///
+/// `ClearedDepthAtStandardPositions`, measured by `runtime_lane::sample_positions` and probes of
+/// it on RADV, Mesa 26.2.6, on the Radeon RX 550 (POLARIS12), 2026-11-09: plane X drawn at four
+/// custom positions into a 4x `Depth32Float`, `Depth16Unorm` and `Depth32Float_Stencil8` its pass
+/// cleared stored each sample's depth at the standard position of its index (16 of 16 samples), and
+/// so did a second draw of the pass and a pass whose `DontCare` load the runtime clears; its own
+/// test under `Less` against a clear of 0.4375 drew samples 0 and 2 of each first-column pixel,
+/// the standard positions', where Metal draws 0 and 1; a pass at four other positions that loaded
+/// that depth drew and stored at its own positions. Cleared by a pass without a draw and then
+/// loaded and drawn at the custom positions, the depth was Metal's (16 of 16), and so was every
+/// such pass of the lane with the depth cleared before it by `vkCmdClearAttachments` in a render
+/// pass of its own. The pass covered each sample at the custom positions throughout (the lane's
+/// coverage and stencil cases passed). The row names the RX 550 alone: RADV on the Radeon 780M
+/// keeps the custom positions' depths (`PositionedDepthReadAtStandardPositions`'s measure).
 ///
 /// `TimestampPoolsAreCounterSampleBuffers` (the probe): MoltenVK 1.4.1 on the M3 Max
 /// and the M4 made 32 timestamp query pools and failed the 33rd, and failed a pool of 8192
@@ -2297,6 +2326,11 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::SubpixelSnapIsMetals)
     },
+    mesa_on(
+        DriverFact::ClearedDepthAtStandardPositions,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RX_550),
+    ),
 ];
 
 /// Intel's `vendorID`.

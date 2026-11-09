@@ -99,6 +99,14 @@
 //! its image was made with the flag, announced the same way; an image of that kind that does not
 //! copy both ways is refused (`NotImplemented(SamplePositionsAtBegin)`).
 //!
+//! **A driver that clears the depth at the standard positions**. RADV on the Radeon RX 550
+//! (`metal2vulkan::device::DriverFact::ClearedDepthAtStandardPositions`) stores and tests the
+//! depth of a pass at custom positions whose load operation clears it at the standard positions,
+//! at every draw, though it covers each sample at the custom ones, and takes the custom positions
+//! in a pass that loads it. On such a driver the depth such a pass clears is cleared before the
+//! pass by a render pass of the attachment alone and loaded in the pass (`clear_reach.rs`),
+//! memoryless and unstored ones too; nothing is announced, the answer being Metal's.
+//!
 //! **Not built** (`NotImplemented(SamplePositionsAtBegin)`): custom positions in a pass whose
 //! depth/stencil attachment is a caller's image not so made, of a format the device does not copy
 //! both ways, which the stand-in's copies need; a stencil-only attachment on a device without a

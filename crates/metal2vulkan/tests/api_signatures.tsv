@@ -11753,6 +11753,7 @@ variant	metal2vulkan-runtime::DriverFact::Bc6hBlockDecodeIsMetals	Bc6hBlockDecod
 variant	metal2vulkan-runtime::DriverFact::Bc7BlockDecodeIsMetals	Bc7BlockDecodeIsMetals
 variant	metal2vulkan-runtime::DriverFact::BlendlessColorAttachmentsWarn	BlendlessColorAttachmentsWarn
 variant	metal2vulkan-runtime::DriverFact::ChannelBlockDecodeIsMetals	ChannelBlockDecodeIsMetals
+variant	metal2vulkan-runtime::DriverFact::ClearedDepthAtStandardPositions	ClearedDepthAtStandardPositions
 variant	metal2vulkan-runtime::DriverFact::ColorBlockDecodeIsMetals	ColorBlockDecodeIsMetals
 variant	metal2vulkan-runtime::DriverFact::ColorClearIsMetals	ColorClearIsMetals
 variant	metal2vulkan-runtime::DriverFact::ColorImagesLieAsMetalHeapTextures	ColorImagesLieAsMetalHeapTextures
@@ -13048,6 +13049,7 @@ variant	metal2vulkan::device::DriverFact::Bc6hBlockDecodeIsMetals	Bc6hBlockDecod
 variant	metal2vulkan::device::DriverFact::Bc7BlockDecodeIsMetals	Bc7BlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::BlendlessColorAttachmentsWarn	BlendlessColorAttachmentsWarn
 variant	metal2vulkan::device::DriverFact::ChannelBlockDecodeIsMetals	ChannelBlockDecodeIsMetals
+variant	metal2vulkan::device::DriverFact::ClearedDepthAtStandardPositions	ClearedDepthAtStandardPositions
 variant	metal2vulkan::device::DriverFact::ColorBlockDecodeIsMetals	ColorBlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::ColorClearIsMetals	ColorClearIsMetals
 variant	metal2vulkan::device::DriverFact::ColorImagesLieAsMetalHeapTextures	ColorImagesLieAsMetalHeapTextures
