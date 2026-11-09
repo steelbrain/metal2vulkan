@@ -2542,7 +2542,8 @@ impl Memory {
     }
 
     /// The external memory `placement`'s memory is, from its own record, which an image bound in
-    /// it names (`VkExternalMemoryImageCreateInfo::handleTypes`): an exported block's handle type
+    /// it names (`VkExternalMemoryImageCreateInfo::handleTypes`): the handle types an exported
+    /// block was allocated exportable as, one of which the image names
     /// (`VUID-vkBindImageMemory-memory-02728`), an import's (`VUID-vkBindImageMemory-memory-02989`:
     /// host allocations for the caller's pages imported by their pointer, a read-only view of them,
     /// pages the runtime mapped and imported, and a guest RAM's chunk imported so; dma-bufs for the
