@@ -213,15 +213,17 @@
       ],
       "bounds": {
         "addressable_buffers_made": 2,
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 201326592,
+        "image_blocks_made_in_place": 1,
         "new_buffer_bytes_cleared": 608,
-        "object_churn.buffers_evicted": 3,
-        "object_churn.buffers_parked": 3,
+        "object_churn.buffers_evicted": 5,
+        "object_churn.buffers_parked": 5,
         "object_churn.images_other": 2,
         "object_churn.making_sites_dropped": 4,
         "object_churn.textures_in_heaps": 2,
         "object_churn.vk_buffer_bindings": 5,
-        "object_churn.vk_buffers_destroyed": 3,
+        "object_churn.vk_buffers_destroyed": 5,
         "object_churn.vk_buffers_made": 5,
         "object_churn.vk_image_bindings": 2,
         "object_churn.vk_images_destroyed": 2,
@@ -230,7 +232,9 @@
       },
       "composed": {
         "addressable_buffers_made": 2,
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 201326592,
+        "image_blocks_made_in_place": 1,
         "pooled_memory_blocks_made": 3
       }
     }

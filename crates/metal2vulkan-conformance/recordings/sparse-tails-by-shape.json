@@ -2523,17 +2523,19 @@
       ],
       "bounds": {
         "addressable_buffers_made": 2,
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 201326592,
+        "image_blocks_made_in_place": 1,
         "new_buffer_bytes_cleared": 23712,
-        "object_churn.buffers_evicted": 69,
-        "object_churn.buffers_parked": 79,
-        "object_churn.buffers_recycled": 10,
+        "object_churn.buffers_evicted": 138,
+        "object_churn.buffers_parked": 157,
+        "object_churn.buffers_recycled": 19,
         "object_churn.images_other": 78,
         "object_churn.making_sites_dropped": 156,
         "object_churn.textures_in_heaps": 78,
-        "object_churn.vk_buffer_bindings": 147,
-        "object_churn.vk_buffers_destroyed": 69,
-        "object_churn.vk_buffers_made": 147,
+        "object_churn.vk_buffer_bindings": 138,
+        "object_churn.vk_buffers_destroyed": 138,
+        "object_churn.vk_buffers_made": 138,
         "object_churn.vk_image_bindings": 78,
         "object_churn.vk_images_destroyed": 78,
         "object_churn.vk_images_made": 78,
@@ -2541,7 +2543,9 @@
       },
       "composed": {
         "addressable_buffers_made": 2,
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 201326592,
+        "image_blocks_made_in_place": 1,
         "pooled_memory_blocks_made": 3
       }
     }

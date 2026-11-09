@@ -9511,6 +9511,7 @@
         "bare_starts": 36,
         "batches_held_past_a_look": 36,
         "batches_with_none_pending": 36,
+        "buffer_blocks_made_in_place": 2,
         "command_buffers_begun": 144,
         "command_buffers_begun_batch_barriers": 36,
         "command_buffers_begun_continuations": 36,
@@ -9542,9 +9543,10 @@
         "functions_translated": 1,
         "gate_waits": 36,
         "gate_waits_slept": 36,
-        "heads_held_for_host_steps": 110,
+        "heads_held_for_host_steps": 112,
         "heap_tables_worked_out": 36,
         "host_steps_recorded": 36,
+        "image_blocks_made_in_place": 1,
         "new_buffer_bytes_cleared": 24832,
         "object_churn.buffers_evicted": 21,
         "object_churn.buffers_parked": 37,
@@ -9559,11 +9561,11 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 36,
         "scheduled_where_submitted": 36,
-        "scheduler_passes": 146,
-        "scheduler_passes_by_waiters": 18,
-        "scheduler_sleeps": 112,
+        "scheduler_passes": 148,
+        "scheduler_passes_by_waiters": 22,
+        "scheduler_sleeps": 115,
         "scheduler_wakes_commit": 36,
-        "scheduler_wakes_host": 76,
+        "scheduler_wakes_host": 79,
         "shader_modules_made": 1,
         "shader_modules_shared": 35,
         "slot_returns": 36,
@@ -9574,15 +9576,17 @@
         "trail_waits": 36,
         "variant_pipelines_made": 36,
         "wakes_completion_waiters": 36,
-        "wakes_spared": 265
+        "wakes_spared": 267
       },
       "moving": {
         "gate_waits_slept": 34,
         "host_steps_recorded": 34
       },
       "composed": {
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 201326592,
         "dispatch_used_resources_listed": 1,
+        "image_blocks_made_in_place": 1,
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {

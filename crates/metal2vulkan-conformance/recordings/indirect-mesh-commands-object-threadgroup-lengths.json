@@ -508,6 +508,7 @@
         "argument_tables_retained": 1,
         "bare_starts": 1,
         "batches_with_none_pending": 1,
+        "buffer_blocks_made_in_place": 2,
         "command_buffers_begun": 9,
         "command_buffers_begun_batch_barriers": 2,
         "command_buffers_begun_continuations": 1,
@@ -567,6 +568,8 @@
         "heap_tables_worked_out": 4,
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 1,
+        "image_blocks_made_ahead": 1,
+        "image_blocks_made_in_place": 2,
         "images_started_on_the_host": 1,
         "indirect_draws_recorded": 2,
         "indirect_record_bytes_copied": 13488,
@@ -621,9 +624,12 @@
         "gate_waits_slept": 0
       },
       "composed": {
+        "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 1342177280,
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 0,
+        "image_blocks_made_ahead": 0,
+        "image_blocks_made_in_place": 2,
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {

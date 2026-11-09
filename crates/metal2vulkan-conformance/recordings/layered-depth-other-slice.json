@@ -2633,6 +2633,7 @@
         "gate_waits_slept": 1,
         "graphics_pipelines_looked_up": 3,
         "heap_tables_worked_out": 6,
+        "image_blocks_made_in_place": 1,
         "linked_use_questions_asked": 2,
         "new_buffer_bytes_cleared": 5472,
         "object_churn.buffers_parked": 27,
@@ -2657,6 +2658,7 @@
         "render_passes_made": 6,
         "resident_textures_looked_at": 3,
         "scheduled_where_submitted": 1,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
@@ -2712,6 +2714,7 @@
         "device_memory_allocated": 201326592,
         "draw_shapes_made": 3,
         "functions_translated": 2,
+        "image_blocks_made_in_place": 1,
         "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 6,
         "stage_entries_specialized": 2
