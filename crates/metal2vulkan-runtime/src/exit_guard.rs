@@ -130,24 +130,34 @@
 //!   Measured: before, on the M3 Max, a pool's making for a lane's third device, made on an
 //!   instance of its own with the layer loaded since the first, called `vkGetPipelineCacheData` or
 //!   `vkDestroyPipelineCache` at exit after the layer's handler ran and before the hook did, and
-//!   the layer ended the process (`SIGABRT`). The hook then runs before every destructor registered
-//!   before its last registration. Since a section publishes nothing before it ended, an exit the
-//!   program makes once it learned of a section's work (from a handler, a wait, a status) comes
-//!   after that section's registration. Measured: while the scheduler posted a command buffer's
-//!   scheduling inside its section, an exit from a scheduled handler crashed the completion's poll
-//!   on MoltenVK in 10 runs of 10. The hole left: a static first made by a making in progress in
-//!   the last interval before the exit, or once the registrar reached its bound, or by a making on
-//!   the program's own thread (in no section, which the hook does not wait for), or by another call
-//!   (not a making) after the hook's last registration, when the process exits before the next
-//!   registration. The program's own calls but its makings
+//!   the layer ended the process (`SIGABRT`). The instance of a device the runtime adopts was the
+//!   program's, so the adoption registers the hook again too, and the program reports an instance
+//!   it makes itself ([`program_instance_made`]), which does the same. Measured: before, on the
+//!   M3 Max (the validation layer from Homebrew, MoltenVK 1.4.2), a child process whose own
+//!   instance was made after its device, while a loop without bound ran on
+//!   (`command_buffer/rerun.rs`), ended with `SIGABRT` inside the layer in 2 and 3 exits of 20
+//!   (its lookup of the device, at the loop's next `vkResetFences`, `vkWaitForFences` or
+//!   `vkDestroyCommandPool`), and 0 of 20 without that instance; on lavapipe, a lane run in one
+//!   process ended with `SIGSEGV` inside the layer's `vkWaitForFences` on two such loops' threads,
+//!   while the hook waited for their sections. The hook then runs before every destructor
+//!   registered before its last registration. Since a section publishes nothing before it ended,
+//!   an exit the program makes once it learned of a section's work (from a handler, a wait, a
+//!   status) comes after that section's registration. Measured: while the scheduler posted a
+//!   command buffer's scheduling inside its section, an exit from a scheduled handler crashed the
+//!   completion's poll on MoltenVK in 10 runs of 10. The hole left: a static first made by a
+//!   making in progress in the last interval before the exit, or once the registrar reached its
+//!   bound, or by a making on the program's own thread (in no section, which the hook does not
+//!   wait for), or by another call (not a making) after the hook's last registration, when the
+//!   process exits before the next registration. The program's own calls but its makings
 //!   register nothing, so one of those may make it
 //!   too: on the M3 Max (the validation layer 1.4.357.0 from Homebrew), the layer's descriptor set
 //!   layouts' empty lists
 //!   (`DescriptorSetLayoutDef::GetMutableTypes` and `GetImmutableSamplerCreateInfosFromIndex`),
 //!   first made on the program's thread 3 to 11 ms before an exit in each of 20 runs; no section
-//!   was seen to read them at exit. So may an instance the program creates itself (an adopted
-//!   device's included): a layer's exit handler registered there runs before the hook's, until
-//!   the next registration. Not the guard's, at exit or before: under a layer on MoltenVK
+//!   was seen to read them at exit. So may an instance the program creates itself and does not
+//!   report ([`program_instance_made`]), and is not that of a device the runtime adopts: a layer's
+//!   exit handler registered there runs before the hook's, until the next registration. Not the
+//!   guard's, at exit or before: under a layer on MoltenVK
 //!   1.4.1, a message that names the device leaves `ICD_LOADER_MAGIC` in its loader word, and the
 //!   layer, which finds its state by that word, ends the process at its next call for the device
 //!   (the validation layer: "The VkDevice dispatch handle was not found";
@@ -1585,16 +1595,34 @@ pub(crate) fn register_device(identity: Vec<u64>) {
     register();
 }
 
-/// This thread called `vkCreateInstance` (the runtime's one door, `device/create.rs`), whatever it
-/// answered: a layer registers an exit handler at each call, as it begins (the validation layer
-/// 1.4.357's `ApplicationAtExit`, which forgets every device the layer knows), so the hook
-/// registers again after it, where it is registered in this process. Before the process's first
-/// device the hook is not registered yet: that device registers it, after its instance.
+/// A `vkCreateInstance` was called, whatever it answered: by this thread (the runtime's one door,
+/// `device/create.rs`), or by the program before (the instance of a device the runtime adopted,
+/// `device/adopt.rs`, or one it reported, [`program_instance_made`]). A layer registers an exit
+/// handler at each call, as it begins (the validation layer 1.4.357's `ApplicationAtExit`, which
+/// forgets every device the layer knows), so the hook registers again after it, where it is
+/// registered in this process. Before the process's first device the hook is not registered yet:
+/// that device registers it, after its instance.
 pub(crate) fn instance_made() {
     if REGISTERED.load(Ordering::SeqCst) == std::process::id() {
         AT_INSTANCES.fetch_add(1, Ordering::Relaxed);
         install();
     }
+}
+
+/// The program made a `VkInstance` itself, outside the runtime: call this right after its
+/// `vkCreateInstance`, whatever that answered. A layer registers an exit handler as an instance is
+/// created (the validation layer's `ApplicationAtExit` forgets every device it knows), and a
+/// process's exit handlers run in the reverse order of their registration: without this, that
+/// handler runs before the runtime's, and a call of the runtime's still in progress on its own
+/// threads, or begun before the runtime's handler runs, ends the process inside the layer
+/// (`SIGABRT`, "The VkDevice dispatch handle was not found", or `SIGSEGV`). This registers the
+/// runtime's handler again, after the layer's; before the process's first device it does nothing,
+/// as that device registers it after its own instance. The instances the runtime creates, and those
+/// of the devices it adopts ([`Device::from_raw`](crate::Device::from_raw)), need no call.
+///
+/// No Metal counterpart: Metal has no Vulkan instance.
+pub fn program_instance_made() {
+    instance_made();
 }
 
 /// Forget the entry points called so far ([`CALLED`]): the next section that calls each

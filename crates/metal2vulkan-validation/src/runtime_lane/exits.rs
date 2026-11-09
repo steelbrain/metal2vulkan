@@ -239,6 +239,20 @@ extern "C" fn drop_the_held_device() {
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
 }
 
+/// An exit handler the cases `program_instance_exit` and `adopted_instance_exit` register right
+/// after the program's own instance, so after the exit handler the validation layer registered
+/// as it was created (which forgets every device the layer knows), and before the program reports
+/// that instance or the runtime adopts its device: note whether the runtime's hook ran by then
+/// (`hook_ran`), as it does where the report or the adoption registered it again, after both.
+extern "C" fn after_the_program_instance() {
+    let line = format!(
+        "{REPORT}-PROGRAM-INSTANCE hook_ran={}\n",
+        u8::from(metal2vulkan_runtime::process_exiting())
+    );
+    // SAFETY: a write of the line's bytes to standard output.
+    unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
+}
+
 /// An exit handler every child registers right after its first device, so that it runs after
 /// every handler registered since (the case's own, the later instances' and devices', the hook's
 /// later registrations, [`drop_the_held_device`], the destructors the driver's compiler registered
@@ -623,6 +637,23 @@ fn child() {
             let after = metal2vulkan_runtime::exit_registrations();
             println!("{REPORT}-REGISTRATIONS before={before:?} after={after:?}");
             *HELD.lock().unwrap_or_else(PoisonError::into_inner) = Some(last);
+            exit_now(case, &messages);
+        }
+        "program_instance_exit" | "adopted_instance_exit" => {
+            // The runtime's threads in sections at the exit: a loop without bound runs on.
+            super::predication::loop_without_bound(&device, 3);
+            // The program's own instance and device, with the validation layer, whose exit
+            // handler the instance's creation registers; then a handler of the case's after it.
+            let adopted = super::presenting::Adopted::open(false).unwrap();
+            // SAFETY: a handler with no arguments that never unwinds.
+            unsafe { libc::atexit(after_the_program_instance) };
+            if case == "program_instance_exit" {
+                metal2vulkan_runtime::program_instance_made();
+            } else {
+                // Kept to the process's end, as the instance and device it adopts are.
+                std::mem::forget(adopted.runtime(&cache));
+            }
+            std::mem::forget(adopted);
             exit_now(case, &messages);
         }
         "pending_plain_event_exit" => {
@@ -1459,6 +1490,26 @@ fn an_exit_handler_registered_before_an_instance_runs_after_the_hook() {
             dropped.saturating_sub(held),
             mark.saturating_sub(dropped),
             end.saturating_sub(mark)
+        );
+    }
+}
+
+/// An instance the program makes itself, reported (`program_instance_made`) or the instance of a
+/// device the runtime adopts (`Device::from_raw`), registers the exit hook again after the exit
+/// handler the validation layer registers as the instance is created, which forgets every device
+/// the layer knows: the hook runs first and closes the guard, so no call of the runtime's (here a
+/// loop without bound's, which runs on its own thread) reaches the layer after its handler ran.
+/// Before, on the M3 Max, a child that made its own instance after its device while a loop without
+/// bound ran on ended with `SIGABRT` inside the layer in 2 and 3 exits of 20 (the layer's lookup
+/// of the device, at the loop's next call).
+#[test]
+fn an_instance_the_program_made_registers_the_exit_hook_after_its_layer_s_handler() {
+    for exited in exits_cleanly(&["program_instance_exit", "adopted_instance_exit"]) {
+        let line = stdout_line(&exited, &format!("{REPORT}-PROGRAM-INSTANCE "))
+            .unwrap_or_else(|| panic!("no line from the handler: {}", exited.stdout));
+        assert!(
+            line.contains("hook_ran=1"),
+            "the layer's handler ran before the hook: {line}"
         );
     }
 }

@@ -377,6 +377,11 @@ impl Device {
             recipe: None,
         };
         // SAFETY: the caller's contract.
-        unsafe { Device::assemble(parts) }.map(|device| device.root())
+        let device = unsafe { Device::assemble(parts) }?;
+        // The consumer made the instance, so a layer's exit handler registered at its
+        // `vkCreateInstance` may follow the hook's last registration: the hook registers again,
+        // after it (`exit_guard::instance_made`).
+        crate::exit_guard::instance_made();
+        Ok(device.root())
     }
 }

@@ -1179,7 +1179,11 @@ fn create_instance(
         // SAFETY: every pointer in `info` outlives the call. A validated context's layer provides
         // the extensions it enables through it (`require_validation_layer`), and so does the
         // profiles layer of a restricted context or a probe (`require_profiles_layer`).
-        unsafe { entry.create_instance(info, None) }
+        let instance = unsafe { entry.create_instance(info, None) };
+        // A layer registered an exit handler as the call began: the runtime's, where a runtime
+        // device lives in this process (a lane's), registers again after it.
+        metal2vulkan_runtime::program_instance_made();
+        instance
     })
 }
 

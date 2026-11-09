@@ -1818,6 +1818,35 @@ fn a_loop_without_bound_runs_on_after_its_queue_is_let_go() {
     });
 }
 
+/// Commit on `device` a loop without bound, as
+/// [`a_loop_without_bound_runs_on_after_its_queue_is_let_go`] does, and return once its laying ran
+/// again `times` times; its queue and command buffer let go, it runs on to the process's end
+/// (`runtime_lane::exits`).
+pub(super) fn loop_without_bound(device: &Device, times: u64) {
+    let marks = Marks::new(device);
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder
+        .encode_start_while(Some(&marks.log), 4, NOT_EQUAL, 1)
+        .unwrap();
+    marks.mark(&mut encoder, 0);
+    assert_eq!(encoder.encode_end_while(), Ok(true));
+    encoder.end_encoding().unwrap();
+    let again = || device.work_counts().predicated_loop_runs_again;
+    let before = again();
+    command_buffer.commit().unwrap();
+    let start = std::time::Instant::now();
+    while again() < before + times {
+        assert!(
+            start.elapsed() < WAIT,
+            "its laying ran {} times again",
+            again() - before
+        );
+        std::thread::yield_now();
+    }
+}
+
 /// The shapes of [`a_runs_first_indirect_dispatch_of_another_type_runs_every_dispatch`]: each
 /// the consumer's name for it and its script.
 const INDIRECT_SHAPES: [(&str, &str); 18] = [

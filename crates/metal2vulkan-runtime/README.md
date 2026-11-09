@@ -48,6 +48,12 @@ ash = { version = "0.38", default-features = false, features = ["std"] }
 - Nothing links against Vulkan at build time. The runtime opens the Vulkan loader when it makes a
   device, or takes the consumer's `vkGetInstanceProcAddr` when it adopts one. A device needs
   Vulkan 1.2 and `timelineSemaphore`.
+- A program that makes a `VkInstance` of its own beside a runtime device calls
+  `program_instance_made()` right after it. A layer registers an exit handler as an instance is
+  made (the validation layer's forgets every device it knows), and exit handlers run in the reverse
+  order of their registration: unreported, that handler runs before the runtime's at exit, and a
+  call the runtime's threads still make into the layer ends the process. The instance of a device
+  the runtime adopts (`Device::from_raw`) needs no call.
 - Shaders come in as a metallib (`Device::new_library_with_data`); there is no MSL compiler. Like
   Metal, `new_library_with_data` refuses bare AIR bitcode. For AIR bitcode, parse it with
   `metal2vulkan::library::Library::from_air` and pass the result to
