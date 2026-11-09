@@ -4,9 +4,9 @@
 //!
 //! - **The blit chain** of formats every Vulkan device blits and filters linearly, in 2D, 2D
 //!   array, cube and 3D textures: one `vkCmdBlitImage` a level (the work counts say so), the
-//!   compute filter never, each level of a halving chain within a code (a half within a unit in
-//!   the last place) of the bilinear filter in `float` of the level above as the device read it
-//!   back, and `device-filtered-mipmaps` announced once. On a driver whose blits do not filter a
+//!   compute filter never, each level of a halving chain within a code (a half within two units
+//!   in the last place: [`HALF_BLIT_ULPS`]) of the bilinear filter in `float` of the level above as
+//!   the device read it back, and `device-filtered-mipmaps` announced once. On a driver whose blits do not filter a
 //!   volume (`RuntimeDriverDefect::VolumeBlitsUnfiltered`, MoltenVK's) the 3D textures take the
 //!   compute filter instead, each level within a code of the same filter.
 //! - **The compute filter** of every format it computes that the device's blits cannot filter
@@ -181,13 +181,19 @@ fn filtered(
     levels.swap_remove(1)
 }
 
+/// How far a half a device's blit filters may lie from the bilinear filter in `float` of the level
+/// above, in units in the last place: the device's filter, whose precision Vulkan leaves to it.
+/// The Radeon 780M under RADV filters an `RGBA16Float` cube's level 1 at most two below it (job
+/// m3-max-11026 at development 1c7a75be62: of its 384 halves, 274 one below and 9 two below).
+const HALF_BLIT_ULPS: u16 = 2;
+
 /// The device's blit chain of formats every Vulkan device blits and filters linearly (`R8Unorm`,
 /// `RGBA8Unorm`, `BGRA8Unorm`, `RGBA16Float`), in 2D textures (halving and not, one two texels
 /// high), a 2D array, a cube and 3D textures: one blit a level and no compute filter (but a 3D
 /// texture's compute filter on a driver whose blits do not filter a volume,
 /// `RuntimeDriverDefect::VolumeBlitsUnfiltered`), each level of a halving chain within a code (a
-/// half within a unit in the last place) of the bilinear filter in `float` of the level above as
-/// the device read it back, and `device-filtered-mipmaps` announced once, naming the first
+/// half within [`HALF_BLIT_ULPS`] units in the last place) of the bilinear filter in `float` of
+/// the level above as the device read it back, and `device-filtered-mipmaps` announced once, naming the first
 /// texture.
 #[test]
 fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
@@ -261,12 +267,23 @@ fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
                 let want = filtered(pf, ty, level_extent(extent, l - 1), slices, &above);
                 let got = read(l);
                 let near = match pf {
-                    P::RGBA16Float => got
-                        .as_chunks::<2>()
-                        .0
-                        .iter()
-                        .zip(want.as_chunks::<2>().0)
-                        .all(|(a, b)| u16::from_le_bytes(*a).abs_diff(u16::from_le_bytes(*b)) <= 1),
+                    P::RGBA16Float => {
+                        let apart: Vec<u16> = (got.as_chunks::<2>().0.iter())
+                            .zip(want.as_chunks::<2>().0)
+                            .map(|(a, b)| u16::from_le_bytes(*a).abs_diff(u16::from_le_bytes(*b)))
+                            .collect();
+                        let most = apart.iter().copied().max().unwrap_or(0);
+                        let ulps = |n: u16| apart.iter().filter(|&&d| d == n).count();
+                        eprintln!(
+                            "blit chain {pf:?} {ty:?} {extent:?} level {l} on {}: of {} halves, \
+                             {} one unit in the last place from the filter, {} two, the most {most}",
+                            device.name(),
+                            apart.len(),
+                            ulps(1),
+                            ulps(2)
+                        );
+                        most <= HALF_BLIT_ULPS
+                    }
                     _ => got.iter().zip(&want).all(|(a, b)| a.abs_diff(*b) <= 1),
                 };
                 assert!(
@@ -277,8 +294,8 @@ fn the_device_s_blit_chain_filters_each_level_and_is_announced() {
             }
         }
         eprintln!(
-            "the blit chain on {}: {checked} bytes of halving chains, each within a code of the \
-             bilinear filter in float",
+            "the blit chain on {}: {checked} bytes of halving chains, each within a code (a half \
+             within {HALF_BLIT_ULPS} units in the last place) of the bilinear filter in float",
             device.name()
         );
         let notices = messages.take_notices();
