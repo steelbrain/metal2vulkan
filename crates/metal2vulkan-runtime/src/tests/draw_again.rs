@@ -38,6 +38,7 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// The draws an encoder of a test draws.
 pub(super) const DRAWS: u64 = 9;
@@ -225,7 +226,9 @@ fn run_on(
 
 /// Run `encode` on `device` until a run draws no key's residual form and the device's pool is
 /// idle: every later draw finds its key's own pipeline made, as a draw that is kept to draw again
-/// does (a draw recorded against a making, or of a residual form, keeps nothing).
+/// does (a draw recorded against a making, or of a residual form, keeps nothing). Then wait until
+/// the device's own checks ended ([`checks_ended`]), so that no window a test opens after it meets
+/// their command buffers.
 pub(super) fn warm(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) {
     until("every key's own pipeline made", || {
         let residual = device.work_counts().residual_form_draws;
@@ -235,6 +238,28 @@ pub(super) fn warm(device: &Device, encode: impl Fn(&mut RenderCommandEncoder)) 
     until("the pipeline pool idle", || {
         device.work_counts().pipeline_pool_busy == 0
     });
+    checks_ended(device);
+}
+
+/// How long a device's own checks may run ([`checks_ended`]).
+const CHECKS_WAIT: Duration = Duration::from_secs(120);
+
+/// Wait until `device`'s check of the GPU's idling between `VkQueue`s (`queue_switch_check.rs`,
+/// started by its first command queue) and its submission checks (`submit_check.rs`, started as
+/// it is made) ended. Each records command buffers on a thread of its own (the queue-switch
+/// check's timestamp writes, the submission checks' empty ones), which
+/// `WorkCounts::commands_recorded` counts as it counts a run's: a run whose window met one counted
+/// its commands too, 32 `cmd_reset_query_pool`, 64 `cmd_write_timestamp` and 32
+/// `end_command_buffer` of the queue-switch check under twelve processes' load on an RTX 5080.
+fn checks_ended(device: &Device) {
+    assert!(
+        device.settle_queue_switch_check(CHECKS_WAIT),
+        "the device's queue-switch check ended"
+    );
+    assert!(
+        device.settle_submit_checks(CHECKS_WAIT),
+        "the device's submission checks ended"
+    );
 }
 
 /// A run's commands count its primary as begun whether its encoder began it or took it begun
@@ -331,6 +356,46 @@ fn a_primary_begun_ahead_while_a_run_encodes_is_no_begin_of_the_run_s() {
         alone.commands["begin_command_buffer"]
     );
     assert_eq!(meanwhile.words, alone.words, "the pixels of the draws");
+}
+
+/// [`warm`] returns once the device's own checks ended ([`checks_ended`]): with its check of the
+/// GPU's idling between `VkQueue`s held between two of its rounds, `warm` waits for its verdict
+/// (a call that waits for it lets the hold go, below), which is known as `warm` returns. A device
+/// that runs no such check is skipped.
+#[test]
+fn warm_returns_once_the_device_s_own_checks_ended() {
+    let scratch = Scratch::new("draw-again-checks-ended");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &[], &heard);
+    if crate::queue_switch_check::pair(&device).is_none()
+        || !crate::queue_switch_check::timed(&device)
+    {
+        println!(
+            "SKIPPED {}: the device runs no queue-switch check",
+            device.name()
+        );
+        return;
+    }
+    let switch = Arc::clone(&device.shared().queue_switch);
+    switch.held.hold();
+    let releasing = std::thread::spawn({
+        let switch = Arc::clone(&switch);
+        move || {
+            let pending = || switch.verdict() == crate::queue_share::Verdict::Pending;
+            while pending() && !switch.awaited() && !switch.stopping() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            switch.held.release();
+        }
+    });
+    let state = adding_state(&device);
+    warm(&device, |encoder| rectangles(encoder, &state, |_| {}));
+    assert_ne!(
+        switch.verdict(),
+        crate::queue_share::Verdict::Pending,
+        "warm returned while the device's queue-switch check ran"
+    );
+    releasing.join().unwrap();
 }
 
 /// Set `state`, the rectangle over the whole target and its color, `1 / 64` in each channel.
