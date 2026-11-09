@@ -268,6 +268,36 @@ fn an_import_tax_holds_is_recorded_only_past_its_margin_and_repeated() {
     assert!(tax_clear((slow + TAX_MARGIN * (slow / 8) + 1, slow)));
 }
 
+/// Import tax tries that all split answer `Fails` for the device's life, unrecorded, where the
+/// last one's floors over all its phases fall short of the bound [`TAX_MARGIN`] times over: the M3
+/// Max's device under the load of the device tests, 2.5 against 1.2 us, which answered
+/// `Unchecked` and took no fresh pages where the five others of its runs answered `Fails`. Past
+/// the margin (the Radeon 780M's floors) they stay `Unchecked` so; a merge's split tries are
+/// unchanged.
+#[test]
+fn import_tax_tries_that_all_split_short_of_the_margin_answer_fails_unrecorded() {
+    let split = |floors| {
+        Some(Timed {
+            verdict: None,
+            floors,
+        })
+    };
+    let m3 = (2_500, 1_200);
+    assert!(!tax_clear(m3));
+    let fails = (Some((Verdict::Fails, m3, false)), TRIES);
+    assert_eq!(tax_answers(&[split(m3)]), fails, "the M3 Max under load");
+    let radeon = (20_700, 10_400);
+    let unchecked = (Some((Verdict::Unchecked, radeon, false)), TRIES);
+    assert_eq!(
+        tax_answers(&[split(radeon)]),
+        unchecked,
+        "a tax past the margin"
+    );
+    let checks = SubmitChecks::new(false);
+    let merge = tried(&checks, || Some(split(m3)));
+    assert_eq!(merge, Some((Verdict::Unchecked, m3, false)), "a merge's");
+}
+
 fn identity(device_id: u32) -> DriverIdentity {
     DriverIdentity {
         vendor_id: 0x1002,

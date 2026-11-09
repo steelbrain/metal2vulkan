@@ -79,12 +79,19 @@
 //!   [`TAX_IMPORTS`]), and the first's record would have kept its answer for the kernel's
 //!   release. So an import tax `Holds` is recorded only where it passes its bound [`TAX_MARGIN`]
 //!   times over, and again so in each of [`TAX_REPEATS`] tries more; short of that, it answers
-//!   for the device's life alone, and the next device measures again.
+//!   for the device's life alone, and the next device measures again. The same load splits a
+//!   try's halves: on the M3 Max, in three runs of the runtime's device tests (2026-11-09,
+//!   MoltenVK 1.4.2), one of the six devices that printed their verdicts had all three of its
+//!   import tax tries split, its last 2.5 against 1.2 us over all its phases, where the other five
+//!   answered `Fails` (1.1 to 2.6 us against 1.2 to 3.0), and it answered `Unchecked`, so its long
+//!   buffers took no fresh pages where the others' did. Tries that all split so answer `Fails` for
+//!   the device's life, unrecorded, where the last one's floors fall short of the margin, and
+//!   `Unchecked` only past it.
 //! - **Its verdicts** are `Pending` until it answers, and the device takes the form a driver
 //!   without each answer takes: every batch its own call, its long buffers placed and cleared as
 //!   ever, every pointer import kept. `Unchecked` where a check could not run (no
-//!   `VK_EXT_external_memory_host`, a call refused, too few rounds) or its tries disagreed, with
-//!   the same forms.
+//!   `VK_EXT_external_memory_host`, a call refused, too few rounds) or its tries disagreed (the
+//!   import tax's only past its margin, above), with the same forms.
 //! - **Its cost**: [`ROUNDS`] rounds of each merge form and [`TAX_PHASES`] phases of
 //!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the
 //!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed once a try, over pages
@@ -1096,12 +1103,17 @@ pub(crate) fn tried(
 /// ([`tax_clear`]) and each of [`TAX_REPEATS`] tries more answers `Holds` so again (the module
 /// docs, "Load beside it"). A `Holds` short of that answers for the device's life alone, with
 /// the floors of its first try, and the next device measures again; a refused call ends the
-/// repeats, unrecorded. `None` where the check stops.
+/// repeats, unrecorded. Tries that all split answer `Fails` for the device's life, unrecorded,
+/// where the last one's floors over all its phases fall short of that margin (a cost no try told
+/// from the load beside it), else `Unchecked` so. `None` where the check stops.
 pub(crate) fn tax_tried(
     checks: &SubmitChecks,
     mut once: impl FnMut() -> Option<Option<Timed>>,
 ) -> Option<(Verdict, (i64, i64), bool)> {
     let (verdict, floors, kept) = tried(checks, &mut once)?;
+    if verdict == Verdict::Unchecked && !kept && !tax_clear(floors) {
+        return Some((Verdict::Fails, floors, false));
+    }
     if verdict != Verdict::Holds || !kept {
         return Some((verdict, floors, kept));
     }
