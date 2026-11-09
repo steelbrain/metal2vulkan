@@ -780,11 +780,14 @@ impl Device {
             let key = buffer.identity().key;
             // The GPU's writes through it are reported to the import's logs, as through the
             // buffer it was made for, over the same bytes (`dirty_pages.rs`), and merged back
-            // from the copy where it lies in one. The pages keep what that buffer was made of,
-            // over the same bytes ([`HostPages::made_of`]).
+            // from the copy where it lies in one. Its pages keep what it was made of
+            // ([`HostPages::made_of`]).
             if let Some(pages) = buffer.host_pages() {
                 pages.logged_as(key);
                 pages.copied_as(key);
+                if let Some(made_of) = made_of {
+                    pages.keep_made_of(made_of);
+                }
             }
             if kind == Kind::Copy {
                 shared.counts.copied_host_buffer_shared();
