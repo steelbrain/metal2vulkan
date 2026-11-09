@@ -396,6 +396,10 @@ mod device {
     const LEAD: usize = 320;
     const TAIL: usize = 768;
 
+    /// The encoders filling buffers of their own that each command buffer after the trims test's
+    /// frees adds to the one before.
+    const STEP: usize = 16;
+
     /// The longest a command buffer, or the spares' count, is waited for.
     const WAIT: Duration = Duration::from_secs(30);
 
@@ -490,12 +494,16 @@ mod device {
     /// its command buffers were freed. Each of the burst's middle [`KEPT`] encoders fills one
     /// buffer after a barrier, so a kept command buffer comes before each, and the encoders
     /// before and after them fill buffers of their own, with no barrier, so the command buffers
-    /// those barriers came before are neither the pool's first nor its last. A second burst then
-    /// makes as many command buffers again, so the driver takes back the memory of those freed,
-    /// and takes the kept barriers again. On ANV, which names in each submission of a kept
-    /// command buffer every command buffer that ever came next after it, those submissions failed
-    /// and the device was lost where the pool was trimmed after the frees
-    /// (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`).
+    /// those barriers came before are neither the pool's first nor its last. Then each command
+    /// buffer takes the kept barriers again and makes [`STEP`] command buffers more than the one
+    /// before, so that the driver takes back the memory of those freed while it makes few of its
+    /// own. On ANV, which names in each submission of a kept command buffer every command buffer
+    /// that ever came next after it, such a submission failed and the device was lost where the
+    /// pool was trimmed after the frees
+    /// (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`): Mesa's slab allocator takes
+    /// freed slices back only once an allocation finds its current slab full
+    /// (`pb_slab_alloc_reclaimed`), releasing each slab they empty, and a submission fails only
+    /// while no buffer object made since holds the handle released.
     #[test]
     fn kept_barriers_run_again_after_the_command_buffers_after_them_were_freed() {
         let scratch = std::env::temp_dir().join(format!("m2v-spares-trims-{}", std::process::id()));
@@ -521,16 +529,23 @@ mod device {
             statuses.push(fills(&device, &queue, &shared, 2));
         }
         let freed = device.shared().spares.freed_on().len();
-        // The kept barriers taken again, past the command buffers the pool makes anew.
-        statuses.push(fills_of(&device, &queue, &burst));
+        for step in 1..=TAIL / STEP {
+            let again: Vec<&Buffer> = std::iter::repeat_n(&shared, KEPT)
+                .chain(&own[..step * STEP])
+                .collect();
+            statuses.push(fills_of(&device, &queue, &again));
+        }
         let failed = statuses
             .iter()
             .filter(|status| **status != CommandBufferStatus::Completed)
             .count();
+        let first = statuses
+            .iter()
+            .position(|status| *status != CommandBufferStatus::Completed);
         let recoveries = device.work_counts().device_recoveries;
         println!(
             "SPARES-TRIMS {}: trims {}; {freed} frees ran; {failed} of {} command buffers not \
-             completed ({statuses:?}); {recoveries} recoveries",
+             completed, the first at {first:?}; {recoveries} recoveries",
             device.name(),
             device.shared().spares.trims(),
             statuses.len()
