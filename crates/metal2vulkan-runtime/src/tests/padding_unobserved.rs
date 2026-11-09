@@ -139,16 +139,21 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
         device.settle_in_place_checks(CHECK_WAIT),
         "the check settles"
     );
+    // Its submission checks answered too, so that where the device takes blocks of its own pages,
+    // every pitch's undeclared buffer lies in one (`memory.rs`'s `Holds::PageBuffers`).
+    let _settled = device.settle_submit_checks(CHECK_WAIT);
     let length = PITCHES[2] * HEIGHT;
     let descriptor = texture_descriptor();
     let mut aliased = Vec::new();
     for pitch in PITCHES {
         let observed = own_buffer(&device, length, false);
         let answer = observed.texture_placement(&descriptor, 0, pitch).unwrap();
+        let undeclared = answer;
         let (texture, before, after) = made(&device, &observed, pitch);
         if observed.in_page_block() {
             // In a block of the runtime's own pages: as over fresh pages, in place where the
-            // check passed for them, else a shadow it decided (`texture/route.rs`).
+            // check passed for them and the device makes the image over them at the pitch, else
+            // a shadow the check or the making decided (`texture/route.rs`).
             assert!(
                 matches!(
                     answer,
@@ -156,6 +161,7 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
                         | TexturePlacement::Shadow(
                             TextureShadowReason::Unchecked { .. }
                                 | TextureShadowReason::CheckFailed { .. }
+                                | TextureShadowReason::Refused(_)
                         )
                 ),
                 "undeclared in the runtime's own pages at {pitch}: the answer {answer:?}"
@@ -238,10 +244,9 @@ fn a_texture_over_unobserved_padding_aliases_its_buffer_and_over_observed_paddin
         }
         let pitched = after.pooled_pitched_images - before.pooled_pitched_images;
         eprintln!(
-            "UNOBSERVED-PADDING on {}: {WIDTH}x{HEIGHT} BGRA8Unorm at {pitch}: undeclared a \
-             shadow ({:?}); declared {} ({answer:?})",
+            "UNOBSERVED-PADDING on {}: {WIDTH}x{HEIGHT} BGRA8Unorm at {pitch}: undeclared \
+             {undeclared:?}; declared {} ({answer:?})",
             device.name(),
-            TexturePlacement::Shadow(TextureShadowReason::BytesBetweenRows),
             match (aliases, pitched) {
                 (true, 0) => "the device's linear image",
                 (true, _) => "a DRM_FORMAT_MOD_LINEAR image at the pitch",
