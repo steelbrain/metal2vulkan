@@ -2286,13 +2286,15 @@ pub(super) fn expected_once(
 }
 
 /// The note a device announces at its first clear of a color attachment to a value at a rounding
-/// question, which the device converts its own way (`device-color-conversion`): such as 0.5 in an
-/// 8-bit unorm channel, 127.5 codes, a tie, or any value strictly between 0 and 1 in an sRGB
-/// one, whose encode Vulkan leaves to the device. A lane whose pipelines record the note has it
-/// already (`made_render_kinds`); MoltenVK's record none. Not where every such clear is by the load
+/// question, which the device converts its own way (`device-color-conversion`): any value whose
+/// scaled `float` lies off a whole code of a normalized channel, of which Vulkan lets the device
+/// store either of the two closest codes (0.5 in an 8-bit unorm channel, 127.5 codes, a tie; 0.2,
+/// 51.0000008 codes), or any value strictly between 0 and 1 in an sRGB one, whose encode Vulkan
+/// leaves to the device. A lane whose pipelines record the note has it already
+/// (`made_render_kinds`); MoltenVK's record none. Not where every such clear is by the load
 /// operation of an attachment its pass's render area covers (`covered`) on a driver whose load
 /// operation clears as Metal's does (`DriverFact::ColorClearIsMetals`).
-pub(super) fn tie_cleared(device: &Device, covered: bool) -> BTreeSet<Degradation> {
+pub(super) fn clear_in_question(device: &Device, covered: bool) -> BTreeSet<Degradation> {
     let metals = device
         .properties()
         .driver_facts

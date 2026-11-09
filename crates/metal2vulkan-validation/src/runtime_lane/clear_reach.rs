@@ -66,7 +66,7 @@ const CLEAR: [f64; 4] = [0.5, 0.0, 0.0, 1.0];
 /// The codes an 8-bit unorm channel's clear to `value` may store on a device whose clear is
 /// Metal's conversion (`metals`, `DriverFact::ColorClearIsMetals`) or not: Metal's, but at a half
 /// step on any other device either nearest code, which Vulkan leaves to the device (announced
-/// `device-color-conversion`: `degrade_notices::tie_cleared`).
+/// `device-color-conversion`: `degrade_notices::clear_in_question`).
 fn clear_codes(value: f64, metals: bool) -> Vec<u8> {
     let scaled = value.clamp(0.0, 1.0) * 255.0;
     let metal = scaled.round_ties_even() as u8;

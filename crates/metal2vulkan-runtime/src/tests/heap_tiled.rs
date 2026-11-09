@@ -1326,8 +1326,9 @@ fn multisample_samples_lie_where_metal_draws_them() {
 
 /// Each clear color `fresh_pattern` gives converts to its texel on every device: no rounding of
 /// it is in question (`clear_value::rounds_apart`), and Metal's conversion
-/// (`clear_value::tests::texel_bytes`) writes the pattern. Every pattern is of a whole number of bytes a texel, and every format with a pattern
-/// but a clear color is one whose pattern holds a NaN or an extended-range code.
+/// (`clear_value::tests::texel_bytes`) writes the pattern. Every format with a pattern but no
+/// clear color is one whose pattern holds a NaN, an extended-range code or a signed normalized
+/// code -1, which no clear color scales onto a whole code.
 #[test]
 fn fresh_patterns_clear_colors_write_their_texels() {
     let mut cleared = 0;
@@ -1340,15 +1341,15 @@ fn fresh_patterns_clear_colors_write_their_texels() {
                 let bytes = crate::clear_value::tests::texel_bytes(pf, color);
                 assert_eq!(bytes.as_deref(), Some(texel), "{pf:?}: {color:?}");
                 assert!(
-                    !crate::clear_value::rounds_apart(pf, color, false),
+                    !crate::clear_value::rounds_apart(pf, color),
                     "{pf:?}: {color:?}"
                 );
                 cleared += 1;
             }
             Some(FreshPattern::Color { texel, color: None }) => {
                 assert!(
-                    [2, 4, 8, 16].contains(&texel.len()),
-                    "{pf:?}: a NaN or extended-range pattern of {} bytes",
+                    [1, 2, 4, 8, 16].contains(&texel.len()),
+                    "{pf:?}: a NaN, extended-range or signed normalized pattern of {} bytes",
                     texel.len()
                 );
             }

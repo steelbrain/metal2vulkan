@@ -742,10 +742,6 @@ pub(crate) const AMD_RADEON_780M: u32 = 0x15bf;
 /// The `deviceID` of the Radeon RX 7900 XTX (Navi 31) its rows were measured on, under RADV.
 pub(crate) const AMD_RX_7900_XTX: u32 = 0x744c;
 
-/// The `deviceID` of the Radeon RX 550 (Polaris 12, Lexa Pro) its rows were measured on, under
-/// RADV.
-const AMD_RX_550: u32 = 0x699f;
-
 /// The `deviceID` of the Intel UHD Graphics 770 of Raptor Lake-S (the committed capture
 /// `intel-uhd770-rpls-anv`).
 pub(crate) const INTEL_UHD_770_RPL_S: u32 = 0xa780;
@@ -972,55 +968,25 @@ pub enum DriverFact {
     /// formats has on Apple's GPUs), so its average is Metal's resolve by construction. The
     /// runtime announces no `device-rounded-resolve` for such an attachment on a driver with it.
     ColorResolveAverageIsMetals,
-    /// A render pass's `CLEAR` load operation of a colour attachment its render area covers
-    /// stores the texel Metal's own `Clear` load action stores for the clear colour: MoltenVK
-    /// hands the operation to Metal as the attachment's load action wherever the render area
-    /// covers the attachment, the clear value's floats as Metal's clear colour, and Metal's
-    /// conversion of a clear colour takes its `float` first. Vulkan leaves a clear's tie, its sRGB
-    /// encode and a float's rounding to the device, so elsewhere a clear whose rounding is in
-    /// question is announced (`device-color-conversion`, `render_pass.rs`); on a driver with it
-    /// the runtime announces none for a clear by the load operation of an attachment the pass's
-    /// render area covers, and announces it for the same clear made otherwise (before the pass,
-    /// of an attachment the pass's first instance leaves out). Measured by
+    /// A render pass's `CLEAR` load operation of a colour attachment its render area covers stores
+    /// the texel Metal's own `Clear` load action stores for the clear colour: MoltenVK hands the
+    /// operation to Metal as the attachment's load action wherever the render area covers the
+    /// attachment, the clear value's floats as Metal's clear colour, and Metal's conversion of a
+    /// clear colour takes its `float` first. Vulkan lets a clear store either of the two codes
+    /// closest to a normalized channel's scaled value and leaves its sRGB encode and a float's
+    /// rounding to the device, so elsewhere a clear whose rounding is in question (a normalized
+    /// channel's value off a whole code among them) is announced (`device-color-conversion`,
+    /// `render_pass.rs`); on a driver with it the runtime announces none for a clear by the load
+    /// operation of an attachment the pass's render area covers, and announces it for the same
+    /// clear made otherwise (before the pass, of an attachment the pass's first instance leaves
+    /// out). Measured by
     /// `runtime_lane::renders::clears_are_the_device_s_conversion_of_the_clear_value`, which on
-    /// such a driver also holds that the note stays unannounced: MoltenVK 1.4.2 on the M3 Max
-    /// under macOS 27.0.1, each of the 71 colour clears Metal was measured with (ties of 8-bit,
-    /// 10-bit and 16-bit unorm and snorm channels, sRGB channels, the packed 16-bit formats, half
-    /// and small floats, shared exponents and NaNs among them) into a 1x1 attachment, its 11
-    /// depth and 4 stencil clears beside them: all 86 texels Metal's bytes, none a code apart.
+    /// such a driver also holds that the note stays unannounced: MoltenVK 1.4.2 on the M3 Max under
+    /// macOS 27.0.1, each of the 71 colour clears Metal was measured with (ties of 8-bit, 10-bit
+    /// and 16-bit unorm and snorm channels, sRGB channels, the packed 16-bit formats, half and
+    /// small floats, shared exponents and NaNs among them) into a 1x1 attachment, its 11 depth and
+    /// 4 stencil clears beside them: all 86 texels Metal's bytes, none a code apart.
     ColorClearIsMetals,
-    /// A colour clear's normalized channel (a render pass's `CLEAR` load operation's, and
-    /// `vkCmdClearColorImage`'s) stores either of the two codes nearest its scaled value, not
-    /// always the nearest, as Vulkan allows ("returns one of the two unsigned binary integer values
-    /// with exactly b bits which are closest to the floating-point value r. Implementations should
-    /// round to nearest", Conversion from Floating-Point to Normalized Fixed-Point). On a driver
-    /// with it the runtime announces `device-color-conversion` for a clear or a plain colour fill
-    /// of a normalized channel whose scaled value is not a whole code, not only for one near a
-    /// midpoint between two. Measured by
-    /// `runtime_lane::color_fills::plain_color_fills_are_the_device_s_clear` (`vkCmdClearColorImage`
-    /// of 762 colours into each of 70 formats) on the RTX 5080 Laptop GPU at 0b556ddfd6
-    /// (2026-11-04): 352 fills stored 382 normalized channels a code from Metal's, each one of the
-    /// two codes nearest the scaled value. The 8- and 16-bit unorm and snorm channels went toward
-    /// zero (`R16Unorm`'s 0.001, 65.535 codes, stored 65; `R8Snorm`'s -0.5, -63.5, stored -63), the
-    /// packed 16-bit and 10-bit channels and an sRGB format's alpha at times to the code above the
-    /// nearest (`B5G6R5Unorm`'s 0.7529 red, 23.34 codes, stored 24). The load operation's tie of an
-    /// 8-bit channel (127.5 codes) stores 127 there (`runtime_lane::clear_reach`, `sample_fills`).
-    /// The same lane on ANV on the Iris Xe of RPL-P (`deviceID` 0xa7a0) at 6cb37f2c86
-    /// (2026-11-08): beside ties stored either way (3,827 texels of 38 formats and placements), its
-    /// fills of `RGB10A2Unorm` and `BGR10A2Unorm` stored the 10-bit channel of 0.8793 (899.51
-    /// codes) as 899 where Metal stores 900, off a midpoint, into a texel of a level and a whole
-    /// 1 x 1 slice alike. There the code a load operation's clear stores depends on the image: 0.1
-    /// in an 8-bit unorm channel (25.5 codes) stores `0x1a` in a private optimal image and `0x19` in
-    /// a linear image in place over host pages, or in a shadow listing an unsigned-integer view
-    /// format (`runtime_lane::pitched_surfaces`, `no_copy_textures`). The same lane on RADV on the
-    /// Radeon RX 550 (Polaris 12, `deviceID` 0x699f), Mesa 26.2.6, at 90c9936538 (2026-11-08):
-    /// 93 fills of 11 8- and 10-bit unorm and snorm formats, in a texel of a level and a whole
-    /// 1 x 1 slice alike, stored a channel's code below the nearest, its scaled value up to 0.37
-    /// of a code past the midpoint (`RGB10A2Unorm`'s 0.549235, 561.87 codes, stored 561). Every
-    /// channel of those fills is the colour first cut to a `half` toward zero, then rounded to
-    /// nearest (0.549235 cuts to 0.548828, 561.45 codes), as its `R16Float` clears store it
-    /// (0.001 as `0x1418`, where Metal stores `0x1419`).
-    ColorClearTakesEitherCode,
     /// An optimal colour image may keep its compression state apart from the memory it is bound
     /// to, so a write through a buffer or another image over its bytes can leave its texels as
     /// they were. Vulkan leaves an optimal image's texels undefined after such a write; Metal's
@@ -2098,20 +2064,6 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::ColorClearIsMetals)
     },
-    nvidia_on(
-        DriverFact::ColorClearTakesEitherCode,
-        NVIDIA_RTX_5080_LAPTOP,
-    ),
-    mesa_on(
-        DriverFact::ColorClearTakesEitherCode,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
-    ),
-    mesa_on(
-        DriverFact::ColorClearTakesEitherCode,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RX_550),
-    ),
     Measured {
         fact: DriverFact::CompressedImagesHideAliasedWrites,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,

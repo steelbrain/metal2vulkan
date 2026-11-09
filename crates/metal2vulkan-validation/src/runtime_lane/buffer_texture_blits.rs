@@ -9,7 +9,9 @@
 //! between rows. The overlapping cases, which a model alone would not prove, also match the rows
 //! the probe recorded on the M4 and the M3 Max.
 
-use super::degrade_notices::{assert_made_once, forced, shared_in_system_memory};
+use super::degrade_notices::{
+    assert_made_once, clear_in_question, forced, shared_in_system_memory,
+};
 use super::host_memory::{no_copy, not_importable, Mapping};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
@@ -936,8 +938,8 @@ pub(super) const NARROW_ROWS: [Degradation; 1] = [Degradation::NarrowSurfaceRows
 /// without planes at 4 bytes a row (Metal asserts) and of rows that overlap on the GPU. The
 /// device announces `NarrowSurfaceRows` once, for the planes under 16 bytes a row, and where they
 /// force it a plane's shadow ([`linear_rows_differ`]), the `Shared` buffers' system memory, and
-/// the planes' clear's conversion on a driver whose clears take either nearest code
-/// (`DriverFact::ColorClearTakesEitherCode`).
+/// the planes' clear's conversion but where the load operation clears as Metal's
+/// (`degrade_notices::clear_in_question`).
 #[test]
 fn iosurface_planes_lie_where_metal_puts_them() {
     let messages = Messages::default();
@@ -1014,17 +1016,16 @@ fn iosurface_planes_lie_where_metal_puts_them() {
             .iter()
             .any(|&(pf, texel, _, bpr)| linear_rows_differ(&device, pf, [4, 4], texel, bpr));
         // The planes' clear to (0.2, 0.4, 0.6, 0.8), each scaled `float` a hair off a whole code,
-        // where the device's clear may store either code nearest it.
-        let either = (device.properties().driver_facts)
-            .contains(&metal2vulkan::device::DriverFact::ColorClearTakesEitherCode);
-        let first = forced(&[
+        // where the device's clear may store either code nearest it, by its load operation of
+        // the whole plane.
+        let mut first = forced(&[
             (Degradation::ShadowedTexture, shadowed),
             (
                 Degradation::SharedInSystemMemory,
                 shared_in_system_memory(&device),
             ),
-            (Degradation::DeviceColorConversion, either),
         ]);
+        first.extend(clear_in_question(&device, true));
         assert_made_once(&messages, &NARROW_ROWS, &first);
     }
     layer_reported_nothing_at_all(&messages);

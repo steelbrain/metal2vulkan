@@ -1631,11 +1631,9 @@ pub(super) fn layout(
         // The device converts a float clear its own way, which can stand a code from Metal's
         // where the rounding is in question (`clear_value::rounds_apart`), announced once the
         // render area is known (below); a word attachment's clear is Metal's codes.
-        let either =
-            (device.properties().driver_facts).contains(&DriverFact::ColorClearTakesEitherCode);
         let withheld_clear = (color.load_action == LoadAction::Clear
             && word.is_none()
-            && clear_value::rounds_apart(texture.pixel_format(), channels, either))
+            && clear_value::rounds_apart(texture.pixel_format(), channels))
         .then_some(channels);
         let straight_clear = ExtendedRange::of(texture.pixel_format()).and_then(|_| {
             clear_value::color(texture.pixel_format(), channels, ClearRoute::Straight)

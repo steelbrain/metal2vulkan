@@ -1245,21 +1245,22 @@ pub enum PrecisionNote {
     /// take the other code near a tie.
     ///
     /// Also (the runtime announces it): a render pass clears a normalized, sRGB, packed 16-bit,
-    /// half or small-float color attachment to a color whose conversion is in question. The
-    /// device converts the clear color, which Vulkan asks it to round to nearest, leaving a tie,
-    /// an sRGB encode and a float's rounding to it, where Metal's clear rounds each channel to
-    /// nearest, a tie to even (a packed 16-bit channel through `half`) and truncates a small
-    /// float's and a shared exponent's mantissas. A normalized channel lies within 1/1024 of a
-    /// midpoint between two codes there, and stores one of the two. Not for a clear by the load
-    /// operation of an attachment the pass's render area covers on a driver whose load operation
-    /// clears as Metal's `Clear` load action does (`DriverFact::ColorClearIsMetals`: MoltenVK on
-    /// the Apple9 GPUs under macOS 27, measured on the M3 Max).
+    /// half or small-float color attachment to a color whose conversion is in question. The device
+    /// converts the clear color, which Vulkan lets store either of the two codes closest to a
+    /// normalized channel's scaled value (asking for the nearest), leaving an sRGB encode and a
+    /// float's rounding to it, where Metal's clear rounds each channel to nearest, a tie to even (a
+    /// packed 16-bit channel through `half`) and truncates a small float's and a shared exponent's
+    /// mantissas. A normalized channel lies off a whole code there, and stores one of the two
+    /// closest. Not for a clear by the load operation of an attachment the pass's render area
+    /// covers on a driver whose load operation clears as Metal's `Clear` load action does
+    /// (`DriverFact::ColorClearIsMetals`: MoltenVK on the Apple9 GPUs under macOS 27, measured on
+    /// the M3 Max).
     ///
     /// Also (the runtime announces it): a plain color fill (`fillTexture…color:` without
     /// `pixelFormat:`) of a texture of such a format the device renders, which the device's clear
     /// of the color writes, to a color whose conversion is in question against Metal's fill
     /// packing, which rounds a normalized tie half up and takes the sRGB code whose decoded value
-    /// is nearest (a packed 16-bit channel's margin widened by a step through `half`).
+    /// is nearest.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.

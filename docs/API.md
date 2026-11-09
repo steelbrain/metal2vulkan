@@ -3780,29 +3780,28 @@ bound.
   the source. Another device
   is not bounded past one code (an NVIDIA RTX 5080 Laptop GPU's blend into an 8-bit sRGB attachment
   stored up to 11 codes from Metal's).
-  Also a render pass's clear of a normalized, sRGB,
-  packed 16-bit, half or small-float color attachment to a color whose conversion is in question
-  (a normalized channel within 1/1024 of a midpoint between two codes, or anywhere off a whole code
-  on a driver that takes either code nearest it, `DriverFact::ColorClearTakesEitherCode`: NVIDIA's
-  on the RTX 5080 Laptop GPU, whose 8- and 16-bit channels' clears went toward zero, ANV on the
-  Iris Xe of RPL-P, whose clear's code also depends on the image (a private optimal image's and one
-  in place over host pages can stand a code apart), and RADV on the Radeon RX 550 (Polaris 12),
-  whose 8- and 10-bit channels' clears take the colour cut to a `half` toward zero); an sRGB channel
-  inside its range, a value the format does not hold exactly): the device converts the clear color,
-  where Metal's clear rounds each channel to nearest, a tie to even, and truncates a small float's
-  and a shared exponent's mantissas. Vulkan lets the device store either of the two codes nearest a
-  normalized channel's scaled value, asking for the nearest. Not for a clear by the load operation of an attachment the pass's
-  render area covers on a driver whose load operation clears as Metal's `Clear` load action does
+  Also a render pass's clear of a normalized, sRGB, packed 16-bit, half or small-float color
+  attachment to a color whose conversion is in question (a normalized channel's scaled value off a
+  whole code, an sRGB channel inside its range, a value the format does not hold exactly): the
+  device converts the clear color, where Metal's clear rounds each channel to nearest, a tie to
+  even, and truncates a small float's and a shared exponent's mantissas. Vulkan lets the device
+  store either of the two codes closest to a normalized channel's scaled value, asking for the
+  nearest, and devices are measured to take the farther one off a midpoint: NVIDIA's on the RTX 5080
+  Laptop GPU, whose 8- and 16-bit channels' clears went toward zero (`R16Unorm`'s 0.001, 65.535
+  codes, stored 65), ANV on the Iris Xe of RPL-P, whose clear's code also depends on the image (a
+  private optimal image's and one in place over host pages can stand a code apart), and RADV on the
+  Radeon RX 550 (Polaris 12), whose 8- and 10-bit channels' clears take the colour cut to a `half`
+  toward zero (`runtime_lane::color_fills`). So the rule is the spec's on every device, with one
+  measured exception: not for a clear by the load operation of an attachment the pass's render area
+  covers on a driver whose load operation clears as Metal's `Clear` load action does
   (`DriverFact::ColorClearIsMetals`: MoltenVK on the Apple9 GPUs under macOS 27, measured on the M3
   Max); a clear made before the pass, of an attachment its first instance leaves out, is announced
   there too. Also a plain color fill (`BlitCommandEncoder::fill_texture_color` without a pixel
   format) of a texture of such a format the device renders, which the device's clear of the color
   writes, to a color whose conversion is in question against Metal's fill packing (a normalized
-  channel within 1/1024 of a midpoint between two codes, more for a packed 16-bit channel, or
-  anywhere off a whole code on a driver with `DriverFact::ColorClearTakesEitherCode`; an sRGB
-  channel inside its range, a value a half, small float or shared exponent does not hold exactly):
-  Metal's fill rounds a tie half up and takes an sRGB channel's code whose decoded value is
-  nearest.
+  channel's scaled value off a whole code, an sRGB channel inside its range, a value a half, small
+  float or shared exponent does not hold exactly): Metal's fill rounds a tie half up and takes an
+  sRGB channel's code whose decoded value is nearest.
 - `metal2vulkan-degrade-device-interpolation` (precision). `PrecisionNote::DeviceInterpolation`: A
   fragment function reads a varying the device interpolates (`center_perspective`, `centroid`,
   `sample` or `no_perspective`, not `flat`) on a device not measured to interpolate as Metal does

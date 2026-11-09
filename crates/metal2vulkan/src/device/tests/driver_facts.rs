@@ -381,7 +381,6 @@ const FRAGDEPTH: DriverFact = DriverFact::FragmentDepthStoresUnchanged;
 const APART: DriverFact = DriverFact::DepthStencilImagesLieApart;
 const AVERAGE: DriverFact = DriverFact::ColorResolveAverageIsMetals;
 const CLEAR: DriverFact = DriverFact::ColorClearIsMetals;
-const EITHER_CODE: DriverFact = DriverFact::ColorClearTakesEitherCode;
 const HIDE: DriverFact = DriverFact::CompressedImagesHideAliasedWrites;
 const HOST: DriverFact = DriverFact::HostTransferImagesKeepTheirBytes;
 const OPTIMIZED: DriverFact = DriverFact::DepthStencilImagesStayGpuOptimized;
@@ -468,7 +467,6 @@ fn the_committed_profiles_drivers_have_their_facts() {
         (
             "intel-irisxe-rplp-anv",
             vec![
-                EITHER_CODE,
                 HIDE,
                 HOST,
                 FETCH,
@@ -536,17 +534,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
         (
             "nvidia-rtx5080-laptop",
             vec![
-                ZERO,
-                DENORMALS,
-                EITHER_CODE,
-                FETCH,
-                SPLIT,
-                PLANES,
-                BC6H,
-                BC7,
-                ROWS,
-                STALL,
-                STALL_1024,
+                ZERO, DENORMALS, FETCH, SPLIT, PLANES, BC6H, BC7, ROWS, STALL, STALL_1024,
             ],
         ),
     ]

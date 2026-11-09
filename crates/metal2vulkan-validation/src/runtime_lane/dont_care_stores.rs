@@ -40,7 +40,7 @@ use super::clear_reach::{
     lane, lane_with, quiet, Draw, Lane, Shape, AREA, DRAWN, OLD, PLAIN, SIDE,
 };
 use super::degrade_notices::{
-    assert_made_once, forced, resolve_kind, shared_in_system_memory, tie_cleared,
+    assert_made_once, clear_in_question, forced, resolve_kind, shared_in_system_memory,
 };
 use super::{buffer_with, Messages, WAIT};
 use metal2vulkan::device::{DontCareColorPolicy, DriverFact, VkExtension};
@@ -433,7 +433,7 @@ fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
         true,
     );
     // `color_clear_draw_small_area` clears over a render area smaller than its attachment.
-    first.extend(tie_cleared(&lane.device, false));
+    first.extend(clear_in_question(&lane.device, false));
     announces(&messages, "the kept passes", !metals(&lane), &first);
     // The default policy stores the colors as the driver stores them: no pass took a backing.
     assert_eq!(kept_texels(&lane), 0, "the passes through a backing");
@@ -483,7 +483,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
             Degradation::RenderPassSplit,
             scope == BarrierScope::BUFFERS,
         )]));
-        first.extend(tie_cleared(&lane.device, true));
+        first.extend(clear_in_question(&lane.device, true));
         announces(&messages, case, true, &first);
         assert_eq!(
             kept_texels(&lane),
@@ -516,7 +516,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
             }
         );
         let mut first = made(&lane, &[], &[RGBA8], true);
-        first.extend(tie_cleared(&lane.device, true));
+        first.extend(clear_in_question(&lane.device, true));
         announces(&messages, case, true, &first);
         quiet(lane, &messages);
     }
@@ -553,7 +553,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
                 }
             );
             let mut first = made(&lane, &[(&[RGBA8], (None, None), 4)], &[RGBA8], true);
-            first.extend(tie_cleared(&lane.device, true));
+            first.extend(clear_in_question(&lane.device, true));
             announces(&messages, case, true, &first);
         } else {
             eprintln!("{case} on {}: no sample locations", lane.device.name());
@@ -650,7 +650,7 @@ fn exact_answers_keep_a_dont_care_color_s_earlier_texels_on_every_driver() {
     // `color_clear_draw_small_area` clears over a render area smaller than its attachment.
     let mut first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
     first.insert(Degradation::RenderPassSplit);
-    first.extend(tie_cleared(&lane.device, false));
+    first.extend(clear_in_question(&lane.device, false));
     announces(&messages, "the kept colors", false, &first);
     quiet(lane, &messages);
     // The 4x colors, on a device of their own (the notice is once per device).
@@ -690,7 +690,7 @@ fn exact_answers_keep_a_dont_care_color_s_earlier_texels_on_every_driver() {
         true,
     );
     // The 4x colors' clears cover their attachments.
-    first.extend(tie_cleared(&lane.device, true));
+    first.extend(clear_in_question(&lane.device, true));
     announces(&messages, "the kept 4x colors", !metals(&lane), &first);
     quiet(lane, &messages);
 }
@@ -719,7 +719,7 @@ fn a_hidden_depth_announces_no_dont_care_store() {
         "hidden_depth: the draw passes the hidden depth of 1.0"
     );
     let mut first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
-    first.extend(tie_cleared(&lane.device, true));
+    first.extend(clear_in_question(&lane.device, true));
     announces(&messages, "hidden_depth", false, &first);
     quiet(lane, &messages);
 }

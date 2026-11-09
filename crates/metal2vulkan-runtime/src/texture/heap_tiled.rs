@@ -636,26 +636,28 @@ pub(crate) fn metal_keeps_uncompressed(colour: bool, usage: TextureUsage) -> boo
 pub(crate) fn fresh_pattern(pf: PixelFormat) -> Option<FreshPattern> {
     use FreshPattern::{Color, DepthStencil};
     use PixelFormat as P;
-    // A clear color whose conversion writes the texel exactly (`clear_value::texel_bytes`).
+    // A clear color whose conversion writes the texel exactly (`clear_value::texel_bytes`), no
+    // rounding of it in question (`clear_value::rounds_apart`). A signed normalized pattern's
+    // code -1 takes none: no `float` scales onto it (`-1/127` is -0.99999999627 codes, which
+    // Vulkan lets a clear store as 0), so copies of its bytes write it.
     const MAGENTA: Option<[f64; 4]> = Some([1.0, 0.0, 1.0, 1.0]);
     const YELLOW: Option<[f64; 4]> = Some([1.0, 1.0, 0.0, 1.0]);
     const ONES: Option<[f64; 4]> = Some([4294967295.0, 0.0, 4294967295.0, 4294967295.0]);
     const MINUS_ONE: Option<[f64; 4]> = Some([-1.0, 0.0, -1.0, -1.0]);
-    const SNORM8: Option<[f64; 4]> = Some([-1.0 / 127.0, 0.0, -1.0 / 127.0, -1.0 / 127.0]);
-    const SNORM16: Option<[f64; 4]> = Some([-1.0 / 32767.0, 0.0, -1.0 / 32767.0, -1.0 / 32767.0]);
+    const SNORM: Option<[f64; 4]> = None;
     const SHARED: Option<[f64; 4]> = Some([65408.0, 0.0, 65408.0, 1.0]);
     let color = |texel: &'static [u8], color: Option<[f64; 4]>| Some(Color { texel, color });
     match pf {
         P::A8Unorm | P::R8Unorm | P::R8UnormSRGB => color(&[0xff], MAGENTA),
-        P::R8Snorm => color(&[0xff], SNORM8),
+        P::R8Snorm => color(&[0xff], SNORM),
         P::R8Uint => color(&[0xff], ONES),
         P::R8Sint => color(&[0xff], MINUS_ONE),
         P::RG8Unorm | P::RG8UnormSRGB => color(&[0xff, 0x00], MAGENTA),
-        P::RG8Snorm => color(&[0xff, 0x00], SNORM8),
+        P::RG8Snorm => color(&[0xff, 0x00], SNORM),
         P::RG8Uint => color(&[0xff, 0x00], ONES),
         P::RG8Sint => color(&[0xff, 0x00], MINUS_ONE),
         P::R16Unorm => color(&[0xff, 0xff], MAGENTA),
-        P::R16Snorm => color(&[0xff, 0xff], SNORM16),
+        P::R16Snorm => color(&[0xff, 0xff], SNORM),
         P::R16Uint => color(&[0xff, 0xff], ONES),
         P::R16Sint => color(&[0xff, 0xff], MINUS_ONE),
         P::R16Float => color(&[0xff, 0xff], None),
@@ -666,7 +668,7 @@ pub(crate) fn fresh_pattern(pf: PixelFormat) -> Option<FreshPattern> {
         P::RGBA8Unorm | P::RGBA8UnormSRGB | P::BGRA8Unorm | P::BGRA8UnormSRGB => {
             color(&[0xff, 0x00, 0xff, 0xff], MAGENTA)
         }
-        P::RGBA8Snorm => color(&[0xff, 0x00, 0xff, 0xff], SNORM8),
+        P::RGBA8Snorm => color(&[0xff, 0x00, 0xff, 0xff], SNORM),
         P::RGBA8Uint => color(&[0xff, 0x00, 0xff, 0xff], ONES),
         P::RGBA8Sint => color(&[0xff, 0x00, 0xff, 0xff], MINUS_ONE),
         P::RGB10A2Unorm | P::BGR10A2Unorm => color(&[0xff, 0x03, 0xf0, 0xff], MAGENTA),
@@ -675,7 +677,7 @@ pub(crate) fn fresh_pattern(pf: PixelFormat) -> Option<FreshPattern> {
         P::RG11B10Float => color(&[0xe0, 0x07, 0x00, 0xfc], None),
         P::RGB9E5Float => color(&[0xff, 0x01, 0xfc, 0xff], SHARED),
         P::RG16Unorm => color(&[0xff, 0xff, 0x00, 0x00], MAGENTA),
-        P::RG16Snorm => color(&[0xff, 0xff, 0x00, 0x00], SNORM16),
+        P::RG16Snorm => color(&[0xff, 0xff, 0x00, 0x00], SNORM),
         P::RG16Uint => color(&[0xff, 0xff, 0x00, 0x00], ONES),
         P::RG16Sint => color(&[0xff, 0xff, 0x00, 0x00], MINUS_ONE),
         P::RG16Float => color(&[0xff, 0xff, 0x00, 0x00], None),
@@ -683,7 +685,7 @@ pub(crate) fn fresh_pattern(pf: PixelFormat) -> Option<FreshPattern> {
         P::R32Sint => color(&[0xff; 4], MINUS_ONE),
         P::R32Float => color(&[0xff; 4], None),
         P::RGBA16Unorm => color(&[0xff, 0xff, 0, 0, 0xff, 0xff, 0xff, 0xff], MAGENTA),
-        P::RGBA16Snorm => color(&[0xff, 0xff, 0, 0, 0xff, 0xff, 0xff, 0xff], SNORM16),
+        P::RGBA16Snorm => color(&[0xff, 0xff, 0, 0, 0xff, 0xff, 0xff, 0xff], SNORM),
         P::RGBA16Uint => color(&[0xff, 0xff, 0, 0, 0xff, 0xff, 0xff, 0xff], ONES),
         P::RGBA16Sint => color(&[0xff, 0xff, 0, 0, 0xff, 0xff, 0xff, 0xff], MINUS_ONE),
         P::RGBA16Float => color(&[0xff, 0xff, 0, 0, 0xff, 0xff, 0xff, 0xff], None),

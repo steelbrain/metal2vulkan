@@ -411,29 +411,14 @@ pub(super) fn device_converts(pf: PixelFormat) -> bool {
         })
 }
 
-/// How near a midpoint between two codes a normalized channel's scaled color may lie where the
-/// device, which Vulkan asks to round to nearest (it may store either nearest code), may store the
-/// other code than Metal's fill: a
-/// tie (which the fill rounds up, half away from zero signed), or a value the device's arithmetic
-/// may take across one, as for a clear (`clear_value.rs`).
-const TIE: f64 = 1.0 / 1024.0;
-
-/// Whether `r`, a value scaled to codes, lies within `margin` of a midpoint between two codes.
-fn near_tie(r: f64, margin: f64) -> bool {
-    (r - r.floor() - 0.5).abs() <= margin
-}
-
 /// Whether the device's clear of `color` for a texture of `pf` ([`device_converts`]) may store
 /// another texel than Metal's fill packs (the module docs), announced `device-color-conversion`:
-/// a normalized channel's value scaled within [`TIE`] of a midpoint between two codes (widened by
-/// the fill's rounding of the product to `float`, and for a packed 16-bit format by a step
-/// through `half`, which a device's clear may take as Metal's own clear does), or anywhere off a
-/// whole code where the device takes either of the two nearest codes (`either`,
-/// `DriverFact::ColorClearTakesEitherCode`), an sRGB channel's
-/// value inside `(0, 1)` (the fill takes the code whose decoded value is nearest, the device
-/// encodes), and a half's, small float's or shared exponent's value it does not hold exactly. A
-/// NaN is [`device_nan`]'s, or stores 0 on both.
-pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4], either: bool) -> bool {
+/// a normalized channel's value scaled anywhere off a whole code, where Vulkan lets the device
+/// store either of the two codes closest to it (a tie among them, which the fill rounds up, half
+/// away from zero signed), an sRGB channel's value inside `(0, 1)` (the fill takes the code whose
+/// decoded value is nearest, the device encodes), and a half's, small float's or shared
+/// exponent's value it does not hold exactly. A NaN is [`device_nan`]'s, or stores 0 on both.
+pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4]) -> bool {
     use Conversion as C;
     if pf == PixelFormat::RGB9E5Float {
         return !shared_exact(color);
@@ -441,9 +426,6 @@ pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4], either: bool) -> bo
     let Some(fields) = fields(pf) else {
         return false;
     };
-    // A packed 16-bit format: B5G6R5, A1BGR5, BGR5A1, ABGR4 and BGRA4.
-    let packed16 =
-        fields.len() >= 3 && fields.iter().map(|f| f.conversion.width()).sum::<u32>() == 16;
     fields.iter().any(|f| {
         let v = color[f.channel] as f32;
         if v.is_nan() {
@@ -455,12 +437,8 @@ pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4], either: bool) -> bo
                     C::Unorm(_) => (0.0, largest(bits) as f64),
                     _ => (-1.0, largest(bits - 1) as f64),
                 };
-                let margin = match packed16 {
-                    true => TIE + m / 2048.0,
-                    false => TIE + m / f64::from(1u32 << 24),
-                };
                 let r = f64::from(v.clamp(low, 1.0)) * m;
-                near_tie(r, margin) || (either && r != r.round())
+                r != r.round()
             }
             C::Srgb => v > 0.0 && v < 1.0,
             C::Half => {

@@ -556,9 +556,7 @@ fn placement(
 /// texel than Metal's fill packs ([`device_apart`], `device-color-conversion`), and where it
 /// converts a half or small-float NaN as the device likes ([`device_nan`], `device-nan-encoding`).
 fn degrade_fill_conversion(device: &Device, pf: PixelFormat, color: [f64; 4]) {
-    let either = (device.properties().driver_facts)
-        .contains(&metal2vulkan::device::DriverFact::ColorClearTakesEitherCode);
-    if device_apart(pf, color, either) {
+    if device_apart(pf, color) {
         device.degrade(Degradation::DeviceColorConversion, || {
             (
                 format!("a color fill of a {pf:?} texture to {color:?}"),

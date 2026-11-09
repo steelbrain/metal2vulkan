@@ -11751,7 +11751,6 @@ variant	metal2vulkan-runtime::DriverFact::BlendlessColorAttachmentsWarn	Blendles
 variant	metal2vulkan-runtime::DriverFact::ChannelBlockDecodeIsMetals	ChannelBlockDecodeIsMetals
 variant	metal2vulkan-runtime::DriverFact::ColorBlockDecodeIsMetals	ColorBlockDecodeIsMetals
 variant	metal2vulkan-runtime::DriverFact::ColorClearIsMetals	ColorClearIsMetals
-variant	metal2vulkan-runtime::DriverFact::ColorClearTakesEitherCode	ColorClearTakesEitherCode
 variant	metal2vulkan-runtime::DriverFact::ColorImagesLieAsMetalHeapTextures	ColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan-runtime::DriverFact::ColorResolveAverageIsMetals	ColorResolveAverageIsMetals
 variant	metal2vulkan-runtime::DriverFact::CompressedImagesHideAliasedWrites	CompressedImagesHideAliasedWrites
@@ -13047,7 +13046,6 @@ variant	metal2vulkan::device::DriverFact::BlendlessColorAttachmentsWarn	Blendles
 variant	metal2vulkan::device::DriverFact::ChannelBlockDecodeIsMetals	ChannelBlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::ColorBlockDecodeIsMetals	ColorBlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::ColorClearIsMetals	ColorClearIsMetals
-variant	metal2vulkan::device::DriverFact::ColorClearTakesEitherCode	ColorClearTakesEitherCode
 variant	metal2vulkan::device::DriverFact::ColorImagesLieAsMetalHeapTextures	ColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan::device::DriverFact::ColorResolveAverageIsMetals	ColorResolveAverageIsMetals
 variant	metal2vulkan::device::DriverFact::CompressedImagesHideAliasedWrites	CompressedImagesHideAliasedWrites

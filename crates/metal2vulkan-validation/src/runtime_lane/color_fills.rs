@@ -511,7 +511,8 @@ fn color_fills_write_metal_s_texels() {
 /// own image, which makes no image, [`filled_whole`]); the device's clear may store another code
 /// in each (MoltenVK's of a 1 x 1 image and of a larger one), both held to Metal's alike. An
 /// `RGBA8Unorm_sRGB` fill announces `device-color-conversion` (its color channels inside
-/// `(0, 1)`), which the host's packing never does: the device's clear ran.
+/// `(0, 1)`), which the host's packing never does: the device's clear ran. How many fills
+/// announced `device-color-conversion` is printed (`COLOR-FILLS-ANNOUNCED`).
 #[test]
 fn plain_color_fills_are_the_device_s_clear() {
     let (messages, _cache, lane) = super::resolves::lane_with(|options| {
@@ -530,6 +531,7 @@ fn plain_color_fills_are_the_device_s_clear() {
         .collect();
     let mut wrong = Vec::new();
     let mut srgb_converted = false;
+    let (mut fills, mut announced) = (0usize, 0usize);
     for (raw, texel, _, _) in METAL {
         let pf = PixelFormat::try_from(raw).unwrap();
         let Some(metal) = filled(&lane, (pf, texel), &colors, Some(pf), |_| {}) else {
@@ -559,6 +561,8 @@ fn plain_color_fills_are_the_device_s_clear() {
             for (i, (got, want)) in plain.chunks(bytes).zip(metal.chunks(bytes)).enumerate() {
                 let converted = notes[i].contains(&Degradation::DeviceColorConversion);
                 let nan = notes[i].contains(&Degradation::DeviceNanEncoding);
+                fills += 1;
+                announced += usize::from(converted);
                 srgb_converted |= pf == PixelFormat::RGBA8UnormSRGB && converted;
                 if got == want {
                     continue;
@@ -588,6 +592,10 @@ fn plain_color_fills_are_the_device_s_clear() {
             }
         }
     }
+    println!(
+        "COLOR-FILLS-ANNOUNCED {name}: {announced} of {fills} plain fills announced \
+         device-color-conversion"
+    );
     for line in &wrong {
         println!("COLOR-FILLS-DIFFERS {name}: {line}");
     }
