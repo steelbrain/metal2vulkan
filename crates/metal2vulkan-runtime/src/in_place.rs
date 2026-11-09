@@ -96,10 +96,10 @@
 //!   the opaque one; the check's own textures over that memory take the same image, so its
 //!   verdicts are of the image a texture takes. Where the device's image format query
 //!   (`VkPhysicalDeviceExternalImageFormatInfo`) takes none of those handle types for such an
-//!   image of the texture's format, usage and tiling but with a dedicated allocation, or lists
-//!   not every type the block is exported as among those compatible with it, or where the memory
-//!   is the buffer's dedicated allocation (`VUID-vkBindImageMemory-memory-10926`), the texture is
-//!   a shadow, its notice naming why. Where such an image lies is decided as for any texture over a
+//!   image of the texture's format, usage and tiling but with a dedicated allocation, or the
+//!   image made requires one (`VkMemoryDedicatedRequirements`), or where the memory is the
+//!   buffer's dedicated allocation (`VUID-vkBindImageMemory-memory-10926`), the texture is a
+//!   shadow, its notice naming why. Where such an image lies is decided as for any texture over a
 //!   buffer (`linear_plan::aliases`), of the image made for the handle type, for each texture (each
 //!   plane of a picture) apart: the texels' offset in the memory (the buffer's first byte lies at
 //!   a multiple of 256 bytes there, or its `aligned_byte` does, `BufferDescriptor::aligned_byte`;

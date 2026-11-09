@@ -1590,17 +1590,6 @@ impl Device {
                 features.as_raw()
             ));
         }
-        let compatible = imported.external_memory_properties.compatible_handle_types;
-        if !compatible.contains(memory.shared_with()) {
-            return Err(format!(
-                "its image format query lists handle types {:#x} as compatible with a \
-                 DRM_FORMAT_MOD_LINEAR image of {:?} for {}, whose memory is exported as {:#x}",
-                compatible.as_raw(),
-                plan.format,
-                memory.words(),
-                memory.shared_with().as_raw()
-            ));
-        }
         Ok(limits)
     }
 }
@@ -1674,20 +1663,6 @@ impl ModifierMemory {
             ModifierMemory::Host => Some(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT),
             ModifierMemory::Own => None,
             ModifierMemory::Exported { named, .. } => Some(named),
-        }
-    }
-
-    /// The handle types an image's format query must list as compatible with the one it names
-    /// (`VkExternalMemoryProperties::compatibleHandleTypes`): for the runtime's exported memory,
-    /// every type its blocks are exported as, which an image bound there shares memory with
-    /// (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`); none for other memory, whose
-    /// allocation names the image's type alone.
-    pub(super) fn shared_with(self) -> vk::ExternalMemoryHandleTypeFlags {
-        match self {
-            ModifierMemory::Exported { exports, .. } => exports,
-            ModifierMemory::DmaBuf | ModifierMemory::Host | ModifierMemory::Own => {
-                vk::ExternalMemoryHandleTypeFlags::empty()
-            }
         }
     }
 

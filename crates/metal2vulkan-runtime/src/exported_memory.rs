@@ -167,11 +167,15 @@ impl FdExport {
     ///
     /// A dma-buf's shared blocks are exportable as an opaque file descriptor too where that query
     /// answers each handle type compatible with the other and an opaque file descriptor
-    /// exportable from a buffer's memory not only as a dedicated allocation: an image bound in such
-    /// a block may name either (`VUID-vkBindImageMemory-memory-02728`), and a device whose images
-    /// of a dma-buf's handle type take only a dedicated allocation (RADV's) binds one naming an
-    /// opaque file descriptor there (`texture.rs`'s `alias_unbound`). The dma-buf a buffer's export
-    /// answers is the same memory's either way (`vkGetMemoryFdKHR` of the dma-buf handle type).
+    /// exportable from a buffer's memory not only as a dedicated allocation: the export set's
+    /// compatibility is this query's (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`: "as
+    /// reported by VkExternalImageFormatProperties, or VkExternalBufferProperties"), an image
+    /// bound in such a block may name either (`VUID-vkBindImageMemory-memory-02728`: one type in
+    /// common), its own compatible types bounding only those it names
+    /// (`VUID-VkImageCreateInfo-pNext-00990`), and a device whose images of a dma-buf's handle
+    /// type take only a dedicated allocation (RADV's) binds one naming an opaque file descriptor
+    /// there (`texture.rs`'s `alias_unbound`). The dma-buf a buffer's export answers is the same
+    /// memory's either way (`vkGetMemoryFdKHR` of the dma-buf handle type).
     ///
     /// # Safety
     ///

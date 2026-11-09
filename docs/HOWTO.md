@@ -820,8 +820,8 @@ format, extent and usage, that handle type; the plain linear image first, else a
 
 - the image format query (`vkGetPhysicalDeviceImageFormatProperties2` with
   `VkPhysicalDeviceExternalImageFormatInfo`) takes the handle type for it, and not in a dedicated
-  allocation alone, and lists every handle type the memory is exportable as among those
-  compatible with it;
+  allocation alone, and the image made requires no dedicated allocation
+  (`VkMemoryDedicatedRequirements`);
 - the plane's byte in the memory, `exported.offset` plus the plane's offset in the frame, is a
   multiple of the `alignment` `vkGetImageMemoryRequirements` answers for the image;
 - `vkGetImageSubresourceLayout` answers `offset` 0 and a `rowPitch` equal to the plane's row
@@ -833,10 +833,12 @@ format, extent and usage, that handle type; the plain linear image first, else a
 Dma-buf-exportable buffers that share a block share one allocated exportable as a dma-buf, and as
 an opaque file descriptor too where `vkGetPhysicalDeviceExternalBufferProperties` answers both
 exportable for the runtime's buffers, each compatible with the other, the opaque one not only in a
-dedicated allocation. A plane's image there names the dma-buf handle type where the format query
-takes it as above, else the opaque one where the query takes that. RADV takes the dma-buf handle
-type for no plain linear image and for a `DRM_FORMAT_MOD_LINEAR` image only in a dedicated
-allocation, so its planes over such a block name the opaque one
+dedicated allocation. A plane's image there names the dma-buf handle type where the device takes
+it as above, else the opaque one where it takes that: Vulkan binds an image in memory exported as
+several handle types where the image names one of them, and the export set's compatibility is the
+buffer query's. RADV's format query takes the dma-buf handle type for no plain linear image, and
+its `DRM_FORMAT_MOD_LINEAR` image of it requires a dedicated allocation, so its planes over such a
+block name the opaque one
 (`WorkCounts::exported_dma_buf_images_named_opaque_fd`). `export_memory_dma_buf` answers a dma-buf
 of the same memory whatever else the block is exportable as, and the device's check of that memory
 makes the image a texture there makes.

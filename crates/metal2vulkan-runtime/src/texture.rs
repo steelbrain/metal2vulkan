@@ -810,10 +810,6 @@ pub(super) enum LinearRefusal {
     /// type): the device's image format query takes none of that memory for such an image, or
     /// only a dedicated allocation (its external memory features).
     External(ModifierMemory, vk::ExternalMemoryFeatureFlags),
-    /// For the runtime's memory exported as more than one handle type: the device's image format
-    /// query, of the handle type the image names, lists these handle types as compatible with
-    /// it, not every one the memory is exported as.
-    Incompatible(ModifierMemory, vk::ExternalMemoryHandleTypeFlags),
 }
 
 impl LinearRefusal {
@@ -863,13 +859,6 @@ impl LinearRefusal {
                 },
                 features.contains(memory.needs()),
                 features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
-            ),
-            LinearRefusal::Incompatible(memory, compatible) => format!(
-                "its image format query lists handle types {:#x} as compatible with a linear \
-                 image of {format:?}, usage {usage:?}, for {}, whose memory is exported as {:#x}",
-                compatible.as_raw(),
-                memory.words(),
-                memory.shared_with().as_raw()
             ),
         }
     }
@@ -2836,10 +2825,8 @@ impl Device {
     /// handle type (host allocations, `VK_EXT_external_memory_host`, or the runtime's memory
     /// exported as an opaque file descriptor or a dma-buf), where its image format query
     /// (`VkPhysicalDeviceExternalImageFormatInfo`) takes that memory for such an image (importable,
-    /// or exportable for memory the runtime exports) without a dedicated allocation, and lists
-    /// every handle type the memory is exported as among those compatible with it
-    /// (`ModifierMemory::shared_with`); why not where it does not, or makes no such image (the
-    /// refusal named).
+    /// or exportable for memory the runtime exports) without a dedicated allocation; why not where
+    /// it does not, or makes no such image (the refusal named).
     pub(super) fn external_image_limits(
         &self,
         info: &vk::ImageCreateInfo<'_>,
@@ -2881,13 +2868,9 @@ impl Device {
             Ok(()) => {
                 let takes = features.contains(memory.needs())
                     && !features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY);
-                let compatible = external.external_memory_properties.compatible_handle_types;
-                if !takes {
-                    Ok(Err(LinearRefusal::External(memory, features)))
-                } else if !compatible.contains(memory.shared_with()) {
-                    Ok(Err(LinearRefusal::Incompatible(memory, compatible)))
-                } else {
-                    Ok(Ok(limits))
+                match takes {
+                    true => Ok(Ok(limits)),
+                    false => Ok(Err(LinearRefusal::External(memory, features))),
                 }
             }
             Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED) => {
@@ -2915,13 +2898,14 @@ impl Device {
     ///   ([`PagesClass::ExportedFd`], [`PagesClass::ExportedDmaBuf`]) take each access the usage
     ///   takes for texels that lie in its lines as these do (a pending verdict starts the check,
     ///   and the texture is a shadow meanwhile), and where the device's image format query takes
-    ///   the handle type for the image without a dedicated allocation, listing every type the
-    ///   block is exported as among those compatible with it. A block of dma-bufs exportable as an
-    ///   opaque file descriptor too (`exported_memory.rs`'s `FdExport::new`) has its image name the
-    ///   dma-buf type where the query takes it, else the opaque one: RADV takes the dma-buf type
-    ///   for no linear image and for a `DRM_FORMAT_MOD_LINEAR` one only in a dedicated allocation,
-    ///   and takes the opaque one in a shared block. The check's own textures take them whatever
-    ///   the verdicts, so its verdicts are of the image a texture names.
+    ///   the handle type for the image without a dedicated allocation and the image made requires
+    ///   none. A block of dma-bufs exportable as an opaque file descriptor too
+    ///   (`exported_memory.rs`'s `FdExport::new`) has its image name the dma-buf type where the
+    ///   device takes it so, else the opaque one: RADV's format query takes the dma-buf type for no
+    ///   linear image, and its `DRM_FORMAT_MOD_LINEAR` image of it requires a dedicated
+    ///   allocation, where it takes the opaque one for a linear image in a shared block. The check's
+    ///   own textures take them whatever the verdicts, so its verdicts are of the image a texture
+    ///   names.
     /// - In a buffer's dedicated allocation (an exportable buffer's where the driver exports
     ///   such memory only so, or prefers or requires it), no image
     ///   (`VUID-vkBindImageMemory-memory-10926`).
@@ -2972,6 +2956,17 @@ impl Device {
                 )));
             }
         };
+        // Each handle type the block is exported as, the dma-buf's first. An image naming one of
+        // them binds there: the bind needs one type in common with the memory's export set
+        // (`VUID-vkBindImageMemory-memory-02728`); the image's own `compatibleHandleTypes` bounds
+        // only the types it names itself (`VUID-VkImageCreateInfo-pNext-00990`), which is one;
+        // and the export set's compatibility is the buffer query's
+        // (`VUID-VkExportMemoryAllocateInfo-handleTypes-09860`: "as reported by
+        // VkExternalImageFormatProperties, or VkExternalBufferProperties", `FdExport::new`).
+        // So the image's format query must take the type it names (exportable, not only as a
+        // dedicated allocation), the image made must require no dedicated allocation, and it
+        // must take the block's memory type at the texels' offset (`alias_unbound_in`); RADV's
+        // lists the opaque type alone as compatible with its opaque linear images.
         let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
         let opaque = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
         let mut refused: Option<(String, ShadowCause)> = None;
