@@ -382,6 +382,7 @@
         "object_churn.vk_buffers_destroyed": 7,
         "object_churn.vk_buffers_made": 3,
         "object_churn.vk_memory_allocations": 1,
+        "plain_buffer_blocks_made": 3,
         "pooled_memory_blocks_made": 3,
         "primaries_begun_ahead": 4,
         "queue_submissions": 4,
@@ -396,7 +397,7 @@
         "slot_returns": 4,
         "spare_command_pools_taken": 4,
         "submit_infos": 4,
-        "submit_stalls_on_work": 1,
+        "submit_stalls_on_work": 2,
         "trail_waits": 2,
         "wakes_completion_waiters": 4,
         "wakes_handler_threads": 4,
@@ -407,6 +408,7 @@
         "buffer_blocks_made_in_place": 2,
         "device_memory_allocated": 469762048,
         "image_blocks_made_in_place": 1,
+        "plain_buffer_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {

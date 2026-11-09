@@ -694,10 +694,12 @@
         "object_churn.vk_buffers_destroyed": 52,
         "object_churn.vk_buffers_made": 6,
         "object_churn.vk_memory_allocations": 1,
+        "plain_buffer_blocks_made": 3,
         "pooled_memory_blocks_made": 4,
         "queue_submissions": 15,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 15,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 15,
         "scheduler_sleeps": 15,
         "scheduler_wakes_commit": 15,
@@ -721,6 +723,7 @@
         "commands_recorded.end_command_buffer": 0,
         "device_memory_allocated": 268435456,
         "image_blocks_made_in_place": 1,
+        "plain_buffer_blocks_made": 3,
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {
