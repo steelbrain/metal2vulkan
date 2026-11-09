@@ -9070,6 +9070,12 @@ impl RenderLowering {
             (Stage::Object, pass_start.or(Stage::Object, &self.object)),
             (Stage::Mesh, pass_start.or(Stage::Mesh, &self.mesh)),
         ];
+        // The sampled slots that read the levels of their texture before an attached one in
+        // place of its copy (`render/attached_levels.rs`).
+        let narrowed = match attached {
+            true => self.attached_slots(&device, (&*plan, variant.pipeline()), &stages, true),
+            false => binding::NarrowedSlots::default(),
+        };
         let mut tables = binding::Tables::new(&stages)
             .with_pass(layout, views)
             .with_residency(&self.residency)
@@ -9080,7 +9086,7 @@ impl RenderLowering {
         // function-table array reads in set 0, which has no heap of its own.
         tables = tables.with_function_tables(&function_tables);
         if attached {
-            tables = tables.with_attachments(layout);
+            tables = tables.with_attachments(layout).with_narrowed(&narrowed);
         }
         if let Some(views) = &snapshot_views {
             tables = tables.with_snapshots(views);
@@ -9217,15 +9223,21 @@ impl RenderLowering {
         let (index, indirect) = (buffers.index.as_ref(), buffers.indirect.as_ref());
         // Over the last draw's uses, in their storage (`LiveBind::uses`), those of what the
         // encoder made resident kept where they are the last draw's.
-        binding::command_uses_into(
-            call,
-            (&plan, &command, &tables),
-            (
-                index.map(DrawSource::metal),
-                indirect.map(DrawSource::metal),
-            ),
-            &mut live.uses,
-        )?;
+        let sources = (
+            index.map(DrawSource::metal),
+            indirect.map(DrawSource::metal),
+        );
+        let made = (&plan, &command, &tables);
+        binding::command_uses_into(call, made, sources, &mut live.uses)?;
+        // A narrowed slot whose levels a write of the draw's own meets: every one takes its copy,
+        // its uses made again (`render/attached_levels.rs`).
+        let narrowed_slots = narrowed.len();
+        let written = narrowed_slots > 0 && narrowed.written_by(&live.uses);
+        if written {
+            narrowed.withdraw();
+            binding::command_uses_into(call, made, sources, &mut live.uses)?;
+        }
+        self.count_narrowed(narrowed_slots, written);
         let resident_made = live.uses.made() as u64;
         let counts = self.core.counts();
         if resident_made > 0 {
@@ -9291,9 +9303,6 @@ impl RenderLowering {
         let (draw_shadows, own_pixel) = self.draw_shadows(resident, uses, reading);
         if own_pixel {
             self.core.counts().own_pixel_read();
-        }
-        if let Some((plan, compiled)) = reading {
-            self.count_attached_levels(&device, plan, compiled);
         }
         if self.replaying && !self.gathered().covers(&draw_shadows) {
             return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
@@ -10928,6 +10937,7 @@ impl RenderLowering {
                 pushes_set_zero: !pushed.is_empty(),
                 last_vertex: provoking == provoking::Provoking::Native,
                 through_copies: (attached, own_pixel),
+                narrowed: narrowed.listed().collect(),
                 reads_images,
                 execution,
                 reads: RenderStages::empty(),

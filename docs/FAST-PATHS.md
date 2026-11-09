@@ -233,7 +233,10 @@ recorded here.
 - **A draw that reads its own pass's attachment reads a copy, a snapshot or a split.** A sampled
   slot binding of a texture the render pass instance renders reads a copy taken before the
   instance (`texture/attached_reads.rs`): the texels around the draw's scissors where it reads at
-  its own pixels alone, else every texel or what the instances since drew. After a barrier inside
+  its own pixels alone, else every texel or what the instances since drew; none where every read
+  of the slot reaches only levels before the lowest one the instance renders, which it reads in
+  the texture's own image through a view of those levels (`render/attached_levels.rs`,
+  `WorkCounts::attached_read_slots_narrowed`). After a barrier inside
   the instance, an own-pixel read takes a snapshot drawn in its subpass (`render/snapshot.rs`,
   docs/API.md "Snapshot reads") or splits the instance; both are exact. A private texture of the
   runtime's own whose image lacks `STORAGE` (the device lays it out otherwise with it) splits at

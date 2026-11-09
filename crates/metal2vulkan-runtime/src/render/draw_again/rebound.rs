@@ -119,7 +119,7 @@ use std::sync::Arc;
 
 use super::{Again, RenderLowering};
 use crate::argument_table::Stamp;
-use crate::binding::{self, SetWrite, Write};
+use crate::binding::{self, NarrowedSlots, SetWrite, Write};
 use crate::draw_source::{DrawSource, IndexBind};
 use crate::error::Error;
 use crate::live_bind::{LiveBind, Reshape};
@@ -663,6 +663,19 @@ impl RenderLowering {
             (Stage::Object, &self.object),
             (Stage::Mesh, &self.mesh),
         ];
+        // Its slots narrowed to the levels before an attached one, worked out as every step
+        // works them out (`render/attached_levels.rs`): the kept draw's, else it takes every step.
+        let narrowed = match attached {
+            true => {
+                let device = self.core.device();
+                self.attached_slots(device, (&**plan, compiled), &stages, false)
+            }
+            false => NarrowedSlots::default(),
+        };
+        let kept_narrowed = (self.again.kept.as_ref()).map(|kept| &kept.narrowed[..]);
+        if !kept_narrowed.is_some_and(|kept| narrowed.listed().eq(kept.iter().copied())) {
+            return None;
+        }
         let commands = &live.commands;
         let command = binding::Command {
             descriptor_bytes: &commands.descriptor_bytes,
@@ -713,7 +726,9 @@ impl RenderLowering {
                 .with_pass(&self.layout, plan.views)
                 .with_residency(&self.residency);
             if attached {
-                tables = tables.with_attachments(&self.layout);
+                tables = tables
+                    .with_attachments(&self.layout)
+                    .with_narrowed(&narrowed);
             }
             // Its runtime samplers' address modes: the kept draw's, as `bring_in` found them.
             if images {
@@ -738,7 +753,8 @@ impl RenderLowering {
         }
         let rebound = rebound
             && binding::push_writes_into(&commands.push_constants, &[], &mut live.pushes).is_ok();
-        if !rebound {
+        // A narrowed slot whose levels a write of its own meets takes its copy at every step.
+        if !rebound || (narrowed.len() > 0 && narrowed.written_by(&live.uses)) {
             return None;
         }
         let made = live.uses.made() as u64;

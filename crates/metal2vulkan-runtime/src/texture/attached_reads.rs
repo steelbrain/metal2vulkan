@@ -59,6 +59,13 @@
 //!   the attachment; before the first, ahead of the pass's load actions. Each such draw counts
 //!   (`WorkCounts::attachment_reads_through_copies`, the shadow served or not), and so does each
 //!   copy (`WorkCounts::shadow_copies`). It is exact and announces nothing.
+//! - **Levels before the attached one.** A slot every read of which reaches only levels of the
+//!   texture before the lowest one an attachment of the instance renders, through the samplers
+//!   the draw binds (`StageModule::level_reads`), reads the texture's own image through a view of
+//!   those levels in place of the copy, and names them in its uses (`render/attached_levels.rs`,
+//!   `WorkCounts::attached_read_slots_narrowed`): the copy would hold the same texels there, as
+//!   nothing the instance does writes them. Its view's first level is the texture's, so an
+//!   explicit level of detail selects the same level through either.
 //! - **Only what the instances drew.** A copy after the pass's first instance, of a buffer's
 //!   bytes or of an image's one level and slice, where the instances since the last copy changed
 //!   them only by their draws into a color attachment the pass loads (the encoder's load,
@@ -121,18 +128,21 @@
 //!   ranges: a copy or a snapshot is another resource) announces it,
 //!   `Degradation::AttachmentReadInPlace`.
 
-use super::{Device, Storage, Texture};
-use crate::binding_view::VkView;
+use super::{Device, Owner, Storage, Texture};
+use crate::binding_view::{binding_view, VkView};
 use crate::command_buffer::CommandBuffer;
 use crate::error::Error;
 use crate::image_plan::ImagePlan;
 use crate::render_pass::{ColorTarget, PassLayout};
 use crate::render_values::LoadAction;
 use crate::resource::ResourceKey;
+use crate::texture::view_error;
 use crate::texture_descriptor::TextureDescriptor;
-use crate::tracker::{Access, Use};
+use crate::tracker::{Access, Use, UseRange};
 use crate::values::ResourceOptions;
+use crate::view_plan::ViewRecord;
 use ash::vk;
+use metal2vulkan::bind::ImageViewDesc;
 use metal2vulkan::metal::format::FormatMapping;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::SnapshotForm;
@@ -259,6 +269,53 @@ impl Texture {
     pub(crate) fn lowest_attached_level(&self, layout: &PassLayout) -> Option<(u32, u32)> {
         let lowest = self.attached_levels(layout, |_| true).min()?;
         Some((lowest, self.0.record.level_count))
+    }
+
+    /// Whether a sampled slot binding of the texture can read its own image's levels before an
+    /// attached one in place of its copy (`render/attached_levels.rs`): its storage is an image of
+    /// its own, not a sparse one, with no decoded twin, whose image has the sampled usage.
+    pub(crate) fn reads_levels_in_place(&self) -> bool {
+        let Storage::Image(image) = self.storage() else {
+            return false;
+        };
+        !matches!(image.owner, Owner::Sparse(_))
+            && !self.has_decoded_twin()
+            && image.plan().usage.contains(ImageUsageFlags::SAMPLED)
+    }
+
+    /// A slot binding's use of the texture's levels `0..levels`, counted from its own first
+    /// level, at every layer it presents, reading by `read` and writing by `write`: its own
+    /// image's, as [`reads_levels_in_place`](Self::reads_levels_in_place) holds.
+    pub(crate) fn levels_use(
+        &self,
+        levels: u32,
+        (read, write): (Access, Access),
+    ) -> Use<ResourceKey> {
+        let mut used = self.bound_use(read, write);
+        if let UseRange::Image { levels: range, .. } = &mut used.range {
+            range.end = range.end.min(range.start + levels);
+        }
+        used
+    }
+
+    /// The view of a sampled slot binding `desc` of `call` over the texture's own image's levels
+    /// `0..levels`, counted from its own first level, as
+    /// [`reads_levels_in_place`](Self::reads_levels_in_place) holds: the view of every level but
+    /// its level count, so an explicit level of detail selects the same level through either.
+    pub(crate) fn levels_view(
+        &self,
+        call: &'static str,
+        desc: &ImageViewDesc,
+        levels: u32,
+    ) -> Result<vk::ImageView, Error> {
+        let image = self.image()?;
+        let record = ViewRecord {
+            level_count: levels,
+            ..self.0.record.bound()
+        };
+        let view = binding_view(image.plan(), &record, desc, false)
+            .map_err(|refusal| view_error(call, refusal))?;
+        image.view(&view)
     }
 
     /// The levels, counted from the texture's own first level, that the color attachments of

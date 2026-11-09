@@ -49,6 +49,7 @@
 //! - Every other write source names a later step's resource and is refused, typed, before
 //!   anything is recorded.
 
+use std::cell::Cell;
 use std::mem::MaybeUninit;
 
 use super::address_map::SamplerMaps;
@@ -149,6 +150,70 @@ pub(super) struct Tables<'a> {
     /// A merged draw replay's header's address (`render/executions/gpu.rs`): its vertex
     /// function's `PushHole::MergedDrawAddress` takes it.
     merged_header: Option<u64>,
+    /// A draw's sampled slots that read the levels of their texture's own image before an
+    /// attached one, in place of its copy (`render/attached_levels.rs`).
+    narrowed: Option<&'a NarrowedSlots>,
+}
+
+/// The sampled texture slots of a draw narrowed to the levels of their texture's own image before
+/// a level its render pass instance renders (`render/attached_levels.rs`): each binds the image
+/// through a view of its levels `0..n`, counted from the texture's own first level, and names
+/// those levels in its uses, in place of the texture's copy (`texture/attached_reads.rs`). Once
+/// withdrawn, every slot binds as it would without them: its copy.
+#[derive(Default)]
+pub(super) struct NarrowedSlots {
+    /// Each slot, the levels its view holds, and its use of them.
+    slots: Vec<(SlotRef, u32, Use<ResourceKey>)>,
+    withdrawn: Cell<bool>,
+}
+
+impl NarrowedSlots {
+    /// Narrow `slot` to its texture's levels `0..levels`, whose use `used` names them.
+    pub(super) fn narrow(&mut self, slot: SlotRef, levels: u32, used: Use<ResourceKey>) {
+        self.slots.push((slot, levels, used));
+    }
+
+    /// The levels `slot` is narrowed to, where it is and they are not withdrawn.
+    fn levels(&self, slot: SlotRef) -> Option<u32> {
+        if self.withdrawn.get() {
+            return None;
+        }
+        (self.slots.iter())
+            .find(|(narrowed, ..)| *narrowed == slot)
+            .map(|&(_, levels, _)| levels)
+    }
+
+    /// How many slots are narrowed, none once withdrawn.
+    pub(super) fn len(&self) -> usize {
+        match self.withdrawn.get() {
+            true => 0,
+            false => self.slots.len(),
+        }
+    }
+
+    /// The narrowed slots and their levels, in the order they were narrowed; none once withdrawn.
+    pub(super) fn listed(&self) -> impl Iterator<Item = (SlotRef, u32)> + '_ {
+        let withdrawn = self.withdrawn.get();
+        (self.slots.iter())
+            .filter(move |_| !withdrawn)
+            .map(|&(slot, levels, _)| (slot, levels))
+    }
+
+    /// Whether a write among `uses` meets the levels a narrowed slot reads.
+    pub(super) fn written_by(&self, uses: &[Use<ResourceKey>]) -> bool {
+        (self.slots.iter()).any(|(.., narrowed)| {
+            (uses.iter()).any(|used| {
+                !used.write.is_empty()
+                    && used.key == narrowed.key
+                    && used.range.overlaps(&narrowed.range)
+            })
+        })
+    }
+
+    /// Bind every slot as it would without these: through its copy.
+    pub(super) fn withdraw(&self) {
+        self.withdrawn.set(true);
+    }
 }
 
 /// The fragment texture slots a draw reads through snapshots, and the storage view of each one's
@@ -185,6 +250,7 @@ impl<'a> Tables<'a> {
             indices: None,
             snapshots: None,
             merged_header: None,
+            narrowed: None,
         }
     }
 
@@ -194,6 +260,28 @@ impl<'a> Tables<'a> {
         Tables {
             snapshots: Some(snapshots),
             ..self
+        }
+    }
+
+    /// The tables, with the draw's slots narrowed to the levels before an attached one
+    /// (`Tables::narrowed`).
+    pub(super) fn with_narrowed(self, narrowed: &'a NarrowedSlots) -> Tables<'a> {
+        Tables {
+            narrowed: Some(narrowed),
+            ..self
+        }
+    }
+
+    /// How a slot binding of `texture` at `slot`, of the kind `storage`, reads it: through a view
+    /// of its levels before an attached one where the slot is narrowed (a sampled binding alone),
+    /// else through its copy where it presents an attachment of the draw's instance and the slot
+    /// reads no snapshot, else its own image.
+    fn slot_read(&self, texture: &Texture, slot: SlotRef, storage: bool) -> SlotRead {
+        let narrowed = (self.narrowed.filter(|_| !storage)).and_then(|n| n.levels(slot));
+        match narrowed {
+            Some(levels) => SlotRead::Levels(levels),
+            None if self.attached(texture, storage) && !self.snapshot_slot(slot) => SlotRead::Copy,
+            None => SlotRead::Own,
         }
     }
 
@@ -1687,9 +1775,35 @@ pub(super) struct BindMemo {
 }
 
 /// What a view a bind made or found is a function of ([`BindMemo`]): a binding of the texture at
-/// the address as the view, a storage one where the first flag is set, of a texture the draw's
-/// instance renders where the second is (`Tables::attached`).
-type ViewKey = (usize, ImageViewDesc, bool, bool);
+/// the address as the view, a storage one where the flag is set, read as [`SlotRead`] says.
+type ViewKey = (usize, ImageViewDesc, bool, SlotRead);
+
+/// How a slot binding reads its texture (`Tables::slot_read`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SlotRead {
+    /// Its own image, or its shadow beyond its usage (`texture/usage_shadow.rs`).
+    Own,
+    /// Its copy, as it presents an attachment of the draw's instance (`texture/attached_reads.rs`).
+    Copy,
+    /// Its own image's levels `0..n` before an attached one (`render/attached_levels.rs`).
+    Levels(u32),
+}
+
+impl SlotRead {
+    /// The view a binding `view` of `texture` by `call`, of the kind `storage`, reads so.
+    fn view(
+        self,
+        texture: &Texture,
+        call: &'static str,
+        view: &ImageViewDesc,
+        storage: bool,
+    ) -> Result<vk::ImageView, Error> {
+        match self {
+            SlotRead::Levels(levels) => texture.levels_view(call, view, levels),
+            read => texture.slot_view(call, view, storage, read == SlotRead::Copy),
+        }
+    }
+}
 
 /// A view a [`BindMemo`] keeps, and its texture, held weakly: a texture that goes leaves its
 /// allocation, and so its address, to its weak handles, so no other texture is at the address
@@ -1798,17 +1912,17 @@ fn image_descriptor(
     let mut texture_view = |slot: SlotRef, view: &ImageViewDesc, storage: bool| {
         let texture = slot_texture(tables, slot)
             .ok_or_else(|| internal("the plan binds an unbound texture slot"))?;
-        let attached = tables.attached(texture, storage) && !tables.snapshot_slot(slot);
+        let read = tables.slot_read(texture, slot, storage);
         let Some(kept_views) = kept_views.as_deref_mut() else {
-            return texture.slot_view(call, view, storage, attached);
+            return read.view(texture, call, view, storage);
         };
-        let key = (texture.address(), *view, storage, attached);
+        let key = (texture.address(), *view, storage, read);
         if let Some(kept) = kept_views.get(&key) {
             debug_assert_eq!(kept.texture.as_ptr() as usize, key.0);
             return Ok(kept.raw);
         }
         device.shared().counts.thread().bind_view_worked_out();
-        let raw = texture.slot_view(call, view, storage, attached)?;
+        let raw = read.view(texture, call, view, storage)?;
         if kept_views.len() == KEPT_VIEWS {
             kept_views.clear();
         }
@@ -2743,14 +2857,15 @@ fn other_use(
                 }
                 let (read, write) = image_access(resource.class)?;
                 let storage = resource.class == AccessClass::StorageImage;
-                let attached = tables.attached(texture, storage) && !tables.snapshot_slot(slot);
                 let accesses = (
                     access(read, resource.access.read),
                     access(write, resource.access.write),
                 );
-                return texture
-                    .slot_use(call, storage, attached, accesses)
-                    .map(Some);
+                return match tables.slot_read(texture, slot, storage) {
+                    SlotRead::Levels(levels) => Ok(Some(texture.levels_use(levels, accesses))),
+                    read => (texture.slot_use(call, storage, read == SlotRead::Copy, accesses))
+                        .map(Some),
+                };
             }
             SlotClass::Sampler => return Ok(None),
         },
