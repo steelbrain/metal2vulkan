@@ -93,7 +93,7 @@ use super::predication::{Event, Predication};
 use super::program_objects;
 use super::queue::{QueueGen, Slot};
 use super::rebind::{Holds, SubmittedHolds, Taken};
-use super::render::EndInFlight;
+use super::render::{Carried, EndInFlight};
 use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
@@ -109,7 +109,7 @@ use super::unique_identifier::ScheduledWork;
 use super::upload::{Upload, Uploads};
 use super::used_resources::{names_any, EncoderKind, EncoderRecord, Reached, ReadRecord};
 use super::values::CommandBufferStatus;
-use super::work_counts::Counters;
+use super::work_counts::{CarryDropped, Counters};
 use super::write_routes::{AtCommit, Routes};
 use super::{Buffer, CommandQueue, Device};
 use crate::release;
@@ -680,6 +680,10 @@ pub(super) struct State {
     ending: Option<EndInFlight>,
     /// The device's lowering thread lowered the end it holds (`ending`).
     end_lowered: bool,
+    /// The kept draw its last render encoder carried for its next render encoder, with that
+    /// encoder's bind state (`render/carried.rs`): let go by every call that settles the end
+    /// ([`CommandBuffer::settle_end`]) but a render encoder's opening, which takes it.
+    carried: Option<Box<Carried>>,
     /// The commits' own work fails this many more times (a device test's injection of an out of
     /// memory, `tests::deferred_calls`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2118,6 +2122,7 @@ impl CommandBuffer {
                 abandoned: false,
                 ending: None,
                 end_lowered: false,
+                carried: None,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 failures_injected: 0,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2456,10 +2461,55 @@ impl CommandBuffer {
     /// of its calls the thread has not lowered): first in each call that follows an encoder's end
     /// in the command buffer (another encoder's opening, an event or a semaphore, the commit, a
     /// read of what its encoders left), as if the end had been lowered inside its call.
+    ///
+    /// A kept draw the last render encoder carried for the next is let go (`render/carried.rs`),
+    /// counted as one another call came before (`WorkCounts::kept_draws_carry_dropped_between`).
     pub(crate) fn settle_end(&self) {
+        self.settle_ended();
+        self.let_go_carried(Some(CarryDropped::Between));
+    }
+
+    /// [`settle_end`](Self::settle_end) at a commit: a kept draw carried is let go uncounted, as
+    /// no render encoder of the command buffer comes after it.
+    fn settle_end_committing(&self) {
+        self.settle_ended();
+        self.let_go_carried(None);
+    }
+
+    /// [`settle_end`](Self::settle_end), but a kept draw the last render encoder carried stays
+    /// (`render/carried.rs`): for a render encoder's opening, which takes it, and a read of what
+    /// the encoders left, which records nothing between them.
+    pub(crate) fn settle_ended(&self) {
         let ending = self.state().ending.take();
         if let Some(ending) = ending {
             ending.finish();
+        }
+    }
+
+    /// The kept draw the last render encoder carried for the next, taken (`render/carried.rs`).
+    pub(crate) fn take_carried(&self) -> Option<Box<Carried>> {
+        self.state().carried.take()
+    }
+
+    /// Hold `carried`, the kept draw of a render encoder ending, for the next render encoder
+    /// (`render/carried.rs`).
+    pub(crate) fn carry(&self, carried: Box<Carried>) {
+        let earlier = self.state().carried.replace(carried);
+        // None is held: the opening of the encoder ending took the one before.
+        if let Some(earlier) = earlier {
+            earlier.let_go(&self.0.device);
+        }
+    }
+
+    /// Let go of the kept draw the last render encoder carried, where it holds one, to the
+    /// device's spares, counted as `why` says where it says (`render/carried.rs`).
+    fn let_go_carried(&self, why: Option<CarryDropped>) {
+        let carried = self.state().carried.take();
+        if let Some(carried) = carried {
+            if let Some(why) = why {
+                self.0.device.shared().counts.kept_draw_carry_dropped(why);
+            }
+            carried.let_go(&self.0.device);
         }
     }
 
@@ -3002,7 +3052,7 @@ impl CommandBuffer {
             return Ok(());
         }
         // The last render encoder's end, where its call left it to the device's lowering thread.
-        self.settle_end();
+        self.settle_end_committing();
         self.commit_settled(call, failure, CommitRun::AtCall, hand)
     }
 
@@ -3064,7 +3114,7 @@ impl CommandBuffer {
             true => Hand::Wake,
             false => self.state().queued_commit.unwrap_or(Hand::Wake),
         };
-        self.settle_end();
+        self.settle_end_committing();
         if let Err(error) = self.commit_settled("commit", None, CommitRun::Queued, hand) {
             self.state().refuse_commit(error);
             let committed = self.commit_settled("commit", None, CommitRun::Refused, hand);
@@ -3089,7 +3139,7 @@ impl CommandBuffer {
             return;
         };
         for command_buffer in commits.unready_through(self) {
-            command_buffer.settle_end();
+            command_buffer.settle_end_committing();
         }
     }
 
@@ -3639,7 +3689,7 @@ impl CommandBuffer {
     /// encoder's call refused as it was lowered would have returned at the call. No Metal
     /// counterpart.
     pub fn refusal(&self) -> Option<Error> {
-        self.settle_end();
+        self.settle_ended();
         self.state().refusal.clone()
     }
 
@@ -3650,7 +3700,7 @@ impl CommandBuffer {
     /// dispatch, in encoding order: Metal reports one error per command buffer. No Metal
     /// counterpart.
     pub fn failed_pipeline(&self) -> Option<FailedPipeline> {
-        self.settle_end();
+        self.settle_ended();
         self.state().failed_pipeline.clone()
     }
 
@@ -3665,7 +3715,7 @@ impl CommandBuffer {
     /// `dispatches_dropped_still_making`. No Metal counterpart: Metal makes a state's pipelines as
     /// it makes the state.
     pub fn dropped_draw(&self) -> Option<FailedPipeline> {
-        self.settle_end();
+        self.settle_ended();
         self.state().dropped_draw.clone()
     }
 
@@ -3809,7 +3859,7 @@ impl CommandBuffer {
     /// encoders build no record otherwise.
     #[doc(hidden)]
     pub fn executions(&self) -> Vec<Execution> {
-        self.settle_end();
+        self.settle_ended();
         self.state().executions.clone()
     }
 

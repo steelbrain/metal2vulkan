@@ -51,7 +51,9 @@
 //!   lock of its program's (`GraphicsState::settle_shape`, whose answer is a function of the
 //!   shape and forms alone). Only a draw that recorded keeps it, so its encoder holds its pipeline
 //!   state (and the command buffer the variant's objects); it goes as the encoder ends
-//!   ([`SpareLiveBinds::give`]), so a spare state holds nothing alive.
+//!   ([`SpareLiveBinds::give`]), so a spare state holds nothing alive, but where the encoder
+//!   carries its kept draw into its command buffer's next render encoder, which takes the state
+//!   with its settle (`render/carried.rs`, [`LiveBind::end_carried`]).
 //! - **Kept from one encoder to the next.** An encoder that ends gives its state, with its shape,
 //!   to its device ([`SpareLiveBinds`]), and the next render encoder opened starts from it, as a
 //!   draw starts from the draw before it: its first draw brings it in place, so a pass that binds
@@ -546,6 +548,14 @@ impl LiveBind {
     /// kept go with the encoder (the module docs), so the next encoder may start from it.
     pub(super) fn end_encoder(&mut self) {
         self.end_chunk();
+        self.end_carried();
+    }
+
+    /// Its encoder ended, carrying its kept draw into its command buffer's next render encoder
+    /// (`render/carried.rs`): as [`end_encoder`](Self::end_encoder), but what its draws settled
+    /// stays, which the command buffer holds the variants' objects of. The shadows' copies listed
+    /// and the heap parts kept go: they are its residency's, which is the encoder's.
+    pub(super) fn end_carried(&mut self) {
         self.shadows.let_go();
         self.heap.let_go();
     }

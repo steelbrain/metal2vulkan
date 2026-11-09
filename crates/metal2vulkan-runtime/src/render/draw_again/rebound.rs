@@ -125,11 +125,12 @@ use crate::error::Error;
 use crate::live_bind::{LiveBind, Reshape};
 use crate::pipeline::{RenderStateKind, Settled};
 use crate::render::{line_width, Assembly, Bound, DrawBuffers, DrawState, Recording};
+use crate::render_target::Feedback;
 use crate::resource::ResourceKey;
 use crate::shadow::{ShadowUse, UsedAs};
 use crate::texture::Texture;
 use crate::tracker::Use;
-use crate::work_counts::ArgumentsStop;
+use crate::work_counts::{ArgumentsStop, CarryStop};
 
 /// The most slots a draw rebound takes changed: a draw after more takes every step.
 const SLOTS: usize = 8;
@@ -336,29 +337,40 @@ impl RenderLowering {
     ) -> Again {
         // A notice met at each occurrence forgets the draw once recorded, as its every step does.
         let watch = crate::degradation::EachWatch::start();
-        // A draw of other arguments whose rebind stops is counted by where.
-        let stopped = |encoder: &Self, why| {
+        // Carried in from the command buffer's last render encoder (`render/carried.rs`).
+        let carried = (self.again.kept.as_ref()).is_some_and(|kept| kept.carried);
+        // A draw of other arguments, or a carried one, whose rebind stops is counted by where.
+        let stopped = |encoder: &Self, (why, carry): (ArgumentsStop, CarryStop)| {
             if reargued {
                 encoder.core.counts().draw_rebind_stopped_arguments(why);
             }
+            if carried {
+                encoder.core.counts().draw_carry_stopped(carry);
+            }
             encoder.rebind_stopped()
         };
+        let other = (ArgumentsStop::Other, CarryStop::Other);
         // Of other arguments, routed as the kept draw.
         if reargued && !self.routed_as_kept(assembly, draw) {
-            return stopped(self, ArgumentsStop::Route);
+            return stopped(self, (ArgumentsStop::Route, CarryStop::Other));
         }
         // After a call set the encoder's render state, what it decides derived again
         // (`restated.rs`).
         let restated =
             (self.again.kept.as_ref()).is_some_and(|kept| kept.stated != self.again.stated);
         if restated && !self.restate_kept(live, call, assembly, draw) {
-            return stopped(self, ArgumentsStop::Other);
+            return stopped(self, other);
         }
-        let Some(changed) = self.bring_in(live, stamps) else {
-            return stopped(self, ArgumentsStop::Other);
+        // A carried draw: every slot its bind state holds bound, the encoder's calls bound
+        // (`render/carried.rs`).
+        if carried && self.carried_stale(live) {
+            return stopped(self, (ArgumentsStop::Other, CarryStop::Stale));
+        }
+        let Some(changed) = self.bring_in(live, stamps, carried) else {
+            return stopped(self, other);
         };
-        let mut stop = ArgumentsStop::Other;
-        let drawn = (draw, buffers, reargued);
+        let mut stop = other;
+        let drawn = (draw, buffers, (reargued, carried));
         let Some(rebinding) = self.rebind(call, live, &changed, drawn, &mut stop) else {
             return stopped(self, stop);
         };
@@ -367,8 +379,14 @@ impl RenderLowering {
         }
         #[cfg(debug_assertions)]
         {
-            let hits = self.again.hits;
-            self.again.hits += 1;
+            // The first and every second draw rebound since the draw was kept, or carried in since
+            // the command buffer's first render encoder (`render/carried.rs`), takes every step.
+            let count = match carried {
+                true => &mut self.again.carries,
+                false => &mut self.again.hits,
+            };
+            let hits = *count;
+            *count += 1;
             if hits.is_multiple_of(2) {
                 let rebound = super::Expected::Rebound(super::Rebound::of(live));
                 *checked = Some(super::Checked::of(self, rebound));
@@ -398,6 +416,12 @@ impl RenderLowering {
         if let Err(refused) = attached {
             return Again::Refused(refused);
         }
+        // A carried draw begins its pass's first instance (`render/carried.rs`).
+        if carried {
+            if let Err(refused) = self.begin_carried() {
+                return Again::Refused(refused);
+            }
+        }
         let counted = (stamps, changed.images());
         let recorded =
             self.record_rebound(live, (call, assembly, draw), buffers, (counted, rebinding));
@@ -418,6 +442,76 @@ impl RenderLowering {
             self.forget_again();
         }
         Again::Drawn
+    }
+
+    /// Whether the bind state `live` holds a slot bound that no call of the encoder bound since
+    /// its opening: of the kept draw carried into it, whose tables' stamps are the encoder's
+    /// tables' first ones (`render/carried.rs`). A new encoder inherits no binding, so such a slot
+    /// is stale; and a threadgroup memory length or an acceleration structure, which no stage
+    /// table's change lists, is told stale too. A table whose changes since its opening it no
+    /// longer lists is not told here: [`bring_in`](Self::bring_in) stops at it.
+    fn carried_stale(&self, live: &LiveBind) -> bool {
+        let Some(kept) = self.again.kept.as_ref() else {
+            return true;
+        };
+        let tables = [&self.vertex, &self.fragment, &self.object, &self.mesh];
+        let stages = [Stage::Vertex, Stage::Fragment, Stage::Object, Stage::Mesh];
+        for (at, (stage, table)) in stages.into_iter().zip(tables).enumerate() {
+            let Some(state) = live.state.stages.get(&stage) else {
+                continue;
+            };
+            if !state.threadgroup_lengths.is_empty() || !state.acceleration_structures.is_empty() {
+                return true;
+            }
+            let mut bound = (state
+                .buffers
+                .keys()
+                .map(|&index| (SlotClass::Buffer, index)))
+            .chain(
+                state
+                    .textures
+                    .keys()
+                    .map(|&index| (SlotClass::Texture, index)),
+            )
+            .chain(
+                state
+                    .samplers
+                    .keys()
+                    .map(|&index| (SlotClass::Sampler, index)),
+            );
+            // A table no call changed binds nothing.
+            let opened = kept.stamps[at];
+            if table.stamp() == opened {
+                if bound.next().is_some() {
+                    return true;
+                }
+                continue;
+            }
+            let Some(since) = table.changed_since(opened) else {
+                continue;
+            };
+            let stale = bound.any(|slot| {
+                let mut changed = since.clone();
+                !changed.any(|(class, index, _)| (class, index) == slot)
+            });
+            if stale {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Begin the pass's first instance for the kept draw carried into the encoder, as every
+    /// step's first draw that records begins it (`render/inline_first.rs`): inline where the pass
+    /// opened so and its instance allows it, else its secondary. Refused only where an object
+    /// cannot be made, as every step's is.
+    fn begin_carried(&mut self) -> Result<(), Error> {
+        let next = super::super::Next::Current;
+        let begin = self.inline_begin(&next, None, (true, true, false), Feedback::NONE)?;
+        if let Some(begin) = begin {
+            self.begin_inline(begin);
+        }
+        Ok(())
     }
 
     /// Whether `draw` of `assembly`, of other arguments than the kept draw's alone, is routed as
@@ -452,8 +546,11 @@ impl RenderLowering {
     /// stamp is no longer the kept draw's, each table so read counted read in part
     /// (`WorkCounts::stage_tables_read_in_part`): the changed slots; `None` where one is not a
     /// buffer, texture or sampler slot, a table keeps no list of them, or the shape changed (then
-    /// the kept state makes its shape again, as any draw's does).
-    fn bring_in(&self, live: &mut LiveBind, stamps: [Stamp; 4]) -> Option<Changed> {
+    /// the kept state makes its shape again, as any draw's does). A `carried` draw's stamps are
+    /// its encoder's tables' first ones, under which its state holds the slots the calls since
+    /// bound, each a slot of the state ([`carried_stale`](Self::carried_stale)), whatever
+    /// table the state was read from.
+    fn bring_in(&self, live: &mut LiveBind, stamps: [Stamp; 4], carried: bool) -> Option<Changed> {
         let RenderStateKind::Graphics(pipeline) = self.pipeline.as_ref()?.kind() else {
             return None;
         };
@@ -478,7 +575,7 @@ impl RenderLowering {
                 continue;
             }
             let state = live.state.stages.get(&stage)?;
-            let read = live.read_from.read_under(at) == Some(under);
+            let read = carried || live.read_from.read_under(at) == Some(under);
             if !read || !views.holds(stage, state.at_bind_views) {
                 return None;
             }
@@ -563,8 +660,8 @@ impl RenderLowering {
         call: &'static str,
         live: &mut LiveBind,
         changed: &Changed,
-        (draw, buffers, reargued): (&DrawCall, &DrawBuffers<'_>, bool),
-        stop: &mut ArgumentsStop,
+        (draw, buffers, (reargued, carried)): (&DrawCall, &DrawBuffers<'_>, (bool, bool)),
+        stop: &mut (ArgumentsStop, CarryStop),
     ) -> Option<Rebinding> {
         let slots = changed.list();
         let kept = settles_kept(self, live)
@@ -594,7 +691,7 @@ impl RenderLowering {
             None => Ok(false),
         };
         if rebound != Ok(true) {
-            *stop = ArgumentsStop::Tables;
+            stop.0 = ArgumentsStop::Tables;
             return None;
         }
         // A draw of other arguments: what they decide of its commands, its Vulkan draw, push
@@ -608,7 +705,7 @@ impl RenderLowering {
                 Ok(true) => {}
                 Ok(false) => {
                     if !plan.vertex_buffers.is_empty() {
-                        *stop = ArgumentsStop::FetchWindow;
+                        stop.0 = ArgumentsStop::FetchWindow;
                     }
                     return None;
                 }
@@ -634,7 +731,7 @@ impl RenderLowering {
         );
         let reached = (self.check_vertex_reach(&compiled.vertex_input.pulled, draw)).is_ok();
         if !reached {
-            *stop = ArgumentsStop::Reach;
+            stop.0 = ArgumentsStop::Reach;
         }
         let checked = reached && (moved || tables_checked());
         // The pass's fragment writes, a copy of which a stage before the fragments may read
@@ -651,6 +748,11 @@ impl RenderLowering {
         // draw.
         let attached = self.samples_attachment(facts, Texture::attached_in);
         if attached && self.loads_ordered && self.samples_attachment(facts, Texture::cleared_in) {
+            return None;
+        }
+        // A carried draw reads no texture its pass's attachments render (`render/carried.rs`).
+        if attached && carried {
+            stop.1 = CarryStop::Attached;
             return None;
         }
         let images = changed.images();
@@ -695,10 +797,11 @@ impl RenderLowering {
         let writes_kept = moved && commands.descriptor_ranges == live.kept.ranges;
         // Its uses: where only buffer slots changed, the kept draw's with those slots' patched in
         // place, which reads the stages' tables alone, else made again whole, those of what the
-        // encoder made resident kept (`binding::command_uses_into`).
+        // encoder made resident kept (`binding::command_uses_into`); a carried draw's whole, as its
+        // kept draw's are another encoder's (`render/carried.rs`).
         // A draw of other arguments patches its index buffer's use too, as a moved slot's.
         let patch = (&**plan, &command, &stages[..]);
-        let inside = match images {
+        let inside = match images || carried {
             true => None,
             false => {
                 let moved_uses = (&mut live.kept.moved_at, &mut live.kept.moved);
@@ -1120,6 +1223,10 @@ impl RenderLowering {
         kept.settled = Some(settled);
         kept.between = false;
         kept.stated = stated;
+        // A carried draw is the encoder's own from here, recorded into the instance it began.
+        let carried = kept.carried;
+        kept.carried = false;
+        kept.command_buffer = self.current.draws;
         // Whether its uses read an image: what its drawing again notes (`Kept::reads_images`).
         if images {
             kept.reads_images = live.uses.iter().any(super::reads_image);
@@ -1132,6 +1239,9 @@ impl RenderLowering {
         }
         if restated {
             counts.draw_restated();
+        }
+        if carried {
+            counts.draw_rebound_carried();
         }
         recorded.count_equal_shapes(counts);
         self.current.recorded = true;

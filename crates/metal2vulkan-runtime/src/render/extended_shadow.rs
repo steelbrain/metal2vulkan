@@ -175,6 +175,12 @@ impl ExtendedShadows {
         self.holds
     }
 
+    /// Whether the pass has a color of an extended-range form, or holds shadows: a draw kept in
+    /// another pass is not carried into it (`render/carried.rs`).
+    pub(super) fn any(&self) -> bool {
+        self.holds || !self.colors.is_empty()
+    }
+
     /// Whether the pass made `color`'s shadow, whose draws took a view of the color.
     pub(super) fn made(&self, color: u32) -> bool {
         self.made.contains_key(&color)

@@ -77,6 +77,12 @@
 //!   state decides of it (`restated.rs`). It is then rebound (`rebound.rs`), recording its new
 //!   draw state's dynamic states against what its record holds, where what it derived leaves
 //!   its pipeline, plan, shape and push bytes the kept draw's; else it takes every step.
+//! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's first
+//!   instance carries it, with its bind state and settle, into its command buffer's next render
+//!   encoder where nothing comes between and that encoder's pass is its pass's like
+//!   (`render/carried.rs`): the draw is kept there as one after draws of other states, recorded
+//!   through no record, under another render state ([`Kept::carried`]), so its first draw there
+//!   is rebound (`rebound.rs`), bringing in every slot that encoder's calls bound.
 //! - **What a kept draw left holds for the next.** Each of its steps adds to what the encoder
 //!   holds, and adding the same again changes nothing: its drawn area and coverage (rectangles
 //!   and boxes, `clear_reach::DrawnArea`, `linear_attachment::Coverage`), the pass's reads
@@ -143,6 +149,11 @@ pub(super) struct DrawAgain {
     /// second one after it take every step instead (the module docs).
     #[cfg(debug_assertions)]
     hits: u64,
+    /// Kept draws carried in and rebound since the command buffer's first render encoder: in
+    /// builds with debug assertions, the first and every second one after it take every step
+    /// instead (`render/carried.rs`).
+    #[cfg(debug_assertions)]
+    carries: u64,
 }
 
 /// What a kept draw was, what it read, and what a draw again repeats of it (the module docs).
@@ -205,6 +216,45 @@ pub(crate) struct Kept {
     /// this, the record holds the pipeline and dynamic states it set, which a draw rebound then
     /// compares with none. `None` where it recorded through none.
     pub(super) settled: Option<u64>,
+    /// Whether its command buffer's last render encoder carried it into this one, which has not
+    /// drawn it since (`render/carried.rs`): its tables' stamps are the encoder's tables' first
+    /// ones, and its next draw is rebound as a carried draw is.
+    pub(super) carried: bool,
+}
+
+impl Kept {
+    /// This draw, carried into a render encoder of epoch `epoch` whose tables' stamps are
+    /// `stamps` at its opening, whose `Under` is `under` there and whose first instance records
+    /// into `draws` (`render/carried.rs`).
+    pub(super) fn carried_into(
+        self,
+        epoch: Stamp,
+        stamps: [Stamp; 4],
+        under: Under,
+        draws: vk::CommandBuffer,
+    ) -> Kept {
+        Kept {
+            epoch,
+            // A stamp no render state had: its first draw derives again what the encoder's
+            // render state decides (`restated.rs`).
+            stated: Stamp::fresh(),
+            between: true,
+            stamps,
+            under,
+            command_buffer: draws,
+            settled: None,
+            carried: true,
+            ..self
+        }
+    }
+
+    /// Whether what the draw read that changes with no call is as it was, but what it was noted
+    /// into: `moved` no-copy buffers' moves, a residency of `residency`'s generation, and the
+    /// device's sampler IDs' slots changed `samplers` times (`render/carried.rs`).
+    pub(super) fn carried_under(&self, moved: u64, residency: u64, samplers: u64) -> bool {
+        let under = &self.under;
+        (under.moved, under.residency, under.samplers) == (moved, residency, samplers)
+    }
 }
 
 /// An index source as a kept draw read it in place: the Metal buffer, by key, and offset, and
@@ -386,6 +436,32 @@ impl RenderLowering {
     /// keeps itself in place of where it can: those set aside stay kept.
     pub(super) fn drop_kept(&mut self) {
         self.again.kept = None;
+    }
+
+    /// The last direct draw's kept draw, taken: an ended encoder's, carried into its command
+    /// buffer's next render encoder (`render/carried.rs`).
+    pub(super) fn take_kept(&mut self) -> Option<Kept> {
+        self.again.kept.take()
+    }
+
+    /// Keep `kept`, a draw carried in from the command buffer's last render encoder
+    /// (`render/carried.rs`), as the last direct draw's.
+    pub(super) fn keep_carried(&mut self, kept: Kept) {
+        self.again.kept = Some(kept);
+    }
+
+    /// The kept draws carried in since the command buffer's first render encoder
+    /// ([`DrawAgain`]), which a carried draw carries on (`render/carried.rs`).
+    #[cfg(debug_assertions)]
+    pub(super) fn carries(&self) -> u64 {
+        self.again.carries
+    }
+
+    /// Take `carries` kept draws carried in since the command buffer's first render encoder: a
+    /// carried draw's.
+    #[cfg(debug_assertions)]
+    pub(super) fn set_carries(&mut self, carries: u64) {
+        self.again.carries = carries;
     }
 
     /// Bring in the kept draw of the pipeline state the encoder draws through, where its last draw
@@ -824,6 +900,9 @@ impl Checked {
             again.between,
             again.stated,
         );
+        // A carried draw's every step began the pass's first instance, which its kept draw named
+        // before any did, and keeps a draw carried no more (`render/carried.rs`).
+        let (command_buffer, carried) = (again.command_buffer, again.carried);
         assert!(
             draw_alone || rebound,
             "a draw again recorded a state command"
@@ -838,9 +917,13 @@ impl Checked {
         // (`Kept::stated`).
         (again.draw_alone, again.stamps, again.under) = (kept.draw_alone, kept.stamps, kept.under);
         (again.settled, again.between, again.stated) = (kept.settled, kept.between, kept.stated);
+        if kept.carried {
+            (again.command_buffer, again.carried) = (kept.command_buffer, kept.carried);
+        }
         assert!(*again == kept, "a draw again kept another draw");
         (again.draw_alone, again.stamps, again.under) = (draw_alone, stamps, under);
         (again.settled, again.between, again.stated) = (settled, between, stated);
+        (again.command_buffer, again.carried) = (command_buffer, carried);
         encoder.again.hits = hits;
     }
 }

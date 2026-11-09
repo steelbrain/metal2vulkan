@@ -255,6 +255,8 @@ pub(crate) struct Counters {
     untouched_passes_skipped: AtomicU64,
     inline_passes: AtomicU64,
     inline_passes_split: AtomicU64,
+    kept_draws_carried: AtomicU64,
+    kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
     inline_split_instances: AtomicU64,
     inline_memoryless_write_splits: AtomicU64,
     passes_not_inline: [AtomicU64; NotInline::COUNT],
@@ -646,6 +648,9 @@ struct CommandCounters {
     draws_rebind_stopped_arguments_fetch_window: AtomicU64,
     draws_rebind_stopped_arguments_reach: AtomicU64,
     draws_rebind_stopped_arguments_other: AtomicU64,
+    draws_rebound_carried: AtomicU64,
+    draws_carry_stopped: AtomicU64,
+    draws_carry_stopped_by: [AtomicU64; CarryStop::COUNT],
     attached_read_slots: AtomicU64,
     attached_read_slots_by: [AtomicU64; AttachedLevels::COUNT],
 }
@@ -681,6 +686,46 @@ pub(crate) enum AttachedLevels {
 impl AttachedLevels {
     /// How many there are.
     pub(crate) const COUNT: usize = 7;
+}
+
+/// Why a render encoder's kept draw carried into its command buffer's next render encoder
+/// (`render/carried.rs`) was let go before that encoder started from it
+/// (`WorkCounts::kept_draws_carry_dropped_*`): the first that held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CarryDropped {
+    /// Another call of the command buffer came first: another encoder's opening, an event, a
+    /// commit, or any other that settles its last render encoder's end.
+    Between,
+    /// The next render encoder's pass is another's: another shape or compatible render pass, a
+    /// color, depth or stencil attachment of another kind, memoryless colors, a visibility
+    /// buffer, a rasterization-rate map, color groups, or an encoder that encodes an ended one
+    /// again.
+    Layout,
+    /// What the kept draw read that changes with no call: a no-copy buffer moved, the device's
+    /// sampler IDs' slots changed, or the next encoder's residency is of another generation.
+    Under,
+}
+
+impl CarryDropped {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 3;
+}
+
+/// Where the rebind of a render encoder's first draw of the kept draw its command buffer's last
+/// render encoder carried into it stopped (`WorkCounts::draws_carry_stopped_*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CarryStop {
+    /// A slot its bind state holds bound that no call of the encoder bound (`render/carried.rs`).
+    Stale,
+    /// It samples a texture an attachment of the encoder's pass renders.
+    Attached,
+    /// Any other step of a rebind.
+    Other,
+}
+
+impl CarryStop {
+    /// How many there are.
+    pub(crate) const COUNT: usize = 3;
 }
 
 /// What kept a direct draw that recorded from being kept to draw again
@@ -1297,6 +1342,25 @@ impl Counting<'_> {
             ArgumentsStop::FetchWindow => |c| &c.draws_rebind_stopped_arguments_fetch_window,
             ArgumentsStop::Reach => |c| &c.draws_rebind_stopped_arguments_reach,
             ArgumentsStop::Other => |c| &c.draws_rebind_stopped_arguments_other,
+        };
+        counts.add(count, 1);
+    }
+
+    /// A render draw rebound from the kept draw its command buffer's last render encoder carried
+    /// into its encoder (`WorkCounts::draws_rebound_carried`).
+    pub(crate) fn draw_rebound_carried(&self) {
+        self.0.add(|counts| &counts.draws_rebound_carried, 1);
+    }
+
+    /// A render draw of the kept draw carried into its encoder whose rebind stopped where `why`
+    /// says (`WorkCounts::draws_carry_stopped`).
+    pub(crate) fn draw_carry_stopped(&self, why: CarryStop) {
+        let counts = self.0;
+        counts.add(|counts| &counts.draws_carry_stopped, 1);
+        let count: fn(&CommandCounters) -> &AtomicU64 = match why {
+            CarryStop::Stale => |c| &c.draws_carry_stopped_by[CarryStop::Stale as usize],
+            CarryStop::Attached => |c| &c.draws_carry_stopped_by[CarryStop::Attached as usize],
+            CarryStop::Other => |c| &c.draws_carry_stopped_by[CarryStop::Other as usize],
         };
         counts.add(count, 1);
     }
@@ -2698,6 +2762,18 @@ impl Counters {
     /// (`render/inline_first.rs`).
     pub(crate) fn inline_pass(&self) {
         self.inline_passes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A render encoder opened from the kept draw its command buffer's last render encoder
+    /// carried (`render/carried.rs`, `WorkCounts::kept_draws_carried`).
+    pub(crate) fn kept_draw_carried(&self) {
+        self.kept_draws_carried.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A kept draw carried into its command buffer's next render encoder was let go for `why`
+    /// (`WorkCounts::kept_draws_carry_dropped_*`).
+    pub(crate) fn kept_draw_carry_dropped(&self, why: CarryDropped) {
+        self.kept_draws_carry_dropped[why as usize].fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance did not record inline, for `why` (`NotInline`).
@@ -5704,6 +5780,24 @@ pub struct WorkCounts {
     /// command buffer of its encoder's, begun at its first draw, in place of a secondary
     /// (`render/inline_first.rs`).
     pub inline_passes: u64,
+    /// Render encoders that opened from the kept draw their command buffer's last render encoder
+    /// carried into them, with that encoder's bind state and settle (`render/carried.rs`): the
+    /// encoder's first draw of it is rebound (`draws_rebound_carried`). An encoder ended with a
+    /// kept draw of its pass's first instance that read no attachment of its pass carries it.
+    pub kept_draws_carried: u64,
+    /// Kept draws carried that were let go before a render encoder started from them because
+    /// another call of the command buffer came first: another encoder's opening, an event, a
+    /// commit, or any other call that settles the last render encoder's end.
+    pub kept_draws_carry_dropped_between: u64,
+    /// Kept draws carried that were let go because the next render encoder's pass is another's:
+    /// another shape or compatible render pass, another kind of attachment, memoryless colors, a
+    /// visibility buffer, a rasterization-rate map, color groups, or an encoder that encodes an
+    /// ended one again.
+    pub kept_draws_carry_dropped_layout: u64,
+    /// Kept draws carried that were let go because what they read that changes with no call
+    /// changed: a no-copy buffer moved, the device's sampler IDs' slots changed, or the next
+    /// encoder's residency is of another generation.
+    pub kept_draws_carry_dropped_under: u64,
     /// Those of them that ended with more than one instance.
     pub inline_passes_split: u64,
     /// The instances after a split of such passes that recorded their draws inline too, in the
@@ -6286,6 +6380,23 @@ pub struct WorkCounts {
     /// (`BindingPlan::redraw_apart_into`), its pulled attributes' reach and its index buffer's
     /// bind, which it records with its draw (`render/draw_again/rebound.rs`).
     pub draws_rebound_arguments: u64,
+    /// Of `draws_rebound`, render encoders' first draws of the kept draw their command buffer's
+    /// last render encoder carried into them (`kept_draws_carried`, `render/carried.rs`): each
+    /// derived again what the encoder's render state decides of it, brought in every slot the
+    /// encoder's calls bound, made its uses whole, began its pass's first instance as every step
+    /// begins it, and recorded every state command it sets into the encoder's command buffer.
+    pub draws_rebound_carried: u64,
+    /// Render encoders' first draws of a carried kept draw whose rebind stopped, so that they took
+    /// every step: each counted in one of the counts below.
+    pub draws_carry_stopped: u64,
+    /// Of `draws_carry_stopped`, those whose bind state held a slot bound that no call of their
+    /// encoder bound: a new encoder inherits no binding, so the state is stale there.
+    pub draws_carry_stopped_stale: u64,
+    /// Of `draws_carry_stopped`, those that sample a texture an attachment of their pass renders.
+    pub draws_carry_stopped_attached: u64,
+    /// Of `draws_carry_stopped`, those that stopped at another step of a rebind
+    /// (`draws_rebind_stopped`'s).
+    pub draws_carry_stopped_other: u64,
     /// Render encoders' direct draws that recorded a Vulkan draw and kept nothing to draw again
     /// or rebind (`render/draw_again.rs`), so their encoder's next draw takes every step; with,
     /// in the counts below, what kept each from being kept, a draw counted in every group it met
@@ -7757,6 +7868,12 @@ impl Device {
         let attached = |levels: AttachedLevels| {
             (counters.commands).sum(|counts| &counts.attached_read_slots_by[levels as usize])
         };
+        let carry_stopped = |why: CarryStop| {
+            (counters.commands).sum(|counts| &counts.draws_carry_stopped_by[why as usize])
+        };
+        let carry_dropped = |why: CarryDropped| {
+            counters.kept_draws_carry_dropped[why as usize].load(Ordering::Relaxed)
+        };
         let group_end = |end: GroupEnd| counters.group_ends[end as usize].load(Ordering::Relaxed);
         let first_work_order = self.shared().textures.first_moves.submissions_waited();
         let held_for =
@@ -8234,6 +8351,10 @@ impl Device {
             unrun_instances_ended: counters.unrun_instances_ended.load(Ordering::Relaxed),
             untouched_passes_skipped: counters.untouched_passes_skipped.load(Ordering::Relaxed),
             inline_passes: counters.inline_passes.load(Ordering::Relaxed),
+            kept_draws_carried: counters.kept_draws_carried.load(Ordering::Relaxed),
+            kept_draws_carry_dropped_between: carry_dropped(CarryDropped::Between),
+            kept_draws_carry_dropped_layout: carry_dropped(CarryDropped::Layout),
+            kept_draws_carry_dropped_under: carry_dropped(CarryDropped::Under),
             inline_passes_split: counters.inline_passes_split.load(Ordering::Relaxed),
             inline_split_instances: counters.inline_split_instances.load(Ordering::Relaxed),
             inline_memoryless_write_splits: (counters.inline_memoryless_write_splits)
@@ -8403,6 +8524,11 @@ impl Device {
             draws_moved_inside: commands(|counts| &counts.draws_moved_inside),
             draws_restated: commands(|counts| &counts.draws_restated),
             draws_rebound_arguments: commands(|counts| &counts.draws_rebound_arguments),
+            draws_rebound_carried: commands(|counts| &counts.draws_rebound_carried),
+            draws_carry_stopped: commands(|counts| &counts.draws_carry_stopped),
+            draws_carry_stopped_stale: carry_stopped(CarryStop::Stale),
+            draws_carry_stopped_attached: carry_stopped(CarryStop::Attached),
+            draws_carry_stopped_other: carry_stopped(CarryStop::Other),
             draws_unkept: commands(|counts| &counts.draws_unkept),
             draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
             draws_unkept_instance_later: commands(|counts| &counts.draws_unkept_instance_later),

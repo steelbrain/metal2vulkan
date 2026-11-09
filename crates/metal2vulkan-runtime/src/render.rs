@@ -399,6 +399,7 @@ mod arguments;
 mod attached_levels;
 mod bound;
 mod call_checks;
+mod carried;
 mod color_groups;
 pub(crate) mod coverage;
 mod deferral;
@@ -440,6 +441,7 @@ mod vertex_strides;
 #[cfg(all(test, debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) use bound::dynamic_compares;
 use bound::{Bound, EqualShapes, Now, Recorded};
+pub(crate) use carried::Carried;
 pub(crate) use deferral::{lowering, DeferredEncoders, EndInFlight};
 use deferral::{Logged, OwnLowering};
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1951,10 +1953,12 @@ impl Lowering {
         lowering
     }
 
-    /// The lowering of [`RenderCommandEncoder::end_encoding`] (`RenderLowering::end_encoding`).
+    /// The lowering of [`RenderCommandEncoder::end_encoding`] (`RenderLowering::end_encoding`),
+    /// its kept draw carried into its command buffer's next render encoder where it carries
+    /// (`render/carried.rs`).
     pub(crate) fn end_encoding(self) -> Result<(), Error> {
         let _for = self.core.notices_for();
-        self.ending().end_encoding()
+        self.ending_carried().end_encoding()
     }
 
     /// `RenderLowering::finish_replay`, its bind state given back first.
@@ -1978,11 +1982,13 @@ impl CommandBuffer {
         descriptor: &RenderPassDescriptor,
     ) -> Result<RenderCommandEncoder, Error> {
         let _for = self.notices_for();
-        // The last render encoder's end, where its call left it to the device's lowering thread.
-        self.settle_end();
+        // The last render encoder's end, where its call left it to the device's lowering thread,
+        // and the kept draw it carried (`render/carried.rs`), which nothing came between.
+        self.settle_ended();
+        let carried = self.take_carried();
         // Metal's process ends here under some protection options (`command_buffer/protection.rs`).
         self.refuse_protected_encoder("render_command_encoder")?;
-        self.open_render(descriptor, None, None)
+        self.open_render(descriptor, None, None, carried)
             .map(RenderCommandEncoder::new)
     }
 
@@ -1999,6 +2005,7 @@ impl CommandBuffer {
         given: &RenderPassDescriptor,
         again: Option<Residency>,
         screen: Option<[u32; 2]>,
+        carried: Option<Box<carried::Carried>>,
     ) -> Result<Lowering, Error> {
         const CALL: &str = "render_command_encoder";
         let device = self.device();
@@ -2113,7 +2120,7 @@ impl CommandBuffer {
             log,
             grouped,
         );
-        Ok(RenderLowering::assemble(core, draws, opening))
+        Ok(RenderLowering::assemble(core, draws, opening, carried))
     }
 }
 
@@ -2177,8 +2184,17 @@ impl RenderLowering {
     /// An encoder over `core` of the pass `opening` describes, its first instance's draws
     /// recording into `draws` (null where it records inline), made in its box: the box is
     /// allocated first and the lowering written into it, where `Box::new` of a lowering makes it
-    /// on the stack and copies its thousands of bytes in.
-    fn assemble(core: Box<EncoderCore>, draws: vk::CommandBuffer, opening: Opening) -> Lowering {
+    /// on the stack and copies its thousands of bytes in. It starts from `carried`, the kept draw
+    /// its command buffer's last render encoder carried, where that fits its pass
+    /// (`render/carried.rs`).
+    fn assemble(
+        core: Box<EncoderCore>,
+        draws: vk::CommandBuffer,
+        opening: Opening,
+        carried: Option<Box<carried::Carried>>,
+    ) -> Lowering {
+        let samplers = core.generation().sampler_slots_changed();
+        let carried = carried::fitting(carried, &opening, (core.device(), samplers));
         let Opening {
             layout,
             render_target_array_length,
@@ -2193,8 +2209,12 @@ impl RenderLowering {
             grouped,
         } = opening;
         let rerecord = extended.keeps_draws();
-        // The bind state the device's last ended render encoder left (`live_bind.rs`).
-        let live = core.device().shared().live_binds.take();
+        // The bind state the device's last ended render encoder left (`live_bind.rs`), where it
+        // starts from no carried one.
+        let start = match carried {
+            Some(carried) => carried::Start::Carried(carried),
+            None => carried::Start::Spare(core.device().shared().live_binds.take()),
+        };
         // The views and sampler descriptions its binds made or found (`binding::BindMemo`).
         let bind_memo = core.device().shared().bind_memos.take();
         // What its draws gather into, with the room an ended encoder's left
@@ -2327,7 +2347,7 @@ impl RenderLowering {
                 pins_frozen: false,
             },
         );
-        Lowering { lowering, live }
+        Lowering::starting_from(lowering, start)
     }
 }
 
@@ -4251,7 +4271,7 @@ impl RenderLowering {
         residency: Residency,
         screen: Option<[u32; 2]>,
     ) -> Result<Lowering, Error> {
-        command_buffer.open_render(descriptor, Some(residency), screen)
+        command_buffer.open_render(descriptor, Some(residency), screen, None)
     }
 
     /// Refuse `call` as its lowering refused it, after it returned, for `error`
@@ -10949,6 +10969,7 @@ impl RenderLowering {
                 stamps: self.table_stamps(),
                 rebinds,
                 settled: through_record,
+                carried: false,
             };
             self.again.keep(kept);
         }

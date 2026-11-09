@@ -1415,7 +1415,7 @@ impl ArgumentTable {
     pub(super) fn changed_since(
         &self,
         read: Stamp,
-    ) -> Option<impl Iterator<Item = (SlotClass, u32, bool)> + '_> {
+    ) -> Option<impl Iterator<Item = (SlotClass, u32, bool)> + Clone + '_> {
         Some(
             self.changes
                 .since(read)?

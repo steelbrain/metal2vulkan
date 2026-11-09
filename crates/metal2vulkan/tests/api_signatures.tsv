@@ -2707,6 +2707,10 @@ field	metal2vulkan-runtime::WorkCounts.draw_shapes_made	pub draw_shapes_made: u6
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_reused	pub draw_shapes_reused: u64
 field	metal2vulkan-runtime::WorkCounts.draw_states_recorded	pub draw_states_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.draws_as_before	pub draws_as_before: u64
+field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped	pub draws_carry_stopped: u64
+field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_attached	pub draws_carry_stopped_attached: u64
+field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_other	pub draws_carry_stopped_other: u64
+field	metal2vulkan-runtime::WorkCounts.draws_carry_stopped_stale	pub draws_carry_stopped_stale: u64
 field	metal2vulkan-runtime::WorkCounts.draws_counted_past_early_masks	pub draws_counted_past_early_masks: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_still_making	pub draws_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
@@ -2722,6 +2726,7 @@ field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments_route	pub 
 field	metal2vulkan-runtime::WorkCounts.draws_rebind_stopped_arguments_tables	pub draws_rebind_stopped_arguments_tables: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebound	pub draws_rebound: u64
 field	metal2vulkan-runtime::WorkCounts.draws_rebound_arguments	pub draws_rebound_arguments: u64
+field	metal2vulkan-runtime::WorkCounts.draws_rebound_carried	pub draws_rebound_carried: u64
 field	metal2vulkan-runtime::WorkCounts.draws_restated	pub draws_restated: u64
 field	metal2vulkan-runtime::WorkCounts.draws_settled	pub draws_settled: u64
 field	metal2vulkan-runtime::WorkCounts.draws_unkept	pub draws_unkept: u64
@@ -2948,6 +2953,10 @@ field	metal2vulkan-runtime::WorkCounts.joins_withheld_from_unshared	pub joins_wi
 field	metal2vulkan-runtime::WorkCounts.kept_backings_made	pub kept_backings_made: u64
 field	metal2vulkan-runtime::WorkCounts.kept_bytes_passes	pub kept_bytes_passes: u64
 field	metal2vulkan-runtime::WorkCounts.kept_contexts_made	pub kept_contexts_made: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_carried	pub kept_draws_carried: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_between	pub kept_draws_carry_dropped_between: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_layout	pub kept_draws_carry_dropped_layout: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_under	pub kept_draws_carry_dropped_under: u64
 field	metal2vulkan-runtime::WorkCounts.kept_resident_keys_compared	pub kept_resident_keys_compared: u64
 field	metal2vulkan-runtime::WorkCounts.kept_texels_passes	pub kept_texels_passes: u64
 field	metal2vulkan-runtime::WorkCounts.line_band_draws	pub line_band_draws: u64
