@@ -12,13 +12,14 @@
 //! [`METAL_LINES`] beside the first 16 hex digits of their SHA-256, which the probe printed. A
 //! differing case names its first differing line. A sample whose bytes `n · b` of a texel's are 16 or fewer takes its own bytes
 //! of the pattern, past 16 every sample the pattern cut at the texel (`tests::blit_fill` checks
-//! the rule on every measured case without a device). An `RGBA8Unorm` sample that holds the pass's
-//! clear holds the device's conversion of it where the device announced it
-//! (`device-color-conversion`): its 0.25, 0.5 and 0.75 are 63.75, 127.5 and 191.25 codes, and
-//! Vulkan lets the device store either code nearest each (the RTX 5080 Laptop GPU stores 0.5 as
-//! 127, Metal 128), so such a sample is compared against those codes ([`only_cleared_codes_apart`],
-//! a `SAMPLE-FILLS-CLEAR` line), and so is a sample a colour fill wrote; every other word is
-//! Metal's. The depths outside `[0, 1]` (`d32-wide-4`)
+//! the rule on every measured case without a device). An 8-bit unorm sample that holds the
+//! pass's clear holds the device's conversion of it where the device announced it
+//! (`device-color-conversion`): its 0.25, 0.5 and 0.75 are 63.75, 127.5 and 191.25 codes
+//! (`BGRA8Unorm_sRGB`'s encoded 136.97, 187.52 and 224.61), and Vulkan lets the device store
+//! either code nearest each (the RTX 5080 Laptop GPU stores 0.5 as 127, Metal 128; ANV on the
+//! Iris Xe of RPL-P stores the sRGB 187.52 as 187, Metal 188), so such a sample is compared
+//! against those codes ([`only_cleared_codes_apart`], a `SAMPLE-FILLS-CLEAR` line), and so is a
+//! sample an `RGBA8Unorm` colour fill wrote; every other word is Metal's. The depths outside `[0, 1]` (`d32-wide-4`)
 //! are not compared where the device's depth copies go by a draw that announced the values it
 //! changes (`drawn-depth-copy`), whose samples it prints on a `SAMPLE-FILLS-DRAWN` line; a
 //! differing case prints a `SAMPLE-FILLS-DIFFERS` line.
@@ -570,18 +571,29 @@ fn line_words(line: &str) -> Option<(&str, Vec<&str>)> {
     Some((head, words))
 }
 
-/// Whether `lines` differ from Metal's `metal` only in samples that hold the pass's clear
-/// (`(0.25, 0.5, 0.75, 1)`, Metal's word `ffbf8040`) or the case's colour fill (`fill`), whose
-/// every channel this device and Metal each hold as one of the two codes nearest that colour's
-/// scaled value: the device's conversion of a clear or a plain colour fill, which Vulkan lets
-/// store either.
-fn only_cleared_codes_apart(lines: &[String], metal: &[String], fill: Option<[f64; 4]>) -> bool {
+/// Whether `lines` of a texture of format `pf` differ from Metal's `metal` only in samples that
+/// hold the pass's clear (`(0.25, 0.5, 0.75, 1)`, Metal's `RGBA8Unorm` word `ffbf8040`) or the
+/// case's colour fill (`fill`, an `RGBA8Unorm` one's), whose every channel this device and Metal
+/// each hold as one of the two codes nearest that colour's scaled value in the format
+/// ([`scaled_codes`]): the device's conversion of a clear or a plain colour fill, which Vulkan
+/// lets store either.
+fn only_cleared_codes_apart(
+    lines: &[String],
+    metal: &[String],
+    pf: PixelFormat,
+    fill: Option<[f64; 4]>,
+) -> bool {
     let near = |word: &str, color: [f64; 4]| {
-        u32::from_str_radix(word, 16).is_ok_and(|word| {
-            let codes = word.to_le_bytes();
-            (color.iter().zip(codes)).all(|(c, code)| (f64::from(code) - c * 255.0).abs() < 1.0)
-        })
+        let Some(scaled) = scaled_codes(pf, color) else {
+            return false;
+        };
+        word.len() == 2 * scaled.len()
+            && u32::from_str_radix(word, 16).is_ok_and(|word| {
+                let codes = word.to_le_bytes();
+                (scaled.iter().zip(codes)).all(|(v, code)| (f64::from(code) - v).abs() < 1.0)
+            })
     };
+    let fill = fill.filter(|_| pf == PixelFormat::RGBA8Unorm);
     let colors = [Some([0.25, 0.5, 0.75, 1.0]), fill];
     let converted =
         |g: &str, w: &str| (colors.iter().flatten()).any(|&color| near(g, color) && near(w, color));
@@ -597,6 +609,26 @@ fn only_cleared_codes_apart(lines: &[String], metal: &[String], fill: Option<[f6
                 }
                 _ => got == want,
             })
+}
+
+/// The scaled value of each byte of a sample of the 8-bit unorm format `pf` holding `color`, in
+/// the order of its bytes: `c · 255` of each channel, an sRGB format's color channels encoded
+/// first; `None` for another format.
+fn scaled_codes(pf: PixelFormat, [r, g, b, a]: [f64; 4]) -> Option<Vec<f64>> {
+    let encoded = |c: f64| match c <= 0.003_130_8 {
+        true => 12.92 * c,
+        false => 1.055 * c.powf(1.0 / 2.4) - 0.055,
+    };
+    let channels = match pf {
+        PixelFormat::R8Unorm => vec![r],
+        PixelFormat::RG8Unorm => vec![r, g],
+        PixelFormat::RGBA8Unorm => vec![r, g, b, a],
+        PixelFormat::BGRA8Unorm => vec![b, g, r, a],
+        PixelFormat::RGBA8UnormSRGB => vec![encoded(r), encoded(g), encoded(b), a],
+        PixelFormat::BGRA8UnormSRGB => vec![encoded(b), encoded(g), encoded(r), a],
+        _ => return None,
+    };
+    Some(channels.into_iter().map(|c| c * 255.0).collect())
 }
 
 /// Whether Metal's word `want` is a denormal 32-bit float and `got` is its zero, the sign kept.
@@ -701,13 +733,13 @@ fn multisample_fills_write_metal_s_samples() {
             continue;
         }
         let cleared = converted
-            && PixelFormat::try_from(case.1).is_ok_and(|pf| pf == PixelFormat::RGBA8Unorm)
             && metal_lines(case_name).is_some_and(|metal| {
                 let fill = match case.7 {
                     Fill::Color(color) => Some(color),
                     Fill::Bytes(_) => None,
                 };
-                only_cleared_codes_apart(&lines, &metal, fill)
+                let pf = PixelFormat::try_from(case.1).unwrap();
+                only_cleared_codes_apart(&lines, &metal, pf, fill)
             });
         if cleared {
             println!(
