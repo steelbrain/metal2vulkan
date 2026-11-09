@@ -11682,7 +11682,6 @@ variant	metal2vulkan-runtime::DriverFact::ColorResolveAverageIsMetals	ColorResol
 variant	metal2vulkan-runtime::DriverFact::CompressedImagesHideAliasedWrites	CompressedImagesHideAliasedWrites
 variant	metal2vulkan-runtime::DriverFact::ConstantOffsetUniformReadsPreloaded	ConstantOffsetUniformReadsPreloaded
 variant	metal2vulkan-runtime::DriverFact::DepthImageKeepsDenormals	DepthImageKeepsDenormals
-variant	metal2vulkan-runtime::DriverFact::DepthImageKeepsValuesOutsideUnitRange	DepthImageKeepsValuesOutsideUnitRange
 variant	metal2vulkan-runtime::DriverFact::DepthStencilImagesLieApart	DepthStencilImagesLieApart
 variant	metal2vulkan-runtime::DriverFact::DepthStencilImagesStayGpuOptimized	DepthStencilImagesStayGpuOptimized
 variant	metal2vulkan-runtime::DriverFact::DepthTestComparesMagnitudes	DepthTestComparesMagnitudes
@@ -12979,7 +12978,6 @@ variant	metal2vulkan::device::DriverFact::ColorResolveAverageIsMetals	ColorResol
 variant	metal2vulkan::device::DriverFact::CompressedImagesHideAliasedWrites	CompressedImagesHideAliasedWrites
 variant	metal2vulkan::device::DriverFact::ConstantOffsetUniformReadsPreloaded	ConstantOffsetUniformReadsPreloaded
 variant	metal2vulkan::device::DriverFact::DepthImageKeepsDenormals	DepthImageKeepsDenormals
-variant	metal2vulkan::device::DriverFact::DepthImageKeepsValuesOutsideUnitRange	DepthImageKeepsValuesOutsideUnitRange
 variant	metal2vulkan::device::DriverFact::DepthStencilImagesLieApart	DepthStencilImagesLieApart
 variant	metal2vulkan::device::DriverFact::DepthStencilImagesStayGpuOptimized	DepthStencilImagesStayGpuOptimized
 variant	metal2vulkan::device::DriverFact::DepthTestComparesMagnitudes	DepthTestComparesMagnitudes
@@ -13462,7 +13460,6 @@ variant	metal2vulkan::device::VkProperty::CenterFragCoordDepth	CenterFragCoordDe
 variant	metal2vulkan::device::VkProperty::ColorAttachmentSampleCount	ColorAttachmentSampleCount(vk::Format, u32)
 variant	metal2vulkan::device::VkProperty::DenormIndependence32BitOnly	DenormIndependence32BitOnly
 variant	metal2vulkan::device::VkProperty::DenormIndependenceAll	DenormIndependenceAll
-variant	metal2vulkan::device::VkProperty::DepthImageKeepsValuesOutsideUnitRange	DepthImageKeepsValuesOutsideUnitRange
 variant	metal2vulkan::device::VkProperty::DepthResolveMode	DepthResolveMode(ResolveMode)
 variant	metal2vulkan::device::VkProperty::DeviceSampling	DeviceSampling
 variant	metal2vulkan::device::VkProperty::FilterMinmaxSingleComponentFormats	FilterMinmaxSingleComponentFormats

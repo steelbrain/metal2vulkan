@@ -374,7 +374,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
 
 const ZERO: DriverFact = DriverFact::RobustIndexFetchReadsZero;
 const DENORMALS: DriverFact = DriverFact::DepthImageKeepsDenormals;
-const OUTSIDE: DriverFact = DriverFact::DepthImageKeepsValuesOutsideUnitRange;
 const FRAGDEPTH: DriverFact = DriverFact::FragmentDepthStoresUnchanged;
 const APART: DriverFact = DriverFact::DepthStencilImagesLieApart;
 const AVERAGE: DriverFact = DriverFact::ColorResolveAverageIsMetals;
@@ -501,7 +500,6 @@ fn the_committed_profiles_drivers_have_their_facts() {
             "moltenvk-m3",
             vec![
                 DENORMALS,
-                OUTSIDE,
                 APART,
                 AVERAGE,
                 CLEAR,

@@ -4,8 +4,7 @@
 //!
 //! - **Why.** Vulkan takes no value outside `[0, 1]` into a depth image by a copy there
 //!   (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), whatever a driver is measured to keep (ANV
-//!   stores one clamped; MoltenVK is measured to keep it,
-//!   `DriverFact::DepthImageKeepsValuesOutsideUnitRange`, which no copy relies on). Metal's
+//!   stores one clamped, MoltenVK keeps it; no copy relies on either). Metal's
 //!   `Depth32Float` texel keeps any `float`. The clamp is `bind::clamped_depth` on a depth's bits:
 //!   a NaN of either sign 1.0, `-0.0` as it is, another negative value 0, a value above 1.0 1.0,
 //!   no denormal flushed. Announced `restricted-depth-upload` by the upload.

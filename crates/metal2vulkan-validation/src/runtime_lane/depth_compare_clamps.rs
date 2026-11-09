@@ -11,16 +11,16 @@
 //! rule matched all 432 probed `sample_compare` rows (depths 0, 0.5 and 1, four functions, masks 0
 //! to 3, nine references among them NaN and the infinities), and the slot, constexpr and gather
 //! rows. Each draw here is checked against it. The comparisons are the device's, which announce
-//! `restricted-depth-range` only where the translation records it ([`restricts_compared_depths`]).
+//! `restricted-depth-range` only on a device whose depth images take no depth outside `[0, 1]`
+//! (`degrade_notices::clamps_depth_uploads`: without `VK_EXT_depth_range_unrestricted`).
 
-use super::degrade_notices::counts;
+use super::degrade_notices::{clamps_depth_uploads, counts};
 use super::{
     buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::device::{VkExtension, VkProperty};
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -182,8 +182,8 @@ impl Lane {
 /// `[[sampler(2)]]` under `Less`, `Equal` and `GreaterEqual`, and through a constexpr `Less`
 /// sampler, under masks that clamp the sampler's comparisons and masks that clamp others: each
 /// `sample_compare` and `gather_compare` answers as Metal's rule says (the module docs), and
-/// `restricted-depth-range` is announced exactly where the translation records it
-/// ([`restricts_compared_depths`]).
+/// `restricted-depth-range` is announced exactly where the device's depth images take no value
+/// outside `[0, 1]`.
 #[test]
 fn the_depth_compare_clamp_mask_clamps_metal_s_references() {
     let messages = Messages::default();
@@ -250,25 +250,9 @@ fn the_depth_compare_clamp_mask_clamps_metal_s_references() {
         counts(&messages.take_notices()).contains_key(&Degradation::RestrictedDepthRange);
     assert_eq!(
         restricted,
-        restricts_compared_depths(&lane.device),
+        clamps_depth_uploads(&lane.device),
         "{name}: restricted-depth-range announced"
     );
     drop(lane);
     layer_reported_nothing_at_all(&messages);
-}
-
-/// Whether a stage's depth comparisons on `device` record `PrecisionNote::RestrictedDepthRange`,
-/// which its pipeline state announces as `restricted-depth-range`: the device lacks
-/// `VK_EXT_depth_range_unrestricted` and its driver is not measured to keep a depth outside
-/// `[0, 1]` in a depth image (`VkProperty::DepthImageKeepsValuesOutsideUnitRange`, which a module
-/// whose comparisons read such images requires instead). The uploads of such a device clamp too,
-/// whatever it keeps (`degrade_notices::clamps_depth_uploads`), and announce that apart.
-fn restricts_compared_depths(device: &Device) -> bool {
-    let enabled = device.compile_device().profile().enabled();
-    !enabled
-        .extensions
-        .contains(&VkExtension::ExtDepthRangeUnrestricted)
-        && !enabled
-            .properties
-            .contains(&VkProperty::DepthImageKeepsValuesOutsideUnitRange)
 }

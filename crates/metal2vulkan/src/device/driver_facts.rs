@@ -920,15 +920,6 @@ pub enum DriverFact {
     /// (`replace_region` on the host), so a write on the GPU that may store a denormal there
     /// announces `depth-denormals`.
     DepthImageKeepsDenormals,
-    /// Without `VK_EXT_depth_range_unrestricted` enabled, a `D32_SFLOAT` image keeps each value
-    /// outside `[0, 1]` it is given, as Metal's `Depth32Float` texel keeps any `float`, where ANV
-    /// stores it clamped. Vulkan states no such rule: it takes no such value by a copy
-    /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so a consumer's copy clamps it on every
-    /// device without the extension and announces `restricted-depth-upload`, this fact or not.
-    /// The translator's depth comparisons read it
-    /// ([`VkProperty::DepthImageKeepsValuesOutsideUnitRange`](crate::device::VkProperty::DepthImageKeepsValuesOutsideUnitRange)):
-    /// a value a render pass stored there.
-    DepthImageKeepsValuesOutsideUnitRange,
     /// A fragment shader's `FragDepth` is stored in a 32-bit float depth attachment unchanged:
     /// each value in `[0, 1]` it is given, and, for the rest, the value it stored when given it
     /// again. Vulkan states the stored value only inside the depth range. A multisampled depth
@@ -1587,25 +1578,24 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// its fetch past the range has no one answer; MoltenVK, which enables no
 /// `robustBufferAccess2`; and every driver and release not measured.
 ///
-/// `DepthImageKeepsDenormals` and `DepthImageKeepsValuesOutsideUnitRange`, measured by
+/// `DepthImageKeepsDenormals`, measured by
 /// `runtime_lane::texture_blits::depth_images_keep_what_their_drivers_claim` (at
-/// d0c9878a, 2026-10-06): 11 denormals of both signs and 5 values outside `[0, 1]` through
-/// `replace_region` into a render target's `Depth32Float` depth image, read back by `get_bytes`:
+/// d0c9878a, 2026-10-06): 11 denormals of both signs through `replace_region` into a render
+/// target's `Depth32Float` depth image, read back by `get_bytes`:
 /// - NVIDIA's from 615.71.09 keeps every denormal, with `VK_EXT_depth_range_unrestricted`: the
 ///   GeForce RTX 3090 and the RTX 5080 Laptop GPU, both 615.71.09.
 /// - lavapipe from Mesa 26.0.8 keeps every denormal, with the extension: arm64, Mesa 26.0.8 with
 ///   LLVM 21.1.8, in `scripts/linux-gate` on an M4 mini; x86, Mesa 26.2.4
 ///   with LLVM 23.1.1, on an Iris Xe (RPL-P) host.
-/// - MoltenVK from 1.4.1 (`driverVersion` 10401) keeps both, without the extension: an Apple M4
-///   mini and the M3 Max.
+/// - MoltenVK from 1.4.1 (`driverVersion` 10401) keeps every denormal, without the extension: an
+///   Apple M4 mini and the M3 Max.
 ///
-/// Measured to keep neither, so not listed: RADV (`MESA_RADV`), Mesa 26.2.4 on the Radeon 780M
-/// (no denormal; every value outside `[0, 1]` under the extension), and ANV
-/// (`INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.4 on Intel Graphics (RPL-S) and the Iris Xe (RPL-P)
-/// without the extension (no denormal, every value outside `[0, 1]` clamped). A driver with the
-/// extension is not measured for `DepthImageKeepsValuesOutsideUnitRange`, which only a device
-/// without it reads. That lane checks the clamp in its place: on a device without the extension
-/// its uploads clamp every value outside `[0, 1]` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`).
+/// Measured to keep none, so not listed: RADV (`MESA_RADV`), Mesa 26.2.4 on the Radeon 780M, and
+/// ANV (`INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.4 on Intel Graphics (RPL-S) and the Iris Xe (RPL-P).
+/// No fact states a value outside `[0, 1]` kept: Vulkan keeps one only under
+/// `VK_EXT_depth_range_unrestricted`, and without it takes none into a depth image
+/// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so a consumer's uploads clamp there, which
+/// that lane checks, whatever a driver is measured to keep.
 ///
 /// `DepthImageKeepsDenormals` again and `DepthTestKeepsDenormals`, measured by
 /// `runtime_lane::depth_denormals` (2026-10-10): the smallest and largest denormal of each sign,
@@ -1977,7 +1967,6 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// MoltenVK 1.4.2 on the M3 Max under macOS 27.0.1 (2026-10-21, the runtime lanes in release
 /// builds under `--cfg m2v_gpu`, each fact taken):
 /// - Measured by the lane that measured its 1.4.1 row, which passed: `DepthImageKeepsDenormals`
-///   and `DepthImageKeepsValuesOutsideUnitRange`
 ///   (`texture_blits::depth_images_keep_what_their_drivers_claim`, `depth_denormals`),
 ///   `DepthTestKeepsDenormals` and `DepthTestComparesMagnitudes` (`depth_denormals`' stored
 ///   depths, tested and compared as Metal's), `DepthStencilImagesLieApart`
@@ -2039,12 +2028,6 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     },
     Measured {
         fact: DriverFact::DepthImageKeepsDenormals,
-        driver: DriverId::MOLTENVK,
-        vendor: None,
-        device: None,
-    },
-    Measured {
-        fact: DriverFact::DepthImageKeepsValuesOutsideUnitRange,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,

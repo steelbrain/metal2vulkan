@@ -1032,7 +1032,7 @@ codec_enum! {
         MetalFragmentSimdgroups, MetalVertexSimdgroups, CenterFragCoordDepth, SampleFragCoordDepth,
         MetalHalfTexelWrites, MetalNormStorageWrites, DeviceSampling,
         MetalDepth16Stores, MetalDepth16BiasedStores, MetalInterpolation, MetalFirstVertexIndices,
-        MetalFullQuads, ProvokingVertexModePerPipeline, DepthImageKeepsValuesOutsideUnitRange,
+        MetalFullQuads, ProvokingVertexModePerPipeline,
         MetalNormalizedVertexFetch, MetalAlphaCoverage, InterpolateAtOffsetFromSevenSixteenths,
         MetalNanMoves, MetalPackConversions, MetalHalfConversion, MetalSmallFloatNans,
         MetalUnaryDenormals,

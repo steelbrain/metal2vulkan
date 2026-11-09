@@ -941,20 +941,17 @@ pub enum PrecisionNote {
     /// it, as for `DeviceDenormals`.
     DeviceNanEncoding,
     /// The device compares a depth texture's texels (a sample or a gather with comparison) on a
-    /// device without `VK_EXT_depth_range_unrestricted` enabled whose driver is not measured to
-    /// keep depth values outside `[0, 1]` without it (narrowed to comparisons). Metal's
+    /// device without `VK_EXT_depth_range_unrestricted` enabled (narrowed to comparisons). Metal's
     /// `Depth32Float` texels hold any `float`, and the device's comparison reads them from the
-    /// texture's depth image. Vulkan leaves a value outside `[0, 1]` uploaded there undefined
-    /// without the extension (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and a device may store
-    /// it clamped (RADV on a Radeon 780M and ANV read 1000.0 back as 1.0, measured) or keep it
-    /// (MoltenVK and lavapipe keep it, measured), so a comparison whose texel and reference both
-    /// lie outside `[0, 1]` on the same side can differ. Values within `[0, 1]`, and every texel on
-    /// a device with the extension enabled or a driver measured to keep such values without it
-    /// (`VkProperty::DepthImageKeepsValuesOutsideUnitRange`, which such a module requires instead),
-    /// are exact. A function that reads, samples or gathers a depth texture without comparing
-    /// records nothing: its interface's `TextureSlot::access` states the use, and a consumer that
-    /// uploads a value into a depth image its device may clamp announces that upload (docs/API.md
-    /// section 5).
+    /// texture's depth image, which without the extension Vulkan gives no value outside `[0, 1]`:
+    /// a copy may take none (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so a consumer clamps
+    /// its uploads, and a render write is clamped to the viewport's depth range. A comparison whose
+    /// texel Metal holds outside `[0, 1]` can then differ, on every such device, whatever its
+    /// driver is measured to keep (MoltenVK). Values within `[0, 1]`, and every texel on a device
+    /// with the extension enabled, are exact. A function that reads, samples or gathers a depth
+    /// texture without comparing records nothing: its interface's `TextureSlot::access` states
+    /// the use, and a consumer that uploads a value into a depth image its device clamps announces
+    /// that upload (docs/API.md section 5).
     RestrictedDepthRange,
     /// An explicit-gradient sample of a cube texture takes Metal's footprint in a form a Vulkan
     /// device reads alike, but for what is not reproduced. Metal (measured on the Apple M3 Max

@@ -2991,13 +2991,6 @@ fn compile_kept<K>(
     requirements
         .properties
         .extend(plan.families.texture.storage_properties.iter().copied());
-    // Depth comparisons the device makes, with no note, because its depth images keep values
-    // outside `[0, 1]` as Metal's do.
-    if plan.families.texture.kept_depth_range {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::DepthImageKeepsValuesOutsideUnitRange);
-    }
     // The set-1 heap's binding flags need their features beside the module's.
     requirements
         .features

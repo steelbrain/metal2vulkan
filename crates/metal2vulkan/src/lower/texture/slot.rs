@@ -4,7 +4,7 @@
 use crate::air::abi::Access as AbiAccess;
 use crate::air::intrinsics::{ImageDim, ImageShape};
 use crate::device::profile::Containment;
-use crate::device::requirements::{VkExtension, VkFeature, VkProperty};
+use crate::device::requirements::{VkExtension, VkFeature};
 use crate::error::{Capability, Error, Feature, LowerFamily, RuntimeInput, Unsupported};
 use crate::lower::select::{DescriptorCounts, SelectCx};
 use crate::memory::contain;
@@ -1220,30 +1220,22 @@ fn tiled_shape(shape: ImageShape) -> bool {
 }
 
 /// The device compares a depth texture's texels (a sample or gather with comparison). Metal's
-/// `Depth32Float` texels hold any `float`, which a depth image keeps outside `[0, 1]` where the
-/// consumer enabled `VK_EXT_depth_range_unrestricted`, or where its driver is measured to keep them
-/// without it (`VkProperty::DepthImageKeepsValuesOutsideUnitRange`, MoltenVK's), which the module
-/// then requires; the device's comparison reads the texture's depth image: on a device with neither
-/// the function records `PrecisionNote::RestrictedDepthRange`. Its reads, samples and gathers
-/// record nothing: the interface's `TextureSlot::access` states them, and the consumer announces an
-/// upload its depth image may clamp (`restricted-depth-upload`), which every read of it then reads.
-/// No module requires the extension, since every value within `[0, 1]` is exact without it.
+/// `Depth32Float` texels hold any `float`, which a depth image keeps outside `[0, 1]` only where
+/// the consumer enabled `VK_EXT_depth_range_unrestricted`: without it Vulkan takes no such value
+/// into a depth image, by a copy (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) or by a render
+/// write (clamped to the viewport's depth range), whatever a driver is measured to keep. The
+/// device's comparison reads the texture's depth image, so without the extension the function
+/// records `PrecisionNote::RestrictedDepthRange`. Its reads, samples and gathers record nothing:
+/// the interface's `TextureSlot::access` states them, and the consumer announces an upload its
+/// depth image clamps (`restricted-depth-upload`), which every read of it then reads. No module
+/// requires the extension, since every value within `[0, 1]` is exact without it.
 pub(crate) fn depth_comparison(cx: &mut SelectCx<'_>) {
     let enabled = &cx.profile.fields().enabled;
-    if enabled
+    if !enabled
         .extensions
         .contains(&VkExtension::ExtDepthRangeUnrestricted)
     {
-        return;
-    }
-    match enabled
-        .properties
-        .contains(&VkProperty::DepthImageKeepsValuesOutsideUnitRange)
-    {
-        true => cx.families.texture.kept_depth_range = true,
-        false => {
-            cx.precision.insert(PrecisionNote::RestrictedDepthRange);
-        }
+        cx.precision.insert(PrecisionNote::RestrictedDepthRange);
     }
 }
 

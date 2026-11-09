@@ -799,14 +799,6 @@ pub enum VkProperty {
     /// shading), including "any pipeline already bound when beginning the render pass instance"
     /// (`VUID-vkCmdBindPipeline-pipelineBindPoint-04881`).
     ProvokingVertexModePerPipeline,
-    /// The device's `D32_SFLOAT` images keep each value outside `[0, 1]` without
-    /// [`VkExtension::ExtDepthRangeUnrestricted`] enabled, as Metal's `Depth32Float` textures do
-    /// (the runtime's measured driver fact
-    /// [`DriverFact::DepthImageKeepsValuesOutsideUnitRange`](crate::device::DriverFact::DepthImageKeepsValuesOutsideUnitRange)).
-    /// No Vulkan query reports it: Vulkan leaves such a value undefined without the extension. A
-    /// module whose depth comparisons the device makes requires it on a device without the
-    /// extension in place of recording `PrecisionNote::RestrictedDepthRange`.
-    DepthImageKeepsValuesOutsideUnitRange,
     /// The device's fixed-function vertex input converts a normalized format's codes to Metal's
     /// `float` at every code (the driver's measured deviation
     /// [`DriverDeviation::MetalNormalizedVertexFetch`](crate::error::DriverDeviation::MetalNormalizedVertexFetch)).

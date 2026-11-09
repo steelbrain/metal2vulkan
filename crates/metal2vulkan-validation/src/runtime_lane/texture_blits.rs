@@ -1174,11 +1174,10 @@ pub(super) const UPLOADS: [Degradation; 1] = [Degradation::RestrictedDepthUpload
 /// through a blit from a buffer, on every device.
 ///
 /// A depth image, a read-only texture's and a render target's alike, keeps each value where the
-/// device enabled `VK_EXT_depth_range_unrestricted` or its driver is measured to keep one without
-/// it; elsewhere Vulkan leaves such a value undefined
-/// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) and a device keeps it or stores it clamped to
-/// `[0, 1]`, which its first upload announces once ([`UPLOADS`]): each value reads back as one of
-/// the two, and the form the device took is printed; where it keeps them, the upload of a negative
+/// device enabled `VK_EXT_depth_range_unrestricted`; elsewhere Vulkan takes no such value by a
+/// copy (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so the upload clamps it into `[0, 1]`,
+/// which its first upload announces once ([`UPLOADS`]): each value reads back as one of the two,
+/// and the form the device took is printed; where it keeps them, the upload of a negative
 /// value into a render target, whose depth a test reads, announces `signed-depth-test` where the
 /// device's depth test compares the value as it is (`degrade_notices::signs_depth_tests`). A copy
 /// between two depth images moves the source's words, and a copy into a render target announces the

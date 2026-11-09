@@ -181,8 +181,9 @@ impl UlpTable {
 /// - `SparseResidency`: unbounded: the sparse form's residency and unmapped texels are the
 ///   device's, which no Metal reading has compared; another residency answer flips a whole status
 ///   word, and an unmapped texel can read anything where the device is not strict.
-/// - `RestrictedDepthRange`: unbounded: a depth texel outside `[0, 1]` uploaded without
-///   `VK_EXT_depth_range_unrestricted` is undefined, read back clamped (RADV) or kept.
+/// - `RestrictedDepthRange`: unbounded: without `VK_EXT_depth_range_unrestricted` a depth image
+///   takes no texel outside `[0, 1]`, so a comparison of one Metal holds there can answer
+///   otherwise.
 /// - `CubeGradientFootprint`: unbounded: Apple's approximate length and truncated level against the
 ///   device's can select another level or filter near a boundary, which changes whole texels, not
 ///   lanes.

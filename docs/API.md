@@ -3617,7 +3617,10 @@ bound.
   16,446 NaNs among them (the module requires `VkProperty::MetalSmallFloatNans`).
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
-  enabled whose driver is not measured to keep depth values outside `[0, 1]` without it.
+  enabled (MoltenVK on the M3 Max, ANV on the Iris Xe, RADV), where Vulkan gives a depth image no
+  value outside `[0, 1]`, whatever its driver is measured to keep: an upload clamps one
+  (`restricted-depth-upload`), and a render write is clamped to the viewport's depth range. A
+  comparison of a texel Metal holds outside `[0, 1]` can differ; one within it is exact.
 - `metal2vulkan-degrade-cube-gradient-footprint` (precision).
   `PrecisionNote::CubeGradientFootprint`: An explicit-gradient sample of a cube texture takes
   Metal's footprint in a form a Vulkan device reads alike, but for what is not reproduced. Cost:

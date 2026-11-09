@@ -6,7 +6,7 @@
 //! and into `Depth32Float_Stencil8`'s depth, a lane each), and a copy from a colour texture.
 //!
 //! Where the device lacks the extension ([`clamps`]: ANV on the Iris Xe, MoltenVK on the M3 Max,
-//! whatever `DriverFact::DepthImageKeepsValuesOutsideUnitRange` says), each upload clamps
+//! whatever its driver is measured to keep), each upload clamps
 //! its depths into `[0, 1]` first (`WorkCounts::depth_uploads_clamped`, one an upload): no copy
 //! takes a depth outside there, and each texel reads back as `bind::clamped_depth` gives it, a
 //! zero with its sign or without (the device's to keep). Elsewhere (lavapipe enables the
