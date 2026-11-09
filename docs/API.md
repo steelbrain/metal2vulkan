@@ -1658,9 +1658,14 @@ bound.
   verdict passes, at a quiet commit, with no copy (`WorkCounts::pooled_textures_moved_in_place`);
   over memory the runtime exports (`MemoryExport`, a runtime extension), where either image names
   the memory's handle type as Vulkan requires and so starts `UNDEFINED`, its check of that exported
-  memory has not passed for the texture's accesses (a pending one moving the same way), the
-  device's image format query takes the handle type for no such image but in a dedicated
-  allocation, or the memory is the buffer's dedicated allocation, to which no image may be bound;
+  memory has not passed for the texture's accesses (a pending one moving the same way), or the
+  device takes the handle type for no such image in the memory itself (its image format query
+  takes it only in a dedicated allocation, or the image made requires one, or the memory is the
+  buffer's dedicated allocation, to which no image may be bound) and, over memory exported as a
+  dma-buf, makes no `DRM_FORMAT_MOD_LINEAR` image at the texels bound to a dedicated import of that
+  memory's own dma-buf either (the route it takes there, as on RADV's 780M, the texture in place
+  through a second `VkDeviceMemory` of the same payload, `WorkCounts::exported_dma_buf_images`;
+  the RX 550 makes no such image);
   for one that renders, whose rows each to its
   pitch share no line with bytes past them, the check of renders that lets the rows' padding
   change, as the declaration does, and no byte past the last row's pitch); past a bound in bytes of its rows to their

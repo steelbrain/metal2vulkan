@@ -91,13 +91,22 @@
 //!   starts `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) whichever it is, and the same rule
 //!   takes it, under the check of that handle type's exported memory
 //!   ([`PagesClass::ExportedFd`], [`PagesClass::ExportedDmaBuf`]), moving in place once the
-//!   verdicts pass as over the pooled memory. Where the device's image format query
-//!   (`VkPhysicalDeviceExternalImageFormatInfo`) takes the handle type for no such image of the
-//!   texture's format, usage and tiling but with a dedicated allocation, or where the memory is
-//!   the buffer's dedicated allocation (`VUID-vkBindImageMemory-memory-10926`), the texture is a
-//!   shadow, its notice naming why. Where such an image lies is decided as for any texture over a
-//!   buffer (`linear_plan::aliases`), of the image made for the handle type, for each texture (each
-//!   plane of a picture) apart: the texels' offset in the memory (the buffer's first byte lies at
+//!   verdicts pass as over the pooled memory. Where no such image binds in the memory itself (the
+//!   device's image format query, `VkPhysicalDeviceExternalImageFormatInfo`, takes the handle
+//!   type for none of the texture's format, usage and tiling but with a dedicated allocation, or
+//!   the image made asks one, or the memory is the buffer's dedicated allocation,
+//!   `VUID-vkBindImageMemory-memory-10926`), a texture over memory exported as a dma-buf takes a
+//!   `DRM_FORMAT_MOD_LINEAR` image at the texels' offset with Metal's pitches, bound to a
+//!   dedicated import of that memory's own dma-buf (`texture.rs`'s `exported_dma_buf_alias`, as
+//!   an image over dma-buf pages is, its first move acquiring it from
+//!   `VK_QUEUE_FAMILY_FOREIGN_EXT`): the buffer's bytes in place through a second
+//!   `VkDeviceMemory` of one payload, under the same check, whose own textures take that route
+//!   wherever the image in the memory is refused, so its verdicts are of the image a texture
+//!   takes. Elsewhere (an opaque file descriptor, or no such image either) the texture is a
+//!   shadow, its notice naming why. Where an image in the memory lies is decided as for any
+//!   texture over a buffer (`linear_plan::aliases`), of the image made for the handle type, for
+//!   each texture (each plane of a picture) apart: the texels' offset in the memory (the buffer's
+//!   first byte lies at
 //!   a multiple of 256 bytes there, or its `aligned_byte` does, `BufferDescriptor::aligned_byte`;
 //!   plus the texture's offset in the buffer) is a multiple of the
 //!   `alignment` that `vkGetImageMemoryRequirements` answers for that image of the texture's
@@ -944,7 +953,7 @@ impl Drop for Waiting<'_> {
 /// differs, and so does the version it holds). The runtime's own version is not in the record: a
 /// release that changes none of these keeps the verdicts the driver gave, so a device made after
 /// it reads them again rather than checking anew.
-pub(crate) const CHECK_VERSION: u32 = 13;
+pub(crate) const CHECK_VERSION: u32 = 14;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VINPL\0";

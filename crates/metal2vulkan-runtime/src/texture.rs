@@ -879,6 +879,20 @@ fn first_color_subresource() -> vk::ImageSubresource {
 /// (`Device::pooled_pitched_image`).
 type Aliased = Result<(Arc<Image>, AliasCount), (String, Option<ShadowCause>)>;
 
+/// An image over the runtime's memory exported as a dma-buf, bound to a dedicated import of that
+/// memory's own dma-buf (`Device::exported_dma_buf_alias`).
+#[cfg(unix)]
+type ExportedImage = crate::dma_buf::DmaBufImage;
+
+/// No image is made over a dma-buf on this system.
+#[cfg(not(unix))]
+type ExportedImage = std::convert::Infallible;
+
+/// The last step before a texture's shadow over the runtime's memory exported as a dma-buf
+/// (`Device::exported_dma_buf_alias`): `None` where it does not apply, else its image (made and
+/// bound, or `None` for the placement query, which makes none), or why not with the shadow's cause.
+type ExportedAlias = Option<Result<Option<ExportedImage>, (String, ShadowCause)>>;
+
 /// What an image aliasing a buffer of the device's own memory counts as it becomes a texture's: as
 /// the texture is made (`Device::storage_over_buffer`), or as a shadow made before its pooled
 /// class's verdicts moves to it (`texture/storage_form.rs`).
@@ -3055,8 +3069,132 @@ impl Device {
                 unsafe { release::object(self.shared().vk(), made.raw) };
                 Ok(())
             }
-            Err((_, cause)) => Err(cause),
+            Err((_, cause)) => {
+                let last =
+                    self.exported_dma_buf_alias(plan, texels, usage, facts, (&cause, false))?;
+                match last {
+                    None => Err(cause),
+                    Some(Ok(_)) => Ok(()),
+                    Some(Err((_, cause))) => Err(cause),
+                }
+            }
         })
+    }
+
+    /// The last step before the shadow of a texture over a buffer of the runtime's memory exported
+    /// as a dma-buf (`exported_memory.rs`: a shared block of such buffers, or a buffer's dedicated
+    /// allocation), where no image binds in that memory itself ([`alias_unbound`]'s refusal,
+    /// `cause`: RADV makes no linear image for dma-bufs, and asks a dedicated allocation of its
+    /// `DRM_FORMAT_MOD_LINEAR` one; Vulkan binds no image in a buffer's dedicated allocation): a
+    /// `DRM_FORMAT_MOD_LINEAR` image at the texels' offset in the memory with Metal's pitches,
+    /// bound to a dedicated import of that memory's own dma-buf (`dma_buf.rs`'s
+    /// `exported_dma_buf_image_unbound`, `bind_exported_dma_buf_image`), the device's route for
+    /// images over dma-bufs (`Device::dma_buf_image`). Its memory is the buffer's, through a second
+    /// `VkDeviceMemory` of one payload: taken where the device's policy and its check of that
+    /// exported memory take the texture's accesses ([`PagesClass::ExportedDmaBuf`], whose own
+    /// textures take this route wherever the image in the memory is refused, so its verdicts are of
+    /// this image), and where the image holds exactly Metal's texels from their first byte to the
+    /// buffer's end as one bound in the memory would (`linear_plan::aliases`). With `bind`, the image
+    /// made and bound; else whether it would be, the image released unbound (the placement query).
+    /// `None` where the memory is no such export or `cause` is the device's policy or check, not a
+    /// refusal of the image: the shadow it names stands. Else why not, with the shadow's cause.
+    #[cfg(unix)]
+    fn exported_dma_buf_alias(
+        &self,
+        plan: &ImagePlan,
+        texels: &Texels,
+        usage: TextureUsage,
+        facts: &ImageFacts<'_>,
+        (cause, bind): (&ShadowCause, bool),
+    ) -> Result<ExportedAlias, Error> {
+        const CALL: &str = "new_texture";
+        let ShadowCause::Refused(refusal, first) = cause else {
+            return Ok(None);
+        };
+        let Some((exported, size, (memory, at, type_index))) = texels.buffer.exported() else {
+            return Ok(None);
+        };
+        if exported.handle != crate::memory::DMA_BUF_HANDLE {
+            return Ok(None);
+        }
+        // A buffer's dedicated allocation was refused before the verdicts were asked.
+        let class = PagesClass::ExportedDmaBuf;
+        if let Err(cause) = self.exported_takes(class, texels, usage) {
+            let why = format!(
+                "an image over {} starts UNDEFINED, whose first move the device's check of that \
+                 memory covers",
+                class.words()
+            );
+            return Ok(Some(Err((why, cause))));
+        }
+        let refused = |why: String| {
+            let why = format!("over a dedicated import of the buffer memory's dma-buf, {why}");
+            let cause = ShadowCause::Refused(*refusal, format!("{first}; and {why}"));
+            Ok(Some(Err((why, cause))))
+        };
+        let modes = crate::buffer::Modes::of(texels.buffer.resource_options());
+        let memory_class = match modes.and_then(|modes| crate::buffer::buffer_class(CALL, modes)) {
+            Ok(memory_class) => memory_class,
+            Err(error) => return refused(format!("its buffer has no memory class ({error:?})")),
+        };
+        let exported_texels = crate::dma_buf::ExportedTexels {
+            memory,
+            size,
+            type_index,
+            class: memory_class,
+            at: at + texels.layout.offset,
+            row_pitch: texels.layout.row_pitch,
+            slice_pitch: texels.layout.slice_pitch,
+        };
+        let made = self.exported_dma_buf_image_unbound(plan, facts, &exported_texels)?;
+        let (raw, requirements, report) = match made {
+            Ok(made) => made,
+            Err(why) => return refused(why),
+        };
+        let raw_device = self.shared().vk();
+        // The image's bytes from its plane on, as one bound at the texels in the memory holds.
+        let image = LinearImage {
+            alignment: requirements.alignment,
+            size: requirements.size.saturating_sub(exported_texels.at),
+            offset: 0,
+            subresource: report.size,
+            row_pitch: report.row_pitch,
+            array_pitch: report.array_pitch,
+        };
+        let room = texels.buffer.padded_length() - texels.layout.offset;
+        let unobserved = texels.buffer.padding_unobserved();
+        if !aliases(&texels.layout, 0, room, &image, unobserved) {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(raw_device, raw) };
+            return refused(format!(
+                "its image holds other bytes than the texels or runs past the buffer (a \
+                 subresource of {} bytes, rows {} bytes apart, {} bytes of memory from the plane)",
+                report.size, report.row_pitch, image.size
+            ));
+        }
+        if !bind {
+            // SAFETY: the image is live and unbound, and no command uses it.
+            unsafe { release::object(raw_device, raw) };
+            return Ok(Some(Ok(None)));
+        }
+        let unbound = (raw, requirements, report);
+        match self.bind_exported_dma_buf_image(unbound, &exported_texels)? {
+            Ok(made) => Ok(Some(Ok(Some(made)))),
+            Err(why) => refused(why),
+        }
+    }
+
+    /// No image is made over a dma-buf on this system.
+    #[cfg(not(unix))]
+    fn exported_dma_buf_alias(
+        &self,
+        _plan: &ImagePlan,
+        _texels: &Texels,
+        _usage: TextureUsage,
+        _facts: &ImageFacts<'_>,
+        _: (&ShadowCause, bool),
+    ) -> Result<ExportedAlias, Error> {
+        Ok(None)
     }
 
     /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` over `texels` in their buffer's pooled memory, its
@@ -3168,8 +3306,18 @@ impl Device {
         let (made, pitched) = match self.alias_unbound(&plan, texels, usage, facts)? {
             Ok(made) => made,
             Err((linear, cause)) => {
-                let why = format!("{linear}; and {}", cause.words());
-                return Ok(Err((why, Some(cause))));
+                let last =
+                    self.exported_dma_buf_alias(&plan, texels, usage, facts, (&cause, true))?;
+                return Ok(match last {
+                    None => Err((format!("{linear}; and {}", cause.words()), Some(cause))),
+                    Some(Err((why, cause))) => Err((format!("{linear}; and {why}"), Some(cause))),
+                    Some(Ok(None)) => {
+                        return Err(internal("an exported dma-buf's image made and not bound"))
+                    }
+                    Some(Ok(Some(made))) => {
+                        Ok(self.exported_dma_buf_texture_image(made, plan, descriptor, texels))
+                    }
+                });
             }
         };
         let LinearMade { raw, initial, .. } = made;
@@ -3225,6 +3373,79 @@ impl Device {
             feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
         };
         Ok(Ok((image.shared(), count)))
+    }
+
+    /// The image of a texture over `texels` in the runtime's memory exported as a dma-buf, bound
+    /// to a dedicated import of that memory's own dma-buf
+    /// ([`exported_dma_buf_alias`](Self::exported_dma_buf_alias)), of `plan`, made with
+    /// `descriptor`, with what it counts as the texture's ([`AliasCount`]). It holds the buffer's
+    /// memory as an image aliasing it does, and its import, freed after it
+    /// (`WorkCounts::dma_buf_image_memories_live`). Its first move acquires it from
+    /// `VK_QUEUE_FAMILY_FOREIGN_EXT` into `GENERAL`, keeping the bytes, as an image over dma-buf
+    /// pages does (`dma_buf.rs`, "Their layouts"); the buffer's own acquires
+    /// (`Buffer::external_write_done`) order the other API's writes as for an image in the memory.
+    #[cfg(unix)]
+    fn exported_dma_buf_texture_image(
+        &self,
+        made: ExportedImage,
+        plan: ImagePlan,
+        descriptor: &TextureDescriptor,
+        texels: &Texels,
+    ) -> (Arc<Image>, AliasCount) {
+        let crate::dma_buf::DmaBufImage { raw, import } = made;
+        let image = Image {
+            device: self.clone(),
+            raw: Raw::imported(raw, import),
+            owner: Owner::Buffer {
+                memory: Mutex::new(texels.buffer.memory_hold()),
+            },
+            plan,
+            options: texels.options(),
+            allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
+            // The buffer's bytes, tracked as the texture is.
+            identity: Identity {
+                tracked: texels.tracked(),
+                ..texels.buffer.identity()
+            },
+            views: Mutex::new(KeyMap::default()),
+            own_views: Mutex::new(KeyMap::default()),
+            resolves: KeptResolves::new(),
+            decoded: None,
+            second: OnceLock::new(),
+            form: Default::default(),
+            kept_outside: AtomicBool::new(false),
+            released: AtomicBool::new(false),
+            host_shadow: Mutex::default(),
+            between: OnceLock::new(),
+            detached: Mutex::new(None),
+            first_move: Mutex::new(None),
+            host_copies: false,
+            linear: true,
+            staging_copies: false,
+            objects: ObjectsToken::default(),
+        };
+        let undefined = vk::ImageLayout::UNDEFINED;
+        let first = FirstMove::new(raw, image.plan().format, undefined, None)
+            .acquired(self.foreign_acquirer());
+        *lock(&image.first_move) = Some(first);
+        let count = AliasCount {
+            pitched: false,
+            unobserved: texels.buffer.padding_unobserved() && texels.layout.padded(),
+            feedback: (image.plan().usage).contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT),
+        };
+        (image.shared(), count)
+    }
+
+    /// No image is made over a dma-buf on this system.
+    #[cfg(not(unix))]
+    fn exported_dma_buf_texture_image(
+        &self,
+        made: ExportedImage,
+        _plan: ImagePlan,
+        _descriptor: &TextureDescriptor,
+        _texels: &Texels,
+    ) -> (Arc<Image>, AliasCount) {
+        match made {}
     }
 
     /// The image aliasing `texels` in their buffer's memory, the device's own, of a texture of

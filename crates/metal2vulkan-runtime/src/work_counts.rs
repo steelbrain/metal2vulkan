@@ -382,6 +382,7 @@ pub(crate) struct Counters {
     run_imports_live: AtomicU64,
     dma_buf_sparse_buffers: AtomicU64,
     dma_buf_images: AtomicU64,
+    exported_dma_buf_images: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
     modifier_feature_queries: AtomicU64,
     linear_alignments_probed: AtomicU64,
@@ -3281,6 +3282,13 @@ impl Counters {
     /// of its own pages (`dma_buf.rs`).
     pub(crate) fn dma_buf_image_made(&self) {
         self.dma_buf_images.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device made an image of a texture over a buffer of its own memory exported as a
+    /// dma-buf bound to a dedicated import of that memory's own dma-buf (`dma_buf.rs`'s
+    /// `bind_exported_dma_buf_image`).
+    pub(crate) fn exported_dma_buf_image_made(&self) {
+        (self.exported_dma_buf_images).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture placed in a heap over dma-buf pages that such an image would alias is a shadow of
@@ -6398,8 +6406,9 @@ pub struct WorkCounts {
     /// imported memory, in every kernel submission of the device (Mesa 26.2.4's global BO list),
     /// and amdgpu's work per submission grows with them (`runtime_lane::submit_per_import`).
     pub dma_buf_memories_live: u64,
-    /// The dedicated dma-buf imports of images over such memory live now (`dma_buf_images`): one
-    /// per live image, listed in every kernel submission as those above.
+    /// The dedicated dma-buf imports of images over such memory live now (`dma_buf_images`), and
+    /// of images over the runtime's memory exported as a dma-buf (`exported_dma_buf_images`): one
+    /// per live image, listed in every kernel submission as those above, freed after the image.
     pub dma_buf_image_memories_live: u64,
     /// No-copy buffers' imports of dma-bufs released while idle, their `VkBuffer` destroyed and
     /// their memory freed, the dma-bufs kept: a runtime-internal residency, which nothing of
@@ -6715,6 +6724,16 @@ pub struct WorkCounts {
     /// too. Not counted in `dma_buf_imports`. A texture over a no-copy buffer's pages takes no such
     /// image: it is a shadow (`shadowed-texture`).
     pub dma_buf_images: u64,
+    /// Images of textures over a buffer of the runtime's memory exported as a dma-buf
+    /// (`MemoryExport::DmaBuf`: a shared block of such buffers, or a buffer's dedicated
+    /// allocation) where no image binds in that memory itself (RADV takes the dma-buf handle type
+    /// for no linear image, and asks a dedicated allocation of a `DRM_FORMAT_MOD_LINEAR` one), each
+    /// a `DRM_FORMAT_MOD_LINEAR` image at the texels' offset with Metal's pitches, bound to a
+    /// dedicated import of that memory's own dma-buf: the buffer's bytes in place, through a
+    /// second `VkDeviceMemory` of the same payload, the import live in
+    /// `dma_buf_image_memories_live` until the image goes. One per image made, a shadow's move in
+    /// place too; none is a shadow (`shadowed_textures`). A runtime extension: Metal has none.
+    pub exported_dma_buf_images: u64,
     /// Textures placed in such a heap that such an image would alias but the device made none
     /// (the source failed, the format, usage, extent or plane layout is not supported, or the
     /// driver refused the import): each is a shadow of the heap's bytes in memory of its own
@@ -8371,6 +8390,7 @@ impl Device {
             host_imports_kept_for_fds: counters.host_imports_kept_for_fds.load(Ordering::Relaxed),
             dma_buf_sparse_buffers: counters.dma_buf_sparse_buffers.load(Ordering::Relaxed),
             dma_buf_images: counters.dma_buf_images.load(Ordering::Relaxed),
+            exported_dma_buf_images: counters.exported_dma_buf_images.load(Ordering::Relaxed),
             dma_buf_image_fallbacks: counters.dma_buf_image_fallbacks.load(Ordering::Relaxed),
             modifier_feature_queries: counters.modifier_feature_queries.load(Ordering::Relaxed),
             linear_alignments_probed: counters.linear_alignments_probed.load(Ordering::Relaxed),

@@ -56,9 +56,13 @@
 //!   bytes, which copies them), a host-accessible alias that reads what the buffer holds, made
 //!   for the memory's handle type, which an image bound in exported memory names
 //!   (`VUID-vkBindImageMemory-memory-02728`), so made `UNDEFINED`, and taken where the device's
-//!   check of that exported memory passed (`in_place.rs`, "The runtime's exported memory"); a
-//!   shadow over a dedicated allocation, to which no image may be bound
-//!   (`VUID-vkBindImageMemory-memory-10926`). The call lets go of every shadow's standing over the
+//!   check of that exported memory passed (`in_place.rs`, "The runtime's exported memory"). Over
+//!   a dma-buf where no image binds in the memory itself (RADV's linear images for dma-bufs, its
+//!   `DRM_FORMAT_MOD_LINEAR` ones that require a dedicated allocation, or the buffer's dedicated
+//!   allocation, to which no image may be bound, `VUID-vkBindImageMemory-memory-10926`), it is a
+//!   `DRM_FORMAT_MOD_LINEAR` image bound to a dedicated import of the memory's own dma-buf
+//!   ([`Device::dma_buf_of`], `dma_buf.rs`'s `bind_exported_dma_buf_image`), whose first move
+//!   acquires it from `VK_QUEUE_FAMILY_FOREIGN_EXT`; else a shadow. The call lets go of every shadow's standing over the
 //!   bytes (`shadow_standing.rs`), so a shadow's next
 //!   copy in, in the next command buffer that uses it, moves what the other API wrote. A write the
 //!   caller does not announce so is not the device's to read: a shadow whose image a command
@@ -381,6 +385,35 @@ impl Device {
     }
 }
 
+impl Device {
+    /// A new dma-buf of `memory`, the runtime's own allocated exportable as one
+    /// (`vkGetMemoryFdKHR`, as [`Buffer::export_memory_dma_buf`] makes one), the caller's to close
+    /// or hand to an import: what a texture's image over a buffer in that memory imports
+    /// (`dma_buf.rs`'s `bind_exported_dma_buf_image`). Why not where the device exports no
+    /// dma-buf or the driver refuses one; a lost device is `DeviceLost`.
+    pub(super) fn dma_buf_of(
+        &self,
+        memory: vk::DeviceMemory,
+    ) -> Result<Result<OwnedFd, String>, Error> {
+        let Some(exports) = self.shared().dma_buf_export.as_ref() else {
+            return Ok(Err("the device exports no dma-buf".to_owned()));
+        };
+        let info = vk::MemoryGetFdInfoKHR::default()
+            .memory(memory)
+            .handle_type(DMA_BUF_HANDLE);
+        // SAFETY: the memory is a live allocation of this device's, exportable as a dma-buf
+        // (`allocate_exported`); the functions are the device's.
+        match unsafe { exports.functions.get_memory_fd(&info) } {
+            // SAFETY: a new descriptor Vulkan handed over, the caller's from here on.
+            Ok(fd) => Ok(Ok(unsafe { OwnedFd::from_raw_fd(fd) })),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(Error::DeviceLost),
+            Err(error) => Ok(Err(format!(
+                "the driver exports no dma-buf of the buffer's memory ({error:?})"
+            ))),
+        }
+    }
+}
+
 impl Buffer {
     /// No Metal counterpart (a runtime extension): the buffer's memory as a new opaque file
     /// descriptor (`vkGetMemoryFdKHR`, `VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT`), with what an
@@ -469,7 +502,7 @@ impl Buffer {
     /// What the buffer's memory was allocated exportable as, with the allocation's size, its
     /// memory, the buffer's first byte's offset in it and its memory type; `None` for a buffer
     /// not made exportable.
-    fn exported(&self) -> Option<(Exported, u64, (vk::DeviceMemory, u64, u32))> {
+    pub(super) fn exported(&self) -> Option<(Exported, u64, (vk::DeviceMemory, u64, u32))> {
         let shared = self.device().shared();
         let found = self.own_placement(|placement, offset| {
             let (exported, size) = lock(&shared.memory).exported(placement)?;

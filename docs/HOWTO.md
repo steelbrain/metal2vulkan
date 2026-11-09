@@ -828,14 +828,26 @@ usage, that handle type; the plain linear image first, else a `DRM_FORMAT_MOD_LI
   the texture's access (a texture made before the check answered is a shadow that moves in place
   at a later commit).
 
-Elsewhere the texture is a shadow, announced with its cause: the memory is the buffer's dedicated
-allocation (Vulkan binds no image in memory dedicated to a buffer), the format query refuses the
-handle type, the layout differs, or the check did not pass. Measured for a 3840x2160 NV12 frame
-(an `R8Unorm` plane, then an `RG8Unorm` 1920x1080 plane, both rows 3840 bytes) made with
-`aligned_byte(0x20)`, its planes at 256 and 8,294,656 bytes of the memory, each plane's image
-answered row pitch 3840 and offset 0, with an alignment of 64 on lavapipe and 256 on RADV (RX 550,
-opaque file descriptors; that device makes no image over a dma-buf, so its dma-buf planes are
-shadows).
+Over a dma-buf export where the device takes no such image in the memory itself (the format query
+takes the dma-buf handle type only in a dedicated allocation, the image made requires one, or the
+memory is the buffer's dedicated allocation), the plane's image is a `DRM_FORMAT_MOD_LINEAR` one
+whose plane lies at the plane's byte in the memory with the plane's row pitch, bound to a dedicated
+import of that memory's own dma-buf (`vkGetMemoryFdKHR`, as `export_memory_dma_buf` makes one),
+so it reads and writes the frame's bytes in place through a second `VkDeviceMemory` of the same
+memory, where the driver takes that layout and the same check passed
+(`WorkCounts::exported_dma_buf_images`; the import goes with the texture). RADV takes the dma-buf
+handle type for no plain linear image, and requires a dedicated allocation of a
+`DRM_FORMAT_MOD_LINEAR` one, so a frame's planes take this route there. `export_memory_dma_buf`
+answers the same dma-buf as before.
+
+Elsewhere the texture is a shadow, announced with its cause: the memory is an opaque file
+descriptor's dedicated allocation (Vulkan binds no image in memory dedicated to a buffer), the
+format query refuses the handle type, the layout differs, or the check did not pass. Measured for
+a 3840x2160 NV12 frame (an `R8Unorm` plane, then an `RG8Unorm` 1920x1080 plane, both rows 3840
+bytes) made with `aligned_byte(0x20)`, its planes at 256 and 8,294,656 bytes of the memory, each
+plane's image answered row pitch 3840 and offset 0, with an alignment of 64 on lavapipe and 256 on
+RADV (RX 550, opaque file descriptors). The RX 550 makes no `DRM_FORMAT_MOD_LINEAR` image, so its
+dma-buf planes are shadows.
 
 The export settles the zeros the buffer was made with first, so the decoder may write at once.
 After each of its writes, once the consumer waited for them (`vaSyncSurface`), call

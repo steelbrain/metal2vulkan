@@ -15,15 +15,26 @@
 //!   next commit moves both in place (`WorkCounts::pooled_textures_moved_in_place`), and their
 //!   blits read the same bytes through the image in the buffer's memory. A texture made after is
 //!   in place at once (`TexturePlacement::NotHostPages`, no shadow counted). Where the check did
-//!   not pass for that memory (a device that makes no image over a dma-buf: the RX 550 under
-//!   RADV), each texture stays the shadow its verdict decided (`TextureShadowReason::Unchecked`
+//!   not pass for that memory (the RX 550 under RADV makes no image over the runtime's memory
+//!   exported as a dma-buf: none in the memory, and no `DRM_FORMAT_MOD_LINEAR` image to import it
+//!   into), each texture stays the shadow its verdict decided (`TextureShadowReason::Unchecked`
 //!   or `CheckFailed`), and reads the same bytes.
+//! - **A dma-buf's own import.** Where the device takes no image of a plane in the memory exported
+//!   as a dma-buf (its format query takes the dma-buf handle type for no such linear image, and
+//!   its `DRM_FORMAT_MOD_LINEAR` image requires a dedicated allocation: RADV on the 780M, asked
+//!   here apart from the runtime), the plane's image is a `DRM_FORMAT_MOD_LINEAR` one at the
+//!   texels' offset, bound to a dedicated import of that memory's own dma-buf: in place where the
+//!   check passed, which made the same image, counted (`WorkCounts::exported_dma_buf_images`),
+//!   never a shadow the check made no image for where the device makes such images; the import
+//!   goes with the texture (`WorkCounts::dma_buf_image_memories_live`), and the descriptor the
+//!   buffer exports is a dma-buf of its memory as before.
 //! - **Each handle type, each storage.** Of an opaque file descriptor and of a dma-buf where the
 //!   device exports one, `Private` (its bytes written by a blit, as a decoder writes a cache the CPU
-//!   never maps) and `Shared` (written through its contents). Where the device exports such memory
-//!   only as the buffer's dedicated allocation, to which no image may be bound
+//!   never maps) and `Shared` (written through its contents). Where the device exports an opaque
+//!   file descriptor only as the buffer's dedicated allocation, to which no image may be bound
 //!   (`VUID-vkBindImageMemory-memory-10926`), each texture is a shadow that reads the same bytes,
-//!   its placement refused (`InPlaceRefusal::Placement`).
+//!   its placement refused (`InPlaceRefusal::Placement`); a dma-buf's dedicated allocation takes
+//!   the import of its own dma-buf (below) where the device makes one.
 //!
 //! Printed (`EXPORTED-TEXTURES`): what the device exported, and for each plane its image's
 //! alignment, row pitch and size as `vkGetImageMemoryRequirements` and `vkGetImageSubresourceLayout`
@@ -179,18 +190,32 @@ fn read(device: &Device, texture: &Texture, plane: Plane) -> Vec<u8> {
 }
 
 /// What the device answers of `texture`'s image, an image bound in `picture`'s memory at
-/// `plane`'s texels: its alignment, its first subresource's row pitch and offset, its size, and
-/// the texels' offset in the memory.
-fn image_facts(device: &Device, picture: &Buffer, texture: &Texture, plane: Plane) -> [u64; 5] {
+/// `plane`'s texels, or where `imported` a `DRM_FORMAT_MOD_LINEAR` one bound to a dedicated import
+/// of that memory's own dma-buf, its plane at the texels' offset: its alignment, its first
+/// subresource's (or memory plane's) row pitch and offset, its size, and the texels' offset in the
+/// memory.
+fn image_facts(
+    device: &Device,
+    (picture, texture): (&Buffer, &Texture),
+    plane: Plane,
+    imported: bool,
+) -> [u64; 5] {
     // SAFETY: the image is the texture's, used only to ask of it while the texture lives.
     let image = unsafe { texture.vk_image() }.expect("an image in place");
     let raw = device.shared().vk();
+    // A DRM format modifier's image is asked of its memory plane
+    // (`VUID-vkGetImageSubresourceLayout-tiling-09433`).
+    let aspect_mask = match imported {
+        true => vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
+        false => vk::ImageAspectFlags::COLOR,
+    };
     let subresource = vk::ImageSubresource {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
+        aspect_mask,
         mip_level: 0,
         array_layer: 0,
     };
-    // SAFETY: a live linear image of the device.
+    // SAFETY: a live image of the device, of linear or DRM format modifier tiling as `imported`
+    // says.
     let (requirements, layout) = unsafe {
         (
             raw.get_image_memory_requirements(image),
@@ -253,7 +278,7 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
                 let texture = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
                 (texture, placement)
             };
-            if exported.dedicated {
+            if exported.dedicated && export == MemoryExport::OpaqueFd {
                 for plane in PLANES {
                     let (texture, placement) = made(plane);
                     let refused = TextureShadowReason::Refused(InPlaceRefusal::Placement);
@@ -293,6 +318,9 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
             let answer = |plane: Plane| {
                 let descriptor = descriptor(plane, options);
                 let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
+                // A dma-buf's dedicated allocation where the device makes no image to import its
+                // dma-buf into stays the shadow its placement decided.
+                let refused = TextureShadowReason::Refused(InPlaceRefusal::Placement);
                 assert!(
                     matches!(
                         placement,
@@ -301,7 +329,7 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
                                 TextureShadowReason::Unchecked { .. }
                                     | TextureShadowReason::CheckFailed { .. }
                             )
-                    ),
+                    ) || (exported.dedicated && placement == TexturePlacement::Shadow(refused)),
                     "{export:?} {options:?} {plane:?}: in place, or a shadow the device's check \
                      of that memory decided: {placement:?}"
                 );
@@ -362,16 +390,25 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
                     read(&device, texture, *plane) == want(*plane),
                     "{export:?} {options:?} {plane:?}: the texels, read in place"
                 );
+                // Over a dma-buf, an image the device takes nowhere in the memory is the import's.
+                let imported = export == MemoryExport::DmaBuf
+                    && (exported.dedicated || !dma_buf_images_shared(&device, *plane));
                 let [alignment, row_pitch, offset, size, at] =
-                    image_facts(&device, &picture, texture, *plane);
+                    image_facts(&device, (&picture, texture), *plane, imported);
                 eprintln!(
                     "EXPORTED-TEXTURES on {name}: {export:?} {options:?} {:?} {}x{}: in place, \
                      at {at} of the memory, alignment {alignment}, row pitch {row_pitch}, \
-                     offset {offset}, size {size}",
+                     offset {offset}, size {size}, through the memory's own dma-buf {imported}",
                     plane.format, plane.size[0], plane.size[1]
                 );
-                assert_eq!(at % alignment, 0);
-                assert_eq!((row_pitch, offset), (ROW, 0));
+                match imported {
+                    // The plane lies at the texels' offset of the import, bound at its start.
+                    true => assert_eq!((row_pitch, offset), (ROW, at)),
+                    false => {
+                        assert_eq!(at % alignment, 0);
+                        assert_eq!((row_pitch, offset), (ROW, 0));
+                    }
+                }
             }
             // Made after the check answered: in place at once where it passed, else a shadow.
             let shadows = device.work_counts().shadowed_textures;
@@ -394,5 +431,249 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
     }
     watched.layer_reported_nothing(
         "textures over exported memory name its handle type (VUID-vkBindImageMemory-memory-02728)",
+    );
+}
+
+/// Whether `device` takes a dma-buf's handle type for an image of `plane`'s format and extent in
+/// the memory itself, with the narrowest usage a sampled texture over a buffer has (sampled, both
+/// transfers): linear, or `DRM_FORMAT_MOD_LINEAR` where the device makes such images, shared among
+/// its queue families as the runtime's are. Its image format query reports the type exportable
+/// and not only as a dedicated allocation, and such an image, made, does not require one
+/// (`VkMemoryDedicatedRequirements`: RADV requires it of every shareable image not of linear
+/// tiling). Asked here apart from the runtime.
+fn dma_buf_images_shared(device: &Device, plane: Plane) -> bool {
+    let shared = device.shared();
+    let raw_device = shared.vk();
+    let format = vk_format(plane);
+    let dma_buf = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+    let usage = vk::ImageUsageFlags::SAMPLED
+        | vk::ImageUsageFlags::TRANSFER_SRC
+        | vk::ImageUsageFlags::TRANSFER_DST;
+    let families = &shared.queue_families;
+    let modifiers = [crate::dma_buf::DRM_FORMAT_MOD_LINEAR];
+    let takes = |tiling: vk::ImageTiling| {
+        let modifier_tiling = tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT;
+        let mut external =
+            vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(dma_buf);
+        let mut modifier = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
+            .drm_format_modifier(crate::dma_buf::DRM_FORMAT_MOD_LINEAR);
+        modifier = match families.len() > 1 {
+            true => modifier
+                .sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(families),
+            false => modifier.sharing_mode(vk::SharingMode::EXCLUSIVE),
+        };
+        let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(format)
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(tiling)
+            .usage(usage)
+            .push_next(&mut external);
+        if modifier_tiling {
+            info = info.push_next(&mut modifier);
+        }
+        let mut answer = vk::ExternalImageFormatProperties::default();
+        let mut properties = vk::ImageFormatProperties2::default().push_next(&mut answer);
+        // SAFETY: the device's physical device, of its instance at Vulkan 1.2 or later, which
+        // enables `VK_EXT_image_drm_format_modifier` where that tiling is asked; `info` and
+        // `properties` and their chains live for the call.
+        let queried = unsafe {
+            (shared.instance.raw).get_physical_device_image_format_properties2(
+                shared.physical,
+                &info,
+                &mut properties,
+            )
+        };
+        let features = answer.external_memory_properties.external_memory_features;
+        if queried.is_err()
+            || !features.contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+            || features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+        {
+            return false;
+        }
+        let mut handles = vk::ExternalMemoryImageCreateInfo::default().handle_types(dma_buf);
+        let mut listed =
+            vk::ImageDrmFormatModifierListCreateInfoEXT::default().drm_format_modifiers(&modifiers);
+        let [width, height] = plane.size;
+        let mut image = shared
+            .sharing()
+            .image(
+                vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(format)
+                    .extent(vk::Extent3D {
+                        width: width as u32,
+                        height: height as u32,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(tiling)
+                    .usage(usage)
+                    .initial_layout(vk::ImageLayout::UNDEFINED),
+            )
+            .push_next(&mut handles);
+        if modifier_tiling {
+            image = image.push_next(&mut listed);
+        }
+        // SAFETY: the device is live; `image` and its chain are within what its format query
+        // answered for such an image.
+        let Ok(raw) = (unsafe { crate::creation::image(raw_device, &image) }) else {
+            return false;
+        };
+        let mut dedicated = vk::MemoryDedicatedRequirements::default();
+        let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+        let query = vk::ImageMemoryRequirementsInfo2::default().image(raw);
+        // SAFETY: `raw` is a live image of the device; destroyed right after, with no memory
+        // bound and no command using it.
+        unsafe {
+            raw_device.get_image_memory_requirements2(&query, &mut requirements);
+            crate::release::object(raw_device, raw);
+        }
+        dedicated.requires_dedicated_allocation == vk::FALSE
+    };
+    takes(vk::ImageTiling::LINEAR)
+        || (device.makes_modifier_images() && takes(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT))
+}
+
+/// `plane`'s format as Vulkan names it.
+fn vk_format(plane: Plane) -> vk::Format {
+    match plane.format {
+        PixelFormat::R8Unorm => vk::Format::R8_UNORM,
+        PixelFormat::RG8Unorm => vk::Format::R8G8_UNORM,
+        format => panic!("no plane of {format:?}"),
+    }
+}
+
+/// Whether `fd` is a dma-buf: its `fdinfo` names the exporter of one (`exp_name`), as the kernel
+/// writes for a dma-buf alone.
+#[cfg(target_os = "linux")]
+fn is_dma_buf(fd: &std::os::fd::OwnedFd) -> bool {
+    use std::os::fd::AsRawFd;
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd())).unwrap();
+    info.lines().any(|line| line.starts_with("exp_name:"))
+}
+
+#[test]
+fn a_dma_buf_export_s_planes_go_in_place_through_its_own_dma_buf_where_no_image_binds_in_it() {
+    let watched = Watched::default();
+    let scratch = Scratch::new("exported-dma-buf-import");
+    let device = device(&watched, &scratch.0);
+    let name = device.name().to_owned();
+    let options = ResourceOptions::shared();
+    let picture = match picture(&device, options, MemoryExport::DmaBuf) {
+        Ok(picture) => picture,
+        Err(Error::NotImplemented(
+            gap @ (RuntimeGap::ExportableMemory | RuntimeGap::DmaBufExport),
+        )) => {
+            eprintln!("EXPORTED-DMA-BUF on {name}: refused: {gap:?}");
+            return;
+        }
+        Err(error) => panic!("{name}: {error:?}"),
+    };
+    let exported = picture.export_memory_dma_buf().unwrap();
+    #[cfg(target_os = "linux")]
+    assert!(
+        is_dma_buf(&exported.fd),
+        "{name}: the buffer's export is a dma-buf"
+    );
+    fill(&device, &picture);
+    // The first placement query starts the device's check of that memory: its answer first.
+    let first = descriptor(PLANES[0], options);
+    let _ = (picture.texture_placement(&first, PLANES[0].at, ROW)).unwrap();
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let imports_before = device.work_counts().dma_buf_image_memories_live;
+    let made_before = device.work_counts().exported_dma_buf_images;
+    let makes = device.makes_modifier_images();
+    let mut textures = Vec::new();
+    let mut imported = 0;
+    for plane in PLANES {
+        let in_memory = !exported.dedicated && dma_buf_images_shared(&device, plane);
+        let descriptor = descriptor(plane, options);
+        let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
+        let counted = device.work_counts().exported_dma_buf_images;
+        let texture = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+        let this = device.work_counts().exported_dma_buf_images - counted;
+        assert!(
+            read(&device, &texture, plane) == want(plane),
+            "{name} {plane:?}: the texels"
+        );
+        eprintln!(
+            "EXPORTED-DMA-BUF on {name}: {:?} {}x{}: dedicated {}, an image in the memory {}, \
+             DRM_FORMAT_MOD_LINEAR images {makes}: {placement:?}, through the memory's own \
+             dma-buf {this}",
+            plane.format, plane.size[0], plane.size[1], exported.dedicated, in_memory
+        );
+        if placement != TexturePlacement::NotHostPages {
+            for line in (device.in_place_check_report().iter())
+                .skip(crate::in_place::VERDICTS)
+                .filter(|line| line.starts_with("ExportedDmaBuf "))
+            {
+                eprintln!("EXPORTED-DMA-BUF on {name}: the check: {line}");
+            }
+            assert!(texture.shadow().is_some(), "{name} {plane:?}: a shadow");
+        }
+        if !in_memory && makes {
+            // The import's image, which the check made too: in place, or a shadow of a byte the
+            // check found changed.
+            let changed = matches!(
+                placement,
+                TexturePlacement::Shadow(TextureShadowReason::CheckFailed { .. })
+            );
+            assert!(
+                placement == TexturePlacement::NotHostPages || changed,
+                "{name} {plane:?}: an image through the memory's own dma-buf, in place or a \
+                 shadow of a changed byte: {placement:?}"
+            );
+        }
+        if placement == TexturePlacement::NotHostPages {
+            assert!(texture.shadow().is_none(), "{name} {plane:?}: in place");
+            assert_eq!(
+                this,
+                u64::from(!in_memory),
+                "{name} {plane:?}: counted as its route"
+            );
+            let [alignment, row_pitch, offset, size, at] =
+                image_facts(&device, (&picture, &texture), plane, !in_memory);
+            eprintln!(
+                "EXPORTED-DMA-BUF on {name}: {:?}: in place, at {at} of the memory, alignment \
+                 {alignment}, row pitch {row_pitch}, offset {offset}, size {size}",
+                plane.format
+            );
+            match in_memory {
+                true => assert_eq!((at % alignment, row_pitch, offset), (0, ROW, 0)),
+                false => assert_eq!((row_pitch, offset), (ROW, at)),
+            }
+            imported += this;
+        } else {
+            assert_eq!(this, 0, "{name} {plane:?}: a shadow makes no import");
+        }
+        textures.push(texture);
+    }
+    let made = device.work_counts().exported_dma_buf_images - made_before;
+    let live = device.work_counts().dma_buf_image_memories_live - imports_before;
+    eprintln!(
+        "EXPORTED-DMA-BUF on {name}: {made} images through the memory's own dma-buf, {live} \
+         imports live"
+    );
+    assert_eq!(
+        (made, live),
+        (imported, imported),
+        "{name}: one import per such image"
+    );
+    // The textures' teardown leaves no import behind: each goes with its image.
+    drop(textures);
+    let began = std::time::Instant::now();
+    while device.work_counts().dma_buf_image_memories_live != imports_before {
+        assert!(
+            began.elapsed() < WAIT,
+            "{name}: the imports outlive their textures: {} live, {imports_before} before",
+            device.work_counts().dma_buf_image_memories_live
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    watched.layer_reported_nothing(
+        "images over a dma-buf export, in its memory or through its own dma-buf",
     );
 }

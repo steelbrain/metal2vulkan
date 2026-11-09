@@ -176,7 +176,7 @@ use crate::in_place::{
     Verdict,
 };
 use crate::linear_plan::BufferLayout;
-use crate::memory::BoundMemory;
+use crate::memory::{BoundMemory, NoImage};
 use crate::values::ResourceOptions;
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,
@@ -1401,8 +1401,10 @@ impl ClassPages {
 /// as `export`'s handle type, outside the Metal address space, that declares the bytes between a
 /// texture's rows unobserved, as the product's buffers whose textures take an image there may
 /// (`exported_memory.rs`, `texture.rs`'s `alias_image`). Why not: a cause that lasts where the
-/// device exports no such memory, or only as a buffer's dedicated allocation, to which no image
-/// is bound.
+/// device exports no such memory, or an opaque file descriptor only as a buffer's dedicated
+/// allocation, to which no image is bound. A dma-buf's dedicated allocation is taken: its
+/// textures' images are bound to a dedicated import of its own dma-buf, as the product's are
+/// wherever no image binds in the memory (`texture.rs`'s `exported_dma_buf_alias`).
 fn exported_pages(
     device: &Device,
     export: MemoryExport,
@@ -1422,6 +1424,7 @@ fn exported_pages(
     };
     match buffer.bound_memory() {
         BoundMemory::External(_) => {}
+        BoundMemory::NoImage(NoImage::Dedicated) if export == MemoryExport::DmaBuf => {}
         BoundMemory::NoImage(no) => return Err(Unmade::lasting(no.words())),
         BoundMemory::Own => return Err(Unmade::passing("its buffer's memory is not exported")),
     }
