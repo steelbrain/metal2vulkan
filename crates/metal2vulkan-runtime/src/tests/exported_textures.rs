@@ -694,14 +694,14 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     let scratch = Scratch::new("own-buffer-textures");
     let device = device(&watched, &scratch.0);
     let name = device.name().to_owned();
-    let types = crate::device::lock(&device.shared().memory).fd_buffer_types();
+    let types = crate::device::lock(&device.shared().memory).fd_buffer_types;
     eprintln!("EXPORTED-TEXTURES on {name}: the blocks of the runtime's own buffers: {types:?}");
     let mut first = true;
     for options in [ResourceOptions::private(), ResourceOptions::shared()] {
-        let descriptor = BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
+        let made = BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
             .with_aligned_byte(LUMA_AT)
             .with_padding_unobserved();
-        let picture = device.new_buffer_with_descriptor(descriptor).unwrap();
+        let picture = device.new_buffer_with_descriptor(made).unwrap();
         let (bound, counts) = (picture.bound_memory(), device.work_counts());
         match types {
             Ok(_) => {

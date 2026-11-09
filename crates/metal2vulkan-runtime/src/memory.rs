@@ -1611,7 +1611,7 @@ pub(super) struct Memory {
     fd_address_types: Option<u32>,
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits, or
     /// why none are ([`fd_buffer_types`]).
-    fd_buffer_types: Result<u32, &'static str>,
+    pub(super) fd_buffer_types: Result<u32, &'static str>,
     fd_blocks: FdBlocks,
     /// The pools the runtime's encodings and commits place their own resources in, once asked
     /// ([`Memory::kept`], [`keep_room`]).
@@ -1834,12 +1834,6 @@ impl Memory {
             });
         }
         self.fd_buffer_types = types;
-    }
-
-    /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits, or
-    /// why none are.
-    pub(super) fn fd_buffer_types(&self) -> Result<u32, &'static str> {
-        self.fd_buffer_types
     }
 
     /// The kind of block the buffers `buffer.rs`'s `placed_new_buffer` makes for the program and

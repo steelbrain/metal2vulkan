@@ -36,37 +36,42 @@
 //!   memory type that is host-visible and host-coherent but not device-local or cached (where a
 //!   unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of 64 MiB every
 //!   [`RAW_EVERY`] or of 4 MiB sixteen times as often, [`RAW_BYTES`] a phase.
-//! - **System heap, 64 MiB, exportable** and **System heap, 64 MiB, opaque fd**: the system
-//!   heap's 64 MiB allocations, each exportable (`VkExportMemoryAllocateInfo`) as a dma-buf or as
-//!   an opaque file descriptor.
+//! - **System heap, 64 MiB, exportable**, **System heap, 64 MiB, opaque fd** and **System heap,
+//!   64 MiB, both**: the system heap's 64 MiB allocations, each exportable
+//!   (`VkExportMemoryAllocateInfo`) as a dma-buf, as an opaque file descriptor, or as both.
 //! - **Carve-out, 64 MiB**: the same of the first device-local memory type that is not
 //!   host-visible.
 //! - **Made before**: [`HELD_BUFFERS`] `Private` buffers of [`RUNTIME_BUFFER_BYTES`] made before
 //!   the quiet phase, and nothing made in the phases.
-//! - **Exportable, held 32**, **Exportable, held 64** and **Opaque fd, held 64**: that many of
-//!   the system heap's 64 MiB allocations, each exportable as a dma-buf or as an opaque file
-//!   descriptor, made before the quiet phase, and nothing made in the phases: what holding memory
+//! - **Exportable, held 32**, **Exportable, held 64**, **Opaque fd, held 64** and **Both, held
+//!   64**: that many of the system heap's 64 MiB allocations, each exportable as a dma-buf, as an
+//!   opaque file descriptor or as both, made before the quiet phase, and nothing made in the phases: what holding memory
 //!   that is not private to the device's process costs each submission.
 //! - **Nothing made**: the copies' buffers alone.
 //!
-//! Three arms ask instead whether memory allocated exportable holds one queue's work behind
+//! Four arms ask instead whether memory allocated exportable holds one queue's work behind
 //! another's, as memory that synchronizes implicitly would: **Two queues, private**, **Two
-//! queues, exportable** and **Two queues, opaque fd** each allocate [`TWO_QUEUE_BYTES`] of the
-//! system heap, as a plain allocation or exportable as a dma-buf or an opaque file descriptor,
-//! and bind three buffers in it, each made for that handle
-//! type where the memory is exportable (`VUID-vkBindBufferMemory-memory-02726`). For
-//! [`TWO_QUEUE_ROUNDS`] rounds, a second queue fills the first buffer [`LONG_FILLS`] times, and a millisecond later a command queue's `VkQueue` (lent,
+//! queues, exportable**, **Two queues, opaque fd** and **Two queues, both** each allocate
+//! [`TWO_QUEUE_BYTES`] of the system heap, as a plain allocation or exportable as a dma-buf, an
+//! opaque file descriptor or both, and bind three buffers in it, each made for those handle
+//! types where the memory is exportable (`VUID-vkBindBufferMemory-memory-02726`). For
+//! [`TWO_QUEUE_ROUNDS`] rounds, a second queue (one the device reserved for the caller, else a
+//! compute queue it made beside its own) fills the first buffer [`LONG_FILLS`] times, and a
+//! millisecond later a command queue's `VkQueue` (lent,
 //! `CommandQueue::with_vk_queue`) copies [`COPY_BYTES`] from the second into the third, each
 //! waited for by its fence: printed, the fills' and the copies' times from submission to their
 //! fence, and the rounds whose copy completed while the fills ran. Copies held behind the fills
 //! take as long as the fills' rest, and complete after them.
 //!
-//! **Export facts** prints, for each of those handle types, what the device answers for the
-//! runtime's buffers (`vkGetPhysicalDeviceExternalBufferProperties`, of a buffer of the runtime's
-//! usage with and without the device-address usage) and for linear and `DRM_FORMAT_MOD_LINEAR`
-//! images of [`FACT_FORMATS`] that are sampled and copied, and rendered to
+//! **Export facts** prints, for a dma-buf and an opaque file descriptor, what the device answers
+//! for the runtime's buffers (`vkGetPhysicalDeviceExternalBufferProperties`, of a buffer of the
+//! runtime's usage with and without the device-address usage), for linear and
+//! `DRM_FORMAT_MOD_LINEAR` images of [`FACT_FORMATS`] that are sampled and copied, and rendered
+//! to, and for sampled images of [`PLANE_FORMATS`] (as `texture/ycbcr_planes.rs` makes them)
 //! (`vkGetPhysicalDeviceImageFormatProperties2` with `VkPhysicalDeviceExternalImageFormatInfo`):
-//! the result, and whether such memory is exportable and only as a dedicated allocation.
+//! the result, whether such memory is exportable and only as a dedicated allocation, and the
+//! handle types it is compatible with; then the device's in-place check's verdicts for each
+//! class, access and row ends, once it settled.
 //!
 //! Printed (`RECLAIM-SUBMIT`), per arm and phase: the submissions; for `commit_and_submit` and for
 //! the turnaround each, those of 8 ms or more and of 17 ms or more, the median, 99th percentile and
@@ -99,6 +104,7 @@ const WAIT: Duration = Duration::from_secs(60);
 type Handle = vk::ExternalMemoryHandleTypeFlags;
 const DMA_BUF: Handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 const OPAQUE_FD: Handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
+const BOTH: Handle = OPAQUE_FD.union(DMA_BUF);
 const PAGE: u64 = 4096;
 const MIB: u64 = 1 << 20;
 const GIB: u64 = 1 << 30;
@@ -142,6 +148,11 @@ const FACT_FORMATS: [vk::Format; 6] = [
     vk::Format::R8G8B8A8_UNORM,
     vk::Format::A2B10G10R10_UNORM_PACK32,
     vk::Format::R16G16B16A16_SFLOAT,
+];
+/// The formats of a two-plane 4:2:0 video surface's image (`texture/ycbcr_planes.rs`).
+const PLANE_FORMATS: [vk::Format; 2] = [
+    vk::Format::G8_B8R8_2PLANE_420_UNORM,
+    vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
 ];
 /// The two-queue arms' allocation, the bytes of its first buffer, which the second queue
 /// fills, the fills in each of its command buffers, and the rounds.
@@ -838,9 +849,10 @@ fn reclaim_submit_bench_export_facts() {
     let features = |properties: vk::ExternalMemoryProperties| {
         let features = properties.external_memory_features;
         format!(
-            "exportable {}, dedicated only {}",
+            "exportable {}, dedicated only {}, compatible {:#x}",
             features.contains(F::EXPORTABLE),
-            features.contains(F::DEDICATED_ONLY)
+            features.contains(F::DEDICATED_ONLY),
+            properties.compatible_handle_types.as_raw()
         )
     };
     for (name, handle) in [("dma-buf", DMA_BUF), ("opaque fd", OPAQUE_FD)] {
@@ -864,7 +876,11 @@ fn reclaim_submit_bench_export_facts() {
             );
         }
         let copied = I::SAMPLED | I::TRANSFER_SRC | I::TRANSFER_DST;
-        for format in FACT_FORMATS {
+        let images = (FACT_FORMATS.iter()).flat_map(|&format| {
+            [copied, copied | I::COLOR_ATTACHMENT].map(|usage| (format, usage))
+        });
+        let planes = PLANE_FORMATS.map(|format| (format, I::SAMPLED));
+        for (format, usage) in images.chain(planes) {
             for (tiling, tiling_name) in [
                 (vk::ImageTiling::LINEAR, "linear"),
                 (
@@ -872,7 +888,7 @@ fn reclaim_submit_bench_export_facts() {
                     "DRM_FORMAT_MOD_LINEAR",
                 ),
             ] {
-                for usage in [copied, copied | I::COLOR_ATTACHMENT] {
+                {
                     let mut external =
                         vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(handle);
                     let mut modifier = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
@@ -913,6 +929,17 @@ fn reclaim_submit_bench_export_facts() {
             }
         }
     }
+    let settled = device.settle_in_place_checks(WAIT);
+    for class in crate::in_place::PagesClass::ALL {
+        for access in crate::in_place::Access::ALL {
+            let verdicts = (crate::in_place::RowEnds::ALL)
+                .map(|rows| (rows, device.in_place_verdict(class, access, rows)));
+            eprintln!(
+                "RECLAIM-SUBMIT export facts, the in-place check (settled {settled}): {class:?} \
+                 {access:?}: {verdicts:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -931,6 +958,12 @@ fn reclaim_submit_bench_two_queues_exportable() {
 #[ignore = "a measurement of the GPU's queues: run alone on its host by name"]
 fn reclaim_submit_bench_two_queues_opaque_fd() {
     two_queues("two queues, opaque fd", Some(OPAQUE_FD));
+}
+
+#[test]
+#[ignore = "a measurement of the GPU's queues: run alone on its host by name"]
+fn reclaim_submit_bench_two_queues_both() {
+    two_queues("two queues, both", Some(BOTH));
 }
 
 #[test]
@@ -989,6 +1022,18 @@ fn reclaim_submit_bench_system_heap_64mib_opaque_fd() {
 
 #[test]
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_system_heap_64mib_both() {
+    arm(
+        "system heap, 64 MiB, both",
+        Arm::SystemHeap {
+            bytes: 64 * MIB,
+            export: Some(BOTH),
+        },
+    );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_carve_out_64mib() {
     arm("carve-out, 64 MiB", Arm::CarveOut);
 }
@@ -1015,6 +1060,12 @@ fn reclaim_submit_bench_exportable_held_64() {
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_opaque_fd_held_64() {
     arm("opaque fd, held 64", Arm::ExportableHeld(64, OPAQUE_FD));
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_both_held_64() {
+    arm("both, held 64", Arm::ExportableHeld(64, BOTH));
 }
 
 #[test]

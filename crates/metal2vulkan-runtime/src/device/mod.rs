@@ -2141,7 +2141,7 @@ impl Device {
                 Some(_) => {
                     let usages = [
                         Some(super::buffer::usage(false)),
-                        device_address.then(|| usage),
+                        device_address.then_some(usage),
                     ];
                     let pooled = usages.into_iter().flatten().all(|usage| {
                         // SAFETY: as above.
