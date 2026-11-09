@@ -528,10 +528,10 @@ pub(super) fn orders_by_ends(device: &Device, batch_order: BatchOrderPolicy) -> 
 /// Under the default, on a device made with `gpu_times_from_host` (so no start timestamp is
 /// written before a batch's work): a long fill, waiting for a shared event, then a chain of
 /// command buffers on the same command queue, each copying what the one before wrote, the first
-/// copying the long one's last fill; the host raises the event once all are committed, so none
-/// is complete as the next is planned. Where the device orders batches by their ends, every batch
-/// begins with no command buffer of barriers, as the end of the batch before orders it (the
-/// module docs), and the chain's last copy reads the long one's fill. Elsewhere
+/// copying the long one's last fill; the host raises the event once all are committed. Where the
+/// device orders batches by their ends, every batch begins with no command buffer of barriers, as
+/// the end of the batch before orders it (the module docs), and the chain's last copy reads the
+/// long one's fill. Elsewhere
 /// [`batches_of_one_queue_in_the_exact_form_begin_with_their_barriers`]'s.
 #[test]
 fn batches_of_one_queue_ordered_by_their_ends_begin_with_no_barrier() {
@@ -539,7 +539,8 @@ fn batches_of_one_queue_ordered_by_their_ends_begin_with_no_barrier() {
 }
 
 /// The same under `BatchOrderPolicy::Exact`: each batch of the chain begins with a command buffer
-/// of barriers for the copy before it, still in flight, and the last reads the same bytes.
+/// of barriers for the copy before it exactly where that copy was in flight as the batch was
+/// planned, and the last reads the same bytes.
 #[test]
 fn batches_of_one_queue_in_the_exact_form_begin_with_their_barriers() {
     chained_batches(BatchOrderPolicy::Exact);
@@ -548,9 +549,22 @@ fn batches_of_one_queue_in_the_exact_form_begin_with_their_barriers() {
 /// The two tests above under `batch_order`. Where the driver's submissions stall on semaphore
 /// operations (`DriverFact::SemaphoreOperationsStallSubmits`), every batch begins with its command
 /// buffer of barriers under either.
+///
+/// The scheduler holds the long fill on the host until the event is raised (no batch is submitted
+/// waiting for a value the host may set, `event_timeline.rs`), and the chain behind it, so every
+/// batch is planned after the raise, while the work before it runs on the GPU or after it
+/// completed, as the GPU's speed and the host's planning fall. Under the exact form a batch begins
+/// with no barrier exactly where the host saw no earlier batch of its queue pending as it planned
+/// it: `WorkCounts::bare_starts` equals `batches_with_none_pending`, both counted from the
+/// completed value the plan took, the long fill always among them (what it depends on completed).
+/// A run where the GPU finished every batch before the next was planned exercises only that side,
+/// and says so; the planner's barrier for work in flight is `tests::tracker`'s
+/// `a_chain_of_copies_orders_each_after_the_one_before_only_while_it_is_in_flight`, by
+/// construction. The long fill writes 16 GiB, so the barrier side usually runs: on the Radeon RX
+/// 7900 XTX every copy of 24 runs was planned behind work in flight.
 fn chained_batches(batch_order: BatchOrderPolicy) {
     const CHAIN: usize = 8;
-    const LONG_FILLS: u64 = 64;
+    const LONG_FILLS: u64 = 1024;
     on_device_with(
         |options| {
             options.gpu_times_from_host = true;
@@ -607,18 +621,24 @@ fn chained_batches(batch_order: BatchOrderPolicy) {
             }
             let after = device.work_counts();
             let bare = after.bare_starts - before.bare_starts;
+            let none_pending = after.batches_with_none_pending - before.batches_with_none_pending;
+            let exact = !by_barrier && !by_ends;
+            let only_bare = match exact && none_pending == CHAIN as u64 + 1 {
+                true => "; only the bare side ran: each batch's work before it had completed",
+                false => "",
+            };
             eprintln!(
-                "CHAINED-BATCHES {} {batch_order:?}: {bare} bare starts of {} batches",
+                "CHAINED-BATCHES {} {batch_order:?}: {bare} bare starts of {} batches, \
+                 {none_pending} planned with no earlier work in flight{only_bare}",
                 device.name(),
                 CHAIN + 1,
             );
-            // The long fill begins bare under either: what it depends on completed. Each copy
-            // behind it plans a barrier for the copy before it, in flight, unless batches are
-            // ordered by their ends.
+            // Each copy plans a barrier for the copy before it where that one was in flight,
+            // unless batches are ordered by their ends.
             let expected = match (by_barrier, by_ends) {
                 (true, _) => 0,
                 (false, true) => CHAIN as u64 + 1,
-                (false, false) => 1,
+                (false, false) => none_pending,
             };
             assert_eq!(bare, expected, "bare starts");
             assert!(
