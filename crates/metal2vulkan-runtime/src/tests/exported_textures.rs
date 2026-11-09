@@ -37,18 +37,19 @@
 //!   the import of its own dma-buf (below) where the device makes one.
 //!
 //! - **The runtime's own buffers' blocks.** The same picture in a buffer the program made with no
-//!   export, its rows' padding declared unobserved as the consumer's caches declare it. One made
-//!   before the device's in-place check answered lies in a plain block. Once it answered, where the
-//!   device allocates its buffers' blocks exportable and the check passed them (`memory.rs`'s
-//!   "Buffers in exportable blocks", `in_place.rs`'s `fd_blocks_take`), its memory is such a block
-//!   (`WorkCounts::fd_buffer_blocks_made`), which the runtime never exports (`export_memory_fd`
-//!   refuses it, `NotExportable`), and each plane is in place, its image the device's linear
-//!   image naming the block's handle type, an opaque file descriptor, the layer reporting nothing
-//!   (`VUID-vkBindImageMemory-memory-02728`, `VUID-VkExportMemoryAllocateInfo-handleTypes-09860`);
-//!   elsewhere its memory is a plain block,
-//!   each plane in place or the shadow the check decided. Each reads the same bytes. A second
-//!   device of the driver, its shader cache the first's, reads the verdicts from the check's
-//!   record as it is made, and lays its first buffer where they say, none waiting for the check.
+//!   export, keeping its padding. One made before the device's in-place check answered lies in a
+//!   plain block. Once it answered, where the device allocates its buffers' blocks exportable and
+//!   the check passed them (`memory.rs`'s "Buffers in exportable blocks", `in_place.rs`'s
+//!   `fd_blocks_take`), its memory is such a block (`WorkCounts::fd_buffer_blocks_made`), which
+//!   the runtime never exports (`export_memory_fd` refuses it, `NotExportable`), and each plane is
+//!   in place, its image the device's linear image naming the block's handle type, an opaque file
+//!   descriptor, the layer reporting nothing (`VUID-vkBindImageMemory-memory-02728`,
+//!   `VUID-VkExportMemoryAllocateInfo-handleTypes-09860`); elsewhere its memory is a plain block,
+//!   each plane in place or the shadow the check decided. Each reads the same bytes. One that
+//!   declares its padding unobserved, as the consumer's caches do, lies in a plain block wherever,
+//!   a parked buffer of the same making in an exportable block not taken for it. A second device of
+//!   the driver, its shader cache the first's, reads the verdicts from the check's record as it is
+//!   made, and lays its first buffer where they say, none waiting for the check.
 //!
 //! Printed (`EXPORTED-TEXTURES`): what the device exported, and for each plane its image's
 //! alignment, row pitch and size as `vkGetImageMemoryRequirements` and `vkGetImageSubresourceLayout`
@@ -704,10 +705,9 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     let name = device.name().to_owned();
     let types = crate::device::lock(&device.shared().memory).fd_buffer_types;
     eprintln!("EXPORTED-TEXTURES on {name}: the blocks of the runtime's own buffers: {types:?}");
+    // Its planes' rows lie one after another: the same images whatever its padding.
     let descriptor_of = |options| {
-        BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
-            .with_aligned_byte(LUMA_AT)
-            .with_padding_unobserved()
+        BufferDescriptor::new(LENGTH, options, BufferContents::Zero).with_aligned_byte(LUMA_AT)
     };
     // Made before the device's check answered: a plain block, whatever the check answers.
     let early =
@@ -806,6 +806,30 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
             );
         }
     }
+    // A picture that declares its padding unobserved lies in a plain block wherever, a parked
+    // buffer of its length and options in a block allocated exportable not taken for it
+    // (`recycle.rs`'s `BufferMaking`); one that keeps its padding lies where the others do.
+    let before = device.work_counts().object_churn;
+    let unobserved = (device.new_buffer_with_descriptor(
+        descriptor_of(ResourceOptions::shared()).with_padding_unobserved(),
+    ))
+    .unwrap();
+    let kept =
+        (device.new_buffer_with_descriptor(descriptor_of(ResourceOptions::shared()))).unwrap();
+    let after = device.work_counts().object_churn;
+    let (unobserved_at, kept_at) = (unobserved.bound_memory(), kept.bound_memory());
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: a picture that declares its padding unobserved lies in \
+         {unobserved_at:?}, one that keeps it in {kept_at:?}; buffers parked before them {}, \
+         taken by them {}",
+        before.buffers_parked,
+        after.buffers_recycled - before.buffers_recycled
+    );
+    assert!(unobserved_at == BoundMemory::Own, "{unobserved_at:?}");
+    match exportable {
+        true => assert!(kept_at == BoundMemory::Blocks, "{kept_at:?}"),
+        false => assert!(kept_at == BoundMemory::Own, "{kept_at:?}"),
+    }
     watched.layer_reported_nothing(
         "buffers and textures in blocks allocated exportable name their handle type, which the \
          image format query takes for each image there (VUID-vkBindBufferMemory-memory-02726, \
@@ -840,9 +864,7 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
     );
     let options = ResourceOptions::private();
     let picture = (second.new_buffer_with_descriptor(
-        BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
-            .with_aligned_byte(LUMA_AT)
-            .with_padding_unobserved(),
+        BufferDescriptor::new(LENGTH, options, BufferContents::Zero).with_aligned_byte(LUMA_AT),
     ))
     .unwrap();
     let counts = second.work_counts();
@@ -878,21 +900,24 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
     watched.layer_reported_nothing("a second device's buffers and textures");
 }
 
-/// No texture over a buffer of the runtime's own loses its place in a block allocated exportable
+/// No texture over a buffer of the program's loses its place to the blocks allocated exportable
 /// (`memory.rs`'s "Buffers in exportable blocks"): for every pixel format a buffer backs
 /// (`linear_alignment::backed_formats`), at each width of `linear_alignment::WIDTHS`, rows the
-/// width's bytes rounded up to the format's linear alignment answer and to 256 apart, 256 bytes
-/// more than that and twice it, three rows at offset 0 and at that answer and four at offset 0,
-/// of `ShaderRead`, `ShaderRead | ShaderWrite` and
-/// `ShaderRead | RenderTarget` usage, a texture over a `Shared` buffer in such a block lies in place
-/// wherever one over a plain block's buffer of the same layout does (`Buffer::texture_placement`).
-/// Where the device lays its buffers in such blocks (`in_place.rs`'s `fd_blocks_take`, which
-/// `texture/fd_blocks_cover.rs` gates), a texture that loses its place fails; elsewhere
-/// the losses are printed, and those the images alone make, asked as the device's check asks them
-/// (its verdicts aside), with the notice of the first few such textures.
+/// width's bytes rounded up to 16 (Metal's rule), to the format's linear alignment answer and to
+/// 256 apart, 256 bytes more than that and twice it, three rows at offset 0 and at that answer and
+/// four at offset 0, of `ShaderRead`, `ShaderRead | ShaderWrite` and `ShaderRead | RenderTarget`
+/// usage, a texture over a `Shared` buffer the program makes (`new_buffer_with_descriptor`) lies
+/// in place wherever one over a plain block's buffer of the same layout and padding does
+/// (`Buffer::texture_placement`): over a buffer that keeps its padding, which lies in such a block
+/// where the device lays its buffers there (`in_place.rs`'s `fd_blocks_take`, which
+/// `texture/fd_blocks_cover.rs` gates), and over one that declares it unobserved, which lies in a
+/// plain block wherever the device's buffers lie (`buffer.rs`'s `NewBufferOf::Unobserved`). A
+/// texture that loses its place fails. For each, the losses a buffer of the same padding in such
+/// a block would see are printed, and those the images alone make, asked as the device's check
+/// asks them (its verdicts aside), with the notice of the first few such textures.
 ///
-/// Printed (`EXPORTED-TEXTURES`): the verdicts' and the tiling's answers, the textures tried, and
-/// each kind of loss.
+/// Printed (`EXPORTED-TEXTURES`): the verdicts' and the tiling's answers and how long the cover
+/// took, the textures tried, where each buffer lies, and each kind of loss.
 #[test]
 fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one() {
     use crate::memory::Holds;
@@ -930,11 +955,14 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
     }
     let verdict = |class, access, rows| device.in_place_verdict(class, access, rows);
     let take = crate::in_place::fd_blocks_take(verdict);
+    let asked = std::time::Instant::now();
     let covered = device.fd_blocks_cover();
+    let asked = asked.elapsed();
     eprintln!(
         "EXPORTED-TEXTURES on {name}: the verdicts of exportable blocks: {take:?}; such a block \
-         holds every image a plain one does: {covered:?}"
+         holds every image a plain one does: {covered:?} (asked in {asked:?})"
     );
+    let blocks = take == crate::in_place::FdBlocksTake::Take && covered.is_ok();
     let usages = [
         TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
@@ -949,12 +977,15 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         let align = device.linear_texture_alignment(pf);
         for width in WIDTHS {
             let packed = width * texel;
-            let rows = [
+            let mut rows = vec![
+                packed.next_multiple_of(16),
                 packed.next_multiple_of(align),
                 packed.next_multiple_of(256),
                 packed.next_multiple_of(256) + 256,
                 packed.next_multiple_of(256) * 2,
             ];
+            rows.sort_unstable();
+            rows.dedup();
             for row in rows {
                 for (offset, height) in [(0, 3), (align, 3), (0, 4)] {
                     for usage in usages {
@@ -983,6 +1014,19 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
             plain.declare_padding_unobserved();
             exportable.declare_padding_unobserved();
         }
+        let descriptor =
+            BufferDescriptor::new(length, ResourceOptions::shared(), BufferContents::Zero);
+        let descriptor = match unobserved {
+            true => descriptor.with_padding_unobserved(),
+            false => descriptor,
+        };
+        let program = device.new_buffer_with_descriptor(descriptor).unwrap();
+        let lies = program.bound_memory();
+        eprintln!("EXPORTED-TEXTURES on {name}, {padding}: the program's buffer lies in {lies:?}");
+        match blocks && !unobserved {
+            true => assert!(lies == BoundMemory::Blocks, "{padding}: {lies:?}"),
+            false => assert!(lies == BoundMemory::Own, "{padding}: {lies:?}"),
+        }
         let in_place = |placement: &Result<TexturePlacement, Error>| {
             matches!(placement, Ok(TexturePlacement::NotHostPages))
         };
@@ -1010,7 +1054,8 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
                 .map(|(at, _)| at)
                 .collect()
         };
-        let product = lost(&exportable);
+        let product = lost(&program);
+        let over_blocks = lost(&exportable);
         // Of the textures in place over a plain block's buffer, those whose image there is a
         // DRM_FORMAT_MOD_LINEAR one at Metal's pitch (`WorkCounts::pooled_pitched_images`),
         // which an exportable block takes none of.
@@ -1043,17 +1088,17 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         let in_place_plain = plain_at.iter().filter(|&&at| at).count();
         eprintln!(
             "EXPORTED-TEXTURES on {name}, {padding}: {} textures tried, {in_place_plain} in place \
-             over a plain \
-             block's buffer; over an exportable block's, {} of those lose their place, {} by the \
-             images alone",
+             over a plain block's buffer; over the program's buffer, {} of those lose their \
+             place; over an exportable block's, {}, {} by the images alone",
             layouts.len(),
             product.len(),
+            over_blocks.len(),
             images.len()
         );
         eprintln!(
             "EXPORTED-TEXTURES on {name}, {padding}: of those in place over a plain block's \
-             buffer, {} take a \
-             DRM_FORMAT_MOD_LINEAR image at Metal's pitch, the rest the device's linear image",
+             buffer, {} take a DRM_FORMAT_MOD_LINEAR image at Metal's pitch, the rest the \
+             device's linear image",
             pitched.len()
         );
         for &at in pitched.iter().take(8) {
@@ -1076,11 +1121,13 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
                 "EXPORTED-TEXTURES on {name}, {padding}: lost by the images: {count} of {kind}"
             );
         }
-        if take == crate::in_place::FdBlocksTake::Take && covered.is_ok() {
-            assert!(
-                product.is_empty(),
-                "textures that lose their place: {product:?}"
-            );
-        }
+        assert!(
+            product.is_empty(),
+            "{padding}: textures that lose their place: {:?}",
+            (product.iter().take(8))
+                .map(|&at| &layouts[at])
+                .map(|(d, offset, row)| (d.pixel_format, d.width, d.height, offset, row, d.usage))
+                .collect::<Vec<_>>()
+        );
     }
 }

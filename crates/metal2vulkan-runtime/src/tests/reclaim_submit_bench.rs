@@ -51,8 +51,9 @@
 //!   the quiet phase, and nothing made in the phases.
 //! - **Exportable, held 32**, **Exportable, held 64**, **Opaque fd, held 64** and **Both, held
 //!   64**: that many of the system heap's 64 MiB allocations, each exportable as a dma-buf, as an
-//!   opaque file descriptor or as both, made before the quiet phase, and nothing made in the phases: what holding memory
-//!   that is not private to the device's process costs each submission.
+//!   opaque file descriptor or as both, made before the quiet phase, and nothing made in the
+//!   phases: what holding memory that is not private to the device's process costs each
+//!   submission.
 //! - **Nothing made**: the copies' buffers alone.
 //!
 //! Four arms ask instead whether memory allocated exportable holds one queue's work behind
@@ -84,13 +85,15 @@
 //! slowest; the command buffers submitted, those the committing thread submitted
 //! (`WorkCounts::batches_submitted_at_commit`) and the time spent in `vkQueueSubmit`
 //! (`WorkCounts::batch_submit_nanos`); the makings, their median and slowest, the runtime's
-//! blocks made ahead and in place, its buffers' blocks made exportable and plain, and its buffers
-//! laid in plain blocks while the check was pending or once it refused such blocks; the host's reclaim over the phase (`/proc/vmstat`: pages kswapd
-//! and direct reclaim scanned, compaction stalls, allocation stalls, pages swapped out); the
-//! memory the fragmenting took, the host's free memory and the cgroup's room it was sized from;
-//! the free blocks of each order before and after the fragmenting and after the phase
-//! (`/proc/buddyinfo`); and the slowest submissions', turnarounds' and makings' `CLOCK_MONOTONIC`
-//! times, to line up with a kernel trace taken beside the run. Ignored: run it in release under
+//! blocks made ahead and in place, its buffers' blocks made exportable and plain, every plain
+//! block of buffers made (`WorkCounts::plain_buffer_blocks_made`), and its buffers laid in plain
+//! blocks while the check was pending or once it refused such blocks; the host's
+//! reclaim over the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction
+//! stalls, allocation stalls, pages swapped out); the memory the fragmenting took, the host's free
+//! memory and the cgroup's room it was sized from; the free blocks of each order before and after
+//! the fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions',
+//! turnarounds' and makings' `CLOCK_MONOTONIC` times, to line up with a kernel trace taken beside
+//! the run. Ignored: run it in release under
 //! `--cfg m2v_gpu` on Linux, alone on its host (it presses the whole host's memory), one arm at a
 //! time, in a cgroup with room for nearly all of the host's free memory: `cargo nextest run
 //! --release -p metal2vulkan-runtime --lib --run-ignored all reclaim_submit_bench --no-capture`.
@@ -531,9 +534,9 @@ fn phase(
          {turn_p99:.3}, slowest {turn_slowest:.3}; command buffers submitted {submitted}, by the \
          committing thread {}, in vkQueueSubmit {:.1} ms, {:.3} ms each; {} makings, ms median \
          {make_median:.1}, slowest {make_slowest:.1}; blocks made ahead {}, in place {}; \
-         blocks of the runtime's buffers made exportable {}, made plain {}; buffers in plain \
-         blocks awaiting the check {}, by its refusal {}; reclaim: {}; blocks live {}, empty {}; \
-         MemAvailable {} MiB",
+         blocks of the runtime's buffers made exportable {}, made plain {}, plain blocks of \
+         buffers made {}; buffers in plain blocks awaiting the check {}, by its refusal {}; \
+         reclaim: {}; blocks live {}, empty {}; MemAvailable {} MiB",
         device.name(),
         submits.len(),
         over(&submits, 8.0),
@@ -548,6 +551,7 @@ fn phase(
         counts.buffer_blocks_made_in_place - earlier.buffer_blocks_made_in_place,
         counts.fd_buffer_blocks_made - earlier.fd_buffer_blocks_made,
         counts.fd_buffer_blocks_plain - earlier.fd_buffer_blocks_plain,
+        counts.plain_buffer_blocks_made - earlier.plain_buffer_blocks_made,
         counts.fd_blocks_awaited - earlier.fd_blocks_awaited,
         counts.fd_blocks_refused - earlier.fd_blocks_refused,
         reclaim.join(", "),

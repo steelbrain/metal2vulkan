@@ -71,9 +71,13 @@
 //!   descriptor of a pooled buffer's memory (`vkGetPhysicalDeviceExternalBufferProperties`, for
 //!   the program's buffers' usage and a buffer of addresses' usage: exportable, and not only from
 //!   a dedicated allocation), and whose linear image made for one takes them as the device's own
-//!   linear image does ([`fd_image_types`]), the buffers the runtime's buffer path makes (`buffer.rs`'s `placed_new_buffer`: the program's, those of buffer
-//!   descriptors, and the runtime's own, not a heap's own buffer, a copied host buffer's copy nor
-//!   the in-place check's buffer of plain pooled memory) are made with
+//!   linear image does ([`fd_image_types`]), the buffers the runtime's buffer path makes
+//!   (`buffer.rs`'s `placed_new_buffer`: the program's, those of buffer descriptors, and the
+//!   runtime's own; not a heap's own buffer, a copied host buffer's copy, the in-place check's
+//!   buffer of plain pooled memory, nor a buffer whose maker declares its padding unobserved,
+//!   `BufferDescriptor::padding_unobserved`, which lies in a plain block, as a texture over it
+//!   whose rows lie apart may take a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch there and
+//!   such a block takes none: `buffer.rs`'s `NewBufferOf::Unobserved`) are made with
 //!   `VkExternalMemoryBufferCreateInfo` naming that handle type ([`FD_BLOCKS_HANDLE`]) and lie in
 //!   blocks of their own, whose blocks of those memory types are allocated exportable
 //!   (`VkExportMemoryAllocateInfo`) as it; never exported. Their buffers of addresses are made
@@ -236,7 +240,7 @@ pub(super) enum MemoryClass {
 /// whose blocks of them in memory of a heap that is not device-local are allocated exportable as
 /// an opaque file descriptor ([`FD_BLOCKS_HANDLE`]), never exported (the module docs, "Buffers
 /// in exportable blocks").
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Holds {
     Buffers,
     Images,
@@ -1870,7 +1874,7 @@ impl AheadBlocks {
     }
 }
 
-/// The counts of the blocks of [`Holds::FdBuffers`] made so far.
+/// The counts of the blocks of [`Holds::FdBuffers`] made so far, and of [`Holds::Buffers`].
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FdBlocks {
     /// Allocated exportable as an opaque file descriptor: of a memory type [`fd_buffer_types`]
@@ -1879,6 +1883,8 @@ pub(super) struct FdBlocks {
     /// Allocated as any block of buffers: of a memory type it does not name (device-local memory
     /// the program's buffers overflowed into, or that their class takes first).
     pub(super) plain: u64,
+    /// The blocks of [`Holds::Buffers`], pooled or dedicated: plain blocks of buffers.
+    pub(super) plain_buffers: u64,
 }
 
 /// The counts of the blocks of the pool host copies place in ([`Memory::host_copy_pool`]).
@@ -2009,7 +2015,7 @@ impl Memory {
         }
     }
 
-    /// The counts of the blocks of [`Holds::FdBuffers`] made so far.
+    /// The counts of the blocks of [`Holds::FdBuffers`] made so far, and of [`Holds::Buffers`].
     pub(super) fn fd_blocks(&self) -> FdBlocks {
         self.fd_blocks
     }
@@ -2463,11 +2469,11 @@ impl Memory {
             };
             self.say_block(what, &block);
         }
-        if holds == Holds::FdBuffers {
-            match block.fd {
-                true => self.fd_blocks.exportable += 1,
-                false => self.fd_blocks.plain += 1,
-            }
+        match holds {
+            Holds::FdBuffers if block.fd => self.fd_blocks.exportable += 1,
+            Holds::FdBuffers => self.fd_blocks.plain += 1,
+            Holds::Buffers => self.fd_blocks.plain_buffers += 1,
+            Holds::Images | Holds::Exports | Holds::DmaBufs => {}
         }
         self.allocated += size;
         let heap = self.heap_of(type_index);

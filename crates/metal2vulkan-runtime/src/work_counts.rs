@@ -5064,16 +5064,26 @@ pub struct WorkCounts {
     /// memory type of a device-local heap, which such buffers overflowed into or their class
     /// takes first.
     pub fd_buffer_blocks_plain: u64,
+    /// The plain blocks of buffers made so far, pooled or dedicated, allocated with no export
+    /// (`memory.rs`'s `Holds::Buffers`): the runtime's own buffers' and the program's on a
+    /// device that takes no blocks allocated exportable, before its check of them answered and
+    /// once it refused them; those of buffers that declare their padding unobserved
+    /// (`BufferDescriptor::padding_unobserved`), which lie in plain blocks wherever; and those of
+    /// the few buffers the runtime places apart. Beside `fd_buffer_blocks_made`, the share of the
+    /// blocks of buffers whose `vkAllocateMemory` holds the process's submissions on RADV (the
+    /// module docs of `memory.rs`, "Buffers in exportable blocks").
+    pub plain_buffer_blocks_made: u64,
     /// The buffers of the runtime's own and the program's made so far in a plain block, not one
     /// allocated exportable, on a device that allocates such blocks, while the device's in-place
     /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): its first run on a
-    /// driver, before the check's record holds its verdicts. 0 once they are known.
+    /// driver, before the check's record holds its verdicts. 0 once they are known. A buffer that
+    /// declares its padding unobserved lies in a plain block wherever, and is not counted.
     pub fd_blocks_awaited: u64,
     /// As `fd_blocks_awaited`, once the device's check of such blocks found a texture over one's
     /// buffer would be a shadow where over a plain block's it is not (`in_place.rs`'s
-    /// `fd_blocks_take`), or where its `DRM_FORMAT_MOD_LINEAR` tiling, which every image there
-    /// is, lacks a feature its linear tiling has in a format a texture over a buffer may take:
-    /// every such buffer from then on.
+    /// `fd_blocks_take`), or that such a block does not hold every image a texture over a plain
+    /// block's buffer that keeps its padding takes (`texture/fd_blocks_cover.rs`, whose answer
+    /// the memory log names): every such buffer from then on.
     pub fd_blocks_refused: u64,
     /// As `buffer_blocks_made_ahead`, of images, those of the pool host copies place in among
     /// them (`host_copy_blocks_readied`).
@@ -8153,6 +8163,7 @@ impl Device {
             buffer_blocks_made_in_place: ahead.buffers_in_place,
             fd_buffer_blocks_made: fd_blocks.exportable,
             fd_buffer_blocks_plain: fd_blocks.plain,
+            plain_buffer_blocks_made: fd_blocks.plain_buffers,
             image_blocks_made_ahead: ahead.images_ahead,
             image_blocks_made_in_place: ahead.images_in_place,
             blocks_ahead_waited_for: ahead.waited_for,

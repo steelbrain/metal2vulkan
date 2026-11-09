@@ -20,13 +20,13 @@
 //!   in a block of the kind its buffers take where the device allocates their blocks exportable
 //!   (`memory.rs`'s `Holds::FdBuffers`), whatever this class's verdicts, which decide whether its
 //!   buffers lie there (`in_place.rs`'s `fd_blocks_take`), that declares those bytes unobserved
-//!   too, its textures taking the images a texture over such a buffer takes, made `UNDEFINED`;
-//!   unchecked where the device allocates no such blocks), fills a window of it with a
-//!   pattern, and
-//!   makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture takes
-//!   the image in place exactly as the product's would ([`checking`](crate::in_place::checking)
-//!   lets it whatever the verdict); the fresh-pages class's buffer in fresh pages wherever the
-//!   device takes them, whatever its submission checks found a held import costs
+//!   too, its textures taking the image a texture over such a buffer takes, made `UNDEFINED`;
+//!   unchecked where the device allocates no such blocks), fills a window of it with a pattern,
+//!   and makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture
+//!   takes the image in place exactly as the product's would
+//!   ([`checking`](crate::in_place::checking) lets it whatever the verdict); the fresh-pages
+//!   class's buffer in fresh pages wherever the device takes them, whatever its submission checks
+//!   found a held import costs
 //!   (`submit_check.rs`): the product's long buffers lie in them only where that cost is none
 //!   (`fresh_pages.rs`), but a rebind's copy under an image in place lies in them wherever the
 //!   class passed (`buffer_descriptor.rs`), and the check's buffer, never parked, holds its import
@@ -1405,17 +1405,21 @@ impl ClassPages {
             // A buffer of the runtime's own in a block of the kind its buffers take where the
             // device allocates their blocks exportable (`memory.rs`'s `Holds::FdBuffers`), whatever
             // this class's verdicts, which decide whether they lie there
-            // (`Device::fd_blocks_checked`), that declares the bytes between a texture's rows
-            // unobserved, as a consumer's caches do: its textures take the image a texture over
-            // such a buffer takes, the device's linear image made for the blocks' handle type
-            // (`texture.rs`'s `alias_image`).
+            // (`Device::fd_blocks_checked`): its textures take the image a texture over such a
+            // buffer takes, the device's linear image made for the blocks' handle type
+            // (`texture.rs`'s `alias_image`). It declares the bytes between a texture's rows
+            // unobserved, which none of the device's buffers there does (they lie in plain
+            // blocks: `buffer.rs`'s `NewBufferOf::Unobserved`), so that its textures over rows
+            // that lie apart take that image too, and the class's verdicts answer every access
+            // the pooled class's do (`fd_blocks_take`).
             PagesClass::FdBlocks => {
                 let exportable = lock(&device.shared().memory).fd_buffer_types;
                 if let Err(why) = exportable {
                     return Err(Unmade::lasting(why));
                 }
                 // Made only where such a block holds every image a texture over a plain block's
-                // buffer takes in place (`texture/fd_blocks_cover.rs`), noted in the memory log.
+                // buffer that keeps its padding takes in place (`texture/fd_blocks_cover.rs`),
+                // noted in the memory log.
                 #[cfg(unix)]
                 if let Err(why) = device.fd_blocks_cover() {
                     let line = format!("the runtime's own buffers lie in plain blocks: {why}");

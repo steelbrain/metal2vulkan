@@ -52,7 +52,7 @@
 //!   `buffers_parked`, `images_evicted`, ...). A build of `--cfg m2v_no_recycle` parks nothing,
 //!   the control that measures what recycling changes.
 
-use super::memory::{Memory, MemoryClass, Placement};
+use super::memory::{Holds, Memory, MemoryClass, Placement};
 use crate::image_plan::ImagePlan;
 use crate::key_hash::KeyMap;
 use crate::release::{self, Released};
@@ -107,13 +107,16 @@ pub(crate) struct ImageMaking {
 }
 
 /// What fixes a buffer's making (`Device::placed_new_buffer`): its size (padded), the memory
-/// class it lies in, and whether it lies in fresh pages it imported (`fresh_pages.rs`), its
-/// `VkBuffer` made for host allocations.
+/// class it lies in, whether it lies in fresh pages it imported (`fresh_pages.rs`), its
+/// `VkBuffer` made for host allocations, and the kind of block it lies in otherwise
+/// (`memory.rs`'s `Holds`), whose `VkBuffer` names the block's handle type where it has one, and
+/// which a buffer that declares its padding unobserved takes plain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BufferMaking {
     pub(crate) size: u64,
     pub(crate) class: MemoryClass,
     pub(crate) fresh_pages: bool,
+    pub(crate) holds: Holds,
 }
 
 /// A parked object.

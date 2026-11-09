@@ -2138,7 +2138,8 @@ impl Device {
         self.keep_room();
         let options = self.own_memory_options("new_buffer", options)?;
         let placed = (placement.into(), None);
-        let (buffer, class) = self.buffer_of_length("new_buffer", length, options, placed)?;
+        let (buffer, class) =
+            self.buffer_of_length("new_buffer", length, options, placed, false)?;
         self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(self.visible(buffer))
     }
@@ -2154,7 +2155,7 @@ impl Device {
     ) -> Result<Buffer, Error> {
         let placed = (AddressPlacement::Outside.into(), None);
         Ok(self
-            .buffer_of_length("new_buffer", length, options, placed)?
+            .buffer_of_length("new_buffer", length, options, placed, false)?
             .0)
     }
 
@@ -2175,20 +2176,26 @@ impl Device {
     /// A buffer of `length` bytes, all zero, with `options`, at `placement` in the address space,
     /// its byte `aligned` (where given) on a multiple of 256 bytes of its memory, for `call`, and
     /// the memory class it took: refused as [`Device::new_buffer`] refuses it, and for a pin the
-    /// address space cannot honour.
+    /// address space cannot honour. Where `padding_unobserved` (its maker declares the bytes
+    /// between a texture's rows unobserved, `BufferDescriptor::padding_unobserved`), it lies in
+    /// a plain block wherever the device's own buffers lie ([`NewBufferOf::Unobserved`]).
     pub(super) fn buffer_of_length(
         &self,
         call: &'static str,
         length: u64,
         options: ResourceOptions,
         (placement, aligned): (Place, Option<u64>),
+        padding_unobserved: bool,
     ) -> Result<(Buffer, MemoryClass), Error> {
         let modes = Modes::of(options)?;
         let class = buffer_class(call, modes)?;
         if length == 0 || length > self.properties().max_buffer_length {
             return Err(nil(call, Problem::BufferLength { length }));
         }
-        let of = NewBufferOf::Runtime(FreshPages::WherePaid);
+        let of = match padding_unobserved {
+            true => NewBufferOf::Unobserved,
+            false => NewBufferOf::Runtime(FreshPages::WherePaid),
+        };
         let buffer =
             self.zeroed_buffer_of(call, length, (modes, class), of, (placement, aligned))?;
         Ok((buffer, class))
@@ -2414,7 +2421,7 @@ impl Device {
         let (of_heap, fresh) = match of {
             NewBufferOf::Heap => (true, FreshPages::WherePaid),
             NewBufferOf::Runtime(fresh) => (false, fresh),
-            NewBufferOf::Check(_) => (false, FreshPages::WherePaid),
+            NewBufferOf::Unobserved | NewBufferOf::Check(_) => (false, FreshPages::WherePaid),
         };
         let plain = matches!(of, NewBufferOf::Check(_));
         if self.is_lost() {
@@ -2442,16 +2449,17 @@ impl Device {
             None => class,
         };
         // The kind of block it lies in: one of the runtime's own lies where the device's own
-        // buffers do, whose blocks may be exportable as a dma-buf once the
+        // buffers do, whose blocks may be exportable as an opaque file descriptor once the
         // device's check of them passed, so that its `VkBuffer` names that handle type there
-        // (`VUID-vkBindBufferMemory-memory-02726`; `memory.rs`'s `Holds::FdBuffers`).
+        // (`VUID-vkBindBufferMemory-memory-02726`; `memory.rs`'s `Holds::FdBuffers`); one whose
+        // maker declares its padding unobserved lies in a plain block.
         let holds = match of {
             NewBufferOf::Runtime(_) => {
                 let exportable = lock(&shared.memory).fd_buffer_types.is_ok();
                 let checked = exportable && self.fd_blocks_checked();
                 lock(&shared.memory).own_buffers(checked)
             }
-            NewBufferOf::Heap => Holds::Buffers,
+            NewBufferOf::Heap | NewBufferOf::Unobserved => Holds::Buffers,
             NewBufferOf::Check(holds) => holds,
         };
         let mut external =
@@ -2480,6 +2488,7 @@ impl Device {
                 size,
                 class,
                 fresh_pages: wants_fresh,
+                holds,
             },
         );
         let mut taken = making.and_then(|making| self.recycled_buffer(&making));
@@ -3034,7 +3043,8 @@ impl Device {
 }
 
 /// Whose a buffer [`Device::placed_new_buffer`] makes is: a heap's own buffer, one of the
-/// runtime's own, with where it lies in fresh pages, or the in-place check's of pooled memory.
+/// runtime's own, with where it lies in fresh pages, one whose maker declares its padding
+/// unobserved, or the in-place check's of pooled memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NewBufferOf {
     /// A heap's own buffer (`heap.rs`), never in fresh pages, in a block of `Holds::Buffers`.
@@ -3042,6 +3052,13 @@ enum NewBufferOf {
     /// A buffer of the runtime's own, in fresh pages where it says, else in a block of the kind
     /// the device's own buffers take (`memory.rs`'s `Memory::own_buffers`).
     Runtime(FreshPages),
+    /// A buffer of the runtime's own whose maker declares the bytes between a texture's rows and
+    /// slices unobserved (`BufferDescriptor::padding_unobserved`): as
+    /// `Runtime(FreshPages::WherePaid)`, but in a plain block (`Holds::Buffers`) wherever the
+    /// device's own buffers lie, as a texture over such a buffer whose rows lie apart may take a
+    /// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch there, which a block allocated exportable
+    /// takes none of (`memory.rs`'s "Buffers in exportable blocks").
+    Unobserved,
     /// The in-place check's buffer of a class of the runtime's pooled memory
     /// (`in_place_check.rs`): in a block that holds this, `Holds::Buffers` for
     /// `PagesClass::Pooled` (exported as no handle type) and `Holds::FdBuffers` for

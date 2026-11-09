@@ -121,12 +121,14 @@ impl MemoryExport {
 
 /// How a buffer of the runtime's own memory a descriptor asks for is made: at `place` in the
 /// address space, its byte `aligned` (where given) on a multiple of 256 bytes of its memory, in
-/// memory exportable as `export` (where given).
+/// memory exportable as `export` (where given), and in a plain block where `padding_unobserved`
+/// (`BufferDescriptor::padding_unobserved`; `buffer.rs`'s `NewBufferOf::Unobserved`).
 #[derive(Clone, Copy)]
 struct Made {
     place: Place,
     aligned: Option<u64>,
     export: Option<MemoryExport>,
+    padding_unobserved: bool,
 }
 
 /// `MTLBufferDescriptor` (Apple's private class, a runtime extension): a buffer's length, resource
@@ -174,9 +176,12 @@ pub struct BufferDescriptor<'a> {
     /// cost submissions nothing, `WorkCounts::fresh_page_buffers_made`) takes its textures in place
     /// where the device's check of such pages passed: there the declaration lets a render pass's
     /// load and store change those bytes of a texture whose rows, each to its pitch, share no line
-    /// of the device's memory with bytes past them, and nothing more. A runtime extension with no
-    /// Metal counterpart, for a consumer that owns every read of the buffer's bytes; `false` by
-    /// default, as Metal keeps every byte.
+    /// of the device's memory with bytes past them, and nothing more. Such a buffer lies in a
+    /// plain block of the runtime's memory, where on a unified-memory device whose other buffers
+    /// lie in blocks allocated exportable (docs/FAST-PATHS.md, the `Private` row) a block's making
+    /// holds the process's submissions on RADV (`WorkCounts::plain_buffer_blocks_made`). A
+    /// runtime extension with no Metal counterpart, for a consumer that owns every read of the
+    /// buffer's bytes; `false` by default, as Metal keeps every byte.
     pub padding_unobserved: bool,
     /// A byte of the buffer the runtime lays on a multiple of 256 bytes of its memory, the largest
     /// linear-image alignment measured (RADV's; the device's own is
@@ -383,6 +388,7 @@ impl Device {
             place,
             aligned: aligned_byte,
             export: exported_as,
+            padding_unobserved,
         };
         let buffer = match contents {
             BufferContents::Zero => self.zero_buffer(CALL, length, resource_options, made),
@@ -452,6 +458,7 @@ impl Device {
             place: AddressPlacement::Any.into(),
             aligned: None,
             export: None,
+            padding_unobserved: false,
         };
         let buffer = self.buffer_with_bytes(CALL, bytes, options, made)?;
         Ok(self.visible(buffer))
@@ -597,6 +604,7 @@ impl Device {
             place,
             aligned,
             export,
+            padding_unobserved,
         } = made;
         if let Some(export) = export {
             #[cfg(unix)]
@@ -604,7 +612,9 @@ impl Device {
             #[cfg(not(unix))]
             return Err(Error::NotImplemented(export.gap()));
         }
-        let (buffer, class) = self.buffer_of_length(call, length, options, (place, aligned))?;
+        let placed = (place, aligned);
+        let (buffer, class) =
+            self.buffer_of_length(call, length, options, placed, padding_unobserved)?;
         self.degrade_system_memory(&buffer, class, || format!("buffer of {length} bytes"));
         Ok(buffer)
     }
