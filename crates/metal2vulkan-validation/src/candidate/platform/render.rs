@@ -72,9 +72,8 @@ use super::acceptance::{unmet_requirements, LayoutError, LayoutObjects};
 use super::buffers::{create_host_buffer, HostBuffer};
 use super::compute::{
     allocate, allocate_in, attempt, check_backend, command_replay, environment, executed_census,
-    executor_degrades, incompatible_binding, module_censuses, opened_device, refused_attempt,
-    replay_commands, table_bytes, upload_root_table, Allocation, CompileChild, Live, OnDevice,
-    Replay, ReplayPath,
+    incompatible_binding, module_censuses, opened_device, refused_attempt, replay_commands,
+    table_bytes, upload_root_table, Allocation, CompileChild, Live, OnDevice, Replay, ReplayPath,
 };
 use super::device::{with_validated_context, ExtendedDynamicState, VulkanContext};
 use super::graphics_pipeline::{self, GraphicsError};
@@ -232,7 +231,6 @@ fn run(
         escaped,
         children,
         replayed,
-        depth_upload,
     } = executed?;
     // Every stage module drawn, in the order `spv_sha256` hashes them, then each replayed
     // command's, and the guard bytes each out-of-bounds target's run changed.
@@ -249,7 +247,6 @@ fn run(
         .map(|(map, plan)| graphics::rate_map_pass_census(map, plan));
     let mut environment = environment(context, device, "engine-render");
     command_replay(&mut environment, &replayed);
-    executor_degrades(&mut environment, context, device, depth_upload);
     Ok(ComputeRun {
         output,
         spv_sha256,
@@ -916,7 +913,6 @@ fn execute(
         graphics::select_render_output(case.output, &finals).map_err(ExecutorError::Failed)?;
     drop(objects);
     drop(readers);
-    let depth_upload = resources.uploads_float_depth() || targets.uploads_float_depth;
     drop(resources);
     drop(shadow);
     drop(planes);
@@ -927,7 +923,6 @@ fn execute(
         escaped,
         children,
         replayed,
-        depth_upload,
     })
 }
 
@@ -940,9 +935,6 @@ struct Drawn {
     escaped: BTreeMap<OutOfBoundsResource, GuardCount>,
     children: Vec<crate::coverage::ModuleCensus>,
     replayed: Vec<ReplayPath>,
-    /// The draw uploaded 32-bit float depth into a depth image, a texture's or its depth
-    /// attachment's.
-    depth_upload: bool,
 }
 
 /// Draw one replayed render command: `pipeline`, compiled for `case` (a render template with the
@@ -1553,9 +1545,6 @@ struct Targets<'a> {
     depth_stencil: Option<DepthStencilTarget>,
     extent: vk::Extent2D,
     samples: u32,
-    /// The depth/stencil attachment holds 32-bit float depth, uploaded from the case's
-    /// contents.
-    uploads_float_depth: bool,
 }
 
 impl Drop for Targets<'_> {
@@ -1625,7 +1614,6 @@ impl<'a> Targets<'a> {
                 height: 1,
             },
             samples,
-            uploads_float_depth: false,
         };
         let mut extent = None;
         // A storage-form attachment is no attachment of the subpass, but its image is one of the
@@ -1714,7 +1702,9 @@ impl<'a> Targets<'a> {
                     "color and depth/stencil targets of different extents",
                 ));
             }
-            targets.uploads_float_depth = super::plan_resources::is_float_depth(format);
+            if let Some(depths) = &authored.depth {
+                super::plan_resources::require_depth_range(context, format, depths)?;
+            }
             targets.depth_stencil = Some(match transfer {
                 AttachmentTransfer::Copy => create_depth_stencil(context, format, authored)?,
                 AttachmentTransfer::PerSample { samples } => {

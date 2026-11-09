@@ -441,6 +441,74 @@ fn depth_and_multisampled_textures_read_their_authored_texels() {
     assert_eq!(run.output, floats(&[0.375, 14.0]));
 }
 
+/// A depth texture whose texel lies outside `[0, 1]` (2.0, which Metal's `Depth32Float` texel
+/// keeps): where the opened device enabled `VK_EXT_depth_range_unrestricted`, the run reads it as
+/// authored; elsewhere the executor neither copies it (Vulkan takes no such copied depth,
+/// `VUID-vkCmdCopyBufferToImage-pRegions-07931`) nor clamps it, and refuses the case typed
+/// before any image is made (`ToolingRequirement::DepthOutsideUnitRange`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_depth_outside_the_unit_range_runs_only_where_the_device_takes_it() {
+    use crate::check::admission::{ExecutorError, NotSupported};
+    use crate::requirement::ToolingRequirement;
+    let samples: Vec<u8> = (0..4i32)
+        .flat_map(|sample| [sample, 7 * sample, -sample, 1])
+        .flat_map(i32::to_le_bytes)
+        .collect();
+    let mut multisampled = texture(
+        1,
+        TextureType::D2Multisample,
+        TextureFormat::Rgba32Sint,
+        [1, 1, 1],
+        samples,
+    );
+    multisampled.sample_count = 4;
+    let case = kernel(
+        "depth_ms",
+        vec![
+            texture(
+                0,
+                TextureType::D2,
+                TextureFormat::Depth32Float,
+                [1, 1, 1],
+                floats(&[2.0]),
+            ),
+            multisampled,
+        ],
+        vec![0xab; 8],
+        [1, 1, 1],
+        buffer_output(8),
+    );
+    let unrestricted = crate::candidate::platform::opened_worker_device(crate::gpu::TEST_DEVICE)
+        .unwrap_or_else(|error| panic!("open the lane's device: {error:?}"))
+        .device()
+        .profile()
+        .enabled()
+        .extensions
+        .contains(&metal2vulkan::device::VkExtension::ExtDepthRangeUnrestricted);
+    let ran = run(&case, &fixture("texture_ops.ll"));
+    eprintln!(
+        "DEPTH-RANGE-CASE unrestricted {unrestricted}: {}",
+        match &ran {
+            Ok(run) => format!("ran, output {:02x?}", run.output),
+            Err(error) => error.to_string(),
+        }
+    );
+    match (ran, unrestricted) {
+        (Ok(run), true) => assert_eq!(run.output, floats(&[2.0, 14.0])),
+        (Err(ExecutorError::NotSupported(NotSupported::Requirements(requirements))), false) => {
+            assert_eq!(
+                requirements,
+                [ToolingRequirement::DepthOutsideUnitRange].into()
+            )
+        }
+        (other, unrestricted) => panic!(
+            "a depth of 2.0 runs where the device enabled the extension ({unrestricted}) and is \
+             refused as depth_outside_unit_range elsewhere: {other:?}"
+        ),
+    }
+}
+
 /// A sample count the device's image format properties do not allow is refused typed before any
 /// image is created, never created as invalid usage (`VUID-VkImageCreateInfo-samples-02258`):
 /// the CPU ICDs the gate runs allow no 2-sample images (lavapipe allows 1, 4, and 8).

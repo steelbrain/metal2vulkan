@@ -1,4 +1,5 @@
 pub mod buffer_slots;
+pub mod depth_range;
 pub mod depth_stencil;
 pub mod mesh;
 pub mod min_lod_clamp;

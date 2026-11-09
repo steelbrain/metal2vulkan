@@ -181,10 +181,6 @@ impl ReferenceGap {
 /// runtime device delivered ([`Degradation::code`]): a run through `metal2vulkan_runtime`.
 pub const RUNTIME_DEGRADES: &str = "runtime_degrades";
 
-/// The member of a candidate row's `environment` that holds the codes of the runtime's degrade
-/// notices the platform executor gives itself where it does the runtime's work.
-pub const EXECUTOR_DEGRADES: &str = "executor_degrades";
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateObservation {
@@ -567,13 +563,14 @@ impl CandidateObservation {
                 .is_ok_and(|golden| self.status_holds(dependencies.case, &golden))
     }
 
-    /// The degradations the row's run announced ([`RUNTIME_DEGRADES`], [`EXECUTOR_DEGRADES`]),
-    /// read through the runtime's closed vocabulary ([`Degradation::from_code`]): a code it does
-    /// not know (a retired kind's) is none of them.
+    /// The degradations the row's run announced ([`RUNTIME_DEGRADES`]), read through the
+    /// runtime's closed vocabulary ([`Degradation::from_code`]): a code it does not know (a
+    /// retired kind's) is none of them.
     pub fn announced_degradations(&self) -> impl Iterator<Item = Degradation> + '_ {
-        [RUNTIME_DEGRADES, EXECUTOR_DEGRADES]
+        self.environment
+            .get(RUNTIME_DEGRADES)
+            .and_then(serde_json::Value::as_array)
             .into_iter()
-            .filter_map(|member| self.environment.get(member)?.as_array())
             .flatten()
             .filter_map(|code| Degradation::from_code(code.as_str()?))
     }

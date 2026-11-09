@@ -3569,7 +3569,7 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
 /// ordinary mismatch, which the list reviews.
 #[test]
 fn an_announced_deferred_near_equivalent_stays_open_with_its_reason() {
-    use crate::observation::{EXECUTOR_DEGRADES, RUNTIME_DEGRADES};
+    use crate::observation::RUNTIME_DEGRADES;
     use metal2vulkan_runtime::Degradation;
     let drawn = case(1, "drawn");
     let row = new_row(&drawn, Backend::Vulkan, LAVAPIPE, &DEVICE, &METAL);
@@ -3622,8 +3622,6 @@ fn an_announced_deferred_near_equivalent_stays_open_with_its_reason() {
         judged(announcing(RUNTIME_DEGRADES, &[cost, rate_map])),
         deferred
     );
-    // The platform executor's own notices are the same vocabulary, read alike.
-    assert_eq!(judged(announcing(EXECUTOR_DEGRADES, &[rate_map])), deferred);
     let ordinary = Some((Verdict::Reviewed, None));
     assert_eq!(judged(row.clone()), ordinary);
     assert_eq!(

@@ -199,9 +199,6 @@ struct SlotImage {
     copies: Vec<vk::BufferImageCopy>,
     /// The final contents, when the texture is the observed output.
     readback: Option<HostBuffer>,
-    /// The image holds 32-bit float depth, which its upload writes: the run's
-    /// `restricted-depth-upload` on a device without `VK_EXT_depth_range_unrestricted`.
-    float_depth: bool,
 }
 
 impl SlotImage {
@@ -296,13 +293,36 @@ struct TextureUse {
     storage: bool,
 }
 
-/// Whether an image of `format` holds 32-bit float depth, which Vulkan leaves undefined outside
-/// `[0, 1]` when uploaded without `VK_EXT_depth_range_unrestricted`.
-pub(super) fn is_float_depth(format: vk::Format) -> bool {
+/// Whether an image of `format` holds 32-bit float depth, which Vulkan takes no value outside
+/// `[0, 1]` into without `VK_EXT_depth_range_unrestricted`.
+fn is_float_depth(format: vk::Format) -> bool {
     matches!(
         format,
         vk::Format::D32_SFLOAT | vk::Format::D32_SFLOAT_S8_UINT
     )
+}
+
+/// Refuse to give an image of `format` on `context`'s device the 32-bit float depths `depths` where
+/// one lies outside `[0, 1]` and the device lacks `VK_EXT_depth_range_unrestricted`
+/// (`ToolingRequirement::DepthOutsideUnitRange`, `executor_contract::depth_range`): the executor
+/// uploads a case's bytes as they are, which Vulkan does not take there, and never clamps them
+/// silently. Before the image is made, so a refused case allocates nothing.
+pub(super) fn require_depth_range(
+    context: &VulkanContext,
+    format: vk::Format,
+    depths: &[u8],
+) -> Result<(), ExecutorError> {
+    if !is_float_depth(format) {
+        return Ok(());
+    }
+    let unrestricted = context
+        .enabled
+        .extensions
+        .contains(&metal2vulkan::device::VkExtension::ExtDepthRangeUnrestricted);
+    match crate::executor_contract::depth_range::depth_range_requirement(depths, unrestricted) {
+        Some(requirement) => Err(NotSupported::Requirements([requirement].into()).into()),
+        None => Ok(()),
+    }
 }
 
 /// Whether a descriptor type reads an image through a sampler or `OpImageFetch` (sampled) rather
@@ -312,12 +332,6 @@ fn is_storage(ty: vk::DescriptorType) -> bool {
 }
 
 impl<'a> PlanResources<'a> {
-    /// Whether the run uploads a texture's 32-bit float depth into a depth image: the executor
-    /// holds every texture in its own format.
-    pub(super) fn uploads_float_depth(&self) -> bool {
-        self.images.values().any(|image| image.float_depth)
-    }
-
     /// Create every object `descriptors` needs from `guest` on `device` (the product device the
     /// plan was made on), with a host readback of `observed` when it is a texture the plan views.
     pub(super) fn create(
@@ -1753,6 +1767,7 @@ fn create_slot_image(
     let aspect: vk::ImageAspectFlags = metal2vulkan::metal::format::aspects(pixel_format)
         .ok_or_else(|| format!("{label}: no aspects for {pixel_format:?}"))?
         .into();
+    require_depth_range(context, format, &texture.bytes)?;
     let layout = texture_use.views[0].layout;
     if texture_use.views.iter().any(|view| view.layout != layout) {
         return Err(not_implemented(format!(
@@ -1917,7 +1932,6 @@ fn create_slot_image(
         staging,
         copies,
         readback,
-        float_depth: is_float_depth(format),
     })
 }
 

@@ -45,11 +45,10 @@ use metal2vulkan::bind::{
     DispatchCommands, DispatchRegion, ExecutionStatus, NeutralResource, PushHole, ReplayVariant,
     RootTable, SamplerDescriptor,
 };
-use metal2vulkan::device::{Device, DeviceDescription, DeviceProfile, DriverFact};
-use metal2vulkan::device::{VkExtension, VkFeature};
+use metal2vulkan::device::VkFeature;
+use metal2vulkan::device::{Device, DeviceDescription, DeviceProfile};
 use metal2vulkan::pipeline::{ComputePipeline, StageModule};
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
-use metal2vulkan_runtime::Degradation;
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::sync::Arc;
@@ -338,7 +337,6 @@ fn run(
         children,
         escaped,
         replayed,
-        depth_upload,
     } = executed?;
     // The census covers every module the run executed: the producer's, under the specialization
     // its plan for the shape gives, and each replayed command's.
@@ -353,7 +351,6 @@ fn run(
     let census = executed_census(context, modules, out_of_bounds);
     let mut environment = environment(context, device, "engine-compute");
     command_replay(&mut environment, &replayed);
-    executor_degrades(&mut environment, context, device, depth_upload);
     Ok(ComputeRun {
         output,
         spv_sha256,
@@ -410,45 +407,6 @@ pub(super) fn module_censuses(
     plan: Option<&BindingPlan>,
 ) -> Result<Vec<ModuleCensus>, ExecutorError> {
     ModuleCensus::of_pipeline_modules_under(stages, profile, plan).map_err(ExecutorError::Failed)
-}
-
-/// Record in `environment` the degradations the executor's own context took
-/// (`executor_degrades`, the runtime's codes): `restricted-depth-upload` when the run uploaded
-/// 32-bit float depth into a depth image (`depth_upload`) on a device without
-/// `VK_EXT_depth_range_unrestricted` enabled whose driver is not measured to keep a value outside
-/// `[0, 1]` (`DriverFact::DepthImageKeepsValuesOutsideUnitRange` among the opened description's
-/// `driver_facts`), which may store such a value clamped: the executor copies the bytes as they
-/// are, where the runtime's uploads clamp them on every device without the extension, and this
-/// temporary bridge keeps its rows honest for what its own copies store. A context
-/// whose opened description is unknown records it, the conservative answer. Under a restriction the
-/// description carries the executing device's identity, so the facts are its driver's.
-pub(super) fn executor_degrades(
-    environment: &mut serde_json::Value,
-    context: &VulkanContext,
-    device: &Device,
-    depth_upload: bool,
-) {
-    let unrestricted = device
-        .profile()
-        .enabled()
-        .extensions
-        .contains(&VkExtension::ExtDepthRangeUnrestricted);
-    let kept = context
-        .opened_description
-        .as_ref()
-        .is_ok_and(|description| {
-            description
-                .driver_facts()
-                .contains(&DriverFact::DepthImageKeepsValuesOutsideUnitRange)
-        });
-    let restricted = !unrestricted && !kept;
-    if let (true, Some(object)) = (depth_upload && restricted, environment.as_object_mut()) {
-        let code = Degradation::RestrictedDepthUpload.code();
-        object.insert(
-            crate::observation::EXECUTOR_DEGRADES.into(),
-            serde_json::json!([code]),
-        );
-    }
 }
 
 /// The candidate environment of `executor`: the device facts, the ICD identity, the layers and
@@ -524,8 +482,6 @@ struct Executed {
     children: Vec<ModuleCensus>,
     escaped: BTreeMap<OutOfBoundsResource, GuardCount>,
     replayed: Vec<ReplayPath>,
-    /// The run uploaded 32-bit float depth into a depth image.
-    depth_upload: bool,
 }
 
 /// A buffer the run allocated, with its device address when the device has them.
@@ -1004,7 +960,6 @@ fn execute(
     )
     .map_err(ExecutorError::Failed)?;
     drop(objects);
-    let depth_upload = resources.uploads_float_depth();
     drop(resources);
     Ok(Executed {
         output,
@@ -1012,7 +967,6 @@ fn execute(
         children: executed,
         escaped,
         replayed,
-        depth_upload,
     })
 }
 

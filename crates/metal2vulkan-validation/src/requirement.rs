@@ -114,6 +114,15 @@ pub enum ToolingRequirement {
     /// stating the observation or object launch whose generated stages take the partners' places
     /// (`companion::MeshStages`).
     MeshCompanion,
+    /// A case gives a 32-bit float depth image a depth outside `[0, 1]`
+    /// (`executor_contract::depth_range`): a `Depth32Float` texture's texels or a depth
+    /// attachment's initial depth holds a NaN, a negative value other than `-0.0`, or a value
+    /// above 1.0, which Metal's texel keeps. Vulkan takes no such value into a depth image without
+    /// `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so on a
+    /// device without the extension the engine's candidate cannot put the case's depths where
+    /// Metal holds them and stops there; on a device with it, it runs. A case's data on the
+    /// executing device raises it, never a source's structure, so no census row carries it.
+    DepthOutsideUnitRange,
 }
 
 /// Every executor (the requirement leaves no case to author, or none to observe).
@@ -121,7 +130,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -144,6 +153,7 @@ impl ToolingRequirement {
         Self::RasterizationRateMapPlacement,
         Self::KernelMinLodClamp,
         Self::MeshCompanion,
+        Self::DepthOutsideUnitRange,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -172,6 +182,7 @@ impl ToolingRequirement {
             Self::RasterizationRateMapPlacement => "rasterization_rate_map_placement",
             Self::KernelMinLodClamp => "kernel_min_lod_clamp",
             Self::MeshCompanion => "mesh_companion",
+            Self::DepthOutsideUnitRange => "depth_outside_unit_range",
         }
     }
 
@@ -187,7 +198,10 @@ impl ToolingRequirement {
     /// - The engine's candidate: the families its case mapping and render executor do not
     ///   implement yet (`candidate::engine`), each of which the Metal oracle runs, and
     ///   rasterization-rate map data a case can author only as bytes, which hold one
-    ///   implementation's private layout where the engine's module decodes this crate's.
+    ///   implementation's private layout where the engine's module decodes this crate's, and a
+    ///   depth outside `[0, 1]` a case gives a depth image, which its executor raises only on a
+    ///   device without `VK_EXT_depth_range_unrestricted`
+    ///   ([`ToolingRequirement::DepthOutsideUnitRange`]).
     ///
     /// The requirements that stopped only the old engine's candidate were retired with it.
     pub const fn stops(self) -> &'static [Executor] {
@@ -213,7 +227,8 @@ impl ToolingRequirement {
             | Self::RenderAccelerationStructure
             | Self::VertexDepthStencilAttachment
             | Self::RasterizationDisabledRenderTarget
-            | Self::RasterizationRateMapPlacement => ENGINE,
+            | Self::RasterizationRateMapPlacement
+            | Self::DepthOutsideUnitRange => ENGINE,
         }
     }
 
