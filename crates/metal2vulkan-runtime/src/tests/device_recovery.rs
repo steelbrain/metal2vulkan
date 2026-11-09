@@ -6,8 +6,8 @@
 //! another queue fails as the recovery's victim. Then the device and the hang's queue serve on.
 //!
 //! Each recovery announces its own notices (`Degradation::DeviceRecovered`), whatever an earlier
-//! one announced: a later recovery's wait and its new `VkDevice`'s failure reach the sink as the
-//! first's would.
+//! one announced: a later recovery's wait, its command buffers' slow failing and its new
+//! `VkDevice`'s failure reach the sink as the first's would.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md). No GPU fault: the loss is marked, and the work in flight
@@ -329,10 +329,12 @@ pub(super) fn recovery_notices(heard: &Heard, from: usize, object: &str) -> Vec<
         .collect()
 }
 
-/// A recovery's wait is announced at a later recovery as at the first, once per recovery however
-/// many calls wait: the kinds a device announced go on across its generations, a recovery's
-/// notices do not. The bound is zero here, so a call that meets the recovery under way announces
-/// its wait at once. The first recovery, which no call waits for, announces itself alone.
+/// A recovery's wait, and its command buffers' failing past the bound, are announced at a later
+/// recovery as at the first, each once per recovery however many calls wait: the kinds a device
+/// announced go on across its generations, a recovery's notices do not. The bound is zero here,
+/// so a call that meets the recovery under way announces its wait at once, and so does a recovery
+/// whose work in flight has yet to fail. The first recovery, which no call waits for, announces
+/// itself once.
 #[test]
 fn each_recovery_announces_its_own_wait() {
     let scratch = Scratch::new();
@@ -342,6 +344,7 @@ fn each_recovery_announces_its_own_wait() {
     device.recover_for_test().unwrap();
     assert_eq!(recovery_notices(&heard, 0, "the device").len(), 1);
     let queue = device.new_command_queue().unwrap();
+    let (mut waited, mut failed_slowly) = (false, false);
     for _ in 0..ATTEMPTS {
         let from = heard.lock().unwrap().len();
         // Work in flight, so the recovery waits for it to fail before it makes its `VkDevice`.
@@ -363,18 +366,25 @@ fn each_recovery_announces_its_own_wait() {
         assert_eq!(made.len(), 1, "one recovery announced {made:?}");
         let failing = recovery_notices(&heard, from, "the device's recovery");
         assert!(failing.len() <= 1, "one recovery announced {failing:?}");
+        failed_slowly |= failing.len() == 1;
         let waits = recovery_notices(&heard, from, "a call made during the device's recovery");
-        match waits.len() {
-            0 => continue,
-            1 => return,
-            _ => panic!(
-                "{} calls announced their wait for one recovery: {waits:?}",
-                waits.len()
-            ),
+        assert!(
+            waits.len() <= 1,
+            "{} calls announced their wait for one recovery: {waits:?}",
+            waits.len()
+        );
+        waited |= waits.len() == 1;
+        if waited && failed_slowly {
+            return;
         }
     }
     panic!(
-        "no call of {WAITERS} threads met any of {ATTEMPTS} recoveries after the first under way"
+        "of {ATTEMPTS} recoveries after the first, none announced {}",
+        match (waited, failed_slowly) {
+            (false, false) => "a call's wait or its command buffers' slow failing",
+            (false, true) => "a call's wait (no call of the threads met one under way)",
+            _ => "its command buffers' slow failing",
+        }
     );
 }
 
