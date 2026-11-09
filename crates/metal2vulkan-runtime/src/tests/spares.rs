@@ -490,10 +490,12 @@ mod device {
     /// its command buffers were freed. Each of the burst's middle [`KEPT`] encoders fills one
     /// buffer after a barrier, so a kept command buffer comes before each, and the encoders
     /// before and after them fill buffers of their own, with no barrier, so the command buffers
-    /// those barriers came before are neither the pool's first nor its last. On ANV, which names
-    /// in each submission of a kept command buffer every command buffer that ever came next after
-    /// it, those submissions failed and the device was lost where the pool was trimmed after the
-    /// frees (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`).
+    /// those barriers came before are neither the pool's first nor its last. A second burst then
+    /// makes as many command buffers again, so the driver takes back the memory of those freed,
+    /// and takes the kept barriers again. On ANV, which names in each submission of a kept
+    /// command buffer every command buffer that ever came next after it, those submissions failed
+    /// and the device was lost where the pool was trimmed after the frees
+    /// (`RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission`).
     #[test]
     fn kept_barriers_run_again_after_the_command_buffers_after_them_were_freed() {
         let scratch = std::env::temp_dir().join(format!("m2v-spares-trims-{}", std::process::id()));
@@ -519,11 +521,8 @@ mod device {
             statuses.push(fills(&device, &queue, &shared, 2));
         }
         let freed = device.shared().spares.freed_on().len();
-        // The kept barriers taken again, before command buffers the pool makes anew past the
-        // two it kept.
-        for _ in 0..4 {
-            statuses.push(fills(&device, &queue, &shared, KEPT));
-        }
+        // The kept barriers taken again, past the command buffers the pool makes anew.
+        statuses.push(fills_of(&device, &queue, &burst));
         let failed = statuses
             .iter()
             .filter(|status| **status != CommandBufferStatus::Completed)
