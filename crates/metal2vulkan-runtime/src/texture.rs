@@ -83,7 +83,7 @@ use super::host_bytes::HostBytes;
 use super::image_plan::{
     check_image_limits, plan_image, AnyViews, DepthImageFacts, ImageFacts, ImagePlan, ImageRefusal,
 };
-use super::in_place::{self, Access, PagesClass, Refusal, ShadowCause, Verdict};
+use super::in_place::{self, PagesClass, Refusal, ShadowCause, Verdict};
 use super::key_hash::KeyMap;
 use super::linear_plan::{aliases, check_linear_limits, linear_lack, LinearImage, LinearLack};
 use super::memory::{BoundMemory, MemoryClass, Placement, DMA_BUF_HANDLE, EXPORT_HANDLE};
@@ -3322,7 +3322,8 @@ impl Device {
     ) -> Result<Result<LinearMade, String>, Error> {
         if !in_place::checking() {
             let rows = texels.rows(self.shared().in_place.line());
-            let verdict = self.in_place_verdict(PagesClass::FdBlocks, Access::Reads, rows);
+            let reads = in_place::Access::Reads;
+            let verdict = self.in_place_verdict(PagesClass::FdBlocks, reads, rows);
             if verdict != Verdict::Passed {
                 return Ok(Err(format!(
                     "its image over {} names a handle type and starts UNDEFINED, whose first move \
