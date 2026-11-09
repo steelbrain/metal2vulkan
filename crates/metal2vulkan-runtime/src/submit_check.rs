@@ -307,6 +307,9 @@ pub(crate) struct SubmitChecks {
     /// The import tax answered `Holds` past its margin but short of its record, in this process
     /// ([`tax_tried`]).
     unearned: AtomicBool,
+    /// The import tax answered `Holds` short of its margin, so `Fails`, in this process
+    /// ([`tax_tried`]).
+    short: AtomicBool,
     /// The merge check holds without its answer, and no record is kept
     /// (`DeviceOptions::assume_submissions_merge`).
     merge_assumed: bool,
@@ -340,6 +343,7 @@ impl SubmitChecks {
             took: AtomicU64::new(0),
             split: AtomicU64::new(0),
             unearned: AtomicBool::new(false),
+            short: AtomicBool::new(false),
             merge_assumed,
             tax_tries: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
@@ -840,6 +844,10 @@ impl Device {
             true => ", its import tax Holds short of a record",
             false => "",
         };
+        let short = match checks.short.load(Ordering::Relaxed) {
+            true => ", its import tax Holds short of its margin",
+            false => "",
+        };
         let tax_tries = match checks.tax_tries.load(Ordering::Relaxed) {
             0 => String::new(),
             tries => format!(", {tries} import tax tries"),
@@ -852,7 +860,7 @@ impl Device {
             "merge {:?}{assumed} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
              {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
              follows {:?}, \
-             {took}{split}{unearned}{tax_tries} (floors)",
+             {took}{split}{unearned}{short}{tax_tries} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
             us(m.apart),
@@ -1121,6 +1129,9 @@ pub(crate) fn tax_tried(
     let (verdict, floors, kept) = tried(checks, &mut once)?;
     let split = verdict == Verdict::Unchecked && !kept;
     if (split || verdict == Verdict::Holds) && !tax_clear(floors) {
+        if verdict == Verdict::Holds {
+            checks.short.store(true, Ordering::Relaxed);
+        }
         return Some((Verdict::Fails, floors, false));
     }
     if verdict != Verdict::Holds {
