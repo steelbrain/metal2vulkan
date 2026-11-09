@@ -1772,7 +1772,7 @@ pub(super) struct Memory {
     fd_blocks: FdBlocks,
     /// The pools the runtime's encodings and commits place their own resources in, once asked
     /// ([`Memory::kept`], [`keep_room`]).
-    kept: Option<Vec<(Holds, u32)>>,
+    kept: Option<Arc<[(Holds, u32)]>>,
     /// The device has unified memory (`DeviceProperties::has_unified_memory`), which
     /// [`candidates`] ranks `WriteCombined` memory by.
     unified: bool,
@@ -2522,9 +2522,9 @@ impl Memory {
     /// for [`FD_BLOCKS_HANDLE`]; of images, the best `Private` type among those a color image of
     /// optimal tiling takes, which every such image takes (the Vulkan specification's
     /// `VkMemoryRequirements`).
-    fn kept(&mut self, device: &ash::Device) -> Result<Vec<(Holds, u32)>, Error> {
+    fn kept(&mut self, device: &ash::Device) -> Result<Arc<[(Holds, u32)]>, Error> {
         if let Some(kept) = &self.kept {
-            return Ok(kept.clone());
+            return Ok(Arc::clone(kept));
         }
         let addresses = self
             .address_types(device, Holds::Buffers)?
@@ -2569,7 +2569,8 @@ impl Memory {
                 kept.push(pool);
             }
         }
-        self.kept = Some(kept.clone());
+        let kept: Arc<[(Holds, u32)]> = kept.into();
+        self.kept = Some(Arc::clone(&kept));
         Ok(kept)
     }
 
@@ -3910,11 +3911,11 @@ pub(super) fn keep_room(
         };
         (kept, memory.maker())
     };
-    let (first, rest): (Vec<_>, Vec<_>) = (kept.into_iter())
-        .filter(|&(holds, _)| holds != Holds::FdBuffers || own == Holds::FdBuffers)
-        .partition(|&(holds, _)| holds == own);
+    // The pools in that order, read in place: a creation call allocates nothing for them.
+    let first = kept.iter().filter(|&&(holds, _)| holds == own);
+    let rest = (kept.iter()).filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers);
     let room = maker.block_bytes / 2;
-    for pool in first.into_iter().chain(rest) {
+    for &pool in first.chain(rest) {
         let addressed = pool.0.buffers().then_some(&**counts);
         loop {
             let mut guard = lock(memory);
