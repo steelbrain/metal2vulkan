@@ -42,8 +42,9 @@
 //! ms or more, the median, 99th percentile and slowest `commit_and_submit`; the makings, their
 //! median and slowest, and the runtime's blocks made ahead and in place; the host's reclaim over
 //! the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction stalls,
-//! allocation stalls, pages swapped out); and the slowest submissions' and makings'
-//! `CLOCK_MONOTONIC` times, to line up with a kernel trace taken beside the run. Ignored: run it in
+//! allocation stalls, pages swapped out); the free blocks of each order before and after the
+//! fragmenting (`/proc/buddyinfo`); and the slowest submissions' and makings' `CLOCK_MONOTONIC`
+//! times, to line up with a kernel trace taken beside the run. Ignored: run it in
 //! release under `--cfg m2v_gpu` on Linux, alone on its host (it presses the whole host's
 //! memory), one arm at a time: `cargo nextest run --release -p metal2vulkan-runtime --lib
 //! --run-ignored all reclaim_submit_bench --no-capture`.
@@ -531,7 +532,15 @@ fn arm(label: &str, arm: Arm) {
     let (middle, out) = (private(COPY_BYTES), private(COPY_BYTES));
     let on = (&queue, &source, &middle, &out);
     phase(&device, on, (label, "quiet"), (QUIET, making), &mut made);
+    let buddies = |when: &str| {
+        let text = std::fs::read_to_string("/proc/buddyinfo").unwrap_or_default();
+        for zone in text.lines().filter(|line| line.contains("Normal")) {
+            eprintln!("RECLAIM-SUBMIT {label}: free blocks by order {when}: {zone}");
+        }
+    };
+    buddies("before the fragmenting");
     let pressing = Pressing::start();
+    buddies("after it");
     phase(
         &device,
         on,
