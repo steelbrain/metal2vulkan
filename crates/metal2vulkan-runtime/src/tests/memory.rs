@@ -288,13 +288,13 @@ fn own_buffer_blocks_are_exportable_in_a_unified_device_s_system_heap() {
 }
 
 /// The device's verdicts decide whether the runtime's buffers lie in blocks allocated exportable
-/// (`in_place.rs`'s `fd_blocks_take`): the first move of the image that takes the place of the
+/// (`in_place.rs`'s `blocks_take`): the first move of the image that takes the place of the
 /// device's linear image there must pass for both row ends, and the class must pass wherever
 /// plain pooled memory passed; a pending verdict that decides it leaves them in plain blocks
 /// meanwhile.
 #[test]
 fn exportable_blocks_take_what_plain_blocks_take() {
-    use crate::in_place::{fd_blocks_take, Access, FdBlocksTake, PagesClass, RowEnds, Verdict};
+    use crate::in_place::{blocks_take, Access, BlocksTake, PagesClass, RowEnds, Verdict};
     // Every verdict of a class, but those `except` gives.
     let all = |class: PagesClass, verdict: Verdict| {
         move |of: PagesClass,
@@ -310,7 +310,7 @@ fn exportable_blocks_take_what_plain_blocks_take() {
         }
     };
     let take = |plain: Verdict, exportable: Verdict, except: &[(Access, RowEnds, Verdict)]| {
-        fd_blocks_take(|class, access, rows| match class {
+        blocks_take(PagesClass::FdBlocks, |class, access, rows| match class {
             PagesClass::Pooled => all(PagesClass::Pooled, plain)(class, access, rows, &[]),
             PagesClass::FdBlocks => {
                 all(PagesClass::FdBlocks, exportable)(class, access, rows, except)
@@ -319,30 +319,30 @@ fn exportable_blocks_take_what_plain_blocks_take() {
         })
     };
     use Verdict::{Failed, Passed, Pending, Unchecked};
-    assert_eq!(take(Passed, Passed, &[]), FdBlocksTake::Take);
+    assert_eq!(take(Passed, Passed, &[]), BlocksTake::Take);
     // Plain pooled memory unchecked (no DRM_FORMAT_MOD_LINEAR images): the first move decides.
-    assert_eq!(take(Unchecked, Passed, &[]), FdBlocksTake::Take);
-    assert_eq!(take(Unchecked, Pending, &[]), FdBlocksTake::Pending);
-    assert_eq!(take(Pending, Passed, &[]), FdBlocksTake::Pending);
+    assert_eq!(take(Unchecked, Passed, &[]), BlocksTake::Take);
+    assert_eq!(take(Unchecked, Pending, &[]), BlocksTake::Pending);
+    assert_eq!(take(Pending, Passed, &[]), BlocksTake::Pending);
     let (reads, on) = (Access::Reads, RowEnds::OnLines);
     assert_eq!(
         take(Unchecked, Passed, &[(reads, on, Failed)]),
-        FdBlocksTake::Refused(reads, on)
+        BlocksTake::Refused(reads, on)
     );
     assert_eq!(
         take(Unchecked, Passed, &[(reads, on, Unchecked)]),
-        FdBlocksTake::Refused(reads, on)
+        BlocksTake::Refused(reads, on)
     );
     // An access plain memory passed and the class did not.
     let renders = (Access::Renders, RowEnds::InLines);
     assert_eq!(
         take(Passed, Passed, &[(renders.0, renders.1, Failed)]),
-        FdBlocksTake::Refused(renders.0, renders.1)
+        BlocksTake::Refused(renders.0, renders.1)
     );
     // One plain memory did not pass either: nothing lost.
     assert_eq!(
         take(Failed, Passed, &[(renders.0, renders.1, Failed)]),
-        FdBlocksTake::Take
+        BlocksTake::Take
     );
 }
 

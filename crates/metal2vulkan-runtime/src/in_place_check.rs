@@ -19,7 +19,7 @@
 //!   buffer's dedicated allocation, to which no image is bound; and a buffer of the runtime's own
 //!   in a block of the kind its buffers take where the device allocates their blocks exportable
 //!   (`memory.rs`'s `Holds::FdBuffers`), whatever this class's verdicts, which decide whether its
-//!   buffers lie there (`in_place.rs`'s `fd_blocks_take`), that declares those bytes unobserved
+//!   buffers lie there (`in_place.rs`'s `blocks_take`), that declares those bytes unobserved
 //!   too, its textures taking the image a texture over such a buffer takes, made `UNDEFINED`;
 //!   unchecked where the device allocates no such blocks), fills a window of it with a pattern,
 //!   and makes a texture over it as the program does (`Buffer::new_runtime_texture`): the texture
@@ -1411,7 +1411,7 @@ impl ClassPages {
             // unobserved, which none of the device's buffers there does (they lie in plain
             // blocks: `buffer.rs`'s `NewBufferOf::Unobserved`), so that its textures over rows
             // that lie apart take that image too, and the class's verdicts answer every access
-            // the pooled class's do (`fd_blocks_take`).
+            // the pooled class's do (`blocks_take`).
             PagesClass::FdBlocks => {
                 let exportable = lock(&device.shared().memory).fd_buffer_types;
                 if let Err(why) = exportable {

@@ -2231,8 +2231,9 @@ degradations! {
         DeviceRecovered = "device-recovered", Performance,
             "the events, uses of guest RAM, no-copy buffers, `Private` buffers and buffers in the \
              runtime's own pages (fresh pages, and the blocks of pages the `Shared` and `Managed` \
-             buffers lie in where the device's check found a held host-page import costs its \
-             submissions nothing) made before it go on, a `Private` buffer's contents lost (it \
+             buffers lie in where the device's checks found a held host-page import costs its \
+             submissions nothing and textures over such pages take what they take over its own \
+             memory) made before it go on, a `Private` buffer's contents lost (it \
              reads zero); the other objects made before it are refused (`MadeBeforeRecovery`), \
              where Metal's go on; the calls during it wait for it";
         /// Apple's private device properties the device has no answer for

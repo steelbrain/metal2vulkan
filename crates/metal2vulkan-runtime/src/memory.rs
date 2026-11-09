@@ -88,7 +88,7 @@
 //!   so starts `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) where over a plain block's
 //!   buffer it starts `PREINITIALIZED`. So the buffers lie there only once the device's in-place
 //!   check of such blocks (`in_place.rs`'s `PagesClass::FdBlocks`) passed what a texture over one
-//!   takes that it takes over a plain block's (`in_place.rs`'s `fd_blocks_take`): from the check's
+//!   takes that it takes over a plain block's (`in_place.rs`'s `blocks_take`): from the check's
 //!   record as the device is made, else once its check answered (a check a texture over host
 //!   pages or `Device::settle_in_place_checks` started; a buffer's making starts none), in plain
 //!   blocks until then (`WorkCounts::fd_blocks_awaited`) and where it refused them
@@ -106,9 +106,12 @@
 //!   a heap is allocated as before.
 //!
 //! - **Buffers in the runtime's own pages** ([`Holds::PageBuffers`],
-//!   [`Memory::page_buffer_blocks`]). On a device that imports host pointers and whose submission
+//!   [`Memory::page_buffer_blocks`]). On a device that imports host pointers, whose submission
 //!   check found that a held import costs its submissions nothing (`submit_check.rs`'s import
-//!   tax), the `Shared`, write-combined and `Managed` (with unified memory) buffers the runtime's
+//!   tax), and whose in-place check of fresh pages passed what a texture over such a buffer takes
+//!   that it takes over a plain block's (`in_place.rs`'s `blocks_take`: from the check's record as
+//!   the device is made, else once its check answered; a buffer's making starts none), the
+//!   `Shared`, write-combined and `Managed` (with unified memory) buffers the runtime's
 //!   buffer path makes (`buffer.rs`'s `placed_new_buffer`, as for [`Holds::FdBuffers`]) lie in
 //!   blocks of anonymous pages the runtime maps and imports by their pointer (`fresh_pages.rs`'s
 //!   `OwnPages`, [`BlockMaker::make_pages`]), of the host-visible memory types the driver imports
@@ -121,7 +124,7 @@
 //!   pages', so a recovery carries its buffers (`device/carry.rs`): the pages are imported again
 //!   on the next generation, once for every buffer carried from the block, into a block that
 //!   takes nothing else ([`place_carried`]), each buffer bound at its offset there, its
-//!   `contents` pointer and bytes as they were. Until the check answers, where it found a tax, and
+//!   `contents` pointer and bytes as they were. Until the checks answer, where they refuse, and
 //!   where the system or the driver refuses the pages, the buffers lie in plain blocks, which a
 //!   recovery leaves on the lost generation.
 //!

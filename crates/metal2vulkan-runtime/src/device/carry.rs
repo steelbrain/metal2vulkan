@@ -37,8 +37,9 @@
 //!   `Managed`) the device allocated, whose `contents` pointer is its block's mapping, which
 //!   Vulkan gives no way to keep over new memory (where the device takes no blocks of the
 //!   runtime's own pages for it: it imports no host pointer, its check found that a held import
-//!   costs its submissions or has not answered, or no memory type of the buffer's class takes
-//!   such pages; and a `Managed` buffer's host copy without unified memory); a detached no-copy
+//!   costs its submissions, its check of fresh pages refused what a texture over such a buffer
+//!   takes, one of them has not answered, or no memory type of the buffer's class takes such
+//!   pages; and a `Managed` buffer's host copy without unified memory); a detached no-copy
 //!   buffer, or one whose last detach's deallocator waits
 //!   for its next rebind; a heap's buffer, one over the caller's `VkBuffer` or exported memory,
 //!   and an event whose semaphore was made exportable, whose importers hold the lost one. The recovery's notice counts those it kept by kind (`Degradation::DeviceRecovered`):

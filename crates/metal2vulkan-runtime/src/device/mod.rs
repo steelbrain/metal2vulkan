@@ -1470,7 +1470,8 @@ impl Device {
         let exportable = lock(memory).fd_buffer_types.is_ok();
         let own = lock(memory).own_buffers(exportable && self.fd_blocks_taken());
         // And whether its host-visible ones take blocks of its own pages.
-        let pages = lock(memory).page_blocks(self.fresh_pages_pay_now());
+        let pay = self.fresh_pages_pay_now() && self.page_blocks_taken();
+        let pages = lock(memory).page_blocks(pay);
         crate::memory::keep_room(
             memory,
             shared.vk(),

@@ -39,7 +39,7 @@
 //!   export, keeping its padding. One made before the device's in-place check answered lies in a
 //!   plain block. Once it answered, where the device allocates its buffers' blocks exportable and
 //!   the check passed them (`memory.rs`'s "Buffers in exportable blocks", `in_place.rs`'s
-//!   `fd_blocks_take`), its memory is such a block (`WorkCounts::fd_buffer_blocks_made`), which
+//!   `blocks_take`), its memory is such a block (`WorkCounts::fd_buffer_blocks_made`), which
 //!   the runtime never exports (`export_memory_fd` refuses it, `NotExportable`), and each plane is
 //!   in place, its image the device's linear image naming the block's handle type, an opaque file
 //!   descriptor, the layer reporting nothing (`VUID-vkBindImageMemory-memory-02728`,
@@ -723,8 +723,8 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     }
     assert!(device.settle_in_place_checks(WAIT), "the check answered");
     let verdict = |class, access, rows| device.in_place_verdict(class, access, rows);
-    let take = crate::in_place::fd_blocks_take(verdict);
-    let exportable = types.is_ok() && take == crate::in_place::FdBlocksTake::Take;
+    let take = crate::in_place::blocks_take(crate::in_place::PagesClass::FdBlocks, verdict);
+    let exportable = types.is_ok() && take == crate::in_place::BlocksTake::Take;
     eprintln!(
         "EXPORTED-TEXTURES on {name}: the check of exportable blocks: {take:?} (known at once \
          {verdicts_known}); awaited {}, refused {}",
@@ -860,9 +860,9 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
             "the first device's check answered"
         );
         let verdict = |class, access, rows| first.in_place_verdict(class, access, rows);
-        let take = crate::in_place::fd_blocks_take(verdict);
+        let take = crate::in_place::blocks_take(crate::in_place::PagesClass::FdBlocks, verdict);
         let types = crate::device::lock(&first.shared().memory).fd_buffer_types;
-        types.is_ok() && take == crate::in_place::FdBlocksTake::Take
+        types.is_ok() && take == crate::in_place::BlocksTake::Take
     };
     let second = device(&watched, &scratch.0);
     let name = second.name().to_owned();
@@ -917,7 +917,7 @@ fn a_driver_s_second_device_lays_its_first_buffer_where_the_record_says() {
 /// usage, a texture over a `Shared` buffer the program makes (`new_buffer_with_descriptor`) lies
 /// in place wherever one over a plain block's buffer of the same layout and padding does
 /// (`Buffer::texture_placement`): over a buffer that keeps its padding, which lies in such a block
-/// where the device lays its buffers there (`in_place.rs`'s `fd_blocks_take`, which
+/// where the device lays its buffers there (`in_place.rs`'s `blocks_take`, which
 /// `texture/fd_blocks_cover.rs` gates), and over one that declares it unobserved, which lies in a
 /// plain block wherever the device's buffers lie (`buffer.rs`'s `NewBufferOf::Unobserved`). A
 /// texture that loses its place fails. For each, the losses a buffer of the same padding in such
@@ -962,7 +962,7 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         return;
     }
     let verdict = |class, access, rows| device.in_place_verdict(class, access, rows);
-    let take = crate::in_place::fd_blocks_take(verdict);
+    let take = crate::in_place::blocks_take(crate::in_place::PagesClass::FdBlocks, verdict);
     let asked = std::time::Instant::now();
     let covered = device.fd_blocks_cover();
     let asked = asked.elapsed();
@@ -970,7 +970,7 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
         "EXPORTED-TEXTURES on {name}: the verdicts of exportable blocks: {take:?}; such a block \
          holds every image a plain one does: {covered:?} (asked in {asked:?})"
     );
-    let blocks = take == crate::in_place::FdBlocksTake::Take && covered.is_ok();
+    let blocks = take == crate::in_place::BlocksTake::Take && covered.is_ok();
     let usages = [
         TextureUsage::SHADER_READ,
         TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,

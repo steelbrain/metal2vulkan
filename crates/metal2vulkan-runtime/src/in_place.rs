@@ -122,7 +122,7 @@
 //!   where every image a texture over a plain block's buffer takes has that image over such a
 //!   block (`texture.rs`'s `Device::fd_blocks_cover`), so elsewhere its verdicts are unchecked. Its
 //!   verdicts decide, before any buffer lies there, whether the device's buffers do
-//!   ([`fd_blocks_take`]): where every texture over such a buffer takes in place what it takes
+//!   ([`blocks_take`]): where every texture over such a buffer takes in place what it takes
 //!   over a plain block's, whose linear image starts `PREINITIALIZED` and needs no verdict.
 //! - **Before the verdict.** A texture made before its class's verdict for its access is known
 //!   waits for nothing: it is a shadow ([`ShadowCause::CheckPending`], counted apart), and the
@@ -974,10 +974,10 @@ impl Drop for Waiting<'_> {
     }
 }
 
-/// What the device's verdicts say of the runtime's own buffers' blocks allocated exportable
-/// ([`fd_blocks_take`]).
+/// What the device's verdicts say of a kind of block of the runtime's own buffers whose images
+/// start `UNDEFINED` ([`blocks_take`]): blocks allocated exportable, or of its own pages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FdBlocksTake {
+pub(crate) enum BlocksTake {
     /// Its buffers lie there: a texture over one takes in place whatever it takes over a plain
     /// block's buffer.
     Take,
@@ -989,47 +989,50 @@ pub(crate) enum FdBlocksTake {
 }
 
 /// What `verdict` (each class's, access's and row ends') says of the runtime's own buffers lying
-/// in blocks allocated exportable, never exported ([`PagesClass::FdBlocks`]; `memory.rs`'s
-/// "Buffers in exportable blocks"): they lie there where every texture over such a buffer takes
-/// in place what it takes over a buffer of a plain block, whose blocks hold the same memory
-/// exported as no handle type. Over a plain block's buffer, the device's own linear image is
-/// made `PREINITIALIZED`, whose first move keeps its bytes, and needs no verdict; over an
-/// exportable block's, it names the block's handle type and so is made `UNDEFINED`
-/// (`VUID-VkImageCreateInfo-pNext-01443`), its other operations the same: so the class's verdict
-/// of that move ([`Access::Reads`]) must pass for texels of both row ends; and every access a
-/// texture over a plain block's buffer takes in place by the verdicts of plain pooled memory
-/// ([`PagesClass::Pooled`]) it must take over such a block's by the class's: so every verdict of
-/// the pooled class that passed must pass for the class too. Pending where one of those is
-/// pending; else refused for the first access and row ends that did not pass.
-pub(crate) fn fd_blocks_take(
+/// in blocks whose textures' images `class` judges: blocks allocated exportable, never exported
+/// ([`PagesClass::FdBlocks`]; `memory.rs`'s "Buffers in exportable blocks"), or blocks of pages
+/// the runtime maps and imports ([`PagesClass::Fresh`]; `memory.rs`'s "Buffers in the runtime's
+/// own pages"). They lie there where every texture over such a buffer takes in place what it
+/// takes over a buffer of a plain block, whose blocks hold memory the device allocated with no
+/// export. Over a plain block's buffer, the device's own linear image is made `PREINITIALIZED`,
+/// whose first move keeps its bytes, and needs no verdict; over such a block's, it names the
+/// block's handle type and so is made `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), its
+/// other operations the same: so the class's verdict of that move ([`Access::Reads`]) must pass
+/// for texels of both row ends; and every access a texture over a plain block's buffer takes in
+/// place by the verdicts of plain pooled memory ([`PagesClass::Pooled`]) it must take over such a
+/// block's by the class's: so every verdict of the pooled class that passed must pass for the
+/// class too. Pending where one of those is pending; else refused for the first access and row
+/// ends that did not pass.
+pub(crate) fn blocks_take(
+    class: PagesClass,
     verdict: impl Fn(PagesClass, Access, RowEnds) -> Verdict,
-) -> FdBlocksTake {
+) -> BlocksTake {
     let mut pending = false;
     for rows in RowEnds::ALL {
-        match verdict(PagesClass::FdBlocks, Access::Reads, rows) {
+        match verdict(class, Access::Reads, rows) {
             Verdict::Passed => {}
             Verdict::Pending => pending = true,
             Verdict::Failed | Verdict::Unchecked => {
-                return FdBlocksTake::Refused(Access::Reads, rows)
+                return BlocksTake::Refused(Access::Reads, rows)
             }
         }
     }
     for access in Access::ALL {
         for rows in RowEnds::ALL {
             let plain = verdict(PagesClass::Pooled, access, rows);
-            let exportable = verdict(PagesClass::FdBlocks, access, rows);
-            match (plain, exportable) {
+            let theirs = verdict(class, access, rows);
+            match (plain, theirs) {
                 (Verdict::Pending, _) | (Verdict::Passed, Verdict::Pending) => pending = true,
                 (Verdict::Passed, Verdict::Failed | Verdict::Unchecked) => {
-                    return FdBlocksTake::Refused(access, rows)
+                    return BlocksTake::Refused(access, rows)
                 }
                 (Verdict::Passed, Verdict::Passed) | (Verdict::Failed | Verdict::Unchecked, _) => {}
             }
         }
     }
     match pending {
-        true => FdBlocksTake::Pending,
-        false => FdBlocksTake::Take,
+        true => BlocksTake::Pending,
+        false => BlocksTake::Take,
     }
 }
 
@@ -1262,7 +1265,7 @@ impl Device {
     }
 
     /// Whether the runtime's own buffers lie in blocks allocated exportable (`memory.rs`'s
-    /// "Buffers in exportable blocks"), by the device's verdicts ([`fd_blocks_take`]), asked as
+    /// "Buffers in exportable blocks"), by the device's verdicts ([`blocks_take`]), asked as
     /// such a buffer is made: where a verdict is pending the buffer lies in a plain block, as it
     /// does where the verdicts refuse such blocks; each counted (`WorkCounts::fd_blocks_awaited`,
     /// `WorkCounts::fd_blocks_refused`). Never waits, and starts no check: the verdicts come from
@@ -1272,13 +1275,13 @@ impl Device {
     /// among the program's, where a program that makes no texture over host pages has no use
     /// for it.
     pub(crate) fn fd_blocks_checked(&self) -> bool {
-        match self.fd_blocks_now() {
-            FdBlocksTake::Take => true,
-            FdBlocksTake::Pending => {
+        match self.blocks_now(PagesClass::FdBlocks) {
+            BlocksTake::Take => true,
+            BlocksTake::Pending => {
                 self.shared().counts.fd_blocks_awaited();
                 false
             }
-            FdBlocksTake::Refused(..) => {
+            BlocksTake::Refused(..) => {
                 self.shared().counts.fd_blocks_refused();
                 false
             }
@@ -1289,12 +1292,23 @@ impl Device {
     /// [`Device::fd_blocks_checked`] answers it, counting nothing: for the pools that keep room
     /// (`memory.rs`'s `keep_room`).
     pub(crate) fn fd_blocks_taken(&self) -> bool {
-        self.fd_blocks_now() == FdBlocksTake::Take
+        self.blocks_now(PagesClass::FdBlocks) == BlocksTake::Take
     }
 
-    /// [`fd_blocks_take`] of the device's verdicts now, starting no check.
-    fn fd_blocks_now(&self) -> FdBlocksTake {
-        fd_blocks_take(|class, access, rows| self.shared().in_place.verdict(class, access, rows))
+    /// Whether the program's host-visible buffers may lie in blocks of the runtime's own pages
+    /// (`memory.rs`'s "Buffers in the runtime's own pages") by the device's verdicts of fresh
+    /// pages ([`blocks_take`]): a texture over such a buffer takes in place whatever it takes over
+    /// a plain block's. Asked as such a buffer is made and as the pools keep room, counting
+    /// nothing; never waits, and starts no check, as [`Device::fd_blocks_checked`].
+    pub(crate) fn page_blocks_taken(&self) -> bool {
+        self.blocks_now(PagesClass::Fresh) == BlocksTake::Take
+    }
+
+    /// [`blocks_take`] of `class` by the device's verdicts now, starting no check.
+    fn blocks_now(&self, class: PagesClass) -> BlocksTake {
+        blocks_take(class, |class, access, rows| {
+            self.shared().in_place.verdict(class, access, rows)
+        })
     }
 
     /// Start the device's check of textures over host pages in place where its verdicts are

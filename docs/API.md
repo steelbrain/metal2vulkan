@@ -3289,8 +3289,9 @@ bound.
   be made, after which the device answers as a lost one. `Device::recover_for_test` runs the same recovery with no GPU fault. Cost: the events,
   uses of guest RAM, no-copy buffers, `Private` buffers and buffers in the runtime's own pages
   (fresh pages, and the blocks of pages the `Shared` and `Managed` buffers lie in where the
-  device's check found a held host-page import costs its submissions nothing) made before it go
-  on, a `Private` buffer's contents lost (it reads zero); the other objects made before it are
+  device's checks found a held host-page import costs its submissions nothing and textures over
+  such pages take what they take over its own memory) made before it go on, a `Private` buffer's
+  contents lost (it reads zero); the other objects made before it are
   refused (`MadeBeforeRecovery`), where Metal's go on; the calls during it wait for it, and a
   device call the loss met while it ran runs again after it. A no-copy buffer is made again over
   the same pages on the new `VkDevice`, as its making or last rebind made it, so the caller's

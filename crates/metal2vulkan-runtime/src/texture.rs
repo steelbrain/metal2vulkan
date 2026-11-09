@@ -3298,7 +3298,7 @@ impl Device {
     /// (`VUID-VkImageCreateInfo-pNext-01443`), where over a plain block's buffer it starts
     /// `PREINITIALIZED`: where the device's check of such blocks ([`PagesClass::FdBlocks`])
     /// passed that move for texels that lie in its lines as these do, as it did wherever the
-    /// device's buffers lie there (`in_place.rs`'s `fd_blocks_take`); the check's own textures
+    /// device's buffers lie there (`in_place.rs`'s `blocks_take`); the check's own textures
     /// whatever its verdicts. Why not.
     fn blocks_linear_image(
         &self,

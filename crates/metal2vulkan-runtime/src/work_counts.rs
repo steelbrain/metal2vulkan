@@ -1736,7 +1736,7 @@ impl Counters {
     }
 
     /// A buffer of the runtime's own lay in a plain block, the device's check of its exportable
-    /// blocks having refused them (`in_place.rs`'s `fd_blocks_take`), or its
+    /// blocks having refused them (`in_place.rs`'s `blocks_take`), or its
     /// `DRM_FORMAT_MOD_LINEAR` tiling, which every image there is (`dma_buf.rs`'s
     /// `Device::modifier_takes_linear`).
     pub(crate) fn fd_blocks_refused(&self) {
@@ -5094,7 +5094,7 @@ pub struct WorkCounts {
     pub fd_blocks_awaited: u64,
     /// As `fd_blocks_awaited`, once the device's check of such blocks found a texture over one's
     /// buffer would be a shadow where over a plain block's it is not (`in_place.rs`'s
-    /// `fd_blocks_take`), or that such a block does not hold every image a texture over a plain
+    /// `blocks_take`), or that such a block does not hold every image a texture over a plain
     /// block's buffer that keeps its padding takes (`texture/fd_blocks_cover.rs`, whose answer
     /// the memory log names): every such buffer from then on.
     pub fd_blocks_refused: u64,

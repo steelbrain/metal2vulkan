@@ -2774,16 +2774,18 @@ impl Device {
         // device's check of them passed, so that its `VkBuffer` names that handle type there
         // (`VUID-vkBindBufferMemory-memory-02726`; `memory.rs`'s `Holds::FdBuffers`); a
         // host-visible one in a block of pages the runtime mapped and imported, where the device
-        // takes such blocks for its class and its check found a held import costs its
-        // submissions nothing, so that its `VkBuffer` names host allocations
-        // (`VUID-vkBindBufferMemory-memory-02985`; `memory.rs`'s `Holds::PageBuffers`); one whose
+        // takes such blocks for its class, its check found a held import costs its submissions
+        // nothing, and its check of fresh pages passed what a texture over such a buffer takes
+        // that it takes over a plain block's (`in_place.rs`'s `blocks_take`), so that its
+        // `VkBuffer` names host allocations (`VUID-vkBindBufferMemory-memory-02985`;
+        // `memory.rs`'s `Holds::PageBuffers`); one whose
         // maker declares its padding unobserved lies in a plain block.
+        let paged = matches!(of, NewBufferOf::Runtime(_)) && {
+            let takes = lock(&shared.memory).page_buffers(class, self.fresh_pages_pay_now());
+            takes && self.page_blocks_taken()
+        };
         let holds = match of {
-            NewBufferOf::Runtime(_)
-                if lock(&shared.memory).page_buffers(class, self.fresh_pages_pay_now()) =>
-            {
-                Holds::PageBuffers
-            }
+            NewBufferOf::Runtime(_) if paged => Holds::PageBuffers,
             NewBufferOf::Runtime(_) => {
                 let exportable = lock(&shared.memory).fd_buffer_types.is_ok();
                 let checked = exportable && self.fd_blocks_checked();
@@ -2834,7 +2836,7 @@ impl Device {
         // Where the device took no fresh pages, a parked buffer of its own memory, made so as the
         // buffer is made below; and for one that would lie in a block allocated exportable, a
         // parked one of a plain block, which any buffer may lie in (the device's buffers lie in
-        // plain blocks until its check answered: `in_place.rs`'s `fd_blocks_take`). Never the
+        // plain blocks until its check answered: `in_place.rs`'s `blocks_take`). Never the
         // other way: a buffer that declares its padding unobserved lies in a plain block.
         if let (None, None, Some(making)) = (&taken, &fresh, making) {
             let own = BufferMaking {

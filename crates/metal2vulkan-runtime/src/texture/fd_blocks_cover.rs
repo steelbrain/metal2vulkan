@@ -3,7 +3,7 @@
 //! block (`memory.rs`'s "Buffers in exportable blocks"): the device's check makes its class of
 //! such blocks (`in_place_check.rs`, `PagesClass::FdBlocks`) only where it does, so the device's
 //! buffers lie there only where no texture over one loses its place (`in_place.rs`'s
-//! `fd_blocks_take`). A buffer that declares its padding unobserved lies in a plain block
+//! `blocks_take`). A buffer that declares its padding unobserved lies in a plain block
 //! (`buffer.rs`'s `NewBufferOf::Unobserved`), and is not asked of.
 //!
 //! Over a plain block's buffer a texture takes the device's linear image, else a
