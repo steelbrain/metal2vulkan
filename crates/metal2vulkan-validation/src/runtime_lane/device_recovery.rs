@@ -15,7 +15,7 @@ use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCa
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Degradation,
-    Device, Error, ResourceOptions, RuntimeGap,
+    Device, Error, EventRef, ResourceOptions, RuntimeGap,
 };
 use std::time::{Duration, Instant};
 
@@ -296,6 +296,46 @@ fn objects_made_before_a_recovery_are_refused_and_the_lost_vk_device_goes_with_t
         let _ = unsafe { device.raw() };
         assert_eq!(device.work_counts().vk_devices_live, 1);
         assert_eq!(device.work_counts().vk_devices_made, 2);
+    });
+}
+
+/// The objects a recovery carries serve on the new `VkDevice` (`device/carry.rs`), under the
+/// layer: a `Private` buffer filled and copied out, and a shared event the GPU signals, after one
+/// recovery and after a second. The layer reporting nothing is the check that no handle of a lost
+/// `VkDevice` reached a new one, and that each lost one's objects went before it; one `VkDevice`
+/// is left.
+#[test]
+fn carried_objects_serve_on_the_new_vk_device() {
+    on_device(|device, _| {
+        let queue = device.new_command_queue().unwrap();
+        let carried = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let event = device.new_shared_event().unwrap();
+        for round in 1..=2u8 {
+            device.recover_for_test().unwrap();
+            let target = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            blit.fill_buffer(&carried, 0..4096, round).unwrap();
+            (blit.copy_from_buffer_to_buffer(&carried, 0, &target, 0, 4096)).unwrap();
+            blit.end_encoding().unwrap();
+            let value = u64::from(round);
+            (command_buffer.encode_signal_event(EventRef::from(&event), value)).unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed().unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            assert!(event.wait_until_signaled_value(value, Duration::from_secs(60)));
+            let contents = target.contents().unwrap();
+            // SAFETY: a shared buffer of 4096 bytes, its command buffer completed.
+            let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 4096) };
+            assert!(bytes.iter().all(|&byte| byte == round));
+        }
+        let began = Instant::now();
+        while device.work_counts().vk_devices_live > 1 && began.elapsed() < Duration::from_secs(60)
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(device.work_counts().vk_devices_live, 1);
+        assert_eq!(device.work_counts().vk_devices_made, 3);
     });
 }
 

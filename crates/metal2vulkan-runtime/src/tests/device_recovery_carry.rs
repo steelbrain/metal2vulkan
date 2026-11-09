@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 /// The bytes the tests write and read of each buffer.
 const BYTES: u64 = 4096;
 
+/// The bytes of a buffer the program lets go of before a loss, past half a pooled block, so that
+/// its `VkBuffer` and memory are kept for reuse apart from every other buffer's.
+const REUSED: u64 = 40 << 20;
+
 /// The recoveries one process's objects outlive in [`seven_recoveries_end_with_one_live_vk_device`]:
 /// one less than the live `VkDevice`s an NVIDIA driver lets a process hold.
 const RECOVERIES: u64 = 7;
@@ -89,8 +93,9 @@ fn live_vk_devices(device: &Device, live: u64) -> u64 {
 /// pages (its `contents` pointer and bytes kept, the host's writes through that pointer after
 /// the recovery read by the GPU), and a shared event (its value, a listener's notification, a
 /// GPU signal after it), and leaves a pooled `Shared` buffer refused, as its notice counts. The
-/// pooled buffer keeps the lost `VkDevice`, but nothing of its memory for work: no empty block,
-/// and less memory than before the loss. The lost `VkDevice` goes with it.
+/// pooled buffer keeps the lost `VkDevice`, but nothing it kept for reuse: the memory of a buffer
+/// the program let go of before the loss (its `VkBuffer` parked, or its block kept empty) is
+/// freed, and no empty block is left. The lost `VkDevice` goes with the pooled buffer.
 #[test]
 fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     let scratch = Scratch::new();
@@ -131,6 +136,12 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
         let _ = sent.send(value);
     };
     event.notify_listener(&listener, 9, Box::new(notification));
+    // Memory the lost generation keeps for reuse: a buffer the program let go of.
+    drop(
+        device
+            .new_buffer(REUSED, ResourceOptions::private())
+            .unwrap(),
+    );
     let before = pooled.device().work_counts_now();
     let from = heard.lock().unwrap().len();
     device.recover_for_test().unwrap();
@@ -189,7 +200,7 @@ fn a_recovery_carries_events_private_and_fresh_page_buffers() {
     let after = pooled.device().work_counts_now();
     assert_eq!(after.empty_memory_blocks_live, 0, "{after:?}");
     assert!(
-        after.device_memory_allocated < before.device_memory_allocated,
+        after.device_memory_allocated + REUSED <= before.device_memory_allocated,
         "the lost generation holds {} bytes, {} before the loss",
         after.device_memory_allocated,
         before.device_memory_allocated
