@@ -154,7 +154,9 @@ pub(crate) struct Counters {
     ycbcr_textures_in_place: AtomicU64,
     ycbcr_images_kept: [AtomicU64; 7],
     ycbcr_planes_images: AtomicU64,
-    ycbcr_planes_images_kept: [AtomicU64; 3],
+    fd_blocks_awaited: AtomicU64,
+    fd_blocks_refused: AtomicU64,
+    ycbcr_planes_images_kept: [AtomicU64; 4],
     ycbcr_device_conversions: AtomicU64,
     ycbcr_device_samples: AtomicU64,
     attachment_clears_recorded: AtomicU64,
@@ -1725,6 +1727,18 @@ impl Counters {
     /// conversion samples (`texture/ycbcr_planes.rs`).
     pub(crate) fn ycbcr_planes_image(&self) {
         self.ycbcr_planes_images.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A buffer of the runtime's own lay in a plain block while the device's check of its
+    /// exportable blocks was pending (`in_place.rs`'s `Device::fd_blocks_checked`).
+    pub(crate) fn fd_blocks_awaited(&self) {
+        self.fd_blocks_awaited.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A buffer of the runtime's own lay in a plain block, the device's check of its exportable
+    /// blocks having refused them (`in_place.rs`'s `fd_blocks_take`).
+    pub(crate) fn fd_blocks_refused(&self) {
+        self.fd_blocks_refused.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A two-plane YCbCr texture's planes read in place were made no image the device's
@@ -5048,6 +5062,15 @@ pub struct WorkCounts {
     /// memory type of a device-local heap, which such buffers overflowed into or their class
     /// takes first.
     pub fd_buffer_blocks_plain: u64,
+    /// The buffers of the runtime's own and the program's made so far in a plain block, not one
+    /// allocated exportable, on a device that allocates such blocks, while the device's in-place
+    /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): its first run on a
+    /// driver, before the check's record holds its verdicts. 0 once they are known.
+    pub fd_blocks_awaited: u64,
+    /// As `fd_blocks_awaited`, once the device's check of such blocks found a texture over one's
+    /// buffer would be a shadow where over a plain block's it is not (`in_place.rs`'s
+    /// `fd_blocks_take`): every such buffer from then on.
+    pub fd_blocks_refused: u64,
     /// As `buffer_blocks_made_ahead`, of images, those of the pool host copies place in among
     /// them (`host_copy_blocks_readied`).
     pub image_blocks_made_ahead: u64,
@@ -5237,6 +5260,12 @@ pub struct WorkCounts {
     /// Two-plane YCbCr textures whose planes read in place take no such image because the driver's
     /// image lays the planes out otherwise than the surface, or does not fit their buffer there.
     pub ycbcr_planes_images_kept_layout: u64,
+    /// Two-plane YCbCr textures whose planes read in place take no such image because the planes
+    /// lie in a block of the runtime's buffers allocated exportable (`memory.rs`'s "Buffers in
+    /// exportable blocks"), whose image would start `UNDEFINED`, which the device's in-place check
+    /// covers for single-plane images alone: the texel buffer reads them, announced
+    /// (`ycbcr-planes-exportable-block`).
+    pub ycbcr_planes_images_kept_exportable_block: u64,
     /// Bindings of two-plane YCbCr textures' planes images written into descriptor sets.
     pub ycbcr_planes_images_bound: u64,
     /// Two-plane YCbCr textures made whose conversions sample the planes' image through the
@@ -8181,11 +8210,15 @@ impl Device {
             ycbcr_images_kept_view: counters.ycbcr_images_kept[6].load(Ordering::Relaxed),
             ycbcr_planes_bound: commands(|counts| &counts.ycbcr_planes_bound),
             ycbcr_planes_images: counters.ycbcr_planes_images.load(Ordering::Relaxed),
+            fd_blocks_awaited: counters.fd_blocks_awaited.load(Ordering::Relaxed),
+            fd_blocks_refused: counters.fd_blocks_refused.load(Ordering::Relaxed),
             ycbcr_planes_images_kept_conversion: counters.ycbcr_planes_images_kept[0]
                 .load(Ordering::Relaxed),
             ycbcr_planes_images_kept_memory: counters.ycbcr_planes_images_kept[1]
                 .load(Ordering::Relaxed),
             ycbcr_planes_images_kept_layout: counters.ycbcr_planes_images_kept[2]
+                .load(Ordering::Relaxed),
+            ycbcr_planes_images_kept_exportable_block: counters.ycbcr_planes_images_kept[3]
                 .load(Ordering::Relaxed),
             ycbcr_planes_images_bound: commands(|counts| &counts.ycbcr_planes_images_bound),
             ycbcr_device_conversions: counters.ycbcr_device_conversions.load(Ordering::Relaxed),

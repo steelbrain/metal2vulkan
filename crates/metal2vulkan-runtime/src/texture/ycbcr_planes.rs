@@ -60,14 +60,20 @@ pub(crate) enum KeptTexels {
     Memory,
     /// The driver's image lays the planes out otherwise, or does not fit the buffer there.
     Layout,
+    /// The planes lie in a block of the runtime's buffers allocated exportable and never
+    /// exported (`memory.rs`'s "Buffers in exportable blocks"), whose image would name one of its
+    /// handle types (`VUID-vkBindImageMemory-memory-02728`) and so start `UNDEFINED`, which the
+    /// device's check of such blocks covers for single-plane images alone.
+    ExportableBlock,
 }
 
 impl KeptTexels {
     /// The reasons, in their counters' order.
-    pub(crate) const ALL: [KeptTexels; 3] = [
+    pub(crate) const ALL: [KeptTexels; 4] = [
         KeptTexels::Conversion,
         KeptTexels::Memory,
         KeptTexels::Layout,
+        KeptTexels::ExportableBlock,
     ];
 }
 
@@ -132,8 +138,11 @@ impl Device {
         else {
             return Ok(Err(KeptTexels::Conversion));
         };
-        let own = texels.buffer.bound_memory() == crate::memory::BoundMemory::Own;
-        if texels.buffer.caller_memory().is_some() || !own {
+        let bound = texels.buffer.bound_memory();
+        if let crate::memory::BoundMemory::Blocks(_) = bound {
+            return Ok(Err(KeptTexels::ExportableBlock));
+        }
+        if texels.buffer.caller_memory().is_some() || bound != crate::memory::BoundMemory::Own {
             return Ok(Err(KeptTexels::Memory));
         }
         let [luma_at, luma_row] = planes.luma.map(u64::from);

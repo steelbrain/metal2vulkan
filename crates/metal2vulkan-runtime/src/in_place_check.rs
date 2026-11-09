@@ -172,6 +172,7 @@
 use crate::buffer_descriptor::MemoryExport;
 use crate::check_draw::CheckDraw;
 use crate::device::holds::Holder;
+use crate::device::lock;
 use crate::exit_guard;
 use crate::host_memory::HostMemory;
 use crate::in_place::{
@@ -179,7 +180,7 @@ use crate::in_place::{
     Verdict,
 };
 use crate::linear_plan::BufferLayout;
-use crate::memory::{BoundMemory, NoImage};
+use crate::memory::{BoundMemory, Holds, NoImage};
 use crate::values::ResourceOptions;
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, ClearColor, CommandQueue, Device,
@@ -452,7 +453,7 @@ const POOLED_BYTES: u64 = 24 << 20;
 /// The bytes of `class`'s buffer.
 fn class_bytes(class: PagesClass) -> u64 {
     match class {
-        PagesClass::Pooled => POOLED_BYTES,
+        PagesClass::Pooled | PagesClass::FdBlocks => POOLED_BYTES,
         PagesClass::Pointer
         | PagesClass::Fresh
         | PagesClass::DmaBuf
@@ -1384,7 +1385,7 @@ impl ClassPages {
                     let why = "the device makes no DRM_FORMAT_MOD_LINEAR images";
                     return Err(Unmade::lasting(why));
                 }
-                let buffer = (device.pooled_check_buffer(length))
+                let buffer = (device.pooled_check_buffer(length, Holds::Buffers))
                     .map_err(|error| Unmade::of_error("its buffer was refused", &error))?;
                 if buffer.in_fresh_pages() {
                     let why = "its buffer lies in fresh pages, not pooled memory";
@@ -1396,6 +1397,31 @@ impl ClassPages {
             }
             PagesClass::ExportedFd => exported_pages(device, MemoryExport::OpaqueFd, length),
             PagesClass::ExportedDmaBuf => exported_pages(device, MemoryExport::DmaBuf, length),
+            // A buffer of the runtime's own in a block of the kind its buffers take where the
+            // device allocates their blocks exportable (`memory.rs`'s `Holds::FdBuffers`), whatever
+            // this class's verdicts, which decide whether they lie there
+            // (`Device::fd_blocks_checked`), that declares the bytes between a texture's rows
+            // unobserved, as the product's buffers whose textures take a `DRM_FORMAT_MOD_LINEAR`
+            // image do: its textures take the images a texture over such a buffer takes
+            // (`texture.rs`'s `alias_image`).
+            PagesClass::FdBlocks => {
+                let exportable = lock(&device.shared().memory).fd_buffer_types;
+                if let Err(why) = exportable {
+                    return Err(Unmade::lasting(why));
+                }
+                let buffer = (device.pooled_check_buffer(length, Holds::FdBuffers))
+                    .map_err(|error| Unmade::of_error("its buffer was refused", &error))?;
+                match buffer.bound_memory() {
+                    BoundMemory::Blocks(_) => {}
+                    _ => {
+                        let why = "its buffer lies in no block allocated exportable";
+                        return Err(Unmade::passing(why));
+                    }
+                }
+                buffer.declare_padding_unobserved();
+                let start = contents(&buffer)?;
+                Ok(ClassPages { buffer, start })
+            }
         }
     }
 }
@@ -1429,7 +1455,9 @@ fn exported_pages(
         BoundMemory::External(_) => {}
         BoundMemory::NoImage(NoImage::Dedicated) if export == MemoryExport::DmaBuf => {}
         BoundMemory::NoImage(no) => return Err(Unmade::lasting(no.words())),
-        BoundMemory::Own => return Err(Unmade::passing("its buffer's memory is not exported")),
+        BoundMemory::Own | BoundMemory::Blocks(_) => {
+            return Err(Unmade::passing("its buffer's memory is not exported"))
+        }
     }
     buffer.declare_padding_unobserved();
     let start = contents(&buffer)?;

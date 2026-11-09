@@ -2314,11 +2314,13 @@ impl Device {
     }
 
     /// A `Shared` buffer of `length` bytes, all zero, outside the Metal address space, in a
-    /// block of the runtime's pooled memory that is exported as no handle type, whatever kind of
-    /// block the device's own buffers take (`memory.rs`'s `Holds::FdBuffers`): the in-place
-    /// check's class of pooled memory (`in_place_check.rs`, `PagesClass::Pooled`), whose image
-    /// names no handle type. Refused as [`Device::new_buffer`] refuses its length.
-    pub(super) fn pooled_check_buffer(&self, length: u64) -> Result<Buffer, Error> {
+    /// block of the runtime's pooled memory that holds `holds`, whatever kind of block the
+    /// device's own buffers take: `Holds::Buffers` for the in-place check's class of plain
+    /// pooled memory (`in_place_check.rs`, `PagesClass::Pooled`), whose image names no handle
+    /// type, and `Holds::FdBuffers` for its class of the blocks allocated exportable
+    /// (`PagesClass::FdBlocks`), whose image names one of their handle types (`memory.rs`'s
+    /// "Buffers in exportable blocks"). Refused as [`Device::new_buffer`] refuses its length.
+    pub(super) fn pooled_check_buffer(&self, length: u64, holds: Holds) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer";
         let modes = Modes::of(ResourceOptions::shared())?;
         let class = buffer_class(CALL, modes)?;
@@ -2330,7 +2332,7 @@ impl Device {
             CALL,
             length,
             (modes, class),
-            NewBufferOf::PlainBlock,
+            NewBufferOf::Check(holds),
             placed,
         )
     }
@@ -2412,9 +2414,9 @@ impl Device {
         let (of_heap, fresh) = match of {
             NewBufferOf::Heap => (true, FreshPages::WherePaid),
             NewBufferOf::Runtime(fresh) => (false, fresh),
-            NewBufferOf::PlainBlock => (false, FreshPages::WherePaid),
+            NewBufferOf::Check(_) => (false, FreshPages::WherePaid),
         };
-        let plain = of == NewBufferOf::PlainBlock;
+        let plain = matches!(of, NewBufferOf::Check(_));
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
@@ -2440,12 +2442,17 @@ impl Device {
             None => class,
         };
         // The kind of block it lies in: one of the runtime's own lies where the device's own
-        // buffers do, whose blocks may be exportable as an opaque file descriptor, so that its
-        // `VkBuffer` names that handle type there (`VUID-vkBindBufferMemory-memory-02726`;
-        // `memory.rs`'s `Holds::FdBuffers`).
+        // buffers do, whose blocks may be exportable as an opaque file descriptor once the
+        // device's check of them passed, so that its `VkBuffer` names that handle type there
+        // (`VUID-vkBindBufferMemory-memory-02726`; `memory.rs`'s `Holds::FdBuffers`).
         let holds = match of {
-            NewBufferOf::Runtime(_) => lock(&shared.memory).own_buffers(),
-            NewBufferOf::Heap | NewBufferOf::PlainBlock => Holds::Buffers,
+            NewBufferOf::Runtime(_) => {
+                let exportable = lock(&shared.memory).fd_buffer_types.is_ok();
+                let checked = exportable && self.fd_blocks_checked();
+                lock(&shared.memory).own_buffers(checked)
+            }
+            NewBufferOf::Heap => Holds::Buffers,
+            NewBufferOf::Check(holds) => holds,
         };
         let mut external =
             vk::ExternalMemoryBufferCreateInfo::default().handle_types(EXPORT_HANDLE);
@@ -3035,10 +3042,12 @@ enum NewBufferOf {
     /// A buffer of the runtime's own, in fresh pages where it says, else in a block of the kind
     /// the device's own buffers take (`memory.rs`'s `Memory::own_buffers`).
     Runtime(FreshPages),
-    /// The in-place check's buffer of the runtime's pooled memory (`in_place_check.rs`,
-    /// `PagesClass::Pooled`): in a block of `Holds::Buffers`, whose memory is exported as no
-    /// handle type, never in fresh pages and never parked.
-    PlainBlock,
+    /// The in-place check's buffer of a class of the runtime's pooled memory
+    /// (`in_place_check.rs`): in a block that holds this, `Holds::Buffers` for
+    /// `PagesClass::Pooled` (exported as no handle type) and `Holds::FdBuffers` for
+    /// `PagesClass::FdBlocks` (allocated exportable, never exported) whatever the class's
+    /// verdicts, never in fresh pages and never parked.
+    Check(Holds),
 }
 
 /// Where [`Device::placed_new_buffer`] lays a long host-visible buffer of the runtime's own in

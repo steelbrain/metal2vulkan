@@ -302,9 +302,10 @@ enum Exportable {
     /// The handle type of the exportable buffers it holds (`exported_memory.rs`), for its buffer:
     /// that buffer's dedicated allocation where `Exported::dedicated` says so.
     For(vk::Buffer, Exported),
-    /// An opaque file descriptor ([`EXPORT_HANDLE`]), never exported: a block of
-    /// [`Holds::FdBuffers`] of a memory type [`fd_buffer_types`] names.
-    Fd,
+    /// The handle types of the runtime's own buffers' blocks ([`Memory::fd_handles`]): an opaque
+    /// file descriptor ([`EXPORT_HANDLE`]), and a dma-buf where the device takes both, never
+    /// exported: a block of [`Holds::FdBuffers`] of a memory type [`fd_buffer_types`] names.
+    Fd(vk::ExternalMemoryHandleTypeFlags),
 }
 
 impl Exportable {
@@ -313,7 +314,7 @@ impl Exportable {
         match self {
             Exportable::No => None,
             Exportable::For(_, exported) => Some(exported.handle),
-            Exportable::Fd => Some(EXPORT_HANDLE),
+            Exportable::Fd(handles) => Some(handles),
         }
     }
 }
@@ -1130,9 +1131,9 @@ pub(super) struct Block {
     type_index: u32,
     /// What it was allocated exportable as, where it was ([`allocate_exported`]).
     exported: Option<Exported>,
-    /// It was allocated exportable as an opaque file descriptor and is never exported
-    /// ([`Holds::FdBuffers`]): an image bound in it names that handle type
-    /// ([`Memory::bound_memory`]).
+    /// It was allocated exportable as the runtime's own buffers' handle types
+    /// ([`Memory::fd_handles`]) and is never exported ([`Holds::FdBuffers`]): an image bound in
+    /// it names one of them ([`Memory::bound_memory`]).
     fd: bool,
     /// It was allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until
     /// written ([`Memory::zero_image_blocks`]).
@@ -1147,6 +1148,10 @@ pub(super) enum BoundMemory {
     Own,
     /// Memory exported or imported as this handle type, which an image bound in it names.
     External(vk::ExternalMemoryHandleTypeFlags),
+    /// A block of the runtime's own buffers allocated exportable as these handle types and never
+    /// exported ([`Holds::FdBuffers`]): an image bound in it names one of them, that its image
+    /// format query takes for it (`VUID-vkBindImageMemory-memory-02728`).
+    Blocks(vk::ExternalMemoryHandleTypeFlags),
     /// Memory no image of the runtime's is bound in.
     NoImage(NoImage),
 }
@@ -1168,6 +1173,7 @@ impl std::fmt::Debug for BoundMemory {
         match self {
             BoundMemory::Own => f.write_str("Own"),
             BoundMemory::External(handle) => write!(f, "External({:#x})", handle.as_raw()),
+            BoundMemory::Blocks(handles) => write!(f, "Blocks({:#x})", handles.as_raw()),
             BoundMemory::NoImage(no) => write!(f, "NoImage({no:?})"),
         }
     }
@@ -1606,12 +1612,19 @@ pub(super) struct Memory {
     /// The memory types a buffer of addresses takes, as bits, once asked
     /// ([`allocate_addressed`]).
     address_types: Option<u32>,
-    /// As `address_types`, of a buffer of addresses made for [`EXPORT_HANDLE`], which the blocks
-    /// of [`Holds::FdBuffers`] that are allocated exportable carry.
+    /// As `address_types`, of a buffer of addresses made for [`Memory::fd_handles`], which the
+    /// blocks of [`Holds::FdBuffers`] that are allocated exportable carry.
     fd_address_types: Option<u32>,
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits, or
     /// why none are ([`fd_buffer_types`]).
     pub(super) fd_buffer_types: Result<u32, &'static str>,
+    /// The handle types those blocks are allocated exportable as, never exported: an opaque file
+    /// descriptor ([`EXPORT_HANDLE`]), and a dma-buf ([`DMA_BUF_HANDLE`]) where the device
+    /// exports pooled memory of the runtime's buffers' usages as both, each compatible with the
+    /// other (`VUID-VkExportMemoryAllocateInfo-handleTypes-00656`): an image bound there names
+    /// one of them its image format query takes for it (`VUID-vkBindImageMemory-memory-02728`,
+    /// [`BoundMemory::Blocks`]).
+    pub(super) fd_handles: vk::ExternalMemoryHandleTypeFlags,
     fd_blocks: FdBlocks,
     /// The pools the runtime's encodings and commits place their own resources in, once asked
     /// ([`Memory::kept`], [`keep_room`]).
@@ -1774,6 +1787,7 @@ impl Memory {
             address_types: None,
             fd_address_types: None,
             fd_buffer_types: Err("the device was not asked for exportable buffer memory"),
+            fd_handles: EXPORT_HANDLE,
             fd_blocks: FdBlocks::default(),
             kept: None,
             unified,
@@ -1819,30 +1833,37 @@ impl Memory {
     }
 
     /// Allocate the blocks of [`Holds::FdBuffers`] of the memory types `types` names (as bits)
-    /// exportable as an opaque file descriptor from now on, where it names any, else note why
-    /// not (the memory log says which), as the device is made: `buffer.rs`'s
-    /// `placed_new_buffer` then makes its buffers for that handle type and places them there
-    /// ([`Memory::own_buffers`]).
-    pub(super) fn fd_buffer_blocks(&mut self, types: Result<u32, &'static str>) {
+    /// exportable as `handles` from now on, where it names any, else note why not (the memory
+    /// log says which), as the device is made: `buffer.rs`'s `placed_new_buffer` then makes its
+    /// buffers for an opaque file descriptor and places them there once the device's check of
+    /// such blocks passed ([`Memory::own_buffers`]).
+    pub(super) fn fd_buffer_blocks(
+        &mut self,
+        types: Result<u32, &'static str>,
+        handles: vk::ExternalMemoryHandleTypeFlags,
+    ) {
         if let Some(log) = &self.log {
             log.line(match types {
                 Ok(types) => format!(
                     "the runtime's own buffers lie in blocks of memory types {types:#x} exportable \
-                     as opaque file descriptors"
+                     as handle types {:#x} once the device's check of them passed",
+                    handles.as_raw()
                 ),
                 Err(why) => format!("the runtime's own buffers lie in plain blocks: {why}"),
             });
         }
         self.fd_buffer_types = types;
+        self.fd_handles = handles;
     }
 
     /// The kind of block the buffers `buffer.rs`'s `placed_new_buffer` makes for the program and
     /// for the runtime take: [`Holds::FdBuffers`] where the device allocates any of them
-    /// exportable ([`Memory::fd_buffer_blocks`]), else [`Holds::Buffers`].
-    pub(super) fn own_buffers(&self) -> Holds {
+    /// exportable ([`Memory::fd_buffer_blocks`]) and its check of such blocks passed (`checked`,
+    /// `in_place.rs`'s `Device::fd_blocks_checked`), else [`Holds::Buffers`].
+    pub(super) fn own_buffers(&self, checked: bool) -> Holds {
         match self.fd_buffer_types {
-            Ok(_) => Holds::FdBuffers,
-            Err(_) => Holds::Buffers,
+            Ok(_) if checked => Holds::FdBuffers,
+            Ok(_) | Err(_) => Holds::Buffers,
         }
     }
 
@@ -2193,7 +2214,7 @@ impl Memory {
     /// The memory types a buffer of addresses of a block that holds `holds` takes, as bits,
     /// asked once: `None` without `bufferDeviceAddress`, where blocks carry no buffer of
     /// addresses. Of [`Holds::FdBuffers`] on a device that allocates its blocks exportable, a
-    /// buffer made for [`EXPORT_HANDLE`].
+    /// buffer made for their handle types ([`Memory::fd_handles`]).
     fn address_types(&mut self, device: &ash::Device, holds: Holds) -> Result<Option<u32>, Error> {
         if !self.device_address {
             return Ok(None);
@@ -2207,7 +2228,7 @@ impl Memory {
             return Ok(Some(types));
         }
         let sharing = Sharing::with_buffers(&self.families, &self.buffer_families);
-        let handle = fd.then_some(EXPORT_HANDLE);
+        let handle = fd.then_some(self.fd_handles);
         let types = buffer_types(device, usage(true), sharing, handle)?;
         match fd {
             true => self.fd_address_types = Some(types),
@@ -2329,6 +2350,7 @@ impl Memory {
             block_bytes: self.block_bytes,
             host_visible,
             fd_types: self.fd_buffer_types.unwrap_or(0),
+            fd_handles: self.fd_handles,
             device_address: self.device_address,
             families: self.buffer_families.clone(),
             zero_images: self.zero_images,
@@ -2455,7 +2477,7 @@ impl Memory {
         if payload.addresses.is_some() {
             return Ok(());
         }
-        let handle = payload.fd.then_some(EXPORT_HANDLE);
+        let handle = payload.fd.then_some(self.fd_handles);
         let (raw, required) = address_buffer(device, payload.size, sharing, handle)?;
         if required > payload.size {
             // SAFETY: the buffer is unused.
@@ -2764,7 +2786,7 @@ impl Memory {
                 dedicated: true, ..
             }) => BoundMemory::NoImage(NoImage::Dedicated),
             Some(exported) => BoundMemory::External(exported.handle),
-            None if block.fd => BoundMemory::External(EXPORT_HANDLE),
+            None if block.fd => BoundMemory::Blocks(self.fd_handles),
             None if block.imported || block.pages.is_some() || block.view.is_some() => {
                 BoundMemory::External(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT)
             }
@@ -2843,6 +2865,8 @@ struct BlockMaker {
     host_visible: u32,
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits.
     fd_types: u32,
+    /// The handle types they are allocated exportable as ([`Memory::fd_handles`]).
+    fd_handles: vk::ExternalMemoryHandleTypeFlags,
     /// As [`Memory`]'s.
     device_address: bool,
     /// The families its buffers of addresses are shared among: [`Memory`]'s buffers'.
@@ -2856,9 +2880,9 @@ impl BlockMaker {
     /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
     /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
     /// on a device whose blocks of images are ([`Memory::zero_image_blocks`]), and exportable as
-    /// the handle type of the exportable buffers it holds ([`Holds::handle`]), or as an opaque
-    /// file descriptor where it is a block of [`Holds::FdBuffers`] of a memory type
-    /// [`fd_buffer_types`] names.
+    /// the handle type of the exportable buffers it holds ([`Holds::handle`]), or as the runtime's
+    /// own buffers' handle types ([`Memory::fd_handles`]) where it is a block of
+    /// [`Holds::FdBuffers`] of a memory type [`fd_buffer_types`] names.
     fn make(
         &self,
         device: &ash::Device,
@@ -2876,7 +2900,7 @@ impl BlockMaker {
                 },
             ),
             None if holds == Holds::FdBuffers && self.fd_types & 1 << type_index != 0 => {
-                Exportable::Fd
+                Exportable::Fd(self.fd_handles)
             }
             None => Exportable::No,
         };
@@ -2991,9 +3015,9 @@ impl BlockMaker {
             type_index,
             exported: match export {
                 Exportable::For(_, exported) => Some(exported),
-                Exportable::No | Exportable::Fd => None,
+                Exportable::No | Exportable::Fd(_) => None,
             },
-            fd: matches!(export, Exportable::Fd),
+            fd: matches!(export, Exportable::Fd(_)),
             zeroed,
         })
     }

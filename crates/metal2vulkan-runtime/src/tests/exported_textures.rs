@@ -37,13 +37,14 @@
 //!   the import of its own dma-buf (below) where the device makes one.
 //!
 //! - **The runtime's own buffers' blocks.** The same picture in a buffer the program made with no
-//!   export, its rows' padding declared unobserved as the consumer's caches declare it: where the
-//!   device's own buffers lie in blocks exportable as opaque file descriptors (`memory.rs`'s
-//!   "Buffers in exportable blocks"), its memory is such a block (`WorkCounts::fd_buffer_blocks_made`),
-//!   which the runtime never exports (`export_memory_fd` refuses it, `NotExportable`), and each
-//!   plane's image names the block's handle type, the layer reporting nothing; once the device's
-//!   check of that memory answered, each plane is in place or the shadow its verdict decided, and
-//!   reads the same bytes. Elsewhere its memory is a plain block, as before.
+//!   export, its rows' padding declared unobserved as the consumer's caches declare it. One made
+//!   before the device's in-place check answered lies in a plain block. Once it answered, where the
+//!   device allocates its buffers' blocks exportable and the check passed them (`memory.rs`'s
+//!   "Buffers in exportable blocks", `in_place.rs`'s `fd_blocks_take`), its memory is such a block
+//!   (`WorkCounts::fd_buffer_blocks_made`), which the runtime never exports (`export_memory_fd`
+//!   refuses it, `NotExportable`), and each plane is in place, its image naming one of the
+//!   block's handle types, the layer reporting nothing; elsewhere its memory is a plain block,
+//!   each plane in place or the shadow the check decided. Each reads the same bytes.
 //!
 //! Printed (`EXPORTED-TEXTURES`): what the device exported, and for each plane its image's
 //! alignment, row pitch and size as `vkGetImageMemoryRequirements` and `vkGetImageSubresourceLayout`
@@ -64,6 +65,7 @@ use crate::{
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::time::Duration;
 
 /// The byte the luma plane starts at: a header's 32 bytes in, as the consumer's cache lays it.
 const LUMA_AT: u64 = 32;
@@ -694,21 +696,50 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
     let scratch = Scratch::new("own-buffer-textures");
     let device = device(&watched, &scratch.0);
     let name = device.name().to_owned();
-    let types = crate::device::lock(&device.shared().memory).fd_buffer_types;
-    eprintln!("EXPORTED-TEXTURES on {name}: the blocks of the runtime's own buffers: {types:?}");
-    let mut first = true;
-    for options in [ResourceOptions::private(), ResourceOptions::shared()] {
-        let made = BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
+    let (types, handles) = {
+        let memory = crate::device::lock(&device.shared().memory);
+        (memory.fd_buffer_types, memory.fd_handles)
+    };
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: the blocks of the runtime's own buffers: {types:?}, \
+         exportable as {:#x}",
+        handles.as_raw()
+    );
+    let descriptor_of = |options| {
+        BufferDescriptor::new(LENGTH, options, BufferContents::Zero)
             .with_aligned_byte(LUMA_AT)
-            .with_padding_unobserved();
-        let picture = device.new_buffer_with_descriptor(made).unwrap();
+            .with_padding_unobserved()
+    };
+    // Made before the device's check answered: a plain block, whatever the check answers.
+    let early =
+        (device.new_buffer_with_descriptor(descriptor_of(ResourceOptions::shared()))).unwrap();
+    let verdicts_known = device.settle_in_place_checks(Duration::ZERO);
+    if !verdicts_known {
+        assert!(
+            early.bound_memory() == BoundMemory::Own,
+            "made while the check was pending"
+        );
+    }
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let verdict = |class, access, rows| device.in_place_verdict(class, access, rows);
+    let take = crate::in_place::fd_blocks_take(verdict);
+    let exportable = types.is_ok() && take == crate::in_place::FdBlocksTake::Take;
+    eprintln!(
+        "EXPORTED-TEXTURES on {name}: the check of exportable blocks: {take:?} (known at once \
+         {verdicts_known}); awaited {}, refused {}",
+        device.work_counts().fd_blocks_awaited,
+        device.work_counts().fd_blocks_refused
+    );
+    for options in [ResourceOptions::private(), ResourceOptions::shared()] {
+        let picture = device
+            .new_buffer_with_descriptor(descriptor_of(options))
+            .unwrap();
         let (bound, counts) = (picture.bound_memory(), device.work_counts());
-        match types {
-            Ok(_) => {
-                let fd = BoundMemory::External(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+        match exportable {
+            true => {
                 assert!(
-                    bound == fd,
-                    "{options:?}: a block exportable as an opaque fd"
+                    bound == BoundMemory::Blocks(handles),
+                    "{options:?}: {bound:?}"
                 );
                 assert!(
                     counts.fd_buffer_blocks_made > 0,
@@ -725,25 +756,20 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
                     "{options:?}: the runtime exports no such buffer"
                 );
             }
-            Err(_) => {
-                assert!(bound == BoundMemory::Own, "{options:?}: a plain block");
-                let made = (counts.fd_buffer_blocks_made, counts.fd_buffer_blocks_plain);
-                assert_eq!(made, (0, 0), "{options:?}: no block of such buffers");
+            false => {
+                assert!(
+                    bound == BoundMemory::Own,
+                    "{options:?}: a plain block, {bound:?}"
+                );
+                if types.is_err() {
+                    let made = (counts.fd_buffer_blocks_made, counts.fd_buffer_blocks_plain);
+                    assert_eq!(made, (0, 0), "{options:?}: no block of such buffers");
+                    let asked = (counts.fd_blocks_awaited, counts.fd_blocks_refused);
+                    assert_eq!(asked, (0, 0), "{options:?}: no check of such blocks asked");
+                }
             }
         }
         fill(&device, &picture);
-        for plane in PLANES {
-            let texture =
-                (picture.new_texture(&descriptor(plane, options), plane.at, ROW)).unwrap();
-            assert!(
-                read(&device, &texture, plane) == want(plane),
-                "{options:?} {plane:?}: the texels, read as made"
-            );
-        }
-        if first {
-            assert!(device.settle_in_place_checks(WAIT), "the check answered");
-            first = false;
-        }
         for plane in PLANES {
             let descriptor = descriptor(plane, options);
             let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
@@ -760,13 +786,23 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
                 "{options:?} {plane:?}: in place, or a shadow the device's check decided: \
                  {placement:?}"
             );
+            // Where the buffers lie in such blocks, every plane is in place as over a plain
+            // block's buffer: the device's linear image, or the DRM_FORMAT_MOD_LINEAR one the
+            // check passed.
+            if exportable {
+                assert_eq!(
+                    placement,
+                    TexturePlacement::NotHostPages,
+                    "{options:?} {plane:?}"
+                );
+            }
             assert_eq!(
                 texture.shadow().is_none(),
                 placement == TexturePlacement::NotHostPages
             );
             assert!(
                 read(&device, &texture, plane) == want(plane),
-                "{options:?} {plane:?}: the texels, read after the check answered"
+                "{options:?} {plane:?}: the texels, read as made"
             );
             eprintln!(
                 "EXPORTED-TEXTURES on {name}: a buffer of the runtime's own, {options:?} {:?} \
@@ -776,7 +812,7 @@ fn an_nv12_picture_s_planes_over_a_buffer_of_the_runtime_s_own_name_its_block_s_
         }
     }
     watched.layer_reported_nothing(
-        "buffers and textures in blocks exportable as opaque fds name the handle type \
+        "buffers and textures in blocks allocated exportable name one of their handle types \
          (VUID-vkBindBufferMemory-memory-02726, VUID-vkBindImageMemory-memory-02728)",
     );
 }

@@ -287,6 +287,64 @@ fn own_buffer_blocks_are_exportable_in_a_unified_device_s_system_heap() {
     assert!(fd_buffer_types(&anv, true, Ok(())).is_err());
 }
 
+/// The device's verdicts decide whether the runtime's buffers lie in blocks allocated exportable
+/// (`in_place.rs`'s `fd_blocks_take`): the first move of the class's linear image must pass for
+/// both row ends, and the class must pass wherever plain pooled memory passed; a pending verdict
+/// that decides it leaves them in plain blocks meanwhile.
+#[test]
+fn exportable_blocks_take_what_plain_blocks_take() {
+    use crate::in_place::{fd_blocks_take, Access, FdBlocksTake, PagesClass, RowEnds, Verdict};
+    // Every verdict of a class, but those `except` gives.
+    let all = |class: PagesClass, verdict: Verdict| {
+        move |of: PagesClass,
+              access: Access,
+              rows: RowEnds,
+              except: &[(Access, RowEnds, Verdict)]| {
+            match of == class {
+                true => (except.iter())
+                    .find(|(a, r, _)| *a == access && *r == rows)
+                    .map_or(verdict, |(_, _, v)| *v),
+                false => Verdict::Unchecked,
+            }
+        }
+    };
+    let take = |plain: Verdict, exportable: Verdict, except: &[(Access, RowEnds, Verdict)]| {
+        fd_blocks_take(|class, access, rows| match class {
+            PagesClass::Pooled => all(PagesClass::Pooled, plain)(class, access, rows, &[]),
+            PagesClass::FdBlocks => {
+                all(PagesClass::FdBlocks, exportable)(class, access, rows, except)
+            }
+            _ => Verdict::Unchecked,
+        })
+    };
+    use Verdict::{Failed, Passed, Pending, Unchecked};
+    assert_eq!(take(Passed, Passed, &[]), FdBlocksTake::Take);
+    // Plain pooled memory unchecked (no DRM_FORMAT_MOD_LINEAR images): the first move decides.
+    assert_eq!(take(Unchecked, Passed, &[]), FdBlocksTake::Take);
+    assert_eq!(take(Unchecked, Pending, &[]), FdBlocksTake::Pending);
+    assert_eq!(take(Pending, Passed, &[]), FdBlocksTake::Pending);
+    let (reads, on) = (Access::Reads, RowEnds::OnLines);
+    assert_eq!(
+        take(Unchecked, Passed, &[(reads, on, Failed)]),
+        FdBlocksTake::Refused(reads, on)
+    );
+    assert_eq!(
+        take(Unchecked, Passed, &[(reads, on, Unchecked)]),
+        FdBlocksTake::Refused(reads, on)
+    );
+    // An access plain memory passed and the class did not.
+    let renders = (Access::Renders, RowEnds::InLines);
+    assert_eq!(
+        take(Passed, Passed, &[(renders.0, renders.1, Failed)]),
+        FdBlocksTake::Refused(renders.0, renders.1)
+    );
+    // One plain memory did not pass either: nothing lost.
+    assert_eq!(
+        take(Failed, Passed, &[(renders.0, renders.1, Failed)]),
+        FdBlocksTake::Take
+    );
+}
+
 /// No class takes a device-coherent or device-uncached type of `VK_AMD_device_coherent_memory`,
 /// whose allocation needs a feature the runtime does not enable, even where it is the only type
 /// the resource allows or ranks best by its other properties.

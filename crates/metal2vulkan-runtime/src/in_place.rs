@@ -185,17 +185,29 @@ pub(crate) enum PagesClass {
     ExportedFd,
     /// As [`ExportedFd`](Self::ExportedFd), of memory the runtime exports as a dma-buf.
     ExportedDmaBuf,
+    /// A buffer of the runtime's own in a block of the kind its buffers take where the device
+    /// allocates their blocks exportable and never exports them (`memory.rs`'s
+    /// `Holds::FdBuffers`, "Buffers in exportable blocks"): the device's linear image made for
+    /// one of the block's handle types its image format query takes for it, else a
+    /// `DRM_FORMAT_MOD_LINEAR` one at Metal's pitch made for one it takes for that, bound in the
+    /// buffer's memory (`texture.rs`'s `alias_image`). Either names that handle type
+    /// (`VUID-vkBindImageMemory-memory-02728`), so it is made `UNDEFINED`
+    /// (`VUID-VkImageCreateInfo-pNext-01443`), and its first move leaves that layout. Its verdicts
+    /// decide whether the device's buffers lie in such blocks at all
+    /// ([`Device::fd_blocks_checked`]).
+    FdBlocks,
 }
 
 impl PagesClass {
     /// Every class, in the order the check runs them and the record holds their verdicts.
-    pub(crate) const ALL: [PagesClass; 6] = [
+    pub(crate) const ALL: [PagesClass; 7] = [
         PagesClass::Pointer,
         PagesClass::Fresh,
         PagesClass::DmaBuf,
         PagesClass::Pooled,
         PagesClass::ExportedFd,
         PagesClass::ExportedDmaBuf,
+        PagesClass::FdBlocks,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -207,6 +219,7 @@ impl PagesClass {
             PagesClass::Pooled => 3,
             PagesClass::ExportedFd => 4,
             PagesClass::ExportedDmaBuf => 5,
+            PagesClass::FdBlocks => 6,
         }
     }
 
@@ -219,6 +232,7 @@ impl PagesClass {
             PagesClass::Pooled => "the runtime's pooled memory at Metal's pitch",
             PagesClass::ExportedFd => "the runtime's memory exported as opaque file descriptors",
             PagesClass::ExportedDmaBuf => "the runtime's memory exported as dma-bufs",
+            PagesClass::FdBlocks => "the runtime's buffers' blocks allocated exportable",
         }
     }
 
@@ -237,7 +251,10 @@ impl PagesClass {
     /// texture's making makes it (`Device::pooled_move_image`), not over host pages.
     pub(crate) fn over_own_memory(self) -> bool {
         match self {
-            PagesClass::Pooled | PagesClass::ExportedFd | PagesClass::ExportedDmaBuf => true,
+            PagesClass::Pooled
+            | PagesClass::ExportedFd
+            | PagesClass::ExportedDmaBuf
+            | PagesClass::FdBlocks => true,
             PagesClass::Pointer | PagesClass::Fresh | PagesClass::DmaBuf => false,
         }
     }
@@ -947,6 +964,65 @@ impl Drop for Waiting<'_> {
     }
 }
 
+/// What the device's verdicts say of the runtime's own buffers' blocks allocated exportable
+/// ([`fd_blocks_take`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FdBlocksTake {
+    /// Its buffers lie there: a texture over one takes in place whatever it takes over a plain
+    /// block's buffer.
+    Take,
+    /// A verdict that decides it is pending: its buffers lie in plain blocks meanwhile.
+    Pending,
+    /// A texture over such a buffer, of this access and row ends, would be a shadow where over a
+    /// plain block's buffer it is in place: its buffers lie in plain blocks.
+    Refused(Access, RowEnds),
+}
+
+/// What `verdict` (each class's, access's and row ends') says of the runtime's own buffers lying
+/// in blocks allocated exportable, never exported ([`PagesClass::FdBlocks`]; `memory.rs`'s
+/// "Buffers in exportable blocks"): they lie there where every texture over such a buffer takes
+/// in place what it takes over a buffer of a plain block, whose blocks hold the same memory
+/// exported as no handle type. Over a plain block's buffer, the device's own linear image is
+/// made `PREINITIALIZED`, whose first move keeps its bytes, and needs no verdict; over an
+/// exportable block's, it names a handle type and so is made `UNDEFINED`
+/// (`VUID-VkImageCreateInfo-pNext-01443`), its other operations the same: so the class's verdict
+/// of that move ([`Access::Reads`]) must pass for texels of both row ends. A
+/// `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch is made `UNDEFINED` in both, and takes each
+/// access its usage takes where its class passed: so every verdict of plain pooled memory
+/// ([`PagesClass::Pooled`]) that passed must pass for the class too. Pending where one of those
+/// is pending; else refused for the first access and row ends that did not pass.
+pub(crate) fn fd_blocks_take(
+    verdict: impl Fn(PagesClass, Access, RowEnds) -> Verdict,
+) -> FdBlocksTake {
+    let mut pending = false;
+    for rows in RowEnds::ALL {
+        match verdict(PagesClass::FdBlocks, Access::Reads, rows) {
+            Verdict::Passed => {}
+            Verdict::Pending => pending = true,
+            Verdict::Failed | Verdict::Unchecked => {
+                return FdBlocksTake::Refused(Access::Reads, rows)
+            }
+        }
+    }
+    for access in Access::ALL {
+        for rows in RowEnds::ALL {
+            let plain = verdict(PagesClass::Pooled, access, rows);
+            let exportable = verdict(PagesClass::FdBlocks, access, rows);
+            match (plain, exportable) {
+                (Verdict::Pending, _) | (Verdict::Passed, Verdict::Pending) => pending = true,
+                (Verdict::Passed, Verdict::Failed | Verdict::Unchecked) => {
+                    return FdBlocksTake::Refused(access, rows)
+                }
+                (Verdict::Passed, Verdict::Passed) | (Verdict::Failed | Verdict::Unchecked, _) => {}
+            }
+        }
+    }
+    match pending {
+        true => FdBlocksTake::Pending,
+        false => FdBlocksTake::Take,
+    }
+}
+
 /// The version of what the check does, of the images over host pages it checks as the product
 /// makes them (their usage, layout and moves), and of how a record of it is named and framed: a
 /// change to any of them bumps it, and a record of another version is never read (its name
@@ -1173,6 +1249,26 @@ impl Device {
             self.start_in_place_checks();
         }
         verdict
+    }
+
+    /// Whether the runtime's own buffers lie in blocks allocated exportable (`memory.rs`'s
+    /// "Buffers in exportable blocks"), by the device's verdicts ([`fd_blocks_take`]), asked as
+    /// such a buffer is made: a pending verdict starts the check, and the buffer lies in a plain
+    /// block meanwhile, as it does where the verdicts refuse such blocks; each counted
+    /// (`WorkCounts::fd_blocks_awaited`, `WorkCounts::fd_blocks_refused`). Never waits.
+    pub(crate) fn fd_blocks_checked(&self) -> bool {
+        let verdict = |class, access, rows| self.in_place_verdict(class, access, rows);
+        match fd_blocks_take(verdict) {
+            FdBlocksTake::Take => true,
+            FdBlocksTake::Pending => {
+                self.shared().counts.fd_blocks_awaited();
+                false
+            }
+            FdBlocksTake::Refused(..) => {
+                self.shared().counts.fd_blocks_refused();
+                false
+            }
+        }
     }
 
     /// Start the device's check of textures over host pages in place where its verdicts are
