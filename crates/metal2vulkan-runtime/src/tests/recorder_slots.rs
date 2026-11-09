@@ -6,7 +6,9 @@
 //!
 //! The slots no device of the test holds are taken in their place (`recorder::take_free_slots`),
 //! so the test holds at most three devices at once, whatever number of devices its driver makes
-//! in one process.
+//! in one process: the RTX 5080's makes seven live devices in one process and refuses the eighth
+//! (`VK_ERROR_INITIALIZATION_FAILED`), alone or beside other processes' device tests, and makes
+//! one again once they are gone.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects; each test runs in a process of its own,
