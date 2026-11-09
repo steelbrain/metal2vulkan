@@ -19,21 +19,23 @@
 //! calibrated timestamps. Beside them: the scheduler thread's sleeps, those it slept waiting on the
 //! GPU itself, and its wakings by completions, per command buffer.
 //!
-//! Checked beside it: that thread waits for such a signal on the GPU itself, and the check still
-//! runs only once the signal landed; and a host signal wakes it from that wait, whether of the
-//! event it waits for there or of another head's (no head waits for the GPU's signal once the
-//! host met its wait).
+//! Checked beside it: that thread waits for such a signal on the GPU itself, the signal held on the
+//! GPU behind a gate the test opens once the thread waits there, and the check still runs only
+//! once the signal landed; and a host signal wakes it from that wait, whether of the event it
+//! waits for there or of another head's (no head waits for the GPU's signal once the host met its
+//! wait).
 
 use super::{
     layer_reported_nothing_at_all, loader, open_device, validated_device_with, Messages,
     ScratchCache, WAIT,
 };
 use crate::gpu::TEST_DEVICE;
+use ash::vk;
 use metal2vulkan::device::CompletionPolicy;
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandQueue, DeviceOptions, EventRef, ResourceOptions,
-    ShaderCacheOptions,
+    ShaderCacheOptions, VkEventSignal,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -209,14 +211,74 @@ fn checked_event_round_trips() {
     }
 }
 
+/// A plain event's signal the test reserved (`Event::reserve_vk_signal`) and gives from the host
+/// ([`open`](Self::open)), which a command buffer's wait for it holds on the GPU: such a wait goes
+/// to its `VkQueue` at once, so the command buffer is submitted and its signals are in flight
+/// until the test opens the gate, however fast the GPU and however loaded the host. Given on drop
+/// where not yet, so no command buffer waits for good after a failed assertion.
+struct GpuGate {
+    device: metal2vulkan_runtime::Device,
+    event: metal2vulkan_runtime::Event,
+    counter: u64,
+    opened: bool,
+}
+
+impl GpuGate {
+    /// A fresh event of `device`, its first signal reserved.
+    fn new(device: &metal2vulkan_runtime::Device) -> GpuGate {
+        let event = device.new_event().unwrap();
+        // SAFETY: the reservation's one signal is given once, from the host, by `open` (or the
+        // drop): a fresh event's first, so after nothing.
+        let reserved = unsafe { event.reserve_vk_signal(1) }.unwrap();
+        let VkEventSignal::Counter {
+            counter,
+            after: None,
+        } = reserved
+        else {
+            panic!("a fresh event's first signal reserved as {reserved:?}");
+        };
+        GpuGate {
+            device: device.clone(),
+            event,
+            counter,
+            opened: false,
+        }
+    }
+
+    /// Give the reserved signal from the host, once: the work waiting for it runs on.
+    fn open(&mut self) {
+        if self.opened {
+            return;
+        }
+        self.opened = true;
+        let info = vk::SemaphoreSignalInfo::default()
+            // SAFETY: the semaphore the event holds while it lives, signalled only as reserved.
+            .semaphore(unsafe { self.event.vk_semaphore() })
+            .value(self.counter);
+        // SAFETY: the reservation's one signal operation, from the host, of a semaphore of the
+        // live device; none of the device's objects is destroyed.
+        unsafe { self.device.raw().device.signal_semaphore(&info) }.unwrap();
+    }
+}
+
+impl Drop for GpuGate {
+    fn drop(&mut self) {
+        self.open();
+    }
+}
+
 /// Where the one head waits for an event value another queue's submitted command buffer signals,
 /// the scheduler's thread waits for it on the GPU itself (`scheduler/mod.rs`; not on MoltenVK,
 /// which keeps the condition variable), and the head's check, run as the signal landed, reads it.
+/// The signalling command buffer waits at a [`GpuGate`] before its fill and its signal: it is
+/// submitted, its signal in flight and held on the GPU, while the test waits for the scheduler's
+/// thread to wait on the GPU (`WorkCounts::scheduler_gpu_waits`), the check not yet run and the
+/// event still 0, and only then opens the gate. So the GPU wait is met however late the
+/// scheduler's thread comes, where before a 64 MiB fill held the signal for some 70 us of an RTX
+/// 5080's time, which a loaded host's scheduler could come after. On MoltenVK the test opens the
+/// gate after 2 ms instead.
 #[test]
 fn a_checked_head_waits_for_another_queue_s_signal_on_the_gpu() {
-    /// The signalling command buffer's fill: long enough that its signal lands after the pass
-    /// that submitted it.
-    const LONG: u64 = 64 << 20;
     let messages = Messages::default();
     for completion in [CompletionPolicy::Exact, CompletionPolicy::Grouped] {
         let cache = ScratchCache::new().unwrap();
@@ -229,22 +291,21 @@ fn a_checked_head_waits_for_another_queue_s_signal_on_the_gpu() {
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
         ];
-        let long = device.new_buffer(LONG, ResourceOptions::private()).unwrap();
-        let short = device.new_buffer(FILL, ResourceOptions::private()).unwrap();
+        let buffers = [
+            device.new_buffer(FILL, ResourceOptions::private()).unwrap(),
+            device.new_buffer(FILL, ResourceOptions::private()).unwrap(),
+        ];
         let before = device.work_counts();
         for round in 0..3_u8 {
-            let (event, gate) = (
-                device.new_shared_event().unwrap(),
-                device.new_shared_event().unwrap(),
-            );
-            // Behind a gate the host raises once both are committed, so the scheduler holds the
-            // checked one, waiting for the signal, while the signalling one runs.
+            let what = format!("{completion:?} round {round}");
+            let event = device.new_shared_event().unwrap();
+            let mut gate = GpuGate::new(&device);
             let signalling = queues[0].command_buffer().unwrap();
             signalling
-                .encode_wait_for_event(EventRef::from(&gate), 1)
+                .encode_wait_for_event(EventRef::from(&gate.event), 1)
                 .unwrap();
             let mut blit = signalling.blit_command_encoder().unwrap();
-            blit.fill_buffer(&long, 0..LONG, round).unwrap();
+            blit.fill_buffer(&buffers[0], 0..FILL, round).unwrap();
             blit.end_encoding().unwrap();
             signalling
                 .encode_signal_event(EventRef::from(&event), 1)
@@ -265,31 +326,51 @@ fn a_checked_head_waits_for_another_queue_s_signal_on_the_gpu() {
                 .encode_wait_for_event(EventRef::from(&event), 1)
                 .unwrap();
             let mut blit = checked.blit_command_encoder().unwrap();
-            blit.fill_buffer(&short, 0..FILL, round).unwrap();
+            blit.fill_buffer(&buffers[1], 0..FILL, round).unwrap();
             blit.end_encoding().unwrap();
+            let waits = device.work_counts().scheduler_gpu_waits;
             signalling.commit().unwrap();
             checked.commit().unwrap();
-            gate.set_signaled_value(1);
+            // The scheduler's thread holds the checked one, waiting on the GPU for the signal the
+            // gate holds.
+            if moltenvk {
+                std::thread::sleep(Duration::from_millis(2));
+            } else {
+                let start = Instant::now();
+                while device.work_counts().scheduler_gpu_waits == waits {
+                    assert!(
+                        start.elapsed() < WAIT,
+                        "{what}: the scheduler never waited for the signal on the GPU"
+                    );
+                    std::thread::sleep(Duration::from_micros(100));
+                }
+            }
+            assert_eq!(
+                *seen.lock().unwrap(),
+                None,
+                "{what}: checked before the gate"
+            );
+            assert_eq!(
+                event.signaled_value(),
+                0,
+                "{what}: signalled before the gate"
+            );
+            gate.open();
             for command_buffer in [&signalling, &checked] {
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
-                assert_eq!(command_buffer.error(), None, "{completion:?} round {round}");
+                assert_eq!(command_buffer.error(), None, "{what}");
             }
             assert_eq!(
                 *seen.lock().unwrap(),
                 Some(1),
-                "{completion:?} round {round}: the check ran before the signal landed"
+                "{what}: the check ran before the signal landed"
             );
         }
-        let waits = device.work_counts().scheduler_gpu_waits - before.scheduler_gpu_waits;
         if moltenvk {
+            let waits = device.work_counts().scheduler_gpu_waits - before.scheduler_gpu_waits;
             assert_eq!(
                 waits, 0,
                 "{completion:?}: MoltenVK keeps the condition variable"
-            );
-        } else {
-            assert!(
-                waits > 0,
-                "{completion:?}: the scheduler never waited for the signal on the GPU"
             );
         }
     }
