@@ -701,6 +701,16 @@ fn settled(device: &Device, done: impl Fn(&crate::WorkCounts) -> bool) -> crate:
     later
 }
 
+/// Keep `buffer`, just made, in the import it was bound in (its run's alone, where it was): its
+/// Metal address handed out keeps that import for good (`Buffer::gpu_address`). The device
+/// releases a buffer's import of its run once idle for 2 s (`host_residency.rs`) and binds the
+/// buffer in its chunk at its next use; a wait for the device's thread under load ([`settled`])
+/// may outlast that, and the test would then find the buffer over one import of its pages, not
+/// the two it orders.
+fn kept_in_its_run(buffer: &Buffer) {
+    let _ = buffer.gpu_address();
+}
+
 /// 1 where the device binds an object over a chunk not imported yet in an import of its own run, 0
 /// where its barriers do not order blits through two imports of the same pages
 /// (`RuntimeDriverDefect::AliasedImportBlitsUnordered`, MoltenVK's and ANV's) and the object
@@ -1330,6 +1340,7 @@ fn a_run_bound_and_a_chunk_bound_buffer_over_the_same_pages_order_by_their_host_
     // (`AliasedImportBlitsUnordered`) the first imports the chunk, and both lie in it.
     let a = runs_alone(&device);
     let alone = over(4 * page);
+    kept_in_its_run(&alone);
     settled(&device, |counts| ahead(counts) == 2 + a);
     let in_chunk = over(8 * page);
     let made = device.work_counts();
@@ -1469,6 +1480,7 @@ fn a_run_bound_buffer_and_a_copy_of_its_pages_order_by_their_host_bytes() {
         gate(&gates, true),
     )
     .unwrap();
+    kept_in_its_run(&alone);
     let made = settled(&device, |counts| ahead(counts) == 2 + a);
     assert_eq!(
         (
