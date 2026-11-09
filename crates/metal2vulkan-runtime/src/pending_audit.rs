@@ -5,13 +5,13 @@
 //!
 //! - **What it checks** ([`Freeing`]). Each `vkBeginCommandBuffer` the device's functions make
 //!   (`device/functions.rs`: every begin of the runtime's, a primary begun ahead in a spare pool
-//!   among them, `spares.rs`), which resets the command buffer; each `vkResetCommandPool` of a spare
-//!   command pool, and each command pool given back to the device's spares, for every command
-//!   buffer the pool made (`Spares::command_pool`, `Spares::give_command_pool`); and each
+//!   among them, `spares.rs`), which resets the command buffer; each `vkResetCommandPool` of a
+//!   spare command pool, and each command pool given back to the device's spares, for every
+//!   command buffer the pool made (`Spares::command_pool`, `Spares::give_command_pool`); and each
 //!   submission of a command buffer that was submitted before, unless it was begun for
 //!   simultaneous use (ANV rewrites a chainable primary's last jump at each submission: Mesa,
-//!   `anv_cmd_buffer_record_chain_submit`). ANV frees a command buffer's batch, dynamic and surface
-//!   state, back to the device's pools, as it is reset (Mesa, `anv_cmd_buffer_reset`).
+//!   `anv_cmd_buffer_record_chain_submit`). ANV frees a command buffer's batch, dynamic and
+//!   surface state, back to the device's pools, as it is reset (Mesa, `anv_cmd_buffer_reset`).
 //! - **What carries a command buffer.** A batch's submission, from the moment the batch goes to its
 //!   `VkQueue` or waits in the scheduler's group (`command_buffer/submit.rs`), to the queue's
 //!   timeline value it signals; a secondary command buffer through each primary that executes it
