@@ -196,8 +196,8 @@ impl Buffer {
     /// Metal answers where its validation stops every call there, a query included. Fails only when
     /// zeroing a `Managed` buffer's bytes on a device without unified memory fails.
     pub fn set_purgeable_state(&self, state: PurgeableState) -> Result<PurgeableState, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         if self.heap().is_some() {
             return Ok(PurgeableState::NonVolatile);
         }

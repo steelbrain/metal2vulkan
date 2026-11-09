@@ -11,9 +11,10 @@ use super::device_recovery::{
 };
 use crate::fresh_pages::FRESH_PAGES_PAST;
 use crate::{
-    Buffer, CommandBufferStatus, CommandQueue, Device, Error, EventRef, PixelFormat,
-    ResourceOptions, RuntimeGap, SharedEvent, SharedEventListener, TextureDescriptor, TextureUsage,
+    Buffer, CommandBufferStatus, CommandQueue, Device, Error, EventRef, ResourceOptions,
+    RuntimeGap, SharedEvent, SharedEventListener, TextureDescriptor,
 };
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -274,7 +275,7 @@ fn seven_recoveries_end_with_one_live_vk_device() {
 }
 
 /// A call outside command buffers' work that reaches a carried buffer's Vulkan objects (here a
-/// texture over its bytes) holds the parts it read (`Buffer::held`): parked there while the
+/// texture over its bytes) holds the parts it read (`Buffer::held_parts`): parked there while the
 /// recovery carries the buffer and the lost generation comes to rest, it keeps the buffer's
 /// parts there, which go as it ends. The buffer serves on the next generation meanwhile.
 #[test]
@@ -288,10 +289,6 @@ fn a_call_under_way_keeps_the_parts_it_read_past_the_lost_generation_s_rest() {
     let made_on = buffer.device().clone();
     let (parked, at_hook) = mpsc::channel();
     let (go, wait) = mpsc::channel::<()>();
-    *crate::device::lock(&crate::buffer::HELD_HOOK) = Some(Box::new(move || {
-        let _ = parked.send(());
-        let _ = wait.recv();
-    }));
     let call = {
         let buffer = buffer.clone();
         std::thread::spawn(move || {
@@ -304,6 +301,13 @@ fn a_call_under_way_keeps_the_parts_it_read_past_the_lost_generation_s_rest() {
                 .minimum_linear_texture_alignment_for_pixel_format(PixelFormat::RGBA8Unorm)
                 .unwrap()
                 .max(16);
+            // This thread's call parks inside its hold of the buffer's parts.
+            crate::buffer::HELD_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    let _ = parked.send(());
+                    let _ = wait.recv();
+                }));
+            });
             buffer
                 .new_texture(&descriptor, 0, row)
                 .map(|texture| texture.device().generation_serves())

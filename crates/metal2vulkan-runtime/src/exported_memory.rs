@@ -439,8 +439,8 @@ impl Buffer {
     /// (`NotImplemented(MadeBeforeRecovery)`) or on a lost device (`DeviceLost`), and the driver's
     /// failure.
     pub fn export_memory_fd(&self) -> Result<ExportedMemory, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         self.export_memory("export_memory_fd", MemoryExport::OpaqueFd)
     }
 
@@ -460,8 +460,8 @@ impl Buffer {
     /// (`NotImplemented(MadeBeforeRecovery)`) or on a lost device (`DeviceLost`), and the driver's
     /// failure.
     pub fn export_memory_dma_buf(&self) -> Result<ExportedMemory, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         self.export_memory("export_memory_dma_buf", MemoryExport::DmaBuf)
     }
 
@@ -546,8 +546,8 @@ impl Buffer {
     /// before its device's recovery (`NotImplemented(MadeBeforeRecovery)`) or on a lost device
     /// (`DeviceLost`), and the driver's failure.
     pub fn external_write_done(&self) -> Result<(), Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         const CALL: &str = "external_write_done";
         let device = self.device();
         if device.is_lost() {

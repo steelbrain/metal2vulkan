@@ -40,7 +40,7 @@
 //!   that waits for or signals it after the carry refuses it, as its device is the next
 //!   generation (`Device::foreign`). A call outside command buffers' work that reaches a buffer's
 //!   Vulkan objects (a texture over its bytes, an export of its memory, an upload, a handle
-//!   handed out) holds the parts it read (`Buffer::held`): their release at the generation's
+//!   handed out) holds the parts it read (`Buffer::held_parts`): their release at the generation's
 //!   rest waits for the call to end, and the call completes on the generation it began on. A
 //!   handle handed out (`Buffer::vk_buffer`, `Event::vk_semaphore`), which the caller may use
 //!   while the object lives, keeps its parts, and the lost `VkDevice`, until the object goes.

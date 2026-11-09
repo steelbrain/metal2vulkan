@@ -122,7 +122,7 @@ struct BufferShared {
     /// `next` is set: read at one relaxed load where nothing was carried ([`Buffer::s`]), `next`
     /// with its own ordering where it was.
     carried: AtomicBool,
-    /// The calls outside a command buffer's work under way on these parts ([`Buffer::held`]).
+    /// The calls outside a command buffer's work under way on these parts ([`Buffer::held_parts`]).
     calls: Mutex<LinkCalls>,
 }
 
@@ -765,7 +765,7 @@ impl LostParts for LostBuffer {
         {
             let mut calls = lock(&buffer.calls);
             if calls.under_way > 0 {
-                // The last call under way on them lets them go (`Buffer::held`).
+                // The last call under way on them lets them go (`Buffer::held_parts`).
                 calls.waiting = Some(self);
                 return;
             }
@@ -785,14 +785,14 @@ impl LostBuffer {
         }
         self.pages.release_lost();
         // SAFETY: its parts on the generation went, no command buffer of the generation records,
-        // no call under way reads them (`Buffer::held`), and every other reach of the buffer goes
-        // to where it was carried (`Buffer::carried`).
+        // no call under way reads them (`Buffer::held_parts`), and every other reach of the
+        // buffer goes to where it was carried (`Buffer::carried`).
         unsafe { buffer.device.let_go() };
     }
 }
 
 /// The calls outside a command buffer's work under way on a buffer's parts on one generation
-/// ([`Buffer::held`]), and the release of those parts that waits for them to end, where the
+/// ([`Buffer::held_parts`]), and the release of those parts that waits for them to end, where the
 /// buffer was carried from that generation and it came to rest (`device/carry.rs`).
 #[derive(Default)]
 struct LinkCalls {
@@ -801,7 +801,7 @@ struct LinkCalls {
 }
 
 /// A call outside a command buffer's work on a buffer's parts on one generation
-/// ([`Buffer::held`]), until it goes: the parts stay while it lives, and every read of the
+/// ([`Buffer::held_parts`]), until it goes: the parts stay while it lives, and every read of the
 /// buffer's parts on this thread meanwhile answers them.
 pub(super) struct HeldParts<'a> {
     link: &'a Arc<BufferShared>,
@@ -2043,7 +2043,7 @@ impl Filled for BufferShared {
 impl BufferShared {
     /// Its parts on its lost generation were marked let go of, the buffer carried to the next one
     /// and that generation at rest (`LostBuffer::mark`): no call takes them from now on
-    /// ([`Buffer::held`]), and they go once none under way holds them.
+    /// ([`Buffer::held_parts`]), and they go once none under way holds them.
     fn released(&self) -> bool {
         match &self.bytes {
             Bytes::Own(OwnBytes {
@@ -3352,7 +3352,7 @@ impl Buffer {
         let mut shared = &self.0;
         loop {
             // Not its parts on a lost generation that went: a call under way that holds them
-            // keeps them until it ends (`Buffer::held`), and no command buffer is made there
+            // keeps them until it ends (`Buffer::held_parts`), and no command buffer is made there
             // after its rest (`Carry::refuses`).
             if records == Some(shared.generation) && !shared.freed() {
                 return shared;
@@ -3376,7 +3376,7 @@ impl Buffer {
     /// the next (`RuntimeGap::MadeBeforeRecovery`), as a call that took its arguments before
     /// the loss (`Device::at_serving_taking`). Not for command buffers' work, whose queue slot
     /// holds the generation (`device/carry.rs`).
-    pub(super) fn held(&self) -> HeldParts<'_> {
+    pub(super) fn held_parts(&self) -> HeldParts<'_> {
         let mut link = self.s();
         loop {
             {
@@ -4585,16 +4585,19 @@ impl Buffer {
     }
 }
 
-/// A test's hook into [`Buffer::held`], run once by the first call that holds a buffer's parts
-/// after the test set it: the test parks that call there across a recovery
-/// (`tests/device_recovery_carry.rs`).
 #[cfg(test)]
-pub(crate) static HELD_HOOK: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+thread_local! {
+    /// A test's hook into [`Buffer::held_parts`], run once by this thread's next call that holds
+    /// a buffer's parts after the test set it: the test parks that call there across a recovery
+    /// (`tests/device_recovery_carry.rs`).
+    pub(crate) static HELD_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
-/// Run [`HELD_HOOK`], where a test set it.
+/// Run this thread's [`HELD_HOOK`], where a test set it.
 #[cfg(test)]
 fn held_hook() {
-    let hook = lock(&HELD_HOOK).take();
+    let hook = HELD_HOOK.with(|hook| hook.borrow_mut().take());
     if let Some(hook) = hook {
         hook();
     }

@@ -230,8 +230,8 @@ impl Buffer {
     /// The `VkBuffer` stays the runtime's: the caller does not destroy it, and uses it only while
     /// the buffer lives, ordered against the runtime's work on it.
     pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64) {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         self.hand_out();
         let handle = self.at_for(0, ReadApart::VkBuffer);
         // A failed submission gives the work back, to the device's next submission; the caller
@@ -274,8 +274,8 @@ impl Buffer {
     /// [`SharedEvent::vk_wait`], [`SharedEvent::reserve_vk_signal`]) and against the host's
     /// writes to the pages, as for any use of the buffer.
     pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         self.host_memory_at(0)
     }
 }

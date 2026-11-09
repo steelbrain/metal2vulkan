@@ -37,8 +37,8 @@ impl Buffer {
     /// buffers, in range and past it; Metal's validation stops it). Refused for a managed
     /// buffer's range past the buffer.
     pub fn did_modify_range(&self, range: Range<u64>) -> Result<(), Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         const CALL: &str = "did_modify_range";
         if self.storage_mode() != StorageMode::Managed {
             return Ok(());

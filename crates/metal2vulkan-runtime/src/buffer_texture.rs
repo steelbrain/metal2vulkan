@@ -416,8 +416,8 @@ impl Buffer {
         offset: u64,
         bytes_per_row: u64,
     ) -> Result<Texture, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         self.texture_over(
             "new_texture",
             descriptor,
@@ -466,8 +466,8 @@ impl Buffer {
         bytes_per_row: u64,
         _bytes_per_image: u64,
     ) -> Result<Texture, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         self.texture_over(
             "new_linear_texture",
             descriptor,
@@ -529,8 +529,8 @@ impl Buffer {
         offset: u64,
         bytes_per_row: u64,
     ) -> Result<Texture, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         self.texture_over(
             "new_tiled_texture",
             descriptor,
@@ -696,8 +696,8 @@ impl Buffer {
         descriptor: &TextureDescriptor,
         plane: IoSurfacePlane,
     ) -> Result<Texture, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         plane.refuse_client_direction()?;
         let texture = self.texture_over(
             "new_texture_with_iosurface_plane",
@@ -750,8 +750,8 @@ impl Buffer {
         offset: u64,
         bytes_per_row: u64,
     ) -> Result<TexturePlacement, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         let over = (offset, bytes_per_row);
         let asked = (BufferTextureCall::Texture, Whose::Program, Goal::Ask);
         self.placement_over("new_texture", descriptor, over, asked, None)
@@ -768,8 +768,8 @@ impl Buffer {
         offset: u64,
         bytes_per_row: u64,
     ) -> Result<TexturePlacement, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         let over = (offset, bytes_per_row);
         let asked = (BufferTextureCall::Tiled, Whose::Program, Goal::Ask);
         self.placement_over("new_tiled_texture", descriptor, over, asked, None)
@@ -785,8 +785,8 @@ impl Buffer {
         descriptor: &TextureDescriptor,
         plane: IoSurfacePlane,
     ) -> Result<TexturePlacement, Error> {
-        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
-        let _held = self.held();
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held_parts`).
+        let _held = self.held_parts();
         plane.refuse_client_direction()?;
         let over = (plane.offset, plane.bytes_per_row);
         let form = BufferTextureCall::IoSurfacePlane {
