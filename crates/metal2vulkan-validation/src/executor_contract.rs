@@ -834,7 +834,9 @@ pub fn checked_requirements(
         reflection,
         case.mesh_draw.as_ref(),
     ));
-    requirements.extend(unsupported_observation_requirements(case.stage, reflection));
+    requirements.extend(unsupported_observation_requirements(
+        case.stage, source_ll, reflection,
+    ));
     requirements.extend(case_requirements(case));
     requirements
 }
@@ -896,12 +898,19 @@ pub fn require_executor(
     }
 }
 
-/// Observation gaps shared by corpus classification and the authored graphics executors.
+/// Observation gaps shared by corpus classification and the authored graphics executors, for the
+/// entry whose text is `source_ll` and whose reflection is `reflection`.
 ///
 /// These are not shader-translation gaps: they mean the validation harness cannot yet construct
-/// an observable experiment for an otherwise reflected interface.
+/// an observable experiment for an otherwise reflected interface. A vertex function's effect is
+/// its position, a writable resource, or the commands it encodes where replaying them observes
+/// them ([`CommandsOnly::Replayed`]): both executors draw it with rasterization off and then
+/// execute those commands, as a kernel's are, and a case of it must execute them
+/// ([`require_reflection`]). Their contents stay an [`UnobservedEffect`]. A vertex function with
+/// none of these raises [`ToolingRequirement::VertexSideEffectObservation`].
 pub fn unsupported_observation_requirements(
     stage: Stage,
+    source_ll: &str,
     reflection: &ShaderInterface,
 ) -> BTreeSet<ToolingRequirement> {
     let mut requirements = BTreeSet::new();
@@ -922,7 +931,11 @@ pub fn unsupported_observation_requirements(
                     Some(crate::air::reflect::ResourceAccess::ReadOnly)
                 )
             });
-            if !writes_position && !has_shader_resource_output {
+            if !writes_position
+                && !has_shader_resource_output
+                && commands_only(source_ll, &air_call_counts(source_ll), Some(reflection))
+                    != Some(CommandsOnly::Replayed)
+            {
                 requirements.insert(ToolingRequirement::VertexSideEffectObservation);
             }
         }
@@ -1653,13 +1666,45 @@ mod tests {
             &crate::air::meta::VertMeta::default(),
             Some("vertex"),
         );
-        assert!(unsupported_observation_requirements(Stage::Vertex, &vertex)
-            .contains(&ToolingRequirement::VertexSideEffectObservation));
+        assert!(
+            unsupported_observation_requirements(Stage::Vertex, "", &vertex)
+                .contains(&ToolingRequirement::VertexSideEffectObservation)
+        );
         let mut authored = case();
         authored.stage = Stage::Vertex;
         assert!(require_reflection(&authored, "", &vertex, "test executor")
             .unwrap_err()
             .contains(ToolingRequirement::VertexSideEffectObservation.as_str()));
+        // A rasterization-disabled vertex function with no position and no writable resource
+        // whose only effect is an indexed draw it encodes is observed by executing that draw, as a
+        // kernel's commands are: a case of it must execute them, and one that does is checkable.
+        let indexed = "  tail call void @air.draw_indexed_primitives_render_command.p1i16(ptr addrspace(1) %c, i32 %i, i32 %t, i32 6, ptr addrspace(1) %x, i32 1, i32 0, i32 0)";
+        assert_eq!(
+            commands_only(indexed, &air_call_counts(indexed), Some(&vertex)),
+            Some(CommandsOnly::Replayed)
+        );
+        assert_eq!(
+            unsupported_observation_requirements(Stage::Vertex, indexed, &vertex),
+            BTreeSet::new()
+        );
+        assert!(
+            require_reflection(&authored, indexed, &vertex, "test executor")
+                .unwrap_err()
+                .contains("the case executes none")
+        );
+        let mut executing_vertex = authored.clone();
+        executing_vertex.command_buffers = executing.command_buffers.clone();
+        assert_eq!(
+            require_reflection(&executing_vertex, indexed, &vertex, "test executor"),
+            Ok(BTreeSet::new())
+        );
+        // Commands no replay observes leave the vertex function without an observed effect: a
+        // fragment buffer alone, which no replayed command reads.
+        let fragment_buffer = "  call void @air.set_fragment_buffer_render_command.p1i8()";
+        assert_eq!(
+            unsupported_observation_requirements(Stage::Vertex, fragment_buffer, &vertex),
+            BTreeSet::from([ToolingRequirement::VertexSideEffectObservation])
+        );
     }
 
     /// The indirect-command contract, row by row: a declared handle is inert; encoding is run
