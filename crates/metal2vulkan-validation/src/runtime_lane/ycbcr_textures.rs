@@ -466,6 +466,11 @@ struct Kernels {
     /// texel rounded to nearest even (within one `half` ulp of Metal's, which rounds a two-plane
     /// YCbCr texel's step on the grid `8192` with ties away from zero).
     native_half: bool,
+    /// The `half` kernels (`read_half`, `sample_half`, `gather_red_half`, `gather_blue_half`) whose
+    /// stage rounds a `half` by the device's `OpQuantizeToF16` (`PrecisionNote::NativeHalfQuantize`,
+    /// on a device without `shaderFloat16`): a value below the smallest normal `half` may come out
+    /// as the zero of its sign.
+    quantizing: Vec<&'static str>,
     /// Whether `write_masked_half`'s stage records `PrecisionNote::NativeNanEncoding`, announced
     /// as its state is made: not where the device's moves of a `half` NaN are Metal's
     /// (`DriverDeviation::MetalNanMoves`) and its write's store accounts for the texel's NaN.
@@ -509,9 +514,28 @@ impl Kernels {
             ]
             .iter()
             .any(|note| stage_notes(device, &bitcode, "read_half").contains(note)),
+            quantizing: [
+                "read_half",
+                "sample_half",
+                "gather_red_half",
+                "gather_blue_half",
+            ]
+            .into_iter()
+            .filter(|entry| {
+                stage_notes(device, &bitcode, entry).contains(&PrecisionNote::NativeHalfQuantize)
+            })
+            .collect(),
             half_write_nans: stage_notes(device, &bitcode, "write_masked_half")
                 .contains(&PrecisionNote::NativeNanEncoding),
         }
+    }
+
+    /// Whether the `half` kernel `entry`'s stage rounds by the device's quantize
+    /// ([`Kernels::quantizing`]).
+    fn quantizes(&self, entry: &str) -> bool {
+        self.quantizing
+            .iter()
+            .any(|&quantizing| quantizing == entry)
     }
 }
 
@@ -886,7 +910,7 @@ impl Texels {
         case: &str,
     ) -> Texels {
         if by_device {
-            assert_device_reads(texels, vulkan, (output, false), case);
+            assert_device_reads(texels, vulkan, (output, false, false), case);
         }
         let read = Texels::of(texels, grid, by_device);
         if let Texels::Metal { steps, .. } = &read {
@@ -2449,7 +2473,7 @@ fn assert_uniform(texels: &[u8], [y, cb, cr]: [u8; 3], by_device: bool, case: &s
                 .unwrap();
             let want = vulkan_read(codes, conversion, [y, cb, cr].map(f64::from));
             let want = vec![want; texels.len() / 16];
-            assert_device_reads(texels, &want, (YCbCrOutput::Converted, false), case);
+            assert_device_reads(texels, &want, (YCbCrOutput::Converted, false, false), case);
         }
         false => {
             let want = ycbcr_texel(conversion.0, conversion.1, y, cb, cr);
@@ -3463,9 +3487,12 @@ fn ten_bit_textures_read_what_metal_reads() {
                         &format!("{case}: read()"),
                     );
                     match by_device {
-                        true => {
-                            assert_device_reads(&sampled, &vulkan, (codes.output, false), &centres)
-                        }
+                        true => assert_device_reads(
+                            &sampled,
+                            &vulkan,
+                            (codes.output, false, false),
+                            &centres,
+                        ),
                         false => assert_eq!(grid(&sampled), want, "{centres}"),
                     }
                     let between = texels_of(device, &kernels.between, &texture, Some(&linear));
@@ -3737,7 +3764,7 @@ fn textures_over_any_surface_read_what_metal_reads() {
             match by_device {
                 true => {
                     let want = anywhere_vulkan(source, codes, (range, Bt601), planes);
-                    assert_device_reads(&read, &want, (codes.output, false), &case);
+                    assert_device_reads(&read, &want, (codes.output, false, false), &case);
                 }
                 false => {
                     let want = read_anywhere(source, codes, (range, Bt601), planes);
@@ -4032,7 +4059,10 @@ fn srgb_twins_read_what_metal_reads() {
                 for (texels, (half, slot), what) in checks {
                     match (by_device, half) {
                         (true, _) => {
-                            assert_device_reads(texels, &vulkan, (codes.output, half), &what)
+                            let entry = if slot { "sample_half" } else { "read_half" };
+                            let quantized = half && kernels.quantizes(entry);
+                            let read = (codes.output, half, quantized);
+                            assert_device_reads(texels, &vulkan, read, &what)
                         }
                         (false, true) if slot => {
                             rounded += assert_half_samples(texels, &want, &what)
@@ -4756,7 +4786,8 @@ fn assert_family_read(
     match (by_device, half) {
         (true, _) => {
             let want = family_vulkan(bytes, codes, conversion);
-            assert_device_reads(texels, &want, (codes.output, half), case);
+            let quantized = half && kernels.quantizes("read_half");
+            assert_device_reads(texels, &want, (codes.output, half, quantized), case);
         }
         (false, true) => {
             let want = family_modelled(bytes, codes, conversion);
@@ -5173,7 +5204,16 @@ fn ycbcr_half_gathers_round_ties_away() {
                                 v => v.log2().floor() as i32 - 10,
                             };
                             let off = (f64::from(h) - nearest).abs();
-                            assert!(off <= 2f64.powi(exponent), "{case}: {h}, the float {f}");
+                            // Or the zero of its sign the device's quantize gave a value below
+                            // the smallest normal `half` (`PrecisionNote::NativeHalfQuantize`).
+                            let zero = kernels.quantizes(&format!("gather_{channel}_half"))
+                                && h == 0.0
+                                && h.is_sign_negative() == f.is_sign_negative()
+                                && nearest.abs() < 2f64.powi(-14);
+                            assert!(
+                                off <= 2f64.powi(exponent) || zero,
+                                "{case}: {h}, the float {f}"
+                            );
                             continue;
                         }
                         let step = f * 8192.0;

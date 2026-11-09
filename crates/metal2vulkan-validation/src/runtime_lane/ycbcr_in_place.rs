@@ -280,7 +280,7 @@ impl Surface {
         match by_device {
             true => {
                 let want = self.device_model(bytes);
-                assert_device_reads(raw, &want, (YCbCrOutput::Converted, false), case);
+                assert_device_reads(raw, &want, (YCbCrOutput::Converted, false, false), case);
             }
             false => assert!(on_grid(raw) == self.model(bytes), "{case}: Metal's texels"),
         }
@@ -916,7 +916,7 @@ fn a_ycbcr_texture_s_planes_image_samples_through_the_device_s_conversion() {
                 1 => {
                     assert_eq!(bound, (1, 0), "{what}: the planes image bound");
                     let want = surface.device_model(&bytes);
-                    assert_device_reads(&raw, &want, (YCbCrOutput::Converted, false), &what);
+                    assert_device_reads(&raw, &want, (YCbCrOutput::Converted, false, false), &what);
                 }
                 _ => {
                     assert_eq!(bound, (0, 1), "{what}: the texel buffer bound");

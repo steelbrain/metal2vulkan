@@ -31,11 +31,15 @@
 //! each read and store is checked within that note's bound of Metal's ([`near`], [`code_near`]):
 //! a value within 3 `f32` units in the last place (an sRGB colour within half a twelve-bit step
 //! and the transfer's `Pow`, `1/8190 + 2^-14`), a `half` one within one more `half` step, a code
-//! within one (a NaN channel's the device's).
+//! within one (a NaN channel's the device's). Where the function rounds a `half` by the device's
+//! `OpQuantizeToF16` (`PrecisionNote::NativeHalfQuantize`, on a device without `shaderFloat16`),
+//! a value below the smallest normal `half` may read as the zero of its sign, Vulkan's choice
+//! for the quantize, which the device makes ([`flushed`]).
 //!
 //! A format the device does not render to, or whose staging view it cannot store to, is refused
 //! typed (`Unsupported`) and said.
 
+use super::degrade_notices::made_tile_kinds;
 use super::tile_states::on_device;
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
@@ -44,7 +48,7 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{StageSource, TileRenderPipelineDescriptor};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    CommandBufferStatus, Device, Error, Library, LoadAction, PipelineOptions, Region,
+    CommandBufferStatus, Degradation, Device, Error, Library, LoadAction, PipelineOptions, Region,
     RenderPassDescriptor, ResourceOptions, Size, StoreAction, TextureDescriptor,
 };
 
@@ -168,19 +172,38 @@ fn near(channel: Option<Channel>, have: f32, want: f32, half: bool) -> bool {
     let Some(channel) = channel else {
         return have.to_bits() == want.to_bits();
     };
-    let ulp = |x: f32| f32::from_bits(x.abs().to_bits() + 1) - x.abs();
     let half_step = |x: f32| match x.abs() {
         a if a < f32::powi(2.0, -14) => f32::powi(2.0, -24),
         a => f32::powi(2.0, (a.to_bits() >> 23) as i32 - 127 - 10),
     };
-    let mut bound = match channel {
-        Channel::Srgb => 1.0 / 8190.0 + f32::powi(2.0, -14),
-        Channel::Unorm(_) | Channel::Snorm(_) => 3.0 * ulp(want),
-    };
+    let mut bound = conversion_bound(channel, want);
     if half {
         bound += half_step(want);
     }
     (have - want).abs() <= bound
+}
+
+/// `PrecisionNote::DevicePackConversion`'s bound of the device's `float` value of a `channel`
+/// read whose value Metal's is `want` (the module docs).
+fn conversion_bound(channel: Channel, want: f32) -> f32 {
+    let ulp = |x: f32| f32::from_bits(x.abs().to_bits() + 1) - x.abs();
+    match channel {
+        Channel::Srgb => 1.0 / 8190.0 + f32::powi(2.0, -14),
+        Channel::Unorm(_) | Channel::Snorm(_) => 3.0 * ulp(want),
+    }
+}
+
+/// Whether `have`, a `channel` read through a `half` the device's `OpQuantizeToF16` rounded
+/// (`PrecisionNote::NativeHalfQuantize`), is the zero of the sign of Metal's `want` that the
+/// quantize may give a value below the smallest normal `half` (`2^-14`): the device's `float`
+/// value, within [`conversion_bound`] of `want`, may lie below it.
+fn flushed(channel: Option<Channel>, have: f32, want: f32) -> bool {
+    let Some(channel) = channel else {
+        return false;
+    };
+    have == 0.0
+        && have.is_sign_negative() == want.is_sign_negative()
+        && want.abs() - conversion_bound(channel, want) < f32::powi(2.0, -14)
 }
 
 /// Whether code `a` of `channel` lies within one of code `b` (signed codes as their values).
@@ -352,6 +375,24 @@ impl Fixture {
         }
     }
 
+    /// The state of `entry` over an attachment of `format`, its threadgroup the tile.
+    fn descriptor(&self, entry: &str, format: &Format) -> TileRenderPipelineDescriptor {
+        let function = self.library.new_function_with_name(entry).unwrap();
+        let mut descriptor = TileRenderPipelineDescriptor::new(StageSource::Function(
+            function.function_descriptor(),
+        ));
+        descriptor.color_attachment_formats[0] = Some(format.pf);
+        descriptor.threadgroup_size_matches_tile_size = true;
+        descriptor
+    }
+
+    /// Whether [`Fixture::descriptor`]'s state, as the device makes it, rounds a `half` by its
+    /// `OpQuantizeToF16`: its making announces `native-half-quantize`.
+    fn quantizes(&self, entry: &str, format: &Format) -> bool {
+        made_tile_kinds(&self.device, &self.descriptor(entry, format))
+            .contains(&Degradation::NativeHalfQuantize)
+    }
+
     /// Dispatch `entry` once per tile in a pass over a new attachment of `format` holding
     /// `texels` (`SIDE` wide, loaded and stored), with `buffer` at tile buffer 0: the buffer and
     /// the texels after, or the refusal of the state, the attachment or the dispatch.
@@ -362,12 +403,7 @@ impl Fixture {
         texels: &[u64],
         buffer: &[u8],
     ) -> Result<(Vec<u8>, Vec<u64>), Error> {
-        let function = self.library.new_function_with_name(entry).unwrap();
-        let mut descriptor = TileRenderPipelineDescriptor::new(StageSource::Function(
-            function.function_descriptor(),
-        ));
-        descriptor.color_attachment_formats[0] = Some(format.pf);
-        descriptor.threadgroup_size_matches_tile_size = true;
+        let descriptor = self.descriptor(entry, format);
         let state = self
             .device
             .new_tile_render_pipeline_state(&descriptor, &PipelineOptions::default())?;
@@ -620,6 +656,8 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
                 let Some((buffer, after)) = ran(&name, &entry, format, run) else {
                     continue;
                 };
+                let quantized = f.quantizes(&entry, format);
+                let mut zeros = 0;
                 let got = floats(&buffer);
                 for (i, &t) in texels.iter().enumerate() {
                     let want: Vec<f32> = (0..4)
@@ -631,11 +669,18 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
                         .collect();
                     let have = &got[4 * i..4 * i + 4];
                     let channel = |k: usize| format.channels.get(k).map(|c| c.0);
-                    assert!(
-                        (0..4).all(|k| near(channel(k), have[k], want[k], true)),
-                        "{name}: {entry} over {:?}, texel {t:#x}: {have:?}, Metal's {want:?}",
-                        format.pf
-                    );
+                    for k in 0..4 {
+                        if near(channel(k), have[k], want[k], true) {
+                            continue;
+                        }
+                        assert!(
+                            quantized && flushed(channel(k), have[k], want[k]),
+                            "{name}: {entry} over {:?}, texel {t:#x}: {have:?}, Metal's {want:?} \
+                             (native-half-quantize {quantized})",
+                            format.pf
+                        );
+                        zeros += 1;
+                    }
                     for (k, &(c, _)) in format.channels.iter().enumerate() {
                         let code = format.code(t, k);
                         let again = f64_to_half_bits(f64::from(c.value(code)));
@@ -643,6 +688,13 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
                     }
                 }
                 assert_eq!(after, texels, "{name}: {entry} over {:?} keeps", format.pf);
+                if quantized {
+                    println!(
+                        "HALF-QUANTIZE {name}: {entry} over {:?}: {zeros} channels read the zero \
+                         of a value below 2^-14",
+                        format.pf
+                    );
+                }
             }
         }
         eprintln!("{name}: {twice} channel reads where a float rounded again would differ");
