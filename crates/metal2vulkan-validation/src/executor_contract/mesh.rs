@@ -21,7 +21,10 @@
 //!   a rasterizing draw with neither ([`MeshDraw`]), so a case never reaches Metal's abort. A row,
 //!   which names none, needs each that its structure does and nothing generates: a mesh function
 //!   whose device writes are observable draws with rasterization off, and one that writes its
-//!   position draws with the generated observer of it, so neither needs a fragment stage; an
+//!   position draws with the generated observer of it, so neither needs a fragment stage; nor does
+//!   one that sets none of its vertices or primitives ([`sets_mesh_outputs`]) and writes no
+//!   observable memory, which has no effect a stage observes: it draws with rasterization off and
+//!   an empty observation (`OutputSelection::None`), as a kernel that writes nothing does. An
 //!   object function whose payload the launch observer reads ([`launch_payload_words`]) draws with
 //!   the generated mesh stage, and a mesh function whose payload a generated object function
 //!   writes ([`object_payload_bytes`]) with the generated object stage.
@@ -165,15 +168,21 @@ pub fn missing_stages(
             }
             // A row is observed through its device writes where it has any, with rasterization
             // off, and otherwise through its rasterized output: the generated observer fragment
-            // reads the position it writes (`air.set_position_mesh`). A case's draw names the
-            // fragment function it rasterizes with, or the observation its observer reads.
+            // reads the position it writes (`air.set_position_mesh`). One that sets no vertex or
+            // primitive and writes nothing has no effect: rasterization off observes all of it,
+            // the empty output. A case's draw names the fragment function it rasterizes with, or
+            // the observation its observer reads.
             let sets_position =
                 own.writes_position() && source_ll.contains("@air.set_position_mesh(");
-            if draw.is_none() && !writes_observable_memory(source_ll) && !sets_position {
+            if draw.is_none()
+                && !writes_observable_memory(source_ll)
+                && !sets_position
+                && sets_mesh_outputs(source_ll)
+            {
                 missing.push((
                     Stage::Fragment,
-                    "a mesh function that writes neither observable memory nor its position has \
-                     no output a fragment stage observes",
+                    "a mesh function that sets vertices or primitives without their position, \
+                     and writes no observable memory, has no output a fragment stage observes",
                 ));
             }
         }
@@ -183,6 +192,21 @@ pub fn missing_stages(
         | ShaderStage::Kernel => {}
     }
     missing
+}
+
+/// Whether the entry whose text is `source_ll` sets any of its mesh's vertices or primitives: it
+/// calls a mesh output setter (`air.set_*_mesh`) other than its primitive count's. One that sets
+/// only a count draws primitives over no vertex it wrote, so rasterizing them shows nothing it
+/// defined.
+pub fn sets_mesh_outputs(source_ll: &str) -> bool {
+    use metal2vulkan_air::intrinsics::{AirIntrinsic, Mesh};
+    super::air_call_counts(source_ll).keys().any(|name| {
+        matches!(
+            AirIntrinsic::parse(name),
+            Some(AirIntrinsic::Mesh(op))
+                if !matches!(op, Mesh::PrimitiveCount | Mesh::ThreadgroupsPerGrid)
+        )
+    })
 }
 
 /// The mesh requirements of a row or case (`draw` `None` for a row) whose entry's reflection is
@@ -318,20 +342,48 @@ mod tests {
     /// writing it unless a generated object function writes it. A mesh function needs no fragment
     /// stage where
     /// one is generated or none is needed: one that writes its position draws with the generated
-    /// observer of it, and one that writes device memory with rasterization off; one that writes
-    /// neither needs a fragment stage nothing can observe it through. Each such row carries
-    /// `mesh_companion`, and a row that needs no stage carries no mesh requirement: both executors
-    /// draw it.
+    /// observer of it, one that writes device memory with rasterization off, and one that sets no
+    /// vertex or primitive and writes nothing (an empty body, or a primitive count alone, constant
+    /// or read from its payload) with rasterization off and an empty observation; one that sets
+    /// vertices without their position and writes nothing needs a fragment stage nothing can
+    /// observe it through. Each such row carries `mesh_companion`, and a row that needs no stage
+    /// carries no mesh requirement: both executors draw it.
     #[test]
     fn a_row_needs_the_stages_its_structure_does() {
         let draws = fixture("mesh_draws");
         let barrier = fixture("mesh_barrier");
+        let grid = fixture("mesh_object_grid");
+        let threadgroup = fixture("icb_object_threadgroup");
+        let limits = fixture("mesh_pipeline_limits");
         let rows = [
             (&draws, Stage::Object, "mesh_draws_object", &[][..]),
             (&draws, Stage::Mesh, "mesh_draws_grid", &[][..]),
             (&draws, Stage::Mesh, "mesh_draws_mesh", &[][..]),
             (&barrier, Stage::Mesh, "mesh_barrier_writer", &[][..]),
+            (&grid, Stage::Mesh, "mesh_object_grid_mesh", &[][..]),
+            (
+                &threadgroup,
+                Stage::Mesh,
+                "icb_object_threadgroup_mesh",
+                &[][..],
+            ),
+            (&limits, Stage::Mesh, "mesh_pipeline_limits_mesh", &[][..]),
+            (
+                &limits,
+                Stage::Mesh,
+                "mesh_pipeline_limits_mesh_alone",
+                &[][..],
+            ),
         ];
+        for (module, entry) in [
+            (&grid, "mesh_object_grid_mesh"),
+            (&threadgroup, "icb_object_threadgroup_mesh"),
+            (&limits, "mesh_pipeline_limits_mesh"),
+        ] {
+            let (text, _) = reflected(module, Stage::Mesh, entry);
+            assert!(!sets_mesh_outputs(&text), "{entry}");
+            assert!(!writes_observable_memory(&text), "{entry}");
+        }
         for (module, stage, entry, stages) in rows {
             let (text, reflection) = reflected(module, stage, entry);
             let missing = missing_stages(&text, &reflection, None)

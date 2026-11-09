@@ -133,7 +133,9 @@ payload is whole words, at least as many bytes as the mesh function reads, and a
 16 KB. Without rasterization the case selects a buffer its entry writes. The payload length is
 the pipeline's default. A stage the case leaves absent and nothing generates is a requirement
 (`mesh_companion`). An object row whose payload the launch observer reads, and a mesh row whose
-payload a generated object function writes, need none. The Metal oracle draws a case through
+payload a generated object function writes, need none. Nor does a mesh row whose function sets no
+vertex or primitive and writes no device memory: it has no effect a stage observes, so it draws
+without rasterization and its case observes the empty output (`"output": {"kind": "none"}`). The Metal oracle draws a case through
 `MTLMeshRenderPipelineDescriptor` and the case's own stage's setters. The engine's candidate
 draws it through the runtime's mesh render pipeline state and `draw_mesh_threadgroups` or
 `draw_mesh_threads`. On a device without `VK_EXT_mesh_shader` the runtime emulates the draw and

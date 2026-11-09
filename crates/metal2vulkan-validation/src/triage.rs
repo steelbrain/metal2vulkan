@@ -14,7 +14,7 @@ use std::path::Path;
 /// bumps it says what changed; this comment keeps no history.
 macro_rules! analyzer_version {
     () => {
-        "structural-triage-v81"
+        "structural-triage-v82"
     };
 }
 
@@ -2314,6 +2314,38 @@ define void @{name}(ptr addrspace(2) %ab, ptr addrspace(1) %out) {{
                 "{entry}: {:?}",
                 classified.unobserved_calls
             );
+        }
+    }
+
+    /// A mesh function that sets no vertex or primitive and writes nothing (an empty body, or a
+    /// primitive count alone, constant or read from its payload) has no effect a stage observes:
+    /// its row draws with rasterization off and an empty observation, needs no stage, and carries
+    /// no requirement.
+    #[test]
+    fn an_effect_free_mesh_row_needs_no_stage() {
+        for (module, entry) in [
+            (
+                "engine/icb_object_threadgroup.ll",
+                "icb_object_threadgroup_mesh",
+            ),
+            ("engine/mesh_object_grid.ll", "mesh_object_grid_mesh"),
+            (
+                "engine/mesh_partial_barrier.ll",
+                "mesh_partial_barrier_mesh",
+            ),
+            (
+                "engine/mesh_pipeline_limits.ll",
+                "mesh_pipeline_limits_mesh",
+            ),
+            (
+                "engine/mesh_pipeline_limits.ll",
+                "mesh_pipeline_limits_mesh_alone",
+            ),
+        ] {
+            let classified = classify(&entry_of(module, entry)).unwrap();
+            assert_eq!(classified.tooling_requirements, [], "{entry}");
+            let draw = classified.mesh_draw.expect("a mesh draw");
+            assert!(draw.missing.is_empty(), "{entry}: {:?}", draw.missing);
         }
     }
 

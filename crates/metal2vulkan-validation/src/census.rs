@@ -519,8 +519,10 @@ mod tests {
     fn mesh_module(with_object: bool) -> String {
         let mesh = "define void @msh(ptr addrspace(7) %m) {\n  \
                     call void @air.set_primitive_count_mesh(ptr addrspace(7) %m, i32 1)\n  \
+                    call void @air.set_primitive_id_mesh(ptr addrspace(7) %m, i32 0, i32 0)\n  \
                     ret void\n}\n\
-                    declare void @air.set_primitive_count_mesh(ptr addrspace(7), i32)\n";
+                    declare void @air.set_primitive_count_mesh(ptr addrspace(7), i32)\n\
+                    declare void @air.set_primitive_id_mesh(ptr addrspace(7), i32, i32)\n";
         let mesh_md = "!5 = !{ptr @msh, !1, !6}\n!6 = !{!7}\n\
                        !7 = !{i32 0, !\"air.mesh\", !8, !\"air.arg_type_name\", \
                        !\"mesh<V, void, 3, 1, triangle>\", !\"air.arg_name\", !\"m\"}\n\
@@ -551,9 +553,9 @@ mod tests {
     /// (`case::Stage`): a public module declaring one of each is two entry rows of those stages,
     /// and a private module declaring a mesh function is its shard's row. A cold census reflects
     /// and classifies all three: the object function draws with the generated launch observer of
-    /// its payload, and each mesh function, which writes no device memory and states no position,
-    /// carries `mesh_companion` (a fragment stage no executor generates), so it is classified and
-    /// unresolved, never skipped; a warm pass selects and reads nothing.
+    /// its payload, and each mesh function, which sets its primitive's ID but no position and
+    /// writes no device memory, carries `mesh_companion` (a fragment stage no executor generates),
+    /// so it is classified and unresolved, never skipped; a warm pass selects and reads nothing.
     #[test]
     fn object_and_mesh_rows_are_indexed_and_classified() {
         let scratch = ScratchDir::new("census-mesh-rows").unwrap();
