@@ -38,7 +38,12 @@
 //!   last. Such a command buffer fails as its device's lost one does. A carried event answers
 //!   the generation it was carried to last everywhere: a command buffer of the lost generation
 //!   that waits for or signals it after the carry refuses it, as its device is the next
-//!   generation (`Device::foreign`).
+//!   generation (`Device::foreign`). A call outside command buffers' work that reaches a buffer's
+//!   Vulkan objects (a texture over its bytes, an export of its memory, an upload, a handle
+//!   handed out) holds the parts it read (`Buffer::held`): their release at the generation's
+//!   rest waits for the call to end, and the call completes on the generation it began on. A
+//!   handle handed out (`Buffer::vk_buffer`, `Event::vk_semaphore`), which the caller may use
+//!   while the object lives, keeps its parts, and the lost `VkDevice`, until the object goes.
 //! - **The lost generation goes once nothing records on it.** A command buffer holds its queue's
 //!   slot on the generation from its making to its completion, or to its drop where it never
 //!   completed (`queue.rs`'s `Slot`); the registry knows the generation's queues' slots
@@ -209,6 +214,12 @@ impl Carry {
     /// [`let_go_at_rest`]: Self::let_go_at_rest
     pub(crate) fn refuses(&self) -> bool {
         self.taken() && lock(&self.state).at_rest
+    }
+
+    /// Whether the generation came to rest ([`let_go_at_rest`](Self::let_go_at_rest)).
+    #[cfg(test)]
+    pub(crate) fn at_rest(&self) -> bool {
+        lock(&self.state).at_rest
     }
 
     /// A carried object's `parts` on `shared`, this generation, let go of once none of its

@@ -155,6 +155,9 @@ struct HostUses {
     /// The event was carried to its device's next generation and its lost generation is at rest
     /// (`device/carry.rs`): its semaphore goes once no call is under way, and none begins again.
     lost: bool,
+    /// The semaphore was handed out (`Event::vk_semaphore`): the caller may use it while the
+    /// event lives, so it goes with the event, not at its generation's rest.
+    handed_out: bool,
 }
 
 /// One host call on an event's semaphore (`EventShared::host_use`), until it goes.
@@ -165,7 +168,7 @@ impl Drop for HostUse<'_> {
         let last = {
             let mut uses = lock(&self.0.uses);
             uses.under_way -= 1;
-            uses.under_way == 0 && uses.lost
+            uses.under_way == 0 && uses.lost && !uses.handed_out
         };
         if last {
             self.0.release_lost();
@@ -185,7 +188,7 @@ impl LostParts for LostEvent {
         let now = {
             let mut uses = lock(&event.uses);
             uses.lost = true;
-            uses.under_way == 0
+            uses.under_way == 0 && !uses.handed_out
         };
         // Else the last call under way lets them go.
         if now {
@@ -393,6 +396,19 @@ impl EventShared {
     /// The timeline semaphore.
     pub(super) fn semaphore(&self) -> vk::Semaphore {
         self.semaphore
+    }
+
+    /// The timeline semaphore, handed out to the caller (`Event::vk_semaphore`), which may use it
+    /// while the event lives: kept until the event goes, where its device's recovery carries the
+    /// event on. `None` where it was carried and its semaphore here went or goes already
+    /// (`HostUses::lost`): the caller asks the event carried.
+    pub(super) fn hand_out_semaphore(&self) -> Option<vk::Semaphore> {
+        let mut uses = lock(&self.uses);
+        if uses.lost {
+            return None;
+        }
+        uses.handed_out = true;
+        Some(self.semaphore)
     }
 
     /// Whether the semaphore was made exportable (`exported_semaphore.rs`).

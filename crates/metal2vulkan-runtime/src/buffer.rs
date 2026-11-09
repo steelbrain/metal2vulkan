@@ -24,7 +24,7 @@ use super::address::{AddressPlacement, GpuAddress, Held, KeptToken, Place, Range
 use super::attributes::ResourceAttributes;
 use super::buffer_texture::TexelViews;
 use super::churn_counts::Recycled;
-use super::degradation::Degradation;
+use super::degradation::{Degradation, NoticesFor};
 use super::device::carry::{Contents, Left, LostParts, MadeOn};
 use super::device::{lock, DeviceShared};
 use super::dirty_pages::{DirtySource, PagesLog};
@@ -122,6 +122,8 @@ struct BufferShared {
     /// `next` is set: read at one relaxed load where nothing was carried ([`Buffer::s`]), `next`
     /// with its own ordering where it was.
     carried: AtomicBool,
+    /// The calls outside a command buffer's work under way on these parts ([`Buffer::held`]).
+    calls: Mutex<LinkCalls>,
 }
 
 /// Where a buffer's bytes are.
@@ -710,8 +712,10 @@ pub(super) struct FixedPages {
     /// The `VkBuffer` is the runtime's to destroy.
     owned: bool,
     /// Its `VkBuffer` and memory are let go of on its lost generation, its buffer carried to the
-    /// next one ([`LostBuffer`]): no work meets them, and its drop lets go of nothing.
+    /// next one ([`LostBuffer`]): no work meets them from now on.
     released: AtomicBool,
+    /// They went ([`FixedPages::release_lost`]): its drop lets go of nothing.
+    freed: AtomicBool,
 }
 
 impl FixedPages {
@@ -733,8 +737,9 @@ impl FixedPages {
             unsafe { release::object(shared.vk(), self.pages.raw) };
         }
         lock(&shared.memory).free(shared.vk(), &self.pages.memory.placement);
+        self.freed.store(true, Ordering::Release);
         drop(busy);
-        // SAFETY: as above; the pages' drop reads nothing once marked.
+        // SAFETY: as above; the pages' drop reads nothing once they went.
         unsafe { self.device.let_go() };
     }
 }
@@ -752,12 +757,69 @@ impl LostParts for LostBuffer {
     }
 
     fn release(self: Box<Self>) {
+        let Some(buffer) = self.buffer.upgrade() else {
+            // The buffer went, and with it every call on its parts.
+            self.pages.release_lost();
+            return;
+        };
+        {
+            let mut calls = lock(&buffer.calls);
+            if calls.under_way > 0 {
+                // The last call under way on them lets them go (`Buffer::held`).
+                calls.waiting = Some(self);
+                return;
+            }
+        }
+        self.release_now(&buffer);
+    }
+}
+
+impl LostBuffer {
+    /// Let the parts go, no call on them under way, and the buffer's handle of their generation:
+    /// but where their `VkBuffer` or memory was handed out (`Buffer::vk_buffer`,
+    /// `Buffer::vk_host_memory`), which the caller may use while the buffer lives, so they go
+    /// with the buffer, as a refused object's do.
+    fn release_now(self: Box<Self>, buffer: &BufferShared) {
+        if buffer.handed_out.load(Ordering::Acquire) {
+            return;
+        }
         self.pages.release_lost();
-        if let Some(buffer) = self.buffer.upgrade() {
-            // SAFETY: its parts on the generation went, no command buffer of the generation
-            // records, and every other reach of the buffer goes to where it was carried
-            // (`Buffer::carried`).
-            unsafe { buffer.device.let_go() };
+        // SAFETY: its parts on the generation went, no command buffer of the generation records,
+        // no call under way reads them (`Buffer::held`), and every other reach of the buffer goes
+        // to where it was carried (`Buffer::carried`).
+        unsafe { buffer.device.let_go() };
+    }
+}
+
+/// The calls outside a command buffer's work under way on a buffer's parts on one generation
+/// ([`Buffer::held`]), and the release of those parts that waits for them to end, where the
+/// buffer was carried from that generation and it came to rest (`device/carry.rs`).
+#[derive(Default)]
+struct LinkCalls {
+    under_way: usize,
+    waiting: Option<Box<LostBuffer>>,
+}
+
+/// A call outside a command buffer's work on a buffer's parts on one generation
+/// ([`Buffer::held`]), until it goes: the parts stay while it lives, and every read of the
+/// buffer's parts on this thread meanwhile answers them.
+pub(super) struct HeldParts<'a> {
+    link: &'a Arc<BufferShared>,
+    _scope: NoticesFor,
+}
+
+impl Drop for HeldParts<'_> {
+    fn drop(&mut self) {
+        let waiting = {
+            let mut calls = lock(&self.link.calls);
+            calls.under_way -= 1;
+            match calls.under_way {
+                0 => calls.waiting.take(),
+                _ => None,
+            }
+        };
+        if let Some(lost) = waiting {
+            lost.release_now(self.link);
         }
     }
 }
@@ -765,7 +827,7 @@ impl LostParts for LostBuffer {
 impl Drop for FixedPages {
     fn drop(&mut self) {
         // Let go of on its lost generation already (`FixedPages::release_lost`).
-        if *self.released.get_mut() {
+        if *self.freed.get_mut() {
             return;
         }
         // The Vulkan teardown is a section of the exit guard.
@@ -1979,14 +2041,26 @@ impl Filled for BufferShared {
 }
 
 impl BufferShared {
-    /// Its parts were let go of on its lost generation, the buffer carried to the next one
-    /// (`FixedPages::release_lost`).
+    /// Its parts on its lost generation were marked let go of, the buffer carried to the next one
+    /// and that generation at rest (`LostBuffer::mark`): no call takes them from now on
+    /// ([`Buffer::held`]), and they go once none under way holds them.
     fn released(&self) -> bool {
         match &self.bytes {
             Bytes::Own(OwnBytes {
                 lie: Lie::Fixed(fixed),
                 ..
             }) => fixed.released.load(Ordering::Acquire),
+            _ => false,
+        }
+    }
+
+    /// Whether its parts on a lost generation went (`FixedPages::release_lost`).
+    fn freed(&self) -> bool {
+        match &self.bytes {
+            Bytes::Own(OwnBytes {
+                lie: Lie::Fixed(fixed),
+                ..
+            }) => fixed.freed.load(Ordering::Acquire),
             _ => false,
         }
     }
@@ -2881,6 +2955,7 @@ impl Device {
                 pages,
                 owned: matches!(owner, Owner::Runtime),
                 released: AtomicBool::new(false),
+                freed: AtomicBool::new(false),
             })),
         };
         let own = OwnBytes {
@@ -2997,6 +3072,7 @@ impl Device {
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
+            calls: Mutex::default(),
         }))
     }
 
@@ -3250,6 +3326,7 @@ impl Heap {
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
+            calls: Mutex::default(),
         }))
     }
 }
@@ -3274,15 +3351,51 @@ impl Buffer {
         let records = crate::degradation::NoticesFor::generation();
         let mut shared = &self.0;
         loop {
-            // Not its parts on a lost generation, let go of: a command buffer made there after
-            // that meets the buffer's next ones, a device it is not of (`Recording::begin`).
-            if records == Some(shared.generation) && !shared.released() {
+            // Not its parts on a lost generation that went: a call under way that holds them
+            // keeps them until it ends (`Buffer::held`), and no command buffer is made there
+            // after its rest (`Carry::refuses`).
+            if records == Some(shared.generation) && !shared.freed() {
                 return shared;
             }
             match shared.next.get() {
                 Some(next) => shared = &next.0,
                 None => return shared,
             }
+        }
+    }
+
+    /// The buffer's parts for a call outside a command buffer's work that reaches their Vulkan
+    /// objects (a texture over its bytes, an export of its memory, an upload, a handle handed
+    /// out), held until the result goes: those [`s`](Self::s) answers, on the generation that
+    /// serves where the buffer was carried there, and every read of its parts on this thread
+    /// meanwhile answers them (`NoticesFor::of_generation`). Where its device's recovery carried
+    /// it from their generation since, and that generation came to rest, their release waits
+    /// for the call to end ([`LostBuffer`]); parts let go of already are never held, the call
+    /// taking those of the generation the buffer was carried to. A call begun on parts of a lost
+    /// generation completes there: what it makes is that generation's, refused where it meets
+    /// the next (`RuntimeGap::MadeBeforeRecovery`), as a call that took its arguments before
+    /// the loss (`Device::at_serving_taking`). Not for command buffers' work, whose queue slot
+    /// holds the generation (`device/carry.rs`).
+    pub(super) fn held(&self) -> HeldParts<'_> {
+        loop {
+            let link = self.s();
+            {
+                let mut calls = lock(&link.calls);
+                // Read under the lock their release takes: parts not let go of yet are released
+                // only once this call ends.
+                if !link.released() {
+                    calls.under_way += 1;
+                    drop(calls);
+                    #[cfg(test)]
+                    held_hook();
+                    return HeldParts {
+                        link,
+                        _scope: NoticesFor::of_generation(link.generation),
+                    };
+                }
+            }
+            // Let go of on their lost generation since this thread read them: the generation
+            // the buffer was carried to serves its calls.
         }
     }
 
@@ -4410,6 +4523,7 @@ impl Buffer {
                     pages: to.pages_of(raw, placement, lead, lead, reach),
                     owned: true,
                     released: AtomicBool::new(false),
+                    freed: AtomicBool::new(false),
                 })),
                 reserved: own.reserved,
                 identity: own.identity,
@@ -4423,6 +4537,7 @@ impl Buffer {
             staged: AtomicBool::new(false),
             next: OnceLock::new(),
             carried: AtomicBool::new(false),
+            calls: Mutex::default(),
         }));
         // Zero, as a new buffer's. Dropping it on failure lets go of its parts and range share,
         // and of the range token, which goes back to the buffer left.
@@ -4446,5 +4561,35 @@ impl Buffer {
         // The program's buffer is the next generation's from now on.
         let _kept = to.visible(self.clone());
         Ok(contents)
+    }
+}
+
+impl Buffer {
+    /// Whether the buffer's parts on the generation it was made on went, carried from there
+    /// (`FixedPages::release_lost`).
+    #[cfg(test)]
+    pub(crate) fn first_parts_freed(&self) -> bool {
+        match &self.0.bytes {
+            Bytes::Own(OwnBytes {
+                lie: Lie::Fixed(fixed),
+                ..
+            }) => fixed.freed.load(Ordering::Acquire),
+            _ => false,
+        }
+    }
+}
+
+/// A test's hook into [`Buffer::held`], run once by the first call that holds a buffer's parts
+/// after the test set it: the test parks that call there across a recovery
+/// (`tests/device_recovery_carry.rs`).
+#[cfg(test)]
+pub(crate) static HELD_HOOK: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Run [`HELD_HOOK`], where a test set it.
+#[cfg(test)]
+fn held_hook() {
+    let hook = lock(&HELD_HOOK).take();
+    if let Some(hook) = hook {
+        hook();
     }
 }

@@ -3006,6 +3006,25 @@ impl NoticesFor {
         }
     }
 
+    /// This thread's reads of a carried object's parts answer those of the generation at
+    /// `generation` (the address of its `DeviceShared`), until the scope goes, inside whatever
+    /// command buffer's work it does: a call outside command buffers' work that holds a buffer's
+    /// parts there (`Buffer::held`).
+    pub(crate) fn of_generation(generation: usize) -> NoticesFor {
+        let outer = NOTICES_FOR.with(|current| {
+            let outer = current.get();
+            current.set(Scope {
+                generation,
+                ..outer
+            });
+            outer
+        });
+        NoticesFor {
+            outer,
+            _thread: std::marker::PhantomData,
+        }
+    }
+
     /// Work for no command buffer, from now, inside one's: what is announced about several
     /// command buffers, or about the device. The work is the outer command buffer's generation's
     /// still, where it is inside one's.

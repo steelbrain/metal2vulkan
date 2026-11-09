@@ -220,13 +220,18 @@ impl Buffer {
     /// its staging copies, the submission goes there and waits for no work of the program's;
     /// elsewhere it goes to the device's first `VkQueue`, behind what was submitted there before.
     /// Nothing is submitted where no such work waits. Where that submission fails (the device
-    /// lost, or out of memory), the work waits for the next.
+    /// lost, or out of memory), the work waits for the next. Once its device's recovery carried
+    /// the buffer to a new `VkDevice` (`Degradation::DeviceRecovered`), a handle answered before
+    /// stays the lost device's, kept with that device until the buffer goes, and a later call
+    /// answers the new one's.
     ///
     /// # Safety
     ///
     /// The `VkBuffer` stays the runtime's: the caller does not destroy it, and uses it only while
     /// the buffer lives, ordered against the runtime's work on it.
     pub unsafe fn vk_buffer(&self) -> (vk::Buffer, u64) {
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
+        let _held = self.held();
         self.hand_out();
         let handle = self.at_for(0, ReadApart::VkBuffer);
         // A failed submission gives the work back, to the device's next submission; the caller
@@ -269,6 +274,8 @@ impl Buffer {
     /// [`SharedEvent::vk_wait`], [`SharedEvent::reserve_vk_signal`]) and against the host's
     /// writes to the pages, as for any use of the buffer.
     pub unsafe fn vk_host_memory(&self) -> Option<VkHostMemory> {
+        // Its parts held while the call reaches them, across a recovery (`Buffer::held`).
+        let _held = self.held();
         self.host_memory_at(0)
     }
 }
@@ -313,7 +320,12 @@ impl std::fmt::Debug for VkHostMemory {
 
 /// Either kind's timeline semaphore ([`Event::vk_semaphore`], [`SharedEvent::vk_semaphore`]).
 fn semaphore(event: EventRef<'_>) -> vk::Semaphore {
-    event.shared().semaphore()
+    loop {
+        // An event carried since this read it answers where it was carried (`EventRef::shared`).
+        if let Some(semaphore) = event.shared().hand_out_semaphore() {
+            return semaphore;
+        }
+    }
 }
 
 /// Either kind's answer of how the caller's submission waits for `value` ([`Event::vk_wait`],
@@ -358,7 +370,9 @@ impl Event {
     ///
     /// # Safety
     ///
-    /// The semaphore stays the runtime's: the caller never destroys it, never uses it as a
+    /// The semaphore stays the runtime's (once its device's recovery carried the event to a new
+    /// `VkDevice`, one answered before stays the lost device's until the event goes, and a later
+    /// call answers the new one's): the caller never destroys it, never uses it as a
     /// binary semaphore, signals it only as a reservation names (never from the host but as
     /// that call says), and uses it only while the event lives: it keeps the event (a clone of
     /// it) until every submission of its own that waits for or signals the semaphore completed.
@@ -443,7 +457,9 @@ impl SharedEvent {
     ///
     /// # Safety
     ///
-    /// The semaphore stays the runtime's: the caller never destroys it, never uses it as a
+    /// The semaphore stays the runtime's (once its device's recovery carried the event to a new
+    /// `VkDevice`, one answered before stays the lost device's until the event goes, and a later
+    /// call answers the new one's): the caller never destroys it, never uses it as a
     /// binary semaphore, signals it only as a reservation names (never from the host but as
     /// that call says), and uses it only while the event lives: it keeps the event (a clone of
     /// it) until every submission of its own that waits for or signals the semaphore completed.

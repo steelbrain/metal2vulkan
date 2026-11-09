@@ -11,8 +11,8 @@ use super::device_recovery::{
 };
 use crate::fresh_pages::FRESH_PAGES_PAST;
 use crate::{
-    Buffer, CommandBufferStatus, CommandQueue, Device, Error, EventRef, ResourceOptions,
-    RuntimeGap, SharedEvent, SharedEventListener,
+    Buffer, CommandBufferStatus, CommandQueue, Device, Error, EventRef, PixelFormat,
+    ResourceOptions, RuntimeGap, SharedEvent, SharedEventListener, TextureDescriptor, TextureUsage,
 };
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -271,4 +271,60 @@ fn seven_recoveries_end_with_one_live_vk_device() {
         began.elapsed(),
         device.work_counts().vk_devices_live
     );
+}
+
+/// A call outside command buffers' work that reaches a carried buffer's Vulkan objects (here a
+/// texture over its bytes) holds the parts it read (`Buffer::held`): parked there while the
+/// recovery carries the buffer and the lost generation comes to rest, it keeps the buffer's
+/// parts there, which go as it ends. The buffer serves on the next generation meanwhile.
+#[test]
+fn a_call_under_way_keeps_the_parts_it_read_past_the_lost_generation_s_rest() {
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let queue = device.new_command_queue().unwrap();
+    let buffer = device
+        .new_buffer(BYTES, ResourceOptions::private())
+        .unwrap();
+    let made_on = buffer.device().clone();
+    let (parked, at_hook) = mpsc::channel();
+    let (go, wait) = mpsc::channel::<()>();
+    *crate::device::lock(&crate::buffer::HELD_HOOK) = Some(Box::new(move || {
+        let _ = parked.send(());
+        let _ = wait.recv();
+    }));
+    let call = {
+        let buffer = buffer.clone();
+        std::thread::spawn(move || {
+            let mut descriptor =
+                TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+            descriptor.usage = TextureUsage::SHADER_READ;
+            descriptor.resource_options = buffer.resource_options();
+            let row = buffer
+                .device()
+                .minimum_linear_texture_alignment_for_pixel_format(PixelFormat::RGBA8Unorm)
+                .unwrap()
+                .max(16);
+            buffer
+                .new_texture(&descriptor, 0, row)
+                .map(|texture| texture.device().generation_serves())
+        })
+    };
+    at_hook.recv_timeout(WAIT).unwrap();
+    device.recover_for_test().unwrap();
+    // The lost generation is at rest, none of its command buffers left, but the call holds the
+    // buffer's parts there.
+    assert!(made_on.shared().carry.at_rest());
+    assert!(!buffer.first_parts_freed());
+    // The buffer serves on the next generation meanwhile.
+    fill(&queue, &buffer, 6);
+    assert_eq!(
+        read(&device, &queue, &buffer).unwrap(),
+        vec![6; BYTES as usize]
+    );
+    go.send(()).unwrap();
+    // The call completed on the generation it began on: its texture is that one's, where the
+    // lost device made one.
+    let made = call.join().unwrap();
+    assert!(!matches!(made, Ok(true)), "{made:?}");
+    assert!(buffer.first_parts_freed());
 }
