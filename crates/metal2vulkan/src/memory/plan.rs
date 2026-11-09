@@ -48,8 +48,8 @@ use std::sync::Arc;
 
 use super::abi_index::AbiIndex;
 use super::provenance::{
-    self, grow, imageblock_cell, CellFacts, Class, ConstForm, HandleClass, OffsetRange, PrivForm,
-    Provenance, Repr, Root, RootSetId, RootSets, RootUse, Shape,
+    self, grow, imageblock_cell, CellFacts, Class, ConstForm, Extent, HandleClass, OffsetRange,
+    PrivForm, Provenance, Repr, Root, RootSetId, RootSets, RootUse, Shape,
 };
 use super::window;
 use crate::air::abi::{AbiInt, Access, ImageblockKind, ParamRole};
@@ -126,10 +126,10 @@ pub struct DynamicRegion {
     pub align: u64,
 }
 
-/// A kernel's explicit imageblock: `width · height` cells `cell_bytes` apart
-/// (`air.imageblock_data_size` rounded up to `air.arg_type_align_size`, so every cell is as
-/// aligned as the first), the extent the compute encoder sets, so it follows the
-/// `[[threadgroup(n)]]` regions.
+/// A kernel's explicit imageblock: `width · height` cells `cell_bytes` apart (the larger of
+/// `air.imageblock_data_size` and the widest access through a cell pointer, rounded up to
+/// `air.arg_type_align_size`, so every cell is as aligned as the first), the extent the compute
+/// encoder sets, so it follows the `[[threadgroup(n)]]` regions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageblockRegion {
     pub param: u32,
@@ -1626,7 +1626,11 @@ impl Planner<'_> {
     /// `air.imageblock_data` names no imageblock, so a kernel with two has none;
     /// `lower::access::imageblock` refuses a use without one. The cell stride is the data size
     /// rounded up to the alignment (Metal's own sizes already are multiples): the layout is
-    /// unobservable, and a stride that is not would misalign every other cell's fields.
+    /// unobservable, and a stride that is not would misalign every other cell's fields. A cell
+    /// pointer may reach past the data size (a `{half v}` cell stored as a `half2`, a slice of a
+    /// `half2` from it), which Metal holds, each cell its own (its imageblock is 8 bytes a pixel
+    /// for that layout, measured on the M3): the stride then covers the widest access through a
+    /// cell pointer, [`Planner::imageblock_reach`].
     ///
     /// A tile function's implicit imageblock: with an explicit layout aliased onto it, that
     /// layout's cell, as above but a whole number of words (its members are the attachments'
@@ -1659,6 +1663,10 @@ impl Planner<'_> {
                 } else {
                     align
                 };
+                let size = match arg.alias_implicit {
+                    true => size,
+                    false => size.max(self.imageblock_reach()?),
+                };
                 Some(ImageblockRegion {
                     param: b.param,
                     cell_bytes: size.checked_next_multiple_of(align)?,
@@ -1678,6 +1686,26 @@ impl Planner<'_> {
             }
             _ => None,
         }
+    }
+
+    /// The end of the widest access through a kernel's cell pointers (`air.imageblock_data`):
+    /// the highest byte past its cell's start that a load, a store, an atomic, or a slice write
+    /// reaches through one, 0 for none. An access at an offset the analysis does not bound, or
+    /// before the cell, adds nothing: `lower::access` and `lower::texture::slice` check each
+    /// against the cell and refuse what it does not hold.
+    fn imageblock_reach(&self) -> Option<u32> {
+        let mut end = 0u32;
+        for (r, u) in &self.prov.uses {
+            if !imageblock_cell(self.e, *r) {
+                continue;
+            }
+            if let Extent::Span { lo, hi } = u.extent {
+                if lo >= 0 {
+                    end = end.max(u32::try_from(hi).ok()?);
+                }
+            }
+        }
+        Some(end)
     }
 
     /// Whether `v` is an implicit imageblock parameter.

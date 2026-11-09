@@ -3144,7 +3144,8 @@ impl Walk<'_, '_> {
                     set(i, Touch::ReadWrite { atomic: false }, Some(Reach::at(n)));
                 }
             }
-            // A slice write reads cells of the imageblock its pointer names a field of.
+            // A slice write reads cells of the imageblock its pointer names a field of: in each,
+            // one element of the type its name spells, at the pointer's offset in its cell.
             Callee::Air {
                 op: AirIntrinsic::Texture(t),
                 ..
@@ -3153,7 +3154,10 @@ impl Walk<'_, '_> {
                     .layout()
                     .index(crate::air::intrinsics::TexRole::Imageblock)
                 {
-                    set(i, Touch::Read, None);
+                    let n = t
+                        .texel
+                        .map(|e| u64::from(e.ty.elem.bits().div_ceil(8)) * u64::from(e.ty.lanes));
+                    set(i, Touch::Read, n.map(Reach::at));
                 }
             }
             Callee::Llvm {

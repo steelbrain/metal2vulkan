@@ -1118,3 +1118,45 @@ fn a_half_slice_hands_the_device_the_cells_halves() {
     }
     assert!(ran > 0, "no profile writes a half slice");
 }
+
+/// `kernel_imageblock_wide_access` (owned, `engine/`): a `{half v}` cell (data size 2, align 2)
+/// stored through its pointer as a `half2` and sliced as one from its start (`ib_half_cell`), and
+/// the `{half2 v}` twin (`ib_half2_cell`). A cell holds the widest access through its pointer
+/// (`RuntimeFact::ImageblockSize { cell_bytes: 4 }` for both), so each thread's `half2` is its
+/// cell's own and thread (0, 0)'s slice writes every pixel of the 8x8 block its own `(x, y)`, as
+/// Metal on the M3 writes for both kernels (its imageblock is 8 bytes a pixel for either).
+#[test]
+fn a_cell_holds_the_widest_access_through_its_pointer() {
+    let Some(bc) = assemble(engine_dir().join("kernel_imageblock_wide_access.ll")) else {
+        return;
+    };
+    let mut ran = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        for entry in ["ib_half_cell", "ib_half2_cell"] {
+            let Some((plan, m)) = module(&bc, entry, &stem, &p) else {
+                continue;
+            };
+            assert!(
+                plan.facts
+                    .contains(&RuntimeFact::ImageblockSize { cell_bytes: 4 }),
+                "{stem}: {entry}: {:?}",
+                plan.facts
+            );
+            let d = Dispatch {
+                local: [8, 8],
+                block: [8, 8],
+                buffers: &[],
+                threadgroup: &[],
+            };
+            let (_, imgs) = run(&plan, &m, &d, &[poisoned(0, [8, 8], 1)]);
+            for y in 0..8 {
+                for x in 0..8 {
+                    let want = [fl(x as f32), fl(y as f32), 0, 0];
+                    assert_eq!(texel(&imgs[0], 0, x, y), want, "{stem}: {entry} ({x}, {y})");
+                }
+            }
+            ran += 1;
+        }
+    }
+    assert!(ran > 0);
+}
