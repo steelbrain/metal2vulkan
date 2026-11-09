@@ -2599,6 +2599,7 @@ field	metal2vulkan-runtime::WorkCounts.command_buffers_unsubmitted	pub command_b
 field	metal2vulkan-runtime::WorkCounts.command_pools_made	pub command_pools_made: u64
 field	metal2vulkan-runtime::WorkCounts.commands_noted_as_before	pub commands_noted_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.commands_recorded	pub commands_recorded: CommandsRecorded
+field	metal2vulkan-runtime::WorkCounts.commands_uncounted	pub commands_uncounted: u64
 field	metal2vulkan-runtime::WorkCounts.commit_refusals_held	pub commit_refusals_held: u64
 field	metal2vulkan-runtime::WorkCounts.commits_handed_off	pub commits_handed_off: u64
 field	metal2vulkan-runtime::WorkCounts.commits_taken_in	pub commits_taken_in: u64

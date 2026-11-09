@@ -374,6 +374,8 @@ mod rebind_making_wait;
 mod recorded_at_the_call;
 mod recorder_shards;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod recorder_slots;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod recycle;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod relay_facts;

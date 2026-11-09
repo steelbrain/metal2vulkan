@@ -16,7 +16,8 @@
 //!   thread holds (`shards.rs`, the threads that hold none sharing one more), each on cache lines
 //!   of its own, and reads their sums: threads that record at once write apart, where one array
 //!   would take each of their commands' counts in turn. A device past the slots records with its
-//!   driver's commands, uncounted.
+//!   driver's commands, uncounted, and says so (`WorkCounts::commands_uncounted`), so that no
+//!   reading takes its empty counts for none recorded.
 
 mod thunks;
 

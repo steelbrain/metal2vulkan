@@ -4196,8 +4196,14 @@ pub struct WorkCounts {
     /// The commands recorded into the device's `VkCommandBuffer`s, by kind, as each was recorded
     /// (`recorder`): one per call, the begins and ends among them, whatever the command buffer
     /// (an encoder's, a batch's submission's, the device's own) and the thread; none on a device
-    /// past the slots.
+    /// past the slots (`commands_uncounted`).
     pub commands_recorded: CommandsRecorded,
+    /// 1 where the device records its commands uncounted, 0 where `commands_recorded` counts them:
+    /// as it was made, every one of the recorder's slots was held (`recorder::SLOTS`, each by a
+    /// device of the process until its `vkDestroyDevice`), so its commands go straight to its
+    /// driver's entry points and `commands_recorded` reads none of them. A reading of
+    /// `commands_recorded` is the device's commands only where this is 0.
+    pub commands_uncounted: u64,
     /// The places in the runtime that recorded `vkCmdCopyBuffer`, `vkCmdCopyBufferToImage`,
     /// `vkCmdCopyImageToBuffer` and `vkCmdCopyImage` through the device's functions, as encoders
     /// and the runtime's own work recorded them: the first 32 places met, each with its calls,
@@ -7418,6 +7424,7 @@ impl Device {
             device_recoveries,
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
             commands_recorded: self.shared().commands_recorded(),
+            commands_uncounted: u64::from(self.shared().recording().is_none()),
             object_churn: churn.0,
             shadow_keeps: churn.1,
             copy_sites: self.shared().vk().copy_sites(),

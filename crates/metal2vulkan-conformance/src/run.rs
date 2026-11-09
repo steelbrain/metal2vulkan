@@ -45,7 +45,7 @@ pub fn replay_on_under(
 ) -> Result<(Report, Stability), String> {
     let mut notices = Notices::default();
     let cache = ScratchCache::new().map_err(|error| error.to_string())?;
-    let device = device::open_under(venues, policy, &notices, &cache)?;
+    let device = device::open_counted(venues, policy, &notices, &cache, device::SLOT_WAIT)?;
     // The notices a device announces as it is made are the venue's, not any case's: they say what
     // this host's driver and release cost, once, before a case runs. They go in the report's venue
     // line; no case's scope was open for them, so none of them can reach a case.
@@ -117,9 +117,19 @@ fn one_replay_pass(
 ///
 /// A reading that does not parse is the cost half's own failure, never the case's: it is reported
 /// as an unmeasured row naming the reason, so a runtime field of a new shape shows up as a hole in
-/// the gate instead of as a correctness result.
+/// the gate instead of as a correctness result. So is a device whose commands the runtime does
+/// not count (`WorkCounts::commands_uncounted`, [`device::open_counted`]): its
+/// `commands_recorded` reads 0 whatever it recorded.
 fn read_counts(device: &metal2vulkan_runtime::Device) -> Result<Counts, String> {
-    Counts::of(&device.work_counts())
+    let counts = device.work_counts();
+    if counts.commands_uncounted != 0 {
+        return Err(
+            "the device records its commands uncounted (every recorder slot was held as it was \
+             made), so its commands_recorded reads none of them"
+                .to_owned(),
+        );
+    }
+    Counts::of(&counts)
 }
 
 /// What one pass measured of one case, before any bound is read: the three readings taken around
@@ -238,7 +248,7 @@ pub fn cost_on_under(
     for round in 0..runs.max(1) {
         let mut notices = Notices::default();
         let cache = ScratchCache::new().map_err(|error| error.to_string())?;
-        let device = device::open_under(venues, policy, &notices, &cache)?;
+        let device = device::open_counted(venues, policy, &notices, &cache, device::SLOT_WAIT)?;
         // The device's own notices, read off so no case's scope ever holds them.
         notices.venue();
         venue = device.name().to_owned();
@@ -581,7 +591,7 @@ struct Open {
 fn open(venues: Venues, policy: Policy) -> Result<Open, String> {
     let notices = Notices::default();
     let cache = ScratchCache::new().map_err(|error| error.to_string())?;
-    let device = device::open_under(venues, policy, &notices, &cache)?;
+    let device = device::open_counted(venues, policy, &notices, &cache, device::SLOT_WAIT)?;
     // The notices the device announced as it was made are the venue's, not any case's.
     notices.venue();
     Ok(Open {
@@ -963,5 +973,76 @@ mod every_case_reads_the_same_verdict_alone {
             &[],
             "the selection announced notices no case's scope was open for"
         );
+    }
+}
+
+/// A device past the runtime's recorder slots measures nothing: its reading says its commands go
+/// uncounted, the cost leg refuses to read a count from it, and a cost leg opened while every slot
+/// is held waits for one to be let go rather than recording the uncounted device's zeros.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod a_device_past_the_recorder_slots_measures_nothing {
+    use super::{cost_on_under, read_counts, Policy, Venues};
+    use crate::device::{self, Notices, ScratchCache};
+    use metal2vulkan_runtime::Device;
+    use std::time::Duration;
+
+    const VENUE: Venues = if cfg!(m2v_gpu) {
+        Venues::Gpu
+    } else {
+        Venues::Cpu
+    };
+
+    /// More devices than the runtime has slots, many times over: the test holds devices until one
+    /// reads uncounted, and a runtime that counted every one of these would fail it.
+    const AT_MOST: usize = 64;
+
+    /// A device of its own (a sink of its own), with the cache it uses, dropped after it.
+    fn open() -> (Device, ScratchCache) {
+        let cache = ScratchCache::new().unwrap();
+        let device = device::open_under(VENUE, Policy::Exact, &Notices::default(), &cache).unwrap();
+        (device, cache)
+    }
+
+    #[test]
+    fn a_device_made_while_every_slot_is_held_is_refused_and_the_cost_leg_waits() {
+        let mut held = Vec::new();
+        let past = loop {
+            assert!(
+                held.len() < AT_MOST,
+                "{AT_MOST} devices held, every one counted"
+            );
+            let (device, cache) = open();
+            if device.work_counts().commands_uncounted != 0 {
+                break (device, cache);
+            }
+            held.push((device, cache));
+        };
+        assert!(!held.is_empty(), "the first device made was uncounted");
+        let refused = read_counts(&past.0).unwrap_err();
+        assert!(refused.contains("uncounted"), "{refused}");
+        drop(past);
+
+        let cache = ScratchCache::new().unwrap();
+        let waited = device::open_counted(
+            VENUE,
+            Policy::Exact,
+            &Notices::default(),
+            &cache,
+            Duration::from_millis(200),
+        );
+        assert!(
+            waited.is_err(),
+            "a counted device made while every slot was held"
+        );
+
+        // A slot let go while the cost leg waits for one: the leg opens its device once it is.
+        let letting_go = held.pop().unwrap();
+        let let_go = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(letting_go);
+        });
+        let measured = cost_on_under(VENUE, Policy::Exact, &[], 1);
+        let_go.join().unwrap();
+        assert!(measured.is_ok(), "{measured:?}");
     }
 }
