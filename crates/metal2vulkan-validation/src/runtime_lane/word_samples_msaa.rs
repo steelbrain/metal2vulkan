@@ -15,9 +15,10 @@
 //! attachments (`DeviceOptions::withheld_attachment_formats`), which holds each multisampled
 //! texture the device renders in its word's format (`image_plan::word_samples`) where the device
 //! renders the word at the count. Each leg prints which way it held each format. A word's samples
-//! are Metal's words, read as Metal reads them (an sRGB word's by the device's decode,
-//! `srgb-texel-decode`, within a code of the transfer where it is not Metal's, and a 5- or 6-bit
-//! field's by the device's widening, `device-texel-conversion`, within its bound there: [`read`]),
+//! are Metal's words, read as Metal reads them (an sRGB sample's, a word's or the format's own, by
+//! the device's decode, `srgb-texel-decode`, within a code of the transfer where it is not
+//! Metal's, and a 5- or 6-bit field's by the device's widening, `device-texel-conversion`, within
+//! its bound there: [`read`]),
 //! and its
 //! resolve, the crate-owned one, is Metal's
 //! for `R8Unorm_sRGB` and `RGB9E5Float` and within one code of each field of Metal's for the
@@ -1064,6 +1065,15 @@ fn multisampled_word_formats_store_read_resolve_and_blend_as_metal() {
             if !lane.metal_sampler() {
                 allowed.insert(Degradation::DeviceTexelConversion);
             }
+            // An sRGB sample's reads, the device's decode where it is not Metal's: a word's and a
+            // format's own alike (RADV holds `R8Unorm_sRGB` in its own format).
+            let srgb = matches!(
+                WordAttachment::layout(pf),
+                Some(WordAttachment::Srgb8 { .. })
+            );
+            if srgb && !lane.metal_sampler() {
+                allowed.insert(Degradation::SrgbTexelDecode);
+            }
             match word {
                 true => {
                     kinds.insert(Degradation::ShaderResolve);
@@ -1076,14 +1086,6 @@ fn multisampled_word_formats_store_read_resolve_and_blend_as_metal() {
                     // A blended word's samples, through the sample planes.
                     if blended {
                         allowed.insert(Degradation::SamplePlanes);
-                    }
-                    // An sRGB word's reads, the device's decode where it is not Metal's.
-                    let srgb = matches!(
-                        WordAttachment::layout(pf),
-                        Some(WordAttachment::Srgb8 { .. })
-                    );
-                    if srgb && !lane.metal_sampler() {
-                        allowed.insert(Degradation::SrgbTexelDecode);
                     }
                 }
                 false => {
