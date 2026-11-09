@@ -3,7 +3,7 @@
 //! `VUID-vkCmdCopyBufferToImage-pRegions-07931` for each depth outside `[0, 1]` a copy takes into
 //! a depth image of a device without `VK_EXT_depth_range_unrestricted`). One lane a path:
 //! `replace_region`, a blit from a buffer (its copy as it is, through its plan's staging buffer,
-//! and into `Depth32Float_Stencil8`'s depth), and a copy from a colour texture.
+//! and into `Depth32Float_Stencil8`'s depth, a lane each), and a copy from a colour texture.
 //!
 //! Where the device may store such a depth clamped ([`clamps`]: no such extension enabled and no
 //! `DriverFact::DepthImageKeepsValuesOutsideUnitRange`, as ANV on the Iris Xe), each upload clamps
@@ -213,84 +213,105 @@ fn replace_region_takes_no_depth_outside_0_1_into_a_depth_image() {
     );
 }
 
-/// A blit from a buffer into a `Private` texture's depth takes no copy of a depth outside
-/// `[0, 1]`: into a `Depth32Float` texture from a buffer at Metal's rules (the copy as it is),
-/// from one at an offset of 2, off the copy unit, which goes through the plan's staging buffer
-/// (each 4-byte word read at an even byte holds `0x40004000`, a depth above 1.0, wherever plain
-/// Metal reads its rows), and into a `Depth32Float_Stencil8` texture's depth
-/// (`DepthFromDepthStencil`). Where the device clamps, each copy's depths are clamped by a
-/// dispatch first, three uploads clamped, and each texel reads back clamped (the module docs).
-#[test]
-fn a_blit_from_a_buffer_takes_no_depth_outside_0_1_into_a_depth_image() {
-    const ABOVE: u32 = 0x4000_4000;
+/// `0x40004000`, a depth above 1.0: the word at any even byte of a buffer of its bytes, `00 40`
+/// over and over.
+const ABOVE: u32 = 0x4000_4000;
+
+/// A blit from a buffer into a new `Private` texture of `pf` (its depth, by `options`), from
+/// byte `at` of a buffer of [`depth_bits`]' texels at 0, else of [`ABOVE`]'s halves, under the
+/// GPU-assisted check, as the lanes below take it: no copy of a depth outside `[0, 1]`; where
+/// the device clamps, one upload clamped by a dispatch, and each texel read back clamped.
+/// `label` names the copy in `DEPTHCLAMP`'s line.
+fn blit_lane(label: &str, pf: PixelFormat, at: u64, options: BlitOption) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let (clamps, clamped, reads) = {
+    let bits = move |i: u64| match at {
+        0 => depth_bits(i),
+        _ => ABOVE,
+    };
+    let (clamps, clamped, read) = {
         let device = &gpu_assisted_copies(&messages, cache.path());
         let clamps = clamps(device);
         let [w, h] = SIDES;
-        let depths = written(depth_bits);
-        let source = staged(device, &depths);
-        // `0x40004000`'s bytes, `00 40` over and over: a word at any even byte is it.
-        let halves: Vec<u8> = (0..4 * w * h + 4)
-            .map(|i| [0x00, 0x40][i as usize % 2])
-            .collect();
-        let off_unit = staged(device, &halves);
-        let (plain, staging, combined) = (
-            texture(device, PixelFormat::Depth32Float, StorageMode::Private),
-            texture(device, PixelFormat::Depth32Float, StorageMode::Private),
-            texture(
-                device,
-                PixelFormat::Depth32FloatStencil8,
-                StorageMode::Private,
-            ),
-        );
+        let bytes: Vec<u8> = match at {
+            0 => written(depth_bits),
+            _ => (0..4 * w * h + 4)
+                .map(|i| [0x00, 0x40][i as usize % 2])
+                .collect(),
+        };
+        let source = staged(device, &bytes);
+        let texture = texture(device, pf, StorageMode::Private);
         let before = device.work_counts().depth_uploads_clamped;
         let queue = device.new_command_queue().unwrap();
         let command_buffer = queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
         let (origin, size) = (Origin::new(0, 0, 0), Size::new(w, h, 1));
-        for (from, at, to, options) in [
-            (&source, 0, &plain, BlitOption::None),
-            (&off_unit, 2, &staging, BlitOption::None),
-            (&source, 0, &combined, BlitOption::DepthFromDepthStencil),
-        ] {
-            blit.copy_from_buffer_to_texture(from, at, 4 * w, 0, size, to, 0, 0, origin, options)
-                .unwrap();
-        }
+        blit.copy_from_buffer_to_texture(
+            &source,
+            at,
+            4 * w,
+            0,
+            size,
+            &texture,
+            0,
+            0,
+            origin,
+            options,
+        )
+        .unwrap();
         blit.end_encoding().unwrap();
         run(&command_buffer);
         let clamped = clamped_since(device, before);
-        let reads = [
-            (
-                "the copy as it is",
-                texels(device, &plain, BlitOption::None),
-            ),
-            (
-                "the staged copy",
-                texels(device, &staging, BlitOption::None),
-            ),
-            (
-                "the combined format's depth",
-                texels(device, &combined, BlitOption::DepthFromDepthStencil),
-            ),
-        ];
-        (clamps, clamped, reads)
+        (clamps, clamped, texels(device, &texture, options))
     };
-    let label =
-        format!("DEPTHCLAMP blit from a buffer: clamps {clamps}, {clamped} uploads clamped");
-    reported_no_depth_outside_0_1(&messages, &label);
-    assert_eq!(clamped, 3 * u64::from(clamps), "the uploads clamped");
-    for (copy, read) in reads {
-        let off = match copy {
-            "the staged copy" => read_otherwise(&read, |_| ABOVE, clamps),
-            _ => read_otherwise(&read, depth_bits, clamps),
-        };
-        assert!(
-            off.is_empty(),
-            "{copy}: texels read otherwise (texel, bits, read): {off:x?}"
-        );
-    }
+    let line = format!("DEPTHCLAMP {label}: clamps {clamps}, {clamped} uploads clamped");
+    reported_no_depth_outside_0_1(&messages, &line);
+    assert_eq!(clamped, u64::from(clamps), "the uploads clamped");
+    let off = read_otherwise(&read, bits, clamps);
+    assert!(
+        off.is_empty(),
+        "texels read otherwise (texel, bits, read): {off:x?}"
+    );
+}
+
+/// A blit from a buffer at Metal's rules into a `Private` `Depth32Float` texture, the copy as it
+/// is: its depths copied into a scratch buffer of the encoder and clamped there where the device
+/// clamps ([`blit_lane`]).
+#[test]
+fn a_blit_from_a_buffer_takes_no_depth_outside_0_1_into_a_depth_image() {
+    blit_lane(
+        "blit from a buffer",
+        PixelFormat::Depth32Float,
+        0,
+        BlitOption::None,
+    );
+}
+
+/// A blit from a buffer at an offset of 2, off the copy unit, into a `Private` `Depth32Float`
+/// texture, which goes through its plan's staging buffer: clamped in that buffer where the
+/// device clamps ([`blit_lane`]). Each word read at an even byte is [`ABOVE`], wherever plain
+/// Metal reads its rows.
+#[test]
+fn a_staged_blit_from_a_buffer_takes_no_depth_outside_0_1_into_a_depth_image() {
+    blit_lane(
+        "staged blit from a buffer",
+        PixelFormat::Depth32Float,
+        2,
+        BlitOption::None,
+    );
+}
+
+/// A blit from a buffer into a `Private` `Depth32Float_Stencil8` texture's depth
+/// (`DepthFromDepthStencil`), a `D32_SFLOAT_S8_UINT` image's depth plane ([`blit_lane`]).
+#[test]
+fn a_blit_from_a_buffer_takes_no_depth_outside_0_1_into_a_combined_format_s_depth() {
+    let pf = PixelFormat::Depth32FloatStencil8;
+    blit_lane(
+        "blit into a combined format's depth",
+        pf,
+        0,
+        BlitOption::DepthFromDepthStencil,
+    );
 }
 
 /// A copy from an `R32Float` texture into a `Depth32Float` one, which goes through the encoder's
