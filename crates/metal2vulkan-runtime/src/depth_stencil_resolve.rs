@@ -41,7 +41,7 @@
 
 use super::device::{device_error, lock};
 use super::encoder::EncoderCore;
-use super::error::{internal, vulkan, Error, RuntimeGap};
+use super::error::{internal, Error, RuntimeGap};
 use super::release;
 use super::render_pass::{PassLayout, Target};
 use super::resource::ResourceKey;
@@ -341,7 +341,6 @@ fn draw_pipeline(
     (write, making): (ResolveWrite, Making),
 ) -> Result<vk::Pipeline, Error> {
     let shared = device.shared();
-    let raw = shared.vk();
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
@@ -405,17 +404,7 @@ fn draw_pipeline(
         .layout(shaders.layout)
         .render_pass(render_pass)
         .subpass(0);
-    let created = shared
-        .make_pipelines(making, |cache| {
-            // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
-            // making's own (`shader_cache/driver.rs`).
-            unsafe { raw.create_graphics_pipelines(cache, &[info], None) }
-        })
-        .map_err(|(_, error)| vulkan(error))?;
-    created
-        .first()
-        .copied()
-        .ok_or_else(|| internal("the driver made no pipeline"))
+    shared.make_graphics_pipeline(making, info)
 }
 
 /// Whether the draws can resolve `aspects` of `source` by `pick` into `into`, and their objects

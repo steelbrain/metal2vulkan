@@ -62,7 +62,7 @@
 use super::binding_view::VkView;
 use super::degradation::Degradation;
 use super::device::{device_error, lock};
-use super::error::{internal, vulkan, Error};
+use super::error::{internal, Error};
 use super::release;
 use super::render_pass::Target;
 use super::sample_planes::{pipeline_layout, set_layout, shader_module};
@@ -500,17 +500,8 @@ impl Device {
             let info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage)
                 .layout(kernel.layout);
-            let created = shared
-                .make_pipelines(Making::new("depth split").words(&module.spirv), |cache| {
-                    // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
-                    // making's own (`shader_cache/driver.rs`).
-                    unsafe { raw.create_compute_pipelines(cache, &[info], None) }
-                })
-                .map_err(|(_, error)| vulkan(error))?;
-            kernel.pipeline = created
-                .first()
-                .copied()
-                .ok_or_else(|| internal("the driver made no pipeline"))?;
+            kernel.pipeline = shared
+                .make_compute_pipeline(Making::new("depth split").words(&module.spirv), info)?;
             Ok(())
         })();
         match made {
@@ -691,7 +682,6 @@ fn depth_pipeline(
     (colour, making): (bool, Making),
 ) -> Result<vk::Pipeline, Error> {
     let shared = device.shared();
-    let raw = shared.vk();
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
@@ -749,17 +739,7 @@ fn depth_pipeline(
         true => info,
         false => info.depth_stencil_state(&depth_stencil),
     };
-    let created = shared
-        .make_pipelines(making, |cache| {
-            // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
-            // making's own (`shader_cache/driver.rs`).
-            unsafe { raw.create_graphics_pipelines(cache, &[info], None) }
-        })
-        .map_err(|(_, error)| vulkan(error))?;
-    created
-        .first()
-        .copied()
-        .ok_or_else(|| internal("the driver made no pipeline"))
+    shared.make_graphics_pipeline(making, info)
 }
 
 /// Make, where they are not yet made, the draw's objects for a destination of `format` at

@@ -965,26 +965,16 @@ fn make(
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(kernel.layout);
-        let created = shared
-            .make_pipelines(
-                Making::new("owned kernel").words(spirv).text(&(
-                    images,
-                    storage_images,
-                    buffers,
-                    push_bytes,
-                    pushed,
-                )),
-                |cache| {
-                    // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
-                    // making's own (`shader_cache/driver.rs`).
-                    unsafe { raw.create_compute_pipelines(cache, &[info], None) }
-                },
-            )
-            .map_err(|(_, error)| vulkan(error))?;
-        kernel.pipeline = created
-            .first()
-            .copied()
-            .ok_or_else(|| internal("the driver made no pipeline"))?;
+        kernel.pipeline = shared.make_compute_pipeline(
+            Making::new("owned kernel").words(spirv).text(&(
+                images,
+                storage_images,
+                buffers,
+                push_bytes,
+                pushed,
+            )),
+            info,
+        )?;
         Ok(())
     })();
     match made {

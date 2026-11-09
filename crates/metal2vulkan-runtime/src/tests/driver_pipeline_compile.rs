@@ -55,7 +55,9 @@
 //! **A library of shaders reports what its driver found**, as a whole pipeline's making does: a
 //! later device over the directory an earlier one wrote counts one report per library of shaders
 //! it makes, and reads no data back for one found in its record
-//! (`a_library_of_shaders_reports_what_its_driver_found`).
+//! (`a_library_of_shaders_reports_what_its_driver_found`). So do the runtime's own kernels, and
+//! one found in its record writes no record again
+//! (`the_runtime_s_own_kernels_found_in_their_records_write_nothing`).
 //!
 //! The device takes a shader cache directory of its own, empty, so no run reads a record an
 //! earlier run stored.
@@ -66,6 +68,7 @@
 
 use super::blit_holds::{device, Scratch};
 use super::descriptor_key_once::descriptor;
+use crate::owned_kernel::OwnedModule;
 use crate::PipelineOptions;
 use metal2vulkan::metal::{BlendFactor, BlendOperation};
 
@@ -245,5 +248,65 @@ fn a_library_of_shaders_reports_what_its_driver_found() {
     );
     if hits == 2 {
         assert_eq!(saves, 0, "libraries found in their records write nothing");
+    }
+}
+
+/// The runtime's own kernels made again on a later device report what their driver found, and
+/// those it reports found in the records an earlier device over the same directory wrote write no
+/// record again (`driver_saves`), whatever bytes the driver's data holds after them: RADV's
+/// differs from the record's now and then (`shader_cache/driver.rs`), which a byte comparison
+/// took for new data and wrote the record again at the device's every making of them.
+#[test]
+fn the_runtime_s_own_kernels_found_in_their_records_write_nothing() {
+    let scratch = Scratch::new("driver-own-kernels");
+    let kernels = [OwnedModule::RowsCopy, OwnedModule::VisibilityCombine];
+    {
+        let device = device(&scratch.0);
+        let reports = device.shared().shader_cache.driver_reports();
+        if !reports {
+            println!("DRIVER-OWN-KERNELS: not covered (the device's makings report nothing)");
+            return;
+        }
+        for which in kernels {
+            device.owned_kernel(which).unwrap();
+        }
+    }
+    // The first device is gone, so its cache thread wrote what its makings handed it.
+    let device = device(&scratch.0);
+    let before = device.shader_cache_statistics();
+    let counts_before = device.work_counts();
+    for which in kernels {
+        device.owned_kernel(which).unwrap();
+    }
+    let after = device.shader_cache_statistics();
+    let made = device.work_counts().owned_kernels_made - counts_before.owned_kernels_made;
+    let since = |of: fn(&crate::ShaderCacheStatistics) -> u64| of(&after) - of(&before);
+    let (hits, misses) = (
+        since(|s| s.driver_pipeline_hits),
+        since(|s| s.driver_pipeline_misses),
+    );
+    let (found, saves) = (since(|s| s.driver_data_found), since(|s| s.driver_saves));
+    println!(
+        "DRIVER-OWN-KERNELS: {made} kernels made, {hits} hits and {misses} misses reported, \
+         {found} found and read nothing back, {saves} records' data written, {} loaded",
+        since(|s| s.driver_loads)
+    );
+    assert_eq!(
+        made,
+        kernels.len() as u64,
+        "the later device made each kernel"
+    );
+    assert_eq!(
+        hits + misses,
+        made,
+        "each of the runtime's kernels reports what its driver found: {hits} hits and {misses} \
+         misses"
+    );
+    assert_eq!(
+        found, hits,
+        "each kernel its driver reports found in the cache its record loaded reads no data back"
+    );
+    if hits == made {
+        assert_eq!(saves, 0, "kernels found in their records write nothing");
     }
 }

@@ -1052,13 +1052,7 @@ impl VariantObjects {
         if bindable {
             info = info.push_next(&mut flags);
         }
-        // Whether the making's cache held it and its one stage, where the making reports them
-        // (`shader_cache::found_in_cache`; one stage's feedback, as
-        // VUID-VkComputePipelineCreateInfo-pipelineStageCreationFeedbackCount-06566 allows).
-        let mut whole = vk::PipelineCreationFeedback::default();
-        let mut stage = [vk::PipelineCreationFeedback::default()];
         let shared = self.device.shared();
-        let driver_reports = shared.shader_cache.driver_reports();
         // Its record is named by the variant's content and what this making adds to it.
         let making = self.making("compute").text(&(
             c.object.stage.as_raw(),
@@ -1084,34 +1078,10 @@ impl VariantObjects {
         let started = std::time::Instant::now();
         // With what the driver reports of the making: a pipeline found in its record's cache
         // reads no data back (`shader_cache/driver.rs`).
-        let created = shared
-            .make_pipelines_reported(making, |cache| {
-                let mut feedback = vk::PipelineCreationFeedbackCreateInfo::default()
-                    .pipeline_creation_feedback(&mut whole)
-                    .pipeline_stage_creation_feedbacks(&mut stage);
-                let mut info = info;
-                if driver_reports {
-                    info = info.push_next(&mut feedback);
-                }
-                // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
-                // making's own, destroyed once the call returned.
-                let made = unsafe { shared.vk().create_compute_pipelines(cache, &[info], None) };
-                let found = driver_reports
-                    .then(|| crate::shader_cache::found_in_cache(&whole, &stage))
-                    .flatten();
-                (made, found)
-            })
-            .map_err(|(_, error)| vulkan(error))?;
+        let raw = shared.make_compute_pipeline(making, info)?;
         let created_in = started.elapsed();
         drop(leader);
         drop(turn);
-        if driver_reports {
-            shared.shader_cache.driver_reported(&whole, &stage);
-        }
-        let raw = created
-            .first()
-            .copied()
-            .ok_or_else(|| internal("the driver made no pipeline"))?;
         self.device.shared().counts.variant_pipeline_made();
         let pipeline = RawPipeline {
             device: self.device.clone(),

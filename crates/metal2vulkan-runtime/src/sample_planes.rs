@@ -467,17 +467,8 @@ impl Device {
             let info = vk::ComputePipelineCreateInfo::default()
                 .stage(stage)
                 .layout(kernel.layout);
-            let created = shared
-                .make_pipelines(Making::new("planes split").words(&module.spirv), |cache| {
-                    // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
-                    // making's own (`shader_cache/driver.rs`).
-                    unsafe { raw.create_compute_pipelines(cache, &[info], None) }
-                })
-                .map_err(|(_, error)| vulkan(error))?;
-            kernel.pipeline = created
-                .first()
-                .copied()
-                .ok_or_else(|| internal("the driver made no pipeline"))?;
+            kernel.pipeline = shared
+                .make_compute_pipeline(Making::new("planes split").words(&module.spirv), info)?;
             Ok(())
         })();
         match made {
@@ -651,7 +642,6 @@ fn merge_pipeline(
     making: Making,
 ) -> Result<vk::Pipeline, Error> {
     let shared = device.shared();
-    let raw = shared.vk();
     let stages = [
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
@@ -697,17 +687,7 @@ fn merge_pipeline(
         .layout(shaders.layout)
         .render_pass(render_pass)
         .subpass(0);
-    let created = shared
-        .make_pipelines(making, |cache| {
-            // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
-            // making's own (`shader_cache/driver.rs`).
-            unsafe { raw.create_graphics_pipelines(cache, &[info], None) }
-        })
-        .map_err(|(_, error)| vulkan(error))?;
-    created
-        .first()
-        .copied()
-        .ok_or_else(|| internal("the driver made no pipeline"))
+    shared.make_graphics_pipeline(making, info)
 }
 
 /// The objects one pass's planes steps hold until its command buffer completes: their

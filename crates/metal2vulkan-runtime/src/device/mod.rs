@@ -55,7 +55,7 @@ use super::depth_copy::DepthCopyObjects;
 use super::depth_stencil_resolve::DepthStencilResolveObjects;
 use super::draw_source::{sized_index_bind, SizedIndexBind};
 use super::dynamic_state::{ColorWriteMasks, ExtendedDynamicState};
-use super::error::{vulkan, Error};
+use super::error::{internal, vulkan, Error};
 use super::exit_guard::{self, Call};
 use super::freed_memory::Parking;
 use super::function_table::TableShared;
@@ -79,7 +79,8 @@ use super::resource_ids::{PassingHolds, ResourceIds, SamplerIdReads};
 use super::sample_planes::PlanesObjects;
 use super::sampler::{LiveSamplers, SamplerCount};
 use super::scheduler::Scheduler;
-use super::shader_cache::{CacheSetup, ShaderCache};
+use super::shader_cache::driver::Making;
+use super::shader_cache::{found_in_cache, CacheSetup, ShaderCache, REPORTED_STAGES};
 use super::sharing::Sharing;
 use super::spares::Spares;
 use super::sparse::device::SparseDevice;
@@ -690,25 +691,16 @@ impl DeviceShared {
     }
 
     /// What `create` makes with the `VkPipelineCache` it is handed, its `vkCreate*Pipelines` call:
-    /// a cache of the making's own, seeded from the record `making` names
-    /// (`ShaderCache::make_pipelines`, `shader_cache/driver.rs`). On a pool's thread the exit waits
-    /// for it longer (`exit_guard::driver_making`).
-    pub(crate) fn make_pipelines<T, E>(
-        &self,
-        making: crate::shader_cache::driver::Making,
-        create: impl FnOnce(vk::PipelineCache) -> Result<T, E>,
-    ) -> Result<T, E> {
-        self.make_pipelines_reported(making, |cache| (create(cache), None))
-    }
-
-    /// [`make_pipelines`](Self::make_pipelines), with what the driver reported of the making:
-    /// `create` returns, with what it made, whether the driver found its pipeline in the cache it
-    /// was handed (`shader_cache::found_in_cache`, `None` where it reports nothing). A making
-    /// from its record that the driver reports found reads no data back and writes nothing
-    /// (`shader_cache/driver.rs`).
+    /// the device's cache of the record `making` names, seeded from that record
+    /// (`ShaderCache::make_pipelines`, `shader_cache/driver.rs`). `create` returns, with what it
+    /// made, whether the driver found its pipeline in the cache it was handed
+    /// (`shader_cache::found_in_cache`, `None` where it reports nothing). A making from its record
+    /// that the driver reports found reads no data back and writes nothing
+    /// (`shader_cache/driver.rs`). On a pool's thread the exit waits for it longer
+    /// (`exit_guard::driver_making`).
     pub(crate) fn make_pipelines_reported<T, E>(
         &self,
-        making: crate::shader_cache::driver::Making,
+        making: Making,
         create: impl FnOnce(vk::PipelineCache) -> (Result<T, E>, Option<bool>),
     ) -> Result<T, E> {
         // What every making is measured to report, withheld inside it (`driver_facts.rs`); a
@@ -719,6 +711,92 @@ impl DeviceShared {
                 self.shader_cache.make_pipelines(self.vk(), making, create)
             })
         })
+    }
+
+    /// The compute pipeline of `info`, made as
+    /// [`make_pipelines_reported`](Self::make_pipelines_reported) makes one under the record
+    /// `making` names, with what its driver reports of it where the device's makings report
+    /// (`VK_EXT_pipeline_creation_feedback`, counted in `driver_pipeline_hits` and `misses`): one
+    /// found in a cache loaded from its record reads no data back and writes nothing, whatever
+    /// bytes the driver's data holds after it. A program's compute pipelines and the runtime's
+    /// own kernels.
+    pub(crate) fn make_compute_pipeline(
+        &self,
+        making: Making,
+        info: vk::ComputePipelineCreateInfo<'_>,
+    ) -> Result<vk::Pipeline, Error> {
+        let reports = self.shader_cache.driver_reports();
+        let mut whole = vk::PipelineCreationFeedback::default();
+        let mut stage = [vk::PipelineCreationFeedback::default()];
+        let made = self.make_pipelines_reported(making, |cache| {
+            let mut feedback = vk::PipelineCreationFeedbackCreateInfo::default()
+                .pipeline_creation_feedback(&mut whole)
+                .pipeline_stage_creation_feedbacks(&mut stage);
+            let mut info = info;
+            if reports {
+                info = info.push_next(&mut feedback);
+            }
+            // SAFETY: what `info` points to outlives it, and so the call; the cache is the
+            // device's of the record, or none.
+            let made = unsafe { self.vk().create_compute_pipelines(cache, &[info], None) };
+            let found = reports.then(|| found_in_cache(&whole, &stage)).flatten();
+            (made, found)
+        });
+        self.made_one(made, reports.then_some((&whole, &stage[..])))
+    }
+
+    /// The graphics pipeline, or graphics pipeline library, of `info`, made and reported as
+    /// [`make_compute_pipeline`](Self::make_compute_pipeline) makes a compute pipeline: a library
+    /// of shaders of a render pipeline linked from libraries (`pipeline/graphics.rs`), and the
+    /// runtime's own draws (its copies, resolves and planes steps).
+    pub(crate) fn make_graphics_pipeline(
+        &self,
+        making: Making,
+        info: vk::GraphicsPipelineCreateInfo<'_>,
+    ) -> Result<vk::Pipeline, Error> {
+        let reports = self.shader_cache.driver_reports();
+        // Its stages' feedback where it has at most `REPORTED_STAGES`, none where more (a count of
+        // 0 is valid, one equal to `stageCount` else:
+        // VUID-VkGraphicsPipelineCreateInfo-pipelineStageCreationFeedbackCount-06594).
+        let mut whole = vk::PipelineCreationFeedback::default();
+        let mut stages = [vk::PipelineCreationFeedback::default(); REPORTED_STAGES];
+        let count = info.stage_count as usize;
+        let reported = if count <= REPORTED_STAGES { count } else { 0 };
+        let made = self.make_pipelines_reported(making, |cache| {
+            let mut feedback = vk::PipelineCreationFeedbackCreateInfo::default()
+                .pipeline_creation_feedback(&mut whole)
+                .pipeline_stage_creation_feedbacks(&mut stages[..reported]);
+            let mut info = info;
+            if reports {
+                info = info.push_next(&mut feedback);
+            }
+            // SAFETY: as `make_compute_pipeline`'s.
+            let made = unsafe { self.vk().create_graphics_pipelines(cache, &[info], None) };
+            let found = reports
+                .then(|| found_in_cache(&whole, &stages[..reported]))
+                .flatten();
+            (made, found)
+        });
+        self.made_one(made, reports.then_some((&whole, &stages[..reported])))
+    }
+
+    /// The one pipeline a making `made`, with what its driver reported of it, `reported`, counted
+    /// where the making chained the reports and made it.
+    fn made_one(
+        &self,
+        made: Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)>,
+        reported: Option<(
+            &vk::PipelineCreationFeedback,
+            &[vk::PipelineCreationFeedback],
+        )>,
+    ) -> Result<vk::Pipeline, Error> {
+        let made = made.map_err(|(_, error)| vulkan(error))?;
+        if let Some((whole, stages)) = reported {
+            self.shader_cache.driver_reported(whole, stages);
+        }
+        made.first()
+            .copied()
+            .ok_or_else(|| internal("the driver made no pipeline"))
     }
 
     /// The device's functions. The runtime's own threads reach them only inside a section of
