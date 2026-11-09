@@ -1363,7 +1363,11 @@ fn a_maps_form_pass_resolves_bgra8_as_announced() {
 /// it, resolves to the clear's codes: the bytes the device's clear of a 1x texture of the format
 /// stores (Metal's bytes, `renders.rs`' `COLOR_CLEARS`, where its conversion is Metal's, printed),
 /// as every sample holds the clear, which Metal's rule and the device's average give back,
-/// whatever form the device keeps the clear in.
+/// whatever form the device keeps the clear in. Where the passes announce
+/// `device-color-conversion`, the device converts the clear its own way, which may differ between
+/// its 1x and its 4x images (the Radeon 780M under RADV: a 1x clear of 0.214 stores `0x80`, the 4x
+/// one resolves to `0x7f`): there each channel of the resolve is one of the two codes nearest the
+/// clear's value, the sRGB curve's for a colour channel and the value itself for alpha.
 #[test]
 fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
     let (messages, _cache, lane) = lane();
@@ -1412,8 +1416,27 @@ fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
                 .unwrap();
             assert_eq!(command_buffer.error(), None);
         };
+        messages.take_notices();
         clear(&single, None);
         clear(&msaa, Some(&resolved));
+        let notices = super::degrade_notices::counts(&messages.take_notices());
+        let converted = notices.contains_key(&Degradation::DeviceColorConversion);
+        // The clear's value in codes, in the texel's byte order: the sRGB curve's for a colour
+        // channel, alpha as it is.
+        let encode = |v: f64| match v <= 0.0031308 {
+            true => 12.92 * v,
+            false => 1.055 * v.powf(1.0 / 2.4) - 0.055,
+        };
+        let [r, g, b] = [r, g, b].map(|v| 255.0 * encode(f64::from(v)));
+        let alpha = 255.0 * f64::from(a);
+        let exact = match pf {
+            PixelFormat::BGRA8UnormSRGB => [b, g, r, alpha],
+            _ => [r, g, b, alpha],
+        };
+        let nearest = |texel: &[u8]| {
+            (texel.iter().zip(exact))
+                .all(|(&code, v)| [v.floor(), v.ceil()].contains(&f64::from(code)))
+        };
         let cleared = super::renders::blit_read(&lane.device, &single, 4);
         let bytes: [u8; 4] = cleared[..4].try_into().unwrap();
         eprintln!(
@@ -1425,8 +1448,15 @@ fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
             }
         );
         let read = super::renders::blit_read(&lane.device, &resolved, 4);
-        let wrong = read.chunks(4).filter(|texel| *texel != bytes).count();
-        eprintln!("cleared resolve {pf:?} x4 on {name}: {wrong} texels other than the clear's");
+        let other = read.chunks(4).filter(|texel| *texel != bytes).count();
+        let wrong = (read.chunks(4))
+            .filter(|texel| *texel != bytes && !(converted && nearest(texel)))
+            .count();
+        eprintln!(
+            "cleared resolve {pf:?} x4 on {name}: {other} texels other than the clear's \
+             ({:02x?} first), {wrong} off the codes nearest it; announced {notices:?}",
+            &read[..4]
+        );
         assert_eq!(wrong, 0, "{pf:?} on {name}: {:02x?}", &read[..4]);
     }
     quiet(lane, &messages);
