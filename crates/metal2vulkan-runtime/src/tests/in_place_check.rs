@@ -392,6 +392,43 @@ fn the_in_place_check_takes_no_texture_id() {
     );
 }
 
+/// A texture reservation made as soon as the device is made, as a consumer's first call reserves
+/// its guest's IDs, is kept whatever the device's check does meanwhile on its thread, and so is
+/// one made once the check has run to its end: the plain textures made after it take IDs past the
+/// reserved range, and no late-reservation diagnostic is given. A texture of the check's that took
+/// a plain ID would start the pool before the reservation, which is then ignored (Metal's pool
+/// logs "reserve() must be called before any allocation takes place"), and the plain textures
+/// take the reserved IDs from 1.
+#[test]
+fn a_texture_reservation_made_with_the_device_is_kept_whatever_its_check_does() {
+    const RESERVED: u64 = 64;
+    for settled in [false, true] {
+        let scratch = Scratch::new("in-place-check-reservation");
+        let device = device(&scratch.0);
+        if settled {
+            assert!(device.settle_in_place_checks(WAIT), "the check answered");
+        }
+        let ids = &device.shared().resource_ids;
+        let started = crate::device::lock(ids).started(crate::resource_ids::IdSpace::Texture);
+        let reserved: Vec<ResourceId> = (1..=RESERVED).map(ResourceId).collect();
+        device
+            .reserve_resource_ids(ResourceIdKind::Texture, &reserved)
+            .unwrap();
+        let made: Vec<Texture> = (0..16).map(|_| texture(&device)).collect();
+        let ids: Vec<u64> = made.iter().map(|t| t.gpu_resource_id().0).collect();
+        eprintln!(
+            "IN-PLACE-CHECK-RESERVATION on {}, the check settled first {settled}: the texture \
+             IDs had started before the reservation: {started}; the plain textures took {ids:?}",
+            device.name()
+        );
+        assert!(!started, "the texture IDs started before the reservation");
+        assert!(
+            ids.iter().all(|&id| id > RESERVED),
+            "plain textures took reserved IDs: {ids:?}"
+        );
+    }
+}
+
 /// The program's textures keep Metal's IDs while the device's check runs on its thread: a
 /// texture made and released over and over takes ID 1 each time, as on a device that makes no
 /// other texture. A check texture holding a plain ID while the program made one would move the
