@@ -1183,6 +1183,21 @@ impl Step {
             ends: group_ends(before, after),
         }
     }
+
+    /// The counts on one line.
+    fn line(&self) -> String {
+        format!(
+            "{} submissions ({} at commit; with none, one, two or more pending {:?}), {} kept, {} \
+             grouped, {} passes, group ends {:?}",
+            self.submissions,
+            self.at_commit,
+            self.pending,
+            self.kept,
+            self.grouped,
+            self.passes,
+            self.ends
+        )
+    }
 }
 
 /// The module docs' run with a handler that waits for another queue's command buffer, `A` of
@@ -1285,6 +1300,8 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
                 .count();
             assert_eq!(wrong, 0, "buffer {at}: bytes off its fill");
         }
+        let a_completed_after_x =
+            (*a_completed.lock().unwrap()).and_then(|at| at.checked_duration_since(x_committed));
         HandlerWait {
             device: device.name().to_owned(),
             merging,
@@ -1297,15 +1314,21 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
             waited,
             ends: group_ends(&before_y, &device.work_counts()),
             steps,
-            a_completed_after_x: (*a_completed.lock().unwrap())
-                .and_then(|at| at.checked_duration_since(x_committed)),
+            a_completed_after_x,
         }
     };
     layer_reported_nothing_at_all(&messages);
     eprintln!(
         "GROUPED-HANDLER-WAIT on {}: Y's handler waited {:?}; groups from Y's commit by what \
-         sent them {:?}; A completed {:?} after X's commit; {seen:#?}",
-        seen.device, seen.waited, seen.ends, seen.a_completed_after_x
+         sent them {:?}; A completed {:?} after X's commit; since A's commit, once A was taken \
+         in: {}; once B was scheduled: {}; once X was scheduled: {}; {seen:?}",
+        seen.device,
+        seen.waited,
+        seen.ends,
+        seen.a_completed_after_x,
+        seen.steps[0].line(),
+        seen.steps[1].line(),
+        seen.steps[2].line()
     );
     seen
 }
