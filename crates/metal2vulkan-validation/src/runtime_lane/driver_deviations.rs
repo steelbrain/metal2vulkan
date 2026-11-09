@@ -130,8 +130,8 @@ use metal2vulkan::error::{Capability, DriverDeviation, Error as CompileError, Fe
 use metal2vulkan::library::Library;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor, LoweringInputs,
-    PrecisionNote, RenderPipelineDescriptor, Stage, StageSource,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote,
+    RenderPipelineDescriptor, Stage, StageSource,
 };
 use metal2vulkan::vk::DriverId;
 use metal2vulkan::Budget;
@@ -685,28 +685,20 @@ fn rounds_under_float_controls(device: &Device, case: &PublicCase) -> bool {
 /// The precision notes of kernel `entry` of `bitcode`'s stage, as `device`'s compile layer compiles
 /// its pipeline.
 pub(super) fn stage_notes(device: &Device, bitcode: &[u8], entry: &str) -> Vec<PrecisionNote> {
-    let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
-    stage_notes_under(device, bitcode, entry, &inputs).unwrap()
-}
-
-/// [`stage_notes`] under the lowering inputs `inputs`, or the compile's error: a function that
-/// needs an input the inputs do not give (`Error::NeedsInput`) included.
-pub(super) fn stage_notes_under(
-    device: &Device,
-    bitcode: &[u8],
-    entry: &str,
-    inputs: &LoweringInputs,
-) -> Result<Vec<PrecisionNote>, CompileError> {
     let compile = device.compile_device();
     let budget = Budget::standard();
     let library = Library::from_air(bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(entry).unwrap());
-    let compiled = compile.compile_function(&function, inputs, &budget)?;
+    let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
+    let compiled = compile
+        .compile_function(&function, &inputs, &budget)
+        .unwrap();
     let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
-    Ok(compile
-        .compile_compute_pipeline(&descriptor, &budget)?
+    compile
+        .compile_compute_pipeline(&descriptor, &budget)
+        .unwrap()
         .stage
-        .precision_notes)
+        .precision_notes
 }
 
 /// [`stage_notes`] of `case`'s kernel.
