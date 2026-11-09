@@ -15,6 +15,12 @@
 //!   range: by 7/16 on MoltenVK, whose SPIRV-Cross adds 7/16 back, requiring
 //!   `InterpolateAtOffsetFromSevenSixteenths`; by a half elsewhere, requiring
 //!   `InterpolateAtOffsetCentered`. The function records `PrecisionNote::DeviceInterpolationOffset`.
+//! - On RADV, whose driver answers a perspective read at a sample or an offset with the pixel
+//!   center's value extrapolated along the quad's derivatives
+//!   (`DriverWorkaround::PerspectiveReadsExtrapolated`), a function that reads a perspective
+//!   interpolant at a sample or an offset records `PrecisionNote::ExtrapolatedInterpolation`, and
+//!   one that reads its no-perspective interpolants alone so (`pm_linear`), or reads only at the
+//!   center or the centroid, records nothing; no other profile records it.
 //! - On RADV (`DriverWorkaround::InterpolationNeedsTheWholeQuad`) an offset read after a discard
 //!   is refused, where some of the quad's invocations may have left; on a driver that shades a
 //!   triangle it clips as several (`DriverWorkaround::ClippedTrianglesSplitPixelFragments`:
@@ -45,6 +51,10 @@ use crate::vk::ShaderStage;
 
 const VERTEX: &str = "pm_place";
 
+/// The fragment function that reads its no-perspective interpolant alone, at a sample and an
+/// offset.
+const LINEAR: &str = "pm_linear";
+
 /// `GLSL.std.450` instruction numbers.
 const INTERPOLATE_AT_CENTROID: u32 = 76;
 const INTERPOLATE_AT_SAMPLE: u32 = 77;
@@ -65,7 +75,13 @@ enum At {
 
 /// Each fragment function of the fixture that compiles somewhere, its color attachments' format
 /// and count, and where it reads.
-const FRAGMENTS: [(&str, PixelFormat, usize, &[At]); 9] = [
+const FRAGMENTS: [(&str, PixelFormat, usize, &[At]); 10] = [
+    (
+        LINEAR,
+        PixelFormat::RGBA32Float,
+        2,
+        &[At::Sample, At::Offset],
+    ),
     ("pm_center", PixelFormat::RGBA32Float, 2, &[At::Center]),
     ("pm_centroid", PixelFormat::RGBA32Float, 2, &[At::Centroid]),
     ("pm_sample", PixelFormat::RGBA32Float, 2, &[At::Sample]),
@@ -166,6 +182,7 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
         return;
     };
     let mut compiled = 0usize;
+    let mut extrapolations = 0usize;
     let mut refused = Vec::new();
     for stem in stems() {
         let dev = Device::new(description(&stem), DevicePolicy::default()).expect("device");
@@ -182,6 +199,9 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
         let whole_quad = fields
             .workarounds
             .contains(&DriverWorkaround::InterpolationNeedsTheWholeQuad);
+        let extrapolates = fields
+            .workarounds
+            .contains(&DriverWorkaround::PerspectiveReadsExtrapolated);
         let ends_at_seven = fields.limits.max_interpolation_offset_bits == SEVEN_SIXTEENTHS;
         let split = fields
             .workarounds
@@ -269,6 +289,15 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
                     reads_at(At::Offset),
                     "{what}: the offset note"
                 );
+                let perspective_beyond =
+                    fragment != LINEAR && (reads_at(At::Sample) || reads_at(At::Offset));
+                let extrapolation_noted = noted(&p, PrecisionNote::ExtrapolatedInterpolation);
+                assert_eq!(
+                    extrapolation_noted,
+                    extrapolates && perspective_beyond,
+                    "{what}: the extrapolation note"
+                );
+                extrapolations += usize::from(extrapolation_noted);
                 assert_eq!(
                     p.requirements.properties.contains(&origin),
                     reads_at(At::Offset) || (pixel_center && centered),
@@ -308,6 +337,12 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
             .iter()
             .any(|r| r.starts_with("amd-780m-radv pm_offset_after_discard")),
         "RADV refuses an offset read after a discard: {refused:?}"
+    );
+    // pm_sample, pm_sample_id, pm_offset, pm_offset_sweep, pm_narrow and pm_half at 1 and 4
+    // samples on the RADV profile.
+    assert!(
+        extrapolations >= 12,
+        "{extrapolations} pipelines recorded the extrapolation"
     );
 }
 

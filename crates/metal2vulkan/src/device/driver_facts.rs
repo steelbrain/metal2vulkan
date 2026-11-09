@@ -796,6 +796,12 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   nonzero offset, in control flow the helper invocations of the pixel's quad had left (a bare
 ///   Vulkan program; the RTX 3090 and ANV answered every variant right). The row names no vendor:
 ///   RADV runs only AMD's GPUs.
+/// - `PerspectiveReadsExtrapolated`: RADV on the Radeon 780M, Mesa 26.2.6 (Arch's), answered
+///   `runtime_lane::pull_model_interpolation`'s perspective reads at a sample or an offset as the
+///   pixel center's value extrapolated along the quad's coarse derivatives: a model of that form,
+///   from the lane's geometry, gave each of the 1113 values off Metal's within 0.005, and the
+///   form with fine derivatives was up to 0.98 off. The row names no vendor: RADV runs only AMD's
+///   GPUs.
 /// - `MeshIndexComponentStoresMisplaced`: lavapipe, Mesa 26.0.8 (Ubuntu's, x86, the Linux gate's),
 ///   drew none of `runtime_lane::mesh_draws`'s triangles, whose indices the mesh function writes
 ///   one at a time. The row names no vendor: the defect is the driver's
@@ -843,6 +849,12 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     moltenvk_on_apple(DriverWorkaround::MemoryWritingFragmentsRunPerSample),
     Measured {
         fact: DriverWorkaround::InterpolationNeedsTheWholeQuad,
+        driver: DriverId::MESA_RADV,
+        vendor: None,
+        device: None,
+    },
+    Measured {
+        fact: DriverWorkaround::PerspectiveReadsExtrapolated,
         driver: DriverId::MESA_RADV,
         vendor: None,
         device: None,

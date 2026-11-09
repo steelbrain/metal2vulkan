@@ -3790,7 +3790,9 @@ bound.
   `sample` or `no_perspective`, not `flat`) on a device not measured to interpolate as Metal does
   (`DriverDeviation::MetalInterpolation`, which MoltenVK takes: Metal interpolates there). Vulkan
   states no precision for interpolation, and RADV, ANV, lavapipe and NVIDIA's driver each round
-  most interpolated lanes otherwise than Metal, up to about `1.5e-4` apart (`3e-4` on lavapipe).
+  most interpolated lanes otherwise than Metal, up to about `1.5e-4` apart (`3e-4` on lavapipe) on
+  the probes. RADV's read of a perspective input at a sample or an offset is further off, and
+  records `extrapolated-interpolation`.
 - `metal2vulkan-degrade-device-interpolation-offset` (precision).
   `PrecisionNote::DeviceInterpolationOffset`: A fragment function reads an `interpolant` through
   `interpolate_at_offset`, which Metal evaluates at the offset as given from the pixel's upper-left
@@ -3801,6 +3803,17 @@ bound.
   `subPixelInterpolationOffsetBits` (at least sixteenths): within the range the read lies within
   half a step of Metal's, past it at the range's nearer end. On MoltenVK Metal reads the offset
   itself, so within the range (`[-1/16, 15/16]` from the corner on the M3 Max) the read is Metal's.
+- `metal2vulkan-degrade-extrapolated-interpolation` (precision).
+  `PrecisionNote::ExtrapolatedInterpolation`: A fragment function reads a perspective input at a
+  sample or an offset (`interpolate_at_sample`, `interpolate_at_offset`, or a sample-qualified
+  varying a function looping over its covered samples reads at each pass's sample) on RADV
+  (`DriverWorkaround::PerspectiveReadsExtrapolated`), whose driver answers such a read with the
+  value at the pixel center extrapolated along the quad's coarse derivatives, where Metal
+  interpolates in perspective at the location itself. The answer is first-order, off by the
+  value's curvature across the distance, which grows with the triangle's spread of clip `w`: on a
+  triangle of `w` 1, 2 and 4 over a 6x6 target, up to about 1.0 in a lane whose vertices hand 3,
+  -2 and 0.5 (the Radeon 780M, Mesa 26.2.6). A no-perspective input is exact there and records
+  nothing. It is the device's own interpolation, which Vulkan states no precision for.
 - `metal2vulkan-degrade-quads-split-by-clipping` (precision). `PrecisionNote::QuadsSplitByClipping`:
   A fragment function runs a quad or simdgroup operation on a device that shades a triangle it clips
   as several triangles (`DriverWorkaround::ClippedTrianglesSplitPixelFragments`): a quad a seam

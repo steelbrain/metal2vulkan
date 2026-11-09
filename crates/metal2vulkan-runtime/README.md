@@ -814,8 +814,10 @@ yes where the device has `sampleRateShading` (and, on MoltenVK, the portability 
 `shaderSampleRateInterpolationFunctions`): an `interpolant` input is then read at its centroid, a
 sample and an offset through Vulkan's interpolation functions; without them only
 `interpolate_at_center` compiles. An offset is read within the device's range and on its grid
-(`device-interpolation-offset`), and a draw at custom sample positions through a function that
-reads at a sample is refused (`RuntimeGap::InterpolateAtSampleWithPositions`).
+(`device-interpolation-offset`); on RADV a perspective interpolant read at a sample or an offset
+is the driver's extrapolation from the pixel center, off by the value's curvature across the
+distance (`extrapolated-interpolation`); and a draw at custom sample positions through a
+function that reads at a sample is refused (`RuntimeGap::InterpolateAtSampleWithPositions`).
 
 `Device::minimum_linear_texture_alignment_for_pixel_format`
 (`minimumLinearTextureAlignmentForPixelFormat:`) answers, per pixel format, the alignment of a

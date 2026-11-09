@@ -1286,6 +1286,23 @@ pub enum DriverWorkaround {
     /// loop, where the whole quad runs, and each pass reads its sample's value
     /// (`lower::fragment::coverage`).
     InterpolationNeedsTheWholeQuad,
+    /// The driver's `InterpolateAtSample` and `InterpolateAtOffset` of a perspective input are its
+    /// value at the pixel center extrapolated along the quad's coarse derivatives,
+    /// `f(center) + (f(tr) - f(tl)) * dx + (f(bl) - f(tl)) * dy` (`tl`, `tr`, `bl` the centers of
+    /// the quad's top-left, top-right and bottom-left pixels, `(dx, dy)` the read's distance from
+    /// the pixel center), not the perspective interpolation at that location: a first-order
+    /// answer, off by the input's curvature across the distance. A no-perspective input is linear
+    /// in the framebuffer, so its extrapolation is exact. Measured on RADV
+    /// (`VK_DRIVER_ID_MESA_RADV`), Mesa 26.2.6, on the Radeon 780M: of
+    /// `runtime_lane::pull_model_interpolation`'s values (a triangle of clip `w` 1, 2 and 4 over a
+    /// 6x6 target), the 52 offset reads and 1061 sample reads off Metal's were that form's, within
+    /// 0.005, and up to about 1.0 from Metal's in a lane whose vertices hand 3, -2 and 0.5;
+    /// the same reads of the no-perspective inputs were Metal's within the device's interpolation.
+    /// Vulkan states no precision for interpolation, so the answer is the device's own (no form
+    /// interpolates otherwise): a fragment function that reads a perspective input at a sample or
+    /// an offset there records `PrecisionNote::ExtrapolatedInterpolation` (`lower::stage_io::plan`).
+    /// It is keyed on the driver's release (`device::driver_facts`).
+    PerspectiveReadsExtrapolated,
     /// The driver reads a mesh shader's store into one component of a vector output (an
     /// `OpAccessChain` to a component of `PrimitiveLineIndicesEXT` or
     /// `PrimitiveTriangleIndicesEXT`) as a store into a later output slot, so the primitive keeps

@@ -429,8 +429,10 @@ impl DeviceProperties {
     /// otherwise is refused, `Unsupported(PullModelInterpolation)`. What differs from Metal: an
     /// offset is read on the device's grid and within its range
     /// (`PrecisionNote::DeviceInterpolationOffset`), a centroid where Vulkan puts it
-    /// (`PrecisionNote::MultisamplePosition`), and a draw at custom sample positions through a
-    /// function that reads at a sample is refused
+    /// (`PrecisionNote::MultisamplePosition`), a perspective interpolant read at a sample or an
+    /// offset on RADV is the driver's extrapolation from the pixel center
+    /// (`PrecisionNote::ExtrapolatedInterpolation`), and a draw at custom sample positions through
+    /// a function that reads at a sample is refused
     /// ([`RuntimeGap::InterpolateAtSampleWithPositions`]).
     pub fn supports_pull_model_interpolation(&self) -> Result<bool, RuntimeGap> {
         Query::PullModelInterpolation.answer(self.pull_model_interpolation)

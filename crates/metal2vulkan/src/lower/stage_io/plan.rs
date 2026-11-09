@@ -445,6 +445,11 @@ fn interpolant(cx: &mut SelectCx<'_>, b: &ParamBinding, v: &Varying) -> Result<(
         perspective,
     };
     note_device_interpolation(cx, interp);
+    if perspective
+        && (reads.contains(&InterpolateAt::Sample) || reads.contains(&InterpolateAt::Offset))
+    {
+        note_extrapolated_read(cx);
+    }
     // The center read's pixel form, as a center varying's.
     let at_center = center && cx.inputs.multisampled;
     let by_device = at_center && device_reads_center_varyings_at_pixel(cx);
@@ -732,6 +737,18 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                         ..
                     }
                 );
+            // Each pass reads it through `InterpolateAtSample` at its sample.
+            if at_loop_sample
+                && matches!(
+                    interp,
+                    Interpolation::Smooth {
+                        perspective: true,
+                        ..
+                    }
+                )
+            {
+                note_extrapolated_read(cx);
+            }
             let center = cx.inputs.multisampled
                 && matches!(
                     interp,
@@ -1782,6 +1799,24 @@ fn note_device_interpolation(cx: &mut SelectCx<'_>, interp: Interpolation) {
         } else {
             cx.precision.insert(PrecisionNote::DeviceInterpolation);
         }
+    }
+}
+
+/// Records that the fragment function reads a perspective input at a sample or an offset other
+/// than the pixel center (`InterpolateAtSample`, `InterpolateAtOffset`) on a device whose driver
+/// answers such a read with the pixel center's value extrapolated along the quad's derivatives
+/// (`DriverWorkaround::PerspectiveReadsExtrapolated`): the device's answer, which the module
+/// records. The pixel-center form of a center read (`InterpolateAtOffset` at offset 0) moves
+/// nothing and records nothing.
+fn note_extrapolated_read(cx: &mut SelectCx<'_>) {
+    if cx
+        .profile
+        .fields()
+        .workarounds
+        .contains(&DriverWorkaround::PerspectiveReadsExtrapolated)
+    {
+        cx.precision
+            .insert(PrecisionNote::ExtrapolatedInterpolation);
     }
 }
 

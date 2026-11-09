@@ -5421,6 +5421,7 @@ macro-member	metal2vulkan-runtime::Degradation::ExtendedRangeBlendSource	Extende
 macro-member	metal2vulkan-runtime::Degradation::ExtendedRangeBlendsStoredCodes	ExtendedRangeBlendsStoredCodes = "extended-range-blends-stored-codes", Precision,
 macro-member	metal2vulkan-runtime::Degradation::ExtendedRangeFloatBlendSource	ExtendedRangeFloatBlendSource = "extended-range-float-blend-source";
 macro-member	metal2vulkan-runtime::Degradation::ExtendedRangeResolve	ExtendedRangeResolve = "extended-range-resolve", Precision,
+macro-member	metal2vulkan-runtime::Degradation::ExtrapolatedInterpolation	ExtrapolatedInterpolation = "extrapolated-interpolation";
 macro-member	metal2vulkan-runtime::Degradation::F16FmaDoubleRounding	F16FmaDoubleRounding = "f16-fma-double-rounding";
 macro-member	metal2vulkan-runtime::Degradation::F16IntConvDoubleRounding	F16IntConvDoubleRounding = "f16-int-conv-double-rounding";
 macro-member	metal2vulkan-runtime::Degradation::FastMathRewrites	FastMathRewrites = "fast-math-rewrites";
@@ -13091,6 +13092,7 @@ variant	metal2vulkan::device::DriverWorkaround::LocalizedLoadsForwardedPastAtomi
 variant	metal2vulkan::device::DriverWorkaround::MemoryWritingFragmentsRunPerSample	MemoryWritingFragmentsRunPerSample
 variant	metal2vulkan::device::DriverWorkaround::MeshIndexComponentStoresMisplaced	MeshIndexComponentStoresMisplaced
 variant	metal2vulkan::device::DriverWorkaround::NarrowMaskAfterSignedClamp	NarrowMaskAfterSignedClamp
+variant	metal2vulkan::device::DriverWorkaround::PerspectiveReadsExtrapolated	PerspectiveReadsExtrapolated
 variant	metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules	RegisterAllocatorOverflowsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals
 variant	metal2vulkan::device::DriverWorkaround::VertexGroupingNotApples	VertexGroupingNotApples
@@ -14230,6 +14232,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceVertexConversion	DeviceVert
 variant	metal2vulkan::pipeline::PrecisionNote::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores
 variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeBlendSource	ExtendedRangeBlendSource
 variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeFloatBlendSource	ExtendedRangeFloatBlendSource
+variant	metal2vulkan::pipeline::PrecisionNote::ExtrapolatedInterpolation	ExtrapolatedInterpolation
 variant	metal2vulkan::pipeline::PrecisionNote::F16FmaDoubleRounding	F16FmaDoubleRounding
 variant	metal2vulkan::pipeline::PrecisionNote::F16IntConvDoubleRounding	F16IntConvDoubleRounding
 variant	metal2vulkan::pipeline::PrecisionNote::FastMathRewrites	FastMathRewrites

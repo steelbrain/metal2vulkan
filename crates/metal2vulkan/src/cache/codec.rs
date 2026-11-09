@@ -1474,6 +1474,7 @@ codec_enum! {
         DeviceVertexConversion,
         DeviceAlphaCoverage,
         DeviceInterpolationOffset,
+        ExtrapolatedInterpolation,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

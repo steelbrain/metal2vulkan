@@ -16,6 +16,11 @@
 //!   rest is the device's (`PrecisionNote::DeviceInterpolationOffset`).
 //! - `interpolate_at_sample(i)` reads sample `i mod n` of a pipeline of `n` samples, every index
 //!   (`stage_io::InterpolantAt::Sample`); the positions are Vulkan's standard ones.
+//! - A perspective interpolant's read at a sample or an offset is, on RADV, the driver's value at
+//!   the pixel center extrapolated along the quad's coarse derivatives, a first-order answer
+//!   (`DriverWorkaround::PerspectiveReadsExtrapolated`): the device's own interpolation, which the
+//!   plan records (`PrecisionNote::ExtrapolatedInterpolation`, `stage_io::plan`). A
+//!   no-perspective one's is exact there.
 //! - `interpolate_at_centroid` reads the pixel's center where the primitive covers the whole pixel,
 //!   else the location of its lowest covered sample. Vulkan's centroid is a location in the pixel
 //!   and the primitive the device chooses: in a multisampled pipeline the compile layer notes

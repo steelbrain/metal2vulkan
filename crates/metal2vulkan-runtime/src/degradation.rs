@@ -2477,6 +2477,7 @@ degradations! {
         DeviceColorConversion = "device-color-conversion";
         DeviceInterpolation = "device-interpolation";
         DeviceInterpolationOffset = "device-interpolation-offset";
+        ExtrapolatedInterpolation = "extrapolated-interpolation";
         QuadsSplitByClipping = "quads-split-by-clipping";
         VertexSimdgroupGrouping = "vertex-simdgroup-grouping";
         FragmentSimdgroupGrouping = "fragment-simdgroup-grouping";

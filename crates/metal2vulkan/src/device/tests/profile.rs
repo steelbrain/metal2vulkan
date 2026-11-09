@@ -723,11 +723,12 @@ fn moltenvk_on_apple_carries_the_early_tests_image_write_defect() {
     desc.driver_id = Some(vk::DriverId::MESA_RADV);
     // Every rasterizer but Apple's hands a clipped primitive's fragments other coverage than
     // Metal's pieces, and every tessellator but Apple's orders a patch's triangles its own way;
-    // RADV's own interpolation defect holds on any vendor.
+    // RADV's own interpolation facts hold on any vendor.
     assert_eq!(
         workarounds(&desc),
         [
             W::InterpolationNeedsTheWholeQuad,
+            W::PerspectiveReadsExtrapolated,
             W::ClippedCoverageNotMetals,
             W::TessellatorNotMetals
         ]
@@ -814,34 +815,39 @@ fn moltenvk_on_apple_carries_the_per_sample_writer_defect_at_every_release() {
     }
 }
 
-/// `DriverWorkaround::InterpolationNeedsTheWholeQuad` is keyed on RADV by the measured table
-/// (`driver_facts::DEFECTS`): carried at every release, whatever the vendor ID (the row names
+/// `DriverWorkaround::InterpolationNeedsTheWholeQuad` and
+/// `DriverWorkaround::PerspectiveReadsExtrapolated` are keyed on RADV by the measured table
+/// (`driver_facts::DEFECTS`): each carried at every release, whatever the vendor ID (the rows name
 /// none), and not by another driver.
 #[test]
-fn radv_carries_the_whole_quad_interpolation_defect_at_every_release() {
+fn radv_carries_its_interpolation_facts_at_every_release() {
     use crate::device::profile::DriverWorkaround;
-    let defect = DriverWorkaround::InterpolationNeedsTheWholeQuad;
-    let carries = |desc: &DeviceDescription| {
-        Device::new(desc.clone(), DevicePolicy::default())
-            .unwrap()
-            .profile()
-            .fields()
-            .workarounds
-            .contains(&defect)
-    };
-    let mut desc = profile("amd-780m-radv");
-    assert_eq!(desc.driver_id, Some(vk::DriverId::MESA_RADV));
-    assert!(carries(&desc));
-    desc.driver_version += 1;
-    assert!(carries(&desc), "at another release");
-    desc.vendor_id = 0x8086;
-    assert!(carries(&desc), "on another vendor's ID");
-    desc.driver_id = Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
-    assert!(!carries(&desc), "under ANV");
-    for (stem, text) in committed_profiles() {
-        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let radv = desc.driver_id == Some(vk::DriverId::MESA_RADV);
-        assert_eq!(carries(&desc), radv, "{stem}");
+    for fact in [
+        DriverWorkaround::InterpolationNeedsTheWholeQuad,
+        DriverWorkaround::PerspectiveReadsExtrapolated,
+    ] {
+        let carries = |desc: &DeviceDescription| {
+            Device::new(desc.clone(), DevicePolicy::default())
+                .unwrap()
+                .profile()
+                .fields()
+                .workarounds
+                .contains(&fact)
+        };
+        let mut desc = profile("amd-780m-radv");
+        assert_eq!(desc.driver_id, Some(vk::DriverId::MESA_RADV));
+        assert!(carries(&desc), "{fact:?}");
+        desc.driver_version += 1;
+        assert!(carries(&desc), "{fact:?} at another release");
+        desc.vendor_id = 0x8086;
+        assert!(carries(&desc), "{fact:?} on another vendor's ID");
+        desc.driver_id = Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
+        assert!(!carries(&desc), "{fact:?} under ANV");
+        for (stem, text) in committed_profiles() {
+            let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+            let radv = desc.driver_id == Some(vk::DriverId::MESA_RADV);
+            assert_eq!(carries(&desc), radv, "{fact:?} on {stem}");
+        }
     }
 }
 

@@ -208,6 +208,9 @@ impl UlpTable {
 ///   about `3e-4` off Metal's on the probes (more where the varying's range is wider), and the
 ///   interpolated value is ordinary data later words use, so no word's difference is bounded by
 ///   it.
+/// - `ExtrapolatedInterpolation`: unbounded: the device's read of a perspective input at a sample
+///   or an offset is first-order, off by the input's curvature across the distance (up to about
+///   1.0 on the pull-model lane's geometry), and the value is ordinary data later words use.
 /// - `QuadsSplitByClipping`: unbounded: a quad a clipping seam crosses runs once per piece, which
 ///   moves a count, a ballot, or a reduction by whole lanes.
 /// - `VertexSimdgroupGrouping`: unbounded: a vertex function's simdgroup holds the device's group
@@ -300,6 +303,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::FloatSampleFilter
         | N::QuadsCountedBeforeDiscard
         | N::DeviceInterpolation
+        | N::ExtrapolatedInterpolation
         | N::ComputedSampleDepth
         | N::QuadsSplitByClipping
         | N::VertexSimdgroupGrouping

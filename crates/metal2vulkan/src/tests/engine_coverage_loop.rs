@@ -672,7 +672,10 @@ fn a_per_sample_driver_runs_the_natural_functions_as_written() {
 /// varying is read before the loop, at every sample a pipeline of the device may have, each by a
 /// constant (`coverage_loop`'s `cov_loop_varying`, and `coverage_natural`'s `nat_varying`, at 2
 /// and 4 samples); everywhere else that loops it is read once, at the pass's sample, which the
-/// loop computes.
+/// loop computes. Each varying is perspective (`sample_perspective`), so on that driver, which
+/// answers a perspective read at a sample by extrapolating from the pixel center
+/// (`DriverWorkaround::PerspectiveReadsExtrapolated`), the module records
+/// `PrecisionNote::ExtrapolatedInterpolation`, and nowhere else.
 #[test]
 fn where_interpolation_needs_the_whole_quad_the_varyings_are_read_before_the_loop() {
     let (Some(loop_lib), Some(natural_lib)) =
@@ -685,6 +688,8 @@ fn where_interpolation_needs_the_whole_quad_the_varyings_are_read_before_the_loo
     for stem in stems() {
         let dev = device(&stem);
         let whole_quad = dev.profile().fields().workarounds.contains(&defect);
+        let extrapolates = (dev.profile().fields().workarounds)
+            .contains(&DriverWorkaround::PerspectiveReadsExtrapolated);
         for (lib, f) in [(&loop_lib, COV_VARYING), (&natural_lib, "nat_varying")] {
             for samples in [2, 4] {
                 let what = format!("{f} at {samples} on {stem}");
@@ -699,6 +704,14 @@ fn where_interpolation_needs_the_whole_quad_the_varyings_are_read_before_the_loo
                     continue;
                 }
                 let reads = interpolated_samples(words);
+                let extrapolation_noted = p.stages.iter().any(|m| {
+                    m.precision_notes
+                        .contains(&PrecisionNote::ExtrapolatedInterpolation)
+                });
+                assert_eq!(
+                    extrapolation_noted, extrapolates,
+                    "{what}: the extrapolation note"
+                );
                 if whole_quad {
                     before += 1;
                     let every: Vec<_> = (0..most_samples(&dev)).map(Some).collect();

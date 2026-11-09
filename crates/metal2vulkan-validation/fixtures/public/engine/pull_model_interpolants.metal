@@ -3,8 +3,9 @@
 // and `interpolate_at_offset(float2)`. `pm_place` places vertex v at the clip-space position
 // buffer 0 holds for it and hands it buffer 1's value as every varying. Each `PmPair` function
 // returns what one form interpolates of a perspective and a no-perspective `float4` input, into
-// color attachments 0 and 1; `pm_narrow` and `pm_half` read every form of `float2`, `float`,
-// `half` and `half4` inputs. `pm_offset_after_discard` reads at an offset after a discard, where
+// color attachments 0 and 1; `pm_linear` reads the no-perspective one alone, at a sample and at an
+// offset; `pm_narrow` and `pm_half` read every form of `float2`, `float`, `half` and `half4`
+// inputs. `pm_offset_after_discard` reads at an offset after a discard, where
 // some invocations of the pixel's quad may have left. `pm_selected` reads an interpolant chosen at
 // run time, a form the translator refuses. `pm_read_samples` reads a multisampled attachment back,
 // sample by sample.
@@ -75,6 +76,16 @@ fragment PmPair pm_offset_sweep(PmIn in [[stage_in]], float4 position [[position
                                 constant float4 &sweep [[buffer(0)]]) {
     float2 offset = sweep.xy + floor(position.xy) * sweep.zw;
     return {in.p.interpolate_at_offset(offset), in.n.interpolate_at_offset(offset)};
+}
+
+struct PmLinear {
+    interpolant<float4, interpolation::no_perspective> n;
+};
+
+// The no-perspective interpolant alone, read at a sample and at an offset.
+fragment PmPair pm_linear(PmLinear in [[stage_in]], constant uint &sample [[buffer(0)]],
+                          constant float2 &offset [[buffer(1)]]) {
+    return {in.n.interpolate_at_sample(sample), in.n.interpolate_at_offset(offset)};
 }
 
 // `pm_offset`'s reads after a discard of the fragments whose offset's x is past 1.
