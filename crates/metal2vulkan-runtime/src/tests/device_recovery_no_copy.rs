@@ -113,6 +113,16 @@ fn ran_to(ran: &Arc<Mutex<Vec<(u64, u64)>>>, runs: usize) -> bool {
     true
 }
 
+/// The page of the serving generation's imports of host memory, `None` where it imports none:
+/// read through a handle of that generation the test lets go of at once. A root handle's own
+/// reach of a generation's state pins that generation for the root's life (`Device::shared_arc`),
+/// which would keep the lost `VkDevice` past the recovery.
+fn import_page(device: &Device) -> Option<u64> {
+    let serving = device.current();
+    let page = serving.shared().host_import.as_ref().ok()?.page;
+    Some(page)
+}
+
 /// The device's live `VkDevice`s once they are `live`, waited for at most [`WAIT`].
 fn live_vk_devices(device: &Device, live: u64) -> u64 {
     let began = Instant::now();
@@ -137,7 +147,7 @@ fn a_recovery_carries_no_copy_buffers_over_the_same_pages() {
     let scratch = Scratch::new();
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
-    if device.shared().host_import.is_err() {
+    if import_page(&device).is_none() {
         eprintln!("NO-COPY-CARRY: the device imports no host memory here; nothing to test");
         return;
     }
@@ -257,17 +267,16 @@ fn a_recovery_carries_a_use_of_guest_ram_and_the_buffers_over_it() {
     let scratch = Scratch::new();
     let heard = Heard::default();
     let device = heard_device(&scratch.0, &heard);
-    if device.shared().host_import.is_err() {
+    let Some(page) = import_page(&device) else {
         eprintln!("NO-COPY-CARRY: the device imports no host memory here; nothing to test");
         return;
-    }
+    };
     // Asked now, as a RAM's kind reads the answer (`fresh_ram`).
     device.imports_shared_host_pointers().unwrap();
     assert!(device.settle_submit_checks(crate::tests::SETTLE));
     let queue = device.new_command_queue().unwrap();
     let (ram, start, dropped) = fresh_ram(&device, 64 << 20);
     let used = device.use_host_ram(&ram).unwrap();
-    let page = device.shared().host_import.as_ref().unwrap().page;
     let (runs, gates): (Arc<Mutex<_>>, Arc<Mutex<_>>) = Default::default();
     let at = NonNull::new(start as *mut u8).unwrap();
     // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
