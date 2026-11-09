@@ -184,9 +184,10 @@ impl Carry {
             if !state.taken || !state.past || self.recording.load(Ordering::SeqCst) > 0 {
                 return;
             }
-            let lost: Vec<Box<dyn LostParts>> = state.lost.drain(..).collect();
-            for parts in &lost {
+            let mut lost = Vec::with_capacity(state.lost.len());
+            for parts in state.lost.drain(..) {
                 parts.mark();
+                lost.push(parts);
             }
             let first = !state.at_rest;
             state.at_rest = true;

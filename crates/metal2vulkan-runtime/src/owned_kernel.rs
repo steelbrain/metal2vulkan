@@ -610,9 +610,10 @@ impl OwnedKernels {
     /// Destroy every kernel, once; the device is idle, and is destroyed next or makes no work
     /// again (`device/carry.rs`).
     pub(super) fn destroy(&mut self, raw: &ash::Device) {
-        if std::mem::replace(&mut self.destroyed, true) {
+        if self.destroyed {
             return;
         }
+        self.destroyed = true;
         for kernel in [
             self.visibility_combine,
             self.index_bounds_plan,

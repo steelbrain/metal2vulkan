@@ -334,7 +334,7 @@ impl EventShared {
             }
             let mut carried = lock(&next.state);
             carried.timeline = state.timeline.carried();
-            carried.notifications.extend(state.notifications.drain(..));
+            carried.notifications.append(&mut state.notifications);
             drop(carried);
             let label = lock(&self.label).clone();
             *lock(&next.label) = label;
