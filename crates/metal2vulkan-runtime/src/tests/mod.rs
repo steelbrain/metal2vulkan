@@ -123,6 +123,8 @@ mod device_recovery;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_recovery_carry;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod device_recovery_no_copy;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device_registry;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod direct_arguments_from_compiled;
