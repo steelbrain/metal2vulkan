@@ -10186,10 +10186,11 @@ impl RenderLowering {
             ));
         }
         // Whether the draw takes no step of its own beside its Vulkan draw, and records into the
-        // current instance as it stood, for keeping it to draw again (`render/draw_again.rs`):
+        // current instance as it stood or into the pass's first instance begun inline at it
+        // (`render/inline_first.rs`), for keeping it to draw again (`render/draw_again.rs`):
         // read before its steps below take their parts.
-        // Split as `WorkCounts::draws_unkept_instance` splits it: the pass's first instance begun
-        // at it, a later instance, a step of its own.
+        // Split as `WorkCounts::draws_unkept_instance` splits it: a later instance, a step of its
+        // own.
         let begun = inline.is_some();
         let later_instance = !begun
             && (split_inline.is_some()
@@ -10208,7 +10209,7 @@ impl RenderLowering {
             || made_stand_in.is_some()
             || made_imageblock.is_some()
             || pending.is_some();
-        let stepless = !begun && !later_instance && !own_steps;
+        let stepless = !later_instance && !own_steps;
         // Recording starts here: nothing below can be refused.
         if let Some(written) = written {
             self.core.keep_set_zero(written, &writes);
@@ -10829,7 +10830,7 @@ impl RenderLowering {
         if !keeps && !self.replaying && !self.rerouting && !empty && !culled {
             let unkept = UnkeptDraw {
                 instance: !stepless,
-                instance_split: (begun, later_instance, own_steps),
+                instance_split: (later_instance, own_steps),
                 barrier: barriered,
                 shadowed: reads_clear
                     || snapshot.is_some()

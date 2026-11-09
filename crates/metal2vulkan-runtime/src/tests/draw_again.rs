@@ -75,9 +75,9 @@ pub(super) fn device(cache: &Path, each: &[Degradation], heard: &Heard) -> Devic
     Device::system_default_with(&options).unwrap()
 }
 
-/// The draws again of a pass of [`DRAWS`] of the same draw: all but its first two, the first
-/// beginning the pass's instance (which keeps no draw), the second kept.
-const HITS: u64 = DRAWS - 2;
+/// The draws again of a pass of [`DRAWS`] of the same draw: all but its first, which begins the
+/// pass's instance and is kept.
+const HITS: u64 = DRAWS - 1;
 
 /// How many of the draws again `hits` of a run recorded their Vulkan draw alone: every second one
 /// from the first takes every step in a build with debug assertions (the module docs).
@@ -642,9 +642,9 @@ fn draws_again_and_rebound_count_as_they_record() {
             read.into_inner()
         };
     // Before the `at`th draw: the draws again among the first `at` draws, the first beginning the
-    // instance and the second kept.
+    // instance and kept.
     let expected: Vec<u64> = (1..DRAWS)
-        .map(|at| drawn_alone(at.saturating_sub(2)))
+        .map(|at| drawn_alone(at.saturating_sub(1)))
         .collect();
     let again = read_between(
         &|encoder, between| rectangles(encoder, &state, between),
@@ -758,9 +758,9 @@ fn switching_rectangles(
 /// (`WorkCounts::draws_rebound`), with the same commands of every kind, state commands and pixels
 /// as the same draws each taking every step, after a call between each that changes nothing for
 /// them (`set_tessellation_factor_scale`, which no draw of their states reads), which forgets
-/// the kept draws of both states. Only the pass's first draw keeps nothing
-/// (`WorkCounts::draws_unkept`, as it begins the pass's instance), and no draw finds its kept draw
-/// unlike it or stops its rebind. And a draw that keeps nothing (one that writes memory,
+/// the kept draws of both states. Every draw keeps itself (`WorkCounts::draws_unkept`), the pass's
+/// first, which begins the pass's instance, too, and no draw finds its kept draw unlike it or
+/// stops its rebind. And a draw that keeps nothing (one that writes memory,
 /// `cfb_dn_count`, counted so) forgets the other state's kept draw: draws switching with it take
 /// every step.
 #[test]
@@ -796,14 +796,7 @@ fn draws_switching_pipeline_states_rebind_each_state_s_last_draw() {
     assert_eq!(rebound.words, every.words, "the pixels of the draws");
     let last = SIDE as usize - 1;
     assert_ne!(rebound.words[0], rebound.words[last], "the draws' offsets");
-    assert_eq!(rebound.counted(|counts| counts.draws_unkept), 1);
-    assert_eq!(rebound.counted(|counts| counts.draws_unkept_instance), 1);
-    let split = [
-        rebound.counted(|counts| counts.draws_unkept_instance_begun),
-        rebound.counted(|counts| counts.draws_unkept_instance_later),
-        rebound.counted(|counts| counts.draws_unkept_instance_steps),
-    ];
-    assert_eq!(split, [1, 0, 0], "the pass's first draw began its instance");
+    assert_eq!(rebound.counted(|counts| counts.draws_unkept), 0);
     let missed = |counts: &WorkCounts| counts.draws_unlike_kept + counts.draws_rebind_stopped;
     assert_eq!(rebound.counted(missed), 0);
     // Between the adding state's draws, draws that count their fragments in a buffer.

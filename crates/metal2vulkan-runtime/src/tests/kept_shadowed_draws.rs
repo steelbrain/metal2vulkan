@@ -7,8 +7,8 @@
 //! One pass over two private `BGRA8Unorm` targets, both loaded and stored, both cleared before by
 //! a pass of their own to a red of their own, draws a rectangle with `tob_read` (each fragment
 //! writes into the first target the texel of its slot-0 texture under it): the first target's
-//! texels over [`FIRST_RECT`], three times (the pass's first draw, kept nothing by its instance;
-//! the next, kept; the next, drawn again); over [`SECOND_RECT`], its vertex bytes bound again (a
+//! texels over [`FIRST_RECT`], three times (the pass's first draw, which begins its instance,
+//! kept; the next two, drawn again); over [`SECOND_RECT`], its vertex bytes bound again (a
 //! draw rebound, its shadow the kept draw's); the second target's texels there (its shadow
 //! another: it takes every step); through the scissor [`SCISSOR`] (its read's bounds another,
 //! where the device bounds a read at its own pixels: it takes every step); and twice again. The
@@ -270,26 +270,27 @@ fn draws_that_read_their_pass_s_copies_are_kept_with_the_copies_of_every_step() 
     // The same copies, every draw a read through a copy.
     assert_eq!(kept_copies, apart_copies, "the kept frame's copies");
     assert_eq!(kept_copies.through_copies, 8, "the reads through copies");
-    // The pass's first draw keeps nothing, by its instance alone. A draw again, or rebound, the
-    // first after a draw kept and every second after it takes every step in builds with debug
-    // assertions (`render/draw_again.rs`): of the draws again after the third draw kept, the
-    // first; of those after the last, the first. The scissor's draw is stopped where the device
-    // bounds the reads at their own pixels, as its read's bounds change, else rebound.
+    // Every draw keeps itself, the pass's first, which begins its instance, too. A draw again, or
+    // rebound, the first after a draw kept and every second after it takes every step in builds
+    // with debug assertions (`render/draw_again.rs`): of the draws after the first draw kept, the
+    // first and third (the draw rebound after the vertex bytes); of those after the last, the
+    // first. The scissor's draw is stopped where the device bounds the reads at their own pixels,
+    // as its read's bounds change, else rebound.
     let bounded = kept_copies.own_pixel > 0;
     let debug = cfg!(debug_assertions);
     let want = Keeps {
-        unkept: 1,
+        unkept: 0,
         unkept_shadowed: 0,
         as_before: match debug {
-            true => 1,
-            false => 3,
+            true => 2,
+            false => 4,
         },
-        rebound: 1 + u64::from(!bounded && !debug),
+        rebound: u64::from(!debug) * (1 + u64::from(!bounded)),
         stopped: 1 + u64::from(bounded),
     };
     assert_eq!(kept, want, "the kept frame's keeps on {}", device.name());
     let apart_want = Keeps {
-        unkept: 1,
+        unkept: 0,
         unkept_shadowed: 0,
         as_before: 0,
         rebound: 0,

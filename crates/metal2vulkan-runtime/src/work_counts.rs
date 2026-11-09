@@ -611,7 +611,6 @@ struct CommandCounters {
     residual_form_makings: AtomicU64,
     draws_unkept: AtomicU64,
     draws_unkept_instance: AtomicU64,
-    draws_unkept_instance_begun: AtomicU64,
     draws_unkept_instance_later: AtomicU64,
     draws_unkept_instance_steps: AtomicU64,
     draws_unkept_barrier: AtomicU64,
@@ -634,11 +633,11 @@ struct CommandCounters {
 /// (`render/draw_again.rs`), any number of them at once.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct UnkeptDraw {
-    /// A step of its own beside its Vulkan draw, or a new render pass instance.
+    /// A step of its own beside its Vulkan draw, or a later render pass instance of its pass.
     pub(crate) instance: bool,
-    /// Of `instance`: the pass's first render pass instance begun at it, a later instance it
-    /// records into (a split, a stand-in arriving, a continuation), a step of its own.
-    pub(crate) instance_split: (bool, bool, bool),
+    /// Of `instance`: a later instance it records into (a split, a stand-in arriving, a
+    /// continuation), a step of its own.
+    pub(crate) instance_split: (bool, bool),
     /// A barrier in its instance.
     pub(crate) barrier: bool,
     /// A shadowed texture among its uses, a snapshot or an extended-range shadow.
@@ -1038,10 +1037,9 @@ impl Counting<'_> {
     pub(crate) fn draw_unkept(&self, why: UnkeptDraw) {
         let counts = self.0;
         counts.add(|counts| &counts.draws_unkept, 1);
-        let (begun, later, steps) = why.instance_split;
-        let groups: [(bool, fn(&CommandCounters) -> &AtomicU64); 13] = [
+        let (later, steps) = why.instance_split;
+        let groups: [(bool, fn(&CommandCounters) -> &AtomicU64); 12] = [
             (why.instance, |c| &c.draws_unkept_instance),
-            (begun, |c| &c.draws_unkept_instance_begun),
             (later, |c| &c.draws_unkept_instance_later),
             (steps, |c| &c.draws_unkept_instance_steps),
             (why.barrier, |c| &c.draws_unkept_barrier),
@@ -6036,13 +6034,12 @@ pub struct WorkCounts {
     pub draws_unkept: u64,
     /// Of `draws_unkept`, those that took a step of their own beside their Vulkan draw (a copy,
     /// rewrite, index bounds, stand-in, mesh or tessellation work, a pipeline being made inline)
-    /// or recorded into a new render pass instance, as a pass's first draw does.
+    /// or recorded into a later render pass instance of their pass. A pass's first draw that
+    /// begins its first instance inline (`render/inline_first.rs`) is kept as any.
     pub draws_unkept_instance: u64,
-    /// Of `draws_unkept_instance`, those its pass's first render pass instance began at (each
-    /// pass's first draw that records), counted in each of the three it met.
-    pub draws_unkept_instance_begun: u64,
     /// Of `draws_unkept_instance`, those that recorded into a later render pass instance of their
-    /// pass: after a split, a stand-in arriving with them, or a continuation.
+    /// pass: after a split, a stand-in arriving with them, or a continuation; counted in each of
+    /// the two it met.
     pub draws_unkept_instance_later: u64,
     /// Of `draws_unkept_instance`, those that took a step of their own beside their Vulkan draw:
     /// a copy, rewrite, index bounds, folded or indirect arguments, mesh or tessellation work, a
@@ -7976,7 +7973,6 @@ impl Device {
             draws_restated: commands(|counts| &counts.draws_restated),
             draws_unkept: commands(|counts| &counts.draws_unkept),
             draws_unkept_instance: commands(|counts| &counts.draws_unkept_instance),
-            draws_unkept_instance_begun: commands(|counts| &counts.draws_unkept_instance_begun),
             draws_unkept_instance_later: commands(|counts| &counts.draws_unkept_instance_later),
             draws_unkept_instance_steps: commands(|counts| &counts.draws_unkept_instance_steps),
             draws_unkept_barrier: commands(|counts| &counts.draws_unkept_barrier),

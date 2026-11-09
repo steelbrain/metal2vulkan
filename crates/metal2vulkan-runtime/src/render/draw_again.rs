@@ -9,7 +9,9 @@
 //!   command it recorded; and what its other steps did that a draw again repeats (its per-draw
 //!   counts, its execution record, whether its instance keeps it for recording again).
 //! - **Only a plain draw is kept.** One that recorded one Vulkan draw into the current instance as
-//!   it stood, through a pipeline made ahead, needing nothing before or around it of its own: no
+//!   it stood, or into its pass's first instance begun inline at it (`render/inline_first.rs`:
+//!   the next draw finds the instance begun, its record holding the states the kept draw set),
+//!   through a pipeline made ahead, needing nothing before or around it of its own: no
 //!   split, stand-in, snapshot, copy, index bounds or rewrite pass, mesh or tessellation work, rate
 //!   map, color groups, extended-range color or its shadow, set 1 or handle table, root table or
 //!   push hole, barrier in its instance, read of a color its pass clears behind its load actions
