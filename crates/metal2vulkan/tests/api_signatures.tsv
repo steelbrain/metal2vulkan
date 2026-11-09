@@ -9883,7 +9883,7 @@ struct	metal2vulkan-runtime::HeapDescriptor	#[derive(Clone, Copy, Debug, Partial
 struct	metal2vulkan-runtime::HostBytes	#[derive(Clone, Copy, Debug)] pub struct HostBytes<'a>
 struct	metal2vulkan-runtime::HostMemory	pub struct HostMemory
 struct	metal2vulkan-runtime::HostRam	pub struct HostRam
-struct	metal2vulkan-runtime::HostRamUse	#[must_use = "dropping the use lets go of the RAM at once"] pub struct HostRamUse
+struct	metal2vulkan-runtime::HostRamUse	#[must_use = "dropping the use lets go of the RAM at once"] pub struct HostRamUse(Arc<RamUseCell>)
 struct	metal2vulkan-runtime::ImportRequest	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ImportRequest
 struct	metal2vulkan-runtime::IndirectBufferBinding	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct IndirectBufferBinding
 struct	metal2vulkan-runtime::IndirectCommandBuffer	#[derive(Clone)] pub struct IndirectCommandBuffer(Arc<IcbShared>)
@@ -10410,7 +10410,6 @@ trait-impl	metal2vulkan-runtime::HostMemory impl fe impl Sync	unsafe impl Sync f
 trait-impl	metal2vulkan-runtime::HostMemory impl std::fmt::Debug	impl std::fmt::Debug for HostMemory
 trait-impl	metal2vulkan-runtime::HostRam impl Drop	impl Drop for HostRam
 trait-impl	metal2vulkan-runtime::HostRam impl std::fmt::Debug	impl std::fmt::Debug for HostRam
-trait-impl	metal2vulkan-runtime::HostRamUse impl Drop	impl Drop for HostRamUse
 trait-impl	metal2vulkan-runtime::HostRamUse impl std::fmt::Debug	impl std::fmt::Debug for HostRamUse
 trait-impl	metal2vulkan-runtime::ImportRequest impl fe impl Send	unsafe impl Send for ImportRequest
 trait-impl	metal2vulkan-runtime::ImportRequest impl fe impl Sync	unsafe impl Sync for ImportRequest
