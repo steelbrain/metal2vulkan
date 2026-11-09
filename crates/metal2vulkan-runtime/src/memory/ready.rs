@@ -1,7 +1,8 @@
 //! Pooled blocks made ahead, off the program's thread, before any resource is placed in them:
 //! for each pool the runtime's encodings and commits place their own resources in
-//! (`memory::keep_room`) while it grows, and for the pool a color texture's host-transfer image
-//! places in (`texture/host_copy.rs`). Each is allocated right after a burst of the device's
+//! (`memory::keep_room`) and each pool of exportable buffers (`memory::allocate_exported`) while
+//! it grows, and for the pool a color texture's host-transfer image places in
+//! (`texture/host_copy.rs`). Each is allocated right after a burst of the device's
 //! submissions returned, then every page of its mapping is read once by the host.
 //!
 //! **Why right after a burst.** A block's `vkAllocateMemory` holds the device's submissions
@@ -33,7 +34,13 @@
 //!   like a guest's scroll on the 780M (from 20 to 63 live blocks of 64 MiB in about 20 s, about 4
 //!   a second) finds a block made when it needs one; and for the host copies' pool once that
 //!   lacks room for half a block, the first by the device's first creation call, before the
-//!   program queued work.
+//!   program queued work. A pool of exportable buffers, which the creation calls themselves place
+//!   in, gets its block started the same way once it grew, so that the creation call that finds
+//!   no room there takes a block made ahead rather than make one on the program's thread (on a
+//!   Radeon 780M a creation call that made such a 64 MiB block itself took 10.0 to 15.0 ms in
+//!   three of four phases of `tests::reclaim_submit_bench`, quiet and fragmented, and none took
+//!   over 0.3 ms with the blocks made ahead); none of its blocks is made by a creation call that
+//!   places nothing there.
 //! - **Added where room is needed.** A creation call that finds such a pool without room for
 //!   half a block (`memory::keep_room`), and a placement that finds no room (`memory::place`),
 //!   add the pool's block made ahead once its making ended. Where the making is under way they

@@ -986,9 +986,11 @@ driver's. Each is open work.
   waited 1 ms (longest 0.39 to 0.67 ms), 16 empty blocks (1 GiB) kept between the clips. A first
   clip still makes its blocks: 16 allocations, against 44 when each picture had an allocation of
   its own, with 3 to 5 commits waiting 1 ms or more (longest 10.9 to 19.6 ms): its blocks'
-  `vkAllocateMemory` holds every submission, and a block made ahead of its placements, on a thread
-  of the device's own, would hold the frames it meets as long (the row above), so none is. Metal's
-  command buffers wait for no allocation. Not announced.
+  `vkAllocateMemory` holds every submission. A pool that grew gets its next block made ahead
+  (`memory/ready.rs`; the pools of exportable buffers, which hold the pictures, among them), right
+  after a burst of the device's submissions ended, and a creation call that needs it while its
+  making still waits for that end makes it at once and waits for it, as for a block made in place.
+  Metal's command buffers wait for no allocation. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
   unobserved: about 1 µs a submission for each such block held.** Where the device has unified memory and a heap that is not

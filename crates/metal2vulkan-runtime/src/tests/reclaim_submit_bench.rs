@@ -38,6 +38,11 @@
 //!   holds its verdicts knows them as it is made, where the first starts no check (a buffer's
 //!   making starts none), its blocks plain, as a driver's first device's are until a texture over
 //!   host pages starts the check and it answers.
+//! - **Exportable, made by the runtime**: an exportable `Private` buffer of
+//!   [`RUNTIME_BUFFER_BYTES`] (`Device::new_exportable_buffer`) every [`RUNTIME_EVERY`], at most
+//!   [`RUNTIME_BUFFERS`] a phase: the pool of exportable buffers grows, its blocks made ahead
+//!   (`memory/ready.rs`), each a buffer object of its own reservation, so that the makings timed
+//!   are the creation calls, on the calling thread.
 //! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
 //!   the device's first memory type that is host-visible and host-coherent but not device-local or
 //!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of
@@ -85,19 +90,20 @@
 //! the turnaround each, those of 8 ms or more and of 17 ms or more, the median, 99th percentile and
 //! slowest; the command buffers submitted, those the committing thread submitted
 //! (`WorkCounts::batches_submitted_at_commit`) and the time spent in `vkQueueSubmit`
-//! (`WorkCounts::batch_submit_nanos`); the makings, their median and slowest, the runtime's
-//! blocks made ahead and in place, its buffers' blocks made exportable and plain, every plain
-//! block of buffers made (`WorkCounts::plain_buffer_blocks_made`), and its buffers laid in plain
-//! blocks while the check was pending or once it refused such blocks; the host's
-//! reclaim over the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction
-//! stalls, allocation stalls, pages swapped out); the memory the fragmenting took, the host's free
-//! memory and the cgroup's room it was sized from; the free blocks of each order before and after
-//! the fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions',
-//! turnarounds' and makings' `CLOCK_MONOTONIC` times, to line up with a kernel trace taken beside
-//! the run. Ignored: run it in release under
-//! `--cfg m2v_gpu` on Linux, alone on its host (it presses the whole host's memory), one arm at a
-//! time, in a cgroup with room for nearly all of the host's free memory: `cargo nextest run
-//! --release -p metal2vulkan-runtime --lib --run-ignored all reclaim_submit_bench --no-capture`.
+//! (`WorkCounts::batch_submit_nanos`); the makings, their median and slowest, the runtime's blocks
+//! made ahead and in place and the blocks made ahead a call waited for
+//! (`WorkCounts::blocks_ahead_waited_for`), its buffers' blocks made exportable and plain, every
+//! plain block of buffers made (`WorkCounts::plain_buffer_blocks_made`), and its buffers laid in
+//! plain blocks while the check was pending or once it refused such blocks; the host's reclaim over
+//! the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction stalls,
+//! allocation stalls, pages swapped out); the memory the fragmenting took, the host's free memory
+//! and the cgroup's room it was sized from; the free blocks of each order before and after the
+//! fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions', turnarounds'
+//! and makings' `CLOCK_MONOTONIC` times, to line up with a kernel trace taken beside the run.
+//! Ignored: run it in release under `--cfg m2v_gpu` on Linux, alone on its host (it presses the
+//! whole host's memory), one arm at a time, in a cgroup with room for nearly all of the host's free
+//! memory: `cargo nextest run --release -p metal2vulkan-runtime --lib --run-ignored all
+//! reclaim_submit_bench --no-capture`.
 
 use super::host_residency::{device, Scratch};
 use crate::{
@@ -393,6 +399,8 @@ fn monotonic() -> f64 {
 enum Making {
     /// The runtime's `Private` buffers (the module docs).
     Runtime,
+    /// The runtime's exportable `Private` buffers (the module docs).
+    Exportable,
     /// Allocations of `bytes` of the memory type `index`, [`RAW_BYTES`] a phase, exportable as
     /// `export`'s handle type where given.
     Raw {
@@ -419,7 +427,7 @@ fn make(
 ) -> Vec<(Duration, f64)> {
     let mut times = Vec::new();
     let (every, most) = match making {
-        Making::Runtime => (RUNTIME_EVERY, RUNTIME_BUFFERS),
+        Making::Runtime | Making::Exportable => (RUNTIME_EVERY, RUNTIME_BUFFERS),
         Making::Raw { bytes, .. } => (
             RAW_EVERY.mul_f64(bytes as f64 / (64 * MIB) as f64),
             (RAW_BYTES / bytes) as usize,
@@ -433,6 +441,11 @@ fn make(
             Making::Runtime => made.buffers.push(
                 device
                     .new_buffer(RUNTIME_BUFFER_BYTES, ResourceOptions::private())
+                    .unwrap(),
+            ),
+            Making::Exportable => made.buffers.push(
+                device
+                    .new_exportable_buffer(RUNTIME_BUFFER_BYTES, ResourceOptions::private())
                     .unwrap(),
             ),
             Making::Raw {
@@ -534,7 +547,8 @@ fn phase(
          turnaround {} of 8 ms or more, {} of 17 ms or more, ms median {turn_median:.3}, p99 \
          {turn_p99:.3}, slowest {turn_slowest:.3}; command buffers submitted {submitted}, by the \
          committing thread {}, in vkQueueSubmit {:.1} ms, {:.3} ms each; {} makings, ms median \
-         {make_median:.1}, slowest {make_slowest:.1}; blocks made ahead {}, in place {}; \
+         {make_median:.1}, slowest {make_slowest:.1}; blocks made ahead {}, in place {}, \
+         waited for {}; \
          blocks of the runtime's buffers made exportable {}, made plain {}, plain blocks of \
          buffers made {}; buffers in plain blocks awaiting the check {}, by its refusal {}; \
          reclaim: {}; blocks live {}, empty {}; MemAvailable {} MiB",
@@ -550,6 +564,7 @@ fn phase(
         makes.len(),
         counts.buffer_blocks_made_ahead - earlier.buffer_blocks_made_ahead,
         counts.buffer_blocks_made_in_place - earlier.buffer_blocks_made_in_place,
+        counts.blocks_ahead_waited_for - earlier.blocks_ahead_waited_for,
         counts.fd_buffer_blocks_made - earlier.fd_buffer_blocks_made,
         counts.fd_buffer_blocks_plain - earlier.fd_buffer_blocks_plain,
         counts.plain_buffer_blocks_made - earlier.plain_buffer_blocks_made,
@@ -587,6 +602,8 @@ enum Arm {
     Runtime {
         settled: bool,
     },
+    /// The runtime's exportable buffers.
+    Exportable,
     SystemHeap {
         bytes: u64,
         export: Option<Handle>,
@@ -630,6 +647,7 @@ fn arm(label: &str, arm: Arm) {
             }
             Making::Runtime
         }
+        Arm::Exportable => Making::Exportable,
         Arm::SystemHeap { bytes, export } => Making::Raw {
             index: system_heap(),
             bytes,
@@ -1117,6 +1135,12 @@ fn reclaim_submit_bench_runtime_settled() {
         "made by the runtime, settled",
         Arm::Runtime { settled: true },
     );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_exportable() {
+    arm("exportable, made by the runtime", Arm::Exportable);
 }
 
 #[test]

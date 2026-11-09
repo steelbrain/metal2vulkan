@@ -106,14 +106,15 @@
 //!   a heap is allocated as before.
 //!
 //! - **Blocks made ahead** (`memory/ready.rs`). Each pool the encodings and commits place their
-//!   own resources in ([`keep_room`]) gets a block made off the program's thread while it grows,
-//!   and the pool a color texture's host-transfer image places in ([`Memory::host_copy_pool`])
-//!   gets its blocks so: each made right after a burst of the device's submissions ended, since
-//!   a block's `vkAllocateMemory` holds the device's submissions while it runs on RADV and on
-//!   NVIDIA's driver, then every page of its mapping read once before anything is placed in it,
-//!   so that no host copy's first touch faults on memory whose kernel work waits behind the
-//!   program's queued GPU work. A call that needs room takes the pool's block made ahead, or
-//!   waits for its making, rather than make a block of its own.
+//!   own resources in ([`keep_room`]) and each pool of exportable buffers ([`allocate_exported`])
+//!   gets a block made off the program's thread while it grows, and the pool a color texture's
+//!   host-transfer image places in ([`Memory::host_copy_pool`]) gets its blocks so: each made
+//!   right after a burst of the device's submissions ended, since a block's `vkAllocateMemory`
+//!   holds the device's submissions while it runs on RADV and on NVIDIA's driver, then every page
+//!   of its mapping read once before anything is placed in it, so that no host copy's first touch
+//!   faults on memory whose kernel work waits behind the program's queued GPU work. A call that
+//!   needs room takes the pool's block made ahead, or waits for its making, rather than make a
+//!   block of its own.
 
 use super::buffer::usage;
 use super::device::lock;
@@ -2316,11 +2317,29 @@ impl Memory {
     }
 
     /// Whether blocks are made ahead for `pool` (`memory/ready.rs`): one the encodings and commits
-    /// place their own resources in ([`Memory::kept`], once found), or the pool host copies place
-    /// in ([`Memory::host_copy_pool`], once found).
+    /// place their own resources in ([`Memory::kept`], once found), a pool of exportable buffers
+    /// ([`Holds::Exports`], [`Holds::DmaBufs`]), or the pool host copies place in
+    /// ([`Memory::host_copy_pool`], once found).
     fn makes_ahead(&self, pool: (Holds, u32)) -> bool {
         self.host_copy_pool == Some(Some(pool))
+            || pool.0.handle().is_some()
             || (self.kept.as_ref()).is_some_and(|kept| kept.contains(&pool))
+    }
+
+    /// The pools of exportable buffers ([`Holds::Exports`], [`Holds::DmaBufs`]) that grew within
+    /// [`KEPT_EMPTY_FOR`] (`allocate_exported`'s pooled placements): those whose blocks are made
+    /// ahead while they grow, besides [`Memory::kept`]'s.
+    fn exported_growing(&mut self) -> Vec<(Holds, u32)> {
+        let types = self.types.len() as u32;
+        let pools = (0..types).flat_map(|type_index| {
+            [Holds::Exports, Holds::DmaBufs].map(|holds| (holds, type_index))
+        });
+        pools
+            .filter(|&(holds, type_index)| {
+                let grew = self.pool(holds, type_index).grew(None);
+                grew.is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR)
+            })
+            .collect()
     }
 
     /// Add the block made ahead for `pool` to it where its making ended (`memory/ready.rs`):
@@ -3880,7 +3899,9 @@ pub(super) fn keep_none(memory: &Mutex<Memory>, device: &ash::Device) {
 /// blocks carry one. A block that fails to be made, or a pool the query fails for, is left to the
 /// placement that needs it. A pool that grew within [`KEPT_EMPTY_FOR`] and lacks room for a whole
 /// block, holding no block made ahead, gets one started, through `functions`, made once a burst
-/// of `quiet`'s queue uses ended. The pool host copies place in, where `copies` says the device
+/// of `quiet`'s queue uses ended; so does each pool of exportable buffers that grew so
+/// (`allocate_exported`), whose room is otherwise left to its placements, which are the creation
+/// calls themselves. The pool host copies place in, where `copies` says the device
 /// copies color textures on the host, gets its block made ahead once it lacks room for half a
 /// block; its making is never waited for here, as its pages' reads may wait behind the program's
 /// GPU work, and its block is never added here: the placement there that finds no room adds it
@@ -3951,22 +3972,44 @@ pub(super) fn keep_room(
             guard.ahead.made_in_place(pool.0);
             break;
         }
-        let mut guard = lock(memory);
-        let pool_of = guard.pool(pool.0, pool.1);
-        let grew = (pool_of.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
-        if !grew || pool_of.has_room(maker.block_bytes) || guard.readying_at(pool).is_some() {
-            continue;
-        }
-        let addressed = pool.0.buffers().then(|| Arc::clone(counts));
-        let started = ready::Readying::start(
-            guard.maker(),
-            Arc::clone(functions),
-            Arc::clone(quiet),
-            addressed,
-            (pool, maker.block_bytes),
-        );
-        guard.readying.extend(started);
+        ready_if_growing(&mut lock(memory), pool, counts, (functions, quiet));
     }
+    // The pools of exportable buffers, which the creation calls themselves place in
+    // (`allocate_exported`): a block made ahead once one grew, which the placement that finds no
+    // room takes, or waits for, rather than make a 64 MiB block on the program's thread; never a
+    // block made here, which that placement would make as soon.
+    let mut guard = lock(memory);
+    for pool in guard.exported_growing() {
+        ready_if_growing(&mut guard, pool, counts, (functions, quiet));
+    }
+}
+
+/// Start making a block ahead for `pool` (`memory/ready.rs`), through `functions`, made once a
+/// burst of `quiet`'s queue uses ended, with a buffer of addresses counted in `counts` where its
+/// blocks carry one, where the pool grew within [`KEPT_EMPTY_FOR`], lacks room for a whole block
+/// and holds no block made ahead.
+fn ready_if_growing(
+    memory: &mut Memory,
+    pool: (Holds, u32),
+    counts: &Arc<Counters>,
+    (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
+) {
+    let bytes = memory.block_bytes;
+    let ahead = memory.readying_at(pool).is_some();
+    let pool_of = memory.pool(pool.0, pool.1);
+    let grew = (pool_of.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
+    if !grew || pool_of.has_room(bytes) || ahead {
+        return;
+    }
+    let addressed = pool.0.buffers().then(|| Arc::clone(counts));
+    let started = ready::Readying::start(
+        memory.maker(),
+        Arc::clone(functions),
+        Arc::clone(quiet),
+        addressed,
+        (pool, bytes),
+    );
+    memory.readying.extend(started);
 }
 
 /// Start making a block ahead for the pool host copies place in (`memory/ready.rs`,

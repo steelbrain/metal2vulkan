@@ -6,7 +6,8 @@
 //!
 //! The first run makes `Private` buffers of a guest's scroll, eight to a block, and waits for every
 //! making to end between two creations: what it holds is where the blocks are made, not how soon
-//! a making ends. The second makes them back to back beside two threads that keep the device's
+//! a making ends. A run of exportable buffers does the same: their pool, which the creation calls
+//! themselves place in (`memory::allocate_exported`), gets its blocks made ahead too. The second makes them back to back beside two threads that keep the device's
 //! queues in use with no pause of 1 ms, so a making waits out its whole wait for a burst's end
 //! (`QUIET_MOST`) unless a call cuts it short: the creation call that needs the block while its
 //! making still waits so returns well within that wait, the making allocating at once.
@@ -14,7 +15,9 @@
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
 use super::freed_memory::device;
-use crate::{Buffer, CommandBufferStatus, Device, ResourceOptions, TextureDescriptor, WorkCounts};
+use crate::{
+    Buffer, CommandBufferStatus, Device, Error, ResourceOptions, TextureDescriptor, WorkCounts,
+};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -123,6 +126,74 @@ fn a_growing_pool_s_new_blocks_are_made_ahead_and_none_in_place() {
         "only {ahead} of the blocks were made ahead"
     );
     assert_eq!(waited_for, 0, "a call waited for a making that had ended");
+}
+
+/// The pool of exportable buffers grows as the runtime's own pools do: once it grew, each new
+/// block there is made ahead, and no creation call makes one itself (on a Radeon 780M such a
+/// making took the creation call 10.0 to 15.0 ms: `tests::reclaim_submit_bench`).
+#[test]
+fn a_growing_pool_of_exportable_buffers_gets_its_new_blocks_made_ahead() {
+    let scratch = Scratch::new("exportable");
+    let device = device(&scratch.0);
+    let mut held = Vec::new();
+    // The counts after an exportable buffer made into `held` and the makings it started; `None`
+    // where the device makes no exportable buffer.
+    let make = |held: &mut Vec<Buffer>| {
+        assert!(held.len() < MOST, "the pool never grew as far");
+        match device.new_exportable_buffer(BUFFER_BYTES, ResourceOptions::private()) {
+            Err(Error::NotImplemented(_)) => return None,
+            made => held.push(made.unwrap()),
+        }
+        makings_ended(&device);
+        Some(device.work_counts())
+    };
+    // Every pooled block made from here on is the exportable pool's: the first creation made each
+    // other pool's first block.
+    let Some(start) = make(&mut held) else {
+        println!(
+            "BLOCKS-AHEAD {}: makes no exportable buffer, so no such pool grows",
+            device.name()
+        );
+        return;
+    };
+    let blocks =
+        |counts: &WorkCounts| counts.pooled_memory_blocks_made - start.pooled_memory_blocks_made;
+    let mut counts = start;
+    // Its first growth, made in place, as nothing grew before it.
+    while blocks(&counts) < 1 {
+        counts = make(&mut held).unwrap();
+        let dedicated = counts.dedicated_memory_blocks_live - start.dedicated_memory_blocks_live;
+        if blocks(&counts) == 0 && dedicated >= 2 {
+            println!(
+                "BLOCKS-AHEAD {}: places each exportable buffer in a dedicated allocation, so no \
+                 such pool grows",
+                device.name()
+            );
+            return;
+        }
+    }
+    let before = counts;
+    while blocks(&counts) - blocks(&before) < GROWTH {
+        counts = make(&mut held).unwrap();
+    }
+    let in_place = counts.buffer_blocks_made_in_place - before.buffer_blocks_made_in_place;
+    let ahead = counts.buffer_blocks_made_ahead - before.buffer_blocks_made_ahead;
+    println!(
+        "BLOCKS-AHEAD {}: {} exportable buffers of {BUFFER_BYTES} bytes; over their pool's last {} \
+         blocks, {ahead} made ahead, {in_place} in place",
+        device.name(),
+        held.len(),
+        blocks(&counts) - blocks(&before),
+    );
+    assert_eq!(
+        in_place, 0,
+        "a creation call made a block of exportable buffers itself"
+    );
+    assert_eq!(
+        ahead,
+        blocks(&counts) - blocks(&before),
+        "only {ahead} of the blocks were made ahead"
+    );
 }
 
 /// Sets its flag as it goes, so the threads that keep the queues in use stop however the test

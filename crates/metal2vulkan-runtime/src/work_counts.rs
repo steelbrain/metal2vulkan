@@ -5046,9 +5046,9 @@ pub struct WorkCounts {
     /// Of `pooled_memory_blocks_made`, the blocks of buffers made ahead off the program's thread,
     /// each right after a burst of the device's submissions ended, and added to their pool where
     /// room was needed: blocks of the pools the runtime's encodings and commits place their own
-    /// resources in, made while such a pool grows (`memory/ready.rs`). A block's
-    /// `vkAllocateMemory` holds the device's submissions while it runs on RADV and on NVIDIA's
-    /// driver, so it is made between them.
+    /// resources in, and of the pools of exportable buffers (`exported_memory.rs`), made while
+    /// such a pool grows (`memory/ready.rs`). A block's `vkAllocateMemory` holds the device's
+    /// submissions while it runs on RADV and on NVIDIA's driver, so it is made between them.
     pub buffer_blocks_made_ahead: u64,
     /// The blocks of buffers of those pools a call made itself, finding none made ahead: a
     /// creation call that found its pool without room for half a block, or a placement that
