@@ -698,93 +698,153 @@ fn a_deallocator_may_touch_the_command_buffer_that_held_its_buffer() {
 /// committed, so the three go in that one pass.) A blit encoder logs its calls while the device has
 /// a buffer over host pages (`replay.rs`), and its log was let go there, with the buffer's last
 /// handle, after the completion: the deallocator then ran on that thread, whose own hold on the
-/// command buffer kept the deallocator's wait from ever returning.
+/// command buffer kept the deallocator's wait from ever returning. `after` needs no GPU work, so
+/// where `filled` completed before the pass took it, its completion turn is that thread's own
+/// (`Completion::turn_owed`), which the thread makes before it runs `holding`'s handler; made
+/// after it, the handler waited for a turn only its return let go.
+///
+/// The two command queues run on one `VkQueue`, and, where the device has another, on two: a
+/// device of one `VkQueue` per family shares it between them, and one of many gives them two
+/// (the lane's devices keep each queue on the `VkQueue` the round robin gave it,
+/// `QueueSharingPolicy::PerQueue`), so each arrangement is made here on every device that has
+/// it ([`queue_where`]).
 #[test]
 fn a_deallocator_returns_whatever_thread_submits_past_its_completion() {
     on_device(|device| {
-        let (first, second) = (
-            device.new_command_queue().unwrap(),
-            device.new_command_queue().unwrap(),
-        );
-        let before = device.work_counts();
-        let opener = second.command_buffer().unwrap();
-        let (opened, open) = std::sync::mpsc::channel::<()>();
-        let (release, released) = std::sync::mpsc::channel::<()>();
-        opener
-            .add_submission_handler(Box::new(move |_: &CommandBuffer| {
-                opened.send(()).unwrap();
-                released.recv_timeout(WAIT).unwrap();
-            }))
-            .unwrap();
-        opener.commit().unwrap();
-        open.recv_timeout(WAIT)
-            .expect("the opener's submission handler ran");
-        let memory = Mapping::anonymous(GUEST_PAGE);
-        let pointer = memory.pointer();
-        let filled = first.command_buffer().unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let deallocator: Deallocator = {
-            let filled = filled.clone();
-            Box::new(move |_: NonNull<u8>, _: u64| {
-                let status = filled.status();
-                let waited = (
-                    filled.wait_until_completed(),
-                    filled.wait_until_completed_for(WAIT),
-                );
-                drop(filled);
-                drop(memory);
-                sender.send((status, waited)).unwrap();
-            })
-        };
-        // SAFETY: the deallocator releases the mapping, after the buffer's last use.
-        let buffer = unsafe {
-            no_copy(
-                device,
-                pointer,
-                GUEST_PAGE,
-                ResourceOptions::default(),
-                Some(deallocator),
-            )
-        }
-        .unwrap();
-        let mut blit = filled.blit_command_encoder().unwrap();
-        blit.fill_buffer(&buffer, 0..64, 0x2d).unwrap();
-        blit.end_encoding().unwrap();
-        filled.commit().unwrap();
-        drop(buffer);
-        let after = first.command_buffer().unwrap();
-        let (ran, after_ran) = std::sync::mpsc::channel::<()>();
-        after
-            .add_completed_handler(Box::new(move |_: &CommandBuffer| {
-                ran.send(()).unwrap();
-            }))
-            .unwrap();
-        after.commit().unwrap();
-        let holding = second.command_buffer().unwrap();
-        let later = after.clone();
-        holding
-            .add_submission_handler(Box::new(move |taken: &CommandBuffer| {
-                if after_ran.recv_timeout(WAIT).is_err() {
-                    panic!(
-                        "the later command buffer's completed handler never ran: it is {:?}; {}",
-                        later.status(),
-                        submitted_since(&before, &taken.device().work_counts())
-                    );
-                }
-            }))
-            .unwrap();
-        holding.commit().unwrap();
-        release.send(()).unwrap();
-        let (status, waited) = receiver
-            .recv_timeout(WAIT)
-            .expect("the deallocator ran and returned");
-        assert_eq!(status, CommandBufferStatus::Completed);
-        assert_eq!(waited, (Ok(()), Ok(())));
-        for command_buffer in [&opener, &filled, &after, &holding] {
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(command_buffer.error(), None);
+        let first = device.new_command_queue().unwrap();
+        let on = first.vk_queue_sharing().0;
+        let shared = queue_where(device, on, true).expect("a queue on the first one's VkQueue");
+        deallocator_past_its_completion(device, &first, &shared, "one VkQueue");
+        match queue_where(device, on, false) {
+            Some(apart) => deallocator_past_its_completion(device, &first, &apart, "two VkQueues"),
+            None => eprintln!(
+                "deallocator past its completion: {} has one VkQueue",
+                device.name()
+            ),
         }
     });
+}
+
+/// A new command queue of `device` on the `VkQueue` `vk_queue` (`shared`), or on another: the
+/// first such of up to 64 made one after another, which the round robin spreads over the
+/// device's `VkQueue`s (`CommandQueue::vk_queue_sharing`). `None` where none was: a device of one
+/// `VkQueue`, for another.
+fn queue_where(device: &Device, vk_queue: usize, shared: bool) -> Option<CommandQueue> {
+    (0..64)
+        .map(|_| device.new_command_queue().unwrap())
+        .find(|queue| (queue.vk_queue_sharing().0 == vk_queue) == shared)
+}
+
+/// [`a_deallocator_returns_whatever_thread_submits_past_its_completion`] on `first` and `second`,
+/// the queues of the `arrangement` named.
+fn deallocator_past_its_completion(
+    device: &Device,
+    first: &CommandQueue,
+    second: &CommandQueue,
+    arrangement: &str,
+) {
+    let queues = (first.vk_queue_sharing().0, second.vk_queue_sharing().0);
+    let before = device.work_counts();
+    let opener = second.command_buffer().unwrap();
+    let (opened, open) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    opener
+        .add_submission_handler(Box::new(move |_: &CommandBuffer| {
+            opened.send(()).unwrap();
+            released.recv_timeout(WAIT).unwrap();
+        }))
+        .unwrap();
+    opener.commit().unwrap();
+    open.recv_timeout(WAIT)
+        .expect("the opener's submission handler ran");
+    let memory = Mapping::anonymous(GUEST_PAGE);
+    let pointer = memory.pointer();
+    let filled = first.command_buffer().unwrap();
+    // The thread the deallocator began on, once it began.
+    let began: Arc<Mutex<Option<String>>> = Arc::default();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let deallocator: Deallocator = {
+        let (filled, began) = (filled.clone(), Arc::clone(&began));
+        Box::new(move |_: NonNull<u8>, _: u64| {
+            let thread = std::thread::current().name().map(str::to_owned);
+            *began.lock().unwrap() = Some(thread.unwrap_or_else(|| "(unnamed)".to_owned()));
+            let status = filled.status();
+            let waited = (
+                filled.wait_until_completed(),
+                filled.wait_until_completed_for(WAIT),
+            );
+            drop(filled);
+            drop(memory);
+            sender.send((status, waited)).unwrap();
+        })
+    };
+    // SAFETY: the deallocator releases the mapping, after the buffer's last use.
+    let buffer = unsafe {
+        no_copy(
+            device,
+            pointer,
+            GUEST_PAGE,
+            ResourceOptions::default(),
+            Some(deallocator),
+        )
+    }
+    .unwrap();
+    let mut blit = filled.blit_command_encoder().unwrap();
+    blit.fill_buffer(&buffer, 0..64, 0x2d).unwrap();
+    blit.end_encoding().unwrap();
+    filled.commit().unwrap();
+    drop(buffer);
+    let after = first.command_buffer().unwrap();
+    let (ran, after_ran) = std::sync::mpsc::channel::<()>();
+    after
+        .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+            ran.send(()).unwrap();
+        }))
+        .unwrap();
+    after.commit().unwrap();
+    let holding = second.command_buffer().unwrap();
+    // What the device did, for a failure's report.
+    let report = {
+        let arrangement = arrangement.to_owned();
+        let (filled, later, began) = (filled.clone(), after.clone(), Arc::clone(&began));
+        move |device: &Device| {
+            format!(
+                "on {arrangement} {queues:?} of {}: the filled command buffer is {:?}, the later \
+                 one {:?}; the deallocator began on {:?}; {}",
+                device.name(),
+                filled.status(),
+                later.status(),
+                began.lock().unwrap(),
+                submitted_since(&before, &device.work_counts())
+            )
+        }
+    };
+    let report_there = report.clone();
+    holding
+        .add_submission_handler(Box::new(move |taken: &CommandBuffer| {
+            if after_ran.recv_timeout(WAIT).is_err() {
+                panic!(
+                    "the later command buffer's completed handler never ran {}",
+                    report_there(taken.device())
+                );
+            }
+        }))
+        .unwrap();
+    holding.commit().unwrap();
+    release.send(()).unwrap();
+    let Ok((status, waited)) = receiver.recv_timeout(WAIT) else {
+        panic!("the deallocator never returned {}", report(device));
+    };
+    assert_eq!(status, CommandBufferStatus::Completed, "{arrangement}");
+    assert_eq!(waited, (Ok(()), Ok(())), "{arrangement}");
+    for command_buffer in [&opener, &filled, &after, &holding] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+    }
+    eprintln!(
+        "deallocator past its completion: on {arrangement} {queues:?} of {}",
+        device.name()
+    );
 }
 
 /// What the device's scheduler did from `before` to `after`: its submissions, by whom, and what
