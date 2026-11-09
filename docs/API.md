@@ -3759,7 +3759,13 @@ bound.
   sRGB attachment and writes it again, within 2 codes once a later draw reads an earlier one's code
   (with `srgb-texel-decode`); a blend into an 8-bit sRGB attachment, within 4 codes; a blend into a
   4-sample `A1BGR5Unorm` attachment the device renders itself (Mesa 26.2.4), within 2 codes, over a
-  sample whose fill it stored a code from Metal's. Another device
+  sample whose fill it stored a code from Metal's. RADV (Mesa 26.2.6 on the Radeon 780M) blends
+  into an `RGB9E5Float` attachment it renders itself a source whose channels and alpha are halves
+  rounded toward zero, a value past 65504 as 65504, where Metal blends the `float`s (Vulkan asks a
+  blend for no more precision and range than the attachment's): at 2 and 4 samples, 30 of 96
+  blended samples are not Metal's, up to 33 units of the larger value's last mantissa bit apart
+  where the source passes 65504, and 7 where the half's alpha weighs a destination far larger than
+  the source. Another device
   is not bounded past one code (an NVIDIA RTX 5080 Laptop GPU's blend into an 8-bit sRGB attachment
   stored up to 11 codes from Metal's).
   Also a render pass's clear of a normalized, sRGB,

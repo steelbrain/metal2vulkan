@@ -27,7 +27,15 @@
 //! further by as far as the sample it blends over lies from Metal's: the device's blend over the
 //! device's stored code, each its own arithmetic (`device-color-conversion`; lavapipe, Mesa 26.2.4,
 //! blends an `A1BGR5Unorm` sample at 4 samples two codes from Metal's over a sample its fill
-//! stored a code from Metal's). A sample count the device's textures or pipelines lack is skipped
+//! stored a code from Metal's). RADV (Mesa 26.2.6 on the Radeon 780M) blends into an
+//! `RGB9E5Float` attachment it renders itself a source whose channels and alpha are halves
+//! rounded toward zero, a value past 65504 taken as 65504, where Metal blends the `float`s: there
+//! each blended sample is that blend's word over the device's own stored sample within a code
+//! ([`half_blend`]), which lies up to 33 units of the larger value's last mantissa bit from
+//! Metal's where the source passes 65504 and 7 where the half's alpha weighs a destination far
+//! larger than the source, the blend's resolve is within a code of Metal's resolve of the
+//! device's samples ([`shared_exponent_resolve`]), and the blend's making announces
+//! `device-color-conversion`. A sample count the device's textures or pipelines lack is skipped
 //! with a printed line, and the other counts are checked.
 
 use super::degrade_notices::{assert_once_allowing, made_render_kinds, resolve_kind};
@@ -513,6 +521,50 @@ fn read(pf: PixelFormat, word: u32, metal_sampler: bool) -> ([f32; 4], f32) {
     }
 }
 
+/// The step between neighbouring `half`s at `x`'s magnitude: `2^-24` below the smallest normal.
+fn half_step(x: f32) -> f32 {
+    let exponent = ((x.abs().to_bits() >> 23) as i32 - 127).max(-14);
+    2f32.powi(exponent - 10)
+}
+
+/// `x` as a `half` rounded toward zero, a value past 65504 as 65504.
+fn half_toward_zero(x: f32) -> f32 {
+    let a = x.abs().min(65504.0);
+    let step = half_step(a);
+    ((a / step).trunc() * step).copysign(x)
+}
+
+/// The word of RADV's source-over blend of `source` over a sample holding `under` in an
+/// `RGB9E5Float` attachment it renders itself (the module docs): the source's channels and alpha
+/// as halves rounded toward zero ([`half_toward_zero`]), blended in `f32` over the sample's
+/// channels, and the result stored as Metal stores a `float` output (each mantissa truncated).
+fn half_blend(source: [f32; 4], under: u32) -> u32 {
+    let [r, g, b, a] = source.map(half_toward_zero);
+    let d = shared_exponent(under);
+    let rgb: [f32; 3] = std::array::from_fn(|c| [r, g, b][c] * a + d[c] * (1.0 - a));
+    let [r, g, b] = rgb;
+    WordAttachment::Rgb9e5.output_word([r, g, b, 1.0]).unwrap()
+}
+
+/// Metal's resolve of `RGB9E5Float` samples `words` (the crate-owned resolve's rule): the
+/// channels' `f32` mean, each rounded to the nearest `half` (a tie to even), and the word of those
+/// values with its mantissas rounded half up, the exponent raised where one reaches 512.
+fn shared_exponent_resolve(words: &[u32]) -> u32 {
+    let mean: [f32; 3] = std::array::from_fn(|c| {
+        let sum = words.iter().fold(0f32, |s, &w| s + shared_exponent(w)[c]);
+        sum * (1.0 / words.len() as f32)
+    });
+    let rgb = mean.map(|m| (m / half_step(m)).round_ties_even() * half_step(m));
+    let largest = rgb.iter().copied().fold(0.0, f32::max);
+    let mut e = ((largest.to_bits() >> 23) as i32 - 127).max(-16) + 16;
+    let mantissas = |e: i32| rgb.map(|x| (f64::from(x) * 2f64.powi(24 - e) + 0.5).floor() as u32);
+    if mantissas(e).iter().any(|&m| m > 511) {
+        e += 1;
+    }
+    let [r, g, b] = mantissas(e).map(|m| m.min(511));
+    (e as u32) << 27 | r | g << 9 | b << 18
+}
+
 /// How far `got` is from Metal's `metal` in each of `pf`'s channels: in codes of a field, and for
 /// `RGB9E5Float` in units of the larger value's last mantissa bit.
 fn apart(pf: PixelFormat, got: u32, metal: u32) -> u32 {
@@ -603,6 +655,14 @@ impl Lane {
     fn interlock_orders(&self) -> bool {
         let fragment = self.device.compile_device().profile().fragment();
         fragment.pixel_interlock && !fragment.rasterization_order_color_access
+    }
+
+    /// Whether the device blends into an `RGB9E5Float` attachment it renders itself a source of
+    /// halves rounded toward zero ([`half_blend`]): RADV, measured on the Radeon 780M under Mesa
+    /// 26.2.6, every blended sample of the lane that blend's word.
+    fn blends_shared_exponent_halves(&self) -> bool {
+        let description = &self.device.properties().description;
+        description.driver_id == Some(vk::DriverId::MESA_RADV)
     }
 
     /// Whether the device renders `pf` through the view of its word.
@@ -857,10 +917,14 @@ impl Lane {
         resolves[0] = resolve_against(pf, &what, "fill", &fill, &resolved, near, wrong);
         resolves[1] = resolve_against(pf, &what, "load", &load, &loaded, near, wrong);
         // A blend over the loaded samples: Metal's within a code of each field, and a code further
-        // for each code the sample it blends over lies from Metal's, where the device makes it. A
-        // word's `R8Unorm_sRGB` and `RGB9E5Float` blend is not built, nor a packed word's where the
-        // device does not order fetch through the pixel interlock alone: refused as the device
-        // lacking the format, as a single-sampled one is.
+        // for each code the sample it blends over lies from Metal's, where the device makes it;
+        // where the device blends an `RGB9E5Float` source as halves, that blend's word over the
+        // device's sample within a code, and its resolve within a code of Metal's resolve of the
+        // device's samples. A word's `R8Unorm_sRGB` and `RGB9E5Float` blend is not built, nor a
+        // packed word's where the device does not order fetch through the pixel interlock alone:
+        // refused as the device lacking the format, as a single-sampled one is.
+        let halves =
+            !word && pf == PixelFormat::RGB9E5Float && self.blends_shared_exponent_halves();
         let b = self.pipeline(pf, samples, true);
         let blend = match self
             .device
@@ -880,22 +944,49 @@ impl Lane {
             made.extend(made_render_kinds(&self.device, &b));
             let got = self.pass(&ms, Some((blend, &blend_colors)), false);
             let (blended_words, _) = self.read_samples(&ms, &view);
-            let under = words.iter().zip(stored).map(|(&w, &m)| apart(pf, w, m));
-            for (i, ((&got, &metal), under)) in
-                blended_words.iter().zip(blended).zip(under).enumerate()
-            {
+            let n = samples as usize;
+            let mut not_metals = 0;
+            for (i, &got) in blended_words.iter().enumerate() {
+                let (metal, at) = (blended[i], format!("pixel {} sample {}", i / n, i % n));
                 let off = apart(pf, got, metal);
                 exact[2] += usize::from(off == 0);
-                if off > 1 + under {
+                if halves {
+                    let device = half_blend(blend_colors[i], words[i]);
+                    not_metals += usize::from(device != metal);
+                    if apart(pf, got, device) > 1 {
+                        wrong.push(format!(
+                            "{what}: blend, {at}: word {got:#x} against the blend of halves' \
+                             {device:#x} (Metal's {metal:#x})"
+                        ));
+                    }
+                } else if off > 1 + apart(pf, words[i], stored[i]) {
                     wrong.push(format!(
-                        "{what}: blend, pixel {} sample {}: word {got:#x} against Metal's \
-                         {metal:#x}",
-                        i / samples as usize,
-                        i % samples as usize
+                        "{what}: blend, {at}: word {got:#x} against Metal's {metal:#x}"
                     ));
                 }
             }
-            resolves[2] = resolve_against(pf, &what, "blend", &got, &blend_resolved, 1, wrong);
+            resolves[2] = match halves {
+                false => resolve_against(pf, &what, "blend", &got, &blend_resolved, 1, wrong),
+                true => {
+                    println!(
+                        "{name}: {what}: blended as halves rounded toward zero, that blend's \
+                         word not Metal's in {not_metals} of {} samples",
+                        blended.len()
+                    );
+                    for (px, &got) in got.iter().enumerate() {
+                        let device = shared_exponent_resolve(&blended_words[px * n..][..n]);
+                        if apart(pf, got, device) > 1 {
+                            wrong.push(format!(
+                                "{what}: blend resolve, pixel {px}: {got:#x} against Metal's \
+                                 resolve of the device's samples, {device:#x}"
+                            ));
+                        }
+                    }
+                    (got.iter().zip(&blend_resolved))
+                        .filter(|(got, metal)| got == metal)
+                        .count()
+                }
+            };
         }
         println!(
             "WORD-SAMPLES-MSAA {name}: {what}: Metal's words in {} of {} samples, resolves \
@@ -995,7 +1086,14 @@ fn multisampled_word_formats_store_read_resolve_and_blend_as_metal() {
                         allowed.insert(Degradation::SrgbTexelDecode);
                     }
                 }
-                false => allowed.extend(resolve_kind(&lane.device, samples)),
+                false => {
+                    allowed.extend(resolve_kind(&lane.device, samples));
+                    // The blend of halves, the device's conversion of the blend's source.
+                    let shared = pf == PixelFormat::RGB9E5Float;
+                    if blended && shared && lane.blends_shared_exponent_halves() {
+                        kinds.insert(Degradation::DeviceColorConversion);
+                    }
+                }
             }
         }
         assert!(

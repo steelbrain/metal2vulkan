@@ -243,8 +243,9 @@ impl UlpTable {
 ///   parent's base level reads otherwise than Metal, which no authored case binds: a difference is
 ///   a mismatch for review.
 /// - `DeviceColorConversion`: [`Allowance::Recorded`]. A color channel left to the device's
-///   conversion may store the neighbouring code near a tie; a difference is a mismatch for review,
-///   never accepted or explained by the note.
+///   conversion may store the neighbouring code near a tie, and a blend further (RADV's into
+///   `RGB9E5Float`, of a source taken as halves, up to 33 units of a mantissa's last bit); a
+///   difference is a mismatch for review, never accepted or explained by the note.
 /// - `LinkedSamplerNumbering`: [`Allowance::Recorded`]. Only sampler resource IDs may differ, no
 ///   shader value; a difference is a mismatch for review.
 /// - `ColorAttachmentGroups`: [`Allowance::Recorded`]. Only a group past the first may differ, at
