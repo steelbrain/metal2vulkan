@@ -18,6 +18,11 @@
 //! whole-pool report of a host query reset (`query_reset_gap.rs`), as the validation crate's
 //! runtime cases let it pass ([`kept`]).
 //!
+//! And the loader's own reports of a driver manifest whose library it could not load, or that is
+//! no driver, which it then ignores ([`IgnoredDrivers`]): the host's listing of its drivers (a
+//! vendor's manifest left behind by a driver no longer installed is common), reported through the
+//! messenger chained at `vkCreateInstance` whatever the device does, and nothing it did.
+//!
 //! A device test: compiled only under the validation crate's GPU safety cfgs.
 
 use super::query_reset_gap;
@@ -44,6 +49,77 @@ const NOT_AVAILABLE: &str = "does not exist in the list of available layers";
 /// at `vkCreateInstance`, before the call answers `VK_ERROR_LAYER_NOT_PRESENT`.
 fn loader_layer_message(id_name: &str, text: &str) -> bool {
     id_name == LOADER_MESSAGE && text.contains(VALIDATE_LAYERS) && text.contains(NOT_AVAILABLE)
+}
+
+/// How the loader's message about a driver manifest whose library it could not load begins
+/// (`loader_icd_scan`, Vulkan-Loader `loader/loader.c`): the library the manifest names follows,
+/// then [`IGNORING`].
+const ICD_SCAN_FAILED: &str = "loader_icd_scan: Failed loading library associated with ICD JSON ";
+
+/// How that message ends: the loader goes on without the manifest.
+const IGNORING: &str = ". Ignoring this JSON";
+
+/// How the loader's message about a driver library that loaded and gave no `vkCreateInstance`
+/// begins (`loader_scanned_icd_add`): the library follows, and the message after it is
+/// [`ICD_SCAN_FAILED`]'s about the same library.
+const NO_CREATE_INSTANCE: &str = "loader_scanned_icd_add: Could not get 'vkCreateInstance' via \
+     'vk_icdGetInstanceProcAddr' for ICD ";
+
+/// How the loader's message about a library a driver manifest names that loaded and exports
+/// neither entry point a driver does begins (`loader_scanned_icd_add`): the library follows, then
+/// [`NO_ENTRY_POINT_END`]; the loader ignores the manifest with no other message.
+const NO_ENTRY_POINT: &str = "loader_scanned_icd_add: Attempt to retrieve either \
+     'vkGetInstanceProcAddr' or 'vk_icdGetInstanceProcAddr' from ICD ";
+
+/// How that message ends.
+const NO_ENTRY_POINT_END: &str = " failed.";
+
+/// The loader's own reports, in one message list, of driver manifests it ignored: the libraries
+/// it said it ignored for failing to load them ([`ICD_SCAN_FAILED`]), which explain its messages
+/// about the same library alone.
+struct IgnoredDrivers(Vec<String>);
+
+impl IgnoredDrivers {
+    /// The libraries the loader said it ignored, among `messages`.
+    fn of(messages: &[DebugMessage]) -> IgnoredDrivers {
+        let libraries = (messages.iter())
+            .filter(|message| message.id_name == LOADER_MESSAGE)
+            .filter_map(|message| {
+                let library = message.text.strip_prefix(ICD_SCAN_FAILED)?;
+                library
+                    .strip_suffix(IGNORING)
+                    .filter(|library| !library.is_empty())
+            })
+            .map(str::to_owned)
+            .collect();
+        IgnoredDrivers(libraries)
+    }
+
+    /// Whether a message with this id name and text is the loader's own report of a driver
+    /// manifest it ignored, and nothing wider: its message that it ignored the library, the dynamic
+    /// linker's error it forwards about that library (`<library>: <why>`), or its message that the
+    /// library gave no `vkCreateInstance`; or its message that a library a manifest names is no
+    /// driver, which names the library it ignored itself.
+    fn explains(&self, id_name: &str, text: &str) -> bool {
+        if id_name != LOADER_MESSAGE {
+            return false;
+        }
+        let no_driver = (text.strip_prefix(NO_ENTRY_POINT))
+            .and_then(|rest| rest.strip_suffix(NO_ENTRY_POINT_END))
+            .is_some_and(|library| !library.is_empty());
+        no_driver
+            || self.0.iter().any(|library| {
+                let named = |prefix: &str, suffix: &str| {
+                    (text.strip_prefix(prefix))
+                        .and_then(|rest| rest.strip_suffix(suffix))
+                        .is_some_and(|named| named == library)
+                };
+                named(ICD_SCAN_FAILED, IGNORING)
+                    || named(NO_CREATE_INSTANCE, "")
+                    || (text.strip_prefix(library.as_str()))
+                        .is_some_and(|why| why.starts_with(": "))
+            })
+    }
 }
 
 /// What one message list holds.
@@ -112,7 +188,8 @@ impl Watched {
     /// the claim then stands on is the instance's answer alone: where a device announced it was
     /// made without the layer it asked for, there was nothing to report, so the claim was not
     /// exercised and the test says so; the loader's own complaint about that same layer passes
-    /// with it, and nothing else does.
+    /// with it, and so do its reports of driver manifests it ignored ([`IgnoredDrivers`]), each
+    /// printed (`LOADER-DRIVER <claim>`); nothing else does.
     ///
     /// # Panics
     ///
@@ -121,15 +198,25 @@ impl Watched {
         let mut seen = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let dropped = seen.dropped;
         let asked = seen.asked;
-        let failing: Vec<DebugMessage> = seen
-            .failing
-            .split_off(0)
-            .into_iter()
+        let reported = seen.failing.split_off(0);
+        drop(seen);
+        let ignored = IgnoredDrivers::of(&reported);
+        let failing: Vec<DebugMessage> = (reported.into_iter())
             // The device said it was made without the layer, which is what the loader complained
             // about first and all it complained about.
             .filter(|message| !(dropped && loader_layer_message(&message.id_name, &message.text)))
+            .filter(|message| {
+                let host = ignored.explains(&message.id_name, &message.text);
+                if host {
+                    eprintln!(
+                        "LOADER-DRIVER {claim}: passed, the loader's own report of a driver \
+                         manifest it ignored: {}",
+                        message.text.replace('\n', " ")
+                    );
+                }
+                !host
+            })
             .collect();
-        drop(seen);
         assert!(
             failing.is_empty(),
             "{claim}: the validation layer reported\n{failing:#?}"
@@ -178,7 +265,7 @@ fn kept(message: &DebugMessage, release: Option<u32>) -> Option<DebugMessage> {
 
 #[cfg(test)]
 mod tests {
-    use super::{kept, loader_layer_message, Watched, VALIDATION};
+    use super::{kept, loader_layer_message, IgnoredDrivers, Watched, VALIDATION};
     use crate::device::create::LAYERS_DROPPED;
     use crate::{DebugMessage, MessageKind, MessageSeverity};
 
@@ -251,6 +338,108 @@ mod tests {
         ] {
             assert!(!loader_layer_message(id_name, text), "{id_name}: {text}");
         }
+    }
+
+    /// The loader's messages about a driver manifest it ignored, as a host left them: one whose
+    /// library is missing (the dynamic linker's error, then the loader's), one whose library loaded
+    /// and gave no `vkCreateInstance`, and one whose library is no driver.
+    fn ignored_drivers() -> Vec<DebugMessage> {
+        [
+            "/nonexistent/libstale_vulkan.so: cannot open shared object file: No such file or \
+             directory",
+            "loader_icd_scan: Failed loading library associated with ICD JSON \
+             /nonexistent/libstale_vulkan.so. Ignoring this JSON",
+            "loader_scanned_icd_add: Could not get 'vkCreateInstance' via \
+             'vk_icdGetInstanceProcAddr' for ICD libGLX_nvidia.so.0",
+            "loader_icd_scan: Failed loading library associated with ICD JSON libGLX_nvidia.so.0. \
+             Ignoring this JSON",
+            "loader_scanned_icd_add: Attempt to retrieve either 'vkGetInstanceProcAddr' or \
+             'vk_icdGetInstanceProcAddr' from ICD /usr/lib/libz.so.1 failed.",
+        ]
+        .map(|text| message(MessageSeverity::Error, "Loader Message", text))
+        .to_vec()
+    }
+
+    /// The loader's reports of a driver manifest it ignored pass, each about the library it said
+    /// it ignored, and nothing wider: the same words of another id name, a linker's error or a
+    /// missing `vkCreateInstance` about a library it did not say it ignored, and its other
+    /// messages about drivers fail.
+    #[test]
+    fn the_loader_s_reports_of_a_driver_manifest_it_ignored_are_matched_and_nothing_wider() {
+        let reported = ignored_drivers();
+        let ignored = IgnoredDrivers::of(&reported);
+        for message in &reported {
+            assert!(
+                ignored.explains(&message.id_name, &message.text),
+                "{}",
+                message.text
+            );
+        }
+        for (id_name, text) in [
+            (
+                "VUID-vkCreateInstance-None",
+                "loader_icd_scan: Failed loading library associated with ICD JSON \
+                 /nonexistent/libstale_vulkan.so. Ignoring this JSON",
+            ),
+            (
+                "Loader Message",
+                "/usr/lib/libvulkan_radeon.so: cannot open shared object file: No such file or \
+                 directory",
+            ),
+            (
+                "Loader Message",
+                "loader_scanned_icd_add: Could not get 'vkCreateInstance' via \
+                 'vk_icdGetInstanceProcAddr' for ICD libvulkan_radeon.so",
+            ),
+            (
+                "Loader Message",
+                "loader_icd_scan: Failed loading library associated with ICD JSON . Ignoring this \
+                 JSON",
+            ),
+            (
+                "Loader Message",
+                "terminator_CreateInstance: Failed to CreateInstance in ICD 0",
+            ),
+            (
+                "Loader Message",
+                "/nonexistent/libstale_vulkan.so was loaded",
+            ),
+        ] {
+            assert!(!ignored.explains(id_name, text), "{id_name}: {text}");
+        }
+        // Without the loader's word that it ignored the library, its linker error and its missing
+        // `vkCreateInstance` stand alone and fail.
+        let alone = IgnoredDrivers::of(&reported[..1]);
+        assert!(!alone.explains(&reported[0].id_name, &reported[0].text));
+        assert!(!alone.explains(&reported[2].id_name, &reported[2].text));
+    }
+
+    /// A claim holds over the loader's reports of driver manifests it ignored, the layer having
+    /// reported nothing, and still fails on what the layer reported beside them.
+    #[test]
+    fn a_claim_holds_over_the_loader_s_reports_of_ignored_drivers_alone() {
+        let watched = Watched::default();
+        assert_eq!(watched.layers(), [VALIDATION.to_owned()]);
+        let sink = watched.sink(|_| {});
+        for message in ignored_drivers() {
+            sink.deliver(&message);
+        }
+        watched.layer_reported_nothing("every command was valid");
+        for message in ignored_drivers() {
+            sink.deliver(&message);
+        }
+        sink.deliver(&message(
+            MessageSeverity::Error,
+            "VUID-vkCmdDraw-None-08600",
+            "a bound descriptor set was not valid",
+        ));
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            watched.layer_reported_nothing("every command was valid")
+        }));
+        assert!(
+            failed.is_err(),
+            "the claim held over a message the layer reported"
+        );
     }
 
     /// The message the loader sends about the layer it cannot provide.

@@ -1073,12 +1073,14 @@ pub(crate) fn creation_heard_checked(
     let mut expected: Vec<String> = Vec::new();
     let mut rest = &informed[..];
     // The loader speaks first, at `vkCreateInstance`: where the host lists a layer twice, a
-    // warning of which copy it removed, the host's listing and nothing the device said; and where
-    // the device was made without a layer it asked for, one message per layer it could not
-    // provide (`layer_claim`).
+    // warning of which copy it removed, and of each driver manifest it ignored, its reports, the
+    // host's listing and nothing the device said; and where the device was made without a layer
+    // it asked for, one message per layer it could not provide (`layer_claim`).
+    let ignored = crate::candidate::runtime_case::IgnoredDrivers::of_messages(&informed);
     while let Some((first, after)) = rest.split_first() {
         let (id_name, text) = (&first.id_name, &first.text);
         let loader = crate::candidate::runtime_case::loader_duplicate_layer_message(id_name, text)
+            || ignored.explains(id_name, text)
             || (dropped.is_some()
                 && crate::candidate::runtime_case::loader_layer_message(id_name, text));
         if !loader {

@@ -3458,7 +3458,11 @@ fn reservations_keep_ids_from_plain_allocation() {
         assert!(line.kind.general && line.degradation.is_none(), "{line:?}");
         drop((sampling, plain, placed, next));
     }
-    let failing = seen.lock().unwrap().1.clone();
+    // The loader's own reports of driver manifests it ignored are the host's listing, not the
+    // device's work (`layer_claim`).
+    let mut failing = seen.lock().unwrap().1.clone();
+    let ignored = crate::candidate::runtime_case::IgnoredDrivers::of_messages(&failing);
+    failing.retain(|message| !ignored.explains(&message.id_name, &message.text));
     assert!(
         failing.is_empty(),
         "the validation layer reported: {failing:#?}"

@@ -100,7 +100,9 @@ pub use layer_claim::{
 /// The lane's own check of the creation messages a device heard reads them too
 /// (`runtime_lane::creation_heard_checked`).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) use layer_claim::{loader_duplicate_layer_message, loader_layer_message};
+pub(crate) use layer_claim::{
+    loader_duplicate_layer_message, loader_layer_message, IgnoredDrivers,
+};
 pub use render::{
     commit_render, encoded_mesh, encoded_render, mesh_pipeline_state, render_pipeline_descriptor,
     render_pipeline_state, CommittedRender, EncodedRender, MeshInputs, RenderInputs,
@@ -347,12 +349,26 @@ impl Messages {
     }
 
     /// The failing messages reported so far, removed, with the loader's own messages about a
-    /// layer it could not provide that no device of this list explained (`layer_claim`).
+    /// layer it could not provide that no device of this list explained, and without its reports
+    /// of driver manifests it ignored, each printed (`layer_claim`).
     pub fn take(&self) -> Vec<DebugMessage> {
         let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let mut unexplained = reported.layers.release();
         let mut failing = reported.failing.split_off(0);
         unexplained.append(&mut failing);
+        let ignored = layer_claim::IgnoredDrivers::of_messages(&unexplained);
+        unexplained.retain(|message| {
+            let host = ignored.explains(&message.id_name, &message.text);
+            if host {
+                eprintln!(
+                    "LANE-LOADER-DRIVER {}: passed, the loader's own report of a driver manifest \
+                     it ignored: {}",
+                    reported.test,
+                    message.text.replace('\n', " ")
+                );
+            }
+            !host
+        });
         unexplained
     }
 
