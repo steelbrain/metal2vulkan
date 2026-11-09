@@ -897,6 +897,44 @@ fn a_batch_is_counted_pending_behind_exactly_the_work_its_plan_orders_after() {
     assert_eq!(queue.pending_before(on(1, 4)), 0);
 }
 
+/// The chain of `runtime_lane::commit_work`'s chained batches, on one `VkQueue`: a fill of link
+/// 0, then a batch for each later link copying the link before into it. Planned while the batch
+/// before it is in flight (the tracker has not seen it complete), each copy begins with a barrier
+/// after that batch's write, and counts it pending; planned after it completed, neither. The
+/// device lane cannot hold a batch in flight for the host (no batch is submitted waiting for a
+/// value the host sets, `event_timeline.rs`), so this sets the tracker's state.
+#[test]
+fn a_chain_of_copies_orders_each_after_the_one_before_only_while_it_is_in_flight() {
+    const CHAIN: u64 = 8;
+    let link = || bytes(0..4096);
+    for in_flight in [true, false] {
+        let mut queue = Tracker::default();
+        let fill = one(&[writes(0, link(), copy_write())]);
+        assert_eq!(commit(&mut queue, &[fill], 1), [None]);
+        for to in 1..=CHAIN {
+            let value = to + 1;
+            if !in_flight {
+                queue.completed(0, value - 1);
+            }
+            let copy = one(&[
+                reads(to - 1, link(), copy_read()),
+                writes(to, link(), copy_write()),
+            ]);
+            let pending = queue.pending_before(at(value));
+            let barriers = commit(&mut queue, &[copy], value);
+            let (want_pending, ordered) = match in_flight {
+                true => (value - 1, barrier(copy_write(), copy_read())),
+                false => (0, None),
+            };
+            assert_eq!(
+                (pending, barriers),
+                (want_pending, vec![ordered]),
+                "link {to}, in flight {in_flight}"
+            );
+        }
+    }
+}
+
 /// A completion looks only at the resources its batches touched: a thousand batches in flight,
 /// each reading a resource of its own, and the first one's completion retires its resource alone.
 #[test]
