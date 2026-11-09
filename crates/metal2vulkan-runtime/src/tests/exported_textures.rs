@@ -341,6 +341,17 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
                          shadow, the device's check of that memory did not pass: {placement:?}",
                         plane.format, plane.size[0], plane.size[1]
                     );
+                    // What the check found of that memory: its notes on the class.
+                    let class = match export {
+                        MemoryExport::OpaqueFd => "ExportedFd ",
+                        MemoryExport::DmaBuf => "ExportedDmaBuf ",
+                    };
+                    let report = device.in_place_check_report();
+                    for line in (report.iter().skip(crate::in_place::VERDICTS))
+                        .filter(|line| line.starts_with(class))
+                    {
+                        eprintln!("EXPORTED-TEXTURES on {name}: the check: {line}");
+                    }
                     continue;
                 }
                 assert!(
