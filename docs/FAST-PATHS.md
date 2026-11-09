@@ -1029,7 +1029,15 @@ driver's. Each is open work.
   quiet host and 12 of 13701 on one whose free memory lay in single pages (2 of 17 ms or more,
   the slowest 63.9 ms, the scheduler's thread waiting 305 ms on that reservation in all), against
   0 of 7153 and 0 of 14266 with the blocks exportable as an opaque file descriptor (the slowest
-  2.7 and 4.5 ms, 2.6 ms waited). In the arm whose 64 `Private` buffers of 32 MiB were made
+  2.7 and 4.5 ms, 2.6 ms waited). Through the runtime (24 `Private` buffers of 32 MiB a phase,
+  its pools growing by 64 MiB blocks made ahead; two runs each), the base took 13 and 12
+  turnarounds of 8 ms or more on the quiet host and 103 and 17 on the fragmented one (19 and 4 of
+  17 ms or more, the slowest 40.4 and 49.0 ms, the scheduler's thread waiting 350 and 311 ms on
+  the kernel's lock); with the blocks exportable, none on the fragmented host (the slowest 5.9
+  and 6.0 ms, 21 and 24 ms waited) and one each on the quiet one, where 3 blocks were made plain
+  while the device's first check was pending (446 and 447 buffers awaited it); with the check's
+  verdicts known first, as from its record, none in either phase (the slowest 7.1 ms, 4 and 10
+  ms waited). In the arm whose 64 `Private` buffers of 32 MiB were made
   before the phases, in plain blocks, the first turnaround took 57.0 ms and none after it 1.4 ms;
   with 64 exportable blocks held, the first took 2.4 to 8.1 ms. The trade: each such block held
   costs every
