@@ -4,25 +4,25 @@
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
 # fingerprint needs cache::SEMANTICS_VERSION above its value at the last bless.
-profile	amd-780m-hawkpoint-radv	b1c8599d199a968c
-profile	amd-780m-radv	b1c8599d199a968c
-profile	amd-rdna2-apu-radv	21ed779d64ac1d59
-profile	amd-rdna3-radv	a237bb79563fd277
-profile	gate-lavapipe	6068acdc3d450169
-profile	gate-lavapipe-x86_64	49a7ad8e64e3dda9
-profile	intel-arl-anv	496653aef3665bf9
-profile	intel-irisxe-anv	c6e02c0426de9067
-profile	intel-irisxe-rplp-anv	720737a450082a77
-profile	intel-uhd770-rpls-anv	720737a450082a77
-profile	lavapipe	a63b08ba07e219c0
-profile	lunarg-desktop-baseline-2023	97c5c16eefb76db1
-profile	moltenvk-m3	4d78dd3f634af783
-profile	nvidia-pascal-linux	cbc6f96f3a385fd5
-profile	nvidia-rtx50-linux	28d3b20d76fb8e56
-profile	nvidia-rtx5080-laptop	96c410f6f4c27089
-profile	roadmap-2022	a01aa0ea0ad81072
-profile	swiftshader	f0e560dcb6dc2ad2
-profile	vk12-floor	81c026b9f79b0355
+profile	amd-780m-hawkpoint-radv	0aa9e812b08220e9
+profile	amd-780m-radv	0aa9e812b08220e9
+profile	amd-rdna2-apu-radv	f4e1f809953f2dc7
+profile	amd-rdna3-radv	fb636ed80141003c
+profile	gate-lavapipe	b2c1dd092f06716a
+profile	gate-lavapipe-x86_64	9dae007e20647682
+profile	intel-arl-anv	a92ca93d062cc085
+profile	intel-irisxe-anv	75a55ff3f883e797
+profile	intel-irisxe-rplp-anv	3b9c598f66476318
+profile	intel-uhd770-rpls-anv	3b9c598f66476318
+profile	lavapipe	e38e60fec9864682
+profile	lunarg-desktop-baseline-2023	3cb56319a7459b3a
+profile	moltenvk-m3	a6fc9f1682f2c86d
+profile	nvidia-pascal-linux	9a85c95e82c9f29e
+profile	nvidia-rtx50-linux	9656292fbb2dfd1b
+profile	nvidia-rtx5080-laptop	8c71b919efe9b1a1
+profile	roadmap-2022	726e5822e9b32bac
+profile	swiftshader	97de0ee90616f119
+profile	vk12-floor	f3135fc374964fa4
 fixture	source	subject	amd-780m-hawkpoint-radv	amd-780m-radv	amd-rdna2-apu-radv	amd-rdna3-radv	gate-lavapipe	gate-lavapipe-x86_64	intel-arl-anv	intel-irisxe-anv	intel-irisxe-rplp-anv	intel-uhd770-rpls-anv	lavapipe	lunarg-desktop-baseline-2023	moltenvk-m3	nvidia-pascal-linux	nvidia-rtx50-linux	nvidia-rtx5080-laptop	roadmap-2022	swiftshader	vk12-floor
 engine/a1_bool_from_float.air.ll	67a41b1383f5ed2f	a1_bool_from_float	af0c282104a088f0	af0c282104a088f0	af0c282104a088f0	af0c282104a088f0	30e9ebcd8a67f0e7	30e9ebcd8a67f0e7	8598fc0e2dade22f	8598fc0e2dade22f	8598fc0e2dade22f	8598fc0e2dade22f	30e9ebcd8a67f0e7	ef45878e34cce8d3	30e9ebcd8a67f0e7	ef45878e34cce8d3	30e9ebcd8a67f0e7	30e9ebcd8a67f0e7	ef45878e34cce8d3	ef45878e34cce8d3	ef45878e34cce8d3
 engine/a1_bool_from_float.ll	965508e37289a775	a1_bool_from_float	af0c282104a088f0	af0c282104a088f0	af0c282104a088f0	af0c282104a088f0	30e9ebcd8a67f0e7	30e9ebcd8a67f0e7	8598fc0e2dade22f	8598fc0e2dade22f	8598fc0e2dade22f	8598fc0e2dade22f	30e9ebcd8a67f0e7	ef45878e34cce8d3	30e9ebcd8a67f0e7	ef45878e34cce8d3	30e9ebcd8a67f0e7	30e9ebcd8a67f0e7	ef45878e34cce8d3	ef45878e34cce8d3	ef45878e34cce8d3
