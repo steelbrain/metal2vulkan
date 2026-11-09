@@ -3325,9 +3325,10 @@ impl Buffer {
     /// Whether the buffer's own pages, of the runtime's memory, lie in device-local memory; `None`
     /// for a heap's buffer, whose bytes are its heap's. A buffer's pages are its for good.
     pub(super) fn own_pages_device_local(&self) -> Option<bool> {
-        match &self.s().bytes {
+        let s = self.s();
+        match &s.bytes {
             Bytes::Own(own) => own.with(ReadApart::Binding, |pages| {
-                let memory = lock(&self.s().device.shared().memory);
+                let memory = lock(&s.device.shared().memory);
                 Some(memory.is_device_local(&pages.memory.placement))
             }),
             Bytes::Heap(_) => None,
@@ -3356,6 +3357,7 @@ impl Buffer {
     /// for a `Managed` buffer with a host copy ([`Mirror`]). Racing the GPU's use of the buffer
     /// is the caller's to avoid.
     pub(super) fn clear(&self) -> Result<(), Error> {
+        let s = self.s();
         let size = self.padded_length();
         if let Some(contents) = self.contents() {
             // SAFETY: the buffer's bytes, its padded length from `contents`, are host-coherent
@@ -3367,19 +3369,13 @@ impl Buffer {
             }
         }
         let (raw, start) = self.at(0);
-        self.s().device.submit_internal(|device, command_buffer| {
+        s.device.submit_internal(|device, command_buffer| {
             // SAFETY: the internal command buffer is recording; the buffer is live, and its
             // padded length (a multiple of 16) lies in the `VkBuffer` from `start`, a multiple
             // of 4: 0, or a heap buffer's offset in its heap's (a buffer without contents is
             // none over host memory).
             unsafe {
-                crate::word_fill::record(
-                    &self.s().device,
-                    command_buffer,
-                    raw,
-                    start..start + size,
-                    0,
-                );
+                crate::word_fill::record(&s.device, command_buffer, raw, start..start + size, 0);
                 let barrier = vk::MemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                     .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE);
@@ -3400,10 +3396,11 @@ impl Buffer {
     /// reserved for external memory, for its target, for the device's next submission to record
     /// before any of its commands (`exported_memory.rs`, `Buffer::external_write_done`).
     pub(super) fn note_acquire(&self, families: (u32, u32)) {
+        let s = self.s();
         let (raw, _) = self.at(0);
-        let weak: Weak<BufferShared> = Arc::downgrade(self.s());
+        let weak: Weak<BufferShared> = Arc::downgrade(s);
         let keeper: Weak<dyn Filled> = weak;
-        let device = &self.s().device;
+        let device = &s.device;
         (device.shared().textures.first_moves).register_acquire(keeper, raw, families);
     }
 
@@ -3413,19 +3410,20 @@ impl Buffer {
     /// host cannot write (`Private` storage, a `Managed` buffer's device copy) by the device's
     /// next submission, before any of its commands (`texture/first_move.rs`).
     pub(super) fn clear_first(&self) -> Result<(), Error> {
+        let s = self.s();
         let size = self.padded_length();
         if let Some(contents) = self.contents() {
             // SAFETY: as in `clear`: the buffer's host-coherent bytes, which nothing else uses
             // yet.
             unsafe { std::ptr::write_bytes(contents.as_ptr(), 0, size as usize) };
-            self.s().device.shared().counts.new_buffer_cleared(size);
+            s.device.shared().counts.new_buffer_cleared(size);
             if self.mirror().is_none() {
                 return Ok(());
             }
         }
         let (raw, start) = self.at(0);
-        let device = &self.s().device;
-        let weak: Weak<BufferShared> = Arc::downgrade(self.s());
+        let device = &s.device;
+        let weak: Weak<BufferShared> = Arc::downgrade(s);
         let keeper: Weak<dyn Filled> = weak;
         (device.shared().textures.first_moves).register_fill(
             device,
@@ -3441,9 +3439,10 @@ impl Buffer {
     /// (`texture/first_move.rs`); that submission holds `staging` until it completed. Past the
     /// bound of what is staged, a submission waited for makes it now.
     pub(super) fn fill_first_from(&self, staging: Buffer, length: u64) -> Result<(), Error> {
-        let device = &self.s().device;
-        self.s().staged.store(true, Ordering::Relaxed);
-        let weak: Weak<BufferShared> = Arc::downgrade(self.s());
+        let s = self.s();
+        let device = &s.device;
+        s.staged.store(true, Ordering::Relaxed);
+        let weak: Weak<BufferShared> = Arc::downgrade(s);
         let keeper: Weak<dyn Filled> = weak;
         let source = staging.at(0);
         let past = (device.shared().textures.first_moves).register_bytes(
@@ -3467,9 +3466,10 @@ impl Buffer {
     /// stops the copy, and plain Metal reads zeros, bytes written past the length, or another
     /// resource's: refused (`Invalid`).
     pub(super) fn copy_reach(&self) -> u64 {
-        match &self.s().bytes {
+        let s = self.s();
+        match &s.bytes {
             Bytes::Own(own) => own.shape().reach,
-            Bytes::Heap(_) => self.s().length,
+            Bytes::Heap(_) => s.length,
         }
     }
 
@@ -3653,9 +3653,10 @@ impl Buffer {
     /// The external memory the buffer's bytes lie in, from that memory's record, which an image
     /// bound there names (`Memory::bound_memory`): a heap's buffer's, its heap's.
     pub(super) fn bound_memory(&self) -> BoundMemory {
-        match &self.s().bytes {
+        let s = self.s();
+        match &s.bytes {
             Bytes::Own(own) => own.with(ReadApart::Texture, |pages| {
-                lock(&self.s().device.shared().memory).bound_memory(&pages.memory.placement)
+                lock(&s.device.shared().memory).bound_memory(&pages.memory.placement)
             }),
             Bytes::Heap(bytes) => bytes.bytes.bound_memory(),
         }
@@ -3713,15 +3714,16 @@ impl Buffer {
     /// Past the bound of what is staged, a submission waited for makes it now. Nothing for a
     /// buffer without a host copy, nor for an empty range.
     pub(super) fn upload(&self, range: Range<u64>) -> Result<(), Error> {
+        let s = self.s();
         let Some(mirror) = self.mirror() else {
             return Ok(());
         };
         if range.is_empty() {
             return Ok(());
         }
-        let device = &self.s().device;
-        self.s().staged.store(true, Ordering::Relaxed);
-        let weak: Weak<BufferShared> = Arc::downgrade(self.s());
+        let device = &s.device;
+        s.staged.store(true, Ordering::Relaxed);
+        let weak: Weak<BufferShared> = Arc::downgrade(s);
         let keeper: Weak<dyn Filled> = weak;
         let past = (device.shared().textures.first_moves).register_bytes(
             keeper,
@@ -3769,9 +3771,10 @@ impl Buffer {
     /// The key of the host memory a no-copy buffer joined, made over the bytes another covers
     /// (`host_aliases.rs`): its uses carry one of that key too. `None` for any other buffer.
     pub(super) fn alias(&self) -> Option<Alias> {
-        match &self.s().bytes {
+        let s = self.s();
+        match &s.bytes {
             Bytes::Own(own) if matches!(own.lie, Lie::Host(_)) => {
-                self.s().device.shared().aliases.of(own.identity.key)
+                s.device.shared().aliases.of(own.identity.key)
             }
             Bytes::Own(_) | Bytes::Heap(_) => None,
         }
@@ -3807,23 +3810,20 @@ impl Buffer {
     /// a hold on its pages that keeps them while a command buffer may reach them. A buffer placed
     /// in a heap: its own range, as the residency states it, with a hold on the heap's pages.
     pub(super) fn resident(&self) -> Option<(ResidentRange, PagesHold)> {
-        let own = match &self.s().bytes {
+        let s = self.s();
+        let own = match &s.bytes {
             Bytes::Own(own) => own,
             Bytes::Heap(heap) => {
                 let (whole, held) = heap.bytes.resident()?;
-                let guest = self.s().address.0;
+                let guest = s.address.0;
                 let host = whole.host + guest.checked_sub(whole.guest)?;
-                return Some((ResidentRange::new(host, guest, self.s().length), held));
+                return Some((ResidentRange::new(host, guest, s.length), held));
             }
         };
         let range = |pages: &Pages| {
             let host = pages.memory.device_address?;
-            let guest = self.s().address.0.checked_sub(pages.base)?;
-            Some(ResidentRange::new(
-                host,
-                guest,
-                pages.base + self.s().length,
-            ))
+            let guest = s.address.0.checked_sub(pages.base)?;
+            Some(ResidentRange::new(host, guest, pages.base + s.length))
         };
         match &own.lie {
             Lie::Fixed(fixed) => Some((
@@ -4272,12 +4272,13 @@ impl Buffer {
     /// A buffer outside a heap stays as it is, not aliasable, as plain Metal leaves it where its
     /// validation stops the call.
     pub fn make_aliasable(&self) -> Result<(), Error> {
-        let Bytes::Heap(bytes) = &self.s().bytes else {
+        let s = self.s();
+        let Bytes::Heap(bytes) = &s.bytes else {
             return Ok(());
         };
         bytes
             .heap
-            .make_aliasable(bytes.offset, self.s().length, &bytes.aliasable);
+            .make_aliasable(bytes.offset, s.length, &bytes.aliasable);
         Ok(())
     }
 
