@@ -4675,25 +4675,31 @@ pub(super) fn copy_units(
     format: Format,
     pf: PixelFormat,
 ) -> Vec<(ImageAspectFlags, u32, [u32; 2])> {
-    let Some(block) = format.block() else {
-        return Vec::new();
-    };
-    let mut units = Vec::new();
-    if block.depth.is_some() {
+    each_copy_unit(format, pf).collect()
+}
+
+/// [`copy_units`] one by one, collecting nothing: its depth's, then its stencil's, or its colour's
+/// alone. A tiled heap texture's making reads them so (`heap_tiled.rs`), allocating nothing.
+pub(super) fn each_copy_unit(
+    format: Format,
+    pf: PixelFormat,
+) -> impl Iterator<Item = (ImageAspectFlags, u32, [u32; 2])> {
+    let block = format.block();
+    let depth = block.filter(|block| block.depth.is_some()).map(|_| {
         let bytes = match format {
             Format::D16_UNORM | Format::D16_UNORM_S8_UINT => 2,
             _ => 4,
         };
-        units.push((ImageAspectFlags::DEPTH, bytes, [1, 1]));
-    }
-    if block.stencil.is_some() {
-        units.push((ImageAspectFlags::STENCIL, 1, [1, 1]));
-    }
-    if units.is_empty() {
-        let extent = image_block_extent(format, pf).unwrap_or([1, 1]);
-        units.push((ImageAspectFlags::COLOR, block.size, extent));
-    }
-    units
+        (ImageAspectFlags::DEPTH, bytes, [1, 1])
+    });
+    let stencil = (block.filter(|block| block.stencil.is_some()))
+        .map(|_| (ImageAspectFlags::STENCIL, 1, [1, 1]));
+    let colour =
+        (block.filter(|block| block.depth.is_none() && block.stencil.is_none())).map(|block| {
+            let extent = image_block_extent(format, pf).unwrap_or([1, 1]);
+            (ImageAspectFlags::COLOR, block.size, extent)
+        });
+    depth.into_iter().chain(stencil).chain(colour)
 }
 
 /// The copy units of an image of `format` that a texture of `pf` holds texels in: [`copy_units`]'s
@@ -4703,18 +4709,17 @@ pub(super) fn copy_units(
 /// a depth-only format's stencil (`Depth32Float` over `D32_SFLOAT_S8_UINT`,
 /// `FormatEmulation::DepthInCombined`). Nothing moves such an aspect to or from the texture's
 /// bytes.
+///
+/// Read one by one, collecting nothing, as [`each_copy_unit`].
 pub(super) fn texel_units(
     format: Format,
     pf: PixelFormat,
-) -> Vec<(ImageAspectFlags, u32, [u32; 2])> {
+) -> impl Iterator<Item = (ImageAspectFlags, u32, [u32; 2])> {
     let own = metal2vulkan::metal::format::aspects(pf);
-    let presented = |aspect: ImageAspectFlags| {
+    let presented = move |aspect: ImageAspectFlags| {
         aspect == ImageAspectFlags::COLOR || own.is_none_or(|own| own.contains(aspect))
     };
-    copy_units(format, pf)
-        .into_iter()
-        .filter(|&(aspect, _, _)| presented(aspect))
-        .collect()
+    each_copy_unit(format, pf).filter(move |&(aspect, _, _)| presented(aspect))
 }
 
 /// How a new texture of the program's starts ([`Device::new_texture_image`]).
@@ -5571,8 +5576,7 @@ impl Texture {
     fn holds_depth_texels(&self) -> bool {
         self.image().is_ok_and(|image| {
             texel_units(image.plan().format, self.pixel_format())
-                .iter()
-                .any(|&(aspect, _, _)| aspect == ImageAspectFlags::DEPTH)
+                .any(|(aspect, _, _)| aspect == ImageAspectFlags::DEPTH)
         })
     }
 

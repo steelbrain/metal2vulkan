@@ -189,7 +189,7 @@ use super::super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, St
 use super::super::{depth_clamp, Device};
 use super::copy_images::{Reused, UseMaker};
 use super::heap::HeapPlane;
-use super::{copy_units, texel_units, Texture, TextureShared};
+use super::{copy_units, each_copy_unit, texel_units, Texture, TextureShared};
 use crate::device::functions::Vk;
 use ash::vk;
 use metal2vulkan::bind::{TiledLevelMove, TiledTexelsModule};
@@ -1144,19 +1144,22 @@ pub(crate) fn holds_metal_texels(pf: PixelFormat, format: Format, bytes: usize) 
 }
 
 fn image_element(pf: PixelFormat, format: Format) -> Option<(u64, [u64; 2])> {
-    let units = copy_units(format, pf);
+    // Each unit read one by one, collecting nothing: every tiled heap texture's making asks this
+    // (`metal_heap_layout`).
     let element = match pf {
         // A stencil format's image holds its stencil, beside a depth it does not present where
         // the image is combined (`X32Stencil8`'s; `texel_units`, `heap_plane_layout`).
-        pf if aspects(pf) == Some(ImageAspectFlags::STENCIL) => match texel_units(format, pf)[..] {
-            [(ImageAspectFlags::STENCIL, bytes, block)] => Some((bytes, block)),
-            _ => None,
-        },
+        pf if aspects(pf) == Some(ImageAspectFlags::STENCIL) => {
+            match only_unit(texel_units(format, pf)) {
+                Some((ImageAspectFlags::STENCIL, bytes, block)) => Some((bytes, block)),
+                _ => None,
+            }
+        }
         // A depth format's image holds its depth, beside a stencil it does not present where
         // the image is combined (`DepthInCombined`; `texel_units`).
         PixelFormat::Depth16Unorm | PixelFormat::Depth32Float => {
-            match texel_units(format, pf)[..] {
-                [(ImageAspectFlags::DEPTH, bytes, block)] => {
+            match only_unit(texel_units(format, pf)) {
+                Some((ImageAspectFlags::DEPTH, bytes, block)) => {
                     (depth_bytes(format) == Some(bytes)).then_some((bytes, block))
                 }
                 _ => None,
@@ -1165,8 +1168,8 @@ fn image_element(pf: PixelFormat, format: Format) -> Option<(u64, [u64; 2])> {
         _ => {
             let bytes_of = |pf: PixelFormat| byte_format(pf).filter(|&own| own == format);
             let same = bytes_of(pf).or_else(|| srgb_raw_twin(pf).and_then(bytes_of));
-            match units[..] {
-                [(ImageAspectFlags::COLOR, bytes, block)]
+            match only_unit(each_copy_unit(format, pf)) {
+                Some((ImageAspectFlags::COLOR, bytes, block))
                     if same.is_some() && block_bytes(pf) == Some(bytes) =>
                 {
                     Some((bytes, block))
@@ -1513,8 +1516,15 @@ fn multisample_tiles(
 /// `D32_SFLOAT_S8_UINT`), its tiles its depth's, the other aspect holding none of its texels;
 /// `None` where the texture's tiles are each of the image's aspects.
 fn held_aspect(format: Format, pf: PixelFormat) -> Option<ImageAspectFlags> {
-    match texel_units(format, pf)[..] {
-        [(aspect, _, _)] if copy_units(format, pf).len() > 1 => Some(aspect),
+    // Each unit read one by one, collecting nothing, as in `image_element`.
+    let (aspect, _, _) = only_unit(texel_units(format, pf))?;
+    each_copy_unit(format, pf).nth(1).map(|_| aspect)
+}
+
+/// The one unit `units` yields, `None` where it yields none or more.
+fn only_unit<T>(mut units: impl Iterator<Item = T>) -> Option<T> {
+    match (units.next(), units.next()) {
+        (Some(unit), None) => Some(unit),
         _ => None,
     }
 }
