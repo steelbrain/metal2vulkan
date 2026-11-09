@@ -562,14 +562,17 @@ pub(super) struct Affected {
 ///   handle 0 (`INTEL_DEBUG=submit`), and `vkQueueSubmit` returns `VK_ERROR_DEVICE_LOST`.
 ///   Measured on Iris Xe Graphics (Raptor Lake-P) under Mesa 26.2.6 on i915:
 ///   `runtime_lane::predication::streams_run_what_metal_ran`, under the validation layer, which
-///   reported nothing, failed so in each of 4 runs once a spare pool's frees ran uncapped on the
-///   device's free thread (`spares.rs`), and passed in each of 2 runs whose frees did not trim,
-///   2 that freed nothing, and 3 whose kept barriers were begun with
-///   `VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT`, which ANV never chains. Read in Mesa main's
-///   source of 2026-11-09. Nothing is refused: a spare pool's command buffers are freed without
-///   trimming the pool there, so its later command buffers take them again; what each holds of
-///   its recording the driver releases as it frees it. Under the xe kernel driver ANV names no
-///   such objects (`uses_relocs`), but no GPU of it is measured, so every ANV GPU takes the path.
+///   reported nothing, failed so in each of 10 runs where a spare pool's frees, uncapped on the
+///   device's free thread (`spares.rs`), trimmed the pool, and passed in each of 8 runs whose
+///   frees did not trim, 2 that freed nothing, and 3 whose kept barriers were begun with
+///   `VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT`, which ANV never chains; and
+///   `tests::spares::device::kept_barriers_run_again_after_the_command_buffers_after_them_were_freed`
+///   failed so at its 16th command buffer in each of 4 runs that trimmed, and passed in each of 3
+///   that did not. Read in Mesa main's source of 2026-11-09. Nothing is refused: a spare pool's
+///   command buffers are freed without trimming the pool there, so its later command buffers take
+///   them again; what each holds of its recording the driver releases as it frees it. Under the
+///   xe kernel driver ANV names no such objects (`uses_relocs`), but no GPU of it is measured, so
+///   every ANV GPU takes the path.
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
