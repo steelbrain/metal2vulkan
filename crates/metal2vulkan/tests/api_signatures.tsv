@@ -1533,6 +1533,7 @@ enum	metal2vulkan::pipeline::SamplerRef	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::pipeline::SlotClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum SlotClass
 enum	metal2vulkan::pipeline::SlotInterface	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SlotInterface
 enum	metal2vulkan::pipeline::SnapshotForm	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SnapshotForm
+enum	metal2vulkan::pipeline::SnapshotRefusal	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SnapshotRefusal
 enum	metal2vulkan::pipeline::SpecKey	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SpecKey
 enum	metal2vulkan::pipeline::Stage	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Stage
 enum	metal2vulkan::pipeline::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
@@ -3026,6 +3027,18 @@ field	metal2vulkan-runtime::WorkCounts.reading_draws_split_slot_left_out	pub rea
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_stand_in	pub reading_draws_split_stand_in: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_storage_binding	pub reading_draws_split_storage_binding: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel	pub reading_draws_split_unreadable_own_pixel: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_atomic	pub reading_draws_split_unreadable_own_pixel_atomic: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_branch	pub reading_draws_split_unreadable_own_pixel_branch: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_coherent	pub reading_draws_split_unreadable_own_pixel_coherent: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_derivative	pub reading_draws_split_unreadable_own_pixel_derivative: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_group_operation	pub reading_draws_split_unreadable_own_pixel_group_operation: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_image_write	pub reading_draws_split_unreadable_own_pixel_image_write: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_interlock	pub reading_draws_split_unreadable_own_pixel_interlock: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_other	pub reading_draws_split_unreadable_own_pixel_other: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_sample	pub reading_draws_split_unreadable_own_pixel_sample: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_store	pub reading_draws_split_unreadable_own_pixel_store: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_undefined_operand	pub reading_draws_split_unreadable_own_pixel_undefined_operand: u64
+field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_writes_memory	pub reading_draws_split_unreadable_own_pixel_writes_memory: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_variant_refused	pub reading_draws_split_variant_refused: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_views	pub reading_draws_split_views: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_visibility_query	pub reading_draws_split_visibility_query: u64
@@ -4751,6 +4764,7 @@ field	metal2vulkan::pipeline::StageModule.private_bytes	pub private_bytes: u64
 field	metal2vulkan::pipeline::StageModule.reconvergence	pub reconvergence: Reconvergence
 field	metal2vulkan::pipeline::StageModule.required_subgroup_size	pub required_subgroup_size: Option<u32>
 field	metal2vulkan::pipeline::StageModule.rounded_colors	pub rounded_colors: Vec<u32>
+field	metal2vulkan::pipeline::StageModule.snapshot_refusals	pub snapshot_refusals: Vec<(u32, SnapshotRefusal)>
 field	metal2vulkan::pipeline::StageModule.snapshot_textures	pub snapshot_textures: Vec<u32>
 field	metal2vulkan::pipeline::StageModule.specialization	pub specialization: SpecializationLayout
 field	metal2vulkan::pipeline::StageModule.specialized_notes	pub specialized_notes: Vec<SpecializedNote>
@@ -14397,6 +14411,18 @@ variant	metal2vulkan::pipeline::SnapshotForm::Uint16	Uint16
 variant	metal2vulkan::pipeline::SnapshotForm::Uint8	Uint8
 variant	metal2vulkan::pipeline::SnapshotForm::Unorm16	Unorm16
 variant	metal2vulkan::pipeline::SnapshotForm::Unorm8	Unorm8
+variant	metal2vulkan::pipeline::SnapshotRefusal::Atomic	Atomic
+variant	metal2vulkan::pipeline::SnapshotRefusal::Branch	Branch
+variant	metal2vulkan::pipeline::SnapshotRefusal::Coherent	Coherent
+variant	metal2vulkan::pipeline::SnapshotRefusal::Derivative	Derivative
+variant	metal2vulkan::pipeline::SnapshotRefusal::GroupOperation	GroupOperation
+variant	metal2vulkan::pipeline::SnapshotRefusal::ImageWrite	ImageWrite
+variant	metal2vulkan::pipeline::SnapshotRefusal::Interlock	Interlock
+variant	metal2vulkan::pipeline::SnapshotRefusal::Other	Other
+variant	metal2vulkan::pipeline::SnapshotRefusal::Sample	Sample
+variant	metal2vulkan::pipeline::SnapshotRefusal::Store	Store
+variant	metal2vulkan::pipeline::SnapshotRefusal::UndefinedOperand	UndefinedOperand
+variant	metal2vulkan::pipeline::SnapshotRefusal::WritesMemory	WritesMemory
 variant	metal2vulkan::pipeline::SpecKey::AmplificationCount	AmplificationCount
 variant	metal2vulkan::pipeline::SpecKey::BicubicTexels	BicubicTexels(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::BoundSamplerWord	BoundSamplerWord(SlotRef)

@@ -1329,7 +1329,8 @@ through a snapshot instead of a copy taken before the render pass instance. The 
 the fragment slots that allow it (`StageInterface::snapshot_textures`, `StageModule::
 snapshot_textures`): own-pixel slots whose texels reach no derivative, sample, quad or subgroup
 operation, branch, integer divisor, dynamic vector index or store outside the invocation, directly
-or through a call, in a function that writes no memory.
+or through a call, in a function that writes no memory. It says why it leaves out each other
+own-pixel slot (`snapshot_refusals`: each slot with every `SnapshotRefusal` that holds for it).
 Name the slots in `BindState::snapshot_textures`; the plan keeps those its pipeline can read so
 and states them in `variant.snapshot_textures`, each with the form its snapshot holds texels in
 (`SnapshotForm::of` the slot's bound view and declared type: the texel's codes for an 8- or 16-bit

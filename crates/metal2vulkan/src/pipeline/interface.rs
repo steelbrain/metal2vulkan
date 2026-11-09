@@ -389,12 +389,61 @@ pub struct StageInterface {
     /// the snapshot. Empty for every other stage.
     #[cfg_attr(feature = "serde", serde(default))]
     pub snapshot_textures: Vec<u32>,
+    /// Why each slot of `own_pixel_textures` that `snapshot_textures` leaves out is left out:
+    /// every [`SnapshotRefusal`] that holds for it, sorted by slot and then by refusal, so a slot
+    /// may appear more than once. Empty for every other stage, and for a function compiled to read
+    /// slots through snapshots (`LoweringInputs::snapshot_textures`), which judges none.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub snapshot_refusals: Vec<(u32, SnapshotRefusal)>,
     /// The private memory a thread of the function keeps, in bytes: its `thread` variables and
     /// arrays a run-time index reaches, its call stacks, and the constants it holds per thread so
     /// (`ProfileFields::function_storage` holds it). What
     /// `PrecisionNote::FunctionStorageAssumed`'s announcement names.
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_bytes: u64,
+}
+
+/// What leaves an own-pixel texture slot of a fragment function out of the slots a draw can read
+/// through a snapshot an earlier draw of the same primitives took
+/// (`StageInterface::snapshot_refusals`, `StageModule::snapshot_refusals`). A helper invocation
+/// reads a constant from the snapshot, so the slot is left out where a helper's value of it could
+/// reach another invocation's result, give it undefined behavior, or where the snapshot cannot be
+/// made beside the function. The first eight say where a value that a fetch of the slot reaches,
+/// through any instruction, phi, call, or `Function`, `Private` or `Output` variable, is used.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SnapshotRefusal {
+    /// It decides a conditional branch or a switch, but for a branch that only decides whether
+    /// the invocation demotes itself.
+    Branch,
+    /// It is an operand of a derivative.
+    Derivative,
+    /// It is an operand of a sample, a gather or a level-of-detail query of any image.
+    Sample,
+    /// It is an operand of a subgroup or quad operation.
+    GroupOperation,
+    /// It is stored to a storage class other than `Function`, `Private` or `Output`, or through
+    /// a function parameter's pointer.
+    Store,
+    /// It is an operand of an atomic.
+    Atomic,
+    /// It is an operand of an image write or a texel pointer.
+    ImageWrite,
+    /// It is an operand an instruction's behavior is undefined for at some value: an integer
+    /// divisor, the dividend of a signed division or remainder whose divisor may be `-1`, or a
+    /// dynamic vector component index.
+    UndefinedOperand,
+    /// The function writes memory (`StageInterface::writes_memory`).
+    WritesMemory,
+    /// The module holds a fragment interlock critical section.
+    Interlock,
+    /// The module has a `Coherent` resource or uses the Vulkan memory model.
+    Coherent,
+    /// Anything else: the slot's index is 128 or more, its values take more than 16 passes over
+    /// the module to settle, or one is an operand of a ray query, a mesh output count or a call
+    /// whose callee's parameters it does not match, or the entry's returned value.
+    Other,
 }
 
 /// An emulated mesh function's records: what each of its threadgroups writes to the draw's records

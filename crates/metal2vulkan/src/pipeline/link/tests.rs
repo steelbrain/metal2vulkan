@@ -138,6 +138,7 @@ pub(super) fn iface(
         numbered_samplers: Vec::new(),
         own_pixel_textures: Vec::new(),
         snapshot_textures: Vec::new(),
+        snapshot_refusals: Vec::new(),
         private_bytes: 0,
     }
 }

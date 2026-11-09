@@ -125,8 +125,8 @@ pub use graphics::{
 pub use interface::{
     AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView,
     MeshRecords, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
-    PushPlacement, RecordField, RecordValue, SamplerSlot, SlotInterface, TextureAccess,
-    TextureSlot, ThreadgroupArgument, Window,
+    PushPlacement, RecordField, RecordValue, SamplerSlot, SlotInterface, SnapshotRefusal,
+    TextureAccess, TextureSlot, ThreadgroupArgument, Window,
 };
 pub use layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,

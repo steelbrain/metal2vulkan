@@ -46,6 +46,7 @@ fn stage_module_bytes_are_little_endian_words() {
         rounded_colors: Vec::new(),
         own_pixel_textures: Vec::new(),
         snapshot_textures: Vec::new(),
+        snapshot_refusals: Vec::new(),
         private_bytes: 0,
         specialized_notes: Vec::new(),
         stats: ModuleStats::default(),
@@ -96,6 +97,7 @@ fn a_stage_s_notes_under_a_specialization_are_its_held_clauses() {
         rounded_colors: Vec::new(),
         own_pixel_textures: Vec::new(),
         snapshot_textures: Vec::new(),
+        snapshot_refusals: Vec::new(),
         private_bytes: 0,
         specialized_notes: vec![
             SpecializedNote {

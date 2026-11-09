@@ -1,18 +1,22 @@
 //! [`snapshot_textures`] on hand-built fragment modules: a fetched value that reaches only
 //! arithmetic and an output qualifies, directly, through a variable or through a call; one that
-//! reaches a derivative, a branch, an implicit sample, an integer divisor or a dynamic index, or a
-//! store elsewhere, directly, through a variable, or into and out of a callee, does not; nor does a
-//! module with an interlock. A branch around a demote alone qualifies.
+//! reaches a derivative, a branch, an implicit sample, a quad operation, an integer divisor or a
+//! dynamic index, a store elsewhere, an atomic or an image write, directly, through a variable,
+//! or into and out of a callee, does not; nor does a module with an interlock or a coherent
+//! resource, of a function that writes memory, or a slot past 127. A branch around a demote alone
+//! qualifies. Each slot left out is stated with the clauses that leave it out.
 
 use super::snapshot_textures;
 use crate::budget::{Budget, Meter};
+use crate::pipeline::interface::SnapshotRefusal;
 use crate::pipeline::sym::{CombinedSampler, ResourceKind, ResourceSlot, SamplerRef, Stage};
 use crate::spirv::builder::constructs::ArmEnd;
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, ConvOp, DerivOp, Dim, ExecMode, ExecModel, ImageOperands,
-    ImageType, ImageUsage, IoDir, MemAccess, StorageClass, Type, TypedModule,
+    natural_layout, AtomicOp, BinOp, ConstBits, Constant, ConvOp, DerivOp, Dim, ExecMode,
+    ExecModel, ImageOperands, ImageType, ImageUsage, IoDir, LayoutRule, MemAccess, QuadDirection,
+    Scope, Semantics, StorageClass, TexelMemory, Type, TypedModule,
 };
 
 /// Where slot 0's fetched value goes.
@@ -63,6 +67,16 @@ enum Sink {
     /// Compared, the invocation demoted where the comparison holds, and the arms' different values
     /// merged.
     DemoteMergingValues,
+    /// Swapped across the quad.
+    QuadSwap,
+    /// Its bits stored to a storage buffer's word.
+    StorageStore,
+    /// Its bits added to a storage buffer's word by an atomic.
+    AtomicAdd,
+    /// Written to a storage image of slot 3.
+    ImageWrite,
+    /// An output, in a module whose storage image of slot 3 is `Coherent`.
+    CoherentImage,
 }
 
 /// Whether lane 0 of `v` is above one half.
@@ -141,6 +155,64 @@ fn module(sink: Sink) -> TypedModule {
             sampled,
         )
         .expect("slot 1");
+    // A storage buffer of words at buffer slot 2, and a float storage image at texture slot 3,
+    // for the sinks that write them.
+    let words = match sink {
+        Sink::StorageStore | Sink::AtomicAdd => {
+            let rta = b
+                .ty(Type::RuntimeArray {
+                    elem: u32_,
+                    stride: Some(4),
+                })
+                .expect("array");
+            let layout =
+                natural_layout(b.types(), LayoutRule::Std430, true, &[rta]).expect("layout");
+            let block = b
+                .ty(Type::Struct {
+                    members: [rta].into(),
+                    layout: Some(layout),
+                })
+                .expect("block");
+            let slot = ResourceSlot {
+                stage: Stage::Fragment,
+                kind: ResourceKind::Buffer,
+                index: 2,
+            };
+            Some(
+                b.resource(slot, StorageClass::StorageBuffer, block)
+                    .expect("slot 2"),
+            )
+        }
+        _ => None,
+    };
+    let storage = match sink {
+        Sink::ImageWrite | Sink::CoherentImage => {
+            let ty = b
+                .ty(Type::Image(ImageType {
+                    sampled_type: f32_,
+                    dim: Dim::D2,
+                    depth: false,
+                    arrayed: false,
+                    multisampled: false,
+                    usage: ImageUsage::Storage,
+                    format: crate::spv::ImageFormat::Rgba32f,
+                }))
+                .expect("storage image");
+            let slot = ResourceSlot {
+                stage: Stage::Fragment,
+                kind: ResourceKind::Texture,
+                index: 3,
+            };
+            let g = b
+                .resource(slot, StorageClass::UniformConstant, ty)
+                .expect("slot 3");
+            if sink == Sink::CoherentImage {
+                b.coherent(g).expect("coherent");
+            }
+            Some(g)
+        }
+        _ => None,
+    };
     let out = b
         .builtin(crate::spv::BuiltIn::FragCoord, IoDir::Input, vec4)
         .expect("FragCoord");
@@ -214,7 +286,51 @@ fn module(sink: Sink) -> TypedModule {
         f.end_interlock().expect("end");
     }
     let value = match sink {
-        Sink::Output | Sink::Interlocked => f.binary(BinOp::FAdd, texel, texel).expect("sum"),
+        Sink::Output | Sink::Interlocked | Sink::CoherentImage => {
+            f.binary(BinOp::FAdd, texel, texel).expect("sum")
+        }
+        Sink::QuadSwap => f
+            .group_quad_swap(texel, QuadDirection::Horizontal)
+            .expect("quad swap"),
+        Sink::StorageStore | Sink::AtomicAdd => {
+            let words = f
+                .module()
+                .global_value(words.expect("words"))
+                .expect("words");
+            let word = f.access_chain(words, &[zero, zero]).expect("word");
+            let x = f.composite_extract(texel, &[0]).expect("x");
+            let bits = f.convert(ConvOp::Bitcast, x, u32_).expect("bits");
+            match sink {
+                Sink::StorageStore => f.store(word, bits, MemAccess::default()).expect("store"),
+                _ => {
+                    f.atomic(
+                        AtomicOp::IAdd,
+                        word,
+                        Scope::Device,
+                        Semantics::RELAXED,
+                        bits,
+                    )
+                    .expect("atomic");
+                }
+            }
+            texel
+        }
+        Sink::ImageWrite => {
+            let g = f
+                .module()
+                .global_value(storage.expect("storage"))
+                .expect("image");
+            let image = f.load(g, MemAccess::default()).expect("storage image");
+            f.write(
+                image,
+                coord,
+                texel,
+                &ImageOperands::default(),
+                TexelMemory::Private { volatile: false },
+            )
+            .expect("write");
+            texel
+        }
         Sink::ThroughVariable | Sink::DerivativeThroughVariable => {
             let var = f.local_var(vec4, None).expect("var");
             let p = f.var_ptr(var).expect("pointer");
@@ -348,40 +464,77 @@ fn module(sink: Sink) -> TypedModule {
 /// beside a constant divisor without `-1`, and a dynamically indexed vector; a derivative of it,
 /// directly, through a variable or of a call's result, a branch on it, in the entry or in a callee
 /// it reaches as an argument, through a pointer argument's memory or back out of it, an implicit
-/// sample at it, a divisor, a signed dividend beside `-1`, or a dynamic index leaves the slot out,
-/// as does an interlock anywhere in the module. A branch on it that only decides whether the
-/// invocation demotes itself, in either arm, qualifies; one whose arm also writes, or whose arms'
-/// values merge apart, does not. The analysis releases every charge.
+/// sample at it, a quad swap of it, a divisor, a signed dividend beside `-1`, a dynamic index, a
+/// store of it to a storage buffer, an atomic of it, or an image write of it leaves the slot out,
+/// as does an interlock or a coherent resource anywhere in the module. A branch on it that only
+/// decides whether the invocation demotes itself, in either arm, qualifies; one whose arm also
+/// writes, or whose arms' values merge apart, does not. Each slot left out is stated with the one
+/// clause that leaves it out. The analysis releases every charge.
 #[test]
 fn only_values_no_helper_can_pass_on_qualify() {
-    for (sink, qualifies) in [
-        (Sink::Output, true),
-        (Sink::ThroughVariable, true),
-        (Sink::Derivative, false),
-        (Sink::DerivativeThroughVariable, false),
-        (Sink::Branch, false),
-        (Sink::SampleCoordinate, false),
-        (Sink::Interlocked, false),
-        (Sink::ThroughCall, true),
-        (Sink::DerivativeOfCall, false),
-        (Sink::BranchInCall, false),
-        (Sink::BranchInCallThroughPointer, false),
-        (Sink::StoredByCallee, false),
-        (Sink::Divisor, false),
-        (Sink::UnsignedDividend, true),
-        (Sink::SignedDividend, true),
-        (Sink::SignedDividendByMinusOne, false),
-        (Sink::DynamicIndex, false),
-        (Sink::DynamicVector, true),
-        (Sink::DemoteGuard, true),
-        (Sink::DemoteInElse, true),
-        (Sink::DemoteAndStore, false),
-        (Sink::DemoteMergingValues, false),
+    use SnapshotRefusal as R;
+    for (sink, refused) in [
+        (Sink::Output, None),
+        (Sink::ThroughVariable, None),
+        (Sink::Derivative, Some(R::Derivative)),
+        (Sink::DerivativeThroughVariable, Some(R::Derivative)),
+        (Sink::Branch, Some(R::Branch)),
+        (Sink::SampleCoordinate, Some(R::Sample)),
+        (Sink::Interlocked, Some(R::Interlock)),
+        (Sink::ThroughCall, None),
+        (Sink::DerivativeOfCall, Some(R::Derivative)),
+        (Sink::BranchInCall, Some(R::Branch)),
+        (Sink::BranchInCallThroughPointer, Some(R::Branch)),
+        (Sink::StoredByCallee, Some(R::Branch)),
+        (Sink::Divisor, Some(R::UndefinedOperand)),
+        (Sink::UnsignedDividend, None),
+        (Sink::SignedDividend, None),
+        (Sink::SignedDividendByMinusOne, Some(R::UndefinedOperand)),
+        (Sink::DynamicIndex, Some(R::UndefinedOperand)),
+        (Sink::DynamicVector, None),
+        (Sink::DemoteGuard, None),
+        (Sink::DemoteInElse, None),
+        (Sink::DemoteAndStore, Some(R::Branch)),
+        (Sink::DemoteMergingValues, Some(R::Branch)),
+        (Sink::QuadSwap, Some(R::GroupOperation)),
+        (Sink::StorageStore, Some(R::Store)),
+        (Sink::AtomicAdd, Some(R::Atomic)),
+        (Sink::ImageWrite, Some(R::ImageWrite)),
+        (Sink::CoherentImage, Some(R::Coherent)),
     ] {
         let mut meter = Meter::new(&Budget::default());
-        let slots = snapshot_textures(&module(sink), &[0], &mut meter).expect("analysis");
+        let judged = snapshot_textures(&module(sink), &[0], false, &mut meter).expect("analysis");
         assert_eq!(meter.ledger(), 0, "{sink:?}: every charge released");
-        let want: &[u32] = if qualifies { &[0] } else { &[] };
-        assert_eq!(slots, want, "{sink:?}");
+        let (slots, refusals): (&[u32], Vec<(u32, SnapshotRefusal)>) = match refused {
+            None => (&[0], Vec::new()),
+            Some(why) => (&[], vec![(0, why)]),
+        };
+        assert_eq!(judged.slots, slots, "{sink:?}");
+        assert_eq!(judged.refusals, refusals, "{sink:?}");
     }
+}
+
+/// A function that writes memory leaves every slot out for it, beside what the walk finds of its
+/// values: the qualifying output alone, and the derivative too. A slot past 127 is left out
+/// unwalked, beside a slot below it that qualifies.
+#[test]
+fn a_slot_left_out_by_the_function_or_its_index_says_so() {
+    use SnapshotRefusal as R;
+    let mut meter = Meter::new(&Budget::default());
+    let mut judged = |sink: Sink, own: &[u32], writes: bool| {
+        snapshot_textures(&module(sink), own, writes, &mut meter).expect("analysis")
+    };
+    let written = judged(Sink::Output, &[0], true);
+    assert!(written.slots.is_empty(), "writes memory");
+    assert_eq!(written.refusals, [(0, R::WritesMemory)], "writes memory");
+    let both = judged(Sink::Derivative, &[0], true);
+    assert_eq!(
+        both.refusals,
+        [(0, R::Derivative), (0, R::WritesMemory)],
+        "writes memory, and a derivative"
+    );
+    let past = judged(Sink::Output, &[0, 200], false);
+    assert_eq!(past.slots, [0], "slot 0 qualifies");
+    assert_eq!(past.refusals, [(200, R::Other)], "slot 200 is not walked");
+    assert_eq!(meter.ledger(), 0, "every charge released");
 }

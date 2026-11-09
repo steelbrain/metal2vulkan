@@ -496,6 +496,7 @@ pub(crate) struct Counters {
     reading_draws_snapshotted: AtomicU64,
     snapshot_inline_splits: AtomicU64,
     reading_draws_split: [AtomicU64; 15],
+    reading_draws_unreadable: [AtomicU64; 12],
     reading_draws_by_coverage: AtomicU64,
     coverage_queries: AtomicU64,
     coverage_pools_made: AtomicU64,
@@ -664,6 +665,58 @@ pub(crate) struct UnkeptDraw {
     pub(crate) tables_heap: bool,
     /// Its `VkPipeline` still being made.
     pub(crate) making: bool,
+}
+
+/// The clauses that leave out the slots of a draw that no snapshot serves
+/// (`SplitReason::UnreadableOwnPixel`; `StageModule::snapshot_refusals`), one bit each in the
+/// order of `WorkCounts::reading_draws_split_unreadable_own_pixel_*`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Unreadable(pub(crate) u16);
+
+impl Unreadable {
+    /// Each clause's text, in the bits' order: what the log says of it.
+    const TEXTS: [&'static str; 12] = [
+        "its read decides a branch or a switch",
+        "its read reaches a derivative",
+        "its read reaches a sample, a gather or a level-of-detail query",
+        "its read reaches a subgroup or quad operation",
+        "its read is stored outside the invocation",
+        "its read reaches an atomic",
+        "its read reaches an image write or a texel pointer",
+        "its read is an integer divisor, a signed dividend beside a divisor that may be -1, or a \
+         dynamic vector index",
+        "the function writes memory",
+        "the function holds an interlock",
+        "the function has a coherent resource or uses the Vulkan memory model",
+        "its read reaches a ray query or a call it does not follow, its slot is past 127, or its \
+         values do not settle",
+    ];
+
+    /// The set with `why` added; a refusal this runtime does not name is `Other`'s.
+    pub(crate) fn with(self, why: metal2vulkan::pipeline::SnapshotRefusal) -> Unreadable {
+        use metal2vulkan::pipeline::SnapshotRefusal as R;
+        let bit = match why {
+            R::Branch => 0,
+            R::Derivative => 1,
+            R::Sample => 2,
+            R::GroupOperation => 3,
+            R::Store => 4,
+            R::Atomic => 5,
+            R::ImageWrite => 6,
+            R::UndefinedOperand => 7,
+            R::WritesMemory => 8,
+            R::Interlock => 9,
+            R::Coherent => 10,
+            _ => 11,
+        };
+        Unreadable(self.0 | (1 << bit))
+    }
+
+    /// What the log says of the set: each clause's text, in order, `; ` between.
+    pub(crate) fn text(self) -> String {
+        let said = (Self::TEXTS.iter().zip(0..)).filter(|&(_, i)| self.0 & (1 << i) != 0);
+        said.map(|(text, _)| *text).collect::<Vec<_>>().join("; ")
+    }
 }
 
 /// How a direct draw differed from the draw its encoder kept (`WorkCounts::draws_unlike_kept`):
@@ -3758,6 +3811,16 @@ impl Counters {
     /// at its own pixels, took the split, for `reason` (`render/snapshot.rs`).
     pub(crate) fn reading_draw_split(&self, reason: SplitReason) {
         self.reading_draws_split[reason as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Of the draws split for `SplitReason::UnreadableOwnPixel`, one whose slots no snapshot
+    /// serves are left out by the clauses of `clauses` (`Unreadable`): counted once in each.
+    pub(crate) fn reading_draw_unreadable(&self, clauses: Unreadable) {
+        for (count, i) in self.reading_draws_unreadable.iter().zip(0..) {
+            if clauses.0 & (1 << i) != 0 {
+                count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     /// A reader of its pass's color was weighed by what it covered when a pass last measured it
@@ -7243,8 +7306,50 @@ pub struct WorkCounts {
     /// and took the split (`attachment_read_splits`), by why the snapshot did not serve them
     /// (`render/snapshot.rs`, `SplitReason`; the log names each reason once a device). This one:
     /// the function's read reaches what no snapshot serves (`StageModule::snapshot_textures`: a
-    /// branch, a sample, a derivative, a store, or the function writes memory).
+    /// branch, a sample, a derivative, a store, or the function writes memory), and the fields
+    /// below it say which (`StageModule::snapshot_refusals`).
     pub reading_draws_split_unreadable_own_pixel: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read decides a branch
+    /// or a switch, beside a branch that only decides whether the invocation demotes itself
+    /// (`SnapshotRefusal::Branch`). A draw is counted in each of the clauses below that leave out
+    /// any of its slots no snapshot serves.
+    pub reading_draws_split_unreadable_own_pixel_branch: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read reaches a
+    /// derivative (`SnapshotRefusal::Derivative`).
+    pub reading_draws_split_unreadable_own_pixel_derivative: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read reaches a sample,
+    /// a gather or a level-of-detail query (`SnapshotRefusal::Sample`).
+    pub reading_draws_split_unreadable_own_pixel_sample: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read reaches a
+    /// subgroup or quad operation (`SnapshotRefusal::GroupOperation`).
+    pub reading_draws_split_unreadable_own_pixel_group_operation: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read is stored outside
+    /// the invocation's `Function`, `Private` and `Output` variables (`SnapshotRefusal::Store`).
+    pub reading_draws_split_unreadable_own_pixel_store: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read reaches an atomic
+    /// (`SnapshotRefusal::Atomic`).
+    pub reading_draws_split_unreadable_own_pixel_atomic: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read reaches an image
+    /// write or a texel pointer (`SnapshotRefusal::ImageWrite`).
+    pub reading_draws_split_unreadable_own_pixel_image_write: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read is an integer
+    /// divisor, a signed dividend beside a divisor that may be `-1`, or a dynamic vector index
+    /// (`SnapshotRefusal::UndefinedOperand`).
+    pub reading_draws_split_unreadable_own_pixel_undefined_operand: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a function that writes memory
+    /// (`SnapshotRefusal::WritesMemory`).
+    pub reading_draws_split_unreadable_own_pixel_writes_memory: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a function that holds an interlock
+    /// (`SnapshotRefusal::Interlock`).
+    pub reading_draws_split_unreadable_own_pixel_interlock: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those of a function with a coherent resource
+    /// or under the Vulkan memory model (`SnapshotRefusal::Coherent`).
+    pub reading_draws_split_unreadable_own_pixel_coherent: u64,
+    /// Of `reading_draws_split_unreadable_own_pixel`, those left out for anything else
+    /// (`SnapshotRefusal::Other`, and a refusal this runtime does not name): a read that reaches a
+    /// ray query or a call the analysis does not follow, a slot past 127, or values that do not
+    /// settle.
+    pub reading_draws_split_unreadable_own_pixel_other: u64,
     /// The texture is not read where its attachment renders it in place, or its image lacks the
     /// feedback loop usage (`Texture::snapshot_color`).
     pub reading_draws_split_not_in_place: u64,
@@ -7469,6 +7574,9 @@ impl Device {
         let standing = |let_go: Option<LetGo>| {
             let at = let_go.map_or(0, |let_go| let_go as usize + 1);
             counters.shadow_texels_unskipped_standing[at].load(Ordering::Relaxed)
+        };
+        let unreadable_by = |bit: usize| {
+            (counters.reading_draws_unreadable.get(bit)).map_or(0, |c| c.load(Ordering::Relaxed))
         };
         let split_by = |reason: SplitReason| {
             counters.reading_draws_split[reason as usize].load(Ordering::Relaxed)
@@ -8347,6 +8455,18 @@ impl Device {
             reading_draws_split_views: split_by(SplitReason::Views),
             reading_draws_split_storage_binding: split_by(SplitReason::StorageBinding),
             reading_draws_split_other_attachment: split_by(SplitReason::OtherAttachment),
+            reading_draws_split_unreadable_own_pixel_branch: unreadable_by(0),
+            reading_draws_split_unreadable_own_pixel_derivative: unreadable_by(1),
+            reading_draws_split_unreadable_own_pixel_sample: unreadable_by(2),
+            reading_draws_split_unreadable_own_pixel_group_operation: unreadable_by(3),
+            reading_draws_split_unreadable_own_pixel_store: unreadable_by(4),
+            reading_draws_split_unreadable_own_pixel_atomic: unreadable_by(5),
+            reading_draws_split_unreadable_own_pixel_image_write: unreadable_by(6),
+            reading_draws_split_unreadable_own_pixel_undefined_operand: unreadable_by(7),
+            reading_draws_split_unreadable_own_pixel_writes_memory: unreadable_by(8),
+            reading_draws_split_unreadable_own_pixel_interlock: unreadable_by(9),
+            reading_draws_split_unreadable_own_pixel_coherent: unreadable_by(10),
+            reading_draws_split_unreadable_own_pixel_other: unreadable_by(11),
             reading_draws_by_coverage: counters.reading_draws_by_coverage.load(Ordering::Relaxed),
             coverage_queries: counters.coverage_queries.load(Ordering::Relaxed),
             coverage_pools_made: counters.coverage_pools_made.load(Ordering::Relaxed),

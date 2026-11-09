@@ -11,7 +11,7 @@ use crate::cache::{Hash256, PipelineKey, SpecializationKey};
 use crate::device::requirements::Requirements;
 use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::graphics::GraphicsState;
-use crate::pipeline::interface::PipelineInterface;
+use crate::pipeline::interface::{PipelineInterface, SnapshotRefusal};
 use crate::pipeline::layout::PipelineLayout;
 use crate::pipeline::sym::{SlotRef, SpecKey};
 use crate::pipeline::vertex::VertexInputState;
@@ -133,6 +133,7 @@ fn stage_footprint(stage: &StageModule) -> u64 {
                 + stage.own_pixel_textures.capacity()
                 + stage.snapshot_textures.capacity(),
         )
+        + vector_bytes::<(u32, SnapshotRefusal)>(stage.snapshot_refusals.capacity())
 }
 
 /// A compiled compute pipeline.
@@ -208,6 +209,10 @@ pub struct StageModule {
     /// draw of the same primitives took (`StageInterface::snapshot_textures`), sorted. Empty for
     /// every other stage.
     pub snapshot_textures: Vec<u32>,
+    /// Why each slot of `own_pixel_textures` that `snapshot_textures` leaves out is left out
+    /// (`StageInterface::snapshot_refusals`): every [`SnapshotRefusal`] that holds for it, sorted
+    /// by slot and then by refusal. Empty for every other stage.
+    pub snapshot_refusals: Vec<(u32, SnapshotRefusal)>,
     /// The private memory a thread of the stage keeps, in bytes
     /// (`StageInterface::private_bytes`): what `PrecisionNote::FunctionStorageAssumed`'s
     /// announcement names. 0 for a stage the link makes itself.

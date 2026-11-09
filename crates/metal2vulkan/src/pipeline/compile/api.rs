@@ -1797,6 +1797,7 @@ fn stage_module(c: &CompiledFunction, linked: &Linked, i: usize) -> Result<Stage
         specialized_notes: a.specialized.clone(),
         own_pixel_textures: a.interface.own_pixel_textures.clone(),
         snapshot_textures: a.interface.snapshot_textures.clone(),
+        snapshot_refusals: a.interface.snapshot_refusals.clone(),
         private_bytes: a.interface.private_bytes,
         // Link resolves the module's symbols and adds no instruction, so the function's own
         // counts are the stage's.

@@ -48,8 +48,9 @@ use crate::pipeline::graphics::{
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, MeshRecords,
     NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc, PushPlacement,
-    RecordField, RecordValue, SamplerSlot, SlotInterface, StageDescriptor, StageInterface,
-    StageSpec, TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument, Window,
+    RecordField, RecordValue, SamplerSlot, SlotInterface, SnapshotRefusal, StageDescriptor,
+    StageInterface, StageSpec, TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument,
+    Window,
 };
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -1111,7 +1112,7 @@ codec_struct! {
         emulated_payload,
         payload, reaches_command_buffers, command_writes, writes_textures, numbered_samplers,
         own_pixel_textures,
-        snapshot_textures, private_bytes,
+        snapshot_textures, snapshot_refusals, private_bytes,
     }
     TessellationStage { domain, control_points, emulated }
     TessellationDescriptor {
@@ -1155,6 +1156,10 @@ codec_enum! {
     TypeDetail { Plain, Struct(f0), Array(f0), TextureReference(f0), Pointer(f0) }
     SlotInterface { Buffer(f0), Texture(f0), Sampler(f0) }
     NumberedSampler { Constexpr(f0), Read, Write }
+    SnapshotRefusal {
+        Branch, Derivative, Sample, GroupOperation, Store, Atomic, ImageWrite, UndefinedOperand,
+        WritesMemory, Interlock, Coherent, Other,
+    }
     PatchDomain { Triangle, Quad }
     RecordValue {
         Position, PointSize, ClipDistance, Culled, Layer, ViewportIndex, Varying(f0),
@@ -1334,7 +1339,8 @@ codec_struct! {
     StageModule {
         stage, entry_point, spirv, specialization, required_subgroup_size, stage_flags,
         reconvergence, precision_notes, strategies, constant_blob, rounded_colors,
-        specialized_notes, own_pixel_textures, snapshot_textures, private_bytes, stats,
+        specialized_notes, own_pixel_textures, snapshot_textures, snapshot_refusals,
+        private_bytes, stats,
     }
     SpecializedNote { note, when }
     SpecClause { all }

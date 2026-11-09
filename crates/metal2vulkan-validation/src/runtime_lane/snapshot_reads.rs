@@ -37,6 +37,11 @@
 //!   translator lets a snapshot serve its slot (`StageModule::snapshot_textures`): a snapshot for
 //!   each reader where the device takes the path, else a split for each, and never a split for an
 //!   own-pixel read no snapshot serves (`WorkCounts::reading_draws_split_unreadable_own_pixel`).
+//! - [`a_reader_that_ends_itself_by_its_texel_takes_the_split_for_its_branch`]: the same draws on
+//!   a device that withholds `shaderDemoteToHelperInvocation`, where the discard ends the
+//!   invocation: the same answers, through a split for each reader on every device, each an
+//!   own-pixel read no snapshot serves, counted under its branch alone
+//!   (`WorkCounts::reading_draws_split_unreadable_own_pixel_branch`; `SnapshotRefusal::Branch`).
 //! - [`readers_take_the_snapshot_by_the_area_rule`]: the same draws through each scissor,
 //!   whatever the snapshot's form (`render/snapshot.rs`'s area rule, each form beside a reader's
 //!   fixed cost of a mebibyte): over `RGBA8Unorm` through the whole target's, a snapshot for each
@@ -575,6 +580,88 @@ fn a_reader_that_discards_by_its_texel_takes_the_snapshot() {
                 (snapshotted, splits),
                 "readers through snapshots, splits"
             );
+        },
+    );
+}
+
+/// What `before` to `after` moved of the unreadable own-pixel splits' clauses
+/// (`WorkCounts::reading_draws_split_unreadable_own_pixel_*`), by name.
+fn unreadable_by(before: &WorkCounts, after: &WorkCounts) -> Vec<(&'static str, u64)> {
+    let clauses: [(&'static str, fn(&WorkCounts) -> u64); 12] = [
+        ("branch", |c| {
+            c.reading_draws_split_unreadable_own_pixel_branch
+        }),
+        ("derivative", |c| {
+            c.reading_draws_split_unreadable_own_pixel_derivative
+        }),
+        ("sample", |c| {
+            c.reading_draws_split_unreadable_own_pixel_sample
+        }),
+        ("group_operation", |c| {
+            c.reading_draws_split_unreadable_own_pixel_group_operation
+        }),
+        ("store", |c| {
+            c.reading_draws_split_unreadable_own_pixel_store
+        }),
+        ("atomic", |c| {
+            c.reading_draws_split_unreadable_own_pixel_atomic
+        }),
+        ("image_write", |c| {
+            c.reading_draws_split_unreadable_own_pixel_image_write
+        }),
+        ("undefined_operand", |c| {
+            c.reading_draws_split_unreadable_own_pixel_undefined_operand
+        }),
+        ("writes_memory", |c| {
+            c.reading_draws_split_unreadable_own_pixel_writes_memory
+        }),
+        ("interlock", |c| {
+            c.reading_draws_split_unreadable_own_pixel_interlock
+        }),
+        ("coherent", |c| {
+            c.reading_draws_split_unreadable_own_pixel_coherent
+        }),
+        ("other", |c| {
+            c.reading_draws_split_unreadable_own_pixel_other
+        }),
+    ];
+    (clauses.iter())
+        .map(|&(name, count)| (name, count(after) - count(before)))
+        .collect()
+}
+
+#[test]
+fn a_reader_that_ends_itself_by_its_texel_takes_the_split_for_its_branch() {
+    on_default_policy(
+        |options| {
+            (options.withheld_features).insert(VkFeature::ShaderDemoteToHelperInvocation);
+        },
+        |device| {
+            let queue = device.new_command_queue().unwrap();
+            let format = PixelFormat::RGBA8Unorm;
+            let before = device.work_counts();
+            let (bytes, moved, _) =
+                readers_over(device, &queue, format, true, None, false, READ_DISCARDING);
+            let after = device.work_counts();
+            let unreadable = after.reading_draws_split_unreadable_own_pixel
+                - before.reading_draws_split_unreadable_own_pixel;
+            let clauses = unreadable_by(&before, &after);
+            eprintln!(
+                "snapshot reads, a reader that ends itself: {moved:?}, unreadable own-pixel \
+                 splits {unreadable}, by clause {clauses:?}"
+            );
+            holds("a reader that ends itself", &bytes, 3 * FILL);
+            assert_eq!(
+                (moved.snapshotted, moved.splits),
+                (0, 2),
+                "readers through snapshots, splits"
+            );
+            assert_eq!(
+                unreadable, 2,
+                "splits for an own-pixel read no snapshot serves"
+            );
+            let named: Vec<_> = clauses.into_iter().filter(|&(_, n)| n != 0).collect();
+            assert_eq!(named, [("branch", 2)], "the clauses that left the slot out");
         },
     );
 }

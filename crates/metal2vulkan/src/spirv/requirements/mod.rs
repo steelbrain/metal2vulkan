@@ -93,7 +93,7 @@ mod snapshot;
 mod writes;
 
 pub use own_pixel::own_pixel_textures;
-pub use snapshot::{snapshot_copies_alone, snapshot_textures};
+pub use snapshot::{snapshot_copies_alone, snapshot_textures, Judged};
 pub use writes::writes_memory;
 
 #[cfg(test)]

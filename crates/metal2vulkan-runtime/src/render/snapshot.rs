@@ -166,6 +166,7 @@ use crate::render_state::MAX_VIEWPORTS;
 use crate::render_target::{self, Feedback};
 use crate::render_values::StoreAction;
 use crate::texture::Texture;
+use crate::work_counts::Unreadable;
 use ash::vk;
 use metal2vulkan::bind::{BindingPlan, ImageSource, PushHole, WriteSource};
 use metal2vulkan::metal::TextureType;
@@ -376,15 +377,19 @@ impl RenderLowering {
         }
         if wanted.slots.is_empty() {
             // A function that reads, after the barrier, a texture of the pass at its own pixels
-            // in a way no snapshot serves (`StageModule::snapshot_textures`) takes the split.
-            let unreadable = ordered
-                && (fragment.own_pixel_textures.iter()).any(|slot| {
-                    !fragment.snapshot_textures.contains(slot)
-                        && (self.fragment.textures.get(slot))
-                            .is_some_and(|texture| texture.attached_in(&self.layout))
-                });
-            if unreadable {
-                return self.snapshot_fallback(SplitReason::UnreadableOwnPixel);
+            // in a way no snapshot serves (`StageModule::snapshot_textures`) takes the split,
+            // counted by the clauses that leave those slots out
+            // (`StageModule::snapshot_refusals`).
+            let unreadable = |slot: &u32| {
+                !fragment.snapshot_textures.contains(slot)
+                    && (self.fragment.textures.get(slot))
+                        .is_some_and(|texture| texture.attached_in(&self.layout))
+            };
+            if ordered && fragment.own_pixel_textures.iter().any(unreadable) {
+                let clauses = (fragment.snapshot_refusals.iter())
+                    .filter(|(slot, _)| unreadable(slot))
+                    .fold(Unreadable::default(), |set, &(_, why)| set.with(why));
+                unreadable_own_pixel(self.core.device(), clauses);
             }
             return None;
         }
@@ -831,25 +836,45 @@ impl SplitReason {
 /// first of each reason on the device said.
 pub(super) fn snapshot_fallback(device: &crate::Device, reason: SplitReason) {
     device.shared().counts.reading_draw_split(reason);
+    say_fallback(device, reason, Unreadable::default());
+}
+
+/// [`snapshot_fallback`] for `SplitReason::UnreadableOwnPixel`, of a draw whose slots no snapshot
+/// serves are left out by `clauses`: counted by the reason and once under each clause, and the
+/// first draw of each set of clauses on the device said, naming them.
+fn unreadable_own_pixel(device: &crate::Device, clauses: Unreadable) {
+    let counts = &device.shared().counts;
+    counts.reading_draw_split(SplitReason::UnreadableOwnPixel);
+    counts.reading_draw_unreadable(clauses);
+    say_fallback(device, SplitReason::UnreadableOwnPixel, clauses);
+}
+
+/// Where `METAL2VULKAN_LOG_PIPELINES` is set, say the split for `reason` and `clauses` (empty but
+/// for `SplitReason::UnreadableOwnPixel`), once a device.
+fn say_fallback(device: &crate::Device, reason: SplitReason, clauses: Unreadable) {
     if !crate::pipeline::creation_log_enabled() {
         return;
     }
     let said = &device.shared().snapshot_fallbacks;
     let first = {
         let mut said = crate::device::lock(said);
-        let first = !said.contains(&reason);
+        let first = !said.contains(&(reason, clauses));
         if first {
-            said.push(reason);
+            said.push((reason, clauses));
         }
         first
     };
     if first {
-        let reason = reason.text();
-        device.inform(
-            "metal2vulkan-snapshot-fallback",
-            format!(
-                "a draw that reads its pass's texture after a barrier takes the split: {reason}"
+        let text = reason.text();
+        let message = match clauses == Unreadable::default() {
+            true => format!(
+                "a draw that reads its pass's texture after a barrier takes the split: {text}"
             ),
-        );
+            false => format!(
+                "a draw that reads its pass's texture after a barrier takes the split: {text}: {}",
+                clauses.text()
+            ),
+        };
+        device.inform("metal2vulkan-snapshot-fallback", message);
     }
 }

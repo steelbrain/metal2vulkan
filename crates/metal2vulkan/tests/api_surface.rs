@@ -400,6 +400,7 @@ surface! {
         enum RecordValue N;
         struct SamplerSlot N;
         enum SlotInterface N;
+        enum SnapshotRefusal N;
         struct TextureAccess N;
         struct TextureSlot N;
         struct ThreadgroupArgument N;

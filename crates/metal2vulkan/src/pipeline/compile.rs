@@ -2733,11 +2733,12 @@ fn compile_kept<K>(
     // A fragment function's texture slots read only at the fragment's own pixel.
     let mut own_pixel_textures = crate::spirv::requirements::own_pixel_textures(&module, m)?;
     // Those a draw can read through a snapshot an earlier draw of the same primitives took, of a
-    // function that writes no memory. A variant compiled to read them so states its own: its only
-    // texel access of each is the entry's copy, at the fragment's own pixel.
+    // function that writes no memory, and why each other one is left out. A variant compiled to
+    // read them so states its own, and judges none: its only texel access of each is the entry's
+    // copy, at the fragment's own pixel.
     let snapshots: Vec<u32> = plan.families.fragment.snapshot.keys().copied().collect();
-    let snapshot_textures = match (snapshots.is_empty(), writes_memory) {
-        (false, _) => {
+    let snapshot_textures = match snapshots.is_empty() {
+        false => {
             if !crate::spirv::requirements::snapshot_copies_alone(&module, &snapshots, m)? {
                 return Err(Error::Internal(InternalError::new(
                     InternalKind::Invariant,
@@ -2747,12 +2748,17 @@ fn compile_kept<K>(
             own_pixel_textures.extend(&snapshots);
             own_pixel_textures.sort_unstable();
             own_pixel_textures.dedup();
-            snapshots
+            crate::spirv::requirements::Judged {
+                slots: snapshots,
+                refusals: Vec::new(),
+            }
         }
-        (true, true) => Vec::new(),
-        (true, false) => {
-            crate::spirv::requirements::snapshot_textures(&module, &own_pixel_textures, m)?
-        }
+        true => crate::spirv::requirements::snapshot_textures(
+            &module,
+            &own_pixel_textures,
+            writes_memory,
+            m,
+        )?,
     };
     // A `half` rounded through `OpQuantizeToF16` (`QuantizeForm::Device`): the module records the
     // native note on every profile, a result below the smallest normal half the device's.
@@ -3156,7 +3162,7 @@ fn stage_interface(
     function_tables: &std::collections::BTreeSet<u32>,
     (reaches_command_buffers, command_writes): (bool, crate::pipeline::interface::CommandWrites),
     (writes_textures, numbered_samplers): (bool, Vec<crate::pipeline::interface::NumberedSampler>),
-    (own_pixel_textures, snapshot_textures): (Vec<u32>, Vec<u32>),
+    (own_pixel_textures, snapshots): (Vec<u32>, crate::spirv::requirements::Judged),
 ) -> StageInterface {
     use crate::pipeline::interface::{BufferKind, BufferSlot};
     use crate::pipeline::sym::{PushField, SlotClass};
@@ -3221,7 +3227,8 @@ fn stage_interface(
         writes_textures,
         numbered_samplers,
         own_pixel_textures,
-        snapshot_textures,
+        snapshot_textures: snapshots.slots,
+        snapshot_refusals: snapshots.refusals,
         private_bytes: plan.private_bytes,
     }
 }

@@ -2558,6 +2558,66 @@ fn the_interface_states_the_textures_read_at_the_fragments_own_pixel() {
     assert_eq!(checks.len(), 2, "both read checks");
 }
 
+/// The interface states why it leaves an own-pixel slot out of those a draw can read through a
+/// snapshot (`StageInterface::snapshot_refusals`, `spirv::requirements::snapshot`): owned fixture
+/// `snapshot_discard`'s `sd_read_discarding`, which discards by the texel it read, states none on
+/// the Radeon 780M's profile, where the discard demotes the invocation and the slot qualifies, and
+/// its branch alone where the profile withholds `shaderDemoteToHelperInvocation` and the discard
+/// ends the invocation; `tob_renders`'s `tob_read` states none on either. The stage module of a
+/// render pipeline of it states the same.
+#[test]
+fn the_interface_states_why_a_slot_takes_no_snapshot() {
+    use crate::device::requirements::VkFeature;
+    use crate::pipeline::interface::SnapshotRefusal;
+    let (Some(discarding), Some(reading)) = (fixture("snapshot_discard"), fixture("tob_renders"))
+    else {
+        return;
+    };
+    let demotes = device("amd-780m-radv");
+    let mut d = description("amd-780m-radv");
+    assert!(
+        (d.features).remove(&VkFeature::ShaderDemoteToHelperInvocation),
+        "the 780M's profile demotes"
+    );
+    let ends = Device::new(d, DevicePolicy::default()).expect("device");
+    for (name, dev, refusals) in [
+        ("demote", &demotes, Vec::new()),
+        ("no demote", &ends, vec![(0, SnapshotRefusal::Branch)]),
+    ] {
+        let p = dev.profile();
+        let a = crate::pipeline::testing::compile(&discarding, "sd_read_discarding", p)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(a.interface.own_pixel_textures, [0u32], "{name}");
+        let slots: &[u32] = if refusals.is_empty() { &[0] } else { &[] };
+        assert_eq!(a.interface.snapshot_textures, slots, "{name}");
+        assert_eq!(a.interface.snapshot_refusals, refusals, "{name}");
+        let read = crate::pipeline::testing::compile(&reading, "tob_read", p)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(read.interface.snapshot_textures, [0u32], "{name}: tob_read");
+        assert!(
+            read.interface.snapshot_refusals.is_empty(),
+            "{name}: tob_read"
+        );
+        let rect = Library::from_air(&reading).expect("library");
+        let rect = rect.function("tob_rect").expect("vertex");
+        let discard = Library::from_air(&discarding).expect("library");
+        let discard = discard.function("sd_read_discarding").expect("fragment");
+        let mut d =
+            RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(rect)));
+        d.fragment = Some(StageSource::Function(FunctionDescriptor::new(discard)));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
+            metal::PixelFormat::RGBA8Unorm,
+        ));
+        let pipe = (dev.compile_render_pipeline(&d, &Budget::standard()))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let fragment = (pipe.stages.iter())
+            .find(|s| s.stage == vk::ShaderStage::FRAGMENT)
+            .expect("a fragment stage");
+        assert_eq!(fragment.snapshot_textures, slots, "{name}: the stage");
+        assert_eq!(fragment.snapshot_refusals, refusals, "{name}: the stage");
+    }
+}
+
 /// The interface states the own-pixel slots a draw can read through a snapshot
 /// (`spirv::requirements::snapshot`): `tob_read`'s, whose texel reaches only its output. Its
 /// snapshot variant (`LoweringInputs::snapshot_textures`) links and validates on every profile with

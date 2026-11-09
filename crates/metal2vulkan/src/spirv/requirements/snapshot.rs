@@ -52,11 +52,15 @@
 //! its own. Nor has one with a `Coherent` resource or under the Vulkan memory model: the variant
 //! decorates its snapshot `Coherent`. The test is structural, never a name.
 //!
+//! Each slot left out is stated with every clause that leaves it out ([`SnapshotRefusal`],
+//! `StageInterface::snapshot_refusals`): the analysis keeps one reach for each clause.
+//!
 //! [`snapshot_copies_alone`] checks a variant compiled to read such slots through snapshots: its
 //! only texel access of each is the entry's copy.
 
 use crate::budget::Meter;
 use crate::error::Error;
+use crate::pipeline::interface::SnapshotRefusal;
 use crate::pipeline::sym::ResourceKind;
 use crate::spirv::ids::{BlockId, Value};
 use crate::spirv::ir::{
@@ -76,17 +80,31 @@ const NONE: u32 = u32::MAX;
 #[cfg(test)]
 mod tests;
 
-/// The slots among `own` (fragment module `m`'s own-pixel texture slots, `own_pixel_textures`)
-/// whose fetched values reach none of the uses the module docs list, sorted; empty for a module
-/// of another stage, one with an interlock, or a slot at or past 128. It charges `meter` for its
-/// tables while it holds them.
+/// What [`snapshot_textures`] finds of a fragment module's own-pixel texture slots.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Judged {
+    /// The slots a draw can read through a snapshot (`StageInterface::snapshot_textures`), sorted.
+    pub slots: Vec<u32>,
+    /// Each other slot with every clause that leaves it out
+    /// (`StageInterface::snapshot_refusals`), sorted by slot and then by clause.
+    pub refusals: Vec<(u32, SnapshotRefusal)>,
+}
+
+/// The slots among `own` (fragment module `m`'s own-pixel texture slots, `own_pixel_textures`,
+/// sorted) whose fetched values reach none of the uses the module docs list, in a module that
+/// holds no interlock, coherent resource or Vulkan memory model, of a function that writes no
+/// memory (`writes_memory`, `StageInterface::writes_memory`), and every clause that leaves out
+/// each other one: those of the module and the function, and those of the uses its values reach,
+/// which the walk states in every case. A slot at or past 128 is left out unwalked. Nothing for a
+/// module of another stage. It charges `meter` for its tables while it holds them.
 pub fn snapshot_textures(
     m: &TypedModule,
     own: &[u32],
+    writes_memory: bool,
     meter: &mut Meter,
-) -> Result<Vec<u32>, Error> {
+) -> Result<Judged, Error> {
     if own.is_empty() || m.entry().model != ExecModel::Fragment {
-        return Ok(Vec::new());
+        return Ok(Judged::default());
     }
     let interlocked = m
         .blocks()
@@ -96,26 +114,91 @@ pub fn snapshot_textures(
     // The variant decorates its snapshot `Coherent`, which the Vulkan memory model bans, beside
     // which no other resource of the function may be coherent (`lower::sync::memory_model`).
     let coherent = !m.coherent.is_empty() || super::uses_vulkan_memory_model(m.requirements());
-    if interlocked || coherent {
-        return Ok(Vec::new());
+    let walked: Vec<u32> = own.iter().copied().filter(|&s| s < 128).collect();
+    let every: u128 = walked.iter().fold(0, |acc, &s| acc | (1u128 << s));
+    let mut refused = Refused::default();
+    for (holds, why) in [
+        (writes_memory, SnapshotRefusal::WritesMemory),
+        (interlocked, SnapshotRefusal::Interlock),
+        (coherent, SnapshotRefusal::Coherent),
+    ] {
+        if holds {
+            refused.add(why, every);
+        }
     }
-    let own: Vec<u32> = own.iter().copied().filter(|&s| s < 128).collect();
-    if own.is_empty() {
-        return Ok(Vec::new());
+    if !walked.is_empty() {
+        let n = m.values().len();
+        // Each value's slot image (`NONE` for none), its reach (the slots whose fetched values it
+        // holds), the reach of the memory behind it where it is a variable's pointer, and the
+        // variable a pointer points into; each block's function, and the reach each function
+        // returns.
+        let tables = n * (4 + 16 + 16 + 4) + 4 * m.blocks().len() + 16 * m.functions().len();
+        meter.charge(tables)?;
+        let result = reach(m, &walked, n, &mut refused);
+        meter.release(tables);
+        result?;
     }
-    let n = m.values().len();
-    // Each value's slot image (`NONE` for none), its reach (the slots whose fetched values it
-    // holds), the reach of the memory behind it where it is a variable's pointer, and the variable
-    // a pointer points into; each block's function, and the reach each function returns.
-    let tables = n * (4 + 16 + 16 + 4) + 4 * m.blocks().len() + 16 * m.functions().len();
-    meter.charge(tables)?;
-    let result = reach(m, &own, n);
-    meter.release(tables);
-    result
+    let mut judged = refused.judged(&walked);
+    let past = own.iter().filter(|&&s| s >= 128);
+    (judged.refusals).extend(past.map(|&s| (s, SnapshotRefusal::Other)));
+    judged.refusals.sort_unstable();
+    Ok(judged)
 }
 
-/// [`snapshot_textures`] once its tables are charged.
-fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
+/// The slots each clause leaves out, as masks of slot bits, indexed by [`SnapshotRefusal`].
+#[derive(Default)]
+struct Refused([u128; 12]);
+
+impl Refused {
+    /// The clauses each mask stands for, in the masks' order.
+    const CLAUSES: [SnapshotRefusal; 12] = [
+        SnapshotRefusal::Branch,
+        SnapshotRefusal::Derivative,
+        SnapshotRefusal::Sample,
+        SnapshotRefusal::GroupOperation,
+        SnapshotRefusal::Store,
+        SnapshotRefusal::Atomic,
+        SnapshotRefusal::ImageWrite,
+        SnapshotRefusal::UndefinedOperand,
+        SnapshotRefusal::WritesMemory,
+        SnapshotRefusal::Interlock,
+        SnapshotRefusal::Coherent,
+        SnapshotRefusal::Other,
+    ];
+
+    /// Leave out the slots of `reach` for `why`.
+    fn add(&mut self, why: SnapshotRefusal, reach: u128) {
+        let at = Self::CLAUSES.iter().position(|&c| c == why);
+        if let Some(mask) = at.and_then(|i| self.0.get_mut(i)) {
+            *mask |= reach;
+        }
+    }
+
+    /// Whether any clause leaves `slot` out.
+    fn any(&self, slot: u32) -> bool {
+        self.0.iter().any(|mask| mask & (1u128 << slot) != 0)
+    }
+
+    /// The slots of `own` none leaves out, and each other one with every clause that does.
+    fn judged(&self, own: &[u32]) -> Judged {
+        let mut judged = Judged::default();
+        for &slot in own {
+            if !self.any(slot) {
+                judged.slots.push(slot);
+            }
+            for (mask, &why) in self.0.iter().zip(&Self::CLAUSES) {
+                if mask & (1u128 << slot) != 0 {
+                    judged.refusals.push((slot, why));
+                }
+            }
+        }
+        judged
+    }
+}
+
+/// [`snapshot_textures`]'s walk once its tables are charged: each slot of `own` the uses its
+/// values reach leave out, added to `bad`.
+fn reach(m: &TypedModule, own: &[u32], n: usize, bad: &mut Refused) -> Result<(), Error> {
     let mut carried = vec![NONE; n];
     let mut base: Vec<u32> = (0..n as u32).collect();
     for g in m.globals() {
@@ -144,7 +227,6 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
     }
     let mut returned = vec![0u128; m.functions().len()];
     let wanted: u128 = own.iter().fold(0, |acc, &s| acc | (1u128 << s));
-    let mut bad: u128 = 0;
     let get = |table: &[u128], v: Value| table.get(v.index()).copied().unwrap_or(0);
     for _ in 0..MOST_PASSES {
         let mut changed = false;
@@ -207,7 +289,7 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
                             let root = root(&base, *ptr);
                             changed |= join(&mut memory, root, reach);
                         } else {
-                            bad |= reach;
+                            bad.add(SnapshotRefusal::Store, reach);
                         }
                     }
                     // Each argument to its parameter, a pointer argument's memory both ways, and the
@@ -215,7 +297,7 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
                     Inst::Call { func, args } => {
                         let params = m.functions().get(func.index()).map(|f| f.params.as_slice());
                         let Some(params) = params.filter(|p| p.len() == args.len()) else {
-                            bad |= operands;
+                            bad.add(SnapshotRefusal::Other, operands);
                             continue;
                         };
                         for (&arg, &param) in args.iter().zip(params) {
@@ -241,10 +323,10 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
                         b,
                         ..
                     } => {
-                        bad |= get(&mask, *b);
+                        bad.add(SnapshotRefusal::UndefinedOperand, get(&mask, *b));
                         let unsigned = matches!(op, BinOp::UDiv | BinOp::UMod);
                         if !unsigned && !never_minus_one(m, *b)? {
-                            bad |= get(&mask, *a);
+                            bad.add(SnapshotRefusal::UndefinedOperand, get(&mask, *a));
                         }
                         if let Some(r) = node.result {
                             changed |= join(&mut mask, r, operands);
@@ -252,12 +334,12 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
                     }
                     Inst::VectorExtractDynamic { index, .. }
                     | Inst::VectorInsertDynamic { index, .. } => {
-                        bad |= get(&mask, *index);
+                        bad.add(SnapshotRefusal::UndefinedOperand, get(&mask, *index));
                         if let Some(r) = node.result {
                             changed |= join(&mut mask, r, operands);
                         }
                     }
-                    Inst::Derivative { .. }
+                    inst @ (Inst::Derivative { .. }
                     | Inst::ImageSample { .. }
                     | Inst::ImageGather { .. }
                     | Inst::ImageDrefGather { .. }
@@ -270,8 +352,8 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
                     | Inst::ImageWrite { .. }
                     | Inst::ImageTexelPointer { .. }
                     | Inst::RayQuery(_)
-                    | Inst::SetMeshOutputs { .. } => {
-                        bad |= operands;
+                    | Inst::SetMeshOutputs { .. }) => {
+                        bad.add(refused_by(inst), operands);
                         if let Some(r) = node.result {
                             changed |= join(&mut mask, r, operands);
                         }
@@ -288,21 +370,23 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
                 // nothing a helper's value can change.
                 Terminator::CondBranch { t, f, .. } if demote_guard(m, at, *t, *f) => {}
                 Terminator::CondBranch { cond: v, .. } | Terminator::Switch { sel: v, .. } => {
-                    bad |= get(&mask, *v)
+                    bad.add(SnapshotRefusal::Branch, get(&mask, *v))
                 }
                 // A callee's returned value reaches its calls' results; the entry's, the stage.
                 Terminator::ReturnValue(v) => {
                     let f = function.get(at).copied().unwrap_or(NONE);
                     let reach = get(&mask, *v);
                     match f {
-                        f if f == m.entry().func.index() as u32 => bad |= reach,
+                        f if f == m.entry().func.index() as u32 => {
+                            bad.add(SnapshotRefusal::Other, reach)
+                        }
                         f => match returned.get_mut(f as usize) {
                             Some(r) if *r | reach != *r => {
                                 *r |= reach;
                                 changed = true;
                             }
                             Some(_) => {}
-                            None => bad |= reach,
+                            None => bad.add(SnapshotRefusal::Other, reach),
                         },
                     }
                 }
@@ -310,14 +394,30 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
             }
         }
         if !changed {
-            return Ok(own
-                .iter()
-                .copied()
-                .filter(|&s| bad & (1u128 << s) == 0)
-                .collect());
+            return Ok(());
         }
     }
-    Ok(Vec::new())
+    bad.add(SnapshotRefusal::Other, wanted);
+    Ok(())
+}
+
+/// The clause an operand of `inst`, an instruction that leaves out every slot whose values reach
+/// it, leaves them out for.
+fn refused_by(inst: &Inst) -> SnapshotRefusal {
+    match inst {
+        Inst::Derivative { .. } => SnapshotRefusal::Derivative,
+        Inst::ImageSample { .. }
+        | Inst::ImageGather { .. }
+        | Inst::ImageDrefGather { .. }
+        | Inst::ImageQueryLod { .. } => SnapshotRefusal::Sample,
+        Inst::Group { .. } => SnapshotRefusal::GroupOperation,
+        Inst::Atomic { .. }
+        | Inst::AtomicLoad { .. }
+        | Inst::AtomicStore { .. }
+        | Inst::AtomicCompareExchange { .. } => SnapshotRefusal::Atomic,
+        Inst::ImageWrite { .. } | Inst::ImageTexelPointer { .. } => SnapshotRefusal::ImageWrite,
+        _ => SnapshotRefusal::Other,
+    }
 }
 
 /// Whether module `m`, compiled to read texture slots `slots` through snapshots
