@@ -97,7 +97,8 @@ struct Anonymous {
 }
 
 impl Anonymous {
-    /// A new mapping of `length` bytes, advised for huge pages where `huge`, every page written.
+    /// A new mapping of `length` bytes, advised for huge pages where `huge` and against them
+    /// otherwise (so that each of its pages is given back alone), every page written.
     fn new(length: u64, huge: bool) -> Anonymous {
         // SAFETY: a new private anonymous mapping.
         let start = unsafe {
@@ -111,10 +112,12 @@ impl Anonymous {
             )
         };
         assert_ne!(start, libc::MAP_FAILED, "mmap");
-        if huge {
-            // SAFETY: advice on the bench's own mapping; refused harmlessly without huge pages.
-            unsafe { libc::madvise(start, length as usize, libc::MADV_HUGEPAGE) };
-        }
+        let advice = match huge {
+            true => libc::MADV_HUGEPAGE,
+            false => libc::MADV_NOHUGEPAGE,
+        };
+        // SAFETY: advice on the bench's own mapping; refused harmlessly without huge pages.
+        unsafe { libc::madvise(start, length as usize, advice) };
         let start = start as u64;
         for page in 0..length / PAGE {
             // SAFETY: the mapping's own page, readable and writable, which no device uses yet.
