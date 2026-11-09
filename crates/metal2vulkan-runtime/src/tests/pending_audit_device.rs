@@ -1,11 +1,11 @@
 //! The pending audit on a device (`pending_audit.rs`): a command pool given back to the device's
-//! spares while a command buffer of it waits on the GPU is found, once, and said in a line; the
-//! command buffer that then takes that pool (its taking resets it), the primary its completing
-//! thread begins ahead in the pool, and the command buffer that takes that primary are each
-//! checked, and none is found pending. The command buffer is held on the GPU by its wait for a
-//! plain event's signal reserved for the caller (`Event::reserve_vk_signal`), which the test makes
-//! from the host once the give-back was found: the contract's signal where the caller's submission
-//! is not made.
+//! spares while a command buffer of it waits on the GPU is found, once for each command buffer of
+//! the pool the waiting batch carries, each said in a line; the command buffer that then takes that
+//! pool (its taking resets it), the primary its completing thread begins ahead in the pool, and the
+//! command buffer that takes that primary are each checked, and none is found pending. The command
+//! buffer is held on the GPU by its wait for a plain event's signal reserved for the caller
+//! (`Event::reserve_vk_signal`), which the test makes from the host once the give-back was found:
+//! the contract's signal where the caller's submission is not made.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
@@ -90,17 +90,18 @@ fn a_pool_given_back_while_its_command_buffer_waits_on_the_gpu_is_found() {
         held.give_pool_back_early(),
         "the held command buffer holds its pool"
     );
+    // One finding for each command buffer of the pool the held batch carries.
     let given = counts(&device);
+    let found = given.found[Freeing::GiveBack as usize];
     let mut expected = [0; 4];
-    expected[Freeing::GiveBack as usize] = 1;
+    expected[Freeing::GiveBack as usize] = found;
+    assert!(found > 0, "the give-back is found: {:?}", said());
     assert_eq!(given.found, expected, "{:?}", said());
-    assert!(
-        said()
-            .iter()
-            .any(|line| line.contains("its pool given back to the device's spares")),
-        "the finding is said: {:?}",
-        said()
-    );
+    let lines = said()
+        .iter()
+        .filter(|line| line.contains("its pool given back to the device's spares"))
+        .count();
+    assert_eq!(lines as u64, found, "each finding is said: {:?}", said());
 
     // The reserved signal lets the held command buffer run.
     let raw = device.shared().vk();
