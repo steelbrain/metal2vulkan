@@ -14,8 +14,10 @@
 //! - **The read.** The planes' textures over the buffer (`R8Unorm` 1024x64 at `0x20`, `RG8Unorm`
 //!   512x32 after it, rows 1024 bytes apart) are each the linear image aliasing the buffer's
 //!   memory (no `shadowed_textures`), made for its dma-buf handle type once the device's check of
-//!   that exported memory answered, wherever the same texture at offset 0 of a plain buffer is
-//!   one, and a blit of each reads the second device's bytes.
+//!   that exported memory answered and passed, wherever the same texture at offset 0 of a plain
+//!   buffer is one; where the check did not pass for a texture that reads (a device that makes no
+//!   image over a dma-buf: the RX 550 under RADV), each is a shadow. A blit of each reads the
+//!   second device's bytes.
 //! - **Refusals.** A device without the export refuses the making
 //!   (`NotImplemented(RuntimeGap::DmaBufExport)`) only where it lacks an extension or the export;
 //!   `NoCopy` contents with `exported_as` are `Invalid` (`ExportedNoCopy`); a buffer not made
@@ -28,6 +30,7 @@
 
 use super::blit_holds::{device, Host, Scratch, WAIT};
 use crate::error::{Error, Invalid, Problem, RuntimeGap};
+use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, Device, IoSurfacePlane, MemoryExport,
     Origin, ResourceOptions, Size, Texture, TextureDescriptor,
@@ -442,14 +445,28 @@ fn a_frame_a_second_device_writes_through_its_dma_buf_reads_in_the_runtime_s_tex
             device.settle_in_place_checks(WAIT),
             "{name}: the check answered"
         );
+        // The check's verdicts for a texture that reads over the memory, each row end.
+        let reads = RowEnds::ALL.map(|rows| {
+            let verdict =
+                (device.shared().in_place).verdict(PagesClass::ExportedDmaBuf, Access::Reads, rows);
+            verdict == Verdict::Passed
+        });
         for plane in PLANES {
             let (texture, aliases) = plane_texture(&device, &buffer, (plane, plane.at));
             let (_, plain_aliases) = plane_texture(&device, &plain, (plane, plane.at));
             eprintln!(
                 "DMA-BUF-EXPORT on {name}: {options:?} {plane:?}: aliases its buffer {aliases} \
-                 (a plain frame's {plain_aliases})"
+                 (a plain frame's {plain_aliases}; the check's reads over exported dma-bufs \
+                 passed {reads:?})"
             );
-            assert_eq!(aliases, plain_aliases, "{options:?} {plane:?}: no shadow");
+            if reads.iter().all(|&passed| passed) {
+                assert_eq!(aliases, plain_aliases, "{options:?} {plane:?}: no shadow");
+            } else if !reads.iter().any(|&passed| passed) {
+                assert!(
+                    !aliases,
+                    "{options:?} {plane:?}: a shadow where the check did not pass"
+                );
+            }
             let want: Vec<u8> = (plane.at..plane.at + plane.row * plane.size[1])
                 .map(decoded_byte)
                 .collect();

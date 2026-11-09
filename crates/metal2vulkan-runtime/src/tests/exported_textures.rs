@@ -11,10 +11,13 @@
 //!   bind.
 //! - **A shadow first, then in place.** Made before the device's check of that exported memory
 //!   answered, each texture is a shadow (`TexturePlacement::Pending`), whose blit reads the
-//!   buffer's bytes; once the check answered (`Device::settle_in_place_checks`), the next commit
-//!   moves both in place (`WorkCounts::pooled_textures_moved_in_place`), and their blits read the
-//!   same bytes through the image in the buffer's memory. A texture made after is in place at once
-//!   (`TexturePlacement::NotHostPages`, no shadow counted).
+//!   buffer's bytes; once the check answered (`Device::settle_in_place_checks`) and passed, the
+//!   next commit moves both in place (`WorkCounts::pooled_textures_moved_in_place`), and their
+//!   blits read the same bytes through the image in the buffer's memory. A texture made after is
+//!   in place at once (`TexturePlacement::NotHostPages`, no shadow counted). Where the check did
+//!   not pass for that memory (a device that makes no image over a dma-buf: the RX 550 under
+//!   RADV), each texture stays the shadow its verdict decided (`TextureShadowReason::Unchecked`
+//!   or `CheckFailed`), and reads the same bytes.
 //! - **Each handle type, each storage.** Of an opaque file descriptor and of a dma-buf where the
 //!   device exports one, `Private` (its bytes written by a blit, as a decoder writes a cache the CPU
 //!   never maps) and `Shared` (written through its contents). Where the device exports such memory
@@ -285,28 +288,61 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
                     "{export:?} {options:?} {plane:?}: the texels, read as made"
                 );
             }
+            // Once the check answered: in place where its verdict for the memory passed, else a
+            // shadow its verdict decided.
+            let answer = |plane: Plane| {
+                let descriptor = descriptor(plane, options);
+                let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
+                assert!(
+                    matches!(
+                        placement,
+                        TexturePlacement::NotHostPages
+                            | TexturePlacement::Shadow(
+                                TextureShadowReason::Unchecked { .. }
+                                    | TextureShadowReason::CheckFailed { .. }
+                            )
+                    ),
+                    "{export:?} {options:?} {plane:?}: in place, or a shadow the device's check \
+                     of that memory decided: {placement:?}"
+                );
+                placement
+            };
             if first {
                 let counts = device.work_counts();
                 assert!(device.settle_in_place_checks(WAIT), "the check answered");
-                // The next commit moves the shadows in place.
+                let passed = PLANES
+                    .iter()
+                    .filter(|&&plane| answer(plane) == TexturePlacement::NotHostPages)
+                    .count() as u64;
+                // The next commit moves the shadows in place where the check passed.
                 let plane = PLANES[0];
                 assert!(read(&device, &textures[0].0, plane) == want(plane));
                 let moved = device.work_counts().pooled_textures_moved_in_place
                     - counts.pooled_textures_moved_in_place;
                 assert_eq!(
-                    moved, 2,
-                    "{export:?} {options:?}: both planes moved in place"
+                    moved, passed,
+                    "{export:?} {options:?}: the planes the check passed for moved in place"
                 );
                 first = false;
             }
             for (plane, (texture, _)) in PLANES.iter().zip(&textures) {
-                let descriptor = descriptor(*plane, options);
-                let placement = (picture.texture_placement(&descriptor, plane.at, ROW)).unwrap();
-                assert_eq!(
-                    placement,
-                    TexturePlacement::NotHostPages,
-                    "{export:?} {options:?} {plane:?}: in place once the check passed"
-                );
+                let placement = answer(*plane);
+                if placement != TexturePlacement::NotHostPages {
+                    assert!(
+                        texture.shadow().is_some(),
+                        "{export:?} {options:?} {plane:?}: a shadow"
+                    );
+                    assert!(
+                        read(&device, texture, *plane) == want(*plane),
+                        "{export:?} {options:?} {plane:?}: the texels, read through the shadow"
+                    );
+                    eprintln!(
+                        "EXPORTED-TEXTURES on {name}: {export:?} {options:?} {:?} {}x{}: a \
+                         shadow, the device's check of that memory did not pass: {placement:?}",
+                        plane.format, plane.size[0], plane.size[1]
+                    );
+                    continue;
+                }
                 assert!(
                     texture.shadow().is_none(),
                     "{export:?} {options:?} {plane:?}: the image in place"
@@ -326,17 +362,22 @@ fn an_nv12_picture_s_planes_over_exported_memory_go_in_place_naming_its_handle_t
                 assert_eq!(at % alignment, 0);
                 assert_eq!((row_pitch, offset), (ROW, 0));
             }
-            // Made after the check answered: in place at once.
+            // Made after the check answered: in place at once where it passed, else a shadow.
             let shadows = device.work_counts().shadowed_textures;
+            let mut kept = 0;
             for plane in PLANES {
+                let expected = answer(plane);
                 let (texture, placement) = made(plane);
-                assert_eq!(placement, TexturePlacement::NotHostPages, "{plane:?}");
+                assert_eq!(placement, expected, "{plane:?}");
+                if placement != TexturePlacement::NotHostPages {
+                    kept += 1;
+                }
                 assert!(read(&device, &texture, plane) == want(plane));
             }
             assert_eq!(
                 device.work_counts().shadowed_textures,
-                shadows,
-                "{export:?} {options:?}: no shadow made after the check"
+                shadows + kept,
+                "{export:?} {options:?}: a shadow made after the check only where it did not pass"
             );
         }
     }
