@@ -5,7 +5,10 @@
 //! of the guest's (as a guest's surface's pages lie: a run each), by `BlitCommandEncoder::copy_from_host_ram` into a `Private`
 //! buffer, in a command buffer of its own, submitted on the calling thread
 //! (`CommandBuffer::commit_and_submit`) and waited for. The RAM is a `memfd`, sealed and mapped
-//! shared as QEMU's `memory-backend-memfd,share=on` makes it, every page written.
+//! shared as QEMU's `memory-backend-memfd,share=on` makes it, at a multiple of 2 MiB and advised
+//! for huge pages as QEMU maps its RAM (so a host whose shared memory takes the advice,
+//! `shmem_enabled` of `advise` or `always`, backs it with 2 MiB pages, as it backs a guest's),
+//! every page written.
 //!
 //! - **First fills**: each of [`SURFACES`] new surfaces once, its pages taken by none before: the
 //!   copy imports its lists of runs (`host_ram/copy.rs`, "Lists of runs").
@@ -19,8 +22,9 @@
 //!   host's pages in a row, and its own memory.
 //!
 //! Each fill's bytes are checked against the pages it gathered, read back through a `Shared`
-//! buffer. Printed (`SURFACE-FILL`), per kind, the median and slowest of: the call's CPU time and wall
-//! time; of the call, the source's making of the lists' dma-bufs, the runtime's imports of them
+//! buffer. Printed (`SURFACE-FILL`): how much of the RAM lies in 2 MiB pages; per kind, the median
+//! and slowest of: the call's CPU time and wall time; of the call, the source's making of the
+//! lists' dma-bufs, the runtime's imports of them
 //! (`WorkCounts::host_ram_run_list_import_nanos`, the source's included) and the rest; the lists
 //! imported and the dispatches; `commit_and_submit`'s wall time; the GPU's time
 //! (`gpu_end_time - gpu_start_time`) and its rate; and commit to completion. Ignored: run it in
@@ -28,6 +32,7 @@
 //! --release -p metal2vulkan-runtime --lib --run-ignored all host_ram_surface_fill_bench
 //! --no-capture`.
 
+use super::host_ram_device::RamPages;
 use super::host_ram_listed_bench::{ram_timed, thread_cpu};
 use super::host_residency::{device, Scratch};
 use crate::{
@@ -264,22 +269,36 @@ fn check(on: (&Device, &CommandQueue, &Buffer), runs: &[Range<u64>]) {
     }
 }
 
+/// The bytes of this process's mapping that starts at `start` mapped in 2 MiB pages of shared
+/// memory (`ShmemPmdMapped` in `/proc/self/smaps`); `None` where it is not listed.
+fn huge_bytes(start: u64) -> Option<u64> {
+    let smaps = std::fs::read_to_string("/proc/self/smaps").ok()?;
+    let head = format!("{start:x}-");
+    let mut lines = smaps.lines().skip_while(|line| !line.starts_with(&head));
+    lines.next()?;
+    let line = lines.find(|line| line.starts_with("ShmemPmdMapped:"))?;
+    let kib = line.split_whitespace().nth(1)?.parse::<u64>().ok()?;
+    Some(kib << 10)
+}
+
 /// The listed RAM's fills: a warm-up surface, then the first fills and fills again.
 fn listed(on: (&Device, &CommandQueue, &Buffer), rng: &mut Rng) {
     let device = on.0;
     let listing = Arc::new(AtomicU64::new(0));
-    let (ram, start) = ram_timed(RAM_BYTES, Arc::clone(&listing));
+    let (ram, start) = ram_timed(RAM_BYTES, Some(RamPages::Huge), Arc::clone(&listing));
     write_pages(start, RAM_BYTES);
+    let huge = huge_bytes(start);
     let used = device.use_host_ram(&ram).unwrap();
     let chunks = device.host_ram_chunks();
     let [(listed, spans)] = &chunks[..] else {
         panic!("one RAM: {chunks:?}");
     };
     eprintln!(
-        "SURFACE-FILL {}: a {} MiB RAM, listed {listed}, {} chunks; a surface of {SURFACE_PAGES} \
-         pages, {} bytes; udmabuf's list_limit {}",
+        "SURFACE-FILL {}: a {} MiB RAM, {} MiB of it in 2 MiB pages, listed {listed}, {} chunks; \
+         a surface of {SURFACE_PAGES} pages, {} bytes; udmabuf's list_limit {}",
         device.name(),
         RAM_BYTES >> 20,
+        huge.map_or("unknown".to_owned(), |bytes| (bytes >> 20).to_string()),
         spans.len(),
         SURFACE_BYTES,
         std::fs::read_to_string("/sys/module/udmabuf/parameters/list_limit")

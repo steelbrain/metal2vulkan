@@ -350,6 +350,33 @@ fn fresh_ram_of(
         true => (libc::MAP_SHARED | libc::MAP_ANON, -1),
         false => (libc::MAP_PRIVATE | libc::MAP_ANON, -1),
     };
+    let start = map_aligned(fd, flags, length, pages);
+    if fd >= 0 {
+        // SAFETY: the test's descriptor; the mapping keeps the file.
+        unsafe { libc::close(fd) };
+    }
+    let start = start as u64;
+    let dropped = Arc::new(AtomicBool::new(false));
+    let keep: KeepAlive = Box::new(Mapping {
+        start,
+        length,
+        dropped: Arc::clone(&dropped),
+    });
+    let at = NonNull::new(start as *mut u8).unwrap();
+    // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
+    let ram = unsafe { HostRam::new(&[(at, length)], Some(keep)) }.unwrap();
+    (Arc::new(ram), start, dropped)
+}
+
+/// `length` bytes of `fd` (anonymous memory where it is -1) mapped with `flags` at a multiple of
+/// 2 MiB, as QEMU maps its RAM, and advised for `pages` on Linux: the mapping's first byte. The
+/// mapping keeps the file; the caller unmaps it.
+pub(super) fn map_aligned(
+    fd: libc::c_int,
+    flags: libc::c_int,
+    length: u64,
+    pages: RamPages,
+) -> *mut libc::c_void {
     // The mapping at a multiple of 2 MiB: a reservation 2 MiB longer, the mapping placed over it
     // at its first such multiple, and the reservation's ends unmapped.
     const ALIGN: usize = 2 << 20;
@@ -368,7 +395,7 @@ fn fresh_ram_of(
     assert_ne!(reserved, libc::MAP_FAILED);
     let head = (reserved as usize).next_multiple_of(ALIGN) - reserved as usize;
     // SAFETY: a fresh mapping of the file's first `length` bytes (or of anonymous memory), over
-    // the test's own reservation, inside it.
+    // the call's own reservation, inside it.
     let start = unsafe {
         libc::mmap(
             reserved.cast::<u8>().add(head).cast(),
@@ -390,12 +417,9 @@ fn fresh_ram_of(
             libc::munmap(start.cast::<u8>().add(length as usize).cast(), tail);
         }
     }
-    if fd >= 0 {
-        // SAFETY: the test's descriptor; the mapping keeps the file.
-        unsafe { libc::close(fd) };
-    }
     #[cfg(target_os = "linux")]
-    // SAFETY: advice on the test's own mapping; a kernel without huge pages refuses it, harmlessly.
+    // SAFETY: advice on the call's own mapping; a kernel without huge pages refuses it,
+    // harmlessly.
     unsafe {
         let advice = match pages {
             RamPages::Huge => libc::MADV_HUGEPAGE,
@@ -405,17 +429,7 @@ fn fresh_ram_of(
     }
     #[cfg(not(target_os = "linux"))]
     let _ = pages;
-    let start = start as u64;
-    let dropped = Arc::new(AtomicBool::new(false));
-    let keep: KeepAlive = Box::new(Mapping {
-        start,
-        length,
-        dropped: Arc::clone(&dropped),
-    });
-    let at = NonNull::new(start as *mut u8).unwrap();
-    // SAFETY: the mapping is readable and writable until the keep-alive unmaps it.
-    let ram = unsafe { HostRam::new(&[(at, length)], Some(keep)) }.unwrap();
-    (Arc::new(ram), start, dropped)
+    start
 }
 
 #[test]

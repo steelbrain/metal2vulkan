@@ -36,6 +36,7 @@
 //! (`cargo nextest run --release -p metal2vulkan-runtime --lib --run-ignored all
 //! host_ram_listed_bench --no-capture`). It needs about 9 GiB of memory for the 16 GiB RAM.
 
+use super::host_ram_device::{map_aligned, RamPages};
 use super::host_residency::{device, udmabuf, udmabuf_list, Scratch};
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, Device, DmaBufChunk, DmaBufRequest,
@@ -105,13 +106,20 @@ fn udmabuf_parameter(name: &str, default: u64) -> u64 {
 /// A RAM of `length` bytes over a new `memfd` sealed against growing and shrinking (as QEMU's
 /// `memory-backend-memfd` seals it, and as udmabuf requires), its source udmabufs of its pages at
 /// the RAM's addresses, as long as the host's udmabuf limit allows, and its source of run lists
-/// udmabuf's lists, of at most the host's `list_limit` runs; its first byte.
+/// udmabuf's lists, of at most the host's `list_limit` runs; its first byte. The file is mapped
+/// where the system puts it, with no advice.
 pub(super) fn ram(length: u64) -> (Arc<HostRam>, u64) {
-    ram_timed(length, Arc::default())
+    ram_timed(length, None, Arc::default())
 }
 
-/// [`ram`], the nanoseconds its source of run lists spent making them added to `listing_nanos`.
-pub(super) fn ram_timed(length: u64, listing_nanos: Arc<AtomicU64>) -> (Arc<HostRam>, u64) {
+/// [`ram`], the file mapped at a multiple of 2 MiB and advised for `pages` where given
+/// ([`map_aligned`], as QEMU maps its RAM with [`RamPages::Huge`]), the nanoseconds its source of
+/// run lists spent making them added to `listing_nanos`.
+pub(super) fn ram_timed(
+    length: u64,
+    pages: Option<RamPages>,
+    listing_nanos: Arc<AtomicU64>,
+) -> (Arc<HostRam>, u64) {
     // SAFETY: a new anonymous file, owned at once, then sized and sealed.
     let fd = unsafe {
         let fd = libc::memfd_create(
@@ -127,16 +135,19 @@ pub(super) fn ram_timed(length: u64, listing_nanos: Arc<AtomicU64>) -> (Arc<Host
         let seals = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
         assert_eq!(libc::fcntl(fd.as_raw_fd(), libc::F_ADD_SEALS, seals), 0);
     }
-    // SAFETY: a new shared mapping of the whole file.
-    let start = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            length as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            fd.as_raw_fd(),
-            0,
-        )
+    let start = match pages {
+        Some(pages) => map_aligned(fd.as_raw_fd(), libc::MAP_SHARED, length, pages),
+        // SAFETY: a new shared mapping of the whole file.
+        None => unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
+        },
     };
     assert_ne!(start, libc::MAP_FAILED, "mmap of the file");
     let start = start as u64;
