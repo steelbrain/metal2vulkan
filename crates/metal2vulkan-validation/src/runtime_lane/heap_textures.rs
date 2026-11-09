@@ -759,19 +759,25 @@ fn alias_round_trip(
 /// the buffer's 1024 bytes and the buffer's write none of its 256 texels), the texture takes
 /// host-transfer usage or a linear image: the device announces one of `heap-texture-host-transfer`
 /// and `heap-texture-linear` once, never `heap-texture-hides-aliased-writes`, whose texels would
-/// fail the test. Elsewhere none of the three is announced. `HEAPTEX alias` lines print the counts.
+/// fail the test. On any device, a texture whose first image takes more bytes or a coarser
+/// alignment of the heap than Metal's answer lies in place as one that fits
+/// (`WorkCounts::heap_textures_refit`: host-transfer usage or a linear image, announced as such;
+/// on the NVIDIA RTX 5080 Laptop, a 64x64 render-target texture's optimal image in the `Private`
+/// heap takes 16384 bytes at 1024 where Metal answers 16512 at 128). Elsewhere none of the three
+/// is announced. `HEAPTEX alias` lines print the counts.
 #[test]
 fn a_buffer_write_shows_in_an_overlapping_texture() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    // Whether the driver hides such writes, and whether a texture was made in a heap.
-    let (hides, made) = {
+    // Whether the driver hides such writes, whether a texture was made in a heap, and whether
+    // one was made in place of its first image.
+    let (hides, made, refit) = {
         let device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let hides = device
             .properties()
             .driver_facts
             .contains(&DriverFact::CompressedImagesHideAliasedWrites);
-        let mut made = false;
+        let (mut made, mut refit) = (false, false);
         let queue = device.new_command_queue().unwrap();
         for storage in [StorageMode::Shared, StorageMode::Private] {
             let options = ResourceOptions::new(
@@ -792,16 +798,20 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
                     let mut descriptor = rgba8(side, options);
                     descriptor.usage = usage;
                     let what = format!("{storage:?} {side}x{side} {usage:?}");
+                    let before = device.work_counts().heap_textures_refit;
                     let Some(unchanged) = alias_round_trip(&queue, &heap, &descriptor, &what)
                     else {
                         continue;
                     };
                     made = true;
+                    let fitted = device.work_counts().heap_textures_refit > before;
+                    refit |= fitted;
+                    eprintln!("HEAPTEX alias {what}: in place of its first image {fitted}");
                     assert_eq!(unchanged, 0, "{what}: texels the buffer's write left alone");
                 }
             }
         }
-        (hides, made)
+        (hides, made, refit)
     };
     let notices = counts(&messages.take_notices());
     let [transfer, linear, hidden] = ALIASES.map(|kind| notices.get(&kind).copied().unwrap_or(0));
@@ -810,7 +820,8 @@ fn a_buffer_write_shows_in_an_overlapping_texture() {
          {hidden} heap-texture-hides-aliased-writes notices"
     );
     assert_eq!(hidden, 0);
-    assert_eq!(transfer + linear, usize::from(hides && made));
+    assert!(transfer <= 1 && linear <= 1, "a route announced twice");
+    assert_eq!(transfer + linear > 0, (hides && made) || refit);
     layer_reported_nothing_at_all(&messages);
 }
 
