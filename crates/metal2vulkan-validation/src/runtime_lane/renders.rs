@@ -830,6 +830,32 @@ fn clear_color(device: &Device, texture: &Texture, color: [f64; 4]) -> Result<()
     Ok(())
 }
 
+/// The bytes of `texture` (one texel of `pixel` bytes) after a plain fill of the whole of it to
+/// `color`: the device's clear command of the clear value a `Clear` load of it takes
+/// (`blit_fill.rs`).
+fn clear_command(device: &Device, texture: &Texture, color: [f64; 4], pixel: u64) -> Vec<u8> {
+    let command_buffer = device
+        .new_command_queue()
+        .unwrap()
+        .command_buffer()
+        .unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    let [red, green, blue, alpha] = color;
+    let (width, height) = (texture.width(), texture.height());
+    blit.fill_texture_color(
+        texture,
+        0,
+        0,
+        Region::new_2d(0, 0, width, height),
+        ClearColor::new(red, green, blue, alpha),
+        None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    run(&command_buffer);
+    blit_read(device, texture, pixel)
+}
+
 /// Whether `channel`'s bits, `exponent` exponent bits above `mantissa` mantissa bits, are a NaN.
 pub(super) fn small_nan(channel: u32, exponent: u32, mantissa: u32) -> bool {
     let all = (1 << exponent) - 1;
@@ -940,15 +966,22 @@ fn a_code_apart(pf: PixelFormat, got: &[u8], want: &[u8]) -> bool {
 /// (`device-color-conversion`; a `Depth16Unorm` depth's `unorm-depth-rounding`), and a NaN of a
 /// half-float or small-float channel, which the device's clear converts as it likes, announced
 /// (`device-nan-encoding`); each printed. A format the device cannot render to is counted, not
-/// run. On a driver whose load operation clears as Metal's does
-/// (`DriverFact::ColorClearIsMetals`), every color clear is Metal's bytes and none announces
-/// `device-color-conversion`.
+/// run. On a driver whose clears are Metal's (`DriverFact::ColorClearIsMetals`), every color
+/// clear is Metal's bytes and none announces `device-color-conversion`, and so is the device's
+/// clear command of the load operation's clear value over the whole of a texture: a plain fill
+/// of it (`BlitCommandEncoder::fill_texture_color` with no pixel format, whose fill announces its
+/// own notes, taken apart).
 #[test]
 fn clears_are_the_device_s_conversion_of_the_clear_value() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let metals = device
+        .properties()
+        .driver_facts
+        .contains(&metal2vulkan::device::DriverFact::ColorClearIsMetals);
     let (mut checked, mut unsupported, mut wrong) = (0usize, Vec::new(), Vec::new());
+    let mut commanded = 0usize;
     let (mut announced, mut converted, mut rounded) = (false, false, 0usize);
     for &(pf, color, expected) in COLOR_CLEARS {
         let texture = match attachment(&device, pf, [1, 1], ResourceOptions::private()) {
@@ -991,6 +1024,17 @@ fn clears_are_the_device_s_conversion_of_the_clear_value() {
             ));
         }
         checked += 1;
+        if metals {
+            let filled = attachment(&device, pf, [1, 1], ResourceOptions::private()).unwrap();
+            let bytes = clear_command(&device, &filled, color, expected.len() as u64);
+            messages.take_notices();
+            if bytes != expected {
+                wrong.push(format!(
+                    "{pf:?} {color:?}, the clear command: {bytes:02x?}, Metal {expected:02x?}"
+                ));
+            }
+            commanded += 1;
+        }
     }
     // Depth: through `float`, `Depth16Unorm` truncating, and outside [0, 1] the nearer end (Metal
     // probe case `depth_clear_range_load` on an M4, which Metal's validation stops); stencil: the
@@ -1086,15 +1130,11 @@ fn clears_are_the_device_s_conversion_of_the_clear_value() {
         checked += 1;
     }
     eprintln!(
-        "clears on {}: {checked} checked, {rounded} a code from Metal's, {} formats the device \
-         cannot render to",
+        "clears on {}: {checked} checked, {rounded} a code from Metal's, {commanded} by the clear \
+         command, {} formats the device cannot render to",
         device.name(),
         unsupported.len()
     );
-    let metals = device
-        .properties()
-        .driver_facts
-        .contains(&metal2vulkan::device::DriverFact::ColorClearIsMetals);
     assert!(
         !(metals && converted),
         "{}: a color clear announced device-color-conversion where the load operation clears as \

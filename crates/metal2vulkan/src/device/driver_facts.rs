@@ -979,16 +979,22 @@ pub enum DriverFact {
     /// closest to a normalized channel's scaled value and leaves its sRGB encode and a float's
     /// rounding to the device, so elsewhere a clear whose rounding is in question (a normalized
     /// channel's value off a whole code among them) is announced (`device-color-conversion`,
-    /// `render_pass.rs`); on a driver with it the runtime announces none for a clear by the load
-    /// operation of an attachment the pass's render area covers, and announces it for the same
-    /// clear made otherwise (before the pass, of an attachment the pass's first instance leaves
-    /// out). Measured by
+    /// `render_pass.rs`). The driver's clear command (`vkCmdClearColorImage`) of a whole level and
+    /// layer with the same clear value stores the same texel. On a driver with it the runtime
+    /// announces none for a clear by the load operation of an attachment the pass's render area
+    /// covers, nor for the same clear made by the clear command (an attachment the pass's first
+    /// instance leaves out, cleared before the pass; a memoryless attachment's backing; the copy a
+    /// draw after a memory barrier at the pass's start reads, `texture/attached_reads.rs`), and
+    /// announces it for the same clear made otherwise (a render pass of the attachment alone, or
+    /// its sample planes). Measured by
     /// `runtime_lane::renders::clears_are_the_device_s_conversion_of_the_clear_value`, which on
     /// such a driver also holds that the note stays unannounced: MoltenVK 1.4.2 on the M3 Max under
     /// macOS 27.0.1, each of the 71 colour clears Metal was measured with (ties of 8-bit, 10-bit
     /// and 16-bit unorm and snorm channels, sRGB channels, the packed 16-bit formats, half and
     /// small floats, shared exponents and NaNs among them) into a 1x1 attachment, its 11 depth and
-    /// 4 stencil clears beside them: all 86 texels Metal's bytes, none a code apart.
+    /// 4 stencil clears beside them: all 86 texels Metal's bytes, none a code apart; and each of
+    /// the 71 by the clear command of the load operation's clear value over the whole 1x1 texture
+    /// (a plain fill of it): all 71 Metal's bytes.
     ColorClearIsMetals,
     /// An optimal colour image may keep its compression state apart from the memory it is bound
     /// to, so a write through a buffer or another image over its bytes can leave its texels as

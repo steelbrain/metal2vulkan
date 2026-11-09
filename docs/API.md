@@ -3804,8 +3804,11 @@ bound.
   measured exception: not for a clear by the load operation of an attachment the pass's render area
   covers on a driver whose load operation clears as Metal's `Clear` load action does
   (`DriverFact::ColorClearIsMetals`: MoltenVK on the Apple9 GPUs under macOS 27, measured on the M3
-  Max); a clear made before the pass, of an attachment its first instance leaves out, is announced
-  there too. Also a plain color fill (`BlitCommandEncoder::fill_texture_color` without a pixel
+  Max), nor for the same clear by that driver's clear command of a whole level and layer (an
+  attachment the pass's first instance leaves out, cleared before the pass; a memoryless
+  attachment's backing; the copy a draw sampling the attachment after a memory barrier at the
+  pass's start reads), measured to store Metal's bytes too; the same clear made otherwise there (a
+  render pass of the attachment alone, or its sample planes) is announced. Also a plain color fill (`BlitCommandEncoder::fill_texture_color` without a pixel
   format) of a texture of such a format the device renders, which the device's clear of the color
   writes, to a color whose conversion is in question against Metal's fill packing (a normalized
   channel's scaled value off a whole code, an sRGB channel inside its range, a value a half, small

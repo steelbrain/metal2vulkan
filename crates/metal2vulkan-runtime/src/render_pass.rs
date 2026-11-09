@@ -758,8 +758,11 @@ pub(super) struct ColorTarget {
     /// The clear color of a `Clear` load the device converts with its rounding in question
     /// (`clear_value::rounds_apart`), whose `device-color-conversion` the pass's load operation
     /// does not owe: on a driver whose load operation clears as Metal's `Clear` load action does
-    /// (`DriverFact::ColorClearIsMetals`), of an attachment the pass's render area covers. The
-    /// clear made otherwise, before the pass, of an attachment its first instance leaves out
+    /// (`DriverFact::ColorClearIsMetals`), of an attachment the pass's render area covers. Its
+    /// clear command of a whole level and layer stores the same texel, so a clear made by it
+    /// (an attachment the first instance leaves out cleared before the pass, a memoryless
+    /// backing, a copy of the attachment cleared for a read after a barrier) owes none either;
+    /// a clear made otherwise, as sample planes or by a render pass of the attachment alone
     /// (`render.rs`), announces it ([`degrade_clear_conversion`]). `None` elsewhere: such a
     /// clear's note is announced as the pass is laid out ([`layout`]).
     pub(super) withheld_clear: Option<[f64; 4]>,

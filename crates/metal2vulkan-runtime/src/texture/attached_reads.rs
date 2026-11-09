@@ -40,10 +40,12 @@
 //!   Before any draw of the pass has recorded, the copy holds nothing but the clear there, so
 //!   where it can be cleared to it ([`Texture::cleared_copy`]: the copy is an image of its own,
 //!   the texture a single-sampled 2D one of one level and slice that one color renders whole, in
-//!   place, in the image's format, inside the render area, with no clear whose note the load
-//!   withholds, `ColorTarget::withheld_clear`), the copy in before the pass is a clear of it to the
-//!   pass's clear value (`vkCmdClearColorImage`, which Vulkan converts as the load operation, the
-//!   pass's `device-color-conversion` note the same), and the draw stays in the pass's first
+//!   place, in the image's format, inside the render area), the copy in before the pass is a clear
+//!   of it to the pass's clear value (`vkCmdClearColorImage`, which Vulkan converts as the load
+//!   operation, the pass's `device-color-conversion` note the same; on a driver whose clears are
+//!   Metal's, `DriverFact::ColorClearIsMetals`, the clear command's texel is the load
+//!   operation's, Metal's, so a clear whose note the load withholds owes none here either,
+//!   `ColorTarget::withheld_clear`), and the draw stays in the pass's first
 //!   instance (`WorkCounts::attachment_read_clears`): no instance of the clear alone, no store and
 //!   load of the attachment between two, and no copy. Later draws of that instance read the same
 //!   copy, as they would read the copy after the clear's instance. Otherwise, and once a draw has
@@ -207,9 +209,10 @@ impl Texture {
     /// single-sampled 2D one of one level and slice, presented whole in its image's format, that
     /// exactly one color attachment of `layout` renders in place, all of it inside the render
     /// area, in that format, loading it `Clear` with a value the device's own clear converts as
-    /// its load operation does (no clear whose note the load withholds,
-    /// `ColorTarget::withheld_clear`, nor an extended-range route) and no stand-in or sample
-    /// planes. `None` elsewhere: the pass splits as before.
+    /// its load operation does (no extended-range route; a clear whose note the load withholds,
+    /// `ColorTarget::withheld_clear`, on a driver whose clear command stores the load operation's
+    /// texel, `DriverFact::ColorClearIsMetals`, owes none) and no stand-in or sample planes.
+    /// `None` elsewhere: the pass splits as before.
     pub(crate) fn cleared_copy(
         &self,
         layout: &PassLayout,
@@ -245,7 +248,6 @@ impl Texture {
             && !color.memoryless
             && color.stand_in.is_none()
             && color.planes.is_none()
-            && color.withheld_clear.is_none()
             && color.straight_clear.is_none();
         if rendering.next().is_some() || !whole || !plain {
             return None;

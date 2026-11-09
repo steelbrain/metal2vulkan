@@ -5293,16 +5293,12 @@ impl RenderLowering {
             )?,
             false => None,
         };
+        // A backing is cleared after the pass's first instance by the device's clear command of
+        // its whole level and layer, not by a load operation, which on a driver whose clears are
+        // Metal's stores the load operation's texel: it owes no note the load operation does not
+        // (`ColorTarget::withheld_clear`, `DriverFact::ColorClearIsMetals`).
         if let Some(clears) = &backings_after_first {
             uses.extend(clears.uses.iter().cloned());
-            // A backing is cleared after the pass's first instance, not by a load operation: the
-            // note that operation does not owe is (`ColorTarget::withheld_clear`).
-            for color in layout.colors.iter().flatten().filter(|c| c.memoryless) {
-                if let Some(clear) = color.withheld_clear {
-                    let pf = color.target.texture.pixel_format();
-                    super::render_pass::degrade_clear_conversion(core.device(), pf, clear);
-                }
-            }
         }
         let backings_after_first = backings_after_first.filter(|_| inlined == 1);
         let mut copied_back =
@@ -5345,20 +5341,23 @@ impl RenderLowering {
                 .get(index as usize)
                 .and_then(Option::as_ref)
                 .ok_or_else(|| internal("a storage attachment the pass does not have"))?;
-            // Cleared before the pass, not by its load operation: the note that operation does
-            // not owe is (`ColorTarget::withheld_clear`).
-            if let Some(clear) = color
-                .withheld_clear
-                .filter(|_| color.load == LoadAction::Clear)
-            {
+            if color.load != LoadAction::Clear {
+                continue;
+            }
+            // Cleared before the pass, not by its load operation. By the device's clear command
+            // of its whole level and layer, which on a driver whose clears are Metal's stores the
+            // load operation's texel (`DriverFact::ColorClearIsMetals`), it owes no note that
+            // operation does not; as sample planes, or by a render pass of the attachment alone
+            // (`clear_reach.rs`), it owes that note (`ColorTarget::withheld_clear`).
+            let by_command = color.planes.is_none() && cleared_ahead(&color.target, layout.extent)?;
+            if let Some(clear) = color.withheld_clear.filter(|_| !by_command) {
                 let pf = color.target.texture.pixel_format();
                 super::render_pass::degrade_clear_conversion(core.device(), pf, clear);
             }
-            if color.load == LoadAction::Clear && color.planes.is_none() {
-                match cleared_ahead(&color.target, layout.extent)? {
-                    true => clears.push((&color.target, color.clear)),
-                    false => left_out.push(index),
-                }
+            match (color.planes.is_none(), by_command) {
+                (true, true) => clears.push((&color.target, color.clear)),
+                (true, false) => left_out.push(index),
+                (false, _) => {}
             }
         }
         let clears = Clears::plan(clears)?;
