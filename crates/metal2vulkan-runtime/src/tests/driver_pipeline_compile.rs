@@ -52,6 +52,11 @@
 //! library of shaders, so nothing of its stages is converted or compiled again; and no making
 //! asks for a cache, so none is shared.
 //!
+//! **A library of shaders reports what its driver found**, as a whole pipeline's making does: a
+//! later device over the directory an earlier one wrote counts one report per library of shaders
+//! it makes, and reads no data back for one found in its record
+//! (`a_library_of_shaders_reports_what_its_driver_found`).
+//!
 //! The device takes a shader cache directory of its own, empty, so no run reads a record an
 //! earlier run stored.
 //!
@@ -166,4 +171,79 @@ fn every_sibling_render_creation_takes_the_first_s_driver_cache() {
         "a driver that reports a sibling found in the first's cache must report every one of \
          {RUN} found there, their stages being the same: {hits} hits and {misses} misses"
     );
+}
+
+/// Where the device links its render pipelines from libraries and its makings report, the making
+/// of each library of shaders reports what its driver found, as a whole pipeline's making does: a
+/// later device over the directory an earlier one's creation of the same state wrote counts one
+/// report for each of the state's pre-rasterization and fragment shader libraries, and each one
+/// the driver reports found in the cache its record loaded reads no data back and writes nothing
+/// (`driver_data_found`). Unreported, a library's making read its data back and compared the
+/// bytes, and RADV's data after a library found in its record is now and then not the record's
+/// byte for byte (`shader_cache/driver.rs`), so such a device wrote the record again.
+#[test]
+fn a_library_of_shaders_reports_what_its_driver_found() {
+    let scratch = Scratch::new("driver-library-reports");
+    let options = PipelineOptions::default();
+    {
+        let device = device(&scratch.0);
+        let shared = device.shared();
+        if shared.libraries.is_none() || !shared.shader_cache.driver_reports() {
+            println!(
+                "DRIVER-LIBRARY-REPORTS: not covered (links from libraries: {}, makings report: \
+                 {})",
+                shared.libraries.is_some(),
+                shared.shader_cache.driver_reports()
+            );
+            return;
+        }
+        drop(
+            device
+                .new_render_pipeline_state(&descriptor(&device), &options)
+                .unwrap(),
+        );
+    }
+    // The first device is gone, so its cache thread wrote what its makings handed it.
+    let device = device(&scratch.0);
+    let base = descriptor(&device);
+    let before = device.shader_cache_statistics();
+    let counts_before = device.work_counts();
+    let _state = device.new_render_pipeline_state(&base, &options).unwrap();
+    let after = device.shader_cache_statistics();
+    let counts = device.work_counts();
+    let made = |of: fn(&crate::WorkCounts) -> u64| of(&counts) - of(&counts_before);
+    let since = |of: fn(&crate::ShaderCacheStatistics) -> u64| of(&after) - of(&before);
+    let (hits, misses) = (
+        since(|s| s.driver_pipeline_hits),
+        since(|s| s.driver_pipeline_misses),
+    );
+    let (found, saves) = (since(|s| s.driver_data_found), since(|s| s.driver_saves));
+    println!(
+        "DRIVER-LIBRARY-REPORTS: {hits} hits and {misses} misses reported, {found} found and read \
+         nothing back, {saves} records' data written, {} loaded",
+        since(|s| s.driver_loads)
+    );
+    // The fresh device makes each of the state's four libraries once and links them.
+    assert_eq!(
+        (
+            made(|c| c.pipelines_linked),
+            made(|c| c.pipeline_libraries_made),
+            made(|c| c.fragment_shader_libraries_made)
+        ),
+        (1, 4, 1),
+        "the state links one pipeline from four libraries made for it"
+    );
+    assert_eq!(
+        hits + misses,
+        2,
+        "each of the state's two libraries of shaders reports what its driver found: {hits} hits \
+         and {misses} misses"
+    );
+    assert_eq!(
+        found, hits,
+        "each library its driver reports found in the cache its record loaded reads no data back"
+    );
+    if hits == 2 {
+        assert_eq!(saves, 0, "libraries found in their records write nothing");
+    }
 }

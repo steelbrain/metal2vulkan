@@ -250,7 +250,9 @@ pub struct ShaderCacheStatistics {
     /// `APPLICATION_PIPELINE_CACHE_HIT`, or every stage's feedback is valid and says it. Drivers
     /// differ in where they say it: most for the whole pipeline; MoltenVK 1.4.1 for each stage
     /// alone, whose Metal function it found converted in the cache (its whole pipeline's
-    /// feedback is only ever valid).
+    /// feedback is only ever valid). Where the device links render pipelines from graphics
+    /// pipeline libraries, each library of shaders is such a making (its pre-rasterization or
+    /// fragment shader part), and the link itself is none.
     pub driver_pipeline_hits: u64,
     /// Such pipelines whose valid feedback says no hit, for the whole pipeline or for every
     /// stage: compiled, or a stage converted again.

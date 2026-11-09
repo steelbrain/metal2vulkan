@@ -1347,24 +1347,26 @@ impl VariantObjects {
                 let mut flag =
                     vk::GraphicsPipelineLibraryCreateInfoEXT::default().flags(part.flag());
                 let info = infos.part(part, &mut flag);
-                let create = |cache| {
-                    // SAFETY: every pointer in `info` outlives the call; the pipeline cache is
-                    // the making's own, destroyed once the call returned, or none.
-                    unsafe { shared.vk().create_graphics_pipelines(cache, &[info], None) }
-                };
                 // A part with shaders is made through the device's shader cache, under a record
                 // of its own; one without holds nothing a record would keep.
                 let made = match part.holds_shaders() {
                     true => {
                         let _ = creation_log::take_record();
                         let made =
-                            shared.make_pipelines(Making::new(part.kind()).digest(name), create);
+                            self.library_of_shaders(Making::new(part.kind()).digest(name), info);
                         made_here = Some(creation_log::take_record());
                         made
                     }
                     false => {
                         made_here = Some(None);
-                        create(vk::PipelineCache::null())
+                        // SAFETY: every pointer in `info` outlives the call.
+                        unsafe {
+                            shared.vk().create_graphics_pipelines(
+                                vk::PipelineCache::null(),
+                                &[info],
+                                None,
+                            )
+                        }
                     }
                 };
                 let made = made.map_err(|(_, error)| vulkan(error))?;
@@ -1404,6 +1406,50 @@ impl VariantObjects {
             .first()
             .copied()
             .ok_or_else(|| internal("the driver linked no pipeline"))
+    }
+
+    /// The library of `info`, a part that holds shaders, made through the device's shader cache
+    /// under the record `making` names, with what its driver reports of it as a whole pipeline's
+    /// making has (`shader_cache::found_in_cache`, counted in `driver_pipeline_hits` and
+    /// `misses`): one found in a cache loaded from its record reads no data back and writes
+    /// nothing (`shader_cache/driver.rs`), whatever bytes the driver's data holds after it.
+    fn library_of_shaders(
+        &self,
+        making: Making,
+        info: vk::GraphicsPipelineCreateInfo<'_>,
+    ) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)> {
+        let shared = self.device.shared();
+        let driver_reports = shared.shader_cache.driver_reports();
+        // Its stages' feedback where it has at most `REPORTED_STAGES`, none where more (a count
+        // of 0 is valid, one equal to `stageCount` else:
+        // VUID-VkGraphicsPipelineCreateInfo-pipelineStageCreationFeedbackCount-06594).
+        let mut whole = vk::PipelineCreationFeedback::default();
+        let mut stages = [vk::PipelineCreationFeedback::default(); REPORTED_STAGES];
+        let count = info.stage_count as usize;
+        let reported_stages = if count <= REPORTED_STAGES { count } else { 0 };
+        let made = shared.make_pipelines_reported(making, |cache| {
+            let reported = &mut stages[..reported_stages];
+            let mut feedback = vk::PipelineCreationFeedbackCreateInfo::default()
+                .pipeline_creation_feedback(&mut whole)
+                .pipeline_stage_creation_feedbacks(reported);
+            let mut info = info;
+            if driver_reports {
+                info = info.push_next(&mut feedback);
+            }
+            // SAFETY: every pointer in `info` outlives the call; the pipeline cache is the
+            // device's for the record, or none.
+            let made = unsafe { shared.vk().create_graphics_pipelines(cache, &[info], None) };
+            let found = driver_reports
+                .then(|| found_in_cache(&whole, &stages[..reported_stages]))
+                .flatten();
+            (made, found)
+        });
+        if driver_reports && made.is_ok() {
+            shared
+                .shader_cache
+                .driver_reported(&whole, &stages[..reported_stages]);
+        }
+        made
     }
 }
 

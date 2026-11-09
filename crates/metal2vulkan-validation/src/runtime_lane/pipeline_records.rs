@@ -13,11 +13,12 @@
 //!   draw's target byte for byte the first device's. A making handed a cache loaded from its
 //!   record that the driver reports found there reads no data back and writes nothing
 //!   (`driver_data_found`: MoltenVK's data after such a making is the record's entries in the
-//!   other order, which a byte comparison took for a change at every making). One the driver does
-//!   not report found writes it again exactly where the driver's data after the making is no
-//!   longer what the cache was loaded with or last wrote (RADV's after its first hit from a
-//!   compile's record is not, and settles), and counts every other read unchanged
-//!   (`driver_data_unchanged`).
+//!   other order, which a byte comparison took for a change at every making, and RADV's now and
+//!   then differs from the record's in a byte at the same length). Where the device links its
+//!   pipelines from libraries, each library of shaders is such a making and reports as a whole
+//!   pipeline does. One the driver does not report found writes it again exactly where the
+//!   driver's data after the making is no longer what the cache was loaded with or last wrote,
+//!   and counts every other read unchanged (`driver_data_unchanged`).
 //! - **Lines from the triangles' cache.** A state's line pipeline, made at its first line draw,
 //!   names the record its triangle sibling named, which the state's creation made the cache of:
 //!   the topology reaches the driver's conversion of a stage through the point class alone

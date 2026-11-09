@@ -30,9 +30,14 @@
 //!   library map iterates its modules' keys opposite to their insertion), so the byte comparison
 //!   alone wrote every record of two modules again at each warm making. The data's format is
 //!   MoltenVK's own, undocumented beyond Vulkan's header, so no comparison here reads its
-//!   entries. A making whose driver reports nothing, or reports a compile, or whose cache was
-//!   made empty, reads the data and compares its SHA-256 with what the cache was loaded with or
-//!   last wrote.
+//!   entries. A library of shaders, where the device links its render pipelines from graphics
+//!   pipeline libraries, is made with its driver's report as a whole pipeline is: RADV's data
+//!   after a library's making from its record is now and then not the record's byte for byte,
+//!   one byte of over a thousand differing at the same length (Mesa 26.2.6 on a Radeon 780M:
+//!   both libraries of a state, in 2 runs of 20), which the byte comparison alone took for data
+//!   the making added, and wrote the record again. A making whose driver reports nothing, or
+//!   reports a compile, or whose cache was made empty, reads the data and compares its SHA-256
+//!   with what the cache was loaded with or last wrote.
 //! - **Named by what a stage's conversion reads** ([`Making`]). A record is named by the SHA-256
 //!   of [`VERSION`], the making's description, the driver's identity (vendor, device, driver
 //!   version, `pipelineCacheUUID`) and the digest of the layer settings the instance was created
