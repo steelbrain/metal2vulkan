@@ -139,14 +139,15 @@
 //!
 //! - **Blocks made ahead** (`memory/ready.rs`). Each pool the encodings and commits place their
 //!   own resources in ([`keep_room`]) and each pool of exportable buffers ([`allocate_exported`])
-//!   gets a block made off the program's thread while it grows or is near its next block, and the
-//!   pool a color texture's host-transfer image places in ([`Memory::host_copy_pool`]) gets its
-//!   blocks so: each made right after a burst of the device's submissions ended, since a block's
+//!   gets a block's worth of bytes made off the program's thread while it grows or is near its
+//!   next block (as many of its blocks as one of [`BLOCK_BYTES`] holds), and the pool a color
+//!   texture's host-transfer image places in ([`Memory::host_copy_pool`]) gets its blocks so: each
+//!   made right after a burst of the device's submissions ended, since a block's
 //!   `vkAllocateMemory` holds the device's submissions while it runs on RADV and on NVIDIA's
 //!   driver, then every page of its mapping read once before anything is placed in it, so that no
 //!   host copy's first touch faults on memory whose kernel work waits behind the program's queued
 //!   GPU work. A call that needs room takes the pool's block made ahead, or waits for its making,
-//!   rather than make a block of its own.
+//!   started for it where none is under way, rather than make a block of its own.
 
 use super::buffer::usage;
 use super::device::lock;
@@ -861,6 +862,9 @@ pub(super) struct Pool<T> {
     kept_bytes: u64,
     /// When it last grew: a pooled block added to it while it held another ([`Pool::grew`]).
     grew: Option<Instant>,
+    /// The bytes of the largest block a placement larger than its blocks took within
+    /// [`KEPT_EMPTY_FOR`] of the last such placement, and when that was ([`Pool::took_large`]).
+    large: Option<(u64, Instant)>,
 }
 
 #[derive(Debug)]
@@ -910,6 +914,7 @@ impl<T> Default for Pool<T> {
             freed: 0,
             kept_bytes: 0,
             grew: None,
+            large: None,
         }
     }
 }
@@ -1253,6 +1258,21 @@ impl<T> Pool<T> {
             }
         }
         self.grew
+    }
+
+    /// A placement larger than its blocks took a pooled block of `bytes` at `now`
+    /// ([`pooled_block_bytes`]): blocks of that size are made ahead for it while such placements
+    /// are recent (`memory/ready.rs`).
+    fn took_large(&mut self, bytes: u64, now: Instant) {
+        let recent = self.large(now).unwrap_or(0);
+        self.large = Some((bytes.max(recent), now));
+    }
+
+    /// The bytes of the largest block a placement larger than its blocks took within
+    /// [`KEPT_EMPTY_FOR`] before `now`, of the placements since one came after a longer gap.
+    fn large(&self, now: Instant) -> Option<u64> {
+        let (bytes, at) = self.large?;
+        (now.saturating_duration_since(at) < KEPT_EMPTY_FOR).then_some(bytes)
     }
 
     /// Whether it holds a pooled block.
@@ -1988,9 +2008,13 @@ pub(super) struct Memory {
     /// The pool a color texture's host-transfer image places in, once asked: `Some(None)` where
     /// the device copies no color texture on the host ([`Memory::host_copy_pool`]).
     host_copy_pool: Option<Option<(Holds, u32)>>,
-    /// The blocks being made ahead, or made and not yet in their pool, one a pool at most: each
-    /// enters its pool at a call that needs room there (`memory/ready.rs`).
+    /// The blocks being made ahead, or made and not yet in their pool, one readying a pool at
+    /// most: each block enters its pool at a call that needs room there (`memory/ready.rs`).
     readying: Vec<ready::Readying>,
+    /// What a making ahead is made through, from the first [`keep_room`] on: the device's
+    /// functions, its queues' quiet and its counts. A placement that starts a making it waits for
+    /// ([`place`]) takes them here.
+    ahead_with: Option<AheadWith>,
     /// Of that pool, its blocks made ready ahead and added to it, and the blocks a placement in it
     /// made itself, finding none ready (`WorkCounts`).
     host_copy_blocks: HostCopyBlocks,
@@ -2005,19 +2029,27 @@ pub(super) struct Memory {
     keeps_none: bool,
 }
 
+/// What a making ahead is made through ([`Memory::ahead_with`]).
+struct AheadWith {
+    functions: Arc<Functions>,
+    quiet: Arc<QueueQuiet>,
+    counts: Arc<Counters>,
+}
+
 /// The counts of the blocks made ahead (`memory/ready.rs`), and of those made in place in the pools
 /// blocks are made ahead for ([`Memory::makes_ahead`]), by the kind of pool.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct AheadBlocks {
     /// Blocks of buffers made ahead and added to their pool.
     pub(super) buffers_ahead: u64,
-    /// Blocks of buffers a call made itself, finding none made ahead.
+    /// Blocks of buffers a call made itself, where no making ahead served it.
     pub(super) buffers_in_place: u64,
     /// Blocks of images made ahead and added to their pool.
     pub(super) images_ahead: u64,
-    /// Blocks of images a call made itself, finding none made ahead.
+    /// Blocks of images a call made itself, where no making ahead served it.
     pub(super) images_in_place: u64,
-    /// Of the blocks made ahead, those a call waited for, their making under way.
+    /// Of the blocks made ahead, those a call waited for, their making under way or started for
+    /// it.
     pub(super) waited_for: u64,
     /// Of those, the blocks whose making a call's wait cut short in its wait for a burst of
     /// submissions to end, so that the call waited for the allocation alone.
@@ -2031,15 +2063,16 @@ pub(super) struct AheadBlocks {
 
 impl AheadBlocks {
     /// A block of a pool of `holds` was made ahead and added, a call having waited for it where
-    /// `waited_for`, after its wait for a burst's end ended as `waited` says.
-    fn made_ahead(&mut self, holds: Holds, waited_for: bool, waited: Waited) {
+    /// `waited_for`, after its wait for a burst's end ended as `waited` says (`None`: it waited
+    /// for none, made after another of its wake or for a call already waiting).
+    fn made_ahead(&mut self, holds: Holds, waited_for: bool, waited: Option<Waited>) {
         match holds {
             Holds::Images => self.images_ahead += 1,
             _ => self.buffers_ahead += 1,
         }
         self.waited_for += u64::from(waited_for);
-        self.hurried += u64::from(waited == Waited::Asked);
-        self.past_quiet_wait += u64::from(waited == Waited::Bound);
+        self.hurried += u64::from(waited == Some(Waited::Asked));
+        self.past_quiet_wait += u64::from(waited == Some(Waited::Bound));
     }
 
     /// A call made a block of a pool of `holds` itself.
@@ -2135,6 +2168,7 @@ impl Memory {
             zero_images: false,
             host_copy_pool: None,
             readying: Vec::new(),
+            ahead_with: None,
             host_copy_blocks: HostCopyBlocks::default(),
             ahead: AheadBlocks::default(),
             next_sweep: Instant::now() + KEPT_SWEEP_EVERY,
@@ -2359,10 +2393,11 @@ impl Memory {
             .filter(|&(at, _)| in_heap(at % count))
             .map(|(_, pool)| pool.kept_bytes())
             .sum();
-        let ahead = (self.readying.iter())
+        let ahead: u64 = (self.readying.iter())
             .filter(|ready| in_heap(ready.pool().1 as usize))
-            .count() as u64;
-        kept + ahead * self.block_bytes
+            .map(ready::Readying::outstanding_bytes)
+            .sum();
+        kept + ahead
     }
 
     /// A block of `size` bytes of memory type `type_index` left the heap's live blocks.
@@ -2600,23 +2635,124 @@ impl Memory {
             .collect()
     }
 
-    /// Add the block made ahead for `pool` to it where its making ended (`memory/ready.rs`):
-    /// whether one was added. A making that failed is let go of.
-    fn add_ready(&mut self, pool: (Holds, u32)) -> bool {
+    /// The blocks `pool` keeps made ahead (`memory/ready.rs`), its blocks of `bytes`: one of the
+    /// bytes of the largest block its placements larger than its blocks took lately
+    /// ([`Pool::large`]), and as many of `bytes` as the rest of one block of
+    /// [`Memory::block_bytes`] holds, at least one, so that a pool whose blocks of plain memory
+    /// are made smaller ([`Memory::plain_block_made`]) keeps the bytes ahead it kept before.
+    fn ahead_sizes(&mut self, pool: (Holds, u32), bytes: u64) -> (Option<u64>, u64) {
+        let bytes = bytes.max(1);
+        let large =
+            (self.pool(pool.0, pool.1).large(Instant::now())).filter(|&large| large > bytes);
+        let rest = self.block_bytes.saturating_sub(large.unwrap_or(0));
+        (large, (rest / bytes).max(1))
+    }
+
+    /// Of the blocks `pool`, its blocks of `bytes`, keeps made ahead ([`ahead_sizes`]), those
+    /// `held` lacks (the bytes of each block made, being made and still to make): the larger
+    /// first.
+    ///
+    /// [`ahead_sizes`]: Self::ahead_sizes
+    fn lacking(&mut self, pool: (Holds, u32), bytes: u64, held: &[u64]) -> Vec<u64> {
+        let (large, count) = self.ahead_sizes(pool, bytes);
+        let mut held = held.to_vec();
+        let mut lacking = Vec::new();
+        if let Some(large) = large {
+            match held.iter().position(|&size| size >= large) {
+                Some(at) => {
+                    held.swap_remove(at);
+                }
+                None => lacking.push(large),
+            }
+        }
+        let have: u64 = held.iter().sum();
+        let more = (count * bytes).saturating_sub(have) / bytes.max(1);
+        lacking.extend((0..more).map(|_| bytes));
+        lacking
+    }
+
+    /// What a making ahead for `pool` is made through, once [`keep_room`] gave it.
+    fn making(&self, pool: (Holds, u32)) -> Option<ready::Making> {
+        let with = self.ahead_with.as_ref()?;
+        Some(ready::Making {
+            maker: self.maker(),
+            functions: Arc::clone(&with.functions),
+            quiet: Arc::clone(&with.quiet),
+            addressed: pool.0.buffers().then(|| Arc::clone(&with.counts)),
+        })
+    }
+
+    /// Keep `pool`'s blocks made ahead, its blocks of `bytes` (`memory/ready.rs`,
+    /// [`ahead_sizes`](Self::ahead_sizes)): those it lacks made after the blocks its thread
+    /// still makes, or on a new thread, once a burst of the device's queue uses ended.
+    fn keep_ahead(&mut self, pool: (Holds, u32), bytes: u64) {
+        let held = match self.readying_at(pool) {
+            Some(at) => self.readying[at].held(),
+            None => Vec::new(),
+        };
+        let lacking = self.lacking(pool, bytes, &held);
+        if lacking.is_empty() {
+            return;
+        }
+        let Some(making) = self.making(pool) else {
+            return;
+        };
+        match self.readying_at(pool) {
+            Some(at) => {
+                let _ = self.readying[at].queue(making, &lacking, false);
+            }
+            None => {
+                let started = ready::Readying::start(making, pool, lacking.into(), None);
+                self.readying.extend(started.map(|(readying, _)| readying));
+            }
+        }
+    }
+
+    /// A call's wait for a block of `need` bytes or more made ahead for `pool`, its blocks of
+    /// `bytes` (`memory/ready.rs`), where none is made: the block being made or still to make, or
+    /// else one queued first for the call, its thread started where it has none, the rest of the
+    /// pool's blocks kept ahead after it. `None` where the pool host copies place in reads a
+    /// block's pages now, as a page's first touch may wait behind the program's GPU work, before
+    /// [`keep_room`] gave the makings what they are made through, or where no thread starts.
+    fn wait_for(&mut self, pool: (Holds, u32), bytes: u64, need: u64) -> Option<ready::Waiter> {
+        let making = self.making(pool)?;
+        let host_copies = self.host_copy_pool == Some(Some(pool));
+        match self.readying_at(pool) {
+            Some(at) => {
+                let readying = &mut self.readying[at];
+                let waiter = readying.waiter(need, host_copies)?;
+                match readying.will_hold(need) || readying.queue(making, &[need], true) {
+                    true => Some(waiter),
+                    false => None,
+                }
+            }
+            None => {
+                let rest = self.lacking(pool, bytes, &[need]);
+                let sizes = std::iter::once(need).chain(rest).collect();
+                let (readying, waiter) = ready::Readying::start(making, pool, sizes, Some(need))?;
+                self.readying.push(readying);
+                waiter
+            }
+        }
+    }
+
+    /// Add the smallest block of `need` bytes or more made ahead for `pool` and not yet added to
+    /// it (`memory/ready.rs`): whether one was added. A readying whose thread ended and that holds
+    /// no block more goes.
+    fn add_ready(&mut self, pool: (Holds, u32), need: u64) -> bool {
         let Some(at) = self.readying_at(pool) else {
             return false;
         };
-        if !self.readying[at].finished() {
-            return false;
+        let made = self.readying[at].take_block(need);
+        if self.readying[at].finished() && !self.readying[at].has_block() {
+            self.readying.swap_remove(at).end();
         }
-        let readying = self.readying.swap_remove(at);
-        let waited_for = readying.waited_for();
-        let Some(made) = readying.take() else {
+        let Some(made) = made else {
             return false;
         };
         let bytes = made.block.size;
         self.add_block(pool, made.block, bytes, false, 0);
-        self.ahead.made_ahead(pool.0, waited_for, made.waited);
+        self.ahead.made_ahead(pool.0, made.waited_for, made.waited);
         if self.host_copy_pool == Some(Some(pool)) {
             self.host_copy_blocks.readied += 1;
         }
@@ -2825,6 +2961,16 @@ impl Memory {
             })
             .map(|block| block.size)
             .collect()
+    }
+
+    /// The bytes of the blocks made ahead for the pools of `holds` and not yet added, and of those
+    /// still to make (`memory/ready.rs`), for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn ahead_bytes(&self, holds: Holds) -> u64 {
+        (self.readying.iter())
+            .filter(|ready| ready.pool().0 == holds)
+            .map(ready::Readying::outstanding_bytes)
+            .sum()
     }
 
     /// The bytes a pooled block of plain memory is made of now ([`Memory::plain_block_made`]), for
@@ -3118,10 +3264,10 @@ impl Memory {
                 at += 1;
                 continue;
             }
-            if let Some(made) = self.readying.swap_remove(at).take() {
+            for block in self.readying.swap_remove(at).stop() {
                 self.ahead.unused += 1;
                 // SAFETY: nothing was placed in the block, and no command reads it.
-                drop(unsafe { self.let_go(device, made.block, FreeCause::KeptStale, None) });
+                drop(unsafe { self.let_go(device, block, FreeCause::KeptStale, None) });
             }
         }
     }
@@ -3412,7 +3558,7 @@ impl Memory {
         let mut making = Vec::new();
         for readying in self.readying.drain(..) {
             match readying.finished() {
-                true => ready.extend(readying.take().map(|made| made.block)),
+                true => ready.extend(readying.stop()),
                 false => making.push(readying),
             }
         }
@@ -3435,7 +3581,7 @@ impl Memory {
         // The blocks being made ahead, those whose making began waited for: nothing is placed in
         // them.
         let readied: Vec<Block> = (self.readying.drain(..))
-            .filter_map(ready::Readying::stop)
+            .flat_map(ready::Readying::stop)
             .collect();
         let blocks: Vec<Block> = (self.pools.iter_mut())
             .flat_map(|pool| pool.drain())
@@ -4441,16 +4587,32 @@ fn place(
                     return Ok(guard.mark_overflowed(placement, overflowing));
                 }
             }
-            // A pooled placement without room: the block made ahead for the pool, rather than
-            // one of the placement's own (`memory/ready.rs`), waited for where its making is
-            // under way, but in the pool host copies place in, whose making may itself wait
-            // behind the program's GPU work, which no making waits for.
-            if !dedicated && take_ready(memory, guard, pool) {
-                let mut guard = lock(memory);
-                if let Some(placement) =
-                    guard.place_pooled(device, pool, (size, align), addressed, class)?
-                {
-                    return Ok(guard.mark_overflowed(placement, overflowing));
+            // A pooled placement without room: a block made ahead for the pool of its block's
+            // size or more, rather than one of the placement's own (`memory/ready.rs`), waited for
+            // where none is made: the one being made or still to make, or else one the ready
+            // thread makes first for it. A placement larger than the pool's blocks, which takes a
+            // block of its own size ([`pooled_block_bytes`]), has blocks of that size kept ahead
+            // while such placements are recent. Made here: one of the pool host copies place in
+            // while that pool's making reads a block's pages, which may wait behind the
+            // program's GPU work, which no placement waits for.
+            if !dedicated {
+                let large = block_size > guard.pooled_bytes(pool);
+                if large {
+                    guard
+                        .pool(pool.0, pool.1)
+                        .took_large(block_size, Instant::now());
+                }
+                if guard.makes_ahead(pool) && take_ready(memory, guard, pool, block_size) {
+                    let mut guard = lock(memory);
+                    if large {
+                        let bytes = guard.pooled_bytes(pool);
+                        guard.keep_ahead(pool, bytes);
+                    }
+                    if let Some(placement) =
+                        guard.place_pooled(device, pool, (size, align), addressed, class)?
+                    {
+                        return Ok(guard.mark_overflowed(placement, overflowing));
+                    }
                 }
             }
         }
@@ -4515,7 +4677,7 @@ fn make_room(memory: &Mutex<Memory>, device: &ash::Device, type_index: u32) -> b
 pub(super) fn keep_none(memory: &Mutex<Memory>, device: &ash::Device) {
     let making = lock(memory).keep_none(device);
     for readying in making {
-        if let Some(block) = readying.stop() {
+        for block in readying.stop() {
             // SAFETY: nothing is placed in a block made ahead, and no command reads it.
             drop(unsafe { lock(memory).let_go(device, block, FreeCause::Teardown, None) });
         }
@@ -4526,16 +4688,18 @@ pub(super) fn keep_none(memory: &Mutex<Memory>, device: &ash::Device) {
 /// commits place their own resources in ([`Memory::kept`]), and start making a block ahead for
 /// each such pool that grows (`memory/ready.rs`). The device's creation calls, which may wait,
 /// keep it, so that an encoding or a commit, which must wait for no other process's GPU work,
-/// finds a block with room rather than making one. A pool without that room takes its block made
-/// ahead, waited for where its making is under way, or else a block made here, with `memory`'s
-/// lock released; a block of buffers gets its buffer of addresses (counted in `counts`) where
-/// blocks carry one. A block that fails to be made, or a pool the query fails for, is left to the
-/// placement that needs it. A pool that grew within [`KEPT_EMPTY_FOR`] and lacks room for a whole
-/// block, holding no block made ahead, gets one started, through `functions`, made once a burst
-/// of `quiet`'s queue uses ended; so does each pool of exportable buffers that grew so
+/// finds a block with room rather than making one. A pool without that room takes a block made
+/// ahead, or waits for one with `memory`'s lock released: the one being made or still to make, or
+/// else one the pool's thread makes first for the call, started where it has none
+/// (`memory/ready.rs`); only where that making fails or no thread starts is the block made here. A block of buffers gets
+/// its buffer of addresses (counted in `counts`) where blocks carry one. A block that fails to be
+/// made, or a pool the query fails for, is left to the placement that needs it. A pool that grew
+/// within [`KEPT_EMPTY_FOR`] and lacks room for a whole block gets the blocks it lacks of a block's
+/// worth made ahead ([`Memory::keep_ahead`]), through `functions`, made once a burst of `quiet`'s
+/// queue uses ended; so does each pool of exportable buffers that grew so
 /// (`allocate_exported`), whose room is otherwise left to its placements, which are the creation
 /// calls themselves. The pool host copies place in, where `copies` says the device
-/// copies color textures on the host, gets its block made ahead once it lacks room for half a
+/// copies color textures on the host, gets its blocks made ahead once it lacks room for half a
 /// block; its making is never waited for here, as its pages' reads may wait behind the program's
 /// GPU work, and its block is never added here: the placement there that finds no room adds it
 /// ([`place`]), so that the pool's blocks change only at its placements, whenever the making
@@ -4559,7 +4723,12 @@ pub(super) fn keep_room(
     (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
     (copies, own, pages): (impl FnOnce() -> bool, Holds, bool),
 ) {
-    ready_ahead(memory, device, (functions, quiet), copies);
+    lock(memory).ahead_with.get_or_insert_with(|| AheadWith {
+        functions: Arc::clone(functions),
+        quiet: Arc::clone(quiet),
+        counts: Arc::clone(counts),
+    });
+    ready_ahead(memory, device, copies);
     let (kept, maker) = {
         let mut memory = lock(memory);
         memory.sweep_stale(device, Instant::now());
@@ -4577,45 +4746,8 @@ pub(super) fn keep_room(
     for &pool in first.chain(rest) {
         let addressed = pool.0.buffers().then_some(&**counts);
         let bytes = maker.pooled_bytes(pool, 0);
-        loop {
-            let mut guard = lock(memory);
-            if guard.pool(pool.0, pool.1).has_room(bytes / 2) {
-                break;
-            }
-            // The host copies' block made ahead joins its pool at the placement that needs it
-            // (`place`), never here, whenever its making ended: its pool's blocks change only at
-            // its placements.
-            let host_copies = guard.host_copy_pool == Some(Some(pool));
-            if host_copies && guard.readying_at(pool).is_some() {
-                break;
-            }
-            if guard.add_ready(pool) {
-                break;
-            }
-            if guard.readying_at(pool).is_some() {
-                // Another call's making to wait for.
-                if take_ready(memory, guard, pool) {
-                    break;
-                }
-                continue;
-            }
-            drop(guard);
-            if !crate::allocations::room_ahead(device.handle()) {
-                break;
-            }
-            let Ok(block) = maker.make(device, pool, bytes, addressed) else {
-                break;
-            };
-            let mut guard = lock(memory);
-            guard.add_block(pool, block, bytes, false, 0);
-            guard.ahead.made_in_place(pool.0);
-            #[cfg(test)]
-            {
-                *guard.in_place_bytes.entry(bytes).or_default() += 1;
-            }
-            break;
-        }
-        ready_if_growing(&mut lock(memory), pool, counts, (functions, quiet));
+        keep_pool_room(memory, device, (&maker, addressed), (pool, bytes));
+        ready_if_growing(&mut lock(memory), pool);
     }
     // The pools of exportable buffers, which the creation calls themselves place in
     // (`allocate_exported`): a block made ahead once one grew, which the placement that finds no
@@ -4623,7 +4755,49 @@ pub(super) fn keep_room(
     // block made here, which that placement would make as soon.
     let mut guard = lock(memory);
     for pool in guard.exported_growing() {
-        ready_if_growing(&mut guard, pool, counts, (functions, quiet));
+        ready_if_growing(&mut guard, pool);
+    }
+}
+
+/// Keep room for half a block of `bytes` in `pool` ([`keep_room`]): a block made ahead, or one
+/// the call waits for with `memory`'s lock released, or, where no making serves it, one made
+/// here by `maker`, with a buffer of addresses counted in `addressed` where blocks carry one.
+fn keep_pool_room(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    (maker, addressed): (&BlockMaker, Option<&Counters>),
+    (pool, bytes): ((Holds, u32), u64),
+) {
+    let mut guard = lock(memory);
+    if guard.pool(pool.0, pool.1).has_room(bytes / 2) {
+        return;
+    }
+    // The host copies' block made ahead joins its pool at the placement that needs it
+    // (`place`), never here, whenever its making ended: its pool's blocks change only at its
+    // placements.
+    let host_copies = guard.host_copy_pool == Some(Some(pool));
+    if host_copies && guard.readying_at(pool).is_some() {
+        return;
+    }
+    // No making for the pool and no room ahead within the device's allocations: none.
+    if guard.readying_at(pool).is_none() && !crate::allocations::room_ahead(device.handle()) {
+        return;
+    }
+    // A block made ahead, or one the call waits for: the one being made or still to make, or
+    // else one the ready thread makes first for it (`memory/ready.rs`).
+    if take_ready(memory, guard, pool, bytes) {
+        return;
+    }
+    // No making serves the call (its making failed, or no thread started): made here.
+    let Ok(block) = maker.make(device, pool, bytes, addressed) else {
+        return;
+    };
+    let mut guard = lock(memory);
+    guard.add_block(pool, block, bytes, false, 0);
+    guard.ahead.made_in_place(pool.0);
+    #[cfg(test)]
+    {
+        *guard.in_place_bytes.entry(bytes).or_default() += 1;
     }
 }
 
@@ -4634,83 +4808,55 @@ pub(super) fn ahead_room(bytes: u64) -> u64 {
     bytes - bytes / 4
 }
 
-/// Start making a block ahead for `pool` (`memory/ready.rs`), through `functions`, made once a
-/// burst of `quiet`'s queue uses ended, with a buffer of addresses counted in `counts` where its
-/// blocks carry one, where the pool holds no block made ahead and grew within [`KEPT_EMPTY_FOR`]
-/// lacking room for a whole block, or, grown or not, is near its next block
-/// ([`Pool::near_next`]).
-fn ready_if_growing(
-    memory: &mut Memory,
-    pool: (Holds, u32),
-    counts: &Arc<Counters>,
-    (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
-) {
+/// Keep `pool`'s blocks made ahead (`memory/ready.rs`, [`Memory::keep_ahead`]), made once a burst
+/// of the device's queue uses ended, with a buffer of addresses where its blocks carry one, where
+/// the pool grew within [`KEPT_EMPTY_FOR`] lacking room for a whole block, or, grown or not, is
+/// near its next block ([`Pool::near_next`]).
+fn ready_if_growing(memory: &mut Memory, pool: (Holds, u32)) {
     let bytes = memory.pooled_bytes(pool);
-    let ahead = memory.readying_at(pool).is_some();
     let pool_of = memory.pool(pool.0, pool.1);
     let grew = (pool_of.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
     let near = pool_of.near_next(bytes);
-    if !(grew || near) || pool_of.has_room(bytes) || ahead {
+    if !(grew || near) || pool_of.has_room(bytes) {
         return;
     }
-    let addressed = pool.0.buffers().then(|| Arc::clone(counts));
-    let started = ready::Readying::start(
-        memory.maker(),
-        Arc::clone(functions),
-        Arc::clone(quiet),
-        addressed,
-        (pool, bytes),
-    );
-    memory.readying.extend(started);
+    memory.keep_ahead(pool, bytes);
 }
 
-/// Start making a block ahead for the pool host copies place in (`memory/ready.rs`,
+/// Keep blocks made ahead for the pool host copies place in (`memory/ready.rs`,
 /// [`Memory::host_copy_pool`], where `copies`, asked with `memory`'s lock released until the pool
-/// was found, says the device copies color textures on the host), through `functions`, made once
-/// a burst of `quiet`'s queue uses ended, where it lacks room for half a block and holds no block
-/// made ahead.
-fn ready_ahead(
-    memory: &Mutex<Memory>,
-    device: &ash::Device,
-    (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
-    copies: impl FnOnce() -> bool,
-) {
+/// was found, says the device copies color textures on the host; [`Memory::keep_ahead`]), made
+/// once a burst of the device's queue uses ended, where it lacks room for half a block.
+fn ready_ahead(memory: &Mutex<Memory>, device: &ash::Device, copies: impl FnOnce() -> bool) {
     let copies = lock(memory).host_copy_pool.is_none() && copies();
     let mut memory = lock(memory);
     let Some(pool) = memory.host_copy_pool(device, copies) else {
         return;
     };
     let bytes = memory.pooled_bytes(pool);
-    if memory.readying_at(pool).is_some() || memory.pool(pool.0, pool.1).has_room(bytes / 2) {
+    if memory.pool(pool.0, pool.1).has_room(bytes / 2) {
         return;
     }
-    let maker = memory.maker();
-    let functions = Arc::clone(functions);
-    let started = ready::Readying::start(maker, functions, Arc::clone(quiet), None, (pool, bytes));
-    memory.readying.extend(started);
+    memory.keep_ahead(pool, bytes);
 }
 
-/// Add the block made ahead for `pool` to it, `guard` held on `memory` (`memory/ready.rs`): at
-/// once where its making ended; where it is under way, once it ends, waited for with the lock
-/// released, but in the pool host copies place in. Whether one may have been added, so that the
-/// caller looks for room again; the lock is released as it returns.
+/// Add a block of `need` bytes or more made ahead for `pool` to it, `guard` held on `memory`
+/// (`memory/ready.rs`): at once where one is made; else once one is, waited for with the lock
+/// released ([`Memory::wait_for`]). Whether one was added; the lock is released as it returns.
 fn take_ready(
     memory: &Mutex<Memory>,
     mut guard: MutexGuard<'_, Memory>,
     pool: (Holds, u32),
+    need: u64,
 ) -> bool {
-    if guard.add_ready(pool) {
+    if guard.add_ready(pool, need) {
         return true;
     }
-    let Some(at) = guard.readying_at(pool) else {
+    let bytes = guard.pooled_bytes(pool);
+    let Some(waiter) = guard.wait_for(pool, bytes, need) else {
         return false;
     };
-    if guard.host_copy_pool == Some(Some(pool)) {
-        return false;
-    }
-    let waiter = guard.readying[at].waiter();
     drop(guard);
     waiter.wait();
-    lock(memory).add_ready(pool);
-    true
+    lock(memory).add_ready(pool, need)
 }

@@ -20,7 +20,8 @@
 
 use super::freed_memory::device;
 use crate::device::queue_quiet::QueueQuiet;
-use crate::{Buffer, Device, Error, ResourceOptions, TextureDescriptor, WorkCounts};
+use crate::memory::{Holds, BLOCK_BYTES, MAKING_BOUND, MIN_PLAIN_BLOCK_BYTES};
+use crate::{Buffer, Device, Error, ResourceOptions, Texture, TextureDescriptor, WorkCounts};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
 
@@ -44,6 +45,18 @@ const MOST: usize = 400;
 
 /// The creation calls that place nothing in the host copies' pool once its making ended.
 const CREATIONS: usize = 20;
+
+/// The side of the small-blocks runs' `RGBA8Unorm` textures: 4 MiB, four to a block of 16 MiB.
+const TEXTURE_SIDE: u64 = 1024;
+
+/// The large-blocks run's textures larger than a block of 16 MiB: 20 MiB, each in a block of
+/// 32 MiB ([`LARGE_EVERY`] textures one of them), and how many it makes.
+const LARGE_SIDES: (u64, u64) = (2560, 2048);
+const LARGE_EVERY: usize = 4;
+const LARGE_TEXTURES: usize = 4;
+
+/// The most textures the small-blocks run makes, well past what `GROWTH` blocks hold.
+const MOST_TEXTURES: usize = 64;
 
 /// A scratch directory for a device's shader cache, removed when dropped.
 struct Scratch(std::path::PathBuf);
@@ -73,6 +86,33 @@ fn makings_ended(device: &Device) {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// A device told of a pooled block's making that took four times `memory::MAKING_BOUND`, so that
+/// it makes its pooled blocks of plain memory of the least size (`Memory::plain_block_made`).
+fn small_blocks_device(scratch: &Scratch) -> Device {
+    let device = device(&scratch.0);
+    {
+        let mut memory = crate::device::lock(&device.shared().memory);
+        memory.plain_block_made(BLOCK_BYTES, MAKING_BOUND * 4);
+        assert_eq!(memory.plain_block_bytes(), MIN_PLAIN_BLOCK_BYTES);
+    }
+    device
+}
+
+/// A `Private` `RGBA8Unorm` texture of `width` by `height` on `device`, sampled and rendered to,
+/// made into `held`; then wait for the makings it started.
+fn texture(device: &Device, (width, height): (u64, u64), held: &mut Vec<Texture>) {
+    assert!(
+        held.len() < MOST_TEXTURES,
+        "the pool of images never grew as far"
+    );
+    let mut descriptor =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, width, height, false);
+    descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+    descriptor.resource_options = ResourceOptions::private();
+    held.push(device.new_texture(&descriptor).unwrap());
+    makings_ended(device);
 }
 
 /// The blocks the buffers' pool grew by from `before` to `after`, made ahead or in place.
@@ -169,7 +209,7 @@ fn a_growing_pool_of_exportable_buffers_gets_its_new_blocks_made_ahead() {
     let blocks =
         |counts: &WorkCounts| counts.pooled_memory_blocks_made - start.pooled_memory_blocks_made;
     let mut counts = start;
-    // Its first growth, made in place, as nothing grew before it.
+    // Its first growth, made for the creation call that needs it, as nothing grew before it.
     while blocks(&counts) < 1 {
         counts = make(&mut held).unwrap();
         let dedicated = counts.dedicated_memory_blocks_live - start.dedicated_memory_blocks_live;
@@ -203,6 +243,103 @@ fn a_growing_pool_of_exportable_buffers_gets_its_new_blocks_made_ahead() {
         ahead,
         blocks(&counts) - blocks(&before),
         "only {ahead} of the blocks were made ahead"
+    );
+}
+
+/// A pool whose blocks of plain memory are made small after a slow making
+/// (`Memory::plain_block_made`) keeps as many of them made ahead as one block of
+/// `memory::BLOCK_BYTES` holds, the bytes it kept ahead before they were made small, and no
+/// creation call makes a block of the pool itself while one can be made ahead: where none is
+/// made or under way, the call starts the pool's making and waits for its first block, the pool's
+/// first block among them. With one small block ahead at a time, a guest's creation calls on a
+/// Radeon 780M whose blocks were made of 16 MiB made 82 to 114 blocks of images themselves.
+#[test]
+fn a_pool_of_small_blocks_keeps_a_block_s_bytes_ahead_and_no_creation_call_makes_one() {
+    let scratch = Scratch::new("small-blocks");
+    let device = small_blocks_device(&scratch);
+    let start = device.work_counts();
+    let blocks = |counts: &WorkCounts| {
+        (counts.image_blocks_made_ahead + counts.image_blocks_made_in_place)
+            - (start.image_blocks_made_ahead + start.image_blocks_made_in_place)
+    };
+    let mut held: Vec<Texture> = Vec::new();
+    let (mut counts, mut most_ahead) = (start, 0);
+    // One texture at a time, every making it started ended before the next: what this holds is
+    // where each block is made and what is kept ahead, not how soon a making ends.
+    while blocks(&counts) < GROWTH {
+        texture(&device, (TEXTURE_SIDE, TEXTURE_SIDE), &mut held);
+        counts = device.work_counts();
+        let ahead = crate::device::lock(&device.shared().memory).ahead_bytes(Holds::Images);
+        most_ahead = most_ahead.max(ahead);
+    }
+    let in_place = counts.image_blocks_made_in_place - start.image_blocks_made_in_place;
+    let ahead = counts.image_blocks_made_ahead - start.image_blocks_made_ahead;
+    println!(
+        "BLOCKS-AHEAD {}: {} textures of 4 MiB in blocks of {} MiB; of the images' pool's {} \
+         blocks, {ahead} made ahead, {in_place} in place, {} waited for; most kept ahead {} MiB",
+        device.name(),
+        held.len(),
+        MIN_PLAIN_BLOCK_BYTES >> 20,
+        blocks(&counts),
+        counts.blocks_ahead_waited_for - start.blocks_ahead_waited_for,
+        most_ahead >> 20,
+    );
+    assert_eq!(in_place, 0, "a creation call made a block of images itself");
+    assert_eq!(
+        most_ahead, BLOCK_BYTES,
+        "the pool kept {most_ahead} bytes ahead, not a block's worth"
+    );
+}
+
+/// A pool of small blocks whose placements larger than its blocks, each taking a block of its
+/// own size (`memory::pooled_block_bytes`), are recent keeps a block of that size made ahead
+/// too: the first such placement waits for the ready thread's making of its block, and each
+/// later one finds its block made; no creation call makes one itself.
+#[test]
+fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead() {
+    let scratch = Scratch::new("large-blocks");
+    let device = small_blocks_device(&scratch);
+    let start = device.work_counts();
+    let mut held: Vec<Texture> = Vec::new();
+    let mut first = None;
+    for at in 0..LARGE_EVERY * LARGE_TEXTURES {
+        let large = at % LARGE_EVERY == LARGE_EVERY - 1;
+        let sides = match large {
+            true => LARGE_SIDES,
+            false => (TEXTURE_SIDE, TEXTURE_SIDE),
+        };
+        texture(&device, sides, &mut held);
+        if large && first.is_none() {
+            first = Some(device.work_counts());
+        }
+    }
+    let (first, counts) = (first.unwrap(), device.work_counts());
+    let in_place = counts.image_blocks_made_in_place - start.image_blocks_made_in_place;
+    let waited_after = counts.blocks_ahead_waited_for - first.blocks_ahead_waited_for;
+    let sizes = crate::device::lock(&device.shared().memory).pooled_block_sizes(Holds::Images);
+    println!(
+        "BLOCKS-AHEAD {}: {} textures, one of 20 MiB every {LARGE_EVERY}, in blocks of {} MiB; \
+         blocks of images made ahead {}, in place {in_place}, waited for {} (after the first \
+         20 MiB texture {waited_after}); the pool's blocks {:?} MiB",
+        device.name(),
+        held.len(),
+        MIN_PLAIN_BLOCK_BYTES >> 20,
+        counts.image_blocks_made_ahead - start.image_blocks_made_ahead,
+        counts.blocks_ahead_waited_for - start.blocks_ahead_waited_for,
+        sizes.iter().map(|size| size >> 20).collect::<Vec<_>>(),
+    );
+    assert_eq!(in_place, 0, "a creation call made a block of images itself");
+    assert_eq!(
+        sizes
+            .iter()
+            .filter(|&&size| size == 2 * MIN_PLAIN_BLOCK_BYTES)
+            .count(),
+        LARGE_TEXTURES,
+        "the 20 MiB textures did not each take a block of 32 MiB"
+    );
+    assert_eq!(
+        waited_after, 0,
+        "a 20 MiB texture after the first waited for its block's making"
     );
 }
 
@@ -243,8 +380,8 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
         held.push(buffer.unwrap());
         made.elapsed()
     };
-    // The buffers' pool's first growth, made in place; the next creation starts its next block's
-    // making, which waits for a pause the held use never leaves.
+    // The buffers' pool's first growth, made for the creation call that needs it; the next
+    // creation starts its next block's making, which waits for a pause the held use never leaves.
     new_buffer(&mut held);
     let start = device.work_counts();
     while grown(&start, &device.work_counts()) == 0 {

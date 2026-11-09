@@ -5045,11 +5045,14 @@ pub struct WorkCounts {
     /// mapping read once by the host, then added to the pool by the first placement there that
     /// found no room, so that no host copy faults on memory whose kernel work waits behind the
     /// program's queued GPU work (`memory/ready.rs`; on RADV after runtime suspend, a new
-    /// block's clear). None on a device that copies no color texture on the host.
+    /// block's clear). A block whose making a placement started and waited for, finding none made
+    /// or under way, is among them with none of its pages read, as a block made in place. None
+    /// on a device that copies no color texture on the host.
     pub host_copy_blocks_readied: u64,
     /// The blocks of that pool a placement made itself, finding no room and no block made ready
-    /// (none held, or its making still under way): their pages untouched, a host copy's first
-    /// touch there may wait for the memory's kernel work (`memory/ready.rs`).
+    /// while its thread read a block's pages (or its making failed, or no thread started): their
+    /// pages untouched, a host copy's first touch there may wait for the memory's kernel work
+    /// (`memory/ready.rs`).
     pub host_copy_blocks_made_in_place: u64,
     /// Of `pooled_memory_blocks_made`, the blocks of buffers made ahead off the program's thread,
     /// each right after a burst of the device's submissions ended, and added to their pool where
@@ -5058,9 +5061,10 @@ pub struct WorkCounts {
     /// such a pool grows (`memory/ready.rs`). A block's `vkAllocateMemory` holds the device's
     /// submissions while it runs on RADV and on NVIDIA's driver, so it is made between them.
     pub buffer_blocks_made_ahead: u64,
-    /// The blocks of buffers of those pools a call made itself, finding none made ahead: a
-    /// creation call that found its pool without room for half a block, or a placement that
-    /// found no room (`memory/ready.rs`).
+    /// The blocks of buffers of those pools a call made itself, where no making ahead served it:
+    /// its making failed or its host started no thread, or the placement came before the
+    /// device's first creation call (`memory/ready.rs`). Elsewhere a call that finds no block made
+    /// ahead of the size it needs waits for one (`blocks_ahead_waited_for`).
     pub buffer_blocks_made_in_place: u64,
     /// The blocks the runtime's own buffers and the program's lie in (`memory.rs`'s
     /// `Holds::FdBuffers`) made so far, pooled or dedicated, allocated exportable as an opaque
@@ -5112,9 +5116,10 @@ pub struct WorkCounts {
     /// As `buffer_blocks_made_in_place`, of images, those of the pool host copies place in among
     /// them (`host_copy_blocks_made_in_place`).
     pub image_blocks_made_in_place: u64,
-    /// Of the blocks made ahead, those a call needed while their making was under way, and
-    /// waited for, rather than make a second block (`memory/ready.rs`): never in the pool host
-    /// copies place in, whose making is not waited for.
+    /// Of the blocks made ahead, those made while a call that found none of the size it needed
+    /// waited, rather than make a block itself (`memory/ready.rs`): the block being made or still
+    /// to make, or one the pool's thread made first for the call. In the pool host copies place
+    /// in, never while its thread reads a block's pages.
     pub blocks_ahead_waited_for: u64,
     /// Of those, the blocks whose making was still waiting for a burst of the device's
     /// submissions to end as the call came: the call's wait made it allocate at once, so that the
