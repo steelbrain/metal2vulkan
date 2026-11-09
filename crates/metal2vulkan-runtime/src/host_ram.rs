@@ -423,7 +423,7 @@ impl RamUseCell {
     /// generation it leaves is let go of, as a drop lets it go (its thread ended, each chunk
     /// freed once nothing there holds it). Refused as [`Device::use_host_ram`] refuses it there,
     /// the use left the lost generation's.
-    pub(crate) fn carry(&self, to: &Device) -> Result<(), Error> {
+    pub(crate) fn carry(self: &Arc<Self>, to: &Device) -> Result<(), Error> {
         let ram = {
             let on = lock(&self.on);
             if on.device.same(to) {
@@ -436,6 +436,11 @@ impl RamUseCell {
         let left = std::mem::replace(&mut *lock(&self.on), used);
         // Let go of with no lock held: its drop waits for the lost generation's thread to end.
         drop(left);
+        // Kept for `to`'s recovery in turn, or carried on where that took `to`'s uses already
+        // (a late carry, `Device::carry_late`).
+        if to.shared().carry.ram_use(self) {
+            to.carry_late(|serving| self.carry(serving));
+        }
         Ok(())
     }
 }
