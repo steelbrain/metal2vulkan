@@ -487,11 +487,13 @@ fn rgbx_passes_and_mipmaps_are_refused() {
 /// runtime sampler at slot 0 (`rgbx_sample_half`, a sample's `half4`), nearest and linear, clamped
 /// to the edge and to an opaque white border, each lane at its own texel's center, where a linear
 /// filter weighs that texel alone: each lane against Metal's answer, the texel's `float` channel
-/// rounded to nearest even (finite channels within `half`'s range; `DriverDeviation::MetalHalfConversion`
-/// measures a read, sample and gather of every `float` word of `RGBA32Float`), with an RGBX alpha
-/// of 1 (`HALF-SAMPLE` lines name the notices). On a profile that takes that deviation, where the
-/// device samples through Metal's own texture unit, the dispatch announces no
-/// `half-texel-conversion`.
+/// rounded toward zero (Metal's sample of a 32-bit float texel, `PrecisionNote::HalfTexelConversion`;
+/// finite channels within `half`'s range), with an RGBX alpha of 1 (`HALF-SAMPLE` lines name the
+/// notices). On a profile that takes `DriverDeviation::MetalSampler` and
+/// `DriverDeviation::MetalHalfConversion`, where the device samples through Metal's own texture
+/// unit, every lane is Metal's and the dispatch announces no `half-texel-conversion`; elsewhere a
+/// lane is Metal's or the texel rounded to nearest even (the device's), and the dispatch announces
+/// it.
 #[test]
 fn rgbx_half_samples_are_metals() {
     use metal2vulkan::error::DriverDeviation;
@@ -563,11 +565,25 @@ fn rgbx_half_samples_are_metals() {
                     })
                     .collect();
                 let centers = buffer_with(device, &centers).unwrap();
-                let want = |t: usize, c: usize| match (c, pf) {
+                let profile = device.compile_device().profile();
+                let metals = profile.takes_driver_deviation(DriverDeviation::MetalSampler)
+                    && profile.takes_driver_deviation(DriverDeviation::MetalHalfConversion);
+                // The texel's channel rounded to nearest even, and toward zero (Metal's).
+                let nearest = |t: usize, c: usize| match (c, pf) {
                     (3, P::RGBX32Float) => 1.0,
                     _ => super::extended_range_targets::half_value(
                         super::extended_range_targets::half_bits(texels[t][c]),
                     ),
+                };
+                let want = |t: usize, c: usize| {
+                    let v = nearest(t, c);
+                    match v.abs() > texels[t][c].abs() && !(c == 3 && pf == P::RGBX32Float) {
+                        true => {
+                            let h = super::extended_range_targets::half_bits(texels[t][c]);
+                            super::extended_range_targets::half_value(h - 1)
+                        }
+                        false => v,
+                    }
                 };
                 let mut announced = std::collections::BTreeMap::new();
                 for filter in [SamplerMinMagFilter::Nearest, SamplerMinMagFilter::Linear] {
@@ -611,7 +627,11 @@ fn rgbx_half_samples_are_metals() {
                                     got[at + 1],
                                 ]))
                             });
-                            if (0..4).any(|c| lanes[c].to_bits() != want(t, c).to_bits()) {
+                            let held = |c: usize| {
+                                lanes[c].to_bits() == want(t, c).to_bits()
+                                    || (!metals && lanes[c].to_bits() == nearest(t, c).to_bits())
+                            };
+                            if !(0..4).all(held) {
                                 if wrong < 4 {
                                     eprintln!(
                                         "HALF-SAMPLE {pf:?} {:#x} {filter:?} {mode:?} texel {t}: \
@@ -637,9 +657,6 @@ fn rgbx_half_samples_are_metals() {
                         }
                     }
                 }
-                let profile = device.compile_device().profile();
-                let metals = profile.takes_driver_deviation(DriverDeviation::MetalSampler)
-                    && profile.takes_driver_deviation(DriverDeviation::MetalHalfConversion);
                 let conversion =
                     Degradation::from_precision_note(PrecisionNote::HalfTexelConversion);
                 eprintln!(
@@ -647,10 +664,11 @@ fn rgbx_half_samples_are_metals() {
                     options.raw(),
                     device.name()
                 );
-                if metals && announced.contains_key(&conversion) {
+                if metals == announced.contains_key(&conversion) {
                     differ.push(format!(
-                        "{pf:?} {:#x}: announced {conversion:?}",
-                        options.raw()
+                        "{pf:?} {:#x}: {conversion:?} announced {}",
+                        options.raw(),
+                        !metals
                     ));
                 }
             });
