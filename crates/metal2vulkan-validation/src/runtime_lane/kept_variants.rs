@@ -6,12 +6,14 @@
 //! commands used is freed while its variant is kept; and the device's teardown destroys what it
 //! kept, the layer reporting nothing, leaks included (each test's `on_device`). The pipelines are
 //! the owned fixture `validation/fixtures/public/examples/runtime_examples.ll` and, for the bound,
-//! committed public kernel cases.
+//! specializations of the owned fixture `engine/unspecialized_stage_functions.ll`'s kernel
+//! `unspecialized_guarded`.
 
 use super::degrade_notices::on_device;
-use super::{pipeline_state, public_cases, WAIT};
+use super::WAIT;
 use crate::air_library::AirLibrary;
-use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
+use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
+use metal2vulkan::metal::{DataType, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
 };
@@ -22,8 +24,6 @@ use metal2vulkan_runtime::{
     ResourceOptions, Size, StoreAction, Texture, TextureDescriptor, WorkCounts,
 };
 use std::alloc::Layout;
-use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,15 +39,38 @@ const NO_COPY: usize = 64 << 10;
 const NO_COPY_ALIGN: usize = 64 << 10;
 const LINEAR: (u64, u64, u64) = (16, 16, 256);
 
-/// More kernel states than the device keeps the variants of (`KEPT`, 16).
-const MANY: usize = 64;
+/// Twice the kernel states the device keeps the variants of (`KEPT`, 256).
+const MANY: u32 = 512;
 
 /// The owned fixture's library on `device`.
 fn library(device: &Device) -> Library {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/examples/runtime_examples.ll");
+    fixture_library(device, "examples/runtime_examples.ll")
+}
+
+/// The library of the owned fixture `fixtures/public/<path>` on `device`.
+fn fixture_library(device: &Device, path: &str) -> Library {
+    let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/public")
+        .join(path);
     let bitcode = llvm_assemble(&ll).unwrap();
     device.new_library_with_air(&bitcode).unwrap()
+}
+
+/// The compute state of `library`'s kernel `unspecialized_guarded` with its constant
+/// `optional_count` at `n`: each `n` its own compiled pipeline.
+fn guarded_state(device: &Device, library: &Library, n: u32) -> ComputePipelineState {
+    let count = FunctionConstantValue::new(DataType::UInt, n.to_le_bytes());
+    let function = library
+        .new_function_with_name_constant_values(
+            "unspecialized_guarded",
+            &FunctionConstantValues::defaults().with_name("optional_count", count),
+        )
+        .unwrap();
+    let descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
+    device
+        .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        .unwrap()
 }
 
 /// The fixture's render pipeline state: `colored_vertex` and `colored_fragment`, one target of
@@ -326,46 +349,22 @@ fn a_state_of_another_pipeline_takes_back_nothing() {
     });
 }
 
-/// Past the bound the least recently released go first: of [`MANY`] kernel states each of its
-/// own compiled pipeline, made and released in turn, the first made again makes its module and
-/// the last made again takes its variant back.
+/// Past the bound the least recently released go first: of [`MANY`] kernel states, each its own
+/// compiled pipeline, made and released in turn, the first made again makes its module and the
+/// last made again takes its variant back.
 #[test]
 fn the_least_recently_released_variants_go_first() {
-    let seen = RefCell::new(BTreeSet::new());
-    let cases = public_cases(|case| {
-        let mut seen = seen.borrow_mut();
-        seen.len() < 4 * MANY && seen.insert((case.air_sha256.clone(), case.entry.clone()))
-    })
-    .unwrap();
     on_device(|device, _| {
-        let mut states = 0;
-        let mut kernels = Vec::new();
-        for (name, case) in cases {
-            let case = match case {
-                Ok(case) => case,
-                Err(error) => {
-                    eprintln!("KEPT skipped {name}: {error}");
-                    continue;
-                }
-            };
-            if let Err(error) = pipeline_state(device, &case) {
-                eprintln!("KEPT skipped {name}: {error}");
-                continue;
-            }
-            states += 1;
-            kernels.push(case);
-            if states == MANY {
-                break;
-            }
+        let library = fixture_library(device, "engine/unspecialized_stage_functions.ll");
+        for n in 0..MANY {
+            drop(guarded_state(device, &library, n));
         }
-        assert_eq!(states, MANY, "{MANY} committed public kernels make states");
-        let (first, last) = (kernels.first().unwrap(), kernels.last().unwrap());
         let before = device.work_counts();
-        drop(pipeline_state(device, first).unwrap());
+        drop(guarded_state(device, &library, 0));
         let (modules, _, taken) = made(&before, &device.work_counts());
         assert!(modules > 0 && taken == 0, "the first went past the bound");
         let before = device.work_counts();
-        drop(pipeline_state(device, last).unwrap());
+        drop(guarded_state(device, &library, MANY - 1));
         let (modules, _, taken) = made(&before, &device.work_counts());
         assert!(modules == 0 && taken > 0, "the last was kept");
     });
