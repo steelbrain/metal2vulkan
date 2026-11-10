@@ -112,11 +112,30 @@ fn storage(pipe: &RenderPipeline) -> Vec<(u32, bool)> {
         .collect()
 }
 
+/// The dead specialization's misses in `pipe` (color 0 `blended` or not): each way it differs from
+/// the pipeline of a function that declares no color input.
+fn dead_misses(pipe: &RenderPipeline, blended: bool) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if !pipe.graphics.storage_attachments.is_empty() {
+        out.push("it takes the storage form");
+    }
+    if !pipe.graphics.input_attachments.is_empty() {
+        out.push("it takes an input attachment");
+    }
+    match pipe.graphics.color_attachments.first().copied().flatten() {
+        None => out.push("color 0 is no color attachment"),
+        Some(c) if c.blend.is_some() != blended => out.push("color 0 lost the pipeline's blend"),
+        Some(_) => {}
+    }
+    out
+}
+
 #[test]
 fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
     let Some(library) = fixture_library() else {
         return;
     };
+    let mut misses = std::collections::BTreeMap::<&str, Vec<String>>::new();
     // Pipelines checked dead, and live on an interlock profile.
     let (mut dead, mut interlocked) = (0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
@@ -126,18 +145,9 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
                 let what = format!("{stem} {entry} blended {blended}");
                 let pipe = pipeline(&dev, &library, entry, false, blended)
                     .unwrap_or_else(|e| panic!("{what}, dead: {e}"));
-                assert_eq!(storage(&pipe), [], "{what}, dead: the storage form");
-                assert!(
-                    pipe.graphics.input_attachments.is_empty(),
-                    "{what}, dead: {:?}",
-                    pipe.graphics.input_attachments
-                );
-                let color = pipe.graphics.color_attachments.first().copied().flatten();
-                assert_eq!(
-                    color.map(|c| c.blend.is_some()),
-                    Some(blended),
-                    "{what}, dead: color 0 {color:?}"
-                );
+                for kind in dead_misses(&pipe, blended) {
+                    misses.entry(kind).or_default().push(what.clone());
+                }
                 for s in &pipe.stages {
                     check_words_valid(&s.spirv, &pipe.requirements, dev.profile())
                         .unwrap_or_else(|e| panic!("{what}, dead: L3: {e}"));
@@ -171,5 +181,9 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
         }
     }
     eprintln!("{dead} dead pipelines, {interlocked} live interlocked ones");
+    for (kind, whats) in &misses {
+        eprintln!("{}: {kind} (first: {})", whats.len(), whats[0]);
+    }
+    assert!(misses.is_empty(), "{misses:#?}");
     assert!(interlocked > 0, "no interlock profile checked");
 }
