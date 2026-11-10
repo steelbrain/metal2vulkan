@@ -595,12 +595,13 @@ fn phase(
     (length, making): (Duration, Making),
     made: &mut Made,
 ) {
-    let bytes_before = {
+    let (bytes_before, unused_before, phase_began) = {
         let mut memory = crate::device::lock(&device.shared().memory);
         memory.longest_making = Duration::ZERO;
         memory.in_place_bytes.clear();
         memory.image_placements.clear();
-        memory.turnover_bytes()
+        let unused = memory.unused_frees.len();
+        (memory.turnover_bytes(), unused, Instant::now())
     };
     let before = (vmstat(), device.work_counts());
     let stop = AtomicBool::new(false);
@@ -632,8 +633,18 @@ fn phase(
             memory.turnover_bytes(),
         )
     };
-    let (placements, ahead) = {
+    let (placements, ahead, unused) = {
         let mut memory = crate::device::lock(&device.shared().memory);
+        let unused: Vec<String> = (memory.unused_frees[unused_before..].iter())
+            .map(|&(pool, bytes, at, idle)| {
+                format!(
+                    "{pool:?} {} MiB at {:.1} s, its pool idle {:.1} s",
+                    bytes >> 20,
+                    at.saturating_duration_since(phase_began).as_secs_f64(),
+                    idle.as_secs_f64()
+                )
+            })
+            .collect();
         let placements: Vec<String> = (memory.image_placements.iter())
             .map(|(&(bytes, align), count)| format!("{count} of {bytes} bytes at {align}"))
             .collect();
@@ -643,7 +654,7 @@ fn phase(
                 format!("{pool:?} {} MiB, grows {grows}", bytes >> 20)
             })
             .collect();
-        (placements, ahead)
+        (placements, ahead, unused)
     };
     let over = |times: &[(Duration, f64)], bound: f64| {
         (times.iter())
@@ -718,9 +729,10 @@ fn phase(
     );
     eprintln!(
         "RECLAIM-SUBMIT {arm}, {name}: images placed by bytes and alignment [{}]; kept ahead at \
-         the phase's end by pool [{}]",
+         the phase's end by pool [{}]; made ahead and freed unused, into the phase [{}]",
         placements.join(", "),
-        ahead.join(", ")
+        ahead.join(", "),
+        unused.join(", ")
     );
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest submissions {slow}");
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest turnarounds {slow_turns}");

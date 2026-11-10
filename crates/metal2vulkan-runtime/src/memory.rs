@@ -2039,9 +2039,11 @@ pub(super) struct Memory {
     /// bytes, since a test last cleared it ([`AheadBlocks::made_in_place`]).
     #[cfg(test)]
     pub(crate) in_place_bytes: std::collections::BTreeMap<u64, u64>,
-    /// The bytes of the blocks made ahead and freed unused ([`AheadBlocks::unused`]).
+    /// The blocks made ahead and freed unused ([`AheadBlocks::unused`]), for the reclaim bench:
+    /// each one's pool and bytes, when it went, and how long before then its pool last grew or
+    /// was last given blocks to make ([`Memory::sweep_stale`]).
     #[cfg(all(test, m2v_gpu, target_os = "linux"))]
-    unused_bytes: u64,
+    pub(crate) unused_frees: Vec<((Holds, u32), u64, Instant, Duration)>,
     /// The images placed ([`place`]), by their bytes and alignment as the driver asked them, since
     /// a test last cleared it.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -2236,7 +2238,7 @@ impl Memory {
             #[cfg(test)]
             in_place_bytes: std::collections::BTreeMap::new(),
             #[cfg(all(test, m2v_gpu, target_os = "linux"))]
-            unused_bytes: 0,
+            unused_frees: Vec::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             image_placements: std::collections::BTreeMap::new(),
         }
@@ -3403,7 +3405,8 @@ impl Memory {
                 self.ahead.unused += 1;
                 #[cfg(all(test, m2v_gpu, target_os = "linux"))]
                 {
-                    self.unused_bytes += block.size;
+                    let idle = now.saturating_duration_since(since);
+                    (self.unused_frees).push(((holds, type_index), block.size, now, idle));
                 }
                 // SAFETY: nothing was placed in the block, and no command reads it.
                 drop(unsafe { self.let_go(device, block, FreeCause::KeptStale, None) });
@@ -3450,7 +3453,11 @@ impl Memory {
     /// unused, for the reclaim bench (`tests::reclaim_submit_bench`).
     #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     pub(crate) fn turnover_bytes(&self) -> (u64, u64, u64) {
-        let unused = self.unused_bytes;
+        let unused = self
+            .unused_frees
+            .iter()
+            .map(|&(_, bytes, _, _)| bytes)
+            .sum();
         let (made, freed) = (self.pools.iter().map(Pool::turnover_bytes))
             .fold((unused, unused), |(made, freed), (m, f)| {
                 (made + m, freed + f)
