@@ -246,6 +246,9 @@ static id<MTLTexture> target(const Format *f) {
     td.height = H;
     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     td.storageMode = MTLStorageModePrivate;
+    // Blits move only some of a padded texture's texels where Metal keeps it in its optimized
+    // (compressed) layout.
+    td.allowGPUOptimizedContents = NO;
     return [gDevice newTextureWithDescriptor:td];
 }
 
