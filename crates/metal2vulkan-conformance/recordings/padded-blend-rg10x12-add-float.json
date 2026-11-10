@@ -340,5 +340,262 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 13.78 and ours at 12.49; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 280,
+      "times": {
+        "case": "padded-blend-rg10x12-add-float",
+        "calls": 9,
+        "in_calls": 37581542,
+        "on_cpu": 1382415,
+        "blocked": 36239041,
+        "elsewhere": 8130791,
+        "spend": 45719292,
+        "spend_least": 45144706,
+        "spend_most": 46935708,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 11875,
+            "on_cpu": 12125,
+            "blocked": 0,
+            "wall_least": 11000,
+            "wall_most": 16208,
+            "wall_total": 84166,
+            "on_cpu_total": 84708,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 28959750,
+            "on_cpu": 666042,
+            "blocked": 28252208,
+            "wall_least": 28686917,
+            "wall_most": 29923292,
+            "wall_total": 28959750,
+            "on_cpu_total": 666042,
+            "blocked_total": 28252208
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 11291,
+            "on_cpu": 11459,
+            "blocked": 0,
+            "wall_least": 10084,
+            "wall_most": 14958,
+            "wall_total": 11291,
+            "on_cpu_total": 11459,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 8495709,
+            "on_cpu": 317458,
+            "blocked": 8173793,
+            "wall_least": 8139042,
+            "wall_most": 8692708,
+            "wall_total": 8495709,
+            "on_cpu_total": 317458,
+            "blocked_total": 8173793
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 213625,
+            "on_cpu": 214042,
+            "blocked": 0,
+            "wall_least": 206000,
+            "wall_most": 237042,
+            "wall_total": 213625,
+            "on_cpu_total": 214042,
+            "blocked_total": 0
+          },
+          {
+            "call": "replace_region",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 18875,
+            "on_cpu": 19083,
+            "blocked": 0,
+            "wall_least": 18083,
+            "wall_most": 20250,
+            "wall_total": 18875,
+            "on_cpu_total": 19083,
+            "blocked_total": 0
+          },
+          {
+            "call": "target",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 32750,
+            "on_cpu": 33000,
+            "blocked": 0,
+            "wall_least": 31750,
+            "wall_most": 39416,
+            "wall_total": 32750,
+            "on_cpu_total": 33000,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 10208,
+            "on_cpu": 10375,
+            "blocked": 0,
+            "wall_least": 8750,
+            "wall_most": 12583,
+            "wall_total": 10208,
+            "on_cpu_total": 10375,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 13.78 and ours at 12.49; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 281,
+      "times": {
+        "case": "padded-blend-rg10x12-add-float",
+        "calls": 9,
+        "in_calls": 9119456,
+        "on_cpu": 6591584,
+        "blocked": 2531041,
+        "elsewhere": 2739375,
+        "spend": 11899789,
+        "spend_least": 11491751,
+        "spend_most": 15126207,
+        "degraded": [
+          "metal2vulkan-degrade-extended-range-bits-kept"
+        ],
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 11458,
+            "on_cpu": 11709,
+            "blocked": 0,
+            "wall_least": 10750,
+            "wall_most": 15292,
+            "wall_total": 58334,
+            "on_cpu_total": 58876,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 2759583,
+            "on_cpu": 2760667,
+            "blocked": 0,
+            "wall_least": 2637417,
+            "wall_most": 2844292,
+            "wall_total": 2759583,
+            "on_cpu_total": 2760667,
+            "blocked_total": 0
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 2084,
+            "on_cpu": 2292,
+            "blocked": 0,
+            "wall_least": 1791,
+            "wall_most": 2417,
+            "wall_total": 2084,
+            "on_cpu_total": 2292,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 1980583,
+            "on_cpu": 1056417,
+            "blocked": 890083,
+            "wall_least": 1903083,
+            "wall_most": 2171000,
+            "wall_total": 1980583,
+            "on_cpu_total": 1056417,
+            "blocked_total": 890083
+          },
+          {
+            "call": "render_pipeline",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4114083,
+            "on_cpu": 2493208,
+            "blocked": 1620875,
+            "wall_least": 4012917,
+            "wall_most": 7290291,
+            "wall_total": 4114083,
+            "on_cpu_total": 2493208,
+            "blocked_total": 1620875
+          },
+          {
+            "call": "replace_region",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 19750,
+            "on_cpu": 19958,
+            "blocked": 0,
+            "wall_least": 19250,
+            "wall_most": 22375,
+            "wall_total": 19750,
+            "on_cpu_total": 19958,
+            "blocked_total": 0
+          },
+          {
+            "call": "target",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 163708,
+            "on_cpu": 164250,
+            "blocked": 0,
+            "wall_least": 151500,
+            "wall_most": 204375,
+            "wall_total": 163708,
+            "on_cpu_total": 164250,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 11667,
+            "on_cpu": 11917,
+            "blocked": 0,
+            "wall_least": 11458,
+            "wall_most": 13042,
+            "wall_total": 11667,
+            "on_cpu_total": 11917,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
   ]
 }
