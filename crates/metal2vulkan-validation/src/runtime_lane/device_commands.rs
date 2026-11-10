@@ -10,7 +10,7 @@
 //! queue family presents to; a venue without one prints its gap and only loads.
 
 use super::{
-    layer_reported_nothing_at_all, nothing_reported_without_the_layer, validated_device,
+    at_plan, layer_reported_nothing_at_all, nothing_reported_without_the_layer, validated_device,
     validated_device_with, Messages, ScratchCache,
 };
 use crate::gpu::wait::{self, SubmissionBackend};
@@ -161,6 +161,7 @@ fn make(
     layered: bool,
 ) -> Device {
     validated_device_with(TEST_DEVICE, messages, cache, |options| {
+        at_plan(options);
         if !layered {
             options.layers.clear();
         }
@@ -198,6 +199,7 @@ fn a_device_is_made_and_used_while_moltenvk_names_it_in_each_message() {
     let messages = Messages::default();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            at_plan(options);
             options.layers.clear();
             options.layer_settings.extend(immediate_tracking());
         })
@@ -483,6 +485,7 @@ fn the_device_s_checks_run_beside_the_caller_s_loader_served_calls() {
         let messages = Messages::default();
         {
             let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+                at_plan(options);
                 options.layers.clear();
                 options.layer_settings.extend(immediate_tracking());
                 options.policy.host_page_textures =

@@ -681,7 +681,7 @@ fn a_ycbcr_texture_reads_its_planes_in_place_under_the_defaults() {
 /// edge; the filter's notices (`ycbcr-filter-not-exact`, `float-sample-filter`) are not announced.
 #[test]
 fn a_ycbcr_texture_sampled_and_gathered_by_one_function_reads_its_planes_in_place() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         if !reads_in_place(device) {
             eprintln!("{}: reads no planes in place", device.name());
             return;
@@ -878,7 +878,7 @@ fn planes_images(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
 /// without it, Metal's texel through the texel buffer, unannounced.
 #[test]
 fn a_ycbcr_texture_s_planes_image_samples_through_the_device_s_conversion() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         if !reads_in_place(device) {
             eprintln!("{}: reads no planes in place", device.name());
             return;
