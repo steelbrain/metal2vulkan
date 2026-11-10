@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1276 |
 | distinct SDK items the Metal leg reaches, of any status | 821 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3586 |
+| ledger rows (a case whose gap is recorded) | 3583 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5574,9 +5574,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `ycbcr-minify-band-x` | The site is the first and last 256 samples of the band, held by their digest alone: a 4K `x420` (`YCBCR10_420_2P`) surface minified along x through a linear sam… |
 | `ycbcr-minify-band-y` | The site is the whole band's 34,816 samples, held by their digest alone: a 4K `x420` (`YCBCR10_420_2P`) surface minified along y through a linear sampler, at th… |
 | `ycbcr-minify-band-y` | The site is the first and last 256 samples of the band, held by their digest alone: a 4K `x420` (`YCBCR10_420_2P`) surface minified along y through a linear sam… |
-| `read-through-rgba8-swizzled` | An argument buffer's texture read through clamp_to_zero past its edge: Metal reads the transparent-black border texel through the texture's swizzle ((G, R, 1, 0… |
-| `read-through-heap-border` | An argument buffer's texture read through clamp_to_border with an opaque border: Metal reads the border colour in the texture's channels through its swizzle; we… |
-| `read-through-heap-sampler` | An argument buffer's texture read through a runtime sampler: Metal addresses it by the sampler's state, a border mode reading the border colour in the texture's… |
 | `read-through-rgba8` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-rgba8` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-rgba8` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
@@ -5624,7 +5621,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-through-rgba8-swizzled` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-rgba8-swizzled` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-rgba8-swizzled` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
-| `read-through-rgba8-swizzled` | An argument buffer's texture read through clamp_to_zero past its edge: Metal reads the transparent-black border texel through the texture's swizzle ((G, R, 1, 0… |
+| `read-through-rgba8-swizzled` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-rgba8-swizzled` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-rgba8-swizzled` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-rgba8-swizzled` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |

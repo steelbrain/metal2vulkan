@@ -86,13 +86,14 @@
 //! - The filters, coordinates, comparison, anisotropy, reduction and LOD clamp change nothing.
 //!
 //! So the level, plane coordinate and layer are addressed before the access, and only a sample
-//! index can be out of bounds as a plain read's, contained as above. A heap element's handle
-//! states whether its format has alpha, which gives the transparent black border texel (the
-//! out-of-bounds texel) alone, and not through the element's swizzle (`docs/FAST-PATHS.md`'s
-//! known gaps): a heap element read through a sampler that may read another border color is not
-//! implemented, nor is a `ulong` texel's border. A cube's read through a sampler
-//! (unclamped on the M3), a sparse one's (its residency unmeasured) and a `read_write` texture's
-//! at a computed level (Metal 4.1 has no such overload) are refused.
+//! index can be out of bounds as a plain read's, contained as above. A heap element's border
+//! texels are its handle-table entry's (`memory::handles::FLAG_BORDER_TEXELS`, the binder's
+//! `border_texels` of the resident texture's format and swizzle), which the read loads from the
+//! entry its handle names (`memory::handles::Lookup::Indexed`), for a constexpr sampler's color
+//! or a runtime or argument-buffer sampler's word's alike. A `ulong` texel's border is not
+//! implemented. A cube's read through a sampler (unclamped on the M3), a sparse one's (its
+//! residency unmeasured) and a `read_write` texture's at a computed level (Metal 4.1 has no such
+//! overload) are refused.
 //!
 //! **Storage levels**. A storage access reaches its view's base level only
 //! (`OpImageRead`/`OpImageWrite` take no `Lod`). A storage slot that is read or written at a level
@@ -162,11 +163,11 @@ pub(crate) use absent::absent_arm;
 pub use absent::ABSENT_ARM;
 pub use atomic::TexAtomic;
 pub(crate) use emit::{
-    constant_lanes, dispatch, half_class, heap_element, heap_half_class, heap_raw_form,
+    constant_lanes, dispatch, half_class, heap_element, heap_flags, heap_half_class, heap_raw_form,
     heap_raw_image, live_or_zero, reinterpret, resident_access, rgb9e5_word, slot_image,
     sparse_spec, srgb_raw_tap, srgb_texel, swizzled_float, swizzled_gather, swizzled_held,
-    tile_map, tiled_word, with_word, NullLeaf, TileLevel, RGB9E5_WORDS, SRGB_DECODE_WORDS,
-    SRGB_TAP_WORDS, SRGB_TEXEL,
+    tile_map, tiled_word, with_word, HeapFlags, NullLeaf, TileLevel, RGB9E5_WORDS,
+    SRGB_DECODE_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
 };
 pub use emit::{emit, held_texel, to_image};
 pub(crate) use slot::depth_comparison;
@@ -377,10 +378,12 @@ pub struct Read {
 /// specialized alpha); the level views' count, index clamp, level test, and select; a heap
 /// element's access chain, load, and null select or guard; the sparse arm ([`RESIDENCY_WORDS`]) and
 /// the word's select outside the image, with its own in-bounds test where the shader has none; a
-/// read through a sampler's addressing ([`Through::words`]); a `half` texel's call of the
-/// conversion routine or exact rounding, or an sRGB texel's raw decode; the lanes Metal reads as
-/// constants; the reinterpretation of another class's words; and each sibling of a heap read with
-/// its class test and branch, and a `half` read's merge of its arms' bits.
+/// read through a sampler's addressing ([`Through::words`]), and a heap element's border texels
+/// and the flags its uses then read from its handle-table entry
+/// (`memory::handles::INDEXED_FLAGS_WORDS`); a `half` texel's call of the conversion routine or
+/// exact rounding, or an sRGB texel's raw decode; the lanes Metal reads as constants; the
+/// reinterpretation of another class's words; and each sibling of a heap read with its class test
+/// and branch, and a `half` read's merge of its arms' bits.
 fn read_words(r: &Read) -> u32 {
     let own = 64
         + if r.checked() { 80 } else { 0 }
@@ -405,6 +408,12 @@ fn read_words(r: &Read) -> u32 {
         }
         + r.heap_conversions.words(true)
         + r.through.map_or(0, Through::words)
+        + match r.through {
+            Some(t) if r.image.heap() && t.sampler.bordered() => {
+                2 * crate::memory::handles::INDEXED_FLAGS_WORDS
+            }
+            _ => 0,
+        }
         + if r.raw || r.srgb_codes {
             SRGB_DECODE_WORDS
         } else if r.extended.is_some() {
@@ -483,12 +492,6 @@ impl ReadSampler {
             ReadSampler::Constant { border, .. } => border.contains(&true),
             ReadSampler::Slot(_) | ReadSampler::Heap(_) => true,
         }
-    }
-
-    /// Whether the border texel it may read is the transparent black one, whatever the bound
-    /// format: the out-of-bounds texel, which a heap element's handle states.
-    fn transparent(self) -> bool {
-        matches!(self, ReadSampler::Constant { color, .. } if color == crate::metal::SamplerBorderColor::TransparentBlack.as_raw())
     }
 }
 
@@ -1445,14 +1448,14 @@ pub(crate) fn heap_classes_words() -> u64 {
 }
 
 /// The texel class (`metal::texel_format::TexelFormat`'s bits, a `u32`) of the heap texture
-/// whose handle is `h`, a handle of a module whose search carries the class's index
-/// ([`HANDLE_TEXEL_CLASS`](crate::memory::handles::HANDLE_TEXEL_CLASS)): the module's table's
-/// element at that index, clamped into the table. A null handle's, or a missed id's, is index 0,
-/// `TexelFormat::OTHER`.
+/// whose handle's flags are `h` ([`heap_flags`]), of a module whose search carries the class's
+/// index ([`HANDLE_TEXEL_CLASS`](crate::memory::handles::HANDLE_TEXEL_CLASS)): the module's
+/// table's element at that index, clamped into the table. A null handle's, or a missed id's, is
+/// index 0, `TexelFormat::OTHER`.
 pub(crate) fn heap_texel_class(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
-    h: SValue,
+    HeapFlags(h): HeapFlags,
 ) -> BResult<SValue> {
     use crate::memory::handles::HANDLE_TEXEL_CLASS;
     let Some(table) = cx.decl.families.texture.heap_classes else {
@@ -3215,10 +3218,7 @@ fn select_read_as(
     // A `ulong` read's lanes past the first are Metal's constants `(0, 0, 1)` in and out of
     // bounds, never the image's. A swizzled read may return the alpha in any lane, so it observes
     // the alpha wherever the function reads a lane.
-    // A heap element read through a sampler selects that texel as its transparent black border
-    // texel too (`select_through`).
-    let bordered_heap = image.heap() && through.is_some_and(|t| t.sampler.bordered());
-    let observed = (check == ReadCheck::Shader || level_views || residency || bordered_heap)
+    let observed = (check == ReadCheck::Shader || level_views || residency)
         && texel.lanes == 4
         && !matches!(texel.conv, TexelConv::U64Words { .. })
         && (swizzle || storage_swizzle || alpha_read(cx, at));
@@ -3434,10 +3434,10 @@ fn constant_read_sampler(state: &crate::air::abi::SamplerState) -> ReadSampler {
 
 /// Plan what read through a sampler `t` of `image` reads besides the image: a runtime slot's
 /// word (`RuntimeSlot::reads`), and where an index outside the level may read the border texel, a
-/// slot's `BorderTexels` specialization (`RuntimeFact::BorderTexels`). A heap element's handle
-/// states only whether its format has alpha, which gives the transparent black border texel
-/// alone, so a read of one that may read another border color is not implemented; nor is a
-/// `ulong` texel's border, which is not measured.
+/// slot's `BorderTexels` specialization (`RuntimeFact::BorderTexels`), or a heap element's
+/// handle-table entry's (`memory::handles::FLAG_BORDER_TEXELS`), which the module's search then
+/// names by its index in the handle (`AccessPlan::heap_border`). A `ulong` texel's border, which
+/// is not measured, is not implemented.
 fn select_through(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
@@ -3467,9 +3467,9 @@ fn select_through(
                 .insert(crate::pipeline::facts::RuntimeFact::BorderTexels { slot });
             Ok(())
         }
-        ImageRef::Heap { .. } if t.sampler.transparent() => Ok(()),
         ImageRef::Heap { .. } => {
-            Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into())
+            cx.families.access.heap_border = true;
+            Ok(())
         }
     }
 }

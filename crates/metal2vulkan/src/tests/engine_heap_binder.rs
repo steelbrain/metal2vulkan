@@ -51,8 +51,9 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Capability, Feature, Needs, Unsupported};
 use crate::library::{FunctionArtifact, Library};
 use crate::memory::handles::{
-    declare_table, define_lookup, lookup_host, Lookup, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE,
-    FLAG_TEXEL_CLASS, HANDLE_ALPHA_ONE, TABLE_ENTRY_BYTES,
+    declare_table, define_lookup, lookup_host, Lookup, FLAG_BORDER_TEXELS,
+    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_TEXEL_CLASS, HANDLE_ALPHA_ONE, HANDLE_ENTRY,
+    TABLE_ENTRY_BYTES,
 };
 use crate::memory::leaf::k32;
 use crate::memory::views;
@@ -247,8 +248,8 @@ fn table(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32)> {
 }
 
 /// The entries `(id, element, flags)` of the table bytes at `(set, binding)`: a texture entry's
-/// flags hold its out-of-bounds-alpha flag, its red-blue order and its texel class's index alone,
-/// and the null entry's none.
+/// flags hold its out-of-bounds-alpha flag, its red-blue order, its border texels and its texel
+/// class's index alone, and the null entry's none.
 fn entries(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32, u32)> {
     let b = &bytes
         .iter()
@@ -260,11 +261,11 @@ fn entries(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32, 
         .map(|e| {
             let w = |i: usize| u32::from_le_bytes(e[4 * i..4 * i + 4].try_into().expect("word"));
             let id = u64::from(w(0)) | (u64::from(w(1)) << 32);
-            assert_eq!(
-                w(3) & !(FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_RED_BLUE | FLAG_TEXEL_CLASS),
-                0,
-                "other flags are reserved"
-            );
+            let fields = FLAG_OUT_OF_BOUNDS_ALPHA_ONE
+                | FLAG_RED_BLUE
+                | FLAG_BORDER_TEXELS
+                | FLAG_TEXEL_CLASS;
+            assert_eq!(w(3) & !fields, 0, "other flags are reserved");
             if id == 0 {
                 assert_eq!(w(3), 0, "the null entry has no flags");
             }
@@ -571,13 +572,13 @@ fn a_sampled_heap_writes_each_member_and_its_table() {
         .bytes;
     assert_eq!(emitted_lookup(bytes, &keys), want.to_vec());
     // Each entry's flags are its member's out-of-bounds alpha: token 2's `R32Uint` has no alpha,
-    // every other member's format has one, and the null entries have none (beside its texel class,
-    // which `table_entries_state_each_members_texel_class` reads).
+    // every other member's format has one, and the null entries have none (beside its texel class
+    // and border texels, which `table_entries_state_each_members_texel_class` reads).
     let flag = FLAG_OUT_OF_BOUNDS_ALPHA_ONE;
     let listed = entries(&cmds.descriptor_bytes, set, binding);
     let flags: Vec<u32> = listed
         .iter()
-        .map(|e| e.2 & !(FLAG_TEXEL_CLASS | FLAG_RED_BLUE))
+        .map(|e| e.2 & !(FLAG_TEXEL_CLASS | FLAG_RED_BLUE | FLAG_BORDER_TEXELS))
         .collect();
     assert_eq!(flags, vec![0, 0, 0, 0, 0, 0, flag, 0, 0]);
     // And its red-blue order: `[[texture(3)]]`'s `BGRA8Unorm` (element 8) is blue-first, every
@@ -1058,9 +1059,11 @@ fn a_compared_depth_member_is_held_by_the_depth_comparison_class() {
 }
 
 /// Each member's table entry states its texel class's index (`heap_class_index`, in
-/// [`FLAG_TEXEL_CLASS`]) beside its out-of-bounds alpha (a depth format has no alpha). The
+/// [`FLAG_TEXEL_CLASS`]) and its border texels (`metal::sampler::border_texels`, in
+/// [`FLAG_BORDER_TEXELS`]) beside its out-of-bounds alpha (a depth format has no alpha). The
 /// search's flagged form carries the alpha in the handle's bit 31 and the class in place where it
-/// carries them; a miss carries nothing.
+/// carries them, and its indexed form the entry's index in the top 16 bits; a miss carries
+/// nothing.
 #[test]
 fn table_entries_state_each_members_texel_class() {
     let dev = m3();
@@ -1113,6 +1116,11 @@ fn table_entries_state_each_members_texel_class() {
             crate::metal::TextureSwizzleChannels::DEFAULT,
         ) << FLAG_TEXEL_CLASS.trailing_zeros()
     };
+    let border = |pf| {
+        crate::metal::sampler::border_texels(pf, crate::metal::TextureSwizzleChannels::DEFAULT)
+            .expect("border texels")
+            << FLAG_BORDER_TEXELS.trailing_zeros()
+    };
     let (d16, d32, d32s8, rgba8) = (
         class(PixelFormat::Depth16Unorm),
         class(PixelFormat::Depth32Float),
@@ -1120,14 +1128,21 @@ fn table_entries_state_each_members_texel_class() {
         class(PixelFormat::RGBA8Unorm),
     );
     assert!(d16 != 0 && d32 != 0 && rgba8 != 0 && d16 != rgba8);
+    // A depth format's border texel is `(b, b, b, 1)`, a four-channel one's the color itself.
+    let (depth, four) = (
+        border(PixelFormat::Depth16Unorm),
+        border(PixelFormat::RGBA8Unorm),
+    );
+    assert_eq!(depth >> 3, 0b111_100_100_100);
+    assert_eq!(four >> 3, 0b110_100_100_100);
     assert_eq!(
         entries(&cmds.descriptor_bytes, set, binding),
         vec![
             (0, 0, 0),
-            (D, 4, rgba8),
-            (A, 1, alpha | d16),
-            (B, 2, alpha | d32),
-            (C, 3, alpha | d32s8),
+            (D, 4, rgba8 | four),
+            (A, 1, alpha | depth | d16),
+            (B, 2, alpha | depth | d32),
+            (C, 3, alpha | depth | d32s8),
         ]
     );
     let bytes = &cmds
@@ -1155,6 +1170,16 @@ fn table_entries_state_each_members_texel_class() {
     assert_eq!(
         emitted_lookup_in(bytes, &keys, classes),
         vec![4 | rgba8, 1 | d16, 2 | d32, 3 | d32s8, 0, 0]
+    );
+    let indexed = Lookup::Indexed {
+        alpha: true,
+        class: true,
+        red_blue: false,
+    };
+    let entry = |k: u32| k << HANDLE_ENTRY.trailing_zeros();
+    assert_eq!(
+        emitted_lookup_in(bytes, &keys, indexed),
+        vec![4 | entry(1), 1 | entry(2), 2 | entry(3), 3 | entry(4), 0, 0]
     );
 }
 

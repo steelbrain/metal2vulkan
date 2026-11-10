@@ -785,6 +785,12 @@ pub struct AccessPlan {
     /// red-blue order (`lower::texture::heap_storage_conversions`): the handle-table search
     /// carries the entry's `FLAG_RED_BLUE` too (`memory::handles::Lookup::Flagged`).
     pub heap_red_blue: bool,
+    /// A heap texture's read through a sampler may hand back its border texels
+    /// (`lower::texture::Through`), which its handle-table entry holds
+    /// (`memory::handles::FLAG_BORDER_TEXELS`): the search yields each heap handle's entry index
+    /// beside its element (`memory::handles::Lookup::Indexed`), by which the read loads them, and
+    /// every use reads the entry's other flags it needs from the entry.
+    pub heap_border: bool,
     /// The relaxed atomic loads an exit of a loop holding them depends on ([`atomic::spin`]): each
     /// acquires its memory. Planned before any instruction is selected.
     pub spins: BTreeSet<InstId>,
@@ -802,14 +808,22 @@ impl AccessPlan {
 
     /// What the function's handle-table search yields.
     pub fn lookup(&self) -> crate::memory::handles::Lookup {
-        if self.heap_alpha || self.carries_class() || self.heap_red_blue {
-            crate::memory::handles::Lookup::Flagged {
-                alpha: self.heap_alpha,
-                class: self.carries_class(),
-                red_blue: self.heap_red_blue,
+        use crate::memory::handles::Lookup;
+        let (alpha, class, red_blue) = (self.heap_alpha, self.carries_class(), self.heap_red_blue);
+        if self.heap_border {
+            Lookup::Indexed {
+                alpha,
+                class,
+                red_blue,
+            }
+        } else if alpha || class || red_blue {
+            Lookup::Flagged {
+                alpha,
+                class,
+                red_blue,
             }
         } else {
-            crate::memory::handles::Lookup::Element
+            Lookup::Element
         }
     }
 }

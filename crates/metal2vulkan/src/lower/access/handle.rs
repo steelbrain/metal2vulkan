@@ -34,9 +34,12 @@
 //! Merges of heap handles are the integer operations above; a texture operation on one indexes its
 //! group's heap array ([`heap_target`], the texture family). The function then reads the handle
 //! table, one more storage descriptor of the stage. Where a shader-checked heap read observes its
-//! alpha, the search also carries the entry's out-of-bounds-alpha flag in the handle's bit 31, and
-//! where the shader makes a heap depth comparison its depth flags in bits 29 and 30
-//! (`memory::handles::Lookup::Flagged`).
+//! alpha, the search also carries the entry's out-of-bounds-alpha flag in the handle's bit 31,
+//! where a heap access reads its texel class the class's index in bits 16 to 28, and where a heap
+//! storage access converts by its red-blue order that flag in bit 30
+//! (`memory::handles::Lookup::Flagged`); where a heap read through a sampler may hand back its
+//! border texels, the search carries the entry's index in bits 16 to 31 instead, and every use
+//! reads the entry's flags it needs from the table (`memory::handles::Lookup::Indexed`).
 //!
 //! **Heap samplers** (the sampler half). A sampler handle loaded from an argument buffer is
 //! searched the same way in the stage's sampler table ([`HandleStrategy::SamplerLookup`],

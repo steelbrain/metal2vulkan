@@ -149,7 +149,8 @@ pub(crate) fn emit(
     }
     let t = Tys::new(fb)?;
     let h = cx.operand(fb, handle)?;
-    let (form, member) = crate::lower::texture::heap_raw_form(fb, h)?;
+    let flags = crate::lower::texture::heap_flags(cx, fb, h)?;
+    let (form, member) = crate::lower::texture::heap_raw_form(fb, flags)?;
     let bfloat = bfloat_form(fb, &t, form)?;
     // A runtime sampler's word, and whether it states a filter the emulation answers.
     let word = match &raw.state {

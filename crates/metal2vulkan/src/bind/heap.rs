@@ -65,8 +65,10 @@
 //!   names misses. A member's flags are [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`] where its pixel format
 //!   has no alpha (`metal::format::out_of_bounds_alpha_one`): a module whose shader-checked heap
 //!   read observes the alpha takes Metal's out-of-bounds alpha from it; [`FLAG_RED_BLUE`] where
-//!   its pixel format is blue-first (`metal::format::red_blue_exchanged`); and its texel class in
-//!   [`FLAG_TEXEL_CLASS`]. Every other bit is 0.
+//!   its pixel format is blue-first (`metal::format::red_blue_exchanged`); its border texels in
+//!   [`FLAG_BORDER_TEXELS`] (`metal::sampler::border_texels` of its pixel format and swizzle, a
+//!   placeholder format's those of the neutral it reads), which a read through a sampler hands
+//!   back at a border; and its texel class in [`FLAG_TEXEL_CLASS`]. Every other bit is 0.
 //! - **Heap samplers**. A heap image is sampled through a separate sampler binding
 //!   (`BindingSource::HeapSampler`) in set 0: a constexpr sampler is the layout's immutable sampler
 //!   and takes no write; a runtime `[[sampler(n)]]` is written with the sampler bound at slot `n`
@@ -142,7 +144,7 @@ use crate::device::requirements::FormatUsage;
 use crate::device::DeviceProfile;
 use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::handles::{
-    lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO,
+    lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO, FLAG_BORDER_TEXELS,
     FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_TEXEL_CLASS, NEUTRAL_ELEMENT, TABLE_CAPACITY,
     TABLE_ENTRY_BYTES,
 };
@@ -469,7 +471,9 @@ pub fn heap_element(
 /// where its pixel format has no alpha, so a shader-checked read past the texture takes Metal's
 /// out-of-bounds alpha of 1; bit 2 where its pixel format is blue-first
 /// (`metal::format::red_blue_exchanged`), so a storage access exchanges red and blue where the
-/// heap views it through its RGBA-order twin; bits 16 to 28 the index of the texture's texel class
+/// heap views it through its RGBA-order twin; bits 3 to 14 its border texels
+/// (`metal::sampler::border_texels` of its pixel format and swizzle), which a Metal 4.1 read
+/// through a sampler hands back at a border; bits 16 to 28 the index of the texture's texel class
 /// (`metal::texel_format::heap_class_index` of its pixel format and swizzle), by which the shader
 /// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; every other
 /// bit 0. A caller passes the word through as is.
@@ -489,9 +493,14 @@ fn entry_flags(shape: &TextureShape) -> u32 {
         true => FLAG_RED_BLUE,
         false => 0,
     };
+    // A placeholder pixel format's member reads its neutral, whose border texels a slot bound to
+    // one takes too.
+    let border = crate::metal::sampler::border_texels(pixel_format, swizzle)
+        .unwrap_or(crate::metal::sampler::NEUTRAL_BORDER_TEXELS)
+        << FLAG_BORDER_TEXELS.trailing_zeros();
     let index = crate::metal::texel_format::heap_class_index(pixel_format, swizzle);
     let class = index << FLAG_TEXEL_CLASS.trailing_zeros();
-    alpha | red_blue | (class & FLAG_TEXEL_CLASS)
+    alpha | red_blue | (border & FLAG_BORDER_TEXELS) | (class & FLAG_TEXEL_CLASS)
 }
 
 /// A conversion a storage access through a heap handle makes of the texels of a member its

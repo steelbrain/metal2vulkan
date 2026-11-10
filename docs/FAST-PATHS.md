@@ -440,15 +440,6 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
-- **An argument buffer's texture read through a sampler's border reads the transparent black
-  border alone, and not through the texture's swizzle** (`lower/texture/emit/through.rs`): a heap
-  handle carries its format's alpha and nothing else of its border texels, so such a read through
-  `clamp_to_zero` or a transparent black `clamp_to_border` reads the out-of-bounds texel, which is
-  Metal's border texel for every texture without a swizzle. Through a swizzled texture Metal
-  swizzles the border texel and we do not (`(G, R, 1, 0)` reads `(0, 0, 1, 0)` on Metal and
-  `(0, 0, 0, 0)` here: the conformance case `read-through-rgba8-swizzled`). A read through an
-  opaque border colour or a runtime sampler is refused (`NotImplemented(ArgumentBufferTextures)`).
-
 - **A heap texture Metal keeps uncompressed lies in its driver's layout, not Metal's tiles, where
   its image fits Metal's answer in the heap's memory** (`texture/heap.rs`,
   `heap-texture-untiled-layout`): on every driver whose colour images are not measured to lie as

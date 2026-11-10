@@ -19,8 +19,8 @@
 //! **One case per texture**, so a venue that cannot make one kind (a 1D texture, a texture buffer)
 //! answers its own typed refusal at its own row. The two kernels that read an argument buffer's
 //! texture through a border colour other than transparent black, or through a runtime sampler, are
-//! cases of their own: the translator refuses them (`NotImplemented(ArgumentBufferTextures)`: a
-//! heap texture's handle carries no border texel), and a refusal stops its case at the pipeline.
+//! cases of their own, so a venue that refuses one (a device without the handle heap's
+//! descriptor-indexing features) stops only its own case at the pipeline.
 //!
 //! Every output word holds [`BLANK`] before its dispatch, so a word a kernel did not write is a
 //! recorded value. Nothing here can fault a GPU: one compute pass a read, at most 20 threads, no
@@ -776,19 +776,14 @@ impl Case for ReadThrough {
         // A read through an argument buffer's sampler or texture takes the handle heap, whose set
         // MoltenVK's layout query refuses though it runs it: measured on the M3 Max through
         // MoltenVK, where all four plane cases announced `set-past-layout-support` and nothing
-        // else, every value exact but the swizzled case's argument-buffer texture. A case whose
-        // read is refused stops at its pipeline and announces nothing.
+        // else.
         let heap = self.reads.iter().any(|read| {
             matches!(
                 read.through,
                 Through::Table(..) | Through::HeapTexture | Through::HeapTextureSlot(..)
             )
         });
-        let refused = self
-            .reads
-            .iter()
-            .any(|read| matches!(read.entry, "rt_heap_ow" | "rt_heap_arg"));
-        match heap && !refused {
+        match heap {
             true => vec![crate::replay::set_past_layout_notice()],
             false => Vec::new(),
         }

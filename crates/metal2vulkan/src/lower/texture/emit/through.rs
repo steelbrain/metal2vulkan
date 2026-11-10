@@ -271,25 +271,40 @@ pub(super) fn address(
 }
 
 /// `texel`, read `r`'s texel in its result form, with what the read hands back in place of it
-/// ([`Addressed`]): a slot's border texel where the plane coordinate is outside on a border axis
-/// (a heap element's selects the out-of-bounds texel instead, before converting it), and zero in
-/// every lane where its level or layer is not the image's.
+/// ([`Addressed`]): the texture's border texel where the plane coordinate is outside on a border
+/// axis, and zero in every lane where its level or layer is not the image's; but `texel` itself
+/// where `held` holds (a `bool`: a heap member's raw texel, which its own image's addressing
+/// already gave them).
 pub(super) fn finish(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     r: &Read,
     (s, a): (&State, &Addressed),
     texel: SValue,
+    held: Option<SValue>,
 ) -> BResult<SValue> {
-    let texel = match (a.border, r.image) {
-        (Some(out), ImageRef::Slot(index)) => {
-            let border = border_texel(cx, fb, index, s, texel)?;
+    let unheld = match held {
+        Some(h) => Some(fb.unary(UnOp::LogicalNot, h)?),
+        None => None,
+    };
+    let texel = match a.border {
+        Some(out) => {
+            let out = match unheld {
+                Some(u) => fb.binary(BinOp::LogicalAnd, out, u)?,
+                None => out,
+            };
+            let bits = border_bits(cx, fb, r.image)?;
+            let border = border_texel(cx, fb, bits, s, texel)?;
             fb.select(out, border, texel)?
         }
-        _ => texel,
+        None => texel,
     };
     match a.inside {
         Some(inside) => {
+            let inside = match held {
+                Some(h) => fb.binary(BinOp::LogicalOr, inside, h)?,
+                None => inside,
+            };
             let ty = fb.value_ty(texel)?;
             let zero = fb.module().constant(Constant::Null { ty })?;
             let zero = fb.module().const_value(zero)?;
@@ -299,21 +314,41 @@ pub(super) fn finish(
     }
 }
 
-/// Metal's border texel of texture slot `index` for the color of `s`, in the form of `like` (a
-/// `float`, `half` or 32-bit integer scalar or vector of up to four lanes): lane `c` is 1 where bit
-/// `3c + color` of the slot's `BorderTexels` specialization is set, else 0.
+/// The border texels of `image` (a `u32`, bit `3c + b` set where channel `c` of Metal's border
+/// texel for border color `b` reads 1): a slot's `BorderTexels` specialization, or a heap
+/// element's handle-table entry's (`memory::handles::FLAG_BORDER_TEXELS`), which the entry index
+/// its handle carries names.
+fn border_bits(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    image: ImageRef,
+) -> BResult<SValue> {
+    match image {
+        ImageRef::Slot(index) => {
+            let bits = cx.decl.families.texture.border_texels.get(&index).copied();
+            bits.ok_or_else(|| {
+                cx.fail(format!(
+                    "texture slot {index} has no border texels constant"
+                ))
+            })
+        }
+        ImageRef::Heap { handle, .. } => {
+            let h = cx.operand(fb, handle)?;
+            super::heap_border_texels(cx, fb, h)
+        }
+    }
+}
+
+/// Metal's border texel of border texels `bits` ([`border_bits`]) for the color of `s`, in the
+/// form of `like` (a `float`, `half` or 32-bit integer scalar or vector of up to four lanes): lane
+/// `c` is 1 where bit `3c + color` of `bits` is set, else 0.
 fn border_texel(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
-    index: u32,
+    bits: SValue,
     s: &State,
     like: SValue,
 ) -> BResult<SValue> {
-    let Some(bits) = cx.decl.families.texture.border_texels.get(&index).copied() else {
-        return Err(cx.fail(format!(
-            "texture slot {index} has no border texels constant"
-        )));
-    };
     let ty = fb.value_ty(like)?;
     let (elem, lanes) = match fb.module().types().get(ty)? {
         SType::Vector { elem, len } => (*elem, *len),

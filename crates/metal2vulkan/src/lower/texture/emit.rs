@@ -384,8 +384,8 @@ struct Loaded {
     live: Option<SValue>,
     /// The level of a slot's level views is one of the bound texture's.
     within: Option<SValue>,
-    /// A heap element's handle, where it carries the out-of-bounds-alpha flag.
-    flagged: Option<SValue>,
+    /// A heap element's flags, where its handle carries the out-of-bounds-alpha flag.
+    flagged: Option<HeapFlags>,
 }
 
 /// The declaration of `image`.
@@ -536,15 +536,15 @@ pub(crate) struct HeapElement {
     pub img: SValue,
     /// The handle is live (not the null element).
     pub live: SValue,
-    /// The handle, where the function's handle-table search carries the element's
-    /// out-of-bounds-alpha flag in it (`memory::handles::Lookup::Flagged`): `heap_alpha_one` reads
+    /// The handle's flags, where the function's handle-table search carries the element's
+    /// out-of-bounds-alpha flag (`memory::handles::Lookup`'s `alpha`): `heap_alpha_one` reads
     /// the flag.
-    pub flagged: Option<SValue>,
+    pub flagged: Option<HeapFlags>,
 }
 
-/// The element of heap handle `h`: the handle masked to its element where the function's
-/// handle-table search carries flags in it (`memory::handles::Lookup::element_mask`), else the
-/// handle itself.
+/// The element of heap handle `h` (as the function's handle-table search yields it): the handle
+/// masked to its element where the search carries anything beside it
+/// (`memory::handles::Lookup::element_mask`), else the handle itself.
 fn heap_element_index(cx: &EmitCx<'_>, fb: &mut FunctionBuilder<'_>, h: SValue) -> BResult<SValue> {
     let Some(element) = cx.plan.families.access.lookup().element_mask() else {
         return Ok(h);
@@ -553,11 +553,60 @@ fn heap_element_index(cx: &EmitCx<'_>, fb: &mut FunctionBuilder<'_>, h: SValue) 
     fb.binary(BinOp::BitwiseAnd, h, mask)
 }
 
-/// Whether the flagged heap handle `h` ([`HeapElement::flagged`]) has [`HANDLE_ALPHA_ONE`] set:
+/// The flags of a heap handle its uses read (its texel class, red-blue order and
+/// out-of-bounds-alpha flag, as the function's search reads them), in the layout of the handle
+/// a flagged search yields (`memory::handles::Lookup::Flagged`: `HANDLE_TEXEL_CLASS`,
+/// `HANDLE_RED_BLUE`, `HANDLE_ALPHA_ONE`). The texture family makes one only through
+/// [`heap_flags`], so a handle that carries its entry's index in those bits (`Lookup::Indexed`)
+/// never reaches a reader of them.
+#[derive(Clone, Copy)]
+pub(crate) struct HeapFlags(pub(super) SValue);
+
+/// The flags of heap handle `h` (as the function's handle-table search yields it): the handle
+/// itself where the search carries them in it, else, where it carries the entry's index
+/// (`memory::handles::Lookup::Indexed`), the handle a flagged search would have yielded, the
+/// entry's flags read from the handle table (`memory::handles::flagged_handle`).
+pub(crate) fn heap_flags(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    h: SValue,
+) -> BResult<HeapFlags> {
+    use crate::memory::handles::Lookup;
+    let form = cx.plan.families.access.lookup();
+    if !matches!(form, Lookup::Indexed { .. }) {
+        return Ok(HeapFlags(h));
+    }
+    let Some(table) = cx.decl.families.access.handle_table else {
+        return Err(cx.fail("an indexed heap handle without its table"));
+    };
+    let flagged = crate::memory::handles::flagged_handle(fb, table.table, h, form)?;
+    Ok(HeapFlags(flagged))
+}
+
+/// The border texels of the texture of heap handle `h` (as the function's handle-table search
+/// yields it, `memory::handles::Lookup::Indexed`), from the entry it names
+/// (`memory::handles::border_texels`): a `u32` in the layout of a slot's `BorderTexels`
+/// specialization.
+pub(super) fn heap_border_texels(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    h: SValue,
+) -> BResult<SValue> {
+    use crate::memory::handles::Lookup;
+    if !matches!(cx.plan.families.access.lookup(), Lookup::Indexed { .. }) {
+        return Err(cx.fail("a heap read's border texels without its entry's index"));
+    }
+    let Some(table) = cx.decl.families.access.handle_table else {
+        return Err(cx.fail("an indexed heap handle without its table"));
+    };
+    crate::memory::handles::border_texels(fb, table.table, h)
+}
+
+/// Whether heap handle flags `h` ([`HeapElement::flagged`]) have [`HANDLE_ALPHA_ONE`] set:
 /// its texture's pixel format has no alpha, so Metal reads alpha 1 out of bounds.
-fn heap_alpha_one(fb: &mut FunctionBuilder<'_>, h: SValue) -> BResult<SValue> {
+fn heap_alpha_one(fb: &mut FunctionBuilder<'_>, h: HeapFlags) -> BResult<SValue> {
     let bit = u32s(fb, 1, HANDLE_ALPHA_ONE)?;
-    let flag = fb.binary(BinOp::BitwiseAnd, h, bit)?;
+    let flag = fb.binary(BinOp::BitwiseAnd, h.0, bit)?;
     let zero = u32s(fb, 1, 0)?;
     fb.binary(BinOp::INotEqual, flag, zero)
 }
@@ -611,7 +660,10 @@ fn heap_element_of(
     let base = fb.module().global_value(g)?;
     let h = cx.operand(fb, handle)?;
     let element = heap_element_index(cx, fb, h)?;
-    let flagged = cx.plan.families.access.heap_alpha.then_some(h);
+    let flagged = match cx.plan.families.access.heap_alpha {
+        true => Some(heap_flags(cx, fb, h)?),
+        false => None,
+    };
     let p = fb.access_chain_non_uniform(base, element)?;
     let img = fb.load(p, MemAccess::default())?;
     let null = u32s(fb, 1, NEUTRAL_ELEMENT)?;
@@ -818,6 +870,7 @@ fn heap_key_among(
 ) -> BResult<SValue> {
     use crate::memory::handles::{HANDLE_RED_BLUE, HANDLE_TEXEL_CLASS};
     let h = cx.operand(fb, handle)?;
+    let HeapFlags(h) = heap_flags(cx, fb, h)?;
     let field = u32s(fb, 1, HANDLE_TEXEL_CLASS | HANDLE_RED_BLUE)?;
     let key = fb.binary(BinOp::BitwiseAnd, h, field)?;
     let mut among = None;
@@ -1095,7 +1148,8 @@ pub(crate) fn heap_half_class(
         return Ok(None);
     };
     let h = cx.operand(fb, handle)?;
-    let class = super::heap_texel_class(cx, fb, h)?;
+    let flags = heap_flags(cx, fb, h)?;
+    let class = super::heap_texel_class(cx, fb, flags)?;
     Ok(Some(HalfClass {
         routine,
         class: ClassOf::Heap(class),
@@ -1613,6 +1667,7 @@ fn heap_class_among(
 ) -> BResult<SValue> {
     use crate::memory::handles::HANDLE_TEXEL_CLASS;
     let h = cx.operand(fb, handle)?;
+    let HeapFlags(h) = heap_flags(cx, fb, h)?;
     let shift = u32s(fb, 1, HANDLE_TEXEL_CLASS.trailing_zeros())?;
     let mask = u32s(
         fb,
@@ -1887,7 +1942,7 @@ pub(super) fn out_of_bounds_texel(
     decl: &ImageDecl,
     image: &ImageRef,
     alpha: bool,
-    flagged: Option<SValue>,
+    flagged: Option<HeapFlags>,
 ) -> BResult<SValue> {
     // An extended-range slot's out-of-bounds texel is Metal's value, selected after the decode.
     let (elem, one) = match decl.held_class() {
@@ -2409,18 +2464,6 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         (true, None) => in_range,
         (false, w) => w,
     };
-    // A heap element read through a sampler, outside on a border axis, hands back the transparent
-    // black border texel, its out-of-bounds texel (`texture::select_through`).
-    let inb = match (&through, r.image) {
-        (Some((_, a)), ImageRef::Heap { .. }) => match a.border {
-            Some(out) => {
-                let kept = fb.unary(UnOp::LogicalNot, out)?;
-                Some(and(fb, inb, kept)?)
-            }
-            None => inb,
-        },
-        _ => inb,
-    };
     let ops = ImageOperands {
         lod: level,
         sample,
@@ -2513,16 +2556,18 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         },
     };
     // A heap member of a form a heap reads: its raw texel's value, Metal's out-of-bounds texel
-    // selected against its own image, which the float array's test below then leaves.
-    let texel = match r.heap_raw {
+    // selected against its own image, which the float array's test below then leaves, and a read
+    // through a sampler's border texel and zero past its level or layer there too, which the
+    // float array's addressing below then leaves.
+    let (texel, raw_member) = match r.heap_raw {
         true => {
             let (texel, member) = heap_raw_texel(cx, fb, r, texel)?;
             if let Some(i) = inb {
                 inb = Some(fb.binary(BinOp::LogicalOr, member, i)?);
             }
-            texel
+            (texel, Some(member))
         }
-        false => texel,
+        false => (texel, None),
     };
     // An `A8Unorm` storage member's texel held in red, Metal's `(0, 0, 0, r)` before Metal's
     // out-of-bounds texel is selected.
@@ -2588,9 +2633,10 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
         (true, ImageRef::Slot(index)) => constant_lanes(cx, fb, index, texel, None)?,
         _ => texel,
     };
-    // A read through a sampler's border texel, and its zero past its level or layer.
+    // A read through a sampler's border texel, and its zero past its level or layer, but where a
+    // heap member's raw texel already holds them.
     let texel = match &through {
-        Some((state, a)) => through::finish(cx, fb, r, (state, a), texel)?,
+        Some((state, a)) => through::finish(cx, fb, r, (state, a), texel, raw_member)?,
         None => texel,
     };
     // A texture of another class: its own texel's words, out of bounds too, as declared.
@@ -2606,7 +2652,9 @@ fn read_texel(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BR
 /// `texel`, the float array's: that element's raw texel fetched from the group's unsigned integer
 /// class (`HeapPlan::raw`), its level and coordinate (a read through a sampler's addressed in it)
 /// tested against that image and clamped into it, decoded by the form, Metal's out-of-bounds
-/// texel outside it (`heap_raw::define`). With whether the handle names such a form (a `bool`).
+/// texel outside it (`heap_raw::define`), and a read through a sampler's border texel and zero
+/// past its level or layer as that image's addressing says (`through::finish`). With whether the
+/// handle names such a form (a `bool`).
 fn heap_raw_texel(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -2631,7 +2679,8 @@ fn heap_raw_texel(
         return Err(cx.fail("a raw heap read without its routine"));
     };
     let h = cx.operand(fb, handle)?;
-    let (form, member) = heap_raw_form(fb, h)?;
+    let flags = heap_flags(cx, fb, h)?;
+    let (form, member) = heap_raw_form(fb, flags)?;
     let raw_arm: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
         let img = heap_raw_image(cx, fb, group, h)?;
         let level = match r.level {
@@ -2639,23 +2688,17 @@ fn heap_raw_texel(
             None => None,
         };
         let n = coord_len(&decl);
-        let (coord, level, ok) = match r.through {
+        let (coord, level, ok, through) = match r.through {
             // A read through a sampler, addressed in this image: its layer clamped into it,
-            // Metal's out-of-bounds texel outside it or on a border axis, the transparent black
-            // border texel there (`texture::select_through`).
+            // Metal's out-of-bounds texel outside it, and the border texel on a border axis
+            // (`through::finish`).
             Some(t) => {
                 let state = through::state(cx, fb, t.sampler)?;
                 let a = through::address(cx, fb, (&decl, img), r, level, &state)?;
                 let lt = fb.binary(BinOp::ULessThan, a.coord, a.size)?;
                 let inside = if n == 1 { lt } else { fb.unary(UnOp::All, lt)? };
-                let ok = match a.border {
-                    Some(out) => {
-                        let kept = fb.unary(UnOp::LogicalNot, out)?;
-                        fb.binary(BinOp::LogicalAnd, inside, kept)?
-                    }
-                    None => inside,
-                };
-                (clamp_below(fb, a.coord, a.size, n)?, a.level, Some(ok))
+                let coord = clamp_below(fb, a.coord, a.size, n)?;
+                (coord, a.level, Some(inside), Some((state, a)))
             }
             None => {
                 let c = coordinate(cx, fb, &decl, &r.at)?;
@@ -2672,7 +2715,7 @@ fn heap_raw_texel(
                 let lt = fb.binary(BinOp::ULessThan, c, size)?;
                 let inside = if n == 1 { lt } else { fb.unary(UnOp::All, lt)? };
                 let ok = and(fb, ok, inside)?;
-                (clamp_below(fb, c, size, n)?, level, Some(ok))
+                (clamp_below(fb, c, size, n)?, level, Some(ok), None)
             }
         };
         let ops = ImageOperands {
@@ -2694,6 +2737,10 @@ fn heap_raw_texel(
         let v = fb
             .call(routine, &[texel, form, ok])?
             .ok_or_else(|| cx.fail("the raw heap routine returned nothing"))?;
+        let v = match &through {
+            Some((state, a)) => through::finish(cx, fb, r, (state, a), v, None)?,
+            None => v,
+        };
         Ok(ArmEnd::FallThrough(vec![v]))
     });
     let own_arm: ArmFn<'_, EmitCx<'_>> =
@@ -2705,10 +2752,13 @@ fn heap_raw_texel(
     }
 }
 
-/// The form heap handle `h` (a `u32`) names by its class index past the heap's own classes
-/// (`metal::texel_format::heap_extended_base`): its index in `ExtendedRange::HEAP_READ` (a `u32`,
-/// wrapped past the forms where it names none), and whether it names one (a `bool`).
-pub(crate) fn heap_raw_form(fb: &mut FunctionBuilder<'_>, h: SValue) -> BResult<(SValue, SValue)> {
+/// The form heap handle flags `h` ([`heap_flags`]) name by their class index past the heap's own
+/// classes (`metal::texel_format::heap_extended_base`): its index in `ExtendedRange::HEAP_READ` (a
+/// `u32`, wrapped past the forms where it names none), and whether it names one (a `bool`).
+pub(crate) fn heap_raw_form(
+    fb: &mut FunctionBuilder<'_>,
+    HeapFlags(h): HeapFlags,
+) -> BResult<(SValue, SValue)> {
     use crate::memory::handles::HANDLE_TEXEL_CLASS;
     let shift = u32s(fb, 1, HANDLE_TEXEL_CLASS.trailing_zeros())?;
     let mask = u32s(
@@ -2729,9 +2779,9 @@ pub(crate) fn heap_raw_form(fb: &mut FunctionBuilder<'_>, h: SValue) -> BResult<
     Ok((form, member))
 }
 
-/// The index heap handle `h` (a `u32`) carries in its class field
+/// The index heap handle flags `h` ([`heap_flags`]) carry in their class field
 /// (`memory::handles::HANDLE_TEXEL_CLASS`).
-fn heap_class_field(fb: &mut FunctionBuilder<'_>, h: SValue) -> BResult<SValue> {
+fn heap_class_field(fb: &mut FunctionBuilder<'_>, HeapFlags(h): HeapFlags) -> BResult<SValue> {
     use crate::memory::handles::HANDLE_TEXEL_CLASS;
     let shift = u32s(fb, 1, HANDLE_TEXEL_CLASS.trailing_zeros())?;
     let mask = u32s(
@@ -2797,7 +2847,8 @@ fn read_crossed(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> 
         return read(cx, fb, r);
     }
     let h = cx.operand(fb, handle)?;
-    let index = heap_class_field(fb, h)?;
+    let flags = heap_flags(cx, fb, h)?;
+    let index = heap_class_field(fb, flags)?;
     if r.texel.conv != TexelConv::F16 {
         return read_arms(cx, fb, index, (&r.heap_cross, r), ArmValue::Read);
     }
@@ -3229,7 +3280,8 @@ fn query(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, q: &QueryOp) -> BRes
         };
         if raw.is_some() || !cross.is_empty() {
             let h = cx.operand(fb, handle)?;
-            let index = heap_class_field(fb, h)?;
+            let flags = heap_flags(cx, fb, h)?;
+            let index = heap_class_field(fb, flags)?;
             let global = |cx: &mut EmitCx<'_>, class| {
                 cx.decl
                     .families
@@ -3246,7 +3298,7 @@ fn query(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, q: &QueryOp) -> BRes
             // A heap member of a form a heap reads is queried in the group's unsigned integer
             // class, which holds it: one arm with the unsigned integer members' where both are.
             if let Some((class, _)) = raw {
-                let (_, member) = heap_raw_form(fb, h)?;
+                let (_, member) = heap_raw_form(fb, flags)?;
                 let g = global(cx, class)?;
                 match arms.iter_mut().find(|(_, at)| *at == g) {
                     Some(arm) => arm.0 = fb.binary(BinOp::LogicalOr, arm.0, member)?,
