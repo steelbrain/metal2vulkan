@@ -642,18 +642,37 @@ pub(super) unsafe extern "system" fn deliver(
 }
 
 /// The instance extensions a loader lists, read with one `vkEnumerateInstanceExtensionProperties`:
-/// the loader scans its driver and layer manifests again at each such call, and asks each driver
-/// it finds, so the making of an instance reads the list once and answers every question of it
-/// from this.
+/// the loader scans its driver and layer manifests again at each such call, and loads and asks
+/// each driver it finds, so the making of an instance reads the list once and answers every
+/// question of it from this.
 pub(crate) struct ListedExtensions(Vec<vk::ExtensionProperties>);
 
+/// The room [`ListedExtensions::of`] gives its first call: more extensions than a loader lists
+/// (20 on lavapipe's alone, 26 with RADV's beside it).
+pub(crate) const LISTED_ROOM: usize = 64;
+
 impl ListedExtensions {
-    /// The instance extensions `entry`'s loader lists.
+    /// The instance extensions `entry`'s loader lists, read in one call into room for
+    /// [`LISTED_ROOM`] of them, and again into twice the room while the loader answers
+    /// `VK_INCOMPLETE`. Not the usual two-call read (the count, then the list), which is two
+    /// scans of the manifests.
     pub(crate) fn of(entry: &ash::Entry) -> Result<ListedExtensions, Error> {
-        // SAFETY: a global command of a loaded entry.
-        let listed =
-            unsafe { entry.enumerate_instance_extension_properties(None) }.map_err(vulkan)?;
-        Ok(ListedExtensions(listed))
+        let enumerate = entry.fp_v1_0().enumerate_instance_extension_properties;
+        let mut room = LISTED_ROOM;
+        loop {
+            let mut listed = vec![vk::ExtensionProperties::default(); room];
+            let mut count = u32::try_from(room).unwrap_or(u32::MAX);
+            // SAFETY: a global command of a loaded entry, for no layer, into `count` properties.
+            let answer = unsafe { enumerate(std::ptr::null(), &mut count, listed.as_mut_ptr()) };
+            match answer {
+                vk::Result::SUCCESS => {
+                    listed.truncate(count as usize);
+                    return Ok(ListedExtensions(listed));
+                }
+                vk::Result::INCOMPLETE => room *= 2,
+                error => return Err(vulkan(error)),
+            }
+        }
     }
 
     /// Whether the loader listed the instance extension `name`.
