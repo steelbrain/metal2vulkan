@@ -35,8 +35,8 @@
 //!   the last; so does the last here, and `kept_bytes.rs` keeps a stored attachment in place),
 //!   its attachments or its clear values.
 //! - **A depth/stencil attachment** ([`depth_stencil_opens`]) the texture's own image (not the
-//!   scratch image of separate depth and stencil textures, `depth_stencil_scratch.rs`, nor a
-//!   stand-in, `attachment_stand_in.rs`), held in `GENERAL` (`render_target::depth_layout`: a
+//!   scratch image of separate depth and stencil textures, `depth_stencil_scratch.rs`, a
+//!   stand-in, `attachment_stand_in.rs`, or a texture over a buffer), held in `GENERAL` (`render_target::depth_layout`: a
 //!   single-sampled one is), of no memoryless aspect, resolved nowhere, each aspect it names
 //!   loaded `Load` or `Clear` (but a NaN depth clear, which the end writes apart and loads,
 //!   `nan_clear.rs`) and stored `Store`, not late; an aspect of the texture it does not name
@@ -300,7 +300,8 @@ pub(super) fn opens_inline(
 /// Whether the depth/stencil attachment `ds` of a pass of `layout` on `device` lets its first
 /// instance record inline over `area` ([`inline_area`]; the module docs), else the first check it
 /// fails ([`NotInline`]): the texture's own image (no separate depth and stencil textures'
-/// scratch, stand-in or hidden depth and stencil), held in `GENERAL` (`render_target::depth_layout`),
+/// scratch, stand-in, texture over a buffer or hidden depth and stencil), held in `GENERAL`
+/// (`render_target::depth_layout`),
 /// of no memoryless aspect, resolved nowhere, each aspect it names loaded where the instance
 /// renders over the render area or cleared over the reach it renders over, and stored `Store`,
 /// not late, its depth's clear no NaN written apart; an aspect it does not name but keeps (the
@@ -340,7 +341,8 @@ fn depth_stencil_opens(
         return Err(NotInline::Actions(ActionsRefused::UnequalReach));
     }
     let written_nan = ds.depth.as_ref().is_some_and(|depth| depth.written_nan);
-    if ds.separate.is_some() || ds.stand_in.is_some() || written_nan {
+    let apart = ds.separate.is_some() || ds.stand_in.is_some() || ds.target.texture.over_buffer();
+    if apart || written_nan {
         return Err(NotInline::Attachments);
     }
     Ok(())

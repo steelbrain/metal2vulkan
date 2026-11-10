@@ -1589,7 +1589,8 @@ pub(crate) enum NotInline {
     BufferTextures,
     /// Another color attachment kind: a stand-in, planes, a clear made apart, an extended-range
     /// format, or a bound linear image; or another depth/stencil attachment kind: separate depth
-    /// and stencil textures' scratch, a stand-in, or a NaN depth clear written apart.
+    /// and stencil textures' scratch, a stand-in, a texture over a buffer, or a NaN depth clear
+    /// written apart.
     Attachments,
     /// The pass's layout allowed it, and its first draw that records reads or writes a color
     /// attachment as storage (a fetch in the pixel interlock leaves it out of the subpass).
@@ -6018,7 +6019,7 @@ pub struct WorkCounts {
     /// Of them, those with a color attachment of another kind: a stand-in, planes, a clear made
     /// apart, an extended-range format, or a bound linear image (`linear_attachment.rs`); or a
     /// depth/stencil attachment of another kind: separate depth and stencil textures' scratch, a
-    /// stand-in, or a NaN depth clear written apart.
+    /// stand-in, a texture over a buffer, or a NaN depth clear written apart.
     pub passes_not_inline_attachments: u64,
     /// Of them, those whose layout allowed it and whose first draw that records reads or writes a
     /// color attachment as storage: a fetch in the pixel interlock, which leaves it out of the
