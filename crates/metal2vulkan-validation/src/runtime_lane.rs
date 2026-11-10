@@ -1306,7 +1306,8 @@ pub fn validated_options(messages: &Messages, cache: &Path) -> DeviceOptions {
 /// queue. A device's `VkQueue`s are made and dropped with it, and on an RTX 5080 Laptop GPU a
 /// device of its plan's 17 took 445 ms to make and 110 ms to drop, one of these 2 queues 145 ms
 /// and 44 ms, the driver making one device at a time across processes: the lane, which makes
-/// thousands, ran in 18 minutes where it took 51. On a device whose families have no queue to
+/// thousands, takes 28 minutes there at these limits, its tests whose work needs the plan making
+/// theirs at it, and 51 with every device at its plan. On a device whose families have no queue to
 /// spare the limits leave its plan as it is. Where they change a placement from what the plan
 /// gives, the device says so (`metal2vulkan-queue-limits-reached`), which fails the run
 /// ([`QUEUE_LIMITS_REACHED`](crate::candidate::runtime_case::QUEUE_LIMITS_REACHED)): a test whose
