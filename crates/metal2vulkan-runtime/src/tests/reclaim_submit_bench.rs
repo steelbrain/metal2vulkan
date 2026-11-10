@@ -632,11 +632,19 @@ fn phase(
             memory.turnover_bytes(),
         )
     };
-    let placements: Vec<String> = (crate::device::lock(&device.shared().memory)
-        .image_placements
-        .iter())
-    .map(|(&(bytes, align), count)| format!("{count} of {bytes} bytes at {align}"))
-    .collect();
+    let (placements, ahead) = {
+        let mut memory = crate::device::lock(&device.shared().memory);
+        let placements: Vec<String> = (memory.image_placements.iter())
+            .map(|(&(bytes, align), count)| format!("{count} of {bytes} bytes at {align}"))
+            .collect();
+        let ahead: Vec<String> = (memory.ahead_by_pool().into_iter())
+            .map(|(pool, bytes)| {
+                let grows = memory.grows(pool);
+                format!("{pool:?} {} MiB, grows {grows}", bytes >> 20)
+            })
+            .collect();
+        (placements, ahead)
+    };
     let over = |times: &[(Duration, f64)], bound: f64| {
         (times.iter())
             .filter(|&&(took, _)| took.as_secs_f64() * 1e3 >= bound)
@@ -709,8 +717,10 @@ fn phase(
         frees.kept_for_room - earlier_frees.kept_for_room,
     );
     eprintln!(
-        "RECLAIM-SUBMIT {arm}, {name}: images placed by bytes and alignment [{}]",
-        placements.join(", ")
+        "RECLAIM-SUBMIT {arm}, {name}: images placed by bytes and alignment [{}]; kept ahead at \
+         the phase's end by pool [{}]",
+        placements.join(", "),
+        ahead.join(", ")
     );
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest submissions {slow}");
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest turnarounds {slow_turns}");
