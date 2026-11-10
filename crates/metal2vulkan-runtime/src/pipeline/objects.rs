@@ -231,14 +231,15 @@ pub(crate) fn evict_kept_for_samplers(device: &Device) -> bool {
     true
 }
 
-/// Let go of the device's modules, pipeline layouts, sampler sets and graphics pipeline libraries
-/// nothing holds now, in that order (each later one may be what an earlier one was made with), in
-/// the program's order: after the kept variants applied their queue.
+/// Let go of the device's graphics pipeline libraries, modules, pipeline layouts and sampler sets
+/// nothing holds now, in the program's order: after the kept variants applied their queue. In
+/// that order, so one settle lets go of all an evicted instance held: a linked pipeline holds its
+/// layout (`libraries.rs`), and a layout the samplers it bakes (`shared_layouts.rs`).
 fn settle_device_maps(device: &Device) {
+    settle_libraries(device);
     settle_modules(device);
     settle_layouts(device);
     settle_sampler_sets(device);
-    settle_libraries(device);
 }
 
 /// Let go of the device's sampler sets no variant holds any more (`content_keyed.rs`): in a
