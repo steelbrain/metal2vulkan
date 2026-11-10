@@ -33,7 +33,7 @@
 //!
 //! - **Ahead.** `memory::keep_room`, which the device's creation calls run, starts a making for a
 //!   pool the encodings and commits place in once the pool grew (a second or later pooled block
-//!   was added to it within `KEPT_EMPTY_FOR`) and lacks room for a whole block, so that a growth
+//!   was added to it within `KEPT_EMPTY_FOR`), so that a growth
 //!   like a guest's scroll on the 780M (from 20 to 63 live blocks of 64 MiB in about 20 s, about 4
 //!   a second) finds a block made when it needs one; and, grown or not, once the pool is near its
 //!   next block (`Pool::near_next`: it holds a pooled block and lacks room for three quarters of
@@ -49,8 +49,17 @@
 //!   its own size (`memory::pooled_block_bytes`), one block of the largest such size besides
 //!   them, which a call that needs one of the pool's own blocks leaves to those placements, so
 //!   that a burst of textures that outruns the makings of the pool's own blocks does not take it
-//!   (`tests::blocks_ahead`). They are made one after another once a burst ended; those it lacks are queued after the blocks its thread still makes, or made on a
-//!   new thread where that ended. So each making stays as short as its block, and the pool's growth
+//!   (`tests::blocks_ahead`). Its own blocks are counted in bytes with its room
+//!   (`Memory::lacking`): it lacks them once those made ahead and the longest free range of its
+//!   blocks come to less than their worth, and then as many as bring those made ahead to it. So
+//!   the block a call just took, which leaves a whole block of room, is made again as soon as a
+//!   placement takes any of that room, not once the pool lacks room for a whole block: on an RX 550
+//!   a 31.6 MiB texture placed in a 64 MiB block just taken left less than the half block the next
+//!   creation call keeps, and that call waited for a making it started itself
+//!   (`tests::blocks_ahead`'s mixed sizes, at textures 8, 16 and 24 of 32). A placement of a
+//!   quarter of a block or more starts the making there and then (`memory::place`), not at the
+//!   next creation call. They are made one after another once a burst ended; those it lacks are
+//!   queued after the blocks its thread still makes, or made on a new thread where that ended. So each making stays as short as its block, and the pool's growth
 //!   still finds its blocks made: with one block of 16 MiB ahead at a time, a guest's scroll on a
 //!   Radeon 780M whose blocks were made so made 82 to 114 blocks of images on its own threads and
 //!   waited for 110 to 159 of those made ahead. It keeps them for as long as it stays near its
@@ -79,7 +88,10 @@
 //!   the thread looks for a waiting call after it says it reads and before each run of reads. A
 //!   call makes its own block (`WorkCounts::buffer_blocks_made_in_place`,
 //!   `image_blocks_made_in_place`) only where no making serves it: a placement in the host copies'
-//!   pool while its thread reads; a call whose making failed, or whose host starts no thread; and
+//!   pool while its thread reads; a call whose makings failed twice (a making that ended without
+//!   its block, as one no call waited for as it began does within the allocation margin below,
+//!   dropping the sizes queued behind it, is waited for once more on a making the call waits for
+//!   from its start), or whose host starts no thread; and
 //!   a placement before the device's first creation call, which gives the makings the device's
 //!   functions and queues. A pool's blocks change only at those calls, never as a making here
 //!   ends.

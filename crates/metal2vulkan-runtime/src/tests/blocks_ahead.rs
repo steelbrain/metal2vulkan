@@ -405,22 +405,32 @@ const MIXED_ROUNDS: usize = 4;
 
 /// A pool of 64 MiB blocks whose placements take up to half a block each keeps its next block
 /// made ahead of the call that needs it: after the pool's first block, no creation call waits for
-/// a block of images, and none makes one. On a Radeon 780M, `tests::reclaim_submit_bench`'s mixed
-/// arm waited for 8 of its 13 blocks of images in its quiet phase, each making started only as
-/// the call needed it.
+/// a block of images, and none makes one. On an RX 550 the calls after a 31.6 MiB texture waited
+/// for a making they started themselves (textures 8, 16 and 24) while the pool's blocks made
+/// ahead were counted by whole blocks of room, and on a Radeon 780M
+/// `tests::reclaim_submit_bench`'s mixed arm waited for 8 of its 13 blocks of images in its quiet
+/// phase. Where the device's makings were slow and its blocks of images were made smaller
+/// (`Memory::plain_block_made`, lavapipe), the first texture larger than them waits for its
+/// block of its own size, which nothing foretold
+/// (`placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead`); no other.
 #[test]
 fn mixed_sizes_find_their_blocks_made_ahead() {
     let scratch = Scratch::new("mixed");
     let device = device(&scratch.0);
     let shared = device.shared();
     let ahead = || crate::device::lock(&shared.memory).ahead_blocks();
+    let plain = || crate::device::lock(&shared.memory).plain_block_bytes();
     let mut held: Vec<Texture> = Vec::new();
     texture(&device, MIXED_SIDES[0], &mut held);
     let start = ahead();
-    let mut waits = Vec::new();
+    let (mut waits, mut first_large) = (Vec::new(), None);
     for at in 1..MIXED_SIDES.len() * MIXED_ROUNDS {
+        let (width, height) = MIXED_SIDES[at % MIXED_SIDES.len()];
+        if first_large.is_none() && width * height * 4 > plain() {
+            first_large = Some(at);
+        }
         let before = ahead().images_waited_for;
-        texture(&device, MIXED_SIDES[at % MIXED_SIDES.len()], &mut held);
+        texture(&device, (width, height), &mut held);
         let after = ahead();
         if after.images_waited_for > before {
             waits.push(at);
@@ -445,10 +455,11 @@ fn mixed_sizes_find_their_blocks_made_ahead() {
         (end.images_ahead + end.images_in_place) - (start.images_ahead + start.images_in_place);
     println!(
         "BLOCKS-AHEAD {}: {} textures of mixed sizes in blocks of {} MiB; after the first, {blocks} \
-         blocks of images, {} made ahead, {} waited for (at textures {waits:?}), {} in place",
+         blocks of images, {} made ahead, {} waited for (at textures {waits:?}; the first larger \
+         than the blocks {first_large:?}), {} in place",
         device.name(),
         held.len(),
-        crate::device::lock(&shared.memory).plain_block_bytes() >> 20,
+        plain() >> 20,
         end.images_ahead - start.images_ahead,
         end.images_waited_for - start.images_waited_for,
         end.images_in_place - start.images_in_place,
@@ -457,9 +468,12 @@ fn mixed_sizes_find_their_blocks_made_ahead() {
         end.images_in_place, start.images_in_place,
         "a creation call made a block of images itself"
     );
+    let unforetold: Vec<usize> = (waits.iter().copied())
+        .filter(|&at| Some(at) != first_large)
+        .collect();
     assert!(
-        waits.is_empty(),
-        "creation calls waited for a block of images at textures {waits:?}"
+        unforetold.is_empty(),
+        "creation calls waited for a block of images at textures {unforetold:?}"
     );
 }
 

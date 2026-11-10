@@ -992,7 +992,10 @@ driver's. Each is open work.
   a block's worth of bytes made ahead (`memory/ready.rs`; the pools of exportable buffers, which
   hold the pictures, among them): as many of its blocks as one 64 MiB block holds, and while its
   placements larger than a plain pool's smaller blocks are recent, one block of their size
-  besides, one `vkAllocateMemory` each, right after a burst of the device's submissions ended. A
+  besides, one `vkAllocateMemory` each, right after a burst of the device's submissions ended.
+  Its own blocks are counted in bytes with its free room: they are made again once those made
+  ahead and its room come to less than a block's worth, a placement of a quarter of a block or
+  more starting their making at once rather than at the next creation call. A
   creation call that needs one while its making still waits for that end makes it at once and
   waits for it, as for a block made in place, and one that finds none of its size made waits for
   the ready thread to make it first. A pool near its next block keeps those blocks at rest for as
