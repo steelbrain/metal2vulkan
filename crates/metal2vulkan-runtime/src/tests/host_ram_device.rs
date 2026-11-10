@@ -680,8 +680,14 @@ impl AtTheMargin {
 
     /// Let go of the RAM's use, the objects first: its keep-alive goes after the last chunk.
     fn let_go(self, objects: Vec<Buffer>) {
-        let dropped = Arc::clone(&self.dropped);
-        drop((objects, self));
+        let AtTheMargin {
+            opener,
+            used,
+            ram,
+            dropped,
+            ..
+        } = self;
+        drop((objects, opener, used, ram));
         assert!(
             settles(&dropped),
             "the keep-alive goes after the last chunk"
