@@ -210,9 +210,13 @@ fn the_paths_follow_the_verdicts() {
     let after = device.work_counts();
     let grouped = after.grouped_submissions - before.grouped_submissions;
     println!("grouped submissions: {grouped}");
+    // Batches group only on a queue whose failures are not relayed, each relayed batch taking a
+    // fence (`command_buffer/group.rs`): MoltenVK's, which answered `Holds` under load.
+    let shared = device.shared();
+    let relays = (0..shared.queues.len()).any(|queue| shared.flights(queue).is_some());
     assert_eq!(
         grouped > 0,
-        device.submissions_merge(),
+        device.submissions_merge() && !relays,
         "grouping against the merge verdict"
     );
     // A long `Shared` buffer lies in fresh pages where a held import costs nothing.

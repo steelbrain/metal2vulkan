@@ -93,9 +93,9 @@
 //!   the device's life, unrecorded, where the last one's floors fall short of the margin, and
 //!   `Unchecked` only past it. Load moves the merge's floors either way, its halves agreeing: in
 //!   one full run of the runtime's and the validation crate's device tests on the Radeon 780M
-//!   (RADV, Mesa 26.2.6, Linux 7.3.1), 32 of 2,527 devices answered `Fails`, one call of four at
-//!   0.6 to 1.2 of the calls apart where a quiet device's is 0.35; and on the M3 Max beside loops
-//!   of the runtime's device tests (MoltenVK 1.4.2), M3_HOLDS of M3_ANSWERS answered `Holds`, at
+//!   (RADV, Mesa 26.2.6, Linux 7.3.1), 32 of 2,531 devices answered `Fails`, one call of four at
+//!   0.6 to 1.15 of the calls apart where a quiet device's is 0.35; and on the M3 Max beside loops
+//!   of the runtime's device tests (MoltenVK 1.4.2), 145 of 15,181 answered `Holds`, at
 //!   0.29 and up where its quiet tries are 0.81 to 0.91 (2026-11-10). One try recorded each, for
 //!   the kernel's release. So a merge verdict is recorded only where its try's floors are clear of
 //!   that load ([`merge_clear`]: a `Holds` at most [`MERGE_HOLDS_CLEAR`] of the calls apart, a
