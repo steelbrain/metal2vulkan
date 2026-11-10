@@ -1067,6 +1067,17 @@ fn a_scattered_overwrite_of_logged_pages_merges_back_in_whole_blocks() {
 /// its rows (the next 256-byte block of a row), far right of it, and below it.
 const BESIDE: [(u64, u64); 3] = [(64, 10), (900, 40), (10, 100)];
 
+/// Raises its flag as it goes, on a panic's unwind too: a thread of a `std::thread::scope` that
+/// runs until the flag is raised ends once the thread holding this ends, however it ends, so the
+/// scope (which waits for every thread it started before it returns or unwinds) ends too.
+struct Stops<'a>(&'a AtomicBool);
+
+impl Drop for Stops<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 #[test]
 fn a_pass_storing_its_loaded_area_keeps_a_cpu_write_beside_it() {
     const ROUNDS: usize = 8;
@@ -1136,17 +1147,23 @@ fn a_pass_storing_its_loaded_area_keeps_a_cpu_write_beside_it() {
                     }
                 }
             });
-            while !started.load(Ordering::SeqCst) {
+            // Raised as this thread leaves, a panic's unwind included: the scope waits for the
+            // writer, which runs until it is raised.
+            let stops = Stops(&stop);
+            // A writer that ended (a panic) never starts.
+            while !started.load(Ordering::SeqCst) && !writer.is_finished() {
                 std::hint::spin_loop();
             }
-            pass(
-                &device,
-                &target,
-                LoadAction::Load,
-                square,
-                [0.0, 0.0, 0.0, 1.0],
-            );
-            stop.store(true, Ordering::SeqCst);
+            if started.load(Ordering::SeqCst) {
+                pass(
+                    &device,
+                    &target,
+                    LoadAction::Load,
+                    square,
+                    [0.0, 0.0, 0.0, 1.0],
+                );
+            }
+            drop(stops);
             writer.join().unwrap()
         });
         sweeps += last.1;
