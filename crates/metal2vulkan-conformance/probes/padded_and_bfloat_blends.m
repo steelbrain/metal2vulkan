@@ -4,6 +4,7 @@
 //   create <format> <state>   make the pipeline (blending on at colour 0) and print CREATED or
 //                             REFUSED with Metal's words. One shape a process: a pipeline Metal's
 //                             own validation asserts on ends the process.
+//   bare <format> <state>     the same without a fragment function.
 //   sweep <format>...         blend every state below into a 256 x 256 target of random raw texels,
 //                             for a `half4` and a `float4` output, under fast and safe math, and
 //                             write the inputs and the stored texels into out/ for the analysis.
@@ -89,6 +90,8 @@ static const State kStates[] = {
      O(Add), M(Green) | M(Alpha), NO},
     {"premul-rgb", F(One), F(OneMinusSourceAlpha), O(Add), F(One), F(OneMinusSourceAlpha), O(Add),
      M(Red) | M(Green) | M(Blue), NO},
+    {"premul-none", F(One), F(OneMinusSourceAlpha), O(Add), F(One), F(OneMinusSourceAlpha), O(Add),
+     M(None), NO},
 };
 #undef F
 #undef O
@@ -327,6 +330,31 @@ static BOOL roundTrip(const Format *f, const uint8_t *dst) {
     return memcmp(back.contents, dst, (size_t)N * f->bytes) == 0;
 }
 
+// `create` without a fragment function: the blend is the descriptor's alone.
+static int bare(const char *fname, const char *sname) {
+    const Format *f = formatNamed(fname);
+    const State *s = stateNamed(sname);
+    if (!f || !s) return 2;
+    setup();
+    MTLRenderPipelineDescriptor *rp = [MTLRenderPipelineDescriptor new];
+    rp.vertexFunction = [gLibrary[0] newFunctionWithName:@"vs"];
+    MTLRenderPipelineColorAttachmentDescriptor *c = rp.colorAttachments[0];
+    c.pixelFormat = (MTLPixelFormat)f->format;
+    c.blendingEnabled = YES;
+    c.sourceRGBBlendFactor = s->srgb;
+    c.destinationRGBBlendFactor = s->drgb;
+    c.rgbBlendOperation = s->oprgb;
+    c.sourceAlphaBlendFactor = s->sa;
+    c.destinationAlphaBlendFactor = s->da;
+    c.alphaBlendOperation = s->opa;
+    c.writeMask = s->mask;
+    NSError *error = nil;
+    id<MTLRenderPipelineState> p = [gDevice newRenderPipelineStateWithDescriptor:rp error:&error];
+    printf("%s %s %s no-fragment\n", p ? "CREATED" : "REFUSED", f->name, s->name);
+    if (!p) printf("  %s\n", error.localizedDescription.UTF8String);
+    return 0;
+}
+
 static int create(const char *fname, const char *sname) {
     const Format *f = formatNamed(fname);
     const State *s = stateNamed(sname);
@@ -488,6 +516,7 @@ static int tile(int argc, char **argv) {
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc >= 4 && strcmp(argv[1], "create") == 0) return create(argv[2], argv[3]);
+        if (argc >= 4 && strcmp(argv[1], "bare") == 0) return bare(argv[2], argv[3]);
         if (argc >= 3 && strcmp(argv[1], "sweep") == 0) return sweep(argc - 2, argv + 2);
         if (argc >= 3 && strcmp(argv[1], "tile") == 0) return tile(argc - 2, argv + 2);
         fprintf(stderr, "usage: create <format> <state> | sweep <format>... | tile <format>...\n");
