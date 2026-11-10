@@ -469,6 +469,99 @@ fn heap_decodes_record_the_device_pack_conversion() {
     }
 }
 
+/// A heap sample the function emulates (`sampler::heap_raw`) records the filter's note
+/// (`PrecisionNote::BicubicFilterArithmetic`, the device's sum of the decoded taps) as a slot's
+/// sample does, on every committed profile with a sampled heap: through a runtime sampler slot
+/// only where the word of the sampler bound there filters (`SpecKey::BoundSamplerWord`: its
+/// clauses hold for a linear word and not for a nearest one); through a constexpr linear sampler
+/// whatever is bound; and through a constexpr nearest sampler, or as a gather, not at all.
+#[test]
+fn a_heap_sample_s_filter_note_follows_the_bound_sampler_word() {
+    use crate::bind::SamplerDescriptor;
+    use crate::metal::sampler::SamplerWord;
+    use crate::metal::SamplerMinMagFilter as F;
+    use crate::pipeline::{PrecisionNote, SpecClause};
+    let note = PrecisionNote::BicubicFilterArithmetic;
+    let sampler = SlotRef {
+        stage: Stage::Kernel,
+        class: SlotClass::Sampler,
+        index: 0,
+    };
+    let word = |filter| {
+        let mut d = SamplerDescriptor::new();
+        (d.min_filter, d.mag_filter) = (filter, filter);
+        SamplerWord::of(&d).0
+    };
+    let holds = |clause: &SpecClause, word: u32| {
+        clause.all.iter().all(|t| {
+            assert_eq!(t.key, SpecKey::BoundSamplerWord(sampler), "{clause:?}");
+            ((word & t.mask) == t.bits) == t.equal
+        })
+    };
+    let consts = FunctionConstantValues::defaults();
+    let entry = EntryRef::Name("k");
+    let inputs = LowerInputs::new();
+    // (the sampling, whether it records the note, whether its note tests the bound word).
+    let cases = [
+        (Sampling::Runtime, true, true),
+        (Sampling::Sample(words(true, false)), true, false),
+        (Sampling::HalfSample(words(true, false)), true, false),
+        (Sampling::Sample(words(false, false)), false, false),
+        (Sampling::Gather(words(true, false)), false, false),
+    ];
+    for (s, recorded, bound) in cases {
+        let Some(bc) = assemble("heap_filter_note", &sampling_kernel(s)) else {
+            return;
+        };
+        let mut compiled = 0;
+        for (stem, p) in committed_profiles().expect("profiles") {
+            let what = format!("{s:?} on {stem}");
+            let a = match compile_bitcode(
+                &bc,
+                entry,
+                &consts,
+                &p,
+                &inputs,
+                &mut meter(),
+                SPIRV_WORDS,
+            ) {
+                Ok(a) => a,
+                Err(Error::Unsupported(Unsupported {
+                    feature: Feature::ArgumentBufferTextures,
+                    ..
+                })) => continue,
+                Err(e) => panic!("{what}: {e}"),
+            };
+            assert_eq!(
+                a.precision.contains(&note),
+                recorded,
+                "{what}: {:?}",
+                a.precision
+            );
+            let when: Vec<&SpecClause> = (a.specialized.iter())
+                .filter(|s| s.note == note)
+                .flat_map(|s| &s.when)
+                .collect();
+            assert_eq!(!when.is_empty(), bound, "{what}: {when:?}");
+            if bound {
+                assert!(
+                    when.iter().any(|c| holds(c, word(F::Linear))),
+                    "{what}: a linear word"
+                );
+                assert!(
+                    !when.iter().any(|c| holds(c, word(F::Nearest))),
+                    "{what}: a nearest word"
+                );
+            }
+            compiled += 1;
+        }
+        assert!(
+            compiled > 0,
+            "{s:?}: no committed profile has the sampled heap"
+        );
+    }
+}
+
 /// A heap `float` read's `DevicePackConversion` holds where its command can name a texture the heap
 /// holds by its raw texels alone: on every committed profile with a sampled heap, a plan of its
 /// pipeline gives `SpecKey::HeapRawTextures` 1 exactly where a texture the command makes resident

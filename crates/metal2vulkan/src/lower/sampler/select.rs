@@ -644,9 +644,21 @@ fn heap_raw_sample(
     }
     // Every sample takes the `float` routine, a `half` one the `half` routine too.
     crate::lower::texture::heap_raw::plan(cx, group, &[false, half], m)?;
-    // A linear filter's sum of the decoded taps is the device's arithmetic (`extended::filtered`).
-    if gather.is_none() && !matches!(state, State::Constant { linear: false, .. }) {
-        cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
+    // A linear filter's sum of the decoded taps is the device's arithmetic (`extended::filtered`):
+    // a constexpr sampler's that filters, and a runtime sampler slot's where the word bound there
+    // filters (`linear::filtering_word`), as a word that reads one texel takes that texel alone.
+    if gather.is_none() {
+        let note = PrecisionNote::BicubicFilterArithmetic;
+        match state {
+            State::Constant { linear: false, .. } => {}
+            State::Constant { .. } => {
+                cx.precision.insert(note);
+            }
+            State::Slot { sampler: n } => {
+                let when = any_of(super::linear::filtering_word(n));
+                cx.note_when(note, when, m)?;
+            }
+        }
     }
     Ok(Some(HeapRaw {
         state,
@@ -1612,9 +1624,21 @@ fn select_extended(
     cx.families.arith.converts(form);
     let filters = !form.bfloat() && gather.is_none();
     // A linear filter's sum of the decoded taps is the device's arithmetic, as a bicubic
-    // sample's is (its 2D routine), not Metal's datapath.
-    if filters && !matches!(state, State::Constant { linear: false, .. }) {
-        cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
+    // sample's is (its 2D routine), not Metal's datapath: a constexpr sampler's that filters, and
+    // a runtime sampler slot's where the word bound there filters (`linear::filtering_word`), as a
+    // word that reads one texel of one level takes that texel alone.
+    if filters {
+        let note = PrecisionNote::BicubicFilterArithmetic;
+        match state {
+            State::Constant { linear: false, .. } => {}
+            State::Constant { .. } => {
+                cx.precision.insert(note);
+            }
+            State::Slot { sampler: n } => {
+                let when = any_of(super::linear::filtering_word(n));
+                cx.note_when(note, when, m)?;
+            }
+        }
     }
     if cubic.is_some() {
         cx.families
@@ -1623,14 +1647,22 @@ fn select_extended(
             .insert(super::bicubic::routines::Routine::Plane);
         cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
     }
-    // A linear mip filter's blend of two levels (not a 3D texture's).
-    let blends = match level {
-        Level::Base => false,
-        Level::Stated { stated, .. } => stated.linear,
-        Level::Word { .. } => form.blends_levels() && !volume,
-    };
-    if blends {
-        cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
+    // A linear mip filter's blend of two levels (not a 3D texture's): a runtime sampler slot's
+    // where the word bound there states one.
+    match level {
+        Level::Base => {}
+        Level::Stated { stated, .. } => {
+            if stated.linear {
+                cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);
+            }
+        }
+        Level::Word { sampler, .. } => {
+            if form.blends_levels() && !volume {
+                let [_, linear_mip] = super::linear::filtering_word(sampler);
+                let when = any_of([linear_mip]);
+                cx.note_when(PrecisionNote::BicubicFilterArithmetic, when, m)?;
+            }
+        }
     }
     let coord = ops
         .get(TexRole::Coord)

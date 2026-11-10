@@ -373,6 +373,8 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
         let coords = buffer_with(device, &coords).unwrap();
         // Metal's nearest `float` samples, which its `half` ones narrow.
         let mut nearest_floats = Vec::new();
+        let note = Degradation::from_precision_note(PrecisionNote::BicubicFilterArithmetic);
+        let mut announced = counts(&messages.take_notices());
         for (linear, filter) in [SamplerMinMagFilter::Nearest, SamplerMinMagFilter::Linear]
             .into_iter()
             .enumerate()
@@ -483,6 +485,18 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
                     ));
                 }
             }
+            // A nearest sampler's sample is the decoded texel at Metal's position: the filter's
+            // note follows the bound sampler's word, so the nearest samples announce none.
+            let samples = counts(&messages.take_notices());
+            if linear == 0 {
+                assert!(
+                    !samples.contains_key(&note),
+                    "the nearest samples announced bicubic-filter-arithmetic: {samples:?}"
+                );
+            }
+            for (kind, n) in samples {
+                *announced.entry(kind).or_insert(0) += n;
+            }
         }
         for line in &wrong {
             println!("RGB10A2-SRGB-DIFFERS {}: {line}", device.name());
@@ -497,9 +511,7 @@ fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
             "{} answers differ from Metal's",
             wrong.len()
         );
-        let announced = counts(&messages.take_notices());
         assert_counted(&announced, moved, "the kernels' reads, writes and samples");
-        let note = Degradation::from_precision_note(PrecisionNote::BicubicFilterArithmetic);
         assert!(
             filtered == 0 || announced.contains_key(&note),
             "{filtered} linear sample lanes apart, bicubic-filter-arithmetic unannounced"

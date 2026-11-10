@@ -1681,3 +1681,142 @@ fn the_samples_of_one_slot_call_one_routine() {
         }
     }
 }
+
+/// A sample of an extended-range texture through the runtime sampler of slot 0 records the
+/// filter's note (`PrecisionNote::BicubicFilterArithmetic`, the device's sum of the decoded taps)
+/// only where the word of the sampler bound there filters: specialized on that word
+/// (`SpecKey::BoundSamplerWord`), a clause holding for a linear minification or magnification
+/// filter, anisotropy, a cubic filter or a linear mip filter, and none for a nearest word, whose
+/// sample is the decoded texel at Metal's position. A constexpr sampler keeps its rule: a linear
+/// one records the note whatever is bound, a nearest one none. A `bfloat` form's sample reads the
+/// nearest texel whatever the filter and records none.
+#[test]
+fn a_runtime_sampler_s_filter_note_holds_only_where_the_bound_word_filters() {
+    use crate::metal::{SamplerMinMagFilter as F, SamplerMipFilter as Mip};
+    use crate::pipeline::artifact::{PrecisionNote, SpecClause};
+    let note = PrecisionNote::BicubicFilterArithmetic;
+    let sampler = SlotRef {
+        stage: Stage::Kernel,
+        class: SlotClass::Sampler,
+        index: 0,
+    };
+    let desc = |min, mag, mip, anisotropy| {
+        let mut d = SamplerDescriptor::new();
+        (d.min_filter, d.mag_filter, d.mip_filter) = (min, mag, mip);
+        d.max_anisotropy = anisotropy;
+        SamplerWord::of(&d).0
+    };
+    // Each bound sampler's word, and whether a sample through it filters.
+    let words = [
+        (
+            "nearest",
+            desc(F::Nearest, F::Nearest, Mip::NotMipmapped, 1),
+            false,
+        ),
+        (
+            "nearest mip filter",
+            desc(F::Nearest, F::Nearest, Mip::Nearest, 1),
+            false,
+        ),
+        (
+            "linear",
+            desc(F::Linear, F::Linear, Mip::NotMipmapped, 1),
+            true,
+        ),
+        (
+            "linear min",
+            desc(F::Linear, F::Nearest, Mip::NotMipmapped, 1),
+            true,
+        ),
+        (
+            "linear mag",
+            desc(F::Nearest, F::Linear, Mip::NotMipmapped, 1),
+            true,
+        ),
+        (
+            "linear mip filter",
+            desc(F::Nearest, F::Nearest, Mip::Linear, 1),
+            true,
+        ),
+        (
+            "anisotropic",
+            desc(F::Nearest, F::Nearest, Mip::NotMipmapped, 16),
+            true,
+        ),
+        (
+            "cubic",
+            desc(F::Cubic, F::Cubic, Mip::NotMipmapped, 1),
+            true,
+        ),
+    ];
+    let holds = |clause: &SpecClause, word: u32| {
+        clause.all.iter().all(|t| {
+            assert_eq!(t.key, SpecKey::BoundSamplerWord(sampler), "{clause:?}");
+            ((word & t.mask) == t.bits) == t.equal
+        })
+    };
+    let forms = FORMS.into_iter().chain([
+        ExtendedRange::R10X6,
+        ExtendedRange::R10X6Srgb,
+        ExtendedRange::Rg10X12,
+        ExtendedRange::Rg10X12Srgb,
+        ExtendedRange::Rgb10A2Srgb,
+        ExtendedRange::R16Bfloat,
+        ExtendedRange::Rg16Bfloat,
+        ExtendedRange::Rgba16Bfloat,
+    ]);
+    let mut kernels = Vec::new();
+    for half in [false, true] {
+        for (name, through) in [
+            ("runtime", Through::Runtime),
+            (
+                "constexpr linear",
+                Through::Constexpr(words(true, 1, false, 0)),
+            ),
+            (
+                "constexpr nearest",
+                Through::Constexpr(words(false, 1, false, 0)),
+            ),
+        ] {
+            let what = format!("a {name} sampler's sample, half {half}");
+            let Some(bc) = assemble(&what, &sample_kernel(through, half, (0, 0), false)) else {
+                return;
+            };
+            kernels.push((what, bc, name));
+        }
+    }
+    let mut specialized = 0;
+    for ((stem, p), form) in profiles()
+        .into_iter()
+        .flat_map(|sp| forms.clone().map(move |form| (sp.clone(), form)))
+    {
+        let mut inputs = LowerInputs::new();
+        inputs.extended_range.insert(SOURCE, form);
+        for (what, bc, name) in &kernels {
+            let what = format!("{what} of {form:?} on {stem}");
+            let a = validate_entry(bc, "k", &inputs, &p, &what);
+            let when: Vec<&SpecClause> = (a.specialized.iter())
+                .filter(|s| s.note == note)
+                .flat_map(|s| &s.when)
+                .collect();
+            let recorded = a.precision.contains(&note);
+            match (*name, form.bfloat()) {
+                (_, true) | ("constexpr nearest", _) => {
+                    assert!(!recorded && when.is_empty(), "{what}: {:?}", a.precision);
+                }
+                ("constexpr linear", _) => {
+                    assert!(recorded && when.is_empty(), "{what}: {when:?}");
+                }
+                _ => {
+                    assert!(recorded && !when.is_empty(), "{what}: {:?}", a.specialized);
+                    for (word_name, word, filters) in &words {
+                        let held = when.iter().any(|c| holds(c, *word));
+                        assert_eq!(held, *filters, "{what}: a bound {word_name} sampler");
+                    }
+                    specialized += 1;
+                }
+            }
+        }
+    }
+    assert!(specialized > 0, "no runtime sampler's note was specialized");
+}

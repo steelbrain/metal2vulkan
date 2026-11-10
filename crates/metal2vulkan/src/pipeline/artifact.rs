@@ -877,7 +877,12 @@ pub enum PrecisionNote {
     /// few grid steps (`1/4080` at 8 bits), by the weights' distance times the taps (`2.1e-3` at
     /// most on an extended-range `_sRGB` texture's taps), and by up to `1/64` of the two levels'
     /// difference under a linear mip filter. A tap of an 8-bit sRGB texture held as its UNORM twin
-    /// is the device's decode of its code ([`PrecisionNote::SrgbTexelDecode`]).
+    /// is the device's decode of its code ([`PrecisionNote::SrgbTexelDecode`]). Through a runtime
+    /// sampler slot the note is specialized on the word of the sampler bound there
+    /// (`SpecKey::BoundSamplerWord`, which the runtime reads at each draw or dispatch): it holds
+    /// where that word filters (a linear minification or magnification filter, anisotropy, a cubic
+    /// filter or a linear mip filter), and a nearest word's sample, the decoded texel at Metal's
+    /// position, holds none.
     ///
     /// Inferences, taken by family: the signed clamp's lower bound, the treatment of the formats
     /// no case reads (`RG8UnormSRGB`, `RG8Unorm`, `RG8Snorm`, `RG16Unorm`, `BGRA8Unorm`,

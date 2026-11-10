@@ -3663,7 +3663,10 @@ bound.
   filter choice, level and clamps are Metal's. Metal's fixed-point weights, exact grid sums, float
   accumulators and sixty-fourth level fractions are not reproduced: a lane may differ by a few grid
   steps (`1/4080` at 8 bits), by up to `2.1e-3` on an extended-range sRGB texture's bicubic sample,
-  and by up to `1/64` of the two levels' difference under a linear mip filter.
+  and by up to `1/64` of the two levels' difference under a linear mip filter. Through a runtime
+  sampler slot it is announced at a draw or dispatch only where the bound sampler filters (a linear
+  minification or magnification filter, anisotropy, a cubic filter or a linear mip filter): a
+  nearest sampler's sample is the decoded texel at Metal's position.
 - `metal2vulkan-degrade-sparse-residency` (precision). `PrecisionNote::SparseResidency`: A stage
   samples or gathers a texture whose residency it observes (`sparse_color::resident()`) through the
   slot's sparse form, which the module has where the profile enables `shaderResourceResidency`:

@@ -113,8 +113,8 @@ pub(super) fn filter_note(
 /// The tests of the word of the sampler bound at runtime sampler slot `n` (`NoteOn::BoundSampler`,
 /// `SamplerWord`) of which one holds exactly where a sample through it filters, [`unfiltered`]'s
 /// rule read from the word: a linear minification or magnification filter, anisotropy or a cubic
-/// filter (any of their bits set), or a linear mip filter.
-fn filtering_word(n: u32) -> [NoteTest; 2] {
+/// filter (any of their bits set), or a linear mip filter (the second test).
+pub(super) fn filtering_word(n: u32) -> [NoteTest; 2] {
     let on = NoteOn::BoundSampler(n);
     let filters = SamplerWord::MIN_LINEAR
         | SamplerWord::MAG_LINEAR
