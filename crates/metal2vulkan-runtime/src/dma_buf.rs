@@ -849,16 +849,6 @@ impl Device {
         }
     }
 
-    /// The queue family the first move of an image over dma-buf pages acquires it for: the
-    /// device's one family, or `VK_QUEUE_FAMILY_IGNORED` where its images are concurrent among
-    /// several (`sharing.rs`), as Vulkan has an acquire of such an image name it.
-    pub(super) fn foreign_acquirer(&self) -> u32 {
-        match &self.shared().queue_families[..] {
-            [family] => *family,
-            _ => vk::QUEUE_FAMILY_IGNORED,
-        }
-    }
-
     /// [`Device::dma_buf_image`]'s image made and checked, unbound, with the request for its
     /// pages; why not where the device makes none before the source is asked.
     fn dma_buf_image_unbound(

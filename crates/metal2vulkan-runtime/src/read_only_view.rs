@@ -95,6 +95,7 @@ pub(super) const VIEWS_DROP_WRITES: bool = cfg!(target_os = "macos");
 #[derive(Debug)]
 pub(crate) struct ReadOnlyView {
     pointer: NonNull<u8>,
+    #[cfg(unix)]
     length: u64,
 }
 

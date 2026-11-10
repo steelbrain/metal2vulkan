@@ -1424,11 +1424,15 @@ fn runtime_sources() -> Vec<(String, String)> {
     fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            // These are portable source-audit keys, not native display paths;
+            // the same allowlist must match on Windows and Unix.
             let relative = path
                 .strip_prefix(root)
                 .unwrap()
-                .to_string_lossy()
-                .into_owned();
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
             if path.is_dir() {
                 if relative != "tests" {
                     walk(&path, root, out);

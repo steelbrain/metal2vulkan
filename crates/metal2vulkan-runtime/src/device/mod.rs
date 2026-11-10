@@ -94,6 +94,7 @@ use relay::Flights;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
+#[cfg(any(unix, test))]
 use std::time::Instant;
 use submit::{Internal, OwnTimeline};
 
@@ -315,6 +316,7 @@ pub(super) struct DeviceShared {
     pub(super) host_import: Result<Importer, metal2vulkan::error::Unsupported>,
     /// Whether the device imports a pointer to shared memory, once asked
     /// (`Device::imports_shared_host_pointers`).
+    #[cfg(unix)]
     pub(super) shared_pointer_imports: OnceLock<bool>,
     /// The commands of a render pipeline's extended dynamic states, where the device has them
     /// (`dynamic_state.rs`).
@@ -944,6 +946,7 @@ impl QueueSlot {
     }
 
     /// The value of the last batch submitted here; 0 before the first.
+    #[cfg(any(unix, test))]
     fn submitted_value(&self) -> u64 {
         self.submitted.load(Ordering::Acquire)
     }
@@ -1829,6 +1832,7 @@ impl Device {
             shader_cache,
             in_place: crate::in_place::InPlaceChecks::new(fail_in_place_check),
             host_import,
+            #[cfg(unix)]
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,
             sized_index_bind,
@@ -1940,6 +1944,7 @@ impl Device {
 
 impl exit_guard::InProcess for DeviceShared {
     /// Wait on each `VkQueue`'s timeline for the value of the last batch submitted there.
+    #[cfg(any(unix, test))]
     fn drain(&self, deadline: Option<Instant>) -> bool {
         let (timelines, values): (Vec<vk::Semaphore>, Vec<u64>) = self
             .queues
@@ -1971,5 +1976,18 @@ pub(super) fn device_error(error: metal2vulkan::error::Error) -> Error {
     match error {
         metal2vulkan::error::Error::Unsupported(unsupported) => Error::Unsupported(unsupported),
         other => Error::Compile(other),
+    }
+}
+
+// Queue ownership is independent of the OS used to import memory.
+impl Device {
+    /// The queue family the first move of an image over dma-buf pages acquires it for: the
+    /// device's one family, or `VK_QUEUE_FAMILY_IGNORED` where its images are concurrent among
+    /// several (`sharing.rs`), as Vulkan has an acquire of such an image name it.
+    pub(super) fn foreign_acquirer(&self) -> u32 {
+        match &self.shared().queue_families[..] {
+            [family] => *family,
+            _ => vk::QUEUE_FAMILY_IGNORED,
+        }
     }
 }

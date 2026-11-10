@@ -299,7 +299,7 @@ impl Device {
     /// as Metal answers nil. The import costs work per page here (on macOS about 11 to 20 ms per
     /// GiB measured on an M4 and an M3 Max), where Metal makes the buffer at once and pays at the
     /// first command using it (24 to 88 ms per GiB). Where the device refuses the pointer and
-    /// `memory` carries a dma-buf source ([`HostMemory::with_dma_buf`]), the dma-bufs it makes of
+    /// `memory` carries a dma-buf source (`HostMemory::with_dma_buf`), the dma-bufs it makes of
     /// the pages are imported instead. With Metal's private option bit 24
     /// ([`ResourceOptions::PRIVATE_BIT`]), the GPU's writes to the pages are dropped, as Metal's
     /// are: on macOS the pages are imported through a read-only view of them, by their pointer
@@ -328,7 +328,7 @@ impl Device {
     /// # Safety
     ///
     /// `memory` meets the contract of the [`HostMemory`] constructor that made it
-    /// ([`HostMemory::new`], [`HostMemory::with_dma_buf`]) for `length` bytes.
+    /// ([`HostMemory::new`], `HostMemory::with_dma_buf`) for `length` bytes.
     pub unsafe fn new_buffer_with_bytes_no_copy(
         &self,
         memory: HostMemory,
@@ -624,6 +624,8 @@ impl Device {
                 (buffer, memory, again, unwritable)
             }
         };
+        #[cfg(not(unix))]
+        let _ = again; // No releasable DMA-buf import exists on this platform.
         if unwritable {
             self.degrade_read_only_pages(call, pointer, length);
         }

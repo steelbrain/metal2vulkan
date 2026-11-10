@@ -944,6 +944,7 @@ impl Shape {
     }
 
     /// Whether `other` lays the bytes as this does: an import again of them as their first.
+    #[cfg(unix)]
     pub(super) fn same(&self, other: &Shape) -> bool {
         let at = |shape: &Shape| shape.mapped.map(Mapped::as_ptr);
         (

@@ -215,6 +215,8 @@ mod native;
 mod percall;
 mod runtime;
 mod vkfloor;
+#[cfg(windows)]
+mod windows;
 mod workloads;
 
 use gpu::Gpu;

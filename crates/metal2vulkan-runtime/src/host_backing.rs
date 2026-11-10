@@ -25,7 +25,7 @@ pub enum HostBacking {
     /// throughout.
     ImportedByPointer,
     /// In place: the device imported dma-bufs of the pages that the caller's source made
-    /// ([`HostMemory::with_dma_buf`](crate::HostMemory::with_dma_buf)), where it refused their
+    /// (`HostMemory::with_dma_buf`), where it refused their
     /// pointer. Released while idle and imported again as an import by pointer may be.
     ImportedAsDmaBuf,
     /// In place: bound in the device's import of a chunk of a guest RAM it uses

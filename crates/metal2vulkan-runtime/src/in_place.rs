@@ -169,10 +169,12 @@ pub(crate) enum Refusal {
     /// Over pages imported as dma-bufs: the caller's source made no one dma-buf of the texture's
     /// own pages (it failed, as a source of `udmabuf`s does where the pages are more runs of its
     /// file than one `udmabuf` takes, or answered with several chunks).
+    #[cfg(unix)]
     Source,
     /// Over pages imported as dma-bufs: no `DRM_FORMAT_MOD_LINEAR` image over one dma-buf of the
     /// texture's own pages was made for another reason (the modifier's features or limits, the
     /// image's memory past the pages, or the driver's import).
+    #[cfg(unix)]
     DmaBuf,
 }
 
@@ -185,7 +187,9 @@ impl Refusal {
             Refusal::Image => 2,
             Refusal::Pitch => 3,
             Refusal::Placement => 4,
+            #[cfg(unix)]
             Refusal::Source => 5,
+            #[cfg(unix)]
             Refusal::DmaBuf => 6,
         }
     }

@@ -167,7 +167,6 @@ pub(crate) mod host_shadow;
 mod in_place_image;
 pub(super) mod kept_image;
 pub(super) mod requirements;
-#[cfg(unix)]
 mod rotation;
 mod shared;
 mod staging_copy;
@@ -628,6 +627,7 @@ struct Raw {
 /// What keeps an image's `VkImage` beside the image: the dedicated import of dma-buf pages it is
 /// bound to (`dma_buf.rs`), freed after it is destroyed.
 pub(super) enum RawHold {
+    #[cfg(unix)]
     Import { _pages: ImageImport },
 }
 
@@ -635,10 +635,6 @@ pub(super) enum RawHold {
 /// (`dma_buf.rs`), freed after the image is destroyed.
 #[cfg(unix)]
 pub(super) type ImageImport = Arc<crate::dma_buf::DmaBufPages>;
-
-/// No image is made over dma-buf pages on this system.
-#[cfg(not(unix))]
-pub(super) type ImageImport = std::convert::Infallible;
 
 impl Raw {
     fn new(raw: vk::Image) -> Raw {
@@ -659,10 +655,9 @@ impl Raw {
 
     /// Whether the `VkImage` now is bound to a dedicated import of its own pages.
     fn dedicated(&self) -> bool {
-        match &*lock(&self.import) {
-            Some(RawHold::Import { .. }) => true,
-            None => false,
-        }
+        // Every retained hold is an import. Test the option itself so hosts
+        // without that import route do not match a reference to an empty enum.
+        lock(&self.import).is_some()
     }
 
     /// The `VkImage` now.
