@@ -1132,10 +1132,10 @@ driver's. Each is open work.
   fragmented phase's 13 or 14 whose block filled its own pages (8.6 to 14.0 ms). With blocks of
   images of 68 MiB, as made now (the same arms, three runs), a quiet phase had 0 or 1 such
   turnarounds, no fill missed and the makings' `vkAllocateMemory` 1.2 to 2.0 ms in all; a fragmented
-  one 1 to 4 (the slowest 33.1 ms, behind a missed block whose allocation took 29.4 ms), 1 or 2
-  fills of its 12 or 13 missed; of 957 submissions begun while a fill ran (one run), 1 turned around
-  in 8 ms or more (14.0 ms, fragmented), and in another run a 24.0 ms one began within a 32 ms fill
-  on the fragmented host. In a process that submits nothing the fill mostly misses
+  one 0 to 4 (the slowest 33.1 ms, behind a missed block whose allocation took 29.4 ms), 0 to 2 of
+  its 12 or 13 fills missed; of 957 submissions begun while a fill ran (one run), 1 turned around in
+  8 ms or more (14.0 ms, fragmented), and in another run a 24.0 ms one began within a 32 ms fill on
+  the fragmented host. In a process that submits nothing the fill mostly misses
   (`tests::block_fills` on the 780M: of 5 fills, 1 saved and 4 missed); why was not measured. The
   cost is the making thread's (the ready thread, off every submission's way): the exportable
   allocation (10 to 13 ms for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the pool;
