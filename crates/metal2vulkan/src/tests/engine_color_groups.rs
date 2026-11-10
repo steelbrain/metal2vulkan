@@ -1,9 +1,9 @@
 //! Render pipelines whose color attachments a device draws in groups
-//! (`pipeline::compile::color_group`): the owned fixtures `engine/color_groups` and
-//! `engine/color_groups_fetch` on `lavapipe` with four color attachments and four fragment output
-//! locations (Vulkan's floor, the device of the groups' lane), on `vk12-floor`, and on `lavapipe`
-//! as it is (eight), where nothing groups. `llvm-as` assembles the fixtures; a missing tool skips
-//! visibly.
+//! (`pipeline::compile::color_group`): the owned fixtures `engine/color_groups`,
+//! `engine/color_groups_fetch` and `engine/dfk_dead_group` on `lavapipe` with four color
+//! attachments and four fragment output locations (Vulkan's floor, the device of the groups' lane),
+//! on `moltenvk-m3` likewise, on `vk12-floor`, and on `lavapipe` as it is (eight), where nothing
+//! groups. `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
 use std::collections::BTreeSet;
 
@@ -12,8 +12,8 @@ use crate::cache::VariantKey;
 use crate::device::requirements::VkLimit;
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Capability, Error, Feature, InternalKind, Needs, RuntimeInput};
-use crate::library::Library;
-use crate::metal::PixelFormat;
+use crate::library::{FunctionConstantValue, FunctionConstantValues, Library};
+use crate::metal::{DataType, PixelFormat};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
@@ -36,7 +36,12 @@ fn fixture(name: &str) -> Option<Vec<u8>> {
 
 /// `lavapipe` drawing to four color attachments at once.
 fn four() -> Device {
-    let mut desc = description("lavapipe").expect("lavapipe");
+    narrowed("lavapipe")
+}
+
+/// The committed profile `stem` drawing to four color attachments at once.
+fn narrowed(stem: &str) -> Device {
+    let mut desc = description(stem).expect("profile");
     desc.limits.max_color_attachments = 4;
     desc.limits.max_fragment_output_attachments = 4;
     Device::new(desc, DevicePolicy::default()).expect("device")
@@ -371,4 +376,80 @@ fn what_each_group_would_run_again_is_the_limit_refusal() {
         compile(&dev, &mixed, 1),
         Err(Error::NeedsInput(RuntimeInput::ColorWrites))
     ));
+}
+
+/// [`pipeline`] of `cg_cover` and `fragment` of `fs` at `colors`, the fragment function
+/// specialized with its `bool` function constant 0 `on`.
+fn specialized(
+    vs: &[u8],
+    fs: &[u8],
+    fragment: &str,
+    colors: &[u32],
+    on: bool,
+) -> RenderPipelineDescriptor {
+    let mut d = pipeline(vs, fs, fragment, colors);
+    if let Some(StageSource::Function(f)) = d.fragment.as_mut() {
+        f.constants = FunctionConstantValues::defaults().with_index(
+            0,
+            FunctionConstantValue::new(DataType::Bool, [u8::from(on)]),
+        );
+        f.specialized = true;
+    }
+    d
+}
+
+/// A read of a color of another group that the function's constants make dead reads nothing
+/// (`dfk_dead_group`: `dfg_branch`, the read of color 4 in the arm of a branch on constant 0, and
+/// `dfg_gated`, whose color 4 input the constant gates). Five colors on a device of four draw in two
+/// groups, color 4 in the second; on `lavapipe` of four (input attachments), `moltenvk-m3` of four
+/// (the pixel interlock) and `vk12-floor` (no fetch form), specialized with the read dead, each
+/// group's variant compiles as a pipeline of its group's attachments that reads none (no input or
+/// storage attachment, every color a color attachment), passing L3. Specialized live, group 0's
+/// variant, which would read color 4 of group 1, is the pipeline's limit refusal. The misses are
+/// counted by kind before the test fails.
+#[test]
+fn a_read_of_another_group_dead_after_specialization_is_no_refusal() {
+    let (Some(bc), Some(fs)) = (fixture("color_groups"), fixture("dfk_dead_group")) else {
+        return;
+    };
+    let colors = [0, 1, 2, 3, 4];
+    let devices = [
+        ("lavapipe of four", four()),
+        ("moltenvk-m3 of four", narrowed("moltenvk-m3")),
+        ("vk12-floor", device("vk12-floor")),
+    ];
+    let mut misses = std::collections::BTreeMap::<String, Vec<String>>::new();
+    let mut checked = 0;
+    for (name, dev) in &devices {
+        for entry in ["dfg_branch", "dfg_gated"] {
+            let dead = specialized(&bc, &fs, entry, &colors, false);
+            for (group, held) in [(0u32, &colors[..4]), (1, &colors[4..])] {
+                let what = format!("{name} {entry} dead, group {group}");
+                let p = match compile(dev, &dead, group) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let kind = match is_limit(&e, 5) {
+                            true => "refused at the limit".to_owned(),
+                            false => format!("refused otherwise: {e}"),
+                        };
+                        misses.entry(kind).or_default().push(what);
+                        continue;
+                    }
+                };
+                assert_eq!(formats(&p), reference(&dead, held), "{what}");
+                assert!(p.graphics.input_attachments.is_empty(), "{what}");
+                assert!(p.graphics.storage_attachments.is_empty(), "{what}");
+                validate(&p, dev);
+                checked += 1;
+            }
+            let live = specialized(&bc, &fs, entry, &colors, true);
+            let e = compile(dev, &live, 0).expect_err("a read of color 4 in group 0");
+            assert!(is_limit(&e, 5), "{name} {entry} live, group 0: {e:?}");
+        }
+    }
+    for (kind, whats) in &misses {
+        eprintln!("{}: {kind} (first: {})", whats.len(), whats[0]);
+    }
+    assert!(misses.is_empty(), "{misses:#?}");
+    assert_eq!(checked, devices.len() * 2 * 2);
 }
