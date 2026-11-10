@@ -777,7 +777,9 @@ fn every_read_through_a_sampler_validates_or_is_refused_typed() {
 fn table_entries(bytes: &[u8]) -> Vec<(u64, u32, u32)> {
     use crate::memory::handles::TABLE_ENTRY_BYTES;
     bytes
-        .chunks_exact(TABLE_ENTRY_BYTES as usize)
+        .as_chunks::<{ TABLE_ENTRY_BYTES as usize }>()
+        .0
+        .iter()
         .map(|e| {
             let w = |i: usize| u32::from_le_bytes(e[4 * i..4 * i + 4].try_into().expect("word"));
             (u64::from(w(0)) | u64::from(w(1)) << 32, w(2), w(3))
@@ -1061,8 +1063,10 @@ fn an_argument_buffer_texture_reads_its_border_texels_from_its_table_entry() {
                     })
                     .collect();
                 for (i, (got, want)) in bufs[1]
-                    .chunks_exact(16)
-                    .zip(want.chunks_exact(16))
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
+                    .zip(want.as_chunks::<16>().0)
                     .enumerate()
                 {
                     assert_eq!(
