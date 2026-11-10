@@ -122,7 +122,14 @@
 //!   (`WorkCounts::plain_block_fills_saved` and `plain_block_fills_missed`). It costs the making
 //!   thread the fill's allocation and free besides the block's (on the 780M about 10 to 13 ms and
 //!   4 to 6 ms for 64 MiB, the free clearing the pages for the pool), off every submission's way:
-//!   docs/FAST-PATHS.md.
+//!   docs/FAST-PATHS.md. A device fills first only while its fills spare their blocks' own
+//!   allocations ([`Fills`]): a fill spared its block where the block's allocation then took less
+//!   than [`FILL_SAVED_BELOW`], or at most half as long as the fill's. After [`FILL_STOP_AFTER`]
+//!   fills in a row that did not, the device fills only every [`FILL_PROBE_EVERY`]th such block,
+//!   a probe, until one spares its block again (`plain_block_fills_skipped`): where the kernel
+//!   hands the block no pages of the fill's, the block's allocation fills its own as the fill's
+//!   did, so that the fill doubled the making's work and its buffer objects and spared the
+//!   submissions little.
 //!
 //! - **Buffers in the runtime's own pages** ([`Holds::PageBuffers`],
 //!   [`Memory::page_buffer_blocks`]). On a device that imports host pointers, whose submission
@@ -1482,7 +1489,8 @@ pub(super) enum Fill {
     Saved,
     /// Filled, and its own allocation took longer.
     Missed,
-    /// Not filled: the device's recent fills missed ([`Fills`]).
+    /// Not filled: the device's recent fills spared their blocks' allocations too little
+    /// ([`Fills`]).
     Skipped,
 }
 
