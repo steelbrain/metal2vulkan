@@ -1707,7 +1707,7 @@ fn a_runtime_sampler_s_filter_note_holds_only_where_the_bound_word_filters() {
         SamplerWord::of(&d).0
     };
     // Each bound sampler's word, and whether a sample through it filters.
-    let words = [
+    let bound = [
         (
             "nearest",
             desc(F::Nearest, F::Nearest, Mip::NotMipmapped, 1),
@@ -1809,7 +1809,7 @@ fn a_runtime_sampler_s_filter_note_holds_only_where_the_bound_word_filters() {
                 }
                 _ => {
                     assert!(recorded && !when.is_empty(), "{what}: {:?}", a.specialized);
-                    for (word_name, word, filters) in &words {
+                    for (word_name, word, filters) in &bound {
                         let held = when.iter().any(|c| holds(c, *word));
                         assert_eq!(held, *filters, "{what}: a bound {word_name} sampler");
                     }
