@@ -153,7 +153,14 @@ impl Draw {
 /// output is another pixel's output.
 fn second_bytes() -> Vec<u8> {
     let halves = half_bytes();
-    halves.chunks_exact(8).rev().flatten().copied().collect()
+    halves
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .rev()
+        .flatten()
+        .copied()
+        .collect()
 }
 
 /// A case: one padded format blended by one draw under one write mask.
@@ -452,13 +459,13 @@ mod tests {
                 "{}",
                 format.slug
             );
-            assert!(seen.insert(bytes), "{}", format.slug);
             assert_eq!(
                 texel_layout(format, [WIDTH, HEIGHT]).extent(),
                 bytes.len(),
                 "{}",
                 format.slug
             );
+            assert!(seen.insert(bytes), "{}", format.slug);
         }
         let (halves, seconds) = (half_bytes(), second_bytes());
         assert_eq!(halves.len(), COUNT * 8);
