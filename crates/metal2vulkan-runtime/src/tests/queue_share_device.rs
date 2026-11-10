@@ -38,7 +38,7 @@ use crate::{
     ShaderCacheOptions, WorkCounts,
 };
 use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -487,9 +487,15 @@ fn long(queue: &CommandQueue, target: &Buffer, fills: usize) -> CommandBuffer {
 /// beside an application on its own queue committing long command buffers back to back, each
 /// waited for: the compositor's latencies over 2 s from [`SETTLING`] after `ready` answers
 /// (bounded), so that what queued behind a long command buffer before then has completed.
+///
+/// Where `waiting`, each long command buffer signals a shared event's next value at its end, and
+/// a third queue commits, once each long one is committed, a command buffer of one small fill
+/// that waits for that value, each waited for: a wait the scheduler submits once its signal is
+/// submitted (`scheduler/mod.rs`), so it waits on the GPU, its own GPU work short.
 fn isolation(
     device: &Device,
     compositor: CommandQueue,
+    waiting: bool,
     ready: impl Fn(&Device) -> bool,
 ) -> Isolation {
     let app = device.new_command_queue().unwrap();
@@ -500,19 +506,60 @@ fn isolation(
     let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let began = Instant::now();
+    let event = device.new_shared_event().unwrap();
+    // The last value a committed long command buffer signals.
+    let signalled = Arc::new(AtomicU64::new(0));
     let application = {
-        let stop = Arc::clone(&stop);
+        let (stop, event, signalled) = (Arc::clone(&stop), event.clone(), Arc::clone(&signalled));
         std::thread::spawn(move || {
             let mut seen = Seen::default();
+            let mut value = 0;
             while !stop.load(Ordering::Relaxed) {
                 let command_buffer = long(&app, &big, fills);
+                if waiting {
+                    value += 1;
+                    command_buffer
+                        .encode_signal_event((&event).into(), value)
+                        .unwrap();
+                }
                 seen.note(&app, began);
                 command_buffer.commit().unwrap();
+                signalled.store(value, Ordering::SeqCst);
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
             }
             seen.0
         })
     };
+    let waiter = waiting.then(|| {
+        let (stop, signalled) = (Arc::clone(&stop), Arc::clone(&signalled));
+        let (queue, scratch) = (
+            device.new_command_queue().unwrap(),
+            device.new_buffer(4096, ResourceOptions::private()).unwrap(),
+        );
+        std::thread::spawn(move || {
+            let mut seen = Seen::default();
+            let mut waited = 0;
+            while !stop.load(Ordering::Relaxed) {
+                let value = signalled.load(Ordering::SeqCst);
+                if value == waited {
+                    std::thread::sleep(Duration::from_micros(100));
+                    continue;
+                }
+                let command_buffer = queue.command_buffer().unwrap();
+                seen.note(&queue, began);
+                command_buffer
+                    .encode_wait_for_event((&event).into(), value)
+                    .unwrap();
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                blit.fill_buffer(&scratch, 0..256, 1).unwrap();
+                blit.end_encoding().unwrap();
+                command_buffer.commit().unwrap();
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                waited = value;
+            }
+            seen.0
+        })
+    });
     let latencies = Arc::new(Mutex::new(Vec::new()));
     let recording = Arc::new(AtomicBool::new(false));
     let composing = {
@@ -568,8 +615,12 @@ fn isolation(
     recording.store(false, Ordering::Relaxed);
     stop.store(true, Ordering::Relaxed);
     let counts = device.work_counts();
+    let waiter = match waiter {
+        Some(thread) => format!("waiter {}; ", thread.join().unwrap()),
+        None => String::new(),
+    };
     let moves = format!(
-        "compositor {}; application {}; moves {} joins {} gone long {} settles {}",
+        "compositor {}; application {}; {waiter}moves {} joins {} gone long {} settles {}",
         composing.join().unwrap(),
         application.join().unwrap(),
         counts.queue_moves,
@@ -636,7 +687,7 @@ fn a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long(
         }
         let compositor = device.new_command_queue().unwrap();
         let ready = |device: &Device| device.work_counts().queues_gone_long >= 1;
-        let run = isolation(device, compositor, ready);
+        let run = isolation(device, compositor, false, ready);
         println!(
             "p99 {:.2} ms, {} stalls of {} samples; {}",
             run.p99(),
@@ -656,7 +707,7 @@ fn an_unshared_compositor_beside_a_long_queue_never_stalls() {
             return;
         }
         let compositor = device.new_command_queue_unshared(64).unwrap();
-        let run = isolation(device, compositor, |_| true);
+        let run = isolation(device, compositor, false, |_| true);
         println!(
             "p99 {:.2} ms, {} stalls of {} samples; {}",
             run.p99(),
@@ -666,5 +717,31 @@ fn an_unshared_compositor_beside_a_long_queue_never_stalls() {
         );
         assert!(run.p99() < 5.0, "p99 {:.2} ms", run.p99());
         assert_eq!(run.stalls(), 0, "the unshared compositor stalled");
+    });
+}
+
+/// A compositor beside a queue whose command buffers each wait on the GPU for the end of another
+/// queue's long command buffer: a wait the long mark must see, as it sees a long command buffer of
+/// the queue's own, since the compositor's work behind it on a shared `VkQueue` waits as long.
+/// Once the application's queue went long, the compositor's 99th percentile over 2 s stays under
+/// 5 ms with at most one stall over 10 ms, as beside the long queue alone.
+#[test]
+fn a_compositor_beside_a_queue_waiting_on_the_gpu_for_long_work_keeps_its_latency() {
+    each_policy("isolation-gpu-wait", |device, shares| {
+        if !shares {
+            return;
+        }
+        let compositor = device.new_command_queue().unwrap();
+        let ready = |device: &Device| device.work_counts().queues_gone_long >= 1;
+        let run = isolation(device, compositor, true, ready);
+        println!(
+            "p99 {:.2} ms, {} stalls of {} samples; {}",
+            run.p99(),
+            run.stalls(),
+            run.latencies.len(),
+            run.moves
+        );
+        assert!(run.p99() < 5.0, "p99 {:.2} ms", run.p99());
+        assert!(run.stalls() <= 1, "{} stalls", run.stalls());
     });
 }
