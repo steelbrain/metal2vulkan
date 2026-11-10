@@ -1279,10 +1279,11 @@ pub(crate) fn storage_form(
 /// of one sample with no depth or stencil attachment. `Ok` where the device orders fetch through
 /// the pixel interlock alone ([`interlock_orders`]) and that storage form is exact there; `Ok`
 /// where it orders fetch through rasterization-order input attachments and the function's blend
-/// over the attachment's input attachment holds (`input_blend`: a form Metal's model blends, not a
-/// padded or bfloat one, which stays `NotImplemented(Format)` as `stage_io::extended_color` refuses
-/// it); else what blocks it, without either ordering the two it needs one of
-/// ([`unordered_extended_fetch`]).
+/// over the attachment's input attachment holds (`input_blend`); else what blocks it, without
+/// either ordering the two it needs one of ([`unordered_extended_fetch`]). A bfloat format, which
+/// Metal blends nowhere (its pipeline validation asserts; link refuses such a blend
+/// `InvalidDescriptor(ColorAttachment)`), answers `NotRepresentable(Format)`, as the runtime's
+/// formats answer what Metal refuses.
 pub(crate) fn extended_range_blend(
     pf: crate::metal::PixelFormat,
     p: &DeviceProfile,
@@ -1291,6 +1292,9 @@ pub(crate) fn extended_range_blend(
     let Some(form) = ExtendedRange::of(pf) else {
         return Err(Unsupported::not_implemented(Feature::Format));
     };
+    if form.bfloat() {
+        return Err(Unsupported::not_representable(Feature::Format));
+    }
     let equation = BlendEquation {
         source_rgb: F::One,
         destination_rgb: F::OneMinusSourceAlpha,
@@ -1305,9 +1309,6 @@ pub(crate) fn extended_range_blend(
         }
         // The blend over the input attachment: the attachment's raw format a color attachment,
         // and the blend Metal's model's.
-        if form.padded() || form.bfloat() {
-            return Err(Unsupported::not_implemented(Feature::Format));
-        }
         let usages = BTreeSet::from([FormatUsage::ColorAttachment]);
         match crate::metal::format::vk_format(pf, &usages, p) {
             Ok(_) => {}
@@ -1510,8 +1511,8 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         });
     }
     let blended = blended_extended_range(cx)?;
-    // A bfloat attachment's blend has no model (Metal's validation refuses one): no storage form
-    // blends it.
+    // A blend into a bfloat attachment is Metal's pipeline error (its validation asserts that the
+    // format is not blendable), which link refuses whatever the function writes there.
     let bfloat = blended.iter().find(|&&(color, _)| {
         cx.inputs
             .extended_range_colors
@@ -1519,8 +1520,8 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .is_some_and(|e| e.form.bfloat())
     });
     if let Some(&(color, _)) = bfloat {
-        let refused = Unsupported::not_implemented(Feature::Format);
-        return Err(refused.at_attachment(Attachment::Color(color)).into());
+        let invalid = DescriptorError::ColorAttachment { index: color };
+        return Err(Error::InvalidDescriptor(invalid));
     }
     let fetched = colors_read(cx, &body.used)?;
     let mut read = fetched.clone();

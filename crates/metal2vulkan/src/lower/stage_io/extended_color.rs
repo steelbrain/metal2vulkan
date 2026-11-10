@@ -36,7 +36,7 @@
 //! is built: the output's write stores the raw texel of Metal's blend over the texel the input
 //! attachment reads, which `stage_io` writes through the output variable as it writes [`encode`]'s.
 
-use crate::error::{Error, Feature, Unsupported};
+use crate::error::{DescriptorError, Error, Feature, Unsupported};
 use crate::lower::arith::extended_range;
 use crate::lower::arith::texel_round::{self, HalfRounding};
 use crate::lower::arith::{FloatFmt, Form, Held};
@@ -75,18 +75,25 @@ pub(super) fn plan(
     let Some(fmt) = f.float_fmt() else {
         return Ok(None);
     };
+    // A second output to such an attachment is the second source of the blend the function
+    // computes, or stored nowhere (`stage_io::plan`).
+    if index != 0 {
+        return Err(cx.invariant("a second output planned to an extended-range attachment"));
+    }
+    // A blend into a bfloat attachment is Metal's pipeline error (link refuses it whatever the
+    // function writes there).
+    if e.blended && e.form.bfloat() {
+        let invalid = DescriptorError::ColorAttachment { index: color };
+        return Err(Error::InvalidDescriptor(invalid));
+    }
     let blended = e.blended && !cx.families.fragment.input_blends.contains_key(&color);
-    // A blend of a form Metal's model blends, which the function computes over an ordered read of
-    // the attachment (the storage form, or over the input attachment, `lower::fragment`), on a
-    // device that orders fetch in neither form: refused naming the two orderings.
-    let unordered = blended
-        && index == 0
-        && !e.form.bfloat()
-        && crate::lower::fragment::fetch::fetch_unordered(cx.profile);
-    if unordered {
+    // A blend the function computes over an ordered read of the attachment (the storage form, or
+    // over the input attachment, `lower::fragment`), on a device that orders fetch in neither
+    // form: refused naming the two orderings.
+    if blended && crate::lower::fragment::fetch::fetch_unordered(cx.profile) {
         return Err(crate::lower::fragment::fetch::unordered_extended_fetch().into());
     }
-    if index != 0 || blended || !matches!(fmt, FloatFmt::F32 | FloatFmt::Half) {
+    if blended || !matches!(fmt, FloatFmt::F32 | FloatFmt::Half) {
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }
     cx.families

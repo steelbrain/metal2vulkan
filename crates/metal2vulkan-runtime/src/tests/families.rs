@@ -1103,6 +1103,68 @@ fn extended_range_formats_answer_the_shaders_filter_and_blend() {
     }
 }
 
+/// A padded 10-bit format answers Blend exactly where it renders and the compile layer's blend in
+/// the shader holds (`extended_range_blend`), as Metal blends into one: every device that orders
+/// fetch through the pixel interlock alone, and lavapipe. A bfloat format, which Metal blends
+/// nowhere, answers no Blend on any device.
+#[test]
+fn padded_formats_blend_in_the_shader_and_bfloat_formats_do_not() {
+    use metal2vulkan::metal::format::extended_range_blend;
+    let padded = [
+        PixelFormat::R10UnormX6,
+        PixelFormat::R10UnormX6SRGB,
+        PixelFormat::RG10UnormX12,
+        PixelFormat::RG10UnormX12SRGB,
+        PixelFormat::RGB10A2UnormSRGB,
+    ];
+    let bfloat = [
+        PixelFormat::R16Bfloat,
+        PixelFormat::RG16Bfloat,
+        PixelFormat::RGBA16Bfloat,
+    ];
+    let mut blended = Vec::new();
+    for (stem, desc) in committed_descriptions() {
+        let (enabled, _) = created(&stem, &desc);
+        let compile = Device::new(enabled.clone(), DevicePolicy::UNTRUSTED).unwrap();
+        let image = ImageFacts {
+            profile: compile.profile(),
+            formats: &enabled.formats,
+            storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
+            depth_images: crate::image_plan::DepthImageFacts::of(&enabled.driver_facts()),
+            linear_attachments: false,
+            any_views: &crate::image_plan::AnyViews::default(),
+        };
+        let found = |pf| {
+            let sparse = Err(Missing::Gap(RuntimeGap::SparseHeaps));
+            answers(pf, &image, &any_limits, sparse).capabilities()
+        };
+        for pf in padded {
+            let caps = found(pf);
+            let blends = extended_range_blend(pf, compile.profile()).is_ok();
+            assert_eq!(
+                caps.contains(FormatCapability::Blend),
+                blends && caps.contains(FormatCapability::Color),
+                "{stem}: {pf:?}"
+            );
+            if caps.contains(FormatCapability::Blend) {
+                blended.push((stem.clone(), pf));
+            }
+        }
+        for pf in bfloat {
+            assert!(
+                !found(pf).contains(FormatCapability::Blend),
+                "{stem}: {pf:?} answers Blend"
+            );
+        }
+    }
+    for stem in ["moltenvk-m3", "amd-rdna3-radv", "intel-arl-anv", "lavapipe"] {
+        for pf in padded {
+            let at = (stem.to_owned(), pf);
+            assert!(blended.contains(&at), "{stem}: {pf:?} answers no Blend");
+        }
+    }
+}
+
 /// An 8-bit sRGB format a device holds as its UNORM twin, unable to sample the sRGB format
 /// (`R8Unorm_sRGB` on lavapipe, `RG8Unorm_sRGB` on lavapipe, ANV and NVIDIA), answers Filter where
 /// the twin filters linearly: the device filters the twin's codes, which the function decodes

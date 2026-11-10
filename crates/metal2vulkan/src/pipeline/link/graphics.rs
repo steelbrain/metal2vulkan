@@ -15,8 +15,10 @@
 //!   `R16Float` attachment, Metal keeps `-0`). An
 //!   attachment that no first (index 0) output of the fragment function names (every attachment of
 //!   a pipeline without a fragment function) gets an empty write mask, so the draw leaves it
-//!   unmodified, and an extended-range one (a padded 10-bit or bfloat one among them) no blend:
-//!   its raw unsigned format blends nothing, and nothing is written to blend. That is what Metal
+//!   unmodified, and an extended-range one (a padded 10-bit one among them) no blend: its raw
+//!   unsigned format blends nothing, and nothing is written to blend. A bfloat attachment with
+//!   blending enabled is `InvalidDescriptor(ColorAttachment)` whatever the function writes: Metal's
+//!   pipeline validation asserts that the format is not blendable. That is what Metal
 //!   does where measured: an unblended attachment the function reads
 //!   through framebuffer fetch but has no output for, which a draw's later fragments read as
 //!   loaded; an attachment without an output whose blend would change it (`Zero`/`Zero`,
@@ -364,6 +366,21 @@ pub fn graphics_state(
             _ => None,
         })
         .collect();
+    // A blend into a bfloat attachment is Metal's pipeline error, whatever the fragment function
+    // writes there and whatever the mask: its pipeline validation asserts that the format is not
+    // blendable (an Apple M3 Max under macOS 27.0.1, with and without the validation layer, with
+    // a function writing the attachment, under a mask of no channel, and with no fragment function).
+    let unblendable = r.color_attachments.iter().position(|a| {
+        a.is_some_and(|a| {
+            a.blending_enabled
+                && ExtendedRange::of(a.pixel_format).is_some_and(ExtendedRange::bfloat)
+        })
+    });
+    if let Some(index) = unblendable {
+        return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+            index: index as u32,
+        }));
+    }
     let mut color_attachments = Vec::with_capacity(used as usize);
     for (index, a) in r.color_attachments.iter().take(used as usize).enumerate() {
         color_attachments.push(match a {
@@ -431,8 +448,8 @@ pub fn graphics_state(
                     // An extended-range attachment no first output writes (every attachment of a
                     // pipeline without a fragment function) is left as it is, as Metal leaves an
                     // unwritten attachment (the module docs), so its blend changes nothing: it
-                    // takes none, nor the blend usage its raw unsigned format lacks: a padded or
-                    // bfloat one's too, whose blend of a written color is not built.
+                    // takes none, nor the blend usage its raw unsigned format lacks (a padded
+                    // one's too; a bfloat one's blend is refused above).
                     let extended = ExtendedRange::of(a.pixel_format);
                     let written_here = written.contains(&(index as u32));
                     let unwritten_extended = !written_here && extended.is_some();

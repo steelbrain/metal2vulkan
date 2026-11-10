@@ -1058,9 +1058,10 @@ fn a_missing_attachment_is_a_descriptor_error() {
 
 /// An extended-range format's blend (`extended_range_blend`): taken where the device orders fetch
 /// through the pixel interlock alone and the storage form holds, for every form Metal's model
-/// blends and its `_sRGB` twin, and where it orders fetch through rasterization-order input
-/// attachments, over which the function blends; the two orderings named where it has neither; refused
-/// for a padded form, whose blends are not measured, and for any other format.
+/// blends and its `_sRGB` twin and every padded form, and where it orders fetch through
+/// rasterization-order input attachments, over which the function blends; the two orderings named
+/// where it has neither; a bfloat form, which Metal blends nowhere, Metal's refusal; any other
+/// format refused.
 #[test]
 fn an_extended_range_blend_follows_the_ordered_storage_form() {
     let blended = [
@@ -1070,6 +1071,16 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
         PixelFormat::BGRA10XRSRGB,
         PixelFormat::RGB10A82PXR10,
         PixelFormat::RGB10A82PXR10SRGB,
+        PixelFormat::R10UnormX6,
+        PixelFormat::R10UnormX6SRGB,
+        PixelFormat::RG10UnormX12,
+        PixelFormat::RG10UnormX12SRGB,
+        PixelFormat::RGB10A2UnormSRGB,
+    ];
+    let bfloat = [
+        PixelFormat::R16Bfloat,
+        PixelFormat::RG16Bfloat,
+        PixelFormat::RGBA16Bfloat,
     ];
     for stem in [
         "moltenvk-m3",
@@ -1085,8 +1096,12 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
         for pf in blended {
             assert_eq!(extended_range_blend(pf, &p), Ok(()), "{stem}: {pf:?}");
         }
-        for pf in [PixelFormat::R10UnormX6, PixelFormat::RG10UnormX12] {
-            assert!(extended_range_blend(pf, &p).is_err(), "{stem}: {pf:?}");
+        for pf in bfloat {
+            assert_eq!(
+                extended_range_blend(pf, &p),
+                Err(Unsupported::not_representable(Feature::Format)),
+                "{stem}: {pf:?}"
+            );
         }
         assert_eq!(
             extended_range_blend(PixelFormat::RGBA16Float, &p),
@@ -1100,10 +1115,10 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
         for pf in blended {
             assert_eq!(extended_range_blend(pf, &p), Ok(()), "{stem}: {pf:?}");
         }
-        for pf in [PixelFormat::R10UnormX6, PixelFormat::RG10UnormX12] {
+        for pf in bfloat {
             assert_eq!(
                 extended_range_blend(pf, &p),
-                Err(Unsupported::not_implemented(Feature::Format)),
+                Err(Unsupported::not_representable(Feature::Format)),
                 "{stem}: {pf:?}"
             );
         }
