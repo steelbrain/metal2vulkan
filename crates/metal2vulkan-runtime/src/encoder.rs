@@ -104,17 +104,17 @@ const SPARE_CORES: usize = 4;
 /// The box of an ended render encoder's core, emptied: room for the next encoder's core.
 struct CoreRoom(Box<MaybeUninit<EncoderCore>>);
 
-/// The boxes of a device's render encoders' cores, emptied as their encoders end, which the next
-/// render encoders it opens take. A render encoder holds its core in a box (`render.rs`), so its
-/// end hands the core on through each step as a pointer rather than its state; its open takes the
-/// box an ended encoder gave back, so the box costs no allocation once the device has one.
-#[derive(Default)]
 /// The encoders of a command buffer whose barriers the scheduler plans and records before each in
 /// a command buffer of barriers of its own (the module docs): each later encoder's own begins
 /// with a barrier from everything before. Past twice the 706 render passes of a frame split at
 /// every indexed draw, in one command buffer (`tests::linear_runs`'s `CHUNK_PASSES`).
 pub(crate) const PLANNED_BARRIERS: usize = 2048;
 
+/// The boxes of a device's render encoders' cores, emptied as their encoders end, which the next
+/// render encoders it opens take. A render encoder holds its core in a box (`render.rs`), so its
+/// end hands the core on through each step as a pointer rather than its state; its open takes the
+/// box an ended encoder gave back, so the box costs no allocation once the device has one.
+#[derive(Default)]
 pub(crate) struct SpareCores(Mutex<Vec<CoreRoom>>);
 
 impl SpareCores {

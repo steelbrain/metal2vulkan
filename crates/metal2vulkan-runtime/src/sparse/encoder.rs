@@ -447,6 +447,7 @@ impl ResourceStateCommandEncoder {
             Recorded {
                 encoder,
                 raws: Vec::new(),
+                barriered: None,
                 segments: Vec::new(),
                 summary: Summary::of_fences(waits, fence_updates),
                 sparse: updates,
