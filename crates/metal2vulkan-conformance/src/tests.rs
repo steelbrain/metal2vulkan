@@ -7235,21 +7235,7 @@ fn every_case_carries_a_cost_recording() {
     ///
     /// A whole-set run is the only shape that pays a record: a case's counts depend on what ran
     /// before it in the same process, so a selection cannot pay one however many cases it names.
-    const AFTER_THE_LAST_RUN: [&str; 13] = [
-        "blit-generated-mipmaps-bgr10xr",
-        "blit-generated-mipmaps-bgra10xr",
-        "padded-fetch-r10x6-clear-float",
-        "padded-fetch-r10x6-draw-float",
-        "padded-fetch-r10x6-load-float",
-        "padded-fetch-r10x6-load-half",
-        "padded-fetch-r10x6-srgb-load-float",
-        "padded-fetch-rg10x12-load-float",
-        "padded-fetch-rg10x12-srgb-load-float",
-        "padded-fetch-rgb10a2-srgb-clear-float",
-        "padded-fetch-rgb10a2-srgb-draw-float",
-        "padded-fetch-rgb10a2-srgb-load-float",
-        "padded-fetch-rgb10a2-srgb-load-half",
-    ];
+    const AFTER_THE_LAST_RUN: [&str; 0] = [];
 
     /// Cases a whole-set run did not cover although they were committed before it ran.
     ///

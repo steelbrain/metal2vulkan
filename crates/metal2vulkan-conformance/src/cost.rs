@@ -2563,8 +2563,8 @@ mod the_ratio {
 ///
 /// # The census these numbers are, read off the committed recordings
 ///
-/// 576 cost records make a creation pipeline at all. Over them: **1,451 made, 924 taken by a
-/// command, 527 taken by none.** 227 take every one they make, 326 take none of theirs, and 23 take
+/// 607 cost records make a creation pipeline at all. Over them: **1,485 made, 958 taken by a
+/// command, 527 taken by none.** 258 take every one they make, 326 take none of theirs, and 23 take
 /// some and not others — the `xr-blend-planes-*` family at 3 made and 1 taken,
 /// `topology-class-plain-function` and `frame-length-chain` at 4 and 2.
 ///
@@ -2582,8 +2582,8 @@ mod the_ratio {
 /// `creation_pipelines_made` is one count over the render prediction (`pipeline/predicted.rs`) and
 /// the compute one (`pipeline/dispatch_making.rs`), so 527 says nothing about either. Split by the
 /// commands each record's own counts say our leg recorded ([`Speculated`], and no new counter was
-/// needed for it), the two are nothing like each other: **the render prediction is taken 829 times
-/// in 860 over the 191 rows that draw and do not dispatch, and the compute prediction 0 times in
+/// needed for it), the two are nothing like each other: **the render prediction is taken 863 times
+/// in 894 over the 222 rows that draw and do not dispatch, and the compute prediction 0 times in
 /// 386 over the 223 rows that dispatch and do not draw.** 386 of the 527 is one prediction with no
 /// hit in the whole committed census, and 379 of those 386 are rows that make no render pass at
 /// all. [`WASTED_BY_CLASS`] holds the four classes apart and [`DRAWS_TAKEN`] holds the render
@@ -2622,14 +2622,14 @@ mod the_creation_prediction {
     ///
     /// | class | rows | made | taken | by none | taken |
     /// |---|---|---|---|---|---|
-    /// | draws and no dispatch | 191 | 860 | 829 | 31 | 96.4% |
+    /// | draws and no dispatch | 222 | 894 | 863 | 31 | 96.5% |
     /// | dispatches and no draw | 223 | 386 | 0 | 386 | 0.0% |
     /// | both kinds | 103 | 141 | 95 | 46 | 67.4% |
     /// | no command at all | 59 | 64 | 0 | 64 | 0.0% |
-    /// | all | 576 | 1,451 | 924 | 527 | 63.7% |
+    /// | all | 607 | 1,485 | 958 | 527 | 64.5% |
     ///
     /// **So the two predictions are nothing like each other, and the total hides it.** The render
-    /// prediction is taken 829 times in 860 on the cases that draw. The compute prediction is
+    /// prediction is taken 863 times in 894 on the cases that draw. The compute prediction is
     /// taken **0** times in 386 over 223 rows. 386 of the 527 is one prediction, and 379 of those
     /// 386 are rows that make no render pass at all.
     ///
@@ -2657,14 +2657,15 @@ mod the_creation_prediction {
     /// whose fragment function converts a texture's texels to `half` made its predicted key's
     /// general form at its creation, the class routine's arm, beside the predicted key its draws
     /// take. A general form keeps the predicted plain arm (`render/residual.rs`), so such a
-    /// creation makes the one pipeline its draws take: the rows' next measurement reads 2 and 2,
-    /// and lowers this class's ceiling by 2.
+    /// creation makes the one pipeline its draws take: the whole-set measurement at 24ae90feb3
+    /// composed 2 made and 2 taken for both, while their bounds still read 3 made after that
+    /// write, so this class's ceiling stays 31 until those bounds come down.
     ///
     /// # Why the total cannot hold this
     ///
     /// A ceiling on the sum passes a trade between the halves. Were the compute prediction's 386
-    /// to go to nothing while the render prediction lost half its accuracy — 860 made, about 430
-    /// taken — the census would read about 540 against the ceiling of 595 and this family would
+    /// to go to nothing while the render prediction lost half its accuracy — 894 made, about 447
+    /// taken — the census would read about 557 against the ceiling of 595 and this family would
     /// report everything well. The per-class ceilings below fail it, and name the class that
     /// widened.
     ///
@@ -2684,7 +2685,7 @@ mod the_creation_prediction {
     /// A ceiling on waste is not this statement. A case family that stops drawing, or a landing
     /// that removes one, lowers the waste and the reach together, and only the ceiling notices
     /// nothing. This is the half that says the prediction is still *right*, and it is the reason
-    /// the render prediction must not be made lazy: at 829 of 860 it is taken 96.4% of the time,
+    /// the render prediction must not be made lazy: at 863 of 894 it is taken 96.5% of the time,
     /// so a lazy render pipeline would move a creation's compile into the first draw's command
     /// buffer 96 times in 100 — which is the cold making inside a command buffer's execution that
     /// `pipeline/predicted.rs` exists to have removed.
