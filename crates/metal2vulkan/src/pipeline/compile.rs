@@ -244,32 +244,33 @@ impl<'a> InputsFrom<'a> {
     }
 }
 
-/// The specialized entry `spec` as a compile under `inputs` lowers it on `p`: a fragment entry of
-/// a render pipeline checked for an attachment at each color input ([`color_inputs_attached`]),
-/// then renumbered for its color group (`color_group::entry`) where it compiles for one.
+/// The specialized entry `spec` as a compile under `inputs` lowers it on `p`: renumbered for its
+/// color group (`color_group::entry`) where it compiles for one.
 fn grouped_entry(
     spec: air::Entry,
     inputs: InputsFrom<'_>,
     p: &DeviceProfile,
 ) -> Result<air::Entry, Error> {
-    if let InputsFrom::Fragment(pass, ..) = inputs {
-        color_inputs_attached(&spec, &pass)?;
-    }
     match inputs.color_group() {
         Some(g) => color_group::entry(spec, g, p),
         None => Ok(spec),
     }
 }
 
-/// Each `[[color(n)]]` input the specialized fragment entry `spec` declares has an attachment with
-/// a pixel format in its render pipeline (`pass`'s attachments, or its color group's
-/// `ColorGroup::present`, the pipeline's own), whether or not the body reads it: plain Metal
-/// refuses the pipeline otherwise, with the read dead after specialization as with it live
-/// ("Shaders reads from a color attachment whose pixel format is MTLPixelFormatInvalid",
+/// Where `inputs` are a render pipeline's fragment stage's, each `[[color(n)]]` input the
+/// specialized fragment entry `spec` declares has an attachment with a pixel format in the
+/// pipeline (the pass's attachments, or its color group's `ColorGroup::present`, the pipeline's
+/// own), whether or not the body reads it: plain Metal refuses the pipeline otherwise, with the
+/// read dead after specialization as with it live ("Shaders reads from a color attachment whose
+/// pixel format is MTLPixelFormatInvalid",
 /// `metal2vulkan-conformance/probes/dead_ordered_and_unattached_reads.m`, an M3 Max under macOS
 /// 27.0.1). `InvalidDescriptor(ColorAttachment)` at the first index without one. An input its
-/// constants gate is no parameter of the specialized entry.
-fn color_inputs_attached(spec: &air::Entry, pass: &FragmentPass<'_>) -> Result<(), Error> {
+/// constants gate is no parameter of the specialized entry. Checked on the entry before its
+/// group renumbers it, by both a stage's keys ([`stage_inputs`]) and its compile.
+fn color_inputs_attached(spec: &air::Entry, inputs: InputsFrom<'_>) -> Result<(), Error> {
+    let InputsFrom::Fragment(pass, ..) = inputs else {
+        return Ok(());
+    };
     for b in &spec.ep.params {
         let ParamRole::ColorInput {
             index: AbiInt::Const(color),
@@ -606,6 +607,7 @@ pub fn stage_inputs(
     guarded(|| {
         let specialized =
             entries.specialized(fd, inputs.call_stack_depth(), inputs.open_cl_mode(), m)?;
+        color_inputs_attached(&specialized.spec, inputs)?;
         // A color group's variant reads its own renumbering of the entry the creation shares.
         let grouped = match inputs.color_group() {
             Some(_) => Some(grouped_entry(specialized.spec.clone(), inputs, p)?),
@@ -2649,6 +2651,7 @@ fn plan_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Planned
         spec,
         before,
     } = ordered_entry(r, p, m)?;
+    color_inputs_attached(&spec, r.inputs)?;
     let spec = grouped_entry(spec, r.inputs, p)?;
     let inputs = lower_inputs(&spec, r.inputs, p, m)?;
     // A flat variant runs its grid in threadgroups of its own: only a kernel that does not observe
