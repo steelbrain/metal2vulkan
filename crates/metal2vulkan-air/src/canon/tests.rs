@@ -23,6 +23,7 @@ mod command_buffers;
 mod constant_fields;
 mod conversions;
 mod float_compares;
+mod float_folds;
 mod global_builtins;
 mod opencl;
 mod private_memory;

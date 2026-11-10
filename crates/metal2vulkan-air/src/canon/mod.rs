@@ -32,8 +32,9 @@
 //!    inlined in turn, round after round, until none is made.
 //! 7. **SCCP** over the inlined entry, including `air.is_function_constant_defined`, loads of
 //!    bound constants, loads of the integer fields of a constant-space global whose value is
-//!    its initializer (`const_loads`), and the integer `llvm.*` operations on constants;
-//!    unreachable blocks are deleted. A call whose immediates were not constants where it was
+//!    its initializer (`const_loads`), the integer `llvm.*` operations on constants, and the
+//!    float operations a constant operand decides whatever the others hold (a NaN operand, and a
+//!    product by a zero under `nnan` and `nsz`); unreachable blocks are deleted. A call whose immediates were not constants where it was
 //!    decoded (`Callee::Unbound`: an internal function's parameter passed on to the intrinsic) is
 //!    bound where they now are, each inlined copy with its own call site's constants. A value use of an unsupplied
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose

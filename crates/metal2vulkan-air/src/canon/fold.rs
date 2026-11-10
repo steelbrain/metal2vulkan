@@ -6,7 +6,10 @@
 //! integers, same-width bit casts, int to
 //! pointer of zero and pointer to int of null, `freeze` of a constant, and element and member
 //! access on constant vectors and aggregates. SCCP does **no float arithmetic folding**: the
-//! device's denormal and fast-math behavior is the lowering's contract. Anything else, and any
+//! device's denormal and fast-math behavior is the lowering's contract. It reads what a float
+//! constant is ([`Folder::float_class`]) for the answers an operation's constant operand decides
+//! whatever the others hold: a NaN operand, quieted ([`Folder::quiet_nan`]), and a product's
+//! `+0` under `nnan` and `nsz` ([`Folder::float_zero`]). Anything else, and any
 //! operation whose result would be poison (division by zero, an oversized shift, an out-of-range
 //! element), is left unfolded. A fold never guesses: `None` means "not a constant here".
 //!
@@ -68,6 +71,28 @@ fn half_to_f64(h: u16) -> f64 {
         0x1f => f64::NAN,
         e => (1.0 + frac / 1024.0) * 2f64.powi(e - 15),
     }
+}
+
+/// What a float constant is to SCCP's float folds ([`Folder::float_class`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FloatClass {
+    /// Every lane a zero of either sign.
+    Zero,
+    /// Every lane a NaN, quiet or signalling.
+    Nan,
+    /// Anything else.
+    Other,
+}
+
+/// The stored width and mantissa width, in bits, of a float type.
+fn float_bits(ty: &Type) -> Option<(u8, u8)> {
+    Some(match ty {
+        Type::Half => (16, 10),
+        Type::BFloat => (16, 7),
+        Type::Float => (32, 23),
+        Type::Double => (64, 52),
+        _ => return None,
+    })
 }
 
 /// The float formats a static initializer's arithmetic is evaluated in (bfloat is not).
@@ -441,6 +466,108 @@ impl Folder<'_> {
         }
         let bits = *bits ^ format.sign();
         self.mk(ty, Const::Float(bits), m).map(Some)
+    }
+
+    /// What the float constant `c` is to SCCP's float folds: a scalar, or a vector each lane of
+    /// which is, a zero of either sign (`zeroinitializer` included) or a NaN. A vector of mixed
+    /// lanes, or with an `undef` or `poison` lane, is [`FloatClass::Other`], as is anything not a
+    /// float constant.
+    pub fn float_class(&self, c: ConstId, m: &mut Meter) -> Result<FloatClass, Error> {
+        let Some(ty) = self.ty(c) else {
+            return Ok(FloatClass::Other);
+        };
+        match (self.types.get(ty), self.value(c)) {
+            (Some(Type::Vector { elem, .. }), Some(Const::Null)) => {
+                Ok(match self.types.get(*elem).and_then(float_bits) {
+                    Some(_) => FloatClass::Zero,
+                    None => FloatClass::Other,
+                })
+            }
+            (Some(Type::Vector { .. }), Some(Const::Aggregate(lanes))) => {
+                m.tick(u32::try_from(lanes.len()).unwrap_or(u32::MAX))?;
+                let mut class = None;
+                for &lane in lanes.iter() {
+                    let this = self.scalar_class(lane);
+                    if this == FloatClass::Other || class.is_some_and(|c| c != this) {
+                        return Ok(FloatClass::Other);
+                    }
+                    class = Some(this);
+                }
+                Ok(class.unwrap_or(FloatClass::Other))
+            }
+            _ => Ok(self.scalar_class(c)),
+        }
+    }
+
+    /// [`Folder::float_class`] of a scalar.
+    fn scalar_class(&self, c: ConstId) -> FloatClass {
+        let Some((width, mant)) = self
+            .ty(c)
+            .and_then(|t| self.types.get(t))
+            .and_then(float_bits)
+        else {
+            return FloatClass::Other;
+        };
+        let bits = match self.value(c) {
+            Some(Const::Null) => 0,
+            Some(Const::Float(bits)) => *bits,
+            _ => return FloatClass::Other,
+        };
+        let magnitude = bits & mask(width - 1);
+        let exponent = mask(width - 1) & !mask(mant);
+        if magnitude == 0 {
+            FloatClass::Zero
+        } else if magnitude & exponent == exponent && magnitude & mask(mant) != 0 {
+            FloatClass::Nan
+        } else {
+            FloatClass::Other
+        }
+    }
+
+    /// The NaN constant `c` (a scalar, or a vector each lane of which is one), each NaN quieted:
+    /// its sign and payload kept and its quiet bit, the top mantissa bit, set. LLVM's
+    /// `propagateNaN` of a NaN operand.
+    pub fn quiet_nan(&mut self, c: ConstId, m: &mut Meter) -> Result<Option<ConstId>, Error> {
+        self.transient(m, |f, m| f.quiet_nan_in(c, m))
+    }
+
+    fn quiet_nan_in(&mut self, c: ConstId, m: &mut Meter) -> Result<Option<ConstId>, Error> {
+        let Some(ty) = self.ty(c) else {
+            return Ok(None);
+        };
+        if !matches!(self.types.get(ty), Some(Type::Vector { .. })) {
+            return self.quiet_scalar(c, m);
+        }
+        let Some(lanes) = self.members(c, m)? else {
+            return Ok(None);
+        };
+        let mut quiet = Vec::with_capacity(lanes.len());
+        for lane in lanes {
+            match self.quiet_scalar(lane, m)? {
+                Some(q) => quiet.push(q),
+                None => return Ok(None),
+            }
+        }
+        self.mk(ty, Const::Aggregate(quiet.into_boxed_slice()), m)
+            .map(Some)
+    }
+
+    fn quiet_scalar(&mut self, c: ConstId, m: &mut Meter) -> Result<Option<ConstId>, Error> {
+        let (Some(ty), FloatClass::Nan) = (self.ty(c), self.scalar_class(c)) else {
+            return Ok(None);
+        };
+        let (Some((_, mant)), Some(Const::Float(bits))) =
+            (self.types.get(ty).and_then(float_bits), self.value(c))
+        else {
+            return Ok(None);
+        };
+        let bits = *bits | (1 << (mant - 1));
+        self.mk(ty, Const::Float(bits), m).map(Some)
+    }
+
+    /// The `+0` of the float scalar or vector type `ty` (`zeroinitializer`).
+    pub fn float_zero(&mut self, ty: TypeId, m: &mut Meter) -> Result<ConstId, Error> {
+        self.mk(ty, Const::Null, m)
     }
 
     /// `fcmp pred a, b` over scalar floats: an exact IEEE comparison, typed `ty` (`i1`). A NaN

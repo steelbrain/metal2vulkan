@@ -1,8 +1,8 @@
 //! Sparse conditional constant propagation.
 //!
 //! One standard algorithm (Wegman–Zadeck) per function: an SSA worklist and a flow worklist over
-//! executable edges, a lattice per instruction, and folding by [`Folder`]. Two AIR-specific
-//! lattice facts are added:
+//! executable edges, a lattice per instruction, and folding by [`Folder`]. Three facts are
+//! added:
 //!
 //! - `air.is_function_constant_defined(@g)` folds to whether `@g`'s constant was supplied, and a
 //!   load from a bound (supplied) function constant folds to its value, like any load from a
@@ -19,6 +19,16 @@
 //!   Plain Metal makes such a function's pipeline, and its own
 //!   reads of an undefined constant vary from read to read, zero and the false way among them; its
 //!   predicate gates nothing, whether negated or not (Metal probes).
+//! - A float operation a constant operand decides, whatever the run computes for the others, is
+//!   that constant, as LLVM's simplification of the operation decides it but for its poison step
+//!   ([`Solver::float_fold`]): an `fadd`, `fsub`, `fmul`, `fdiv` or `air.fma` with a NaN operand
+//!   (every lane a NaN) is the first such operand, quieted, and an `fmul` under `nnan` and `nsz`
+//!   with an operand every lane of which is a zero is `+0`. SCCP computes no float arithmetic:
+//!   these are the answers no operand the run computes can change. Metal answers so once the
+//!   operand is a bound function constant: a NaN, and `+0` for a NaN or an infinity times a zero,
+//!   on the Apple M3 Max, the AMD Radeon Pro 5300M and the Intel UHD Graphics 630 (macOS 27.0.1),
+//!   the M3's NaN the operand's, quieted. A device given the operation itself answers otherwise:
+//!   MoltenVK 1.4.2 `0` for a quotient by a NaN, and MoltenVK and RADV a NaN for the products.
 //!
 //! Afterwards unreachable blocks are deleted, branches on constants become unconditional, PHIs
 //! keep one entry per remaining edge, and instructions with a constant value are replaced by it.
@@ -38,12 +48,13 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::budget::{vec_bytes, Meter};
 use crate::error::{AbiError, CanonError, DiagName, Error, InputError, InputErrorKind};
 use crate::error::{IntrinsicError, Location};
-use crate::intrinsics::{AirIntrinsic, Bound, FunctionConstant, LlvmIntOp, LlvmIntrinsic};
+use crate::intrinsics::MathFn;
+use crate::intrinsics::{AirIntrinsic, Bound, FunctionConstant, LlvmIntOp, LlvmIntrinsic, Math};
 use crate::ir::{Arena, BlockId, Body, Call, Callee, Const, ConstId, ConstTable, Constant, Global};
-use crate::ir::{ArgIdx, BinOp, GlobalId, Idx, InstId, InstKind, Type, Value};
+use crate::ir::{ArgIdx, BinOp, FastMath, GlobalId, Idx, InstId, InstKind, Type, TypeId, Value};
 
 use super::const_loads;
-use super::fold::Folder;
+use super::fold::{FloatClass, Folder};
 use super::rewrite::{apply, filled, invariant, scoped, BodyEdit};
 
 /// A function constant as SCCP sees it.
@@ -320,6 +331,18 @@ fn int_op(kind: &InstKind) -> Option<LlvmIntOp> {
         },
         _ => None,
     }
+}
+
+/// Whether `kind` calls `air.fma`, the fused multiply-add SCCP's float folds read
+/// ([`Solver::float_fold`]).
+fn is_fma(kind: &InstKind) -> bool {
+    matches!(
+        kind,
+        InstKind::Call(call) if matches!(
+            call.callee,
+            Callee::Air { op: AirIntrinsic::Math(Math { f: MathFn::Fma, .. }), .. }
+        )
+    )
 }
 
 /// What the lattice value of a branch condition decides.
@@ -873,6 +896,43 @@ impl<'b> Solver<'b> {
         }
     }
 
+    /// A float operation over `ops` (`fadd`, `fsub`, `fmul`, `fdiv`, or `air.fma`; `product` for
+    /// `fmul`) with the fast-math flags `fmf`, typed `ty`, decided by its constant operands
+    /// whatever the others hold, as LLVM simplifies the operation (`simplifyFPOp`,
+    /// `simplifyFMAFMul`) but for its poison step: an operand that is a NaN, the first in operand
+    /// order, is the result, quieted; then a product under `nnan` and `nsz` with an operand each
+    /// lane of which is a zero of either sign is `+0`. `Top` while an operand before the deciding
+    /// one is unknown. `None` where no operand decides it, and wherever one is an unsupplied
+    /// constant's undefined value, which keeps its own reading.
+    fn float_fold(
+        &self,
+        (product, fmf): (bool, FastMath),
+        ops: &[Value],
+        ty: TypeId,
+        cx: &mut Context<'_>,
+        m: &mut Meter,
+    ) -> Result<Option<Lat>, Error> {
+        if ops.iter().any(|&v| matches!(self.lat(v), Lat::Fc(_))) {
+            return Ok(None);
+        }
+        let mut zero = false;
+        for &v in ops {
+            match self.lat(v) {
+                Lat::Top => return Ok(Some(Lat::Top)),
+                Lat::Const(k) => match cx.folder.float_class(k, m)? {
+                    FloatClass::Nan => return Ok(cx.folder.quiet_nan(k, m)?.map(Lat::Const)),
+                    FloatClass::Zero => zero = true,
+                    FloatClass::Other => {}
+                },
+                Lat::Fc(_) | Lat::Bottom => {}
+            }
+        }
+        if product && zero && fmf.contains(FastMath::NNAN) && fmf.contains(FastMath::NSZ) {
+            return Ok(Some(Lat::Const(cx.folder.float_zero(ty, m)?)));
+        }
+        Ok(None)
+    }
+
     fn visit(
         &mut self,
         i: InstId,
@@ -893,9 +953,15 @@ impl<'b> Solver<'b> {
         let ty = inst.ty;
         let never = |_: &mut Folder<'_>, _: &[ConstId], _: &mut Meter| Ok(None);
         let new = match &inst.kind {
-            InstKind::BinOp { op, a, b, .. } => {
+            InstKind::BinOp { op, fmf, a, b, .. } => {
                 let op = *op;
-                match self.absorbed(op, *a, *b, cx) {
+                let float = matches!(op, BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv);
+                let folded = if float {
+                    self.float_fold((op == BinOp::FMul, *fmf), &[*a, *b], ty, cx, m)?
+                } else {
+                    self.absorbed(op, *a, *b, cx)
+                };
+                match folded {
                     Some(lat) => lat,
                     None => self.pure(&[*a, *b], cx, m, |f, c, m| match c {
                         [x, y] => f.binop(op, ty, *x, *y, m),
@@ -1046,6 +1112,9 @@ impl<'b> Solver<'b> {
                     lat => lat,
                 }
             }
+            InstKind::Call(call) if is_fma(&inst.kind) => self
+                .float_fold((false, call.fmf), &call.args, ty, cx, m)?
+                .unwrap_or(Lat::Bottom),
             kind @ InstKind::Call(_) => match is_defined_arg(kind, cx.folder.consts, cx.fcs) {
                 Some(Some(g)) => {
                     let supplied = cx.fcs.get(&g).is_some_and(|f| f.supplied);
@@ -1252,6 +1321,7 @@ impl<'b> Solver<'b> {
                 let deletable = is_pure(&inst.kind)
                     || is_normalize(&inst.kind)
                     || int_op(&inst.kind).is_some()
+                    || is_fma(&inst.kind)
                     || is_defined_arg(&inst.kind, cx.folder.consts, cx.fcs).is_some();
                 match (&inst.kind, lat) {
                     // A field's address constant serves the loads it folds; the instruction stays,
