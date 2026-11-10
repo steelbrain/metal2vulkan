@@ -461,16 +461,20 @@ driver's. Each is open work.
   that image does not fit Metal's answer does a shadow of Metal's tiles, or a linear image that
   lays every element there, take its place (the costs above).
 
-- **On RADV, a texture's first CPU copy after a runtime suspend moved its memory waits for the
-  moves back**: where the GPU idles into runtime suspend while a program runs, the kernel moves the
-  program's device-local memory out and back at its next submission, and the first
-  `replace_region` into a texture placed before the suspend waited 86 ms on the RX 7900 XTX (Mesa
-  26.2.6). A `Shared` or `Managed` texture larger than half a block takes a block of its own, made
-  as it is rather than ready ahead (`memory/ready.rs`): its first `replace_region` after such a
-  suspend waited 73 ms there. The pooled blocks those textures place in are made ready ahead, every
-  page touched: in processes started with the GPU suspended, the first `replace_region` into a
-  texture made behind about 1.5 s of fills took 55 to 114 us, against 553 to 654 ms without
-  (`tests::zeroed_start`, five processes each), and 58 to 63 us with the GPU awake.
+- **On RADV, the first submission after the GPU idled into runtime suspend waits for the kernel to
+  resume it**: where the GPU idles past its autosuspend delay while a program runs (5 s on the RX
+  7900 XTX, Mesa 26.2.6), the next submission of any kind, a command buffer on the program's queue
+  or a texture's copy on the staging queue, waits for the kernel's resume of the device: 4.73 to
+  4.88 s there, where the kernel's log of a resume spent about 3 s on the display firmware's
+  errors with no display attached (`Wait for DMUB auto-load failed`, then `DMCUB error` lines).
+  A commit returns at once (0.12 to 0.52 ms), its batches handed to the scheduler thread, and its
+  wait carries the resume (4.83 to 4.86 s). A `replace_region` into a `Shared` texture also
+  returns in its awake time, its copy queued for the next submission and the device left
+  suspended. A `get_bytes` as the first call after the suspend, or after such a `replace_region`,
+  waits for the resume (4.73 to 4.88 s at 1920 x 1080 and at 4096 x 4096, where a `get_bytes`
+  right after the device woke took 3.2 to 4.0 ms and 18.7 to 20.8 ms). The runtime starts no
+  wake ahead and holds off no suspend: what first needs the GPU after the delay pays the resume
+  (`tests::cpu_copy_times`' measurement after a runtime suspend, run by name).
 
 - **A draw that reads and writes a color in the pixel interlock after an earlier draw of its
   instance wrote it begins a render pass instance of its own on MoltenVK on Apple's GPUs**

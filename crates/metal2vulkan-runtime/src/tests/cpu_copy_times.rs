@@ -20,6 +20,17 @@
 //! through its mapping of uncached memory (`device/staging.rs`, `device/create.rs`'s
 //! `queue_plan`).
 //!
+//! After a runtime suspend: where Linux lists the device's PCI function with runtime power
+//! management on (`power/control` `auto`), a measurement run by name waits, the device idle, for
+//! the function to suspend (`power/runtime_status` `suspended`), then times each step of a
+//! sequence: `replace_region` then `get_bytes` of a `Shared` texture made and copied before the
+//! suspend, `get_bytes` then `replace_region`, and a command buffer of the program's queue (a fill:
+//! its commit, then its wait) before them both; then both copies again, awake. A 1920 x 1080
+//! texture in a pooled block, and a 4096 x 4096 one in a block of its own (past half a block,
+//! `memory.rs`'s `BLOCK_BYTES`), each sequence twice, twelve suspends in all. Printed as `CPU-COPY-SUSPEND`
+//! lines, with the path the copies took, the function's status after each step and the staging
+//! queue's submissions the steps made (`WorkCounts::staging_flushes`).
+//!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
 
@@ -30,6 +41,7 @@ use crate::{
 };
 use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The textures' sizes, and the times each call is made at that size.
@@ -368,6 +380,189 @@ fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
                 path, "copied on the staging queue",
                 "{name} {width}x{height}: a device with no memory the host caches for a texture's \
                  image and a queue family to stage on copies its textures on the staging queue"
+            );
+        }
+    }
+}
+
+/// The sizes the measurement after a runtime suspend copies: a texture in a pooled block, and one
+/// in a block of its own.
+const SUSPENDED_SIZES: [(u64, u64); 2] = [(1920, 1080), (4096, 4096)];
+
+/// How long past its autosuspend delay the measurement waits for the device to suspend.
+const SUSPEND_MARGIN: Duration = Duration::from_secs(20);
+
+/// The `power` directory Linux lists for `device`'s PCI function, where the device names its bus
+/// address (`DeviceProperties::pci_bus`) and the directory lists a runtime status.
+fn power_directory(device: &Device) -> Option<PathBuf> {
+    let (domain, bus, slot, function) = device.properties().pci_bus?;
+    let power = PathBuf::from(format!(
+        "/sys/bus/pci/devices/{domain:04x}:{bus:02x}:{slot:02x}.{function:x}/power"
+    ));
+    runtime_status(&power).map(|_| power)
+}
+
+/// The function's runtime power status: `active`, `suspending`, `suspended`, `resuming`.
+fn runtime_status(power: &Path) -> Option<String> {
+    let status = std::fs::read_to_string(power.join("runtime_status")).ok()?;
+    Some(status.trim().to_owned())
+}
+
+/// How long the device stayed idle before its function suspended, polling every 10 ms up to
+/// `most`; `None` where it did not.
+fn idle_until_suspended(power: &Path, most: Duration) -> Option<Duration> {
+    let at = Instant::now();
+    while at.elapsed() < most {
+        if runtime_status(power).as_deref() == Some("suspended") {
+            return Some(at.elapsed());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+/// What a measurement after a runtime suspend does first, and after it.
+#[derive(Clone, Copy, Debug)]
+enum Step {
+    /// The texture's `replace_region` of new texels.
+    Write,
+    /// The texture's `get_bytes`, checked against the texels last written.
+    Read,
+    /// A command buffer of the program's queue that fills a small `Private` buffer, committed and
+    /// waited for: the device's own first submission, no texture copy. Timed as the commit, then
+    /// the wait.
+    Fill,
+}
+
+/// The steps after each suspend, in order: each first call, and the program's command buffer
+/// first, ahead of the texture's copies.
+const SEQUENCES: [&[Step]; 3] = [
+    &[Step::Write, Step::Read],
+    &[Step::Read, Step::Write],
+    &[Step::Fill, Step::Read, Step::Write],
+];
+
+/// For each size of [`SUSPENDED_SIZES`], a `Shared` `BGRA8Unorm` texture a render pass may draw
+/// into, made, written and read while the device is awake; then each sequence of
+/// [`SEQUENCES`] twice, each after the device idled until its PCI function suspended, every step
+/// timed, then a write and a read again, awake. Prints the `CPU-COPY-SUSPEND` lines (the module
+/// docs). Each read is checked against the texels written.
+#[test]
+#[ignore = "a measurement: run alone on its device by name"]
+fn a_shared_texture_s_first_cpu_copies_after_a_runtime_suspend_take_the_times_printed() {
+    let device = device();
+    let name = device.name().to_owned();
+    let Some(power) = power_directory(&device) else {
+        eprintln!("CPU-COPY-SUSPEND {name}: no PCI function's runtime power status listed");
+        return;
+    };
+    let read_power = |file: &str| {
+        let text = std::fs::read_to_string(power.join(file)).unwrap_or_default();
+        text.trim().to_owned()
+    };
+    let control = read_power("control");
+    let delay = read_power("autosuspend_delay_ms");
+    eprintln!(
+        "CPU-COPY-SUSPEND {name}: {} control {control}, autosuspend delay {delay} ms, status {}",
+        power.display(),
+        read_power("runtime_status"),
+    );
+    if control != "auto" {
+        eprintln!("CPU-COPY-SUSPEND {name}: runtime power management is off");
+        return;
+    }
+    let most = Duration::from_millis(delay.parse().unwrap_or(0)) + SUSPEND_MARGIN;
+    let queue = device.new_command_queue().unwrap();
+    let small = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    // The commit's time, then the wait's, in milliseconds.
+    let fill = || {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&small, 0..256, 7).unwrap();
+        blit.end_encoding().unwrap();
+        let committed = millis(|| command_buffer.commit().unwrap());
+        let completed = millis(|| {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+        });
+        assert_eq!(command_buffer.error(), None);
+        (committed, completed)
+    };
+    fill();
+    for (width, height) in SUSPENDED_SIZES {
+        let row = 4 * width;
+        let len = (row * height) as usize;
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        descriptor.resource_options = ResourceOptions::shared();
+        let before = device.work_counts();
+        let texture = device.new_texture(&descriptor).unwrap();
+        let made = device.work_counts();
+        let path = match (
+            made.images_started_on_the_host > before.images_started_on_the_host,
+            made.staging_moves_queued > before.staging_moves_queued,
+        ) {
+            (true, _) if made.uncached_host_images > before.uncached_host_images => {
+                "copied on the host from uncached memory"
+            }
+            (true, _) => "copied on the host",
+            (false, true) => "copied on the staging queue",
+            (false, false) => "copied through submissions",
+        };
+        let region = Region::new_2d(0, 0, width, height);
+        let mut read = vec![0xee; len];
+        let mut salt = 20;
+        let mut written = pattern(len, salt);
+        // Awake: the texture's first copies, so the times below are the suspend's alone.
+        (texture.replace_region(region, 0, 0, &written, row, 0)).unwrap();
+        (texture.get_bytes(&mut read, row, 0, region, 0, 0)).unwrap();
+        assert!(read == written, "{name} {width}x{height}: awake");
+        let mut step = |step: Step, read: &mut [u8], written: &mut Vec<u8>| match step {
+            Step::Write => {
+                salt += 1;
+                let bytes = pattern(len, salt);
+                let took = millis(|| {
+                    (texture.replace_region(region, 0, 0, &bytes, row, 0)).unwrap();
+                });
+                *written = bytes;
+                format!("replace_region {took:.2} ms")
+            }
+            Step::Read => {
+                read.fill(0xee);
+                let took = millis(|| (texture.get_bytes(read, row, 0, region, 0, 0)).unwrap());
+                assert!(*read == written[..], "{name} {width}x{height}: a read");
+                format!("get_bytes {took:.2} ms")
+            }
+            Step::Fill => {
+                let (committed, completed) = fill();
+                format!("a command buffer's commit {committed:.2} ms, its wait {completed:.2} ms")
+            }
+        };
+        for sequence in SEQUENCES.iter().chain(&SEQUENCES) {
+            let Some(idle) = idle_until_suspended(&power, most) else {
+                eprintln!(
+                    "CPU-COPY-SUSPEND {name}: the device did not suspend within {most:?} \
+                     (status {})",
+                    read_power("runtime_status")
+                );
+                return;
+            };
+            let counts = device.work_counts();
+            let mut steps = Vec::new();
+            for &each in *sequence {
+                let took = step(each, &mut read, &mut written);
+                let status = runtime_status(&power).unwrap_or_default();
+                steps.push(format!("{took} ({status})"));
+            }
+            let flushed = device.work_counts().staging_flushes - counts.staging_flushes;
+            let wrote_again = step(Step::Write, &mut read, &mut written);
+            let got_again = step(Step::Read, &mut read, &mut written);
+            eprintln!(
+                "CPU-COPY-SUSPEND {name} {width}x{height} BGRA8Unorm Shared, {path}: suspended \
+                 after {:.2} s idle; then {}; {flushed} staging submission(s); awake again: \
+                 {wrote_again}, {got_again}",
+                idle.as_secs_f64(),
+                steps.join(", "),
             );
         }
     }
