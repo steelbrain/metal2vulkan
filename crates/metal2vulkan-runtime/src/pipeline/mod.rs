@@ -1854,7 +1854,7 @@ impl Variant {
     }
 
     /// The variant's layouts and module.
-    pub(super) fn objects(&self) -> &Arc<VariantObjects> {
+    pub(crate) fn objects(&self) -> &Arc<VariantObjects> {
         &self.objects
     }
 

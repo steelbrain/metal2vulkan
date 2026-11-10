@@ -2360,6 +2360,7 @@ fn record(
     let heap = heap_sets::heap_elements(&compiled.layout, plan, state)?;
     // What the variant's layout binds of the device's tables, worked out once (`heap_sets.rs`).
     let heap_tables = (variant.objects()).heap_tables(&compiled.layout, &compiled.dependencies);
+    (variant.objects()).bind_sampler_tables(&compiled.layout, &compiled.dependencies);
     let texture_table = heap_tables.texture_table(core.device())?;
     let sampler_table = heap_tables.sampler_table(core.device())?;
     let stages = [(Stage::Kernel, tables.table)];

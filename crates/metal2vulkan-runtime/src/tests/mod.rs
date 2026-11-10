@@ -438,6 +438,8 @@ mod sampler_prunes;
 mod sampler_release;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod sampler_sets;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod sampler_table_binders;
 mod scheduler;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod scheduler_wakes;

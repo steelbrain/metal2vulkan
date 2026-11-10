@@ -106,8 +106,11 @@
 //!   [`SamplerWord`], else `{id, 0, 0}`, the neutral. A kind ([`SamplerTableKind`]) maps only the
 //!   states whose elements its layouts' sampler arrays hold, and cubic states only where each of
 //!   the command's stages with a sampler table tests the states it reaches for a cubic filter
-//!   (`RuntimeFact::CubicArgumentSampler`): another is the neutral there, announced. So is a
-//!   state at an ID in neither window. An entry is written after the state's elements, and
+//!   (`RuntimeFact::CubicArgumentSampler`): another is the neutral there, announced while a
+//!   variant whose commands bind a table of the kind lives, from its first command
+//!   ([`TableBinder`]), as the state is made or as that command binds it. The device keeps a
+//!   table after the last such variant went, and a state made then is announced against it by
+//!   none. So is a state at an ID in neither window, announced as it is made. An entry is written after the state's elements, and
 //!   cleared before they go, so a command reading it meanwhile reads the state or the neutral.
 //! - **Release.** A heap set goes with the last variant of its layout and the last command buffer
 //!   that bound it, what its elements name (the sampler states' samplers, which no command holds)
@@ -142,8 +145,8 @@ use metal2vulkan::pipeline::{
 };
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 /// The heap's set number.
@@ -202,6 +205,13 @@ pub(super) struct DeviceHeaps {
     /// The sampler tables, by what they map ([`SamplerTableKind`]), each made at the first
     /// command that binds one of its kind.
     sampler_tables: BTreeMap<SamplerTableKind, Table>,
+    /// By kind, how many variants' commands may bind a sampler table of it ([`TableBinder`]):
+    /// a state a kind leaves out is announced while one may, not for a table the device keeps
+    /// after every variant that bound it went.
+    sampler_binders: BTreeMap<SamplerTableKind, Arc<AtomicUsize>>,
+    /// The IDs whose slots a cubic state holds (`sampler_slots`), which a kind that does not map
+    /// cubic states leaves out.
+    cubic_slots: BTreeSet<u64>,
     /// Run by a batch's thread once it wrote the deferred slots and let go of the lock, while
     /// it still holds their holders (`HeldSlots`): where a program's release may leave it the
     /// last (`tests/passing_holds.rs`).
@@ -260,6 +270,65 @@ impl SamplerTableKind {
     fn holds(self, slot: &SamplerSlot) -> bool {
         slot.element < u64::from(self.capacity) && (self.cubic || !slot.cubic)
     }
+
+    /// Note that the table leaves out sampler ID `id`, whose slot `slot` holds (not
+    /// [`holds`](Self::holds)): a cubic state, or one past its capacity.
+    fn left_out(self, id: u64, slot: &SamplerSlot, notes: &mut Notes) {
+        match slot.element < u64::from(self.capacity) {
+            true => notes.sampler_cubic(id),
+            false => notes.sampler_past(id, u64::from(self.capacity)),
+        }
+    }
+}
+
+/// A variant's share in the device's sampler tables of the kind its layout binds
+/// ([`SamplerTableKind`]), from its first command until its objects go (`VariantObjects`): while
+/// one lives, a sampler state made that the kind leaves out is announced, as a command of the
+/// variant may read it through an argument buffer. A table the device keeps after the last
+/// binder of its kind went announces none: nothing binds it then, and the first command of a
+/// variant that binds it again announces what it leaves out ([`DeviceHeaps::bind_kind`]).
+pub(crate) struct TableBinder(Arc<AtomicUsize>);
+
+impl TableBinder {
+    /// The binder of the variant of `layout`, of a pipeline stating `dependencies`, of
+    /// `device`, at its first command: `None` for a layout without a sampler table.
+    pub(crate) fn of(
+        device: &Device,
+        layout: &PipelineLayout,
+        dependencies: &[RuntimeDependency],
+    ) -> Option<TableBinder> {
+        let kind = SamplerTableAt::of(layout, dependencies)?.kind;
+        let mut notes = Notes::default();
+        let binder = lock(&device.shared().heaps).bind_kind(kind, &mut notes);
+        notes.announce(device);
+        Some(binder)
+    }
+}
+
+impl Drop for TableBinder {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A variant's first command binding the sampler table of `capacity` elements that maps cubic
+/// states where `cubic` (`tests/sampler_table_binders.rs`): the device's table of the kind made,
+/// its binder taken ([`DeviceHeaps::bind_kind`]) and its notes announced.
+#[cfg(test)]
+pub(crate) fn bind_kind_for_tests(
+    device: &Device,
+    capacity: u32,
+    cubic: bool,
+) -> Result<TableBinder, Error> {
+    let kind = SamplerTableKind { capacity, cubic };
+    let mut notes = Notes::default();
+    let binder = {
+        let mut heaps = lock(&device.shared().heaps);
+        heaps.sampler_table(device, kind)?;
+        heaps.bind_kind(kind, &mut notes)
+    };
+    notes.announce(device);
+    Ok(binder)
 }
 
 /// A texture the table and the heap sets hold: its slot's generation and hold serial when it
@@ -916,8 +985,13 @@ impl DeviceHeaps {
             Some(slot) => {
                 self.put_sampler(id, Some(&slot), notes);
                 self.sampler_slots.insert(id, slot);
+                match slot.cubic {
+                    true => self.cubic_slots.insert(id),
+                    false => self.cubic_slots.remove(&id),
+                };
             }
             None => {
+                self.cubic_slots.remove(&id);
                 if self.sampler_slots.remove(&id).is_some() {
                     self.put_sampler(id, None, notes);
                 }
@@ -942,13 +1016,44 @@ impl DeviceHeaps {
         for (kind, table) in &self.sampler_tables {
             let (element, word) = kind.entry(slot);
             table.put(at, id, element, word);
-            if let Some(slot) = slot.filter(|slot| !kind.holds(slot)) {
-                match slot.element < u64::from(kind.capacity) {
-                    true => notes.sampler_cubic(id),
-                    false => notes.sampler_past(id, u64::from(kind.capacity)),
-                }
+        }
+        // A kind that leaves the state out, while a variant's commands may bind its table.
+        let Some(slot) = slot else {
+            return;
+        };
+        for (&kind, binders) in &self.sampler_binders {
+            if binders.load(Ordering::Acquire) > 0 && !kind.holds(slot) {
+                kind.left_out(id, slot, notes);
             }
         }
+    }
+
+    /// A variant whose commands bind sampler tables of `kind` now may: counted while the
+    /// returned binder lives, and the first live state the kind leaves out noted, as its commands
+    /// may read it from now on ([`TableBinder`]).
+    fn bind_kind(&mut self, kind: SamplerTableKind, notes: &mut Notes) -> TableBinder {
+        let binders = Arc::clone(self.sampler_binders.entry(kind).or_default());
+        binders.fetch_add(1, Ordering::AcqRel);
+        let capacity = u64::from(kind.capacity);
+        let cubic = self.cubic_slots.iter().find_map(|id| {
+            let slot = self.sampler_slots.get(id)?;
+            (!kind.holds(slot)).then_some((*id, slot))
+        });
+        // A state past the kind's capacity, where the highest element placed is.
+        let past = || {
+            let highest = self
+                .sampler_states
+                .last_key_value()
+                .map(|(&element, _)| element);
+            highest.filter(|&element| element >= capacity)?;
+            (self.sampler_slots.iter())
+                .find(|(_, slot)| slot.element >= capacity)
+                .map(|(&id, slot)| (id, slot))
+        };
+        if let Some((id, slot)) = cubic.or_else(past) {
+            kind.left_out(id, slot, notes);
+        }
+        TableBinder(binders)
     }
 
     /// Start the sampler tables' high window at `base`: each table's entries of it are rewritten
@@ -979,6 +1084,7 @@ impl DeviceHeaps {
             .is_some_and(|slot| slot.serial == serial)
         {
             self.sampler_slots.remove(&id);
+            self.cubic_slots.remove(&id);
             self.put_sampler(id, None, notes);
         }
         let placed = self
@@ -1076,6 +1182,7 @@ pub(super) fn place_sampler(device: &Device, state: &SamplerState) {
         let placed = heaps.place_sampler(device, state, &mut held, &mut notes);
         if placed.is_err() {
             heaps.sampler_slots.remove(&state.gpu_resource_id().0);
+            heaps.cubic_slots.remove(&state.gpu_resource_id().0);
             heaps.put_sampler(state.gpu_resource_id().0, None, &mut notes);
         }
         placed

@@ -976,6 +976,8 @@ impl RenderLowering {
             &variant.pipeline().layout,
             &variant.pipeline().dependencies,
         )?;
+        (variant.objects())
+            .bind_sampler_tables(&variant.pipeline().layout, &variant.pipeline().dependencies);
         if commands.regions.is_empty() {
             self.core.executed(|| {
                 Execution::new(

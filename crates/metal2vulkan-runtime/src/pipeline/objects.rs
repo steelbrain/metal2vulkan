@@ -27,7 +27,7 @@ use crate::device::{lock, shared_draw_lock, DeviceShared};
 use crate::error::{internal, vulkan, Error};
 use crate::exit_guard;
 use crate::generated_commands::INDIRECT_BINDABLE;
-use crate::heap_sets::{self, HeapSet, HeapTables};
+use crate::heap_sets::{self, HeapSet, HeapTables, TableBinder};
 use crate::release;
 use crate::shader_cache::driver::Making;
 use crate::ycbcr_device::YCbCrSampler;
@@ -492,6 +492,9 @@ pub(crate) struct VariantObjects {
     /// What its layout binds of the device's texture and sampler tables, from its first command
     /// ([`heap_tables`](Self::heap_tables)).
     heap_tables: OnceLock<HeapTables>,
+    /// Its share in the device's sampler tables of the kind its layout binds, from its first
+    /// command ([`bind_sampler_tables`](Self::bind_sampler_tables)).
+    sampler_binder: OnceLock<Option<TableBinder>>,
     /// The variant instance its objects are, where its last release keeps them for a variant of
     /// the same compiled pipeline made again (`kept.rs`); `None` destroys them.
     keep: Option<Instance>,
@@ -710,6 +713,7 @@ impl VariantObjects {
             heap_layout: layout.sets.get(1).cloned(),
             heap: Mutex::new(None),
             heap_tables: OnceLock::new(),
+            sampler_binder: OnceLock::new(),
             kinds: Kinds::of(stages, pipeline, understates_support(device)),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
@@ -793,6 +797,7 @@ impl VariantObjects {
             heap_layout: layout.sets.get(1).cloned(),
             heap: Mutex::new(None),
             heap_tables: OnceLock::new(),
+            sampler_binder: OnceLock::new(),
             kinds: Kinds::of(stages, pipeline, understates_support(device)),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
@@ -984,6 +989,18 @@ impl VariantObjects {
         dependencies: &[RuntimeDependency],
     ) -> &HeapTables {
         (self.heap_tables).get_or_init(|| HeapTables::of(&self.device, layout, dependencies))
+    }
+
+    /// As its command binds its layout, `layout`, of a pipeline stating `dependencies`: its share
+    /// in the device's sampler tables of the kind the layout binds, taken at its first command
+    /// and held while its objects live (`heap_sets::TableBinder`), so a sampler state the kind
+    /// leaves out is announced while its commands may read it, and not after.
+    pub(crate) fn bind_sampler_tables(
+        &self,
+        layout: &PipelineLayout,
+        dependencies: &[RuntimeDependency],
+    ) {
+        (self.sampler_binder).get_or_init(|| TableBinder::of(&self.device, layout, dependencies));
     }
 
     /// The device's heap set of the layout's set 1 (`heap_sets.rs`), which the variant holds

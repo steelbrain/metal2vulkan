@@ -8442,6 +8442,7 @@ impl RenderLowering {
         let texture_table = heap_sets::texture_table(self.core.device(), &compiled.layout)?;
         let sampler_table =
             heap_sets::sampler_table(self.core.device(), &compiled.layout, &compiled.dependencies)?;
+        (variant.objects()).bind_sampler_tables(&compiled.layout, &compiled.dependencies);
         // The arguments are GPU memory an earlier command may write; the exact paths are GPU
         // passes over them. The index bounds pass is one (`index_bounds.rs`). An indexed indirect
         // draw takes it where the binder asks for its arguments on the CPU only for its index
