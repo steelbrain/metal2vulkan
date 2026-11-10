@@ -1134,6 +1134,14 @@ impl Scheduler {
         )
     }
 
+    /// Whether the thread sleeps, on its condition variable or on the GPU, and no waker woke it
+    /// since ([`Sleep`]): a test that wakes it waits for this, rather than for a time.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn asleep(&self) -> bool {
+        let sleep = lock(&self.shared.sleep);
+        sleep.asleep || sleep.on_gpu.is_some()
+    }
+
     /// The passes the thread made so far (`WorkCounts::scheduler_passes`).
     pub(crate) fn passes(&self) -> u64 {
         self.shared.passes.load(Ordering::Relaxed)

@@ -98,6 +98,19 @@ fn settle(completed: &AtomicU64, count: u64, what: &str) {
     }
 }
 
+/// Wait until the scheduler's thread sleeps (`Scheduler::asleep`), failing where it stays awake
+/// for [`BOUND`]: what the last commit or completion set going is over, and no pass is under way.
+fn asleep(device: &Device, what: &str) {
+    let since = Instant::now();
+    while !device.shared().scheduler.asleep() {
+        assert!(
+            since.elapsed() < BOUND,
+            "{what}: the scheduler's thread stayed awake for {BOUND:?}"
+        );
+        std::thread::sleep(Duration::from_micros(50));
+    }
+}
+
 /// The wakings the thread's notifies and nudges count between `before` and `after`, and the
 /// sleeps they may end: those the thread began between the two, and the one it may have been in
 /// as `before` was read, counted as it began, before `before`. A waking of that one is counted in
@@ -116,8 +129,8 @@ fn wakings_and_sleeps(before: &WorkCounts, after: &WorkCounts) -> (u64, u64) {
     )
 }
 
-/// Bursts of commits made faster than the scheduler's thread wakes, each after an idle gap: the
-/// thread is notified at most once a sleep.
+/// Bursts of commits made faster than the scheduler's thread wakes, each once the thread sleeps
+/// ([`asleep`]): the thread is notified at most once a sleep.
 #[test]
 fn a_burst_of_commits_wakes_the_sleeping_thread_once() {
     let device = device();
@@ -126,8 +139,7 @@ fn a_burst_of_commits_wakes_the_sleeping_thread_once() {
     let completed = Arc::new(AtomicU64::new(0));
     let before = device.work_counts();
     for burst in 0..10u64 {
-        // The thread sleeps by now.
-        std::thread::sleep(Duration::from_millis(5));
+        asleep(&device, &format!("burst {burst}"));
         let committed: Vec<CommandBuffer> = (0..BURST)
             .map(|at| counted_fill(&queue, &target, at as u8, &completed))
             .collect();
@@ -202,10 +214,11 @@ fn commits_with_idle_gaps_lose_no_wake() {
     );
 }
 
-/// Commits made with `commit_and_submit` alone, each after an idle gap and each submitted by its
-/// committing thread: where the device's batches may wait in a group (`CompletionPolicy::Grouped`
-/// and its check found the merge, `command_buffer/group.rs`), each wakes the sleeping thread once,
-/// counted as a commit's waking; elsewhere none wakes it.
+/// Commits made with `commit_and_submit` alone, each once the thread sleeps ([`asleep`], not after
+/// a time, which the last commit's waking and pass may outlast under load) and each submitted by
+/// its committing thread: where the device's batches may wait in a group
+/// (`CompletionPolicy::Grouped` and its check found the merge, `command_buffer/group.rs`), each
+/// wakes the sleeping thread once, counted as a commit's waking; elsewhere none wakes it.
 #[test]
 fn a_commit_and_submit_wakes_the_sleeping_thread_only_for_a_batch_that_may_group() {
     const COMMITS: u64 = 10;
@@ -226,8 +239,7 @@ fn a_commit_and_submit_wakes_the_sleeping_thread_only_for_a_batch_that_may_group
     settle(&completed, 1, "the first");
     let before = device.work_counts();
     for at in 1..=COMMITS {
-        // The thread sleeps by now.
-        std::thread::sleep(Duration::from_millis(5));
+        asleep(&device, &format!("commit {at}"));
         let command_buffer = counted_fill(&queue, &target, at as u8, &completed);
         command_buffer.commit_and_submit().unwrap();
         settle(&completed, at + 1, &format!("commit {at}"));
@@ -278,8 +290,8 @@ fn a_commit_returns_while_the_lock_a_submission_holds_is_held() {
         })
     };
     holding.recv_timeout(BOUND).unwrap();
-    // The thread sleeps by now: no pass is under way.
-    std::thread::sleep(Duration::from_millis(5));
+    // No pass is under way.
+    asleep(&device, "before the lock");
     let (returned, committer) = device.shared().scheduler.under_lock(|| {
         let (done, returns) = mpsc::channel();
         let committer = std::thread::spawn(move || {
