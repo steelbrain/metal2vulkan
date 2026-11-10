@@ -17,6 +17,9 @@
 //!   texture, the draw's texels the scissor's.
 //! - **A `Load`** with a draw over a smaller render area, or within a scissor, changes the render
 //!   area's (or the scissor's) texels alone.
+//! - Metal keeps a target of `ShaderWrite` usage, or one over a buffer, uncompressed too: our
+//!   probe `clearreach2` cleared its tiles alone without a draw call (`RGBA8Unorm`, 128x128 at
+//!   37x21), as an uncompressed one's here.
 //!
 //! Every texel past what the pass changes reads what the twin reads (Metal's fresh pattern, or
 //! zero, or the device's zero where it cannot write the pattern). A `Load` pass records no clear
@@ -105,13 +108,47 @@ fn metal_s(mode: Mode, size: [u64; 2], area: [u64; 2], compressed: bool) -> [[u6
     }
 }
 
-/// A new `Private` render target of `pf` and `size`, its GPU optimization `optimized`.
-fn target(lane: &Lane, pf: PixelFormat, size: [u64; 2], optimized: bool) -> Texture {
+/// How a probe's target is made: Metal keeps the first compressed and the others not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    /// `RenderTarget | ShaderRead`, GPU optimization on.
+    Optimized,
+    /// The same, GPU optimization off.
+    Unoptimized,
+    /// `ShaderWrite` besides, GPU optimization on.
+    ShaderWrite,
+    /// Over a new `Private` buffer, GPU optimization on.
+    OverBuffer,
+}
+
+const KINDS: [Kind; 4] = [
+    Kind::Optimized,
+    Kind::Unoptimized,
+    Kind::ShaderWrite,
+    Kind::OverBuffer,
+];
+
+/// A new `Private` render target of `format` and `size`, of `kind`.
+fn target(lane: &Lane, format: &Format, size: [u64; 2], kind: Kind) -> Texture {
+    let pf = format.pf;
     let mut descriptor = TextureDescriptor::texture_2d(pf, size[0], size[1], false);
     descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    if kind == Kind::ShaderWrite {
+        descriptor.usage |= TextureUsage::SHADER_WRITE;
+    }
     descriptor.resource_options = ResourceOptions::private();
-    descriptor.allow_gpu_optimized_contents = optimized;
-    lane.device.new_texture(&descriptor).unwrap()
+    descriptor.allow_gpu_optimized_contents = kind != Kind::Unoptimized;
+    if kind != Kind::OverBuffer {
+        return lane.device.new_texture(&descriptor).unwrap();
+    }
+    let align = (lane.device)
+        .minimum_linear_texture_alignment_for_pixel_format(pf)
+        .unwrap();
+    let row = (size[0] * format.cleared.len() as u64).next_multiple_of(align);
+    let buffer = (lane.device)
+        .new_buffer(row * size[1], ResourceOptions::private())
+        .unwrap();
+    buffer.new_texture(&descriptor, 0, row).unwrap()
 }
 
 /// `texture`'s texels, `bytes` each, through a blit into a shared buffer.
@@ -244,10 +281,10 @@ fn a_fresh_target_s_clear_reaches_as_metal_s_by_its_compression() {
         assert_ne!(format.cleared, format.drawn);
         let pipeline = lane.pipeline(&[format.pf], (None, None), 1);
         for (size, area) in SHAPES {
-            for optimized in [true, false] {
+            for kind in KINDS {
                 for mode in MODES {
-                    let texture = target(&lane, format.pf, size, optimized);
-                    let twin = target(&lane, format.pf, size, optimized);
+                    let texture = target(&lane, format, size, kind);
+                    let twin = target(&lane, format, size, kind);
                     let before = lane.device.work_counts().commands_recorded;
                     encode(&lane, &texture, mode, area, &pipeline);
                     let after = lane.device.work_counts().commands_recorded;
@@ -258,7 +295,7 @@ fn a_fresh_target_s_clear_reaches_as_metal_s_by_its_compression() {
                     assert!(untouched
                         .chunks(bytes)
                         .all(|texel| texel != format.cleared && texel != format.drawn));
-                    let [drawn, cleared] = metal_s(mode, size, area, optimized);
+                    let [drawn, cleared] = metal_s(mode, size, area, kind == Kind::Optimized);
                     let mut expected = untouched.clone();
                     for (at, texel) in expected.chunks_mut(bytes).enumerate() {
                         let (x, y) = (at as u64 % size[0], at as u64 / size[0]);
@@ -269,7 +306,7 @@ fn a_fresh_target_s_clear_reaches_as_metal_s_by_its_compression() {
                         }
                     }
                     let case = format!(
-                        "{:?} {}x{} {:?} {}x{} optimized {optimized}",
+                        "{:?} {}x{} {:?} {}x{} {kind:?}",
                         format.pf, size[0], size[1], mode, area[0], area[1]
                     );
                     cases += 1;
