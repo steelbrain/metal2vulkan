@@ -202,6 +202,8 @@ mod handler_orders;
 mod heap;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_allocated_size;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod heap_border_texels;
 mod heap_footprint_formats;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod heap_one_plane_rows;
