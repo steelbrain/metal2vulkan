@@ -2094,6 +2094,7 @@ field	metal2vulkan-runtime::DeviceOptions.optional_device_extensions	pub optiona
 field	metal2vulkan-runtime::DeviceOptions.pending_audit	pub pending_audit: bool
 field	metal2vulkan-runtime::DeviceOptions.pipeline_records	pub pipeline_records: Option<Arc<dyn Fn(crate::PipelineRecord) + Send + Sync>>
 field	metal2vulkan-runtime::DeviceOptions.policy	pub policy: DevicePolicy
+field	metal2vulkan-runtime::DeviceOptions.queue_limits	pub queue_limits: Option<QueueLimits>
 field	metal2vulkan-runtime::DeviceOptions.record_executions	pub record_executions: bool
 field	metal2vulkan-runtime::DeviceOptions.reserved_queues	pub reserved_queues: u32
 field	metal2vulkan-runtime::DeviceOptions.shader_cache	pub shader_cache: ShaderCacheOptions
@@ -2318,6 +2319,8 @@ field	metal2vulkan-runtime::PixelFormatInfo.cast_class	pub cast_class: u64
 field	metal2vulkan-runtime::PixelFormatInfo.flags	pub flags: u64
 field	metal2vulkan-runtime::PixelFormatInfo.name	pub name: &'static str
 field	metal2vulkan-runtime::PixelFormatInfo.words	pub words: [u64; 4]
+field	metal2vulkan-runtime::QueueLimits.presenting	pub presenting: u32
+field	metal2vulkan-runtime::QueueLimits.round_robin	pub round_robin: u32
 field	metal2vulkan-runtime::RawDevice.announce_each	pub announce_each: BTreeSet<crate::Degradation>
 field	metal2vulkan-runtime::RawDevice.device	pub device: vk::Device
 field	metal2vulkan-runtime::RawDevice.device_extensions	pub device_extensions: Vec<CString>
@@ -9921,6 +9924,7 @@ struct	metal2vulkan-runtime::PipelineOptions	#[derive(Clone, Debug, Default)] #[
 struct	metal2vulkan-runtime::PipelineRecord	#[derive(Clone)] pub struct PipelineRecord
 struct	metal2vulkan-runtime::PixelFormatInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PixelFormatInfo
 struct	metal2vulkan-runtime::PrivateProperties	#[derive(Clone, Debug, PartialEq, Eq)] pub struct PrivateProperties
+struct	metal2vulkan-runtime::QueueLimits	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct QueueLimits
 struct	metal2vulkan-runtime::RasterizationRateMap	#[derive(Clone)] pub struct RasterizationRateMap(Arc<MapShared>)
 struct	metal2vulkan-runtime::RawDevice	#[derive(Clone)] #[non_exhaustive] pub struct RawDevice
 struct	metal2vulkan-runtime::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region

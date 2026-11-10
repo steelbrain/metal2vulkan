@@ -1205,7 +1205,8 @@ pub(crate) fn planned_queues(
 ) -> Option<PlannedQueues> {
     let mut planned = queue_plan(families, reserved)?;
     let planned_extra = extra_queue_places(families, &mut planned, extra);
-    (planned != *plan || planned_extra != extra_places).then(|| PlannedQueues {
+    let changed = planned != *plan || planned_extra != extra_places;
+    changed.then_some(PlannedQueues {
         round_robin: planned.queues.len(),
         presenting: planned.present.len(),
         reserved: planned.reserved,
