@@ -37,8 +37,9 @@
 //!   like a guest's scroll on the 780M (from 20 to 63 live blocks of 64 MiB in about 20 s, about 4
 //!   a second) finds a block made when it needs one; and, grown or not, once the pool is near its
 //!   next block (`Pool::near_next`: it holds a pooled block and lacks room for three quarters of
-//!   one, `memory::ahead_room`, a quarter of a block before the half block `keep_room` keeps), so
-//!   that its first growth, and the first after a pause, finds one made too, where a guest's
+//!   one, of the largest it holds, `Pool::ahead_room`, a quarter of a block before the half block
+//!   `keep_room` keeps), so that its first growth, and the first after a pause, finds one made
+//!   too, where a guest's
 //!   scroll on a Radeon 780M made its buffers' pool's first growth in place, on the guest's
 //!   thread (`tests::reclaim_submit_bench`'s scroll arm: of each phase's 8 blocks, the first was
 //!   made in place in three runs out of three, quiet and fragmented, and none is now). A pool

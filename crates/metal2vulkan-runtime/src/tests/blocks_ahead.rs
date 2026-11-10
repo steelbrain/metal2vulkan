@@ -500,7 +500,33 @@ const MIXED_ROUNDS: usize = 4;
 /// (`placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead`); no other.
 #[test]
 fn mixed_sizes_find_their_blocks_made_ahead() {
-    let scratch = Scratch::new("mixed");
+    mixed_sizes(None);
+}
+
+/// As `mixed_sizes_find_their_blocks_made_ahead`, the device told of a slow making
+/// (`Memory::plain_block_made`) before the run's fourth texture, while its pool of images fills
+/// its first block of 64 MiB: its blocks of images made smaller from then on, the pool keeps its
+/// next block made ahead as it did for the block it fills (`Pool::ahead_room`). By three quarters
+/// of a small block, a Radeon 780M's pool, its 64 MiB block left with 12.4 MiB, kept none ahead,
+/// and its next texture of 2560 x 1440 (15.1 MiB) waited for its block (texture 11, two runs of
+/// two), as it did in the memory tests' runs where a slow making of the host's came that early.
+#[test]
+fn mixed_sizes_after_blocks_made_smaller_find_their_blocks_made_ahead() {
+    mixed_sizes(Some(SMALLER_AT));
+}
+
+/// The texture of the mixed-sizes run before which
+/// `mixed_sizes_after_blocks_made_smaller_find_their_blocks_made_ahead` tells the device of a slow
+/// making.
+const SMALLER_AT: usize = 4;
+
+/// The mixed-sizes run (`mixed_sizes_find_their_blocks_made_ahead`), the device told of a slow
+/// making before texture `smaller_at` where given.
+fn mixed_sizes(smaller_at: Option<usize>) {
+    let scratch = Scratch::new(match smaller_at {
+        Some(_) => "mixed-smaller",
+        None => "mixed",
+    });
     let device = device(&scratch.0);
     let shared = device.shared();
     let ahead = || crate::device::lock(&shared.memory).ahead_blocks();
@@ -510,6 +536,10 @@ fn mixed_sizes_find_their_blocks_made_ahead() {
     let start = ahead();
     let (mut waits, mut first_large) = (Vec::new(), None);
     for at in 1..MIXED_SIDES.len() * MIXED_ROUNDS {
+        if smaller_at == Some(at) {
+            let mut memory = crate::device::lock(&shared.memory);
+            memory.plain_block_made(BLOCK_BYTES, MAKING_BOUND * 4);
+        }
         let (width, height) = MIXED_SIDES[at % MIXED_SIDES.len()];
         if first_large.is_none() && width * height * 4 > plain() {
             first_large = Some(at);

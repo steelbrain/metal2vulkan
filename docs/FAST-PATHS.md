@@ -988,7 +988,8 @@ driver's. Each is open work.
   clip still makes its blocks: 16 allocations, against 44 when each picture had an allocation of
   its own, with 3 to 5 commits waiting 1 ms or more (longest 10.9 to 19.6 ms): its blocks'
   `vkAllocateMemory` holds every submission. A pool that grew, and one near its next block (it
-  holds a pooled block and lacks room for three quarters of one, its first growth among them), gets
+  holds a pooled block and lacks room for three quarters of one, of the largest it holds, its first
+  growth among them), gets
   a block's worth of bytes made ahead (`memory/ready.rs`; the pools of exportable buffers, which
   hold the pictures, among them): as many of its blocks as come to one 64 MiB block or more
   (four of 17 MiB in a plain pool of smaller blocks), and while its

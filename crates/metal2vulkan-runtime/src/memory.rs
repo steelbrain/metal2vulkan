@@ -1316,10 +1316,26 @@ impl<T> Pool<T> {
         self.blocks.iter().flatten().any(|block| !block.dedicated)
     }
 
-    /// Whether it holds a pooled block, its blocks of `bytes`, and lacks room for [`ahead_room`]
-    /// of one: near its next block, which is made ahead (`memory/ready.rs`).
+    /// Whether it holds a pooled block, its blocks of `bytes`, and lacks the room its next block
+    /// is made ahead below ([`Pool::ahead_room`]): near its next block, which is made ahead
+    /// (`memory/ready.rs`).
     fn near_next(&mut self, bytes: u64) -> bool {
-        self.holds_pooled() && !self.has_room(ahead_room(bytes))
+        let room = self.ahead_room(bytes);
+        self.holds_pooled() && !self.has_room(room)
+    }
+
+    /// The longest free range below which it gets its next block made ahead, its blocks of
+    /// `bytes` ([`ahead_room`]): three quarters of the largest of `bytes` and its pooled blocks.
+    /// A pool still filling a block made before its blocks of plain memory were made smaller
+    /// ([`Memory::plain_block_made`]) keeps its next block ahead as it did for that block: by three
+    /// quarters of the small block, a pool on a Radeon 780M whose one 64 MiB block had 12.4 MiB
+    /// left kept none ahead, and its next texture of 2560 x 1440 (15.1 MiB) waited for its block
+    /// (`tests::blocks_ahead`'s mixed sizes, told of a slow making at its fourth texture).
+    fn ahead_room(&self, bytes: u64) -> u64 {
+        let pooled = (self.blocks.iter().flatten())
+            .filter(|block| !block.dedicated)
+            .map(|block| block.size);
+        ahead_room(pooled.fold(bytes, u64::max))
     }
 
     /// Every block's payload, emptying the pool.
@@ -3386,13 +3402,14 @@ impl Memory {
         }
         // A block made ahead for a pool that stopped growing that long ago, where the pool has
         // room for three quarters of a block, so that it is no longer near its next block
-        // ([`ahead_room`], `memory/ready.rs`).
+        // ([`Pool::ahead_room`], `memory/ready.rs`).
         let mut at = 0;
         while at < self.readying.len() {
             let (holds, type_index) = self.readying[at].pool();
             let started = self.readying[at].started();
-            let room = ahead_room(self.pooled_bytes((holds, type_index)));
+            let bytes = self.pooled_bytes((holds, type_index));
             let pool = self.pool(holds, type_index);
+            let room = pool.ahead_room(bytes);
             let since = pool.grew(None).map_or(started, |grew| grew.max(started));
             let unused = now.saturating_duration_since(since) >= KEPT_EMPTY_FOR
                 && pool.has_room(room)
