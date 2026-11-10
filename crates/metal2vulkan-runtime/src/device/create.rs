@@ -229,6 +229,15 @@ pub struct DeviceOptions {
     /// device that renders the format. No Metal counterpart.
     #[doc(hidden)]
     pub withheld_attachment_formats: BTreeSet<metal2vulkan::vk::Format>,
+    /// The most color attachments, and fragment outputs, each device draws at once, where it is
+    /// below the device's own: the device's `maxColorAttachments` and
+    /// `maxFragmentOutputAttachments` are held to it in the description the device plans and
+    /// compiles by (`hold_color_attachments`), so a render pass of more colors draws in color
+    /// groups (`render/color_groups.rs`) as on a device of that many. `None` by default. A test
+    /// hook, for the lanes that run the color groups on a device that draws eight. No Metal
+    /// counterpart.
+    #[doc(hidden)]
+    pub color_attachment_limit: Option<u32>,
     /// Where each device hands its pipeline records: one [`PipelineRecord`](crate::PipelineRecord)
     /// per pipeline state creation that made its state (compute, render, mesh render and tile
     /// render, and the additional-binary-functions forms; and the one-sample or factor-scaling
@@ -379,6 +388,7 @@ impl std::fmt::Debug for DeviceOptions {
             assume_submissions_merge,
             pending_audit,
             withheld_attachment_formats,
+            color_attachment_limit,
             pipeline_records,
             extra_queues,
             reserved_queues,
@@ -412,6 +422,7 @@ impl std::fmt::Debug for DeviceOptions {
             .field("assume_submissions_merge", assume_submissions_merge)
             .field("pending_audit", pending_audit)
             .field("withheld_attachment_formats", withheld_attachment_formats)
+            .field("color_attachment_limit", color_attachment_limit)
             .field(
                 "pipeline_records",
                 &pipeline_records.as_ref().map(|_| "hook"),
@@ -1381,6 +1392,16 @@ pub(crate) fn reserved_queues_absent(asked: u32, reserved: usize, device: &str) 
 /// options asked for sends as it is made ([`reserved_queues_absent`]).
 pub(crate) const RESERVED_QUEUES_ABSENT: &str = "metal2vulkan-reserved-queues-absent";
 
+/// `description` with its `maxColorAttachments` and `maxFragmentOutputAttachments` held to
+/// `limit` where it is lower (`DeviceOptions::color_attachment_limit`); as it is for `None`.
+pub(crate) fn hold_color_attachments(description: &mut DeviceDescription, limit: Option<u32>) {
+    if let Some(limit) = limit {
+        let limits = &mut description.limits;
+        limits.max_color_attachments = limits.max_color_attachments.min(limit);
+        limits.max_fragment_output_attachments = limits.max_fragment_output_attachments.min(limit);
+    }
+}
+
 /// `description` with each of `withheld` no color attachment
 /// (`DeviceOptions::withheld_attachment_formats`): its tilings' `COLOR_ATTACHMENT` and blend
 /// features and its attachment sample counts left out.
@@ -1838,6 +1859,7 @@ pub(super) fn create_on(
         unsafe { DeviceDescription::query(&instance.raw, physical, instance.api_version) }
             .map_err(device_error)?;
     withhold_attachments(&mut description, &options.withheld_attachment_formats);
+    hold_color_attachments(&mut description, options.color_attachment_limit);
     // SAFETY: as above.
     unsafe { timeline_conformant(&instance.raw, physical) }?;
     argument_buffers_kept(&description)?;
@@ -2340,6 +2362,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         assume_submissions_merge,
         pending_audit,
         withheld_attachment_formats,
+        color_attachment_limit,
         pipeline_records: _,
         extra_queues,
         reserved_queues,
@@ -2368,6 +2391,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *assume_submissions_merge == b.assume_submissions_merge
         && *pending_audit == b.pending_audit
         && *withheld_attachment_formats == b.withheld_attachment_formats
+        && *color_attachment_limit == b.color_attachment_limit
         && *extra_queues == b.extra_queues
         && *reserved_queues == b.reserved_queues
         && *queue_limits == b.queue_limits

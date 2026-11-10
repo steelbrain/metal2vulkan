@@ -1,8 +1,8 @@
 //! Render passes of more color attachments than the device draws at once, drawn in color groups
 //! (the runtime's `render/color_groups.rs`), on the device the cfg selects under the validation
-//! layer: restricted to four color attachments and four fragment outputs (Vulkan's floor) through
-//! `VK_LAYER_KHRONOS_profiles` and a profile of those two limits alone, which the test writes, and
-//! as it is, where nothing groups. The owned fixtures `color_groups` and `color_groups_fetch`, each
+//! layer: restricted to four color attachments and four fragment outputs (Vulkan's floor), the
+//! device's description held to four (`DeviceOptions::color_attachment_limit`, so every device
+//! runs it), and as it is, where nothing groups. The owned fixtures `color_groups` and `color_groups_fetch`, each
 //! scene over 8x8 `RGBA16Float` colors:
 //!
 //! - **five**, **seven**, **sparse**: `cg_five` (colors 0 to 4, two groups), `cg_seven` (0 to 6,
@@ -49,7 +49,6 @@ use super::framebuffer_fetch::fetches;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use crate::observation::PROFILES_LAYER;
 use metal2vulkan::device::VkLimit;
 use metal2vulkan::error::{
     Capability, DescriptorError, Error as CompileError, Feature, MetalAnswer, RuntimeDriverDefect,
@@ -65,12 +64,11 @@ use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandQueue, Degradation, DepthStencilState, Device, Error,
-    LayerSetting, LayerSettingValue, Library, LoadAction, Origin, PipelineOptions,
-    RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, RuntimeGap,
-    ScissorRect, Size, StoreAction, Texture, TextureDescriptor, VisibilityResultMode, WorkCounts,
+    Library, LoadAction, Origin, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceOptions, RuntimeGap, ScissorRect, Size, StoreAction, Texture,
+    TextureDescriptor, VisibilityResultMode, WorkCounts,
 };
 use std::collections::BTreeSet;
-use std::ffi::CString;
 use std::time::{Duration, Instant};
 
 /// Every target's side.
@@ -96,80 +94,17 @@ struct Lane {
     width: Width,
 }
 
-/// The profile of four color attachments and four fragment outputs alone: the profiles layer
-/// reports the device's own value for every member it omits.
-const FOUR_COLORS: &str = r#"{
-  "$schema": "https://schema.khronos.org/vulkan/profiles-0.8-latest.json#",
-  "capabilities": {
-    "four_colors": {
-      "properties": {
-        "VkPhysicalDeviceProperties": {
-          "limits": { "maxColorAttachments": 4, "maxFragmentOutputAttachments": 4 }
-        }
-      }
-    }
-  },
-  "profiles": {
-    "VP_M2V_four_colors": {
-      "version": 1,
-      "api-version": "1.2.0",
-      "label": "Four color attachments",
-      "description": "The device's own capabilities but four color attachments and fragment outputs.",
-      "contributors": {},
-      "history": [
-        { "revision": 1, "date": "2026-10-16", "author": "metal2vulkan", "comment": "A lane's." }
-      ],
-      "capabilities": ["four_colors"]
-    }
-  }
-}"#;
-
 /// The lane's device at `width`, under the validation layer where `validated`, its messages and
-/// shader cache, and the directory of the profile that restricts it; `None` (skipped, visibly)
-/// where the profiles layer is not installed or the device as it is draws fewer than eight.
-fn lane(width: Width, validated: bool) -> Option<(Messages, ScratchCache, ScratchCache, Lane)> {
+/// shader cache; `None` (skipped, visibly) where the device as it is draws fewer than eight.
+fn lane(width: Width, validated: bool) -> Option<(Messages, ScratchCache, Lane)> {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let profile = ScratchCache::new().unwrap();
-    let file = profile.path().join("four_colors.json");
-    if width == Width::Four {
-        if !crate::candidate::profiles_layer_installed().unwrap() {
-            println!("SKIPPED: VK_LAYER_KHRONOS_profiles is not installed");
-            return None;
-        }
-        std::fs::create_dir_all(profile.path()).unwrap();
-        std::fs::write(&file, FOUR_COLORS).unwrap();
-    }
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
         if !validated {
             options.layers.clear();
         }
         if width == Width::Four {
-            let setting = |name: &str, value| {
-                LayerSetting::new(
-                    PROFILES_LAYER.to_owned(),
-                    CString::new(name).unwrap(),
-                    value,
-                )
-            };
-            let strings = |values: &[&str]| {
-                LayerSettingValue::Strings(
-                    values.iter().map(|v| CString::new(*v).unwrap()).collect(),
-                )
-            };
-            let path = file.to_string_lossy().into_owned();
-            options.layers.push(PROFILES_LAYER.to_owned());
-            options.layer_settings.extend([
-                setting("profile_emulation", LayerSettingValue::Bool(true)),
-                setting("profile_file", strings(&[&path])),
-                setting("profile_name", strings(&["VP_M2V_four_colors"])),
-                setting(
-                    "simulate_capabilities",
-                    strings(&["SIMULATE_PROPERTIES_BIT"]),
-                ),
-                setting("emulate_portability", LayerSettingValue::Bool(false)),
-                setting("debug_fail_on_error", LayerSettingValue::Bool(false)),
-            ]);
+            options.color_attachment_limit = Some(4);
         }
     })
     .unwrap();
@@ -199,7 +134,7 @@ fn lane(width: Width, validated: bool) -> Option<(Messages, ScratchCache, Scratc
         width,
         device,
     };
-    Some((messages, cache, profile, lane))
+    Some((messages, cache, lane))
 }
 
 /// The fixture's `tint` at pixel `(x, y)`'s center: the fullscreen triangle's `a` is
@@ -474,7 +409,7 @@ fn plain(
 }
 
 fn scenes(width: Width) {
-    let Some((messages, _cache, _profile, lane)) = lane(width, true) else {
+    let Some((messages, _cache, lane)) = lane(width, true) else {
         return;
     };
     // Announced once, as the first state of groups is made; and where the driver counts per
@@ -1012,7 +947,7 @@ fn cost(lane: &Lane, colors: &[usize], depth: bool) -> (Duration, Duration) {
 #[test]
 #[ignore = "a measurement, not a check: run by name with --run-ignored all"]
 fn color_group_costs() {
-    let Some((_messages, _cache, _profile, lane)) = lane(Width::Four, false) else {
+    let Some((_messages, _cache, lane)) = lane(Width::Four, false) else {
         return;
     };
     let ms = |d: Duration| d.as_secs_f64() * 1e3;
