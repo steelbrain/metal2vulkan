@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1276 |
 | distinct SDK items the Metal leg reaches, of any status | 821 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3585 |
+| ledger rows (a case whose gap is recorded) | 3586 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3222,6 +3222,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-bytes-srgb-decode-all-bytes` | Each thread holds four `float` and two words of two `half` results of an sRGB decode of a byte. Metal decodes through its twelve-bit table, answering the step `… |
 | `pass-bytes-srgb-decode-all-bytes` | Each thread holds four `float` and two words of two `half` results of an sRGB decode of a byte. Metal decodes through its twelve-bit table, answering the step `… |
 | `pass-bytes-srgb-decode-all-bytes` | Each thread holds four `float` and two words of two `half` results of an sRGB decode of a byte. Metal decodes through its twelve-bit table, answering the step `… |
+| `pass-bytes-srgb-decode-all-bytes` | Each thread holds four `float` and two words of two `half` results of an sRGB decode of a byte. Metal decodes through its twelve-bit table, answering the step `… |
 | `pass-bytes-srgb-encode-sweep` | Each word holds an sRGB encode of a `float` or a `half` colour packed to four bytes. Metal encodes through its twelve-bit table; the module encodes by the MSL t… |
 | `pass-bytes-srgb-encode-sweep` | Each word holds an sRGB encode of a `float` or a `half` colour packed to four bytes. Metal encodes through its twelve-bit table; the module encodes by the MSL t… |
 | `pass-bytes-srgb-encode-sweep` | Each word holds an sRGB encode of a `float` or a `half` colour packed to four bytes. Metal encodes through its twelve-bit table; the module encodes by the MSL t… |
@@ -3413,14 +3414,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-axis-border-transparent-black` | A linear sample of a 3D texture through the device's own sampler and texel conversion under a clamp-to-border axis: the first differing element is Metal 0x3E541… |
 | `sampler-axis-border-transparent-black` | A linear sample of a 3D texture through the device's own sampler and texel conversion under a clamp-to-border axis: the first differing element is Metal 0x3E541… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
-| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers (`1 + x + 4y + 16z`), under the three axes' address modes, through the device's own sampler. 61 e… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
-| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers (`1 + x + 4y + 16z`), under the three axes' address modes, through the device's own sampler. 25 e… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
-| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers (`1 + x + 4y + 16z`), under the three axes' address modes, through the device's own sampler. 25 e… |
 | `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
-| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers (`1 + x + 4y + 16z`), under the three axes' address modes, through the device's own sampler. 25 e… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
 | `sampler-axis-mode-triples` | A linear sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weigh… |
@@ -3449,8 +3450,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-border-colours` | At the site's coordinates near the edge of the case's 3D texture, Metal's sample reads a texel (0.1255, code 32, at the first differing element) where the devic… |
 | `sampler-border-colours` | A linear sample of a 3D texture through the device's own sampler and texel conversion: the first differing element is Metal 0x3E541414 against our 0x3E54D4D6, a… |
 | `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: the filter's weights differ… |
-| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
-| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers (`1 + x + 4y + 16z`), under the `r` axis's address mode, through the device's own sampler. One el… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers (`1 + x + 4y + 16z`), under the `r` axis's address mode, through the device's own sampler. Two el… |
 | `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
 | `sampler-r-address-modes` | A linear sample of a 3D texture through the device's own sampler and texel conversion: the first differing element is Metal 0x41F00000 against our 0x41F00006, a… |
 | `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
