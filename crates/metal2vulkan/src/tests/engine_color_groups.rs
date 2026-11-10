@@ -1,9 +1,9 @@
 //! Render pipelines whose color attachments a device draws in groups
 //! (`pipeline::compile::color_group`): the owned fixtures `engine/color_groups`,
-//! `engine/color_groups_fetch` and `engine/dfk_dead_group` on `lavapipe` with four color
-//! attachments and four fragment output locations (Vulkan's floor, the device of the groups' lane),
-//! on `moltenvk-m3` likewise, on `vk12-floor`, and on `lavapipe` as it is (eight), where nothing
-//! groups. `llvm-as` assembles the fixtures; a missing tool skips visibly.
+//! `engine/color_groups_fetch`, `engine/dfk_dead_group` and `engine/dfk_dead_rog` on `lavapipe`
+//! with four color attachments and four fragment output locations (Vulkan's floor, the device of
+//! the groups' lane), on `moltenvk-m3` likewise, on `vk12-floor`, and on `lavapipe` as it is
+//! (eight), where nothing groups. `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
 use std::collections::BTreeSet;
 
@@ -444,6 +444,77 @@ fn a_read_of_another_group_dead_after_specialization_is_no_refusal() {
             }
             let live = specialized(&bc, &fs, entry, &colors, true);
             let e = compile(dev, &live, 0).expect_err("a read of color 4 in group 0");
+            assert!(is_limit(&e, 5), "{name} {entry} live, group 0: {e:?}");
+        }
+    }
+    for (kind, whats) in &misses {
+        eprintln!("{}: {kind} (first: {})", whats.len(), whats[0]);
+    }
+    assert!(misses.is_empty(), "{misses:#?}");
+    assert_eq!(checked, devices.len() * 2 * 2);
+}
+
+/// Whether `words` interlocks: an interlock execution mode (`PixelInterlockOrderedEXT` 5366 to
+/// `ShadingRateInterlockUnorderedEXT` 5371) or an `OpBeginInvocationInterlockEXT` (5364).
+fn interlocks(words: &[u32]) -> bool {
+    const OP_EXECUTION_MODE: u32 = 16;
+    const OP_BEGIN_INTERLOCK: u32 = 5364;
+    instructions(words).iter().any(|(op, o)| {
+        *op == OP_BEGIN_INTERLOCK
+            || (*op == OP_EXECUTION_MODE && o.get(1).is_some_and(|m| (5366..=5371).contains(m)))
+    })
+}
+
+/// A raster order group on an input the function's constants make dead orders nothing, in a
+/// pipeline of groups as in any (`dfk_dead_rog`: `dfr_color`, a color 0 input in group 0, and
+/// `dfr_buffer`, a buffer in group 0, each read in the arm of a branch on constant 0; plain Metal
+/// makes and draws both, dead and live). Five colors on a device of four draw in two groups; on
+/// `lavapipe` and `moltenvk-m3` of four (each with the pixel interlock) and `vk12-floor` (without),
+/// specialized with the read dead, each group's variant compiles as a pipeline of its group's
+/// attachments without an interlock, an input or a storage attachment, passing L3. Specialized
+/// live, group 0's variant, which would order its read in each group's draw, is the pipeline's limit
+/// refusal. The misses are counted by kind before the test fails.
+#[test]
+fn a_raster_order_group_dead_after_specialization_is_no_refusal_in_groups() {
+    let (Some(bc), Some(fs)) = (fixture("color_groups"), fixture("dfk_dead_rog")) else {
+        return;
+    };
+    let colors = [0, 1, 2, 3, 4];
+    let devices = [
+        ("lavapipe of four", four()),
+        ("moltenvk-m3 of four", narrowed("moltenvk-m3")),
+        ("vk12-floor", device("vk12-floor")),
+    ];
+    let mut misses = std::collections::BTreeMap::<String, Vec<String>>::new();
+    let mut checked = 0;
+    for (name, dev) in &devices {
+        for entry in ["dfr_color", "dfr_buffer"] {
+            let dead = specialized(&bc, &fs, entry, &colors, false);
+            for (group, held) in [(0u32, &colors[..4]), (1, &colors[4..])] {
+                let what = format!("{name} {entry} dead, group {group}");
+                let p = match compile(dev, &dead, group) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let kind = match is_limit(&e, 5) {
+                            true => "refused at the limit".to_owned(),
+                            false => format!("refused otherwise: {e}"),
+                        };
+                        misses.entry(kind).or_default().push(what);
+                        continue;
+                    }
+                };
+                if interlocks(&stage(&p, vk::ShaderStage::FRAGMENT).spirv) {
+                    misses.entry("interlocked".into()).or_default().push(what);
+                    continue;
+                }
+                assert_eq!(formats(&p), reference(&dead, held), "{what}");
+                assert!(p.graphics.input_attachments.is_empty(), "{what}");
+                assert!(p.graphics.storage_attachments.is_empty(), "{what}");
+                validate(&p, dev);
+                checked += 1;
+            }
+            let live = specialized(&bc, &fs, entry, &colors, true);
+            let e = compile(dev, &live, 0).expect_err("a raster order group in group 0");
             assert!(is_limit(&e, 5), "{name} {entry} live, group 0: {e:?}");
         }
     }
