@@ -77,6 +77,11 @@
 //! - **System heap, 64 MiB, remade**: the system heap's 64 MiB allocations, each freed at once
 //!   and allocated again, the first making, the free and the second making timed apart: what a
 //!   making costs whose pages the kernel kept from the free, against one whose pages it fills.
+//!   **System heap, 64 MiB, remade after a pause** allocates the second [`REMADE_PAUSE`] after
+//!   the free, and **System heap, 64 MiB, filled exportable** allocates the first exportable as an
+//!   opaque file descriptor, a buffer object of its own reservation whose making holds no
+//!   submission, and the second plain after that pause: whether a plain block takes the pages a
+//!   freed exportable one's making filled, outside the reservation the submissions take.
 //! - **System heap, 64 MiB, exportable**, **System heap, 64 MiB, opaque fd** and **System heap,
 //!   64 MiB, both**: the system heap's 64 MiB allocations, each exportable
 //!   (`VkExportMemoryAllocateInfo`) as a dma-buf, as an opaque file descriptor, or as both.
@@ -162,6 +167,11 @@ use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(60);
 /// The handle types an arm's memory is exportable as.
+/// How long the remade arms wait between a free and the allocation after it, where they wait:
+/// some of the bench's submissions, whose ioctls let the kernel finish a freed block's release,
+/// pass meanwhile.
+const REMADE_PAUSE: Duration = Duration::from_millis(20);
+
 type Handle = vk::ExternalMemoryHandleTypeFlags;
 const DMA_BUF: Handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 const OPAQUE_FD: Handle = vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD;
@@ -520,10 +530,13 @@ enum Making {
         export: Option<Handle>,
     },
     /// Allocations of `bytes` of the memory type `index`, [`RAW_BYTES`] a phase, each freed at
-    /// once and allocated again.
+    /// once and, `pause` later, allocated again; the first exportable as `first`'s handle type
+    /// where given, the second plain.
     Remade {
         index: u32,
         bytes: u64,
+        first: Option<Handle>,
+        pause: Duration,
     },
     Nothing,
 }
@@ -600,15 +613,21 @@ fn make(
                 bytes,
                 export,
             } => made.raw.push(allocate(device, index, bytes, export)),
-            Making::Remade { index, bytes } => {
-                let first = allocate(device, index, bytes, None);
+            Making::Remade {
+                index,
+                bytes,
+                first,
+                pause,
+            } => {
+                let first = allocate(device, index, bytes, first);
                 let freeing = Instant::now();
                 // SAFETY: nothing uses the memory.
                 unsafe { crate::release::object(device.shared().vk(), first) };
+                let freed = freeing.elapsed();
+                std::thread::sleep(pause);
                 let again = Instant::now();
                 made.raw.push(allocate(device, index, bytes, None));
-                made.remade
-                    .push([freeing - began, again - freeing, again.elapsed()]);
+                made.remade.push([freeing - began, freed, again.elapsed()]);
             }
             Making::Nothing => unreachable!(),
         }
@@ -955,9 +974,12 @@ enum Arm {
         bytes: u64,
         export: Option<Handle>,
     },
-    /// The system heap's allocations of `bytes`, each freed at once and allocated again.
+    /// The system heap's allocations of `bytes`, each freed at once and, `pause` later,
+    /// allocated again, the first exportable as `first`'s handle type where given.
     SystemHeapRemade {
         bytes: u64,
+        first: Option<Handle>,
+        pause: Duration,
     },
     CarveOut,
     MadeBefore,
@@ -1020,9 +1042,15 @@ fn arm_with(label: &str, arm: Arm, small: bool) {
             bytes,
             export,
         },
-        Arm::SystemHeapRemade { bytes } => Making::Remade {
+        Arm::SystemHeapRemade {
+            bytes,
+            first,
+            pause,
+        } => Making::Remade {
             index: system_heap(),
             bytes,
+            first,
+            pause,
         },
         Arm::CarveOut => Making::Raw {
             index: memory_type(
@@ -1596,7 +1624,37 @@ fn reclaim_submit_bench_system_heap_64mib() {
 fn reclaim_submit_bench_system_heap_64mib_remade() {
     arm(
         "system heap, 64 MiB, remade",
-        Arm::SystemHeapRemade { bytes: 64 * MIB },
+        Arm::SystemHeapRemade {
+            bytes: 64 * MIB,
+            first: None,
+            pause: Duration::ZERO,
+        },
+    );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_system_heap_64mib_remade_after_a_pause() {
+    arm(
+        "system heap, 64 MiB, remade after a pause",
+        Arm::SystemHeapRemade {
+            bytes: 64 * MIB,
+            first: None,
+            pause: REMADE_PAUSE,
+        },
+    );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_system_heap_64mib_filled_exportable() {
+    arm(
+        "system heap, 64 MiB, filled exportable",
+        Arm::SystemHeapRemade {
+            bytes: 64 * MIB,
+            first: Some(OPAQUE_FD),
+            pause: REMADE_PAUSE,
+        },
     );
 }
 
