@@ -7235,20 +7235,37 @@ fn every_case_carries_a_cost_recording() {
     ///
     /// A whole-set run is the only shape that pays a record: a case's counts depend on what ran
     /// before it in the same process, so a selection cannot pay one however many cases it names.
-    const AFTER_THE_LAST_RUN: [&str; 13] = [
-        "read-through-r32f",
-        "read-through-rgba8",
-        "read-through-rgba8-swizzled",
+    const AFTER_THE_LAST_RUN: [&str; 30] = [
+        "padded-blend-r10x6-add-float",
+        "padded-blend-r10x6-dual-half",
+        "padded-blend-r10x6-premul-half",
+        "padded-blend-r10x6-srgb-add-float",
+        "padded-blend-r10x6-srgb-dual-half",
+        "padded-blend-r10x6-srgb-premul-half",
+        "padded-blend-rg10x12-add-float",
+        "padded-blend-rg10x12-dual-half",
+        "padded-blend-rg10x12-premul-half",
+        "padded-blend-rg10x12-premul-red-half",
+        "padded-blend-rg10x12-srgb-add-float",
+        "padded-blend-rg10x12-srgb-dual-half",
+        "padded-blend-rg10x12-srgb-premul-half",
+        "padded-blend-rgb10a2-srgb-add-float",
+        "padded-blend-rgb10a2-srgb-dual-half",
+        "padded-blend-rgb10a2-srgb-premul-half",
+        "padded-blend-rgb10a2-srgb-premul-rgb-half",
         "read-through-a8",
-        "read-through-layers",
-        "read-through-volume",
-        "read-through-line",
-        "read-through-read-write",
         "read-through-buffer",
-        "read-through-int",
         "read-through-half",
         "read-through-heap-border",
         "read-through-heap-sampler",
+        "read-through-int",
+        "read-through-layers",
+        "read-through-line",
+        "read-through-r32f",
+        "read-through-read-write",
+        "read-through-rgba8",
+        "read-through-rgba8-swizzled",
+        "read-through-volume",
     ];
 
     /// Cases a whole-set run did not cover although they were committed before it ran.
