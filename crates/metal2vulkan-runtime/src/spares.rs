@@ -17,14 +17,16 @@
 //!   with its own `[vkrt] Analysis` thread), so the command buffer never completed and its queue
 //!   stalled.
 //! - **A pool's command buffers follow its recent uses.** A pool given back keeps, of each level,
-//!   as many command buffers as the most that one of its last [`RECENT_USES`] uses handed out (a
-//!   secondary at least, below), and frees the rest; and the oldest spare no command buffer took
-//!   for [`IDLE_FOR`] frees every command buffer it holds as a later give-back finds it
-//!   ([`take_idle`]), then goes back among the spares as the oldest. Kept by their peak, a
-//!   device's pools held, for its life, what the largest command buffer each ever served recorded,
-//!   and each burst of command buffers at once added pools and filled them: on RADV each command
-//!   buffer holds 96 KiB of GTT (buffer objects of 80 and 16 KiB) until its pool is trimmed.
-//!   Counted: `Spares::command_buffers_held` (the crate's tests).
+//!   as many command buffers as the most that one of its last [`RECENT_USES`] uses, or one of its
+//!   uses in its current and its last span of [`RECENT_FOR`], handed out (a secondary at least,
+//!   below), and frees the rest; and the oldest spare no command buffer took for [`IDLE_FOR`]
+//!   frees every command buffer it holds as a later give-back finds it ([`take_idle`]), then goes
+//!   back among the spares as the oldest. Kept by their peak, a device's pools held, for its life,
+//!   what the largest command buffer each ever served recorded, and each burst of command buffers
+//!   at once added pools and filled them: on RADV each command buffer holds 96 KiB of GTT (buffer
+//!   objects of 80 and 16 KiB) until its pool is trimmed. Kept by the last [`RECENT_USES`] uses
+//!   alone, a pool freed what a use took again a few dozen uses later, and made it again then.
+//!   Counted: `Spares::command_buffers_held` and `Spares::churn` (the crate's tests).
 //! - **The spares hold at most [`HELD`] command buffers together.** Counted with them: the pool
 //!   given back, and what each pool out of the spares held as it went out, taken by a command
 //!   buffer, freeing command buffers or beginning a primary ahead ([`CommandPools::out`]), whose
@@ -192,6 +194,12 @@ pub(super) const DESCRIPTORS: u64 = 1 << 18;
 /// as many as the most one of its last this many uses handed out (the module docs).
 pub(super) const RECENT_USES: usize = 8;
 
+/// The spans of a command pool's uses whose command buffers it keeps besides its last
+/// [`RECENT_USES`]: given back, it keeps of each level as many as the most one of its uses in this
+/// span and the one before handed out, so that one a use takes again within one to two spans
+/// stays (the module docs).
+pub(super) const RECENT_FOR: Duration = Duration::from_secs(1);
+
 /// How long a spare command pool stays untaken before every command buffer it holds is freed (the
 /// module docs).
 pub(super) const IDLE_FOR: Duration = Duration::from_secs(10);
@@ -244,6 +252,9 @@ pub(super) struct CommandPool {
     /// The command buffers each of its last [`RECENT_USES`] uses handed out, by level, the newest
     /// last ([`given_back`](Self::given_back)).
     uses: VecDeque<[usize; 2]>,
+    /// When its current span of [`RECENT_FOR`] began, the most one of its uses in that span handed
+    /// out, and the most one in the span before did, by level; `None` before a use.
+    spans: Option<(Instant, [usize; 2], [usize; 2])>,
     /// When a command buffer last gave it back, or `None` before one did.
     given: Option<Instant>,
     /// The command buffers it held as it last went out of the spares, counted among those of the
@@ -262,6 +273,7 @@ impl CommandPool {
             begun: None,
             recording: false,
             uses: VecDeque::new(),
+            spans: None,
             given: None,
             out: 0,
         }
@@ -269,18 +281,37 @@ impl CommandPool {
 
     /// A command buffer gives the pool back at `now`, having handed out what
     /// [`handed_out`](Self::handed_out) says: its use is noted, and of the command buffers of
-    /// each level past the most one of its last [`RECENT_USES`] uses handed out (of secondaries,
-    /// past one at least), the last made, are taken out of it, to be freed (the module docs).
-    /// Those it handed out come first, so none of them is among those.
+    /// each level past the most one of its last [`RECENT_USES`] uses, or one of its uses in its
+    /// current and its last span of [`RECENT_FOR`], handed out (of secondaries, past one at
+    /// least), the last made, are taken out of it, to be freed (the module docs). Those it handed
+    /// out come first, so none of them is among those.
     pub(super) fn given_back(&mut self, now: Instant) -> Vec<vk::CommandBuffer> {
         if self.uses.len() == RECENT_USES {
             self.uses.pop_front();
         }
         self.uses.push_back(self.handed);
         self.given = Some(now);
+        let (start, mut current, mut last) = self.spans.unwrap_or((now, [0, 0], [0, 0]));
+        let start = match now.saturating_duration_since(start) {
+            since if since < RECENT_FOR => start,
+            since if since < 2 * RECENT_FOR => {
+                last = current;
+                current = [0, 0];
+                start + RECENT_FOR
+            }
+            _ => {
+                (current, last) = ([0, 0], [0, 0]);
+                now
+            }
+        };
+        for at in 0..2 {
+            current[at] = current[at].max(self.handed[at]);
+        }
+        self.spans = Some((start, current, last));
         let mut past = Vec::new();
         for at in 0..2 {
-            let used = self.uses.iter().map(|used| used[at]).max().unwrap_or(0);
+            let recent = self.uses.iter().map(|used| used[at]).max().unwrap_or(0);
+            let used = recent.max(current[at]).max(last[at]);
             let keep = match at == level_index(vk::CommandBufferLevel::SECONDARY) {
                 true => used.max(1),
                 false => used,

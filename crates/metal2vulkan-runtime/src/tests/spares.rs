@@ -6,11 +6,11 @@ use crate::descriptor_arena::{Room, SetNeeds};
 use crate::spares::{
     keep_command_pool, keep_descriptor_pool, keep_idle_command_pool, past_held, take_command_pool,
     take_descriptor_pool, take_idle, take_to_begin, CommandPool, DescriptorPool, DESCRIPTORS,
-    DESCRIPTOR_POOLS, HELD, IDLE_FOR, RECENT_USES,
+    DESCRIPTOR_POOLS, HELD, IDLE_FOR, RECENT_FOR, RECENT_USES,
 };
 use ash::vk::{self, Handle};
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Needs of `count` storage buffers, with `flags`.
 fn storage(count: u32, flags: vk::DescriptorPoolCreateFlags) -> SetNeeds {
@@ -290,13 +290,13 @@ fn a_spare_command_pool_begins_ahead_out_of_the_spares() {
 
 /// A pool given back keeps, of each level, the command buffers the most one of its last
 /// [`RECENT_USES`] uses handed out, a secondary at least, and gives up the rest to be freed: a
-/// command buffer of many encoders leaves its pool holding them only until that many smaller ones
-/// used it.
+/// command buffer of many encoders leaves its pool holding them, once two spans of
+/// [`RECENT_FOR`] passed, only until that many smaller ones used it.
 #[test]
 fn a_pool_given_back_keeps_what_its_recent_uses_handed_out() {
     let primary = vk::CommandBufferLevel::PRIMARY;
     let secondary = vk::CommandBufferLevel::SECONDARY;
-    let now = Instant::now();
+    let mut now = Instant::now();
     let mut pool = CommandPool::new(vk::CommandPool::from_raw(1), 0);
     for n in 0..100u64 {
         pool.made(primary, vk::CommandBuffer::from_raw(n + 1));
@@ -305,12 +305,14 @@ fn a_pool_given_back_keeps_what_its_recent_uses_handed_out() {
     pool.made(secondary, vk::CommandBuffer::from_raw(1001));
     assert!(pool.given_back(now).is_empty(), "its own use's are kept");
     assert_eq!(pool.held(), 102);
-    // Smaller uses: three primaries each, no secondary.
-    let small = |pool: &mut CommandPool| {
+    // Smaller uses, past the large one's spans: three primaries each, no secondary.
+    now += 2 * RECENT_FOR;
+    let mut small = |pool: &mut CommandPool| {
         pool.taken();
         for _ in 0..3 {
             assert!(pool.reuse(primary).is_some());
         }
+        now += Duration::from_millis(1);
         pool.given_back(now)
     };
     for use_ in 1..RECENT_USES {
@@ -333,6 +335,66 @@ fn a_pool_given_back_keeps_what_its_recent_uses_handed_out() {
     assert_eq!(
         pool.reuse(secondary),
         Some(vk::CommandBuffer::from_raw(1000))
+    );
+}
+
+/// A pool given back keeps, of each level, the command buffers the most one of its uses in its
+/// current and its last span of [`RECENT_FOR`] handed out, past its last [`RECENT_USES`] uses:
+/// a large use's stay until a use two spans after the one it fell in.
+#[test]
+fn a_pool_given_back_keeps_what_its_uses_in_its_last_spans_handed_out() {
+    let primary = vk::CommandBufferLevel::PRIMARY;
+    let start = Instant::now();
+    let mut pool = CommandPool::new(vk::CommandPool::from_raw(1), 0);
+    for n in 0..4u64 {
+        pool.made(primary, vk::CommandBuffer::from_raw(n + 1));
+    }
+    assert!(pool.given_back(start).is_empty());
+    let small = |pool: &mut CommandPool, at: Duration| {
+        pool.taken();
+        assert!(pool.reuse(primary).is_some());
+        pool.given_back(start + at)
+    };
+    // Many uses of one primary, in the large one's span and the next.
+    for use_ in 1..4 * RECENT_USES as u32 {
+        let at = RECENT_FOR * use_ / (2 * RECENT_USES as u32);
+        assert!(small(&mut pool, at).is_empty(), "use {use_}, at {at:?}");
+    }
+    let last = 2 * RECENT_FOR - Duration::from_millis(1);
+    assert!(small(&mut pool, last).is_empty(), "the span before still");
+    let past: Vec<_> = (2..=4).map(vk::CommandBuffer::from_raw).collect();
+    assert_eq!(small(&mut pool, 2 * RECENT_FOR), past, "two spans on");
+    assert_eq!(pool.held(), 1);
+}
+
+/// A steady workload whose every `EVERY`th use takes a second primary, a use every `APART`,
+/// makes each command buffer once: the second stays through the uses between (the module docs).
+/// Kept by its last [`RECENT_USES`] uses alone, the pool freed it after as many and made it again
+/// at the next such use.
+#[test]
+fn a_steady_workload_makes_its_command_buffers_once() {
+    const EVERY: u32 = 15;
+    const APART: Duration = Duration::from_millis(2);
+    let primary = vk::CommandBufferLevel::PRIMARY;
+    let start = Instant::now();
+    let mut pool = CommandPool::new(vk::CommandPool::from_raw(1), 0);
+    let (mut made, mut freed) = (0u64, 0);
+    // Five spans of uses.
+    let uses = 5 * RECENT_FOR.as_millis() as u32 / APART.as_millis() as u32;
+    for use_ in 0..uses {
+        pool.taken();
+        for _ in 0..1 + u32::from(use_ % EVERY == EVERY - 1) {
+            if pool.reuse(primary).is_none() {
+                made += 1;
+                pool.made(primary, vk::CommandBuffer::from_raw(made));
+            }
+        }
+        freed += pool.given_back(start + APART * use_).len();
+    }
+    assert_eq!(
+        (made, freed),
+        (2, 0),
+        "{uses} uses made {made} command buffers and freed {freed}"
     );
 }
 
@@ -469,7 +531,7 @@ fn the_spares_and_a_pool_given_back_hold_at_most_held_command_buffers() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device {
-    use super::{HELD, RECENT_USES};
+    use super::{HELD, RECENT_FOR, RECENT_USES};
     use crate::command_buffer::kept_barriers::KEPT;
     use crate::tests::freed_memory::device;
     use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions};
@@ -538,8 +600,9 @@ mod device {
         }
     }
 
-    /// A burst's command buffers go once the pool's recent uses no longer reach them, freed on
-    /// the device's free thread, never on the thread that saw a command buffer complete.
+    /// The command buffers of a load that grew to a burst go once the load fell back, the
+    /// pool's recent uses and the spans of its uses no longer reaching them, freed on the
+    /// device's free thread, never on the thread that saw a command buffer complete.
     #[test]
     fn command_buffers_the_spares_hold_fall_back_after_a_burst_freed_on_the_free_thread() {
         let scratch = std::env::temp_dir().join(format!("m2v-spares-{}", std::process::id()));
@@ -549,10 +612,15 @@ mod device {
         let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
         fills(&device, &queue, &target, 1);
         let before = held_once(&device, |held| held > 0);
-        fills(&device, &queue, &target, BURST);
-        let burst = held_once(&device, |held| held >= before + BURST / 2);
-        // The burst's use leaves the pool's recent uses after as many more, and the give-back
-        // then frees what it made.
+        let mut grown = Vec::new();
+        for encoders in (1..=BURST.ilog2()).map(|power| 1 << power) {
+            fills(&device, &queue, &target, encoders);
+            grown.push(held_once(&device, |held| held >= before + encoders / 2));
+        }
+        let burst = *grown.last().unwrap();
+        // The load idles past the spans of the burst's use, which then leaves the pool's recent
+        // uses after as many more, and the give-back frees what it made.
+        std::thread::sleep(2 * RECENT_FOR);
         let more = RECENT_USES + 1;
         for _ in 0..more {
             fills(&device, &queue, &target, 1);
@@ -561,8 +629,8 @@ mod device {
         let freed_on = device.shared().spares.freed_on();
         println!(
             "SPARES {}: command buffers the spares hold: {before} after a command buffer of one \
-             blit encoder, {burst} after one of {BURST}, {after} after {more} more of one; freed \
-             on {freed_on:?}",
+             blit encoder, {grown:?} after ones of 2 to {BURST}, {after} after {more} more of \
+             one; freed on {freed_on:?}",
             device.name()
         );
         assert!(
@@ -576,6 +644,57 @@ mod device {
         assert!(
             after <= before + 2,
             "{after} held after {more} command buffers of one encoder, {before} before the burst"
+        );
+        drop((target, queue, device));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A steady workload whose every `EVERY`th command buffer has two blit encoders, the rest
+    /// one, makes no command buffer once each kind ran: what one use takes stays through the
+    /// uses between (`spares.rs`). Kept by its last [`RECENT_USES`] uses alone, a pool freed
+    /// what the larger command buffer took after as many uses, and made it again at the next.
+    #[test]
+    fn a_steady_workload_makes_no_command_buffer_once_warm() {
+        const EVERY: usize = 30;
+        const ROUNDS: usize = 10;
+        let scratch =
+            std::env::temp_dir().join(format!("m2v-spares-steady-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let device = device(&scratch);
+        let queue = device.new_command_queue().unwrap();
+        let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let round = || {
+            for at in 0..EVERY {
+                let encoders = 1 + usize::from(at == EVERY - 1);
+                let status = fills(&device, &queue, &target, encoders);
+                assert_eq!(status, CommandBufferStatus::Completed);
+            }
+        };
+        let allocated = || -> u64 { device.shared().spares.churn().allocated.values().sum() };
+        let start = Instant::now();
+        round();
+        round();
+        let (warm, held) = (allocated(), device.shared().spares.command_buffers_held());
+        for _ in 0..ROUNDS {
+            round();
+        }
+        let churn = device.shared().spares.churn();
+        let made = allocated() - warm;
+        println!(
+            "SPARES-STEADY {}: {ROUNDS} rounds of {EVERY} command buffers, the last of two blit \
+             encoders, in {:?}, made {made} command buffers after the first two made {warm}; the \
+             spares hold {held} then {}; freed past a pool's recent uses {}, past the bound {}, \
+             shed {}",
+            device.name(),
+            start.elapsed(),
+            device.shared().spares.command_buffers_held(),
+            churn.past_recent_uses,
+            churn.past_held,
+            churn.shed
+        );
+        assert_eq!(
+            made, 0,
+            "the steady workload made {made} command buffers once warm"
         );
         drop((target, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
@@ -665,8 +784,9 @@ mod device {
             .collect();
         let mut statuses = vec![fills(&device, &queue, &shared, 1)];
         statuses.push(fills_of(&device, &queue, &burst));
-        // The burst's use leaves the pool's recent uses after as many more, and the give-back
-        // then frees what it made.
+        // Past the spans of the burst's use, it leaves the pool's recent uses after as many more,
+        // and the give-back then frees what it made.
+        std::thread::sleep(2 * RECENT_FOR);
         for _ in 0..=RECENT_USES {
             statuses.push(fills(&device, &queue, &shared, 2));
         }
