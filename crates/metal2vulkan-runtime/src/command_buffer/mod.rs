@@ -2589,6 +2589,7 @@ impl CommandBuffer {
     /// An encoder's primary command buffer, from this command buffer's pool, made on first use:
     /// the encoder records into it at each call, on the program's thread. The caller holds
     /// `state` (the pool is externally synchronized).
+    #[cfg_attr(test, track_caller)]
     pub(super) fn allocate_raw(&self, state: &mut State) -> Result<vk::CommandBuffer, Error> {
         self.0
             .allocate_encoder(state, vk::CommandBufferLevel::PRIMARY)
@@ -4609,6 +4610,7 @@ impl CommandBufferShared {
 
     /// A primary `VkCommandBuffer` from this command buffer's pool, made on first use. The
     /// caller holds `state` (the pool is externally synchronized).
+    #[cfg_attr(test, track_caller)]
     fn allocate_raw(&self, state: &mut State) -> Result<vk::CommandBuffer, Error> {
         self.allocate(state, vk::CommandBufferLevel::PRIMARY)
     }
@@ -4697,6 +4699,7 @@ impl CommandBufferShared {
     /// An encoder's command buffer of `level`, a driver's the encoder records into at each call:
     /// one from this command buffer's pool ([`allocate`](Self::allocate)), or one of a
     /// predicated loop's check's pool while it records again (`rerun.rs`).
+    #[cfg_attr(test, track_caller)]
     fn allocate_encoder(
         &self,
         state: &mut State,
@@ -4716,6 +4719,7 @@ impl CommandBufferShared {
     /// buffer took it is handed out again before a new one is made; its begin resets it (the
     /// pool's `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT`, `spares.rs`). The caller holds
     /// `state` (the pool is externally synchronized).
+    #[cfg_attr(test, track_caller)]
     fn allocate(
         &self,
         state: &mut State,
@@ -5893,6 +5897,7 @@ pub(super) fn command_pool(device: &Device, family: u32) -> Result<CommandPool, 
 /// A `VkCommandBuffer` of `level` from `pool`, of `device`: one it made before and has not
 /// handed out since it was taken, whose begin resets it, else a new one. The caller holds the
 /// pool alone (Vulkan synchronizes it externally).
+#[cfg_attr(test, track_caller)]
 pub(super) fn hand_out(
     device: &Device,
     pool: &mut CommandPool,

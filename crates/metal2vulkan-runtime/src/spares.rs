@@ -210,6 +210,22 @@ fn level_index(level: vk::CommandBufferLevel) -> usize {
     usize::from(level == vk::CommandBufferLevel::SECONDARY)
 }
 
+/// The command buffers a device allocated, by the place that asked, and those its spares freed, by
+/// why, so far: for the crate's device tests.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[derive(Clone, Debug, Default)]
+pub(super) struct Churn {
+    /// By `file:line` of the call that asked (`DeviceShared::allocate_command_buffers` and the
+    /// calls that pass their caller's place on).
+    pub(super) allocated: std::collections::BTreeMap<String, u64>,
+    /// Freed from a pool given back, past its recent uses ([`CommandPool::given_back`]).
+    pub(super) past_recent_uses: u64,
+    /// Freed from a pool given back, past [`HELD`] ([`past_held`]).
+    pub(super) past_held: u64,
+    /// Freed by a spare left idle or shed past [`HELD`] ([`CommandPool::shed`]).
+    pub(super) shed: u64,
+}
+
 /// A command pool and the command buffers made from it, by level: those a command buffer handed
 /// out since it took the pool come first.
 pub(super) struct CommandPool {
@@ -495,6 +511,9 @@ pub(super) struct Spares {
     /// crate's device tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     freed_on: Arc<Mutex<Vec<String>>>,
+    /// The device's command buffers allocated and the spares' freed, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    churn: Mutex<Churn>,
     /// The command buffers' arenas', oldest first.
     descriptor_pools: Mutex<VecDeque<DescriptorPool>>,
     /// The fitted arenas' (the module docs), oldest first.
@@ -510,6 +529,8 @@ impl Spares {
             trims,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             freed_on: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            churn: Default::default(),
             descriptor_pools: Default::default(),
             fitted_pools: Default::default(),
         }
@@ -585,6 +606,8 @@ impl Spares {
         let now = Instant::now();
         pool.recording = !settled;
         let mut past = pool.given_back(now);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let recent = past.len() as u64;
         pool.stock(device);
         let (given, shed) = {
             let mut pools = lock(&self.command_pools);
@@ -592,6 +615,12 @@ impl Spares {
             let idle = take_idle(&mut pools.spares, now);
             let out = pools.out;
             let (oldest, held) = past_held(&mut pools.spares, out, &mut pool);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            {
+                let mut churn = lock(&self.churn);
+                churn.past_recent_uses += recent;
+                churn.past_held += held.len() as u64;
+            }
             past.extend(held);
             let given = match past.is_empty() {
                 true => {
@@ -606,6 +635,10 @@ impl Spares {
             let shed: Vec<_> = (idle.into_iter().chain(oldest))
                 .map(|mut pool| {
                     let shed = pool.shed();
+                    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                    {
+                        lock(&self.churn).shed += shed.len() as u64;
+                    }
                     pools.went_out(&mut pool);
                     self.frees(pool, shed, true)
                 })
@@ -651,6 +684,21 @@ impl Spares {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(super) fn freed_on(&self) -> Vec<String> {
         lock(&self.freed_on).clone()
+    }
+
+    /// `count` command buffers the device allocated, asked for `at`
+    /// (`DeviceShared::allocate_command_buffers`), for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn allocated(&self, at: &std::panic::Location<'_>, count: u32) {
+        let place = format!("{}:{}", at.file(), at.line());
+        *lock(&self.churn).allocated.entry(place).or_default() += u64::from(count);
+    }
+
+    /// The device's command buffers allocated and the spares' freed so far, for the crate's
+    /// device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn churn(&self) -> Churn {
+        lock(&self.churn).clone()
     }
 
     /// Whether a pool is trimmed after its command buffers are freed, for the crate's device

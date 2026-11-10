@@ -889,7 +889,9 @@ impl DeviceShared {
     }
 
     /// `vkAllocateCommandBuffers` of `info`: the loader serves it and reads the device's loader
-    /// word first ([`DeviceWord::restored`]).
+    /// word first ([`DeviceWord::restored`]). Counted by the place that asked, for the crate's
+    /// device tests (`Spares::churn`).
+    #[cfg_attr(test, track_caller)]
     pub(super) fn allocate_command_buffers(
         &self,
         info: &vk::CommandBufferAllocateInfo<'_>,
@@ -901,6 +903,10 @@ impl DeviceShared {
                 .restored(|| self.vk().allocate_command_buffers(info))
         };
         exit_guard::called(Call::AllocateCommandBuffers);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if allocated.is_ok() {
+            (self.spares).allocated(std::panic::Location::caller(), info.command_buffer_count);
+        }
         allocated.map_err(super::error::vulkan)
     }
 
@@ -1670,6 +1676,7 @@ impl Device {
     }
 
     /// `vkAllocateCommandBuffers` of `info` (`DeviceShared::allocate_command_buffers`).
+    #[cfg_attr(test, track_caller)]
     pub(super) fn allocate_command_buffers(
         &self,
         info: &vk::CommandBufferAllocateInfo<'_>,

@@ -11,9 +11,11 @@
 //! [`TEXTURE_WINDOW`] newest released. Printed (`SCROLL-BOS`): the span's `CLOCK_MONOTONIC` start
 //! and end, the command buffers, the pooled blocks made and freed, those made ahead and freed
 //! unused, the `vkAllocateMemory` and `vkFreeMemory` calls, and the five places that allocated
-//! most.
+//! most; then (`SCROLL-COMMAND-BUFFERS`) the command buffers the device allocated, by the place that
+//! asked, those its spares freed, by why (`Spares::churn`), and the command buffers begun for a
+//! batch's barriers, for kept barriers and ahead.
 //!
-//! Only the public API and the runtime's counts, so that the same file runs at earlier trees.
+//! The public API, the runtime's counts and the spares' (`Spares::churn`).
 //! Ignored: run it in release under `--cfg m2v_gpu`, one device selected:
 //! `cargo nextest run --release -p metal2vulkan-runtime --lib --run-ignored all scroll_bos
 //! --no-capture`.
@@ -72,6 +74,7 @@ fn scroll_bos() {
     let mut buffers: Vec<Buffer> = Vec::new();
     let mut textures: Vec<Texture> = Vec::new();
     let start = device.work_counts();
+    let spares_before = device.shared().spares.churn();
     let began = (Instant::now(), monotonic());
     let (mut next_buffer, mut next_burst, mut submitted) = (began.0, began.0, 0u64);
     while began.0.elapsed() < LENGTH {
@@ -146,6 +149,32 @@ fn scroll_bos() {
         churn.0.vk_memory_allocations - churn.1.vk_memory_allocations,
         churn.0.vk_memory_freed - churn.1.vk_memory_freed,
         sites.join(", "),
+    );
+    let spares = device.shared().spares.churn();
+    let mut allocated: Vec<(u64, &String)> = (spares.allocated.iter())
+        .map(|(place, &n)| {
+            (
+                n - spares_before.allocated.get(place).copied().unwrap_or(0),
+                place,
+            )
+        })
+        .filter(|&(n, _)| n > 0)
+        .collect();
+    allocated.sort_by_key(|&(n, _)| std::cmp::Reverse(n));
+    let allocated: Vec<String> = (allocated.iter())
+        .map(|(n, place)| format!("{place} {n}"))
+        .collect();
+    println!(
+        "SCROLL-COMMAND-BUFFERS {}: allocated [{}]; the spares freed {} past a pool's recent uses, \
+         {} past the bound, {} shed; begun for a batch's barriers {}, kept barriers {}, ahead {}",
+        device.name(),
+        allocated.join(", "),
+        spares.past_recent_uses - spares_before.past_recent_uses,
+        spares.past_held - spares_before.past_held,
+        spares.shed - spares_before.shed,
+        counts.command_buffers_begun_batch_barriers - start.command_buffers_begun_batch_barriers,
+        counts.command_buffers_begun_kept_barriers - start.command_buffers_begun_kept_barriers,
+        counts.primaries_begun_ahead - start.primaries_begun_ahead,
     );
     drop((textures, buffers, from, to));
 }
