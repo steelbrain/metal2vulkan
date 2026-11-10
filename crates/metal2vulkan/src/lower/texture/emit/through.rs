@@ -92,14 +92,19 @@ pub(super) fn state(
     // `ClampToZero` (4) and `ClampToBorderColor` (5) read the border; `ClampToEdge` (0),
     // `MirrorClampToEdge` (1), `Repeat` (2) and `MirrorRepeat` (3) the edge.
     let zero = crate::metal::SamplerAddressMode::ClampToZero.as_raw();
-    let mut modes = Vec::with_capacity(3);
+    let mut s_mode = None;
     let mut border = [Flag::Known(false); 3];
-    for (a, shift) in SamplerWord::ADDRESS_SHIFT.into_iter().enumerate() {
+    for (axis, shift) in border.iter_mut().zip(SamplerWord::ADDRESS_SHIFT) {
         let mode = field(fb, shift, 0b111)?;
         let first = u32s(fb, 1, zero)?;
-        border[a] = Flag::Value(fb.binary(BinOp::UGreaterThanEqual, mode, first)?);
-        modes.push(mode);
+        *axis = Flag::Value(fb.binary(BinOp::UGreaterThanEqual, mode, first)?);
+        if s_mode.is_none() {
+            s_mode = Some(mode);
+        }
     }
+    let Some(s_mode) = s_mode else {
+        return Err(cx.fail("a sampler word without its address modes"));
+    };
     let mip = field(fb, SamplerWord::MIP_FILTER_SHIFT, 0b11)?;
     let none = u32s(fb, 1, 0)?;
     let mip = Flag::Value(fb.binary(BinOp::INotEqual, mip, none)?);
@@ -110,7 +115,7 @@ pub(super) fn state(
                 1,
                 crate::metal::SamplerAddressMode::ClampToEdge.as_raw(),
             )?;
-            Flag::Value(fb.binary(BinOp::IEqual, modes[0], edge)?)
+            Flag::Value(fb.binary(BinOp::IEqual, s_mode, edge)?)
         }
         false => Flag::Known(false),
     };
@@ -214,7 +219,10 @@ pub(super) fn address(
         };
         let outside = fb.unary(UnOp::LogicalNot, inside)?;
         let axis = if buffer { 1 } else { usize::from(a) };
-        if let Some(out) = s.border[axis].and(fb, outside)? {
+        let Some(&flag) = s.border.get(axis) else {
+            return Err(cx.fail("a read's coordinate past the sampler's three axes"));
+        };
+        if let Some(out) = flag.and(fb, outside)? {
             border = Some(match border {
                 Some(b) => fb.binary(BinOp::LogicalOr, b, out)?,
                 None => out,
@@ -339,8 +347,8 @@ fn border_texel(
         let set = fb.binary(BinOp::IEqual, v, low)?;
         parts.push(fb.select(set, one, nil)?);
     }
-    match lanes {
-        1 => Ok(parts[0]),
+    match parts.as_slice() {
+        [one] => Ok(*one),
         _ => fb.composite_construct(ty, &parts),
     }
 }
