@@ -4,7 +4,7 @@
 //!
 //! `MTLBlitCommandEncoder` has twenty-two implemented items and the suite reached five of them: a
 //! region copy each way, a texture-to-texture region copy, a buffer fill and a buffer copy. The
-//! nine cases here drive thirteen more. Each is read the same way the family's existing cases are
+//! eleven cases here drive thirteen more. Each is read the same way the family's existing cases are
 //! read: **every byte of the read-back, the bytes a copy must not touch included**. A destination
 //! buffer is made holding one guard byte, `0x7e`, and each copy is given a slot wider than its
 //! region, so a copy that ran long, landed at the wrong offset or wrote a row's padding shows up
@@ -25,6 +25,11 @@
 //!   four levels, every level read back. **The one case here whose answer is a filter's rather
 //!   than a move's**, so it is its own case: an implementation whose box filter rounds otherwise,
 //!   or weights the corners otherwise, diverges here and in none of the others.
+//! - [`generated_xr_mipmaps`] and [`generated_xra_mipmaps`]: the same filter over a 64 by 64
+//!   `Shared` extended-range texture of seven levels (`BGR10_XR`, `BGRA10_XR`), as a consumer
+//!   uploads one: level 0 written with `replaceRegion:` and read back with `getBytes:` before the
+//!   filter runs (the host round trip of the format at that size), then every level read back
+//!   with `getBytes:` after it.
 //! - [`optimized_contents`]: the four layout hints —
 //!   `optimizeContentsForCPUAccess:`, `optimizeContentsForGPUAccess:slice:level:`,
 //!   `optimizeContentsForCPUAccess:slice:level:` and `optimizeContentsForGPUAccess:` — encoded
@@ -580,6 +585,112 @@ static GENERATED_MIPMAPS: Row = Row {
     notices: NOTICES,
 };
 
+/// The extended-range mipmap cases' texture: 64 by 64, seven levels, the size of the upload whose
+/// round trip and generated levels were reported off Metal's on MoltenVK.
+const XR_MIP_WIDTH: u64 = 64;
+const XR_MIP_LEVELS: u64 = 7;
+
+/// `generateMipmapsForTexture:` over a `Shared` extended-range texture of `format`, `texel` bytes
+/// a texel: every level under level 0 written by the host with [`BEFORE`], level 0 with
+/// [`counting`] bytes (its fields' padding bits among them) and read back before the filter runs,
+/// then every level read back after it, each `getBytes:` at a tight pitch into [`GUARD`] bytes.
+fn xr_mipmaps(format: PixelFormat, texel: u64) -> Work {
+    let mut work = Work::new();
+    let spec = TextureSpec::texture_2d(format.as_raw(), XR_MIP_WIDTH, XR_MIP_WIDTH)
+        .levels(XR_MIP_LEVELS)
+        .stored(Storage::Shared)
+        .used(TextureUsage::SHADER_READ.as_raw());
+    let texture = work.add(Resource::Texture { spec });
+    let widths = level_widths(XR_MIP_WIDTH, XR_MIP_LEVELS);
+    for (level, &width) in widths.iter().enumerate() {
+        let length = (width * width * texel) as usize;
+        work.step(Step::ReplaceRegion {
+            texture,
+            level: level as u64,
+            slice: 0,
+            region: Rect::new(0, 0, width, width),
+            bytes: match level {
+                0 => counting(length),
+                _ => vec![BEFORE; length],
+            },
+            rows: width,
+            bytes_per_row: width * texel,
+            bytes_per_image: 0,
+        });
+    }
+    let read = |work: &mut Work, level: usize| {
+        let width = widths[level];
+        work.step(Step::GetBytes {
+            texture,
+            level: level as u64,
+            slice: 0,
+            region: Rect::new(0, 0, width, width),
+            bytes_per_row: width * texel,
+            bytes_per_image: 0,
+            length: (width * width * texel) as usize,
+            before: GUARD,
+        });
+    };
+    read(&mut work, 0);
+    work.step(Step::GenerateMipmaps { texture });
+    work.step(Step::Commit);
+    for level in 0..widths.len() {
+        read(&mut work, level);
+    }
+    work
+}
+
+/// [`xr_mipmaps`]' sites: level 0 as the host wrote it and read it back, then every level after
+/// the filter, each in `element`s of the format's fields.
+fn xr_mip_sites(done: &crate::work::Done, element: Element) -> Vec<Node> {
+    let site = |name: String, bytes: Vec<u8>| {
+        let length = bytes.len() as u64;
+        Node::leaf(
+            name,
+            Observed::bytes(bytes, ByteLayout::buffer(0, length, element)),
+        )
+    };
+    let mut reads = done.reads.iter().cloned();
+    let mut sites = vec![site(
+        "round-trip".to_owned(),
+        reads.next().unwrap_or_default(),
+    )];
+    for level in 0..XR_MIP_LEVELS {
+        sites.push(site(
+            format!("level-{level}"),
+            reads.next().unwrap_or_default(),
+        ));
+    }
+    sites.push(statuses_site(done.statuses.clone()));
+    sites
+}
+
+/// `generateMipmapsForTexture:` of a 64 by 64 `BGR10_XR` texture, its upload's round trip first.
+static GENERATED_BGR10_XR_MIPMAPS: Row = Row {
+    case: "blit-generated-mipmaps-bgr10xr",
+    program: || xr_mipmaps(PixelFormat::BGR10XR, 4),
+    sites: |done| xr_mip_sites(done, Element::U32),
+    parameters: || {
+        b"replaceRegion: of counting bytes into level 0 of 7 levels of 64x64 Shared BGR10_XR, \
+          getBytes: of it, generateMipmapsForTexture:, getBytes: of every level"
+            .to_vec()
+    },
+    notices: NOTICES,
+};
+
+/// `generateMipmapsForTexture:` of a 64 by 64 `BGRA10_XR` texture, its upload's round trip first.
+static GENERATED_BGRA10_XR_MIPMAPS: Row = Row {
+    case: "blit-generated-mipmaps-bgra10xr",
+    program: || xr_mipmaps(PixelFormat::BGRA10XR, 8),
+    sites: |done| xr_mip_sites(done, Element::U16),
+    parameters: || {
+        b"replaceRegion: of counting bytes into level 0 of 7 levels of 64x64 Shared BGRA10_XR, \
+          getBytes: of it, generateMipmapsForTexture:, getBytes: of every level"
+            .to_vec()
+    },
+    notices: NOTICES,
+};
+
 /// The four hints [`optimized_contents`] encodes, in that order: `None` is the whole-texture
 /// selector, `Some` names a slice and a level.
 const HINTS: [(bool, Option<(u64, u64)>); 4] = [
@@ -951,6 +1062,21 @@ pub fn generated_mipmaps() -> BlitEncoderCommands {
     }
 }
 
+/// The case of `generateMipmapsForTexture:` over a `BGR10_XR` texture, its upload's round trip
+/// first.
+pub fn generated_xr_mipmaps() -> BlitEncoderCommands {
+    BlitEncoderCommands {
+        row: &GENERATED_BGR10_XR_MIPMAPS,
+    }
+}
+
+/// [`generated_xr_mipmaps`] over a `BGRA10_XR` texture.
+pub fn generated_xra_mipmaps() -> BlitEncoderCommands {
+    BlitEncoderCommands {
+        row: &GENERATED_BGRA10_XR_MIPMAPS,
+    }
+}
+
 /// The case of the four layout hints.
 pub fn optimized_contents() -> BlitEncoderCommands {
     BlitEncoderCommands {
@@ -991,6 +1117,8 @@ pub fn all() -> Vec<Box<dyn Case>> {
         Box::new(texture_slice_counts()),
         Box::new(texture_counts_of_none()),
         Box::new(generated_mipmaps()),
+        Box::new(generated_xr_mipmaps()),
+        Box::new(generated_xra_mipmaps()),
         Box::new(optimized_contents()),
         Box::new(synchronized_managed_buffer()),
         Box::new(synchronized_managed_texture()),
@@ -1005,11 +1133,13 @@ mod tests {
     use std::collections::BTreeSet;
 
     /// Every row of the family, for the guards that read each one.
-    const EVERY_ROW: [&Row; 9] = [
+    const EVERY_ROW: [&Row; 11] = [
         &WHOLE_TEXTURE,
         &SLICE_COUNTS,
         &COUNTS_OF_NONE,
         &GENERATED_MIPMAPS,
+        &GENERATED_BGR10_XR_MIPMAPS,
+        &GENERATED_BGRA10_XR_MIPMAPS,
         &OPTIMIZED_CONTENTS,
         &SYNCHRONIZED_BUFFER,
         &SYNCHRONIZED_TEXTURE,
