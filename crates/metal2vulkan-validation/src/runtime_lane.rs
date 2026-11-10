@@ -1318,6 +1318,20 @@ pub const LANE_QUEUE_LIMITS: QueueLimits = QueueLimits {
     presenting: 0,
 };
 
+/// The `adjust` of a lane device whose test's work the lane's queue limits change
+/// ([`LANE_QUEUE_LIMITS`]): the device takes its queue plan.
+pub fn at_plan(options: &mut DeviceOptions) {
+    options.queue_limits = None;
+}
+
+/// [`validated_options`] for a lane device whose test's work the lane's queue limits change: the
+/// device takes its queue plan ([`at_plan`]).
+pub fn validated_plan_options(messages: &Messages, cache: &Path) -> DeviceOptions {
+    let mut options = validated_options(messages, cache);
+    at_plan(&mut options);
+    options
+}
+
 /// Whether the runtime makes an untessellated vertex pipeline's topology and restart dynamic on
 /// `device`: the profile's test (`pipeline::link::graphics`), both extended dynamic states, which
 /// the runtime enables wherever the device has them. There a strip takes the pipeline its class's
