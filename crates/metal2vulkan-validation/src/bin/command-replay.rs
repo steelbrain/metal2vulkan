@@ -58,7 +58,11 @@
 //!   in turn, rows packed, through a blit into a shared buffer (a two-plane format's plane 0; a
 //!   memoryless or multisampled texture is not read), a buffer's whole length.
 //!
-//! `DIR/status.txt` says `leg runtime`, `device <name>`, each degrade notice the run raised
+//! `DIR/status.txt` says `leg runtime`, `device <name>`, what the run's pipelines took from the
+//! shader cache (`cache` and its counts: functions translated, variant pipelines made, directory
+//! lookups hit and missed, driver records loaded, and the driver's pipeline cache hits and misses
+//! its creation feedback reported), each pipeline creation's line where
+//! `METAL2VULKAN_LOG_PIPELINES` is set (`pipeline <line>`), each degrade notice the run raised
 //! (`notice <code>`), and `ok` or `error <where>: <message>`: the first failure stops the run,
 //! and the readbacks done so far stay. The exit status is 0 for `ok`, 1 for a run that stopped,
 //! and 2 for a harness failure (a bad manifest or command line).
@@ -193,7 +197,11 @@ fn run(options: &BTreeMap<String, String>) -> i32 {
     device_options.messages = Some(MessageSink::new(move |m| {
         if m.id_name.starts_with("metal2vulkan-degrade") || m.id_name.starts_with("VUID") {
             if let Ok(mut n) = sink.lock() {
-                n.push(format!("{} {}", m.id_name, m.text));
+                n.push(format!("notice {} {}", m.id_name, m.text));
+            }
+        } else if m.id_name == "metal2vulkan-pipeline-creation" {
+            if let Ok(mut n) = sink.lock() {
+                n.push(format!("pipeline {}", m.text));
             }
         }
     }));
@@ -226,8 +234,23 @@ fn run(options: &BTreeMap<String, String>) -> i32 {
     };
     let result = replay.all(&manifest, &mut status);
     let read = replay.readback(&manifest, &mut status);
-    for notice in notices.lock().map(|n| n.clone()).unwrap_or_default() {
-        status.line(&format!("notice {notice}"));
+    let (stats, counts) = (
+        replay.device.shader_cache_statistics(),
+        replay.device.work_counts(),
+    );
+    status.line(&format!(
+        "cache translated {} variant-pipelines {} lookups-hit {} lookups-missed {} driver-loads {} \
+         driver-pipeline-hits {} driver-pipeline-misses {}",
+        counts.functions_translated,
+        counts.variant_pipelines_made,
+        stats.hits,
+        stats.misses,
+        stats.driver_loads,
+        stats.driver_pipeline_hits,
+        stats.driver_pipeline_misses
+    ));
+    for line in notices.lock().map(|n| n.clone()).unwrap_or_default() {
+        status.line(&line);
     }
     match result.and(read) {
         Ok(()) => {
