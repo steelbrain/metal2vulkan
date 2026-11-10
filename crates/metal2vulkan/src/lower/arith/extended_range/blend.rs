@@ -10,7 +10,8 @@
 //! alpha; each `1 - x` is computed in `float`. The source, the second source and the blend color
 //! are clamped first, as a blend unit clamps a normalized format's: a color lane to the form's
 //! range ([`super::source_range`]), alpha to `[0, 1]`, a NaN to the low end
-//! ([`extended_ranges`]). Metal's compiler instead fuses, regroups and rounds each step to `half`;
+//! ([`extended_ranges`]); a padded form's are not clamped at all, as Metal clamps none there.
+//! Metal's compiler instead fuses, regroups and rounds each step to `half`;
 //! the stored value can differ from Metal's in the last bits of the encode, which the artifact
 //! records (`PrecisionNote::ExtendedRangeBlendSource`, `ExtendedRangeFloatBlendSource`).
 //!
@@ -345,9 +346,16 @@ pub fn native(
 
 /// The ranges an extended-range form's blend clamps its source, second source and blend color to
 /// ([`native`]): the color lanes to the form's source range ([`source_range`]), alpha to `[0, 1]`.
-pub fn extended_ranges(form: ExtendedRange) -> ([f32; 4], [f32; 4]) {
+/// `None` for a padded form, whose blend Metal computes over them as they are, every lane
+/// unclamped (the M3 Max under macOS 27.0.1: sources, second sources and blend colors past both
+/// ends of `[0, 1]`, alpha among them, into every padded form; `probes/padded_and_bfloat_blends.m`
+/// of the conformance crate).
+pub fn extended_ranges(form: ExtendedRange) -> Option<([f32; 4], [f32; 4])> {
+    if form.padded() {
+        return None;
+    }
     let (lo, hi) = source_range(form);
-    ([lo, lo, lo, 0.0], [hi, hi, hi, 1.0])
+    Some(([lo, lo, lo, 0.0], [hi, hi, hi, 1.0]))
 }
 
 /// A value a blend lane reads.

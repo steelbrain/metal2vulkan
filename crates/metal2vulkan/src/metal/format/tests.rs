@@ -2641,7 +2641,11 @@ fn a_pass_renders_only_the_ycbcr_formats_whose_store_is_matched() {
 /// channel's `half` is the `half` of its code's value: `0.1`'s (code 435 reads 51/510, whose
 /// `half` is `half` 0.1's), not `0.25`'s (code 512 reads 0.25098) or `0.0012345`'s (code 385);
 /// the two-plane formats' alpha byte reads `0.5` as `128 / 255`, a `BGRA10_XR` alpha code exactly;
-/// `BGR10_XR` has no alpha; the padded and bfloat forms' tile memory is unmeasured.
+/// `BGR10_XR` has no alpha. A padded form's channels read `c / 1023`: `0.33371`'s `half` is not
+/// code 341's (the M3 Max's tile held the `half`: a premultiplied blend of `(0, 0, 0, 0.5)` over
+/// that clear stored code 171 where code 341's value gives 170), nor `0.5`'s code 512's, while 0
+/// and 1 are; only the channels a padded form has count. The bfloat forms' tile memory is
+/// unmeasured.
 #[test]
 fn clears_read_back_where_their_halves_are_their_codes_values() {
     let planes = ExtendedRange::Planes { srgb: false };
@@ -2664,7 +2668,25 @@ fn clears_read_back_where_their_halves_are_their_codes_values() {
     assert_eq!(bgra.clear_read_back([0.0, 0.0, 0.0, 0.5]), Some(true));
     assert_eq!(planes.clear_read_back([0.0, 0.0, 0.0, 0.5]), Some(false));
     assert_eq!(bgr.clear_read_back([0.0, 0.0, 0.0, 0.5]), Some(true));
-    assert_eq!(ExtendedRange::R10X6.clear_read_back([0.0; 4]), None);
+    for form in [
+        ExtendedRange::R10X6,
+        ExtendedRange::Rg10X12,
+        ExtendedRange::R10X6Srgb,
+        ExtendedRange::Rg10X12Srgb,
+        ExtendedRange::Rgb10A2Srgb,
+    ] {
+        assert_eq!(form.clear_read_back([0.0; 4]), Some(true), "{form:?}");
+        assert_eq!(form.clear_read_back([1.0; 4]), Some(true), "{form:?}");
+    }
+    let r10 = ExtendedRange::R10X6;
+    assert_eq!(
+        r10.clear_read_back([0.33371, 0.70011, 0.10049, 0.5]),
+        Some(false)
+    );
+    // Red alone counts: green's 0.5 is no channel of `R10Unorm_X6`.
+    assert_eq!(r10.clear_read_back([1.0, 0.5, 0.5, 0.5]), Some(true));
+    let rg = ExtendedRange::Rg10X12;
+    assert_eq!(rg.clear_read_back([1.0, 0.5, 0.0, 1.0]), Some(false));
     assert_eq!(ExtendedRange::Rgba16Bfloat.clear_read_back([0.0; 4]), None);
 }
 

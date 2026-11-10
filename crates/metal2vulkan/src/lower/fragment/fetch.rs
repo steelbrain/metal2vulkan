@@ -3219,7 +3219,7 @@ fn blended(
         }
     };
     let constant = blend_constant(cx, fb, &b)?;
-    let ranges = Some(extended_range::blend::extended_ranges(range));
+    let ranges = extended_range::blend::extended_ranges(range);
     let v = extended_range::blend::native(fb, &b, ranges, (part, s1, d), constant)?;
     if !sc.view.merges() {
         let texel = extended_range::encode(fb, range, v)?;

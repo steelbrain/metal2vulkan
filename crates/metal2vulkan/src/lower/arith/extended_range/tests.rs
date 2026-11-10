@@ -187,7 +187,7 @@ fn kernel(form: ExtendedRange, op: Op) -> BResult<TypedModule> {
             let s1 = f.composite_construct(uvec4, &lanes[12..16])?;
             let s1 = f.convert(ConvOp::Bitcast, s1, vec4)?;
             let d = tile_value(&mut f, form, x)?;
-            let ranges = Some(extended_ranges(form));
+            let ranges = extended_ranges(form);
             let v = native(&mut f, &b, ranges, (s, Some(s1), d), Some(c))?;
             f.convert(ConvOp::Bitcast, v, uvec4)?
         }
@@ -650,8 +650,8 @@ const OPERATIONS: [BlendOperation; 5] = [
 
 /// The device's blend (`blend::native`) of source `s`, second source `s1` and blend color `c`
 /// over tile value `d` into `form`, storing the channels `mask`: each of `s`, `s1` and `c` clamped
-/// to the form's range (color lanes to its source range, alpha to `[0, 1]`, a NaN to the low end),
-/// then each class's `S·Fs op D·Fd` in `f32`, in the equation's order, each factor, product and
+/// to the form's range (color lanes to its source range, alpha to `[0, 1]`, a NaN to the low end;
+/// a padded form's not clamped), then each class's `S·Fs op D·Fd` in `f32`, in the equation's order, each factor, product and
 /// sum rounded once to `f32`, a factor of one its operand; `Min` and `Max` of the source and the
 /// destination; a lane the mask does not store `d`'s.
 fn native_model(
@@ -663,17 +663,16 @@ fn native_model(
 ) -> [f32; 4] {
     use BlendFactor as F;
     let (lo, hi) = match form {
-        _ if form.padded() => (0.0, 1.0),
         ExtendedRange::Bgra10 { srgb: true } => SRGB_SOURCE_RANGE,
         _ => SOURCE_RANGE,
     };
     let clamp = |v: [f32; 4]| -> [f32; 4] {
         std::array::from_fn(|k| {
             let (lo, hi) = if k == 3 { (0.0, 1.0) } else { (lo, hi) };
-            if v[k].is_nan() {
-                lo
-            } else {
-                v[k].clamp(lo, hi)
+            match v[k] {
+                _ if form.padded() => v[k],
+                x if x.is_nan() => lo,
+                x => x.clamp(lo, hi),
             }
         })
     };
@@ -736,9 +735,8 @@ fn native_model(
 /// device's arithmetic (`blend::native`): over sources off the `half` grid, NaNs, infinities and
 /// values past the range, random texels, blend colors and second sources, every factor as each of
 /// the four factors and every operation for color and for alpha, under every class of write mask,
-/// each lane holds the `f32` model's bits ([`native_model`]): the clamp (a padded form's every lane
-/// to `[0, 1]`), then `S·Fs op D·Fd` in the equation's order, nothing rounded to `half` between the
-/// steps. Metal's own forms (its lerps and common factors, its fused pairs and a `half` rounding
+/// each lane holds the `f32` model's bits ([`native_model`]): the clamp (none for a padded form),
+/// then `S·Fs op D·Fd` in the equation's order, nothing rounded to `half` between the steps. Metal's own forms (its lerps and common factors, its fused pairs and a `half` rounding
 /// after each step) miss these bits at most lanes.
 #[test]
 fn every_blend_is_the_devices_arithmetic() {

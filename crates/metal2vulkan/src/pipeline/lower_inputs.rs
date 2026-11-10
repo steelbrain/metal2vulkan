@@ -925,7 +925,8 @@ pub enum FactorLane {
 /// even), a `half` one is taken as it is, and the value is stored as a kernel write stores it.
 /// Under blending Metal first clamps the output to the format's range (each color channel to the
 /// values of codes 0 and 1022 as `half`s, an `_sRGB` color channel of `BGRA10_XR_sRGB` to its
-/// decoded codes 0 and 1022, a NaN to the low end; alpha to `[0, 1]`, a NaN to 0).
+/// decoded codes 0 and 1022, a NaN to the low end; alpha to `[0, 1]`, a NaN to 0); a padded
+/// form's output it blends unclamped.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

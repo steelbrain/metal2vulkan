@@ -2894,14 +2894,17 @@ bound.
   `ExtendedRangeBlendsStoredCodes`: A draw whose render pipeline state blends into, or reads (a
   framebuffer fetch, or the interlocked storage form an extended-range blend takes), a color
   attachment of an extended-range format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their sRGB
-  twins) that an earlier draw or execution of render commands of the same render pass may have
-  written; an execution of render commands in a pass with such an attachment, whose commands may
-  blend onto each other. Cost: a blend into, or a read of, an extended-range color an earlier draw
-  of the pass wrote sees the codes the runtime stored at that draw (each channel rounded to its
-  10-bit code, the two-plane format's alpha to its byte), where Metal's tile memory holds the color
-  as half through the pass and rounds it once at the store: a blended or read value can differ from
-  Metal's by a code, and the difference can grow over many draws that blend onto each other. Not
-  announced for a color whose half shadow the runtime holds: in a pass of one layer on a device that
+  twins) or a padded 10-bit one (`R10Unorm_X6`, `RG10Unorm_X12`, their sRGB twins,
+  `RGB10A2Unorm_sRGB`) that an earlier draw or execution of render commands of the same render pass
+  may have written, or whose clear Metal's tile holds between two codes; an execution of render
+  commands in a pass with such an attachment, whose commands may blend onto each other. Cost: a
+  blend into, or a read of, an extended-range or padded 10-bit color an earlier draw of the pass
+  wrote sees the codes the runtime stored at that draw (each channel rounded to its 10-bit code, the
+  two-plane format's alpha to its byte), where Metal's tile memory holds the color as half through
+  the pass and rounds it once at the store: a blended or read value can differ from Metal's by a
+  code, and the difference can grow over many draws that blend onto each other. A padded color's
+  tile holds a value past `[0, 1]` unclamped. Not announced for a color whose half shadow the
+  runtime holds, never a padded one's: in a pass of one layer on a device that
   orders framebuffer fetch through the pixel interlock alone (MoltenVK, NVIDIA, ANV, RADV), or
   through input attachments with the pixel interlock, fragment stores and `Rgba16f` storage images
   (lavapipe, whose draws read and write the shadow beside the input attachment), at one sample or
@@ -3947,9 +3950,11 @@ bound.
 - `metal2vulkan-degrade-extended-range-blend-source` (precision).
   `PrecisionNote::ExtendedRangeBlendSource`: A fragment function's `half` color output (a scalar or
   vector of AIR's `half`) is blended into an extended-range attachment (`BGR10_XR`, `BGRA10_XR`,
-  `RGB10A8_2P_XR10`, or an `_sRGB` twin), whose raw codes no device's blend unit reads, so the
+  `RGB10A8_2P_XR10`, or an `_sRGB` twin) or a padded 10-bit one (`R10Unorm_X6`, `RG10Unorm_X12`,
+  their `_sRGB` twins, `RGB10A2Unorm_sRGB`), whose raw codes no device's blend unit reads, so the
   function blends in the shader in the device's arithmetic: `S·Fs op D·Fd` in `float`, in the blend
-  equation's order, the source, second source and blend color clamped to the format's range first.
+  equation's order, the source, second source and blend color clamped to the format's range first
+  (a padded format's not clamped, as Metal clamps none there).
   Metal's compiler rounds each step to `half`, so a blended channel may store another code than
   Metal's.
 - `metal2vulkan-degrade-discard-drops-simdgroup-stores` (precision).

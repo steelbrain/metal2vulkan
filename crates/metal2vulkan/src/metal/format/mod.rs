@@ -615,13 +615,27 @@ impl ExtendedRange {
     /// pass stores it, and a `Clear` load as the clear color through `float` and then `half`
     /// (on an Apple M4 and the same probe on an Apple M3 Max): a draw that reads
     /// or blends into the color then sees those halves, where an image of the codes holds the
-    /// codes nearest them. `None` for the padded and bfloat forms, whose tile memory is
-    /// unmeasured.
+    /// codes nearest them. A padded form's tile holds its channels as `half` too, an unblended
+    /// draw's past `[0, 1]` unclamped (the M3 Max under macOS 27.0.1: a blend over a clear and
+    /// over such a draw, `probes/padded_and_bfloat_blends.m` of the conformance crate); its codes
+    /// read back
+    /// `c / 1023` (`RGB10A2Unorm_sRGB`'s alpha `c / 3`), the color of `R10Unorm_X6_sRGB` and
+    /// `RGB10A2Unorm_sRGB` through the sRGB transfer function. `None` for the bfloat forms,
+    /// whose tile memory is unmeasured.
     pub fn clear_read_back(self, color: [f64; 4]) -> Option<bool> {
-        if self.padded() || self.bfloat() {
+        if self.bfloat() {
             return None;
         }
         let half = |v: f32| crate::float16::f16_bits_to_f32(crate::float16::f32_to_f16_bits(v));
+        if self.padded() {
+            use crate::metal::ColorWriteMask as M;
+            let held = self.channels();
+            let lanes = [M::RED, M::GREEN, M::BLUE, M::ALPHA];
+            return Some((0..4).filter(|&c| held.contains(lanes[c])).all(|c| {
+                let tile = half(color[c] as f32);
+                tile == half(self.padded_code_value(self.code(tile, c == 3), c == 3))
+            }));
+        }
         let channels = match self {
             ExtendedRange::Bgr10 { .. } => 3,
             _ => 4,
@@ -632,11 +646,33 @@ impl ExtendedRange {
         }))
     }
 
+    /// The value a padded form's code `code` of a color channel, or of alpha where `alpha`, reads:
+    /// `code / 1023`, `RGB10A2Unorm_sRGB`'s alpha `code / 3`, the color of `R10Unorm_X6_sRGB` and
+    /// `RGB10A2Unorm_sRGB` through the sRGB transfer function (`RG10Unorm_X12_sRGB` reads its codes
+    /// as `RG10Unorm_X12` does), in `f64` and then rounded to `f32`.
+    fn padded_code_value(self, code: u32, alpha: bool) -> f32 {
+        let linear = |d: f64| f64::from(code) / d;
+        let v = match self {
+            ExtendedRange::Rgb10A2Srgb if alpha => linear(3.0),
+            ExtendedRange::R10X6Srgb | ExtendedRange::Rgb10A2Srgb => {
+                let c = linear(1023.0);
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            }
+            _ => linear(1023.0),
+        };
+        v as f32
+    }
+
     /// The `half` values Metal's tile memory holds for a color of this form after a render
     /// pass's `Clear` load of the clear color `color` (red, green, blue, alpha), as `f32`: each
     /// channel through `float` and then `half`, each rounded to nearest even, and `BGR10_XR`'s
     /// alpha 1, as a read of the tile reads it. The runtime clears the attachment's `half` shadow
-    /// to them. `None` for the padded and bfloat forms, whose tile memory is unmeasured.
+    /// to them. `None` for the padded forms, whose `half` shadow the runtime does not hold, and
+    /// the bfloat forms, whose tile memory is unmeasured.
     pub fn clear_tile_value(self, color: [f64; 4]) -> Option<[f32; 4]> {
         if self.padded() || self.bfloat() {
             return None;

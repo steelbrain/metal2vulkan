@@ -252,11 +252,10 @@ pub fn tile_read(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, held: Value)
 pub(crate) use blend_color::{SOURCE_RANGE, SRGB_SOURCE_RANGE};
 
 /// The range Metal clamps a blend's `half` source color to before blending into an attachment
-/// of `form` ([`SOURCE_RANGE`], [`SRGB_SOURCE_RANGE`]; a padded form's `[0, 1]`, its codes'
-/// range).
+/// of `form` ([`SOURCE_RANGE`], [`SRGB_SOURCE_RANGE`]). A padded form's blend clamps nothing
+/// (`blend::extended_ranges`).
 fn source_range(form: ExtendedRange) -> (f32, f32) {
     match form {
-        _ if form.padded() => (0.0, 1.0),
         ExtendedRange::Bgra10 { srgb: true } => SRGB_SOURCE_RANGE,
         _ => SOURCE_RANGE,
     }

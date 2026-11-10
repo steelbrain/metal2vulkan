@@ -1456,10 +1456,12 @@ pub enum PrecisionNote {
     HalfOutputPrecision,
     /// A fragment function's `half` color output (a scalar or vector of AIR's `half`) is blended
     /// into an extended-range attachment (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, or an
-    /// `_sRGB` twin), whose raw codes no device's blend unit reads, so the function blends in the
-    /// shader (`lower::arith::extended_range::blend::native`), in the device's arithmetic: a blend
-    /// unit's `S·Fs op D·Fd` in `float`, in the blend equation's order, the source, the second
-    /// source and the blend color clamped to the format's range first. Metal's compiler folds the
+    /// `_sRGB` twin) or a padded 10-bit one (`R10Unorm_X6`, `RG10Unorm_X12`, their `_sRGB` twins,
+    /// `RGB10A2Unorm_sRGB`), whose raw codes no device's blend unit reads, so the function blends
+    /// in the shader (`lower::arith::extended_range::blend::native`), in the device's arithmetic: a
+    /// blend unit's `S·Fs op D·Fd` in `float`, in the blend equation's order, the source, the
+    /// second source and the blend color clamped to the format's range first (a padded format's
+    /// not clamped, as Metal clamps none there). Metal's compiler folds the
     /// blend into the function and fuses, regroups and rounds each step to `half` instead, so a
     /// blended channel may store another code than Metal's; the bound is not measured. Recorded
     /// for every blended output that stores a channel, under either math. A `float` output

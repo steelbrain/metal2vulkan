@@ -1738,14 +1738,17 @@ degradations! {
         /// A draw whose render pipeline state blends into, or reads (a framebuffer fetch, or the
         /// interlocked storage form an extended-range blend takes), a color attachment of an
         /// extended-range format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their sRGB
-        /// twins) that an earlier draw or execution of render commands of the same render pass
-        /// may have written (`render.rs`); an execution of render commands in a pass with such
-        /// an attachment, whose commands may blend onto each other. Metal's tile memory holds
-        /// such an attachment as `half` through the pass (a clear's, a load's, a write's or a
-        /// blend's value rounded to `half`) and rounds it to its codes once, at the store (on an
-        /// Apple M4; the M3 Max's run of the same probes), where the runtime stores the codes at
-        /// each draw, so a later blend or read sees the stored codes. Not a color whose `half`
-        /// shadow the runtime holds (`render/extended_shadow.rs`): in a pass of one layer on a
+        /// twins) or a padded 10-bit one (`R10Unorm_X6`, `RG10Unorm_X12`, their sRGB twins,
+        /// `RGB10A2Unorm_sRGB`) that an earlier draw or execution of render commands of the same
+        /// render pass may have written, or whose clear Metal's tile holds between two codes
+        /// (`render.rs`); an execution of render commands in a pass with such an attachment,
+        /// whose commands may blend onto each other. Metal's tile memory holds such an attachment
+        /// as `half` through the pass (a clear's, a load's, a write's or a blend's value rounded
+        /// to `half`; a padded one's past `[0, 1]` unclamped) and rounds it to its codes once, at the store (on
+        /// an Apple M4; the M3 Max's run of the same probes, and for the padded formats the M3
+        /// Max's), where the runtime stores the codes at each draw, so a later blend or read sees
+        /// the stored codes. Not a color whose `half` shadow the runtime holds, which is never a
+        /// padded one's (`render/extended_shadow.rs`): in a pass of one layer on a
         /// device that orders framebuffer fetch through the pixel interlock alone, or through
         /// input attachments (lavapipe) with the pixel interlock, fragment stores and `Rgba16f`
         /// storage images (multisampled ones at more than one sample), from the pass's clear or
@@ -1757,9 +1760,9 @@ degradations! {
         /// codes, exactly: the pipeline's state does not tell that read from the function's own
         /// fetch.
         ExtendedRangeBlendsStoredCodes = "extended-range-blends-stored-codes", Precision,
-            "a blend into, or a read of, an extended-range color an earlier draw of the pass \
-             wrote sees the codes the runtime stored at that draw (each channel rounded to its \
-             10-bit code, the two-plane format's alpha to its byte), where Metal's tile memory \
+            "a blend into, or a read of, an extended-range or padded 10-bit color an earlier \
+             draw of the pass wrote sees the codes the runtime stored at that draw (each channel \
+             rounded to its 10-bit code, the two-plane format's alpha to its byte), where Metal's tile memory \
              holds the color as half through the pass and rounds it once at the store: a \
              blended or read value can differ from Metal's by a code, and the difference can \
              grow over many draws that blend onto each other";

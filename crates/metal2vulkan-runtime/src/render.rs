@@ -7634,15 +7634,17 @@ impl RenderLowering {
     }
 
     /// The pass's color attachments of an extended-range format (`BGR10_XR`, `BGRA10_XR`,
-    /// `RGB10A8_2P_XR10` and their sRGB twins), by index, with their formats. Not the padded and
-    /// bfloat forms, whose tile memory is unmeasured.
+    /// `RGB10A8_2P_XR10` and their sRGB twins) or a padded 10-bit one (`R10Unorm_X6`,
+    /// `RG10Unorm_X12`, their sRGB twins, `RGB10A2Unorm_sRGB`), by index, with their formats,
+    /// whose tile memory Metal holds as `half` through the pass. Not the bfloat forms, whose tile
+    /// memory is unmeasured.
     fn extended_colors(&self) -> BTreeMap<u32, PixelFormat> {
         (0u32..)
             .zip(&self.layout.colors)
             .filter_map(|(index, c)| {
                 let format = c.as_ref()?.target.texture.pixel_format();
                 ExtendedRange::of(format)
-                    .filter(|form| !form.padded() && !form.bfloat())
+                    .filter(|form| !form.bfloat())
                     .map(|_| (index, format))
             })
             .collect()

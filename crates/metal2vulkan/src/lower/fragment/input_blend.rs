@@ -471,7 +471,7 @@ pub(crate) fn texel(
         }
     };
     let constant = fetch::blend_constant(cx, fb, b)?;
-    let ranges = Some(extended_range::blend::extended_ranges(ib.form));
+    let ranges = extended_range::blend::extended_ranges(ib.form);
     let v = extended_range::blend::native(fb, b, ranges, (part, s1, d), constant)?;
     if shadowed {
         super::input_shadow::store(cx, fb, color, v)?;
