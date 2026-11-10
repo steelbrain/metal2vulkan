@@ -41,6 +41,7 @@ use crate::exit_guard;
 use crate::gpu_time;
 use crate::image_barrier::MemoryReads;
 use crate::loader_word::DeviceWord;
+use crate::memory::MemoryClass;
 use crate::release;
 use crate::shader_cache::{CacheSetup, ShaderCacheOptions};
 use crate::sparse;
@@ -333,6 +334,14 @@ pub struct DeviceOptions {
 
 /// The most `VkQueue`s a device takes for its command queues ([`DeviceOptions::queue_limits`]).
 /// No Metal counterpart: a Vulkan-side option.
+///
+/// The limits bound the program's queues alone. The staging queue, where the device's plan
+/// reserves one (of a family of transfers alone, or, where no memory the host caches may hold a
+/// texture's image, as on an RX 7900 XTX, of a family of compute work beside the device's own), is
+/// the runtime's own queue for textures' CPU copies, which no command queue shares: the device
+/// makes it under any limits as it does without them, it counts against neither limit, and the
+/// limits' message never names it. A device made with limits of one and none copies its textures
+/// as one made without them does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct QueueLimits {
     /// The most the round robin its command queues share takes: at least one (0 is taken as 1),
@@ -1089,9 +1098,11 @@ pub(crate) struct QueuePlan {
     /// The queues reserved for the caller (`DeviceOptions::reserved_queues`), after `present` in
     /// the same order: at most as many as asked, none where the families taken have no more.
     pub(crate) reserved: Vec<(u32, u32)>,
-    /// The queue reserved for staging copies (`device/staging.rs`): the first queue of the first
-    /// family of transfers alone whose copies take any texel (a granularity of one texel), which
-    /// is none of the families above; `None` where there is none.
+    /// The queue reserved for staging copies (`device/staging.rs`), of a family none of the
+    /// queues above are of, whose copies take any texel (a granularity of one texel): the first
+    /// queue of the first family of transfers alone (a copy engine); else, where a texture's
+    /// image has no memory the host caches, of the first family of graphics or compute work;
+    /// `None` where there is none ([`queue_plan`]).
     pub(crate) staging: Option<(u32, u32)>,
 }
 
@@ -1110,26 +1121,38 @@ pub(crate) struct QueuePlan {
 /// took before. The next queues in that order, at most [`PRESENT_QUEUES`], are reserved for
 /// presenting queues, and the next, at most `reserved`, for the caller: the round robin keeps its
 /// first [`LEAST_QUEUES`] and presenting its queues before the caller has any (NVIDIA's 16 with
-/// one reserved give the round robin 13). A queue of a family of transfers alone
-/// is reserved for staging copies: a copy engine, which runs beside the graphics family's work
-/// where another of its queues waits behind it; an asynchronous compute queue is none (its work
-/// waited up to 1.05 s on a Radeon 780M and 1.19 s on an RTX 3090 behind a kernel that filled the
-/// GPU). `None` where no family does graphics and compute work.
+/// one reserved give the round robin 13).
+///
+/// A queue of a family of transfers alone is reserved for staging copies (`device/staging.rs`):
+/// a copy engine, which runs beside the graphics family's work where another of its queues waits
+/// behind it. Where the device has none, a queue of another family that does graphics or compute
+/// work is, only where a texture's image has no memory the host caches (`cached` false,
+/// `memory::host_cached_placement`: a discrete GPU with no device-local type the host caches, an
+/// RX 7900 XTX), whose textures' CPU copies would otherwise read and write through the host's
+/// mapping of uncached memory: a 1920 x 1080 `get_bytes` took 1.0 to 1.7 s that way on the XTX. Such
+/// an asynchronous compute queue's work may wait behind a kernel that fills the GPU (up to 1.05 s
+/// on a Radeon 780M and 1.19 s on an RTX 3090), so where a texture's image has memory the host
+/// caches its copies stay on the host, and no such queue stages. `None` where no family does
+/// graphics and compute work.
 pub(crate) fn queue_plan(
     families: &[vk::QueueFamilyProperties],
     reserved: u32,
+    cached: bool,
 ) -> Option<QueuePlan> {
-    queue_plan_within(families, reserved, None)
+    queue_plan_within(families, reserved, None, cached)
 }
 
 /// [`queue_plan`] within `limits` (`DeviceOptions::queue_limits`): the round robin at most
 /// `limits.round_robin` (at least one, its floor of [`LEAST_QUEUES`] no more than that) and at
 /// most `limits.presenting` queues reserved for presenting, limits past the plan's taking the
-/// plan's. `None` is the plan.
+/// plan's. `None` is the plan. The staging queue is the plan's whatever the limits (`cached` as
+/// [`queue_plan`] takes it): a queue of the runtime's own that no command queue shares
+/// ([`QueueLimits`]).
 pub(crate) fn queue_plan_within(
     families: &[vk::QueueFamilyProperties],
     reserved: u32,
     limits: Option<QueueLimits>,
+    cached: bool,
 ) -> Option<QueuePlan> {
     let (ceiling, presenting) = match limits {
         None => (ROUND_ROBIN_CEILING, PRESENT_QUEUES),
@@ -1164,23 +1187,35 @@ pub(crate) fn queue_plan_within(
     let mut rest = order.split_off(round_robin).into_iter();
     let present = rest.by_ref().take(presenting as usize).collect();
     let reserved = rest.take(reserved as usize).collect();
-    // Transfers alone (sparse binding and protected memory aside: no graphics, compute, video or
-    // optical flow work), and copies of any texel.
+    // Copies of any texel, on a family none of the queues above are of.
     let unit = vk::Extent3D {
         width: 1,
         height: 1,
         depth: 1,
     };
+    let stages = |index: usize, family: &vk::QueueFamilyProperties| {
+        !taken.contains(&(index as u32))
+            && family.queue_count > 0
+            && family.min_image_transfer_granularity == unit
+    };
+    // Transfers alone (sparse binding and protected memory aside: no graphics, compute, video or
+    // optical flow work).
     let besides =
         vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING | vk::QueueFlags::PROTECTED;
-    let staging = (families.iter().enumerate())
-        .find(|&(index, family)| {
-            !taken.contains(&(index as u32))
-                && family.queue_count > 0
-                && family.queue_flags.contains(vk::QueueFlags::TRANSFER)
-                && (family.queue_flags & !besides).is_empty()
-                && family.min_image_transfer_granularity == unit
-        })
+    let copy_engine = (families.iter().enumerate()).find(|&(index, family)| {
+        stages(index, family)
+            && family.queue_flags.contains(vk::QueueFlags::TRANSFER)
+            && (family.queue_flags & !besides).is_empty()
+    });
+    // A family of graphics or compute work transfers too, whether or not it lists the bit.
+    let work = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
+    let beside = || match cached {
+        true => None,
+        false => (families.iter().enumerate())
+            .find(|&(index, family)| stages(index, family) && family.queue_flags.intersects(work)),
+    };
+    let staging = copy_engine
+        .or_else(beside)
         .map(|(index, _)| (index as u32, 0));
     // Where every family is equivalent, the primary is family 0, so either way the primary
     // family's first queue leads (internal submissions go there).
@@ -1195,16 +1230,19 @@ pub(crate) fn queue_plan_within(
 
 /// What the queue plan gives a device of `families` whose queue limits
 /// (`DeviceOptions::queue_limits`) gave it `plan` and `extra_places`, for `reserved` reserved and
-/// `extra` extra queues asked for: where the limits changed any of it, the plan's; `None` where
-/// they changed nothing.
+/// `extra` extra queues asked for, on a device whose textures' images may lie in memory the host
+/// caches or not (`cached`, as [`queue_plan`] takes it): where the limits changed any of it, the
+/// plan's; `None` where they changed nothing. The staging queue is the same in both before the
+/// extra queues are placed ([`queue_plan_within`]).
 pub(crate) fn planned_queues(
     families: &[vk::QueueFamilyProperties],
     reserved: u32,
     extra: &[vk::QueueFlags],
     plan: &QueuePlan,
     extra_places: &[Option<(u32, u32)>],
+    cached: bool,
 ) -> Option<PlannedQueues> {
-    let mut planned = queue_plan(families, reserved)?;
+    let mut planned = queue_plan(families, reserved, cached)?;
     let planned_extra = extra_queue_places(families, &mut planned, extra);
     let changed = planned != *plan || planned_extra != extra_places;
     changed.then_some(PlannedQueues {
@@ -1808,8 +1846,28 @@ pub(super) fn create_on(
             .raw
             .get_physical_device_queue_family_properties(physical)
     };
-    let mut plan = queue_plan_within(&families, options.reserved_queues, options.queue_limits)
-        .ok_or(Error::NoDevice)?;
+    // Whether a texture's image may lie in memory the host caches, which decides whether a queue
+    // of compute work stages its CPU copies where no copy engine does (`queue_plan`), within the
+    // queue limits or not (`QueueLimits`).
+    // SAFETY: as above.
+    let (memory, ty) = unsafe {
+        let raw = &instance.raw;
+        let ty = raw.get_physical_device_properties(physical).device_type;
+        (raw.get_physical_device_memory_properties(physical), ty)
+    };
+    let types =
+        &memory.memory_types[..(memory.memory_type_count as usize).min(vk::MAX_MEMORY_TYPES)];
+    let unified = DeviceKind::of(ty).has_unified_memory();
+    let cached =
+        crate::memory::host_cached_placement(types, u32::MAX, MemoryClass::Private, unified)
+            .is_some();
+    let mut plan = queue_plan_within(
+        &families,
+        options.reserved_queues,
+        options.queue_limits,
+        cached,
+    )
+    .ok_or(Error::NoDevice)?;
     let extra_places = extra_queue_places(&families, &mut plan, &options.extra_queues);
     let planned = options.queue_limits.and_then(|_| {
         planned_queues(
@@ -1818,6 +1876,7 @@ pub(super) fn create_on(
             &options.extra_queues,
             &plan,
             &extra_places,
+            cached,
         )
     });
     let reserved_places = plan.reserved.clone();

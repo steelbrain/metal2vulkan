@@ -8,8 +8,9 @@
 //! all the device's families. A device of one family keeps them exclusive. MoltenVK reads no
 //! sharing mode, so the concurrent form costs nothing there.
 //!
-//! Where the device reserved a staging queue (`device/staging.rs`, a copy engine), every buffer
-//! it makes is concurrent among its families and the staging queue's too: a new buffer's zeros or
+//! Where the device reserved a staging queue (`device/staging.rs`: a copy engine, or a queue of
+//! compute work beside the device's own), every buffer it makes is concurrent among its families
+//! and the staging queue's too: a new buffer's zeros or
 //! staged bytes made at its hand-out run there (`Buffer::settle_first_work`), behind no command of
 //! the program's, and no buffer changes owner. Its images keep the device's families (but those
 //! that copy on the staging queue, `Device::staging_sharing`).

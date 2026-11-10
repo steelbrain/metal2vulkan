@@ -1,19 +1,23 @@
-//! A `Shared` or `Managed` texture's CPU copies on the device's staging queue, a copy engine
-//! (`device/staging.rs`): where the device has one and the texture copies none on the host from
-//! memory the host caches (NVIDIA: an RTX 3090's host-transfer image lies in resizable BAR,
+//! A `Shared` or `Managed` texture's CPU copies on the device's staging queue
+//! (`device/staging.rs`: a copy engine, or a queue of compute work beside the device's own where
+//! no memory the host caches holds a texture's image): where the device has one and the texture
+//! copies none on the host from memory the host caches (NVIDIA: an RTX 3090's host-transfer image
+//! lies in resizable BAR; an RX 7900 XTX's in its device-local host-visible memory,
 //! `texture/host_copy.rs`), Metal's `replaceRegion` and `getBytes` of such a texture wait for no
-//! GPU work of the program's, as Metal's do.
+//! GPU work of the program's, as Metal's do, and the host reads the texels out of a staging
+//! buffer in memory it caches.
 //!
 //! - **Which images** ([`Device::stages`]). A new `Shared` or `Managed` texture's image in memory
 //!   of its own, of a color format (a queue of transfers alone copies no depth or stencil aspect,
-//!   so a depth texture keeps the host's or the submission's copies), made for
+//!   so a depth texture keeps the host's or the submission's copies, on every staging queue),
+//!   made for
 //!   copies both ways, of one sample (Vulkan copies nothing into a multisampled image; a clear
 //!   writes its zeros). It is made concurrent among the device's families and the staging queue's,
 //!   so its uses change no owner: measured on the RTX 3090, 50 clears and 50 copies of a 1080p
 //!   image cost the same either way (0.24 ms and 1.32 ms).
 //! - **Made.** Its move to `GENERAL` and its zeros, copied from the staging queue's own buffer
-//!   of zeros (a copy engine clears nothing; the device's own zeros are exclusive to its
-//!   families), are queued for the staging queue's next submission as it is shared
+//!   of zeros (a copy engine clears nothing, and the device's own zeros are exclusive to its
+//!   families, so every staging queue copies them), are queued for the staging queue's next submission as it is shared
 //!   ([`Image::queue_staging_moves`]), before any copy into it: the making waits for no
 //!   submission, and no batch finds its move waiting. Whatever reads it first, a batch, an
 //!   internal submission, a `get_bytes` or a hand-out, finds the zeros written first, as below;

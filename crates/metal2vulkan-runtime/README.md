@@ -236,9 +236,10 @@ the record the pass is making.
   give an object's handle. Handing out a texture's image, or a buffer's `VkBuffer` whose zeros or
   bytes still wait for the device's next submission (a new `Private` buffer's), first makes that
   work, the handle's own alone, by a submission it waits for, so the consumer's own work on the
-  handle comes after it: a buffer's on the device's copy engine where it reserved one for staging
-  copies, behind no other work, else on the device's first `VkQueue`, behind what was submitted
-  there before.
+  handle comes after it: a buffer's on the device's staging queue where it reserved one (a copy
+  engine; or, on a device where no memory the host caches holds a texture's image, such as an
+  RX 7900 XTX under RADV, a queue of compute work beside its own), behind no other work of the
+  program's, else on the device's first `VkQueue`, behind what was submitted there before.
   A texture over a buffer's bytes that aliases them gives a linear image (the same one for textures
   of one image over the same bytes of one import of host pages, which share it), which over a
   no-copy buffer's or dma-buf host pages may be of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`

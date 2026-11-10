@@ -216,8 +216,9 @@ impl Buffer {
     /// (a new `Private` buffer's zeros or bytes, a `Managed` buffer's upload, which the device's
     /// next submission would make before its commands), that work alone, by a submission waited
     /// for, as [`Texture::vk_image`](crate::Texture::vk_image) makes its texture's: so the
-    /// caller's work on the handle comes after it. Where the device reserved a copy engine for
-    /// its staging copies, the submission goes there and waits for no work of the program's;
+    /// caller's work on the handle comes after it. Where the device reserved a queue for its
+    /// staging copies (a copy engine, or a queue of compute work beside its own), the
+    /// submission goes there and waits for no work of the program's;
     /// elsewhere it goes to the device's first `VkQueue`, behind what was submitted there before.
     /// Nothing is submitted where no such work waits. Where that submission fails (the device
     /// lost, or out of memory), the work waits for the next. Once its device's recovery carried
@@ -424,8 +425,8 @@ impl Event {
     /// on their queues included, and a reservation never signalled stalls them for good. So
     /// does a texture's `get_bytes` or `replace_region` behind such a wait on a device that
     /// copies textures through a submission of its own on its first `VkQueue` (one with no
-    /// `VK_EXT_host_image_copy` and no queue family of transfers alone, such as RADV on an
-    /// RX 550): a thread submits the signal before it makes such a call. Those
+    /// `VK_EXT_host_image_copy` and no staging queue, a depth texture's on one with no host
+    /// copies): a thread submits the signal before it makes such a call. Those
     /// command buffers may be submitted before the signal is, so the caller's submission depends
     /// on none of them: it waits for no such command buffer's completion, and goes to a queue no
     /// command queue submits to (an extra or reserved queue,
@@ -518,7 +519,7 @@ impl SharedEvent {
     /// on its `VkQueue` before its own signal. So does a texture's `get_bytes` or
     /// `replace_region` behind such a command buffer on a device that copies textures through a
     /// submission of its own on its first `VkQueue` (one with no `VK_EXT_host_image_copy` and no
-    /// queue family of transfers alone, such as RADV on an RX 550): a thread submits the signal
+    /// staging queue, a depth texture's on one with no host copies): a thread submits the signal
     /// before it makes such a call. Those command buffers may be submitted before the signal is,
     /// so the caller's submission depends on none of them: it waits for no such command buffer's
     /// completion, and goes to a queue no command queue submits to (an extra or reserved queue,

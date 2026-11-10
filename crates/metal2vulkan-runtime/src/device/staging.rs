@@ -1,24 +1,34 @@
-//! The device's staging queue: the first queue of a family of transfers alone, a copy engine
-//! (`create::queue_plan`), where a `Shared` or `Managed` texture's CPU copies run on a device that
-//! copies none on the host from memory the host caches (`texture/host_copy.rs`). An image that
-//! copies here is concurrent among the device's families and this one ([`Device::staging_sharing`]),
-//! so no image changes owner; every other resource keeps the device's sharing (`sharing.rs`).
+//! The device's staging queue (`create::queue_plan`): the first queue of a family of transfers
+//! alone, a copy engine; else, on a device where no memory the host caches holds a texture's image
+//! (`memory::host_cached_placement`), the first queue of a family of graphics or compute work none
+//! of the device's own queues are of (an RX 7900 XTX's compute family). There a `Shared` or
+//! `Managed` texture's CPU copies run on a device that copies none on the host from memory the
+//! host caches (`texture/host_copy.rs`). An image that copies here is concurrent among the
+//! device's families and this one ([`Device::staging_sharing`]), so no image changes owner; every
+//! other resource keeps the device's sharing (`sharing.rs`).
 //!
-//! - **Why a copy engine.** A copy on the device's first `VkQueue` waits behind every command
+//! - **Why not the host, where its memory is uncached.** The host reads uncached memory slowly
+//!   (`memory::host_cached`): on the XTX, which has no device-local type the host caches, a
+//!   1920 x 1080 `get_bytes` copied on the host from its device-local host-visible memory took
+//!   1.0 to 1.7 s (`tests::cpu_copy_times` times it on each device, and the copy here).
+//! - **Why a queue of its own.** A copy on the device's first `VkQueue` waits behind every command
 //!   buffer submitted there before it: behind a 2 s kernel, a 1080p `get_bytes` returned after
 //!   1.99 s on an RTX 3090. It never waits for a wait no submitted signal meets: the scheduler
 //!   holds a command buffer whose event wait only a later commit's signal meets on the host,
-//!   unsubmitted (`scheduler/mod.rs`), so a copy beside it returns. On an RX 550 (RADV, Mesa
-//!   26.2.6), which has no copy engine and copies every texture through the first `VkQueue`, a
-//!   read, 4097 one-texel writes and a read beside such a command buffer took 0.15 s, for an
-//!   event and for a shared event (`tests::copies_beside_a_held_wait`). A plain event's wait for a
+//!   unsubmitted (`scheduler/mod.rs`), so a copy beside it returns. Through an RX 550's first
+//!   `VkQueue` (RADV, Mesa 26.2.6, which has no host copies), a read, 4097 one-texel writes and a
+//!   read beside such a command buffer took 0.15 s, for an event and for a shared event
+//!   (`tests::copies_beside_a_held_wait`). A plain event's wait for a
 //!   signal the caller reserved (`Event::reserve_vk_signal`) goes to its `VkQueue` before that
 //!   signal is submitted, and there the same copies waited until it was. Metal's `getBytes` and
 //!   `replaceRegion` of shared storage are CPU copies that wait for no GPU work. Another queue of
 //!   the graphics family is not enough: on the 3090 (615.71.09) a readback there waited 1.88 s for
 //!   a 2 s kernel running on the first, where the copy engine's took 7.8 to 13.5 ms with the
 //!   kernel still running, and 2.65 ms idle (raw Vulkan). Here nothing but these
-//!   copies runs, so a copy waits for itself and the staging work submitted before it alone.
+//!   copies runs, so a copy waits for itself and the staging work submitted before it alone. A
+//!   queue of compute work shares the GPU's compute units with the program's work, so a copy
+//!   there may still wait behind a kernel that fills them (up to 1.05 s on a Radeon 780M):
+//!   which is why it stages only where the host's copies would read uncached memory.
 //! - **What it waits for.** Each submission waits, on the GPU, for the value through which each
 //!   of the device's other `VkQueue`s completed as the host saw it: work that already completed,
 //!   so the wait costs nothing, and the writes of every command buffer the program saw complete
@@ -65,7 +75,8 @@ pub(crate) const BUFFERS: usize = 8;
 
 /// The staging queue and its objects.
 pub(super) struct StagingQueue {
-    /// The queue's family: one of transfers alone.
+    /// The queue's family: one of transfers alone, or of graphics or compute work none of the
+    /// device's own queues are of (the module docs).
     family: u32,
     /// The family's queue flags, which the barriers recorded for it follow (`image_barrier.rs`).
     flags: vk::QueueFlags,
@@ -186,8 +197,9 @@ impl StagingLock<'_> {
     /// Record `record` into a free command buffer of the staging queue and submit it there,
     /// waiting on the GPU for what the device's other `VkQueue`s completed as the host saw (the
     /// module docs); the value it signals, not waited for ([`Device::wait_staging`]). `record`
-    /// runs outside a render pass, for a family of transfers alone, whose queue flags it is
-    /// given: it records copies, fills and barriers, of color aspects alone.
+    /// runs outside a render pass, for the staging queue's family (of transfers alone, or of
+    /// graphics or compute work), whose queue flags it is given: it records copies, fills and
+    /// barriers, of color aspects alone.
     pub(crate) fn submit(
         &mut self,
         record: impl FnOnce(&ash::Device, vk::CommandBuffer, vk::QueueFlags),
@@ -362,7 +374,8 @@ impl Device {
 
 impl Device {
     /// Whether the device reserved a staging queue (the module docs): a device it created with a
-    /// family of transfers alone whose copies take any texel.
+    /// family of transfers alone whose copies take any texel, or, where no memory the host caches
+    /// holds a texture's image, with such a family of graphics or compute work beside its own.
     pub(crate) fn has_staging_queue(&self) -> bool {
         self.shared().staging.is_some()
     }

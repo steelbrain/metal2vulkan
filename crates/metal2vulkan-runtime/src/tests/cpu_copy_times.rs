@@ -13,13 +13,22 @@
 //! Each read is checked texel for texel against what the GPU or the host wrote. Times are a
 //! release build's where the run is one.
 //!
+//! Asserted: a device where no memory the host caches may hold a texture's image
+//! (`memory::host_cached_placement`: a discrete GPU with no device-local type the host caches)
+//! and that lists a queue family to stage on beside its own ([`has_a_family_to_stage_on`]: an RX
+//! 7900 XTX's compute family) copies its textures on the staging queue, never on the host
+//! through its mapping of uncached memory (`device/staging.rs`, `device/create.rs`'s
+//! `queue_plan`).
+//!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
 
+use crate::memory::MemoryClass;
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind,
     DeviceOptions, Origin, Region, ResourceOptions, Size, Texture, TextureDescriptor,
 };
+use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
 
@@ -56,6 +65,54 @@ fn device() -> Device {
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()
+}
+
+/// Whether `device` lists a queue family its textures' CPU copies may stage on beside its own, as
+/// Vulkan itself reports the physical device (so a device that took no staging queue is caught):
+/// one whose copies take any texel, of transfers alone (sparse binding and protected memory
+/// aside: a copy engine), or of graphics or compute work, other than the first family that does
+/// both, on a device whose families are not all equivalent to that one (MoltenVK's are, and a
+/// device takes queues of all of them).
+fn has_a_family_to_stage_on(device: &Device) -> bool {
+    // SAFETY: the handles are used only here, while the device lives, to query the physical
+    // device.
+    let raw = unsafe { device.raw() };
+    // SAFETY: a physical device of the instance.
+    let families = unsafe {
+        raw.instance
+            .get_physical_device_queue_family_properties(raw.physical_device)
+    };
+    let unit = vk::Extent3D {
+        width: 1,
+        height: 1,
+        depth: 1,
+    };
+    let work = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
+    let Some(first) = (families.iter())
+        .position(|family| family.queue_count > 0 && family.queue_flags.contains(work))
+    else {
+        return false;
+    };
+    let primary = families[first];
+    let equivalent = |family: &vk::QueueFamilyProperties| {
+        family.queue_flags == primary.queue_flags
+            && family.queue_count == primary.queue_count
+            && family.timestamp_valid_bits == primary.timestamp_valid_bits
+            && family.min_image_transfer_granularity == primary.min_image_transfer_granularity
+    };
+    if families.iter().all(equivalent) {
+        return false;
+    }
+    let besides =
+        vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING | vk::QueueFlags::PROTECTED;
+    (families.iter().enumerate()).any(|(index, family)| {
+        let flags = family.queue_flags;
+        let copy_engine = flags.contains(vk::QueueFlags::TRANSFER) && (flags & !besides).is_empty();
+        index != first
+            && family.queue_count > 0
+            && family.min_image_transfer_granularity == unit
+            && (copy_engine || flags.intersects(work))
+    })
 }
 
 /// `len` bytes of a pattern of `salt`.
@@ -193,6 +250,9 @@ fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
     let device = device();
     let name = device.name().to_owned();
     let queue = device.new_command_queue().unwrap();
+    let cached = crate::device::lock(&device.shared().memory).has_host_cached(MemoryClass::Private);
+    let stages = !cached && has_a_family_to_stage_on(&device);
+    let mut paths = Vec::new();
     for (width, height, calls) in SIZES {
         let row = 4 * width;
         let len = (row * height) as usize;
@@ -212,6 +272,7 @@ fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
             (false, true) => "copied on the staging queue",
             (false, false) => "copied through submissions",
         };
+        paths.push((width, height, path));
         let region = Region::new_2d(0, 0, width, height);
         // The GPU writes it, and `get_bytes` reads that.
         let drawn = pattern(len, 11);
@@ -300,5 +361,14 @@ fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
              of {calls}); replace_region best {write_best:.2} ms, median {write_median:.2} ms of \
              {calls}{under_load}"
         );
+    }
+    if stages {
+        for (width, height, path) in paths {
+            assert_eq!(
+                path, "copied on the staging queue",
+                "{name} {width}x{height}: a device with no memory the host caches for a texture's \
+                 image and a queue family to stage on copies its textures on the staging queue"
+            );
+        }
     }
 }

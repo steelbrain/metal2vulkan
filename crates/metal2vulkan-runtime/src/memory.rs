@@ -694,8 +694,11 @@ pub(super) fn host_incoherent(types: &[vk::MemoryType]) -> u32 {
 /// into, clears and copies a 1080p image there as fast as in its device-local memory or faster).
 /// `None` where it has none: the image takes `class` and every allowed type,
 /// as any image of the class does. A discrete GPU with no host-cached memory of the class (NVIDIA
-/// on an RTX 3090) so still copies on the host, slowly: a copy through a submission would queue
-/// behind the program's work, and its GPU reaches system memory across the bus.
+/// on an RTX 3090, RADV on an RX 7900 XTX) so copies a texture on its staging queue where it has
+/// one (`device/staging.rs`: its copy engine, or, as no memory the host caches holds a texture's
+/// image there, a queue of compute work beside its own), and else on the host, slowly: a copy
+/// through a submission would queue behind the program's work, and its GPU reaches system memory
+/// across the bus.
 pub(super) fn host_cached_placement(
     types: &[vk::MemoryType],
     allowed: u32,

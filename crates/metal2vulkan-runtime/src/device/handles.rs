@@ -33,8 +33,9 @@ pub struct DeviceHandles<'a> {
     /// timestamp bits and transfer granularity, as MoltenVK's) takes queues of all of them, so
     /// its queues run side by side; its buffers and images are then concurrent among all these
     /// families, and a buffer or image the caller wraps must be too. Where it also reserved a
-    /// queue of a family of transfers alone for its staging copies (a copy engine), its own
-    /// buffers are concurrent among these families and that one. An adopted device has its one
+    /// queue of another family for its staging copies (a family of transfers alone, a copy
+    /// engine; or, where no memory the host caches holds a texture's image, one of compute work,
+    /// as on an RX 7900 XTX), its own buffers are concurrent among these families and that one. An adopted device has its one
     /// family. [`CommandQueue::with_vk_queue`](super::super::CommandQueue::with_vk_queue)
     /// names the family of each queue's own `VkQueue`.
     pub queue_families: &'a [u32],
@@ -80,8 +81,8 @@ pub struct ReservedQueue {
 /// only submitter, and synchronizes its submissions to it externally, as Vulkan requires. It
 /// lives as long as the device. Where its family is not one of
 /// [`DeviceHandles::queue_families`], the device's own images are not shared with it, nor its
-/// buffers unless its family is that of the copy engine the device reserved for its staging
-/// copies: a submission to it uses only the caller's objects made to be shared with its family.
+/// buffers unless its family is that of the queue the device reserved for its staging copies:
+/// a submission to it uses only the caller's objects made to be shared with its family.
 #[non_exhaustive]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ExtraQueue {

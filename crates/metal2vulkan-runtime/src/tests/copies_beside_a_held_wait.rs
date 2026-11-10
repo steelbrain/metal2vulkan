@@ -4,10 +4,10 @@
 //! the waiting command buffer runs once the signal does.
 //!
 //! The case that matters is a device that copies a texture through a submission of its own on
-//! its first `VkQueue` (`device/submit.rs`): one with no `VK_EXT_host_image_copy` and no family
-//! of transfers alone for a staging queue (RADV on the RX 550, whose one graphics queue every
-//! command queue shares). Such a submission would wait forever behind a batch on that `VkQueue`
-//! that waits for the later signal. None is there: the scheduler holds a batch whose event wait no
+//! its first `VkQueue` (`device/submit.rs`): one with no `VK_EXT_host_image_copy` and no staging
+//! queue (`device/staging.rs`), whose one `VkQueue` every command queue may share. Such a
+//! submission would wait forever behind a batch on that `VkQueue` that waits for the later
+//! signal. None is there: the scheduler holds a batch whose event wait no
 //! submitted signal and no host set reaches, unsubmitted, so no `VkQueue` holds a wait for a
 //! signal not yet submitted (`scheduler/mod.rs`, `event_timeline.rs`). Each case prints the
 //! waiting command buffer's status while the copies ran (`Committed`: held on the host) and the

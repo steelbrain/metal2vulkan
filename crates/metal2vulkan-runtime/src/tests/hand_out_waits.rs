@@ -12,7 +12,7 @@
 //! take about [`BUSY`] of the device's GPU time, timed alone first. Each hand-out is timed and
 //! the busy command buffer's status read as it returns. Where the device's queues run side by
 //! side for that work, each hand-out returns while the busy work still runs: a buffer's on a
-//! device that reserved a copy engine for staging copies (its fills go there), every one where
+//! device that reserved a staging queue (its fills go there, `device/staging.rs`), every one where
 //! the busy `VkQueue`'s family is another than the first's (MoltenVK's families are Metal
 //! command queues of their own). Elsewhere (one `VkQueue`, or the graphics family's queues of a
 //! GPU that runs them one after another) the times are printed (`HAND-OUT-WAITS`), and the

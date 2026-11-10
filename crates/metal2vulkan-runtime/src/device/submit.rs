@@ -194,8 +194,8 @@ impl Device {
     /// ([`FirstMoves::take_mine`]), the rest left for the device's next submission. Its sources
     /// are the host's (the device's zeros, staging buffers, a `Managed` buffer's host copy) and
     /// its destinations new, so it waits for no other work of the device's: fills alone, on a
-    /// device that reserved a staging queue, run there, a copy engine, behind nothing but its
-    /// earlier copies (`staging.rs`); the rest alone on the device's first `VkQueue`, behind what
+    /// device that reserved a staging queue, run there (a copy engine, or a queue of compute work
+    /// beside the device's own), behind nothing but its earlier copies (`staging.rs`); the rest alone on the device's first `VkQueue`, behind what
     /// was submitted there before, and, where `after_other_queues` (an image in a buffer's memory
     /// whose fill a batch took), on the GPU after the batches on the other `VkQueue`s that did
     /// first work. The device's submissions take their place in the order once it was made, as

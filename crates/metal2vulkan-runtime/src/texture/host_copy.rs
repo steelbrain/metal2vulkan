@@ -34,12 +34,15 @@
 //!   device with unified memory, `Shared` memory the host caches (a Radeon 780M's
 //!   system memory, where its GPU uses the image as fast as in device-local memory or faster, and a
 //!   1080p `get_bytes` takes 2.6 ms where it took 108 ms from RADV's uncached device-local type);
-//!   else the class's memory as before, counted (`WorkCounts::uncached_host_images`): the copies
-//!   stay on the host there too, slowly, since a copy through a submission on the device's first
-//!   queue waits behind the program's work submitted there (`device/staging.rs` has what it waits
-//!   for, and what it never waits for). Where the device reserved a staging
-//!   queue on a copy engine (`device/staging.rs`; NVIDIA), a color texture copies on the host only
-//!   from host-cached memory, and else on that queue (`texture/staging_copy.rs`).
+//!   else the class's memory as before, counted (`WorkCounts::uncached_host_images`). Where the
+//!   device reserved a staging queue (`device/staging.rs`: a copy engine, NVIDIA's; or, on a
+//!   device where no memory the host caches holds a texture's image, a queue of compute work
+//!   beside its own, an RX 7900 XTX's), a color texture copies on the host only from host-cached
+//!   memory, and else on that queue (`texture/staging_copy.rs`). Elsewhere (no such queue to
+//!   stage on, or a depth texture) the copies stay on the host from uncached memory too, slowly,
+//!   since a copy through a submission on the device's first queue waits behind the program's
+//!   work submitted there (`device/staging.rs` has what it waits for, and what it never waits
+//!   for).
 //! - **Made.** The making moves the image to `GENERAL` and writes zeros over every texel on the
 //!   host ([`start`]), as Metal's new `Shared` and `Managed` textures read zero: no first move
 //!   waits for a submission (`first_move.rs`). Where the device enabled

@@ -286,8 +286,8 @@ fn two_plane_cpu_copies_wait_for_no_submission_where_a_textures_do() {
 /// (`RuntimeDriverDefect::HostTransferImagesCopiedAtBind`, MoltenVK): the first read makes a host
 /// shadow of the image's texels and every read after it comes out of that
 /// (`texture/host_shadow.rs`, whose own tests hold the shadow's rules). On a device that copies
-/// no image on the host and has no staging queue (no `VK_EXT_host_image_copy` and no family of
-/// transfers alone: RADV on the RX 550), each read waits for a submission of its own, as every
+/// no image on the host and has no staging queue (no `VK_EXT_host_image_copy`, and no family to
+/// stage on, `device/staging.rs`), each read waits for a submission of its own, as every
 /// texture's does there, and no shadow is made: the shadow serves a format the defect alone kept
 /// off a host path the device has.
 ///
@@ -456,8 +456,8 @@ fn bc1_get(texture: &Texture, level: u64) -> Vec<u8> {
 ///
 /// On a device that copies such an image's blocks on the host there is no shadow to make, and the
 /// test says so: it holds the reads to that path instead. On one that copies no image on the host
-/// and has no staging queue (RADV on the RX 550) there is none either, and each read waits for a
-/// submission of its own, as every texture's does there.
+/// and has no staging queue there is none either, and each read waits for a submission of its
+/// own, as every texture's does there.
 #[test]
 fn block_cpu_reads_come_out_of_the_textures_host_shadow() {
     let scratch = Scratch::new("block-host-shadow");

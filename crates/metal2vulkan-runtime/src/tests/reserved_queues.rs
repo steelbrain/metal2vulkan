@@ -136,7 +136,7 @@ fn a_reserved_queue_is_a_runtime_family_s_and_no_command_queue_takes_it() {
         unreserved_count,
         presenting_taken.len(),
     );
-    let plan = queue_plan(&families, 1).unwrap();
+    let plan = queue_plan(&families, 1, true).unwrap();
     assert_eq!(
         (reserved.len(), taken.len()),
         (plan.reserved.len(), plan.queues.len()),
@@ -199,7 +199,7 @@ fn a_device_with_no_queue_to_spare_reports_the_reserved_queue_absent() {
     let scratch = Scratch::new("reserved-queue-absent");
     let probe_messages = Arc::new(Mutex::new(Vec::new()));
     let probe = device(&scratch.0, 0, &probe_messages);
-    let spare = queue_plan(&families(&probe), u32::MAX)
+    let spare = queue_plan(&families(&probe), u32::MAX, true)
         .unwrap()
         .reserved
         .len();

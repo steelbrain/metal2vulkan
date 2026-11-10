@@ -1679,11 +1679,11 @@ fn frame_sized_textures_copy_texel_exact() {
             let hosted = made.images_started_on_the_host > before.images_started_on_the_host;
             let staged = made.staging_moves_queued > before.staging_moves_queued;
             let cached = takes_host_cached_memory(device);
-            if has_a_copy_engine(device) && !cached {
+            if has_a_family_to_stage_on(device) && !cached {
                 assert!(
                     staged,
-                    "{mode:?} on {name}: a device with a copy engine and no memory the host caches \
-                     for a texture copies on its staging queue"
+                    "{mode:?} on {name}: a device with a queue family to stage on and no memory \
+                     the host caches for a texture copies on its staging queue"
                 );
             }
             let uncached = made.uncached_host_images > before.uncached_host_images;
@@ -1866,10 +1866,14 @@ fn frame_sized_textures_copy_texel_exact() {
     });
 }
 
-/// Whether `device` lists a copy engine the runtime stages on, as Vulkan itself reports the
-/// physical device, so a runtime that took no staging queue is caught: a family of transfers
-/// alone (sparse binding and protected memory aside) whose copies take any texel.
-fn has_a_copy_engine(device: &Device) -> bool {
+/// Whether `device` lists a queue family the runtime stages a texture's CPU copies on where no
+/// memory the host caches holds a texture's image, as Vulkan itself reports the physical device,
+/// so a runtime that took no staging queue is caught: one whose copies take any texel, of
+/// transfers alone (sparse binding and protected memory aside: a copy engine), or of graphics or
+/// compute work (an RX 7900 XTX's compute family), other than the first family that does both, on
+/// a device whose families are not all equivalent to that one (MoltenVK's are, and a device takes
+/// queues of all of them).
+fn has_a_family_to_stage_on(device: &Device) -> bool {
     use ash::vk;
     // SAFETY: the handles are used only here, while the device lives, to query the physical
     // device.
@@ -1884,13 +1888,31 @@ fn has_a_copy_engine(device: &Device) -> bool {
         height: 1,
         depth: 1,
     };
+    let work = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
+    let Some(first) = (families.iter())
+        .position(|family| family.queue_count > 0 && family.queue_flags.contains(work))
+    else {
+        return false;
+    };
+    let primary = families[first];
+    let equivalent = |family: &vk::QueueFamilyProperties| {
+        family.queue_flags == primary.queue_flags
+            && family.queue_count == primary.queue_count
+            && family.timestamp_valid_bits == primary.timestamp_valid_bits
+            && family.min_image_transfer_granularity == primary.min_image_transfer_granularity
+    };
+    if families.iter().all(equivalent) {
+        return false;
+    }
     let besides =
         vk::QueueFlags::TRANSFER | vk::QueueFlags::SPARSE_BINDING | vk::QueueFlags::PROTECTED;
-    families.iter().any(|family| {
-        family.queue_count > 0
-            && family.queue_flags.contains(vk::QueueFlags::TRANSFER)
-            && (family.queue_flags & !besides).is_empty()
+    (families.iter().enumerate()).any(|(index, family)| {
+        let flags = family.queue_flags;
+        let copy_engine = flags.contains(vk::QueueFlags::TRANSFER) && (flags & !besides).is_empty();
+        index != first
+            && family.queue_count > 0
             && family.min_image_transfer_granularity == unit
+            && (copy_engine || flags.intersects(work))
     })
 }
 
@@ -1901,7 +1923,7 @@ fn has_a_copy_engine(device: &Device) -> bool {
 /// device measured.
 fn takes_host_cached_memory(device: &Device) -> bool {
     use ash::vk;
-    // SAFETY: as in `has_a_copy_engine`.
+    // SAFETY: as in `has_a_family_to_stage_on`.
     let raw = unsafe { device.raw() };
     // SAFETY: a physical device of the instance.
     let memory = unsafe {

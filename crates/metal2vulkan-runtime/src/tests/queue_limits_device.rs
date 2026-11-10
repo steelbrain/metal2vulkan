@@ -7,16 +7,20 @@
 //!
 //! On a device whose families have no queue to spare (RADV's and lavapipe's one graphics queue)
 //! the limits change nothing and none is expected; on one with queues to spare (NVIDIA's graphics
-//! family of 16) every case sends. Each test prints a `QUEUE-LIMITS:` line with the plan, the
-//! limits' queues and the messages counted by case, the evidence of the path that ran.
+//! family of 16) every case sends. Under the limits the device keeps the plan's staging queue
+//! (`QueueLimits`): an RX 7900 XTX's compute family's first, a copy engine elsewhere. Each test
+//! prints a `QUEUE-LIMITS:` line with the plan, the limits' queues, the staging queue and the
+//! messages counted by case, the evidence of the path that ran.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects.
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::device::create::{
-    extra_queue_places, planned_queues, queue_plan_within, shares_past_limit, QUEUE_LIMITS_REACHED,
+    extra_queue_places, planned_queues, queue_plan, queue_plan_within, shares_past_limit,
+    QUEUE_LIMITS_REACHED,
 };
+use crate::memory::MemoryClass;
 use crate::{
     CommandQueue, Device, DeviceKind, DeviceOptions, MessageSink, QueueLimits, ShaderCacheOptions,
 };
@@ -106,15 +110,26 @@ impl Cases {
     }
 }
 
-/// What a device of `families` under `limits` makes and does in [`run`] sends: none without
-/// limits, else each case where the plan of those families says the limits changed it.
-fn expected(families: &[vk::QueueFamilyProperties], limits: Option<QueueLimits>) -> Cases {
+/// Whether a texture's image on `device` may lie in memory the host caches, as its queue plan
+/// takes it (`queue_plan`).
+fn cached(device: &Device) -> bool {
+    crate::device::lock(&device.shared().memory).has_host_cached(MemoryClass::Private)
+}
+
+/// What a device of `families` (`cached` as [`cached`] gives) under `limits` makes and does in
+/// [`run`] sends: none without limits, else each case where the plan of those families says the
+/// limits changed it.
+fn expected(
+    families: &[vk::QueueFamilyProperties],
+    cached: bool,
+    limits: Option<QueueLimits>,
+) -> Cases {
     let Some(limits) = limits else {
         return Cases::default();
     };
-    let mut within = queue_plan_within(families, 1, Some(limits)).unwrap();
+    let mut within = queue_plan_within(families, 1, Some(limits), cached).unwrap();
     let places = extra_queue_places(families, &mut within, &EXTRA);
-    let Some(planned) = planned_queues(families, 1, &EXTRA, &within, &places) else {
+    let Some(planned) = planned_queues(families, 1, &EXTRA, &within, &places, cached) else {
         return Cases::default();
     };
     let (round_robin, present) = (within.queues.len(), within.present.len());
@@ -152,25 +167,36 @@ fn run(device: &Device) -> Vec<CommandQueue> {
 }
 
 /// Under the lane's limits, the device sends the message exactly where its own families' plan
-/// says the limits changed a placement: each case as many times as expected.
+/// says the limits changed a placement: each case as many times as expected, none for the staging
+/// queue, which it keeps where the plan reserves one.
 #[test]
 fn each_placement_the_limits_change_is_noted_and_no_other() {
     let scratch = Scratch::new("queue-limits");
     let noted = Arc::new(Mutex::new(Vec::new()));
     let device = device(&scratch.0, Some(LEAN), &noted);
     let families = families(&device);
-    let expected = expected(&families, Some(LEAN));
+    let cached = cached(&device);
+    let expected = expected(&families, cached, Some(LEAN));
+    let mut plan = queue_plan(&families, 1, cached).unwrap();
+    extra_queue_places(&families, &mut plan, &EXTRA);
     let _queues = run(&device);
     let texts = noted.lock().unwrap().clone();
     let got = Cases::of(&texts);
     eprintln!(
-        "QUEUE-LIMITS: {}: families {:?}; expected {expected:?}, got {got:?}; {} message(s): \
-         {texts:#?}",
+        "QUEUE-LIMITS: {}: families {:?}; host-cached texture memory {cached}, staging queue {:?} \
+         (the plan's {:?}); expected {expected:?}, got {got:?}; {} message(s): {texts:#?}",
         device.name(),
         (families.iter())
             .map(|f| (f.queue_flags.as_raw(), f.queue_count))
             .collect::<Vec<_>>(),
+        device.has_staging_queue(),
+        plan.staging,
         texts.len()
+    );
+    assert_eq!(
+        device.has_staging_queue(),
+        plan.staging.is_some(),
+        "the limits keep the plan's staging queue"
     );
     assert_eq!(got, expected);
     assert_eq!(
