@@ -40,7 +40,7 @@ Its limits, measured rather than asserted:
 | share of the reachable exercised | 83% |
 | of those exercised, no case reaching it loosens anything | 572 |
 | of those exercised, a case reaching it loosens some site | 242 |
-| case modules | 164 |
+| case modules | 165 |
 | committed recordings | 1276 |
 | distinct SDK items the Metal leg reaches, of any status | 821 |
 | of those, reached only where this cannot name the family | 3 |
@@ -526,7 +526,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 
 | | |
 |---|---|
-| case modules | 164 |
+| case modules | 165 |
 | committed recordings | 1276 |
 | recorded runs behind a case, median | 3 |
 | recorded runs, least and most | 1 and 30 |
@@ -537,7 +537,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 12 |
 | tolerances in all | 12 |
-| modules declaring a notice (loosening no value) | 129 |
+| modules declaring a notice (loosening no value) | 130 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
@@ -712,6 +712,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `two_plane_heap_blits` | 1 | 1 | every field | 51 |
 | `two_plane_samples` | 16 | 16 | every field | 50 |
 | `vertex_attribute_strides` | 2 | 2 | every field | 111 |
+| `vertex_fetch_reach` | 0 | 0 | every field | 0 |
 | `vertex_formats` | 4 | 4 | every field | 109 |
 | `visibility` | 14 | 14 | 1 tolerance(s): `Degradation` | 136 |
 | `visible_tables` | 18 | 18 | every field | 55 |
