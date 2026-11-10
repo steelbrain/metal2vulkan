@@ -265,31 +265,43 @@ fn a_pool_of_small_blocks_keeps_a_block_s_bytes_ahead_and_no_creation_call_makes
             - (start.image_blocks_made_ahead + start.image_blocks_made_in_place)
     };
     let mut held: Vec<Texture> = Vec::new();
-    let (mut counts, mut most_ahead) = (start, 0);
+    let mut counts = start;
+    // The most each pool of images kept ahead, by its memory type: the textures' pool, and the
+    // pool host copies place in where the device copies color textures on the host and its type
+    // differs (an Iris Xe's host-cached type), which keeps its own.
+    let mut most_ahead = std::collections::BTreeMap::<u32, u64>::new();
     // One texture at a time, every making it started ended before the next: what this holds is
     // where each block is made and what is kept ahead, not how soon a making ends.
     while blocks(&counts) < GROWTH {
         texture(&device, (TEXTURE_SIDE, TEXTURE_SIDE), &mut held);
         counts = device.work_counts();
         let ahead = crate::device::lock(&device.shared().memory).ahead_bytes(Holds::Images);
-        most_ahead = most_ahead.max(ahead);
+        for (type_index, bytes) in ahead {
+            let most = most_ahead.entry(type_index).or_default();
+            *most = (*most).max(bytes);
+        }
     }
+    let host_copies = crate::device::lock(&device.shared().memory).host_copies_pool();
     let in_place = counts.image_blocks_made_in_place - start.image_blocks_made_in_place;
     let ahead = counts.image_blocks_made_ahead - start.image_blocks_made_ahead;
     println!(
         "BLOCKS-AHEAD {}: {} textures of 4 MiB in blocks of {} MiB; of the images' pool's {} \
-         blocks, {ahead} made ahead, {in_place} in place, {} waited for; most kept ahead {} MiB",
+         blocks, {ahead} made ahead, {in_place} in place, {} waited for; most kept ahead by \
+         memory type {:?} MiB; host copies' pool {host_copies:?}",
         device.name(),
         held.len(),
         MIN_PLAIN_BLOCK_BYTES >> 20,
         blocks(&counts),
         counts.blocks_ahead_waited_for - start.blocks_ahead_waited_for,
-        most_ahead >> 20,
+        (most_ahead.iter())
+            .map(|(&type_index, &bytes)| (type_index, bytes >> 20))
+            .collect::<Vec<_>>(),
     );
     assert_eq!(in_place, 0, "a creation call made a block of images itself");
-    assert_eq!(
-        most_ahead, BLOCK_BYTES,
-        "the pool kept {most_ahead} bytes ahead, not a block's worth"
+    assert!(
+        !most_ahead.is_empty() && most_ahead.values().all(|&most| most == BLOCK_BYTES),
+        "a pool of images kept other than a block's worth ahead: {most_ahead:?} bytes by memory \
+         type"
     );
 }
 

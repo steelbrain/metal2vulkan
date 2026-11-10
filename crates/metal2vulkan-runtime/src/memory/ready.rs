@@ -253,7 +253,7 @@ impl Drop for Waiter {
 }
 
 /// What a readying's thread makes its blocks with.
-pub(super) struct Making {
+pub(super) struct MadeWith {
     pub(super) maker: BlockMaker,
     pub(super) functions: Arc<Functions>,
     pub(super) quiet: Arc<QueueQuiet>,
@@ -267,7 +267,7 @@ impl Readying {
     /// block of bytes within `need`, whose wait it gives back. `None` where the host cannot start
     /// a thread.
     pub(super) fn start(
-        making: Making,
+        making: MadeWith,
         pool: (Holds, u32),
         sizes: VecDeque<u64>,
         need: Option<Need>,
@@ -303,7 +303,7 @@ impl Readying {
     /// Make blocks of `sizes` bytes too: after those its thread has still to make (before them
     /// where `first`), or, its thread ended, on a new one, which waits for a burst's end unless a
     /// call waits for a block. Whether they will be made.
-    pub(super) fn queue(&mut self, making: Making, sizes: &[u64], first: bool) -> bool {
+    pub(super) fn queue(&mut self, making: MadeWith, sizes: &[u64], first: bool) -> bool {
         self.started = Instant::now();
         {
             let mut state = lock(&self.shared.state);
@@ -441,14 +441,14 @@ impl Readying {
 /// make one after another, those queued meanwhile among them, each made available as it is made,
 /// until none is left, [`STOP`], or a block fails to be made.
 fn spawn(
-    making: Making,
+    making: MadeWith,
     shared: &Arc<Shared>,
     pool: (Holds, u32),
 ) -> std::io::Result<JoinHandle<()>> {
     let builder = std::thread::Builder::new().name("metal2vulkan-ready".into());
     let shared = Arc::clone(shared);
     exit_guard::spawn(builder, move || {
-        let Making {
+        let MadeWith {
             maker,
             functions,
             quiet,

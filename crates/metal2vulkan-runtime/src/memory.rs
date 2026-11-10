@@ -2681,9 +2681,9 @@ impl Memory {
     }
 
     /// What a making ahead for `pool` is made through, once [`keep_room`] gave it.
-    fn making(&self, pool: (Holds, u32)) -> Option<ready::Making> {
+    fn making(&self, pool: (Holds, u32)) -> Option<ready::MadeWith> {
         let with = self.ahead_with.as_ref()?;
-        Some(ready::Making {
+        Some(ready::MadeWith {
             maker: self.maker(),
             functions: Arc::clone(&with.functions),
             quiet: Arc::clone(&with.quiet),
@@ -2975,14 +2975,24 @@ impl Memory {
             .collect()
     }
 
-    /// The bytes of the blocks made ahead for the pools of `holds` and not yet added, and of those
-    /// still to make (`memory/ready.rs`), for the crate's device tests.
+    /// For each pool of `holds` that keeps blocks made ahead, its memory type's index and the bytes
+    /// of its blocks made ahead and not yet added, and of those still to make
+    /// (`memory/ready.rs`), for the crate's device tests. Each pool keeps its own: the pool host
+    /// copies place in ([`Memory::host_copy_pool`]) is one of images beside theirs where its
+    /// type differs.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(super) fn ahead_bytes(&self, holds: Holds) -> u64 {
+    pub(super) fn ahead_bytes(&self, holds: Holds) -> Vec<(u32, u64)> {
         (self.readying.iter())
             .filter(|ready| ready.pool().0 == holds)
-            .map(ready::Readying::outstanding_bytes)
-            .sum()
+            .map(|ready| (ready.pool().1, ready.outstanding_bytes()))
+            .collect()
+    }
+
+    /// The pool host copies place in, where it was found and the device copies color textures on
+    /// the host ([`Memory::host_copy_pool`]), for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn host_copies_pool(&self) -> Option<(Holds, u32)> {
+        self.host_copy_pool.flatten()
     }
 
     /// The bytes of each block made ahead for the pools of `holds` and not yet added
