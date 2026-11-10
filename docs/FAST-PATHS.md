@@ -1126,13 +1126,17 @@ driver's. Each is open work.
   are made plain, then one is filled, a probe, the plain makings between probes doubling with each
   probe that missed up to 32, until a probe saves (`WorkCounts::plain_block_fills_skipped` counts
   the plain ones). A fill that missed had the kernel fill the block's pages twice, and on a host
-  short of free memory compact and reclaim for their high orders twice, which that host's every
-  process waits on; a miss alone or in a pair is a race, which a quiet host sees too. On a Radeon 780M (RADV
-  PHOENIX, Mesa
-  26.2.6, Linux 7.3.1), the kernel's page pools emptied before each run, the arms of the row
-  above, two runs each, without the fill and with it (turnarounds of 8 ms or more a phase, of
-  17 ms or more, the slowest, and the makings' `vkAllocateMemory` in all; the makings the same,
-  13 to 15 a phase, 3 to 5 in the scrolled arm's quiet phase):
+  short of free memory compact and reclaim for their high orders twice, which every process of
+  that host waits on. A miss alone or in a pair is a race, which a quiet host sees too: of 18
+  misses in `tests::reclaim_submit_bench`'s quiet phases on um870 and gem10 (six runs of three to
+  five arms), 17 were fills whose free returned in 0.06 to 0.20 ms, the pages left to the
+  kernel's deferred delete, the block allocated before they were back (most frees take 2.3 ms or
+  more, returning the pages); under um870's pressed phase, 44 of 47 misses freed in 2.7 ms or
+  more, and the base's came in runs of up to 6. On a Radeon 780M (RADV PHOENIX, Mesa 26.2.6,
+  Linux 7.3.1), the kernel's page pools emptied before each run, the arms of the row above, two
+  runs each, without the fill and with it (turnarounds of 8 ms or more a phase, of 17 ms or more,
+  the slowest, and the makings' `vkAllocateMemory` in all; the makings the same, 13 to 15 a
+  phase, 3 to 5 in the scrolled arm's quiet phase):
 
   | Arm, phase | Without: 8 ms, 17 ms, slowest, held | With: 8 ms, 17 ms, slowest, held |
   |---|---|---|
@@ -1151,16 +1155,42 @@ driver's. Each is open work.
   one 0 to 4 (the slowest 33.1 ms, behind a missed block whose allocation took 29.4 ms), 0 to 2 of
   its 12 or 13 fills missed; of 957 submissions begun while a fill ran (one run), 1 turned around in
   8 ms or more (14.0 ms, fragmented), and in another run a 24.0 ms one began within a 32 ms fill on
-  the fragmented host. In a process that submits nothing the fill misses often (`tests::block_fills`
-  on the 780M, two runs: of 5 fills, 4 and 2 missed); why was not measured. The cost is the making
-  thread's (the ready thread, off every submission's way): the exportable allocation (10 to 13 ms
-  for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the pool; the two about 16 ms a 68
-  MiB block on the quiet host, at most 17.3 ms) besides the block's own, so that a block's making
-  took 45 to 74% longer on the quiet host (about 13.7 ms against 9.3 ms) and 33 to 96% longer on the
-  fragmented one. The plain making it replaces ran 90 to 96% on a CPU; how much of the fill's time
-  is on a CPU was not measured apart. Every other device makes its plain blocks with no fill, its
-  driver identity without the fact (`tests::block_fills`: lavapipe and ANV on an Iris Xe fill none).
-  No switch: no answer of Metal's changes. Not announced.
+  the fragmented host. In a process that submits nothing (`tests::block_fills`, four runs on each
+  780M below) 0 or 1 of 5 fills missed.
+
+  The decision, `tests::reclaim_submit_bench`'s images arm, two runs each of three binaries
+  interleaved: the base (every block filled, development before the decision), the decision, and
+  the arm with no fill (`reclaim_submit_bench_images_unfilled`), the kernel's TTM page pools
+  emptied (through the shrinker's debugfs) before each arm and again before its pressed phase. On
+  um870's Radeon 780M (RADV, the device Mesa names PHOENIX, Mesa 26.2.6, Linux 7.3.1-1-cachyos;
+  the pressed phase's fragmenting took 14.8 to 15.9 GiB of 15.8 to 18.3 GiB free, and the
+  bench's process saw 3,707 to 4,835 compactions an arm), per pressed phase of 12 makings, base,
+  decision, no fill: the fills that missed 4 and 3, 3 (the decision never stopping) and 4 of 6
+  (stopping: 6 makings plain), none; turnarounds of 8 ms or more 19 and 4, 5 and 11, 11 and 17,
+  of 17 ms or more 1 and 1, 1 and 2, 8 and 9, the slowest 150 and 45 ms, 82 and 128 ms, 164 and
+  59 ms; the ready thread's makings (a fill's allocation and free and the block's allocation) 419
+  and 461 ms, 379 and 343 ms, 494 and 292 ms, of which in compaction 269 and 299 ms, 215 and 203
+  ms, 374 and 179 ms; block-sized buffer objects 2.0, 2.0 and 1.5, and 1.0 a making. In its quiet
+  phase the decision filled every block as the base did (1 miss alone in 26 fills) with no
+  turnaround of 8 ms or more, where the arm with no fill had 12 of them in each run (the slowest
+  9.4 and 10.0 ms). On gem10's Radeon 780M (PHOENIX, the same Mesa and kernel; the fragmenting
+  took 9.7 to 9.9 GiB of 17.4 to 21.1 GiB free, so that neither phase compacted), with the images
+  and bursts arms: the base's fills missed 3 of 100 and the decision's 2 of 100, never 3 of 4, so
+  that it made no block plain; the turnarounds of 8 ms or more were 0 to 3 a phase with the base,
+  0 with the decision and 7 to 12 with no fill.
+
+  The cost is the making thread's (the ready thread, off every submission's way): the exportable
+  allocation (10 to 13 ms for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the
+  pool; the two about 16 ms a 68 MiB block on the quiet host, at most 17.3 ms) besides the block's
+  own, so that a block's making took 45 to 74% longer on the quiet host (about 13.7 ms against
+  9.3 ms) and 33 to 96% longer on the fragmented one. The plain making it replaces ran 90 to 96%
+  on a CPU; the fill's allocation and free ran 91 to 99% and 85 to 100% on a CPU (the tenth and
+  ninetieth percentiles of the quiet phases' saved fills above, um870 and gem10). Each fill also
+  maps its buffer object, so that the ready thread makes page tables for it too: in an images arm
+  on um870 above, 439 page-table buffer objects (4 KiB of VRAM) with every block filled, 276 with
+  the decision and 124 with no fill, for 26 blocks each. Every other device makes its plain blocks
+  with no fill, its driver identity without the fact (`tests::block_fills`: lavapipe and ANV on an
+  Iris Xe fill none). No switch: no answer of Metal's changes. Not announced.
 
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
