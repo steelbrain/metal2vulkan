@@ -357,23 +357,29 @@ impl InstanceShadows {
     }
 
     /// Whether what it gathered holds `used`'s reads and writes (builds with debug assertions:
-    /// [`add_draw`](Self::add_draw)'s check).
+    /// [`add_draw`](Self::add_draw)'s check). Each gathered list is in key order, so a use's key
+    /// is found by a binary search: a draw of `R` uses checks them in `O(R log R)`, where a walk of
+    /// every gathered key for each use took `O(R^2)` and a debug frame of 5001 such draws ran past
+    /// a minute.
     #[cfg(debug_assertions)]
     fn holds(&self, used: &Use<ResourceKey>) -> bool {
         [(false, used.read), (true, used.write)]
             .into_iter()
             .filter(|(_, access)| !access.is_empty())
-            .all(|(write, _)| match &used.range {
-                UseRange::Bytes(range) => self.held().iter().any(|(key, ranges)| {
-                    *key == (used.key, write)
-                        && ranges
-                            .iter()
-                            .any(|held| held.start <= range.start && range.end <= held.end)
-                }),
-                image => self
-                    .images
-                    .iter()
-                    .any(|(key, held)| *key == (used.key, write) && span(held, image) == *held),
+            .all(|(write, _)| {
+                let key = (used.key, write);
+                match &used.range {
+                    UseRange::Bytes(range) => {
+                        let held = self.held();
+                        held.binary_search_by_key(&key, |&(at, _)| at)
+                            .is_ok_and(|at| {
+                                (held[at].1.iter())
+                                    .any(|held| held.start <= range.start && range.end <= held.end)
+                            })
+                    }
+                    image => (self.images.binary_search_by_key(&key, |&(at, _)| at))
+                        .is_ok_and(|at| span(&self.images[at].1, image) == self.images[at].1),
+                }
             })
     }
 
@@ -1017,6 +1023,55 @@ mod tests {
         // Its list took room for every range it keeps and the merge's one at its first, and
         // never grew.
         assert_eq!(ranges.capacity(), RANGES_PER_BUFFER + 1);
+    }
+
+    /// `holds` (the debug check of `add_draw`) answers by key among many gathered buffers and
+    /// images: a gathered use's bytes, read or written, inside a gathered range, and a gathered
+    /// image's levels; not a buffer gathered only for the other access, a range past the gathered
+    /// one, a key never gathered, or an image's levels past its span.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn an_instance_holds_what_it_gathered_among_many() {
+        let keys: Vec<ResourceKey> = (0..2000).map(|_| ResourceKey::new()).collect();
+        let image = |key, levels: Range<u32>| Use {
+            range: UseRange::Image {
+                aspects: vk::ImageAspectFlags::COLOR,
+                levels,
+                layers: 0..1,
+            },
+            ..bytes(key, 0..0, false)
+        };
+        let mut uses = Vec::new();
+        for (at, &key) in keys.iter().enumerate() {
+            match at % 3 {
+                0 => uses.push(bytes(key, 64..128, at % 2 == 0)),
+                1 => uses.push(image(key, 1..3)),
+                _ => {
+                    uses.push(bytes(key, 0..16, false));
+                    uses.push(bytes(key, 32..48, true));
+                }
+            }
+        }
+        let mut gathered = InstanceShadows::default();
+        gathered.add(&[], &uses);
+        for used in &uses {
+            assert!(gathered.holds(used), "{used:?}");
+        }
+        for (at, &key) in keys.iter().enumerate() {
+            let unheld = match at % 3 {
+                0 => vec![
+                    bytes(key, 64..128, at % 2 != 0),
+                    bytes(key, 120..136, at % 2 == 0),
+                ],
+                1 => vec![image(key, 0..3), image(key, 2..4)],
+                _ => vec![bytes(key, 16..32, false), bytes(key, 0..16, true)],
+            };
+            for used in &unheld {
+                assert!(!gathered.holds(used), "{used:?}");
+            }
+        }
+        assert!(!gathered.holds(&bytes(ResourceKey::new(), 0..4, false)));
+        assert!(!gathered.holds(&image(ResourceKey::new(), 1..2)));
     }
 
     /// A draw's use equal to the last draw's at its place is gathered already, and only the
