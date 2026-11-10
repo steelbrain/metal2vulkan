@@ -1135,16 +1135,16 @@ driver's. Each is open work.
   one 0 to 4 (the slowest 33.1 ms, behind a missed block whose allocation took 29.4 ms), 0 to 2 of
   its 12 or 13 fills missed; of 957 submissions begun while a fill ran (one run), 1 turned around in
   8 ms or more (14.0 ms, fragmented), and in another run a 24.0 ms one began within a 32 ms fill on
-  the fragmented host. In a process that submits nothing the fill mostly misses
-  (`tests::block_fills` on the 780M: of 5 fills, 1 saved and 4 missed); why was not measured. The
-  cost is the making thread's (the ready thread, off every submission's way): the exportable
-  allocation (10 to 13 ms for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the pool;
-  the two about 16 ms a 68 MiB block on the quiet host, at most 17.3 ms) besides the block's own, so
-  that a block's making took 45 to 74% longer on the quiet host (about 13.7 ms against 9.3 ms) and
-  33 to 96% longer on the fragmented one. The plain making it replaces ran 90 to 96% on a CPU; how
-  much of the fill's time is on a CPU was not measured apart. Every other device makes its plain
-  blocks with no fill, its driver identity without the fact (`tests::block_fills`: lavapipe and ANV
-  on an Iris Xe fill none). No switch: no answer of Metal's changes. Not announced.
+  the fragmented host. In a process that submits nothing the fill misses often (`tests::block_fills`
+  on the 780M, two runs: of 5 fills, 4 and 2 missed); why was not measured. The cost is the making
+  thread's (the ready thread, off every submission's way): the exportable allocation (10 to 13 ms
+  for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the pool; the two about 16 ms a 68
+  MiB block on the quiet host, at most 17.3 ms) besides the block's own, so that a block's making
+  took 45 to 74% longer on the quiet host (about 13.7 ms against 9.3 ms) and 33 to 96% longer on the
+  fragmented one. The plain making it replaces ran 90 to 96% on a CPU; how much of the fill's time
+  is on a CPU was not measured apart. Every other device makes its plain blocks with no fill, its
+  driver identity without the fact (`tests::block_fills`: lavapipe and ANV on an Iris Xe fill none).
+  No switch: no answer of Metal's changes. Not announced.
 
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
