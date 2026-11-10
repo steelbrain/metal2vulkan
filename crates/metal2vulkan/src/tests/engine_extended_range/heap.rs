@@ -374,6 +374,79 @@ fn heap_samples_reach_a_raw_member_through_the_unsigned_twin() {
     }
 }
 
+/// A heap access that decodes a texture the heap holds by its raw texels alone
+/// (`texture::heap_raw`: a `float` or `half` read, and a sample or gather the function emulates,
+/// `sampler::heap_raw`) records `PrecisionNote::DevicePackConversion`, as a slot's decode of the
+/// same texel does, on every committed profile with a sampled heap. A heap access that reaches no
+/// such texture records none: a width query alone, a `uint` read, and a sample through a
+/// mip-filtered sampler, which the function does not emulate (`RuntimeFact::HeapRawSamples`).
+#[test]
+fn heap_decodes_record_the_device_pack_conversion() {
+    use crate::pipeline::PrecisionNote;
+    let note = PrecisionNote::DevicePackConversion;
+    let consts = FunctionConstantValues::defaults();
+    let entry = EntryRef::Name("k");
+    let inputs = LowerInputs::new();
+    // (what, the kernel, whether it decodes a raw member).
+    let cases = [
+        ("float read", kernel(Use::Float), true),
+        ("half read", kernel(Use::Half), true),
+        (
+            "nearest sample",
+            sampling_kernel(Sampling::Sample(words(false, false))),
+            true,
+        ),
+        (
+            "float gather",
+            sampling_kernel(Sampling::Gather(words(true, false))),
+            true,
+        ),
+        ("width query", kernel(Use::Query), false),
+        ("uint read", kernel(Use::Uint), false),
+        (
+            "mip-filtered sample",
+            sampling_kernel(Sampling::Sample(words(false, true))),
+            false,
+        ),
+    ];
+    for (name, source, decodes) in &cases {
+        let Some(bc) = assemble("heap_note", source) else {
+            return;
+        };
+        let mut compiled = 0;
+        for (stem, p) in committed_profiles().expect("profiles") {
+            let what = format!("{name} on {stem}");
+            let a = match compile_bitcode(
+                &bc,
+                entry,
+                &consts,
+                &p,
+                &inputs,
+                &mut meter(),
+                SPIRV_WORDS,
+            ) {
+                Ok(a) => a,
+                Err(Error::Unsupported(Unsupported {
+                    feature: Feature::ArgumentBufferTextures,
+                    ..
+                })) => continue,
+                Err(e) => panic!("{what}: {e}"),
+            };
+            assert_eq!(
+                a.precision.contains(&note),
+                *decodes,
+                "{what}: {:?}",
+                a.precision
+            );
+            compiled += 1;
+        }
+        assert!(
+            compiled > 0,
+            "{name}: no committed profile has the sampled heap"
+        );
+    }
+}
+
 /// A `half` read, nearest sample or gather of a texture an argument buffer holds rounds its texel
 /// through the device's conversion of the texel's `f32` value (`narrow::round_texel`): the
 /// fetched texel's, merged with the decode routine's texel of a form a heap reads. On
