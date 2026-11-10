@@ -4630,9 +4630,12 @@ each item named states the rule in full.
     uncompressed one, through `half`, so a `half` NaN clear keeps no sign and an extended-range
     or bfloat clear rounds as through `half`. Expected, not measured on such a Mac.
   - a `Clear` load in a pass of one layer without a draw call clears the attachment's whole level
-    and slice past the render area, whatever its texture, the answer an Apple silicon Mac gives a
-    texture it keeps compressed. Unmeasured on such a Mac: the runtime's answer before the Apple
-    silicon rule below was measured, kept.
+    and slice past the render area, whatever its texture. The Macs disagree there (the consumer's
+    probe `tileclear2`, jobs m3-max-12736 and m3-max-12737): an AMD Radeon Pro 5300M clears the
+    whole level or slice at every format, shape and `allowGPUOptimizedContents`; an Intel UHD 630
+    anything from the render area alone (a level past the first, a slice past the first, 4x
+    multisampled) to the whole texture (plain 4-, 8- and 16-byte color formats). Metal guarantees
+    nothing past the render area, and the runtime gives the 5300M's answer.
 
   Metal leaves a new texture's contents undefined, and zero and a released texture's texels are
   both what such a Mac reads, so this trades no accuracy and no `DevicePolicy` switch fills the
@@ -4641,9 +4644,13 @@ each item named states the rule in full.
   pattern no clear or copy writes exactly reading zero (`fresh-pattern-zeroed`), and a `Clear`
   load in a pass of one layer without a draw call clears a texture Metal keeps compressed over its
   whole level and slice past the render area and any other texture over the render area rounded
-  up to 32x32 tiles, as a pass with a draw call clears every texture (our probes on the M3 Max
-  under macOS 27.0.1: every color format, depth and stencil format, sample count, level, slice and
-  usage measured, and a texture over a buffer). Under a declared
+  up to 32x32 tiles clipped to the level, as a pass with a draw call clears every texture, and no
+  other level or slice (our probes on the M3 Max under macOS 27.0.1: every color format, depth and
+  stencil format, sample count, level, slice and usage measured, and a texture over a buffer; the
+  consumer's `tileclear2`, jobs m3-max-12716 and m3-max-12735, alike). In such a pass the runtime
+  clears the attachment before the pass, by a render pass of that attachment alone, and the pass
+  loads it over Metal's render area, so a `DontCare` or `Load` attachment beside it keeps its
+  texels past that area as Metal keeps them. Under a declared
   class other than the GPU's, the blit encodings and NaN signs above are the runtime's own
   handling, except that MoltenVK's copies of an image Metal compresses on an Apple GPU still write
   the canonical `RG11B10Float` and `RGB9E5Float` encodings

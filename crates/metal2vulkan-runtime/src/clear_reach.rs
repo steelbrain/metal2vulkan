@@ -166,6 +166,17 @@ pub(super) fn clears_whole(target: &Target) -> bool {
     !root.over_buffer() && metal_compresses_layout(&layout, root.usage(), optimized)
 }
 
+/// Whether a `Clear` load of an attachment of `extent` that the pass stores, over the render area
+/// `area` in a pass with a draw call where `called`, is cleared before the pass and loaded in it
+/// though its clear reaches no further than the render area ([`ReachClears`]): in a pass without
+/// a draw call over an attachment larger than the render area. A pass's own clear on a device that
+/// renders through Metal (MoltenVK) reaches the whole attachment there (lane `fresh_clear_reach`
+/// on MoltenVK: an uncompressed 128x128 target cleared over 64x64), where Metal's reaches the
+/// render area's tiles of a texture it keeps uncompressed.
+fn own_clear_overreaches(area: [u32; 2], extent: [u32; 2], called: bool) -> bool {
+    !called && (0..2).any(|axis| area[axis] < extent[axis])
+}
+
 /// Whether Metal's `store` keeps an attachment's texels.
 pub(super) fn stores(store: StoreAction) -> bool {
     matches!(
@@ -754,7 +765,13 @@ impl ReachClears {
             let tiles = bounded
                 .filter(|(loads, _)| loads.colors.contains(&index) && color.planes.is_none())
                 .map(|(_, tiles)| tiles);
-            if extent == area && !left_out.contains(&(index as u32)) && tiles.is_none() {
+            let overreaches =
+                stores(color.store) && own_clear_overreaches(area, color.target.extent, called);
+            if extent == area
+                && !left_out.contains(&(index as u32))
+                && tiles.is_none()
+                && !overreaches
+            {
                 continue;
             }
             let rects = tiles.map_or_else(|| vec![rect(extent)], |t| t.rects(extent));
@@ -825,8 +842,9 @@ impl ReachClears {
                 ([depth && bound[0], stencil && bound[1]], tiles, reached),
                 ([forced && !depth, false], None, area),
             ];
+            let overreaches = own_clear_overreaches(area, ds.target.extent, called);
             for ([depth, stencil], tiles, extent) in parts {
-                let reaches = extent != area || tiles.is_some() || (forced && depth);
+                let reaches = extent != area || tiles.is_some() || (forced && depth) || overreaches;
                 if !(depth || stencil) || !reaches {
                     continue;
                 }

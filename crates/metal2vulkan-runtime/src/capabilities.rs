@@ -266,8 +266,8 @@ pub enum MacClass {
     /// through it write three formats' canonical encodings, and a `half` NaN clear keeps its
     /// sign. A `Clear` load in a pass of one layer without a draw call clears such a texture's
     /// whole level and slice past the render area, and any other texture's render area rounded
-    /// up to 32x32 tiles, as a pass with a draw call clears every texture (our probes on the M3
-    /// Max). The runtime writes the pattern and the zeros (a pattern no clear or copy writes
+    /// up to 32x32 tiles, as a pass with a draw call clears every texture, other levels and
+    /// slices untouched (our probes and the consumer's on the M3 Max). The runtime writes the pattern and the zeros (a pattern no clear or copy writes
     /// exactly reads zero, announced as `fresh-pattern-zeroed`), and clears so.
     AppleSilicon,
     /// A Mac with an Intel or AMD GPU, which keeps no texture compressed: a new `Private`
@@ -277,8 +277,9 @@ pub enum MacClass {
     /// a new `Private` texture (`WorkCounts::private_textures_unfilled`); on an Apple GPU, whose
     /// own compressed texture would read Apple's pattern, it fills it with zeros
     /// (`WorkCounts::private_textures_zero_filled`). A `Clear` load in a pass of one layer
-    /// without a draw call clears the whole level and slice past the render area, the answer an
-    /// Apple silicon Mac gives a compressed texture: unmeasured on such a Mac.
+    /// without a draw call clears the whole level and slice past the render area, the AMD Radeon
+    /// Pro 5300M's answer; an Intel UHD 630 clears anything from the render area alone to the
+    /// whole texture there, by format and shape (the consumer's probes).
     IntelOrAmd,
 }
 
