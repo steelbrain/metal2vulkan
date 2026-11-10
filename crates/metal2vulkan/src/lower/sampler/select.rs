@@ -651,7 +651,7 @@ fn heap_raw_sample(
     // function filters (`SpecKey::HeapRawTextures`' `FILTERED` bit), as a bfloat form's sample
     // reads the nearest texel and any other member's is the device's own sample.
     if gather.is_none() {
-        use crate::lower::texture::heap_raw::FILTERED;
+        use crate::bind::heap::FILTERED;
         let note = PrecisionNote::BicubicFilterArithmetic;
         let raw = NoteTest::equal(NoteOn::HeapRaw(cx.stage), FILTERED, FILTERED);
         let when: Vec<crate::lower::select::NoteClause> = match state {

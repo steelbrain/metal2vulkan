@@ -313,6 +313,16 @@ pub(crate) fn raw_held(shape: &TextureShape) -> bool {
     }
 }
 
+/// The bit of `SpecKey::HeapRawTextures`' value that a texture the stage's handles can name is held
+/// by its raw texels alone ([`heap_raw_form`]), whose decode the function's `float` read, sample or
+/// gather takes (`lower::texture::heap_raw`).
+pub(crate) const HELD: u32 = 1;
+
+/// The bit of `SpecKey::HeapRawTextures`' value that such a texture is of a form whose sample the
+/// function filters (`lower::sampler::heap_raw`): every form of `ExtendedRange::HEAP_READ` but a
+/// bfloat one, whose sample reads the nearest texel under either filter.
+pub(crate) const FILTERED: u32 = 2;
+
 /// The form of `ExtendedRange::HEAP_READ` by whose raw texels alone a heap holds a texture of
 /// `facts` (an unswizzled, not sparse texture of one sample of such a form), else `None`: its
 /// sampled float classes hold the neutral ([`heap_element`]), which a function's read passes

@@ -347,17 +347,16 @@ fn heap_ycbcr(
 }
 
 /// The `SpecKey::HeapRawTextures` of `stage` for `shape`: of the heap members of `shape` that reach
-/// `stage` (as for [`heap_ycbcr`]), the bit `lower::texture::heap_raw::HELD` where one is a texture
-/// a heap holds by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float`
-/// read, sample or gather decodes by the device's arithmetic, and the bit
-/// `lower::texture::heap_raw::FILTERED` where one such is of a form whose sample the function
-/// filters (not a bfloat one).
+/// `stage` (as for [`heap_ycbcr`]), the bit `bind::heap::HELD` where one is a texture a heap holds
+/// by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float` read, sample or
+/// gather decodes by the device's arithmetic, and the bit `bind::heap::FILTERED` where one such is
+/// of a form whose sample the function filters (not a bfloat one).
 fn heap_raw(
     shape: &BindShape,
     stage: Stage,
     reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
 ) -> u32 {
-    use crate::lower::texture::heap_raw::{FILTERED, HELD};
+    use crate::bind::heap::{FILTERED, HELD};
     let mut bits = 0;
     for m in crate::bind::heap::members(shape, &[stage], reach) {
         let TextureShape::Texture { pixel_format, .. } = m.shape else {

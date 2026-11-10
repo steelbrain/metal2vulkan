@@ -21,6 +21,7 @@
 //! in the module's notes, and a runtime announces it at a draw or dispatch whose command can name
 //! such a texture.
 
+use crate::bind::heap::HELD;
 use crate::budget::Meter;
 use crate::error::Error;
 use crate::lower::select::{any_of, NoteOn, NoteTest, SelectCx};
@@ -47,15 +48,6 @@ pub const READ_WORDS: u32 = 256;
 /// The words a query adds: the class index's test, the branch and its merge, and the unsigned
 /// element's access chain, load and query.
 pub const QUERY_WORDS: u32 = 128;
-
-/// The bit of `SpecKey::HeapRawTextures`' value that a texture the stage's handles can name is held
-/// by its raw texels alone, whose decode the function's `float` read, sample or gather takes.
-pub(crate) const HELD: u32 = 1;
-
-/// The bit of `SpecKey::HeapRawTextures`' value that such a texture is of a form whose sample the
-/// function filters (`sampler::heap_raw`): every form of `ExtendedRange::HEAP_READ` but a bfloat
-/// one, whose sample reads the nearest texel under either filter.
-pub(crate) const FILTERED: u32 = 2;
 
 /// Plan a `float` or `half` read, sample or gather of heap group `group` that decodes a member of a
 /// form a heap reads where its handle's class index names one, with the decode routine of each
