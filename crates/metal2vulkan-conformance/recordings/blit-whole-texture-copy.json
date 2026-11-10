@@ -239,6 +239,8 @@
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
+        "device_memory_allocated": 205520896,
+        "empty_memory_blocks_live": 1,
         "encoder_command_buffers_begun": 1,
         "fence_waits": 1,
         "finales_folded": 1,
@@ -274,14 +276,18 @@
       },
       "moving": {
         "addressable_buffers_made": 0,
+        "buffer_blocks_made_ahead": 0,
         "buffer_blocks_made_in_place": 0,
+        "device_memory_allocated": 0,
         "gate_waits_slept": 0,
+        "plain_buffer_blocks_made": 0,
         "pooled_memory_blocks_made": 0
       },
       "composed": {
         "blocks_ahead_waited_for": 3,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 0,
+        "device_memory_allocated": 205520896,
         "image_blocks_made_ahead": 1,
         "image_blocks_made_in_place": 0,
         "plain_buffer_blocks_made": 2,

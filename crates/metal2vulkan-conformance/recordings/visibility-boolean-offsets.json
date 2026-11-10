@@ -448,6 +448,7 @@
         "creation_render_pipelines_drawn": 1,
         "creation_render_pipelines_made": 1,
         "descriptor_keys_built": 1,
+        "device_memory_allocated": 276824064,
         "draw_shapes_carried": 1,
         "draw_shapes_made": 2,
         "draw_shapes_reused": 4,
@@ -509,6 +510,7 @@
         "submit_infos": 2,
         "trail_waits": 2,
         "variant_pipelines_made": 1,
+        "variants_taken_back": 1,
         "visibility_queries_begun": 5,
         "wakes_completion_waiters": 2,
         "wakes_spared": 14
@@ -528,7 +530,12 @@
         "commands_recorded.cmd_copy_buffer": 1,
         "commands_recorded.cmd_pipeline_barrier": 8,
         "commands_recorded.end_command_buffer": 5,
+        "creation_pipelines_drawn": 1,
+        "creation_render_pipelines_drawn": 1,
+        "creation_render_pipelines_made": 1,
+        "device_memory_allocated": 276824064,
         "draw_shapes_made": 2,
+        "driver_diagnostics_withheld": 1,
         "functions_translated": 2,
         "host_copy_blocks_made_in_place": 0,
         "host_copy_blocks_readied": 1,
@@ -544,8 +551,12 @@
         "stage_entries_shared": 5,
         "stage_entries_specialized": 2
       },
+      "ceilings": {
+        "creation_pipelines_made": 1,
+        "variant_pipelines_made": 1
+      },
       "per_state": {
-        "pipelines": 2,
+        "pipelines": 0,
         "states": 1
       }
     }

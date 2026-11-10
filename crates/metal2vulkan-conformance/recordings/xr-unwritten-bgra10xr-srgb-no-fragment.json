@@ -400,6 +400,7 @@
         "creation_render_pipelines_drawn": 2,
         "creation_render_pipelines_made": 2,
         "descriptor_keys_built": 2,
+        "device_memory_allocated": 205520896,
         "draw_shapes_made": 2,
         "draw_states_recorded": 20,
         "draws_settled": 2,
@@ -431,7 +432,7 @@
         "owned_kernels_made": 1,
         "passes_not_inline_layouts": 1,
         "pipeline_layouts_made": 2,
-        "pipeline_layouts_shared": 2,
+        "pipeline_layouts_shared": 1,
         "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 1,
@@ -445,7 +446,7 @@
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
         "shader_modules_made": 2,
-        "shader_modules_shared": 2,
+        "shader_modules_shared": 1,
         "slot_returns": 1,
         "spare_command_pools_taken": 1,
         "stage_entries_shared": 7,
@@ -454,6 +455,7 @@
         "submit_infos": 1,
         "trail_waits": 1,
         "variant_pipelines_made": 2,
+        "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
@@ -462,7 +464,12 @@
         "blocks_ahead_waited_for": 1,
         "commands_recorded.cmd_copy_buffer": 1,
         "commands_recorded.cmd_pipeline_barrier": 6,
+        "creation_pipelines_drawn": 2,
+        "creation_render_pipelines_drawn": 2,
+        "creation_render_pipelines_made": 2,
+        "device_memory_allocated": 205520896,
         "draw_shapes_made": 2,
+        "driver_diagnostics_withheld": 4,
         "functions_translated": 2,
         "image_blocks_made_ahead": 1,
         "image_blocks_made_in_place": 0,
@@ -478,12 +485,14 @@
       "ceilings": {
         "addressable_buffers_made": 1,
         "arena_pools_made": 2,
+        "creation_pipelines_made": 2,
         "pipeline_layouts_made": 2,
         "pooled_memory_blocks_made": 3,
-        "shader_modules_made": 2
+        "shader_modules_made": 2,
+        "variant_pipelines_made": 2
       },
       "per_state": {
-        "pipelines": 4,
+        "pipelines": 2,
         "states": 2
       }
     }

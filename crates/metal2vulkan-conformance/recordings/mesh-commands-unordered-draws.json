@@ -421,6 +421,7 @@
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
+        "device_memory_allocated": 1350565888,
         "draw_resident_textures_looked_at": 1,
         "draw_shapes_made": 2,
         "draw_states_recorded": 20,
@@ -447,12 +448,10 @@
         "linked_use_questions_asked": 6,
         "live_tables_uploaded": 1,
         "new_buffer_bytes_cleared": 4732,
-        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 4,
         "object_churn.buffers_recycled": 4,
         "object_churn.images_own_memory": 1,
         "object_churn.textures_image": 1,
-        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 1,
         "object_churn.vk_images_destroyed": 1,
@@ -477,7 +476,6 @@
         "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
         "shader_modules_made": 6,
-        "shader_modules_shared": 1,
         "slot_returns": 1,
         "spare_command_pools_taken": 1,
         "stage_entries_shared": 6,
@@ -486,6 +484,7 @@
         "submit_infos": 2,
         "trail_waits": 1,
         "variant_pipelines_made": 5,
+        "variants_taken_back": 2,
         "wakes_completion_waiters": 1,
         "wakes_spared": 8
       },
@@ -499,6 +498,7 @@
         "blocks_ahead_waited_for": 4,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 0,
+        "device_memory_allocated": 1350565888,
         "driver_diagnostics_withheld": 2,
         "gpu_pool_blocks_made": 1,
         "host_copy_blocks_made_in_place": 0,
@@ -518,7 +518,7 @@
         "variant_pipelines_made": 5
       },
       "per_state": {
-        "pipelines": 5,
+        "pipelines": 3,
         "states": 2
       }
     }

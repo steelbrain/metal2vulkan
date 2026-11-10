@@ -555,7 +555,7 @@
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
         "dedicated_memory_blocks_live": 1,
-        "device_memory_allocated": 1140850688,
+        "device_memory_allocated": 1350565888,
         "draw_resident_textures_looked_at": 1,
         "draw_shapes_made": 2,
         "draw_states_recorded": 19,
@@ -623,7 +623,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 6,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 8
+        "wakes_spared": 7
       },
       "moving": {
         "blocks_ahead_past_quiet_wait": 0,
@@ -635,6 +635,7 @@
         "blocks_ahead_waited_for": 4,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 0,
+        "device_memory_allocated": 1350565888,
         "host_copy_blocks_made_in_place": 0,
         "host_copy_blocks_readied": 0,
         "image_blocks_made_ahead": 2,

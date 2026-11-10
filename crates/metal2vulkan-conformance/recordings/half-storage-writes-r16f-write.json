@@ -315,6 +315,7 @@
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
+        "device_memory_allocated": 276824192,
         "dispatch_pipelines_pooled": 1,
         "dispatch_shapes_made": 1,
         "dispatch_used_resources_listed": 1,
@@ -360,6 +361,7 @@
         "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 2,
         "shader_modules_made": 2,
+        "shader_modules_shared": 1,
         "slot_returns": 1,
         "spare_command_pools_taken": 1,
         "stage_entries_shared": 1,
@@ -384,6 +386,7 @@
         "commands_recorded.cmd_copy_buffer": 1,
         "commands_recorded.cmd_pipeline_barrier": 4,
         "commands_recorded.end_command_buffer": 5,
+        "device_memory_allocated": 276824192,
         "dispatch_used_resources_listed": 1,
         "host_copy_blocks_made_in_place": 0,
         "host_copy_blocks_readied": 0,
@@ -396,7 +399,8 @@
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
         "pipeline_layouts_made": 2,
-        "pooled_memory_blocks_made": 4
+        "pooled_memory_blocks_made": 4,
+        "shader_modules_made": 2
       },
       "per_state": {
         "pipelines": 1,

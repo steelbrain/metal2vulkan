@@ -5301,9 +5301,10 @@
         "creation_pipelines_made": 1,
         "creation_render_pipelines_made": 1,
         "descriptor_keys_built": 1,
+        "device_memory_allocated": 205520896,
         "draw_shapes_carried": 287,
         "draw_shapes_made": 1,
-        "draw_shapes_reused": 279,
+        "draw_shapes_reused": 280,
         "draw_states_recorded": 5586,
         "draws_settled": 1,
         "draws_unkept": 94,
@@ -5343,6 +5344,7 @@
         "object_churn.vk_images_made": 3,
         "passes_not_inline_draws": 294,
         "pipeline_layouts_made": 2,
+        "pipeline_layouts_shared": 1,
         "pipelines_pooled": 1,
         "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3,
@@ -5360,7 +5362,7 @@
         "scheduler_wakes_commit": 1,
         "set_zero_sets_found": 292,
         "shader_modules_made": 3,
-        "shader_modules_shared": 1,
+        "shader_modules_shared": 2,
         "slot_returns": 1,
         "spare_command_pools_taken": 1,
         "stage_entries_shared": 5,
@@ -5412,6 +5414,7 @@
         "commands_recorded.cmd_pipeline_barrier": 606,
         "commands_recorded.end_command_buffer": 1217,
         "completion_arms": 1,
+        "device_memory_allocated": 205520896,
         "draws_unkept": 8,
         "draws_unkept_instance": 8,
         "draws_unkept_instance_begun": 0,
@@ -5430,6 +5433,10 @@
         "render_passes_begun_inline": 287,
         "render_passes_begun_instances": 8,
         "render_passes_made": 2
+      },
+      "ceilings": {
+        "pipeline_layouts_made": 2,
+        "shader_modules_made": 3
       },
       "per_state": {
         "pipelines": 3,

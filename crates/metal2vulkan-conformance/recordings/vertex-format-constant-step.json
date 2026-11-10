@@ -2265,6 +2265,7 @@
         "creation_render_pipelines_drawn": 45,
         "creation_render_pipelines_made": 45,
         "descriptor_keys_built": 45,
+        "device_memory_allocated": 205520896,
         "draw_shapes_made": 8,
         "draw_shapes_reused": 495,
         "draw_states_recorded": 945,
@@ -2288,7 +2289,7 @@
         "object_churn.buffers_recycled": 2,
         "passes_not_inline_layouts": 45,
         "pipeline_layouts_made": 1,
-        "pipeline_layouts_shared": 44,
+        "pipeline_layouts_shared": 45,
         "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3,
         "queue_submissions": 1,
@@ -2328,6 +2329,7 @@
         "blocks_ahead_waited_for": 3,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 0,
+        "device_memory_allocated": 205520896,
         "draw_shapes_made": 8,
         "image_blocks_made_ahead": 1,
         "image_blocks_made_in_place": 0,
@@ -2341,6 +2343,7 @@
       "ceilings": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 6,
+        "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3
       },
       "per_state": {

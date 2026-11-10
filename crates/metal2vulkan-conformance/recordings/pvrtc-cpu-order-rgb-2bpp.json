@@ -766,7 +766,7 @@
         "metal2vulkan-degrade-carried-decoded-twin"
       ],
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 3,
         "arena_pools_made": 1,
         "bare_starts": 24,
         "batches_submitted_by_waiters": 24,
@@ -798,7 +798,7 @@
         "completion_arms": 24,
         "completion_arms_after_a_wake": 24,
         "completion_waiter_parks": 24,
-        "device_memory_allocated": 67108864,
+        "device_memory_allocated": 205520896,
         "empty_memory_blocks_live": 1,
         "encoder_command_buffers_begun": 24,
         "fence_waits": 24,
@@ -817,13 +817,12 @@
         "object_churn.images_parked": 4,
         "object_churn.images_recycled": 2,
         "object_churn.textures_image": 2,
-        "object_churn.vk_buffer_bindings": 15,
+        "object_churn.vk_buffer_bindings": 14,
         "object_churn.vk_buffers_destroyed": 14,
-        "object_churn.vk_buffers_made": 15,
+        "object_churn.vk_buffers_made": 14,
         "object_churn.vk_image_bindings": 2,
         "object_churn.vk_images_destroyed": 2,
         "object_churn.vk_images_made": 2,
-        "object_churn.vk_memory_allocations": 1,
         "owned_descriptor_pools": 24,
         "owned_kernel_spirv_bytes": 15676,
         "owned_kernels_made": 1,
@@ -832,7 +831,6 @@
         "queue_submissions": 48,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 24,
-        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 24,
         "scheduler_sleeps": 24,
         "scheduler_wakes_commit": 24,
@@ -850,6 +848,7 @@
         "blocks_ahead_waited_for": 3,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 0,
+        "device_memory_allocated": 205520896,
         "image_blocks_made_ahead": 1,
         "image_blocks_made_in_place": 0,
         "owned_kernel_spirv_bytes": 15676,
@@ -858,7 +857,7 @@
         "queues_sharing_a_vk_queue": 0
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 3,
         "arena_pools_made": 1,
         "pooled_memory_blocks_made": 3
       }
