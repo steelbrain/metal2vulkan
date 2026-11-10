@@ -1,6 +1,7 @@
 // Owned fixture, written for this project: an addition, subtraction, product and quotient of a NaN
 // function constant and a value only the run knows, compiled with fast math, whose `nnan` makes
-// each result poison once the constant is bound.
+// each result poison once the constant is bound. The last float row stores the run value itself, so
+// the case observes an effect when every poison row's store is dropped.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -13,7 +14,7 @@ constant half h_negzero [[function_constant(5)]];
 constant half h_nan [[function_constant(6)]];
 
 struct Rows {
-	float4 f[7];
+	float4 f[8];
 	half4 h[4];
 };
 
@@ -30,6 +31,7 @@ kernel void sfold(device const float4 *in [[buffer(0)]],
 	o.f[4] = x * k_snan;
 	o.f[5] = x / k_qnan;
 	o.f[6] = k_snan / x;
+	o.f[7] = x;
 	o.h[0] = y + h_nan;
 	o.h[1] = h_nan - y;
 	o.h[2] = h_nan / y;
