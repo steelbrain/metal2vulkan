@@ -465,6 +465,8 @@ mod freed_memory;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod frees_in_flight;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod fresh_clear_reach;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod fresh_contents;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod fresh_costs;

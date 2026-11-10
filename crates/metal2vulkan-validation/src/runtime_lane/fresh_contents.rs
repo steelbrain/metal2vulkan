@@ -66,7 +66,7 @@ use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     BlitCommandEncoder, BlitOption, Buffer, ClearColor, CpuCacheMode, Degradation, Device, Error,
-    HazardTrackingMode, LoadAction, Origin, RenderPassDescriptor, ResourceOptions, Size,
+    HazardTrackingMode, LoadAction, MacClass, Origin, RenderPassDescriptor, ResourceOptions, Size,
     StorageMode, StoreAction, Texture, TextureDescriptor,
 };
 
@@ -875,6 +875,55 @@ fn a_cleared_multisampled_depth_target_reads_its_clear_silently() {
     assert!(
         !zeroed(&messages),
         "a cleared 4x Depth32Float on {name}: announced"
+    );
+    drop(cache);
+    quiet(lane, &messages);
+}
+
+/// A new multisampled `Depth32Float` target that a pass without a draw call clears over a render
+/// area of a quarter of it reads its clear in every sample, and the device announces nothing:
+/// Metal's clear of a depth it keeps compressed reaches the whole level (`clear_reach.rs`), and
+/// the runtime counts the texels that clear wrote, past the render area too
+/// (`fresh_unwritten.rs`). On a device presenting an Apple silicon Mac, whose such texture reads
+/// zero, noted, where Metal reads its pattern; a runtime counting the render area alone announces
+/// `fresh-pattern-zeroed` at the read.
+#[test]
+fn a_multisampled_depth_cleared_past_its_render_area_reads_its_clear_silently() {
+    let (messages, cache, lane) = lane_with(|options| {
+        options.announce_each = FRESH_PATTERNS.into_iter().collect();
+        options.mac_class = Some(MacClass::AppleSilicon);
+    });
+    let name = lane.device.name();
+    let (depth, unfilled) = msaa_depth(&lane);
+    assert!(!unfilled, "a new 4x Depth32Float on {name}: unfilled");
+    let mut descriptor = RenderPassDescriptor::new();
+    let attachment = &mut descriptor.depth_attachment;
+    attachment.texture = Some(depth.clone());
+    attachment.load_action = LoadAction::Clear;
+    attachment.clear_depth = 0.25;
+    attachment.store_action = StoreAction::Store;
+    descriptor.render_target_width = u64::from(DEPTH_SIDE / 2);
+    descriptor.render_target_height = u64::from(DEPTH_SIDE / 2);
+    let command_buffer = lane.queue.command_buffer().unwrap();
+    let encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer
+        .wait_until_completed_for(super::WAIT)
+        .unwrap();
+    assert_eq!(command_buffer.error(), None);
+    let depths = sample_depths(&lane, &depth);
+    let quarter = 0.25f32.to_bits();
+    let held = depths.iter().filter(|&&d| d == quarter).count();
+    assert_eq!(
+        held,
+        depths.len(),
+        "a 4x Depth32Float on {name} cleared over 8x8 of 16x16: {held} of {} samples hold the clear",
+        depths.len()
+    );
+    assert!(
+        !zeroed(&messages),
+        "a 4x Depth32Float on {name} cleared over 8x8 of 16x16: announced at its read"
     );
     drop(cache);
     quiet(lane, &messages);
