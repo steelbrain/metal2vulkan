@@ -19,13 +19,19 @@
 //!   the second group's twin is loaded by its copy.
 //! - **fetch**: `cg_fetch_sparse` in a pass of colors 0 and 5, reading color 5's clear.
 //! - **dead read**: `dfk_dead_group`'s `dfg_branch` and `dfg_gated` specialized with their read of
-//!   color 4 dead (function constant 0 false) in a pass of colors 0 to 4: each writes `tint`
-//!   swizzled to colors 0 to 3 and `tint` to color 4, and reads nothing, so on the restricted device
-//!   it draws in two groups as `cg_five` does. Specialized live, `dfg_branch` reads color 4 from
-//!   group 0's variant, the pipeline's limit refusal there.
+//!   color 4 dead (function constant 0 false), and `dfk_dead_rog`'s `dfr_color` (a color 0 input in
+//!   raster order group 0) and `dfr_buffer` (a buffer in group 0) with theirs dead, in a pass of
+//!   colors 0 to 4: each writes `tint` swizzled to colors 0 to 3 and `tint` to color 4, and reads
+//!   nothing, so on the restricted device it draws in two groups as `cg_five` does, its group
+//!   ordering nothing. Specialized live, each is the pipeline's limit refusal there (`dfg_branch`
+//!   reads color 4 from group 0's variant; the others order a read in each group's draw).
+//!   `dfr_lacks`, a color 1 input beside a pipeline of color 0 alone, is the pipeline's
+//!   `InvalidDescriptor(ColorAttachment)` dead and live, as plain Metal refuses it both ways
+//!   (`metal2vulkan-conformance/probes/dead_ordered_and_unattached_reads.m`).
 //!
-//! Metal's answers (a probe on the Apple M3 Max, macOS 27.0.1, of these scenes but the dead read,
-//! which writes `tint` and its swizzles only): every texel of
+//! Metal's answers (a probe on the Apple M3 Max, macOS 27.0.1, of these scenes; the dead read's of
+//! `dfk_dead_rog` by `dead_ordered_and_unattached_reads.m`, `dfg_branch` and `dfg_gated` writing
+//! `tint` and its swizzles only): every texel of
 //! every color, depth and stencil is the closed form the checks compute ([`tint`] at each pixel
 //! center), and the visibility counts are 32 and 22. Where the driver counts each sample once per
 //! color its fragment shader writes (ANV: `RuntimeDriverDefect::OcclusionCountPerColorOutput`),
@@ -45,7 +51,9 @@ use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use crate::observation::PROFILES_LAYER;
 use metal2vulkan::device::VkLimit;
-use metal2vulkan::error::{Capability, Feature, RuntimeDriverDefect, Unsupported};
+use metal2vulkan::error::{
+    Capability, DescriptorError, Error as CompileError, Feature, RuntimeDriverDefect, Unsupported,
+};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
@@ -83,6 +91,7 @@ struct Lane {
     groups: Library,
     fetch: Library,
     dead: Library,
+    rog: Library,
     width: Width,
 }
 
@@ -185,6 +194,7 @@ fn lane(width: Width, validated: bool) -> Option<(Messages, ScratchCache, Scratc
         groups: library("color_groups"),
         fetch: library("color_groups_fetch"),
         dead: library("dfk_dead_group"),
+        rog: library("dfk_dead_rog"),
         width,
         device,
     };
@@ -746,11 +756,11 @@ fn fetch_scene(lane: &Lane) {
     });
 }
 
-/// The pipeline of `cg_cover` and `fragment` of `dfk_dead_group` drawing `RGBA16Float` at
-/// `colors`, the fragment function specialized with its `bool` function constant 0 `reads`.
+/// The pipeline of `cg_cover` and `fragment` of `library` drawing `RGBA16Float` at `colors`, the
+/// fragment function specialized with its `bool` function constant 0 `reads`.
 fn dead_pipeline(
     lane: &Lane,
-    fragment: &str,
+    (library, fragment): (&Library, &str),
     colors: &[usize],
     reads: bool,
 ) -> Result<RenderPipelineState, Error> {
@@ -759,8 +769,7 @@ fn dead_pipeline(
         FunctionConstantValue::new(DataType::Bool, [u8::from(reads)]),
     );
     let vertex = lane.groups.new_function_with_name("cg_cover").unwrap();
-    let fragment = lane
-        .dead
+    let fragment = library
         .new_function_with_name_constant_values(fragment, &constants)
         .unwrap();
     let mut descriptor =
@@ -777,8 +786,23 @@ fn dead_pipeline(
 /// The dead read scene (the module docs).
 fn dead_scene(lane: &Lane, five: &[usize]) {
     let name = lane.device.name().to_owned();
-    for fragment in ["dfg_branch", "dfg_gated"] {
-        let pipeline = dead_pipeline(lane, fragment, five, false)
+    // What `dfr_buffer` reads where its read is live.
+    let bytes: Vec<u8> = [0.125f32, 0.25, 0.375, 0.5]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let buffer = lane
+        .device
+        .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
+        .unwrap();
+    let functions = [
+        (&lane.dead, "dfg_branch"),
+        (&lane.dead, "dfg_gated"),
+        (&lane.rog, "dfr_color"),
+        (&lane.rog, "dfr_buffer"),
+    ];
+    for (library, fragment) in functions {
+        let pipeline = dead_pipeline(lane, (library, fragment), five, false)
             .unwrap_or_else(|e| panic!("{fragment} dead on {name}: {e}"));
         let targets: Vec<Texture> = five
             .iter()
@@ -787,6 +811,7 @@ fn dead_scene(lane: &Lane, five: &[usize]) {
         let (passes, twins) = group_counts(lane, || {
             lane.run(&cleared_pass(&targets, five), |encoder| {
                 encoder.set_render_pipeline_state(&pipeline).unwrap();
+                encoder.set_fragment_buffer(Some(&buffer), 0, 0).unwrap();
                 encoder
                     .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
                     .unwrap();
@@ -819,9 +844,24 @@ fn dead_scene(lane: &Lane, five: &[usize]) {
                 available: 4,
             },
         ));
-        let live = dead_pipeline(lane, "dfg_branch", five, true);
-        assert_eq!(live.unwrap_err(), limit, "dfg_branch live on {name}");
+        for (library, fragment) in [functions[0], functions[2], functions[3]] {
+            let live = dead_pipeline(lane, (library, fragment), five, true);
+            assert_eq!(live.unwrap_err(), limit, "{fragment} live on {name}");
+        }
     }
+    // A color input without an attachment, read or not: Metal's pipeline error.
+    let unattached = Error::Compile(CompileError::InvalidDescriptor(
+        DescriptorError::ColorAttachment { index: 1 },
+    ));
+    for reads in [false, true] {
+        let made = dead_pipeline(lane, (&lane.rog, "dfr_lacks"), &[0], reads);
+        assert_eq!(
+            made.unwrap_err(),
+            unattached,
+            "dfr_lacks ({reads}) on {name}"
+        );
+    }
+    eprintln!("COLOR-GROUPS dfr_lacks on {name}: refused dead and live, as Metal");
 }
 
 /// What the restricted device refuses, and the device as it is draws (the module docs); on a
