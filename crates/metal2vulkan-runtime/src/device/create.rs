@@ -1129,7 +1129,8 @@ pub(crate) struct QueuePlan {
 /// work is, only where a texture's image has no memory the host caches (`cached` false,
 /// `memory::host_cached_placement`: a discrete GPU with no device-local type the host caches, an
 /// RX 7900 XTX), whose textures' CPU copies would otherwise read and write through the host's
-/// mapping of uncached memory: a 1920 x 1080 `get_bytes` took 1.0 to 1.7 s that way on the XTX. Such
+/// mapping of uncached memory: most 1920 x 1080 `get_bytes` calls took 1.26 to 1.71 s that way on
+/// the XTX, and 2.0 to 2.2 ms on its compute family's queue (`device/staging.rs`). Such
 /// an asynchronous compute queue's work may wait behind a kernel that fills the GPU (up to 1.05 s
 /// on a Radeon 780M and 1.19 s on an RTX 3090), so where a texture's image has memory the host
 /// caches its copies stay on the host, and no such queue stages. `None` where no family does

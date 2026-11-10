@@ -1639,9 +1639,9 @@ fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
 /// reads `replace_region`'s texels up to `LOADED_READS` times, over about [`BUSY`]; where it copies
 /// on the host or the staging queue, a command buffer behind the work waits for an event the host
 /// signals only once the reads returned, and they return before it, however long a read takes on
-/// the device (a 1080p read from an RX 7900 XTX's uncached device-local memory took 1.0 to 1.7
-/// s); the line gives the distribution of those that returned while the work ran. Elsewhere the
-/// reads wait for the work, which ends at its cap.
+/// the device (a 1080p read on the host from an RX 7900 XTX's uncached device-local memory took
+/// up to 1.7 s); the line gives the distribution of those that returned while the work ran.
+/// Elsewhere the reads wait for the work, which ends at its cap.
 #[test]
 fn frame_sized_textures_copy_texel_exact() {
     const WIDTH: u64 = 1920;

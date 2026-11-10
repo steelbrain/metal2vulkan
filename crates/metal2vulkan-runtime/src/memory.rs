@@ -655,7 +655,9 @@ pub(super) fn allocatable(flags: vk::MemoryPropertyFlags) -> bool {
 /// `vkCopyImageToMemoryEXT` read a 1920 x 1080 `BGRA8Unorm` image's 8 MiB in 758 ms from
 /// device-local host-visible memory (resizable BAR), in 127 ms from uncached system memory and in
 /// 2.9 ms from host-cached system memory; on a Radeon 780M in 144 ms from RADV's device-local
-/// host-visible type and in 4.6 ms from its host-cached one.
+/// host-visible type and in 4.6 ms from its host-cached one; on an RX 7900 XTX (RADV, Mesa 26.2.6)
+/// from its device-local host-visible type (resizable BAR) in 1.26 to 1.71 s in most calls, where
+/// the host's 4-byte loads from that type took 1.0 to 1.4 us each (8 MiB in 2.94 s).
 ///
 /// Only coherent ones: the runtime flushes and invalidates no mapped range, as Metal's `Shared`
 /// and `Managed` textures need no flush, so a cached type that is not coherent leaves the image's

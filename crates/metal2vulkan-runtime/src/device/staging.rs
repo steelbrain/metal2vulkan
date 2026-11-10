@@ -8,9 +8,13 @@
 //! other resource keeps the device's sharing (`sharing.rs`).
 //!
 //! - **Why not the host, where its memory is uncached.** The host reads uncached memory slowly
-//!   (`memory::host_cached`): on the XTX, which has no device-local type the host caches, a
-//!   1920 x 1080 `get_bytes` copied on the host from its device-local host-visible memory took
-//!   1.0 to 1.7 s (`tests::cpu_copy_times` times it on each device, and the copy here).
+//!   (`memory::host_cached`). On the XTX (RADV, Mesa 26.2.6), which has no device-local type the
+//!   host caches, a texture's host-transfer image lay in its device-local host-visible type
+//!   (resizable BAR), and a `get_bytes` copied on the host out of it took 33 to 41 ms at
+//!   256 x 256, 1.26 to 1.71 s in most calls at 1920 x 1080 (3.2 and 5.4 ms at best), 36 to 49 ms
+//!   at 4096 x 4096, and past the end of 1.5 s of GPU fills when they ran; copied here, 0.10 to
+//!   0.13 ms, 2.0 to 2.2 ms (1.9 to 2.1 ms with the fills running) and 17 ms
+//!   (`tests::cpu_copy_times`).
 //! - **Why a queue of its own.** A copy on the device's first `VkQueue` waits behind every command
 //!   buffer submitted there before it: behind a 2 s kernel, a 1080p `get_bytes` returned after
 //!   1.99 s on an RTX 3090. It never waits for a wait no submitted signal meets: the scheduler
