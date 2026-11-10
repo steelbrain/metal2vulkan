@@ -932,9 +932,10 @@ pub enum FactorLane {
 pub struct ExtendedRangeColor {
     /// The attachment's format.
     pub form: metal::format::ExtendedRange,
-    /// The pipeline enables blending at the attachment, with factors one and zero for color and
-    /// alpha and the operation add (any other blend is not built): the output is clamped to the
-    /// format's range first.
+    /// The pipeline enables blending at the attachment: the output is clamped to the format's
+    /// range first, and the fragment function computes the blend over an ordered read of the
+    /// attachment (`lower::fragment`). A blend into a bfloat attachment is Metal's pipeline
+    /// error (`InvalidDescriptor(ColorAttachment)`).
     pub blended: bool,
     /// A bfloat attachment of a pipeline whose `textureWriteRoundingMode` is
     /// `metal::TextureWriteRoundingMode::NearestEven`: a `float` output rounds to `half` to
@@ -946,8 +947,8 @@ pub struct ExtendedRangeColor {
 }
 
 impl ExtendedRangeColor {
-    /// The write of an attachment of `form`, blended (with factors one and zero) where `blended`,
-    /// at the default `textureWriteRoundingMode`.
+    /// The write of an attachment of `form`, blended where `blended`, at the default
+    /// `textureWriteRoundingMode`.
     pub fn new(form: metal::format::ExtendedRange, blended: bool) -> ExtendedRangeColor {
         ExtendedRangeColor {
             form,

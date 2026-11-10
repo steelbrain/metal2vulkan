@@ -364,8 +364,10 @@ fn fragment_outputs_to_extended_range_targets_write_raw_texels() {
 /// the attachment with the mode's rounding (`ExtendedRangeColor::nearest_even`), declares the raw
 /// format's unsigned components, and links with the raw format, a write of the format's raw
 /// components under a full mask and of none under an empty one, both modules passing L3. A
-/// function compiled at the other mode does not link (`NeedsInput(ColorWrites)`), and neither
-/// does a blend (`NotImplemented(Format)`), which Metal's validation refuses.
+/// function compiled at the other mode does not link (`NeedsInput(ColorWrites)`). A blend is
+/// Metal's pipeline error (`InvalidDescriptor(ColorAttachment)`: Metal's pipeline validation
+/// asserts that the format is not blendable), in the function's translation and at link, with no
+/// fragment function too.
 #[test]
 fn fragment_outputs_to_bfloat_targets_write_raw_codes() {
     let Some(bc) = fixture() else {
@@ -449,16 +451,21 @@ fn fragment_outputs_to_bfloat_targets_write_raw_codes() {
                     }
                 }
             }
-            // Blended: refused by the lowering (by the storage form's plan where the device
-            // orders fetch only through the interlock). Unwritten (no fragment function), the
-            // draw leaves the attachment as it is, as Metal leaves an unwritten one: no blend and
-            // an empty mask, where link's format table refused the blend before.
+            // Blended: Metal's pipeline error, in the lowering (by the storage form's plan where
+            // the device orders fetch only through the interlock) and at link, with no fragment
+            // function too.
             let what = format!("{stem} {pf:?} blended");
+            let invalid = Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 0 });
             let r = pipeline_of(pf, ColorWriteMask::ALL, true);
             for entry in ["rt6_fill_rgba32float", "rt6_fill_rgba16float"] {
                 let e = compile_with(&bc, entry, &p, &blended_inputs(&r, &p)).expect_err(&what);
-                assert!(is_format_refusal(&e), "{what} {entry}: {e}");
+                assert_eq!(e, invalid, "{what} {entry}");
             }
+            let e = link(&[&v], &render(&r), &p).expect_err(&what);
+            assert_eq!(e, invalid, "{what}, unwritten");
+            // The negative control: the same pipeline unblended, unwritten, leaves the attachment
+            // as Metal leaves an unwritten one, no blend and an empty mask.
+            let r = pipeline_of(pf, ColorWriteMask::ALL, false);
             let l =
                 link(&[&v], &render(&r), &p).unwrap_or_else(|e| panic!("{what}, unwritten: {e}"));
             let a =

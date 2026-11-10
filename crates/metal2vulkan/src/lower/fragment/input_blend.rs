@@ -47,8 +47,8 @@
 //! the storage form does (another output is refused, `Feature::ExtendedRangeBlend` `Output`); its
 //! second source is the function's index-1 output, read from the returned value and stored nowhere
 //! else ([`select_second_output`]). A write of none of the format's channels stores nothing and
-//! blends nothing. A padded or bfloat attachment's blend is not built, and stays refused
-//! `NotImplemented(Format)` (`stage_io::extended_color`).
+//! blends nothing. A padded attachment's blend is built so too; a bfloat attachment's is Metal's
+//! pipeline error (`InvalidDescriptor(ColorAttachment)`, `stage_io::extended_color`).
 
 use std::collections::BTreeMap;
 

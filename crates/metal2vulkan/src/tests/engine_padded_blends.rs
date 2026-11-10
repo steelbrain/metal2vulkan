@@ -21,7 +21,7 @@ use std::path::Path;
 
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{Error, Needs};
+use crate::error::{DescriptorError, Error, Needs};
 use crate::library::{FunctionArtifact, Library};
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::RenderPipeline;
@@ -58,6 +58,13 @@ const PADDED: [PixelFormat; 5] = [
     PixelFormat::RG10UnormX12,
     PixelFormat::RG10UnormX12SRGB,
     PixelFormat::RGB10A2UnormSRGB,
+];
+
+/// The bfloat formats, which Metal blends nowhere.
+const BFLOAT: [PixelFormat; 3] = [
+    PixelFormat::R16Bfloat,
+    PixelFormat::RG16Bfloat,
+    PixelFormat::RGBA16Bfloat,
 ];
 
 /// Premultiplied source-over: one over one minus the source alpha, added, for color and alpha.
@@ -278,4 +285,53 @@ fn a_blend_into_a_padded_attachment_is_computed_in_the_shader() {
     assert!(interlocked > 0, "no profile blends in the storage form");
     assert!(inputs > 0, "no profile blends over the input attachment");
     assert!(unordered > 0, "no profile orders fetch in neither form");
+}
+
+/// A blend into a bfloat attachment (`R16Bfloat`, `RG16Bfloat`, `RGBA16Bfloat`) is Metal's
+/// pipeline error, whatever the function writes there: Metal's pipeline validation asserts that
+/// the format is not blendable (the M3 Max under macOS 27.0.1, plain and under the validation
+/// layer, with a fragment function writing the attachment, under a mask of no channel, and with no
+/// fragment function). So the pipeline is `InvalidDescriptor(ColorAttachment)` on every committed
+/// profile, as is the fragment function's translation under that state; the same pipeline
+/// unblended is made where the device makes the attachment (the negative control).
+#[test]
+fn a_blend_into_a_bfloat_attachment_is_metals_pipeline_error() {
+    let Some(fills) = assembled("rt6_samples") else {
+        return;
+    };
+    let invalid = Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 0 });
+    let fills = (fills.as_slice(), "rt6_fill_vertex", "rt6_fill_rgba16float");
+    let (mut refused, mut unblended) = (0, 0);
+    for (stem, p) in committed_profiles().expect("profiles") {
+        let dev = device(&stem);
+        for pf in BFLOAT {
+            for mask in [ColorWriteMask::ALL, ColorWriteMask::NONE] {
+                let what = format!("{stem} {pf:?} {mask:?}");
+                let made = pipeline(&dev, fills, attachment(pf, OVER, mask));
+                assert_eq!(made.map(drop), Err(invalid.clone()), "{what}");
+                let compiled = compile_with(fills.0, fills.2, &p, &state(&p, pf, OVER, mask));
+                assert_eq!(compiled.map(drop), Err(invalid.clone()), "{what}");
+                refused += 1;
+            }
+            let what = format!("{stem} {pf:?} without a fragment function");
+            let mut d =
+                RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
+                    Library::from_air(fills.0)
+                        .expect("library")
+                        .function(fills.1)
+                        .expect("function"),
+                )));
+            d.color_attachments[0] = Some(attachment(pf, OVER, ColorWriteMask::ALL));
+            let made = dev.compile_render_pipeline(&d, &Budget::standard());
+            assert_eq!(made.map(drop), Err(invalid.clone()), "{what}");
+            // The negative control: the same pipeline unblended.
+            let mut c = ColorAttachmentDescriptor::new(pf);
+            c.blending_enabled = false;
+            match pipeline(&dev, fills, c) {
+                Ok(_) => unblended += 1,
+                Err(e) => assert!(device_gap(&e), "{stem} {pf:?} unblended: {e}"),
+            }
+        }
+    }
+    assert!(refused > 0 && unblended > 0, "{refused} {unblended}");
 }

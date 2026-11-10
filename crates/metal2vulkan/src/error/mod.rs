@@ -1874,7 +1874,8 @@ pub enum DescriptorError {
     VertexLayout { layout: u32 },
     /// A color attachment format without a fragment output, or of the wrong type class; one a
     /// fragment output has fewer components for than its channels; one whose blend reads a
-    /// second output the function does not write, or writes without the first; or an integer
+    /// second output the function does not write, or writes without the first; a bfloat one
+    /// (`R16Bfloat`, `RG16Bfloat`, `RGBA16Bfloat`) with blending enabled; or an integer
     /// attachment 0 under alpha to coverage (Metal refuses each pipeline).
     ColorAttachment { index: u32 },
     /// A raw Metal enum value outside the known set.

@@ -854,7 +854,7 @@ fn every_padded_code_reads_its_tile_value() {
 /// Metal's pass stores each word of a tile it writes.
 #[test]
 fn a_masked_padded_write_keeps_the_other_codes() {
-    let mut rng = Rng(0xC0DE_5);
+    let mut rng = Rng(0x000C_0DE5);
     let code = |v: f32| {
         let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
         round_even(f64::from(v * 1023.0)) as u32

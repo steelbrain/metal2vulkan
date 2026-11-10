@@ -22,14 +22,14 @@
 //! default mode and at `NearestEven`).
 //!
 //! An integer output to such an attachment is Metal's pipeline error: it is not encoded, and link
-//! refuses it (`ColorAttachment`). Refused `NotImplemented(Format)` until measured and modelled:
-//! an attachment of a padded or bfloat form the pipeline blends (`ExtendedRangeColor::blended`;
-//! Metal's validation refuses a bfloat one's blend) and a dual-source second output to one. A
-//! `bfloat` output is refused before, as Metal's compiler rejects it. A blend of another form is
-//! the function's own, over an ordered read of the attachment (below, and `lower::fragment::fetch`'s
-//! storage form): on a device that orders fetch in neither form it is refused naming what it needs
-//! (`fetch::unordered_extended_fetch`: `fragmentShaderPixelInterlock` or
-//! `rasterizationOrderColorAttachmentAccess`).
+//! refuses it (`ColorAttachment`). So is a blend into a bfloat attachment, whatever the function
+//! writes there (`InvalidDescriptor(ColorAttachment)`: Metal's pipeline validation asserts that
+//! the format is not blendable). A `bfloat` output is refused before, as Metal's compiler rejects
+//! it. The blend of another form, a padded one's included, is the function's own, over an ordered
+//! read of the attachment (below, and `lower::fragment::fetch`'s storage form), and a dual-source
+//! second output to such an attachment is that blend's second source: on a device that orders fetch
+//! in neither form the blend is refused naming what it needs (`fetch::unordered_extended_fetch`:
+//! `fragmentShaderPixelInterlock` or `rasterizationOrderColorAttachmentAccess`).
 //!
 //! On a device that orders framebuffer fetch through rasterization-order input attachments, a blend
 //! the function computes over the attachment's input attachment (`lower::fragment`'s `input_blend`)
