@@ -90,6 +90,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::StorageTextureNumericType { slot },
         RuntimeFact::OutOfBoundsAlpha { slot },
         RuntimeFact::BicubicTexels { slot },
+        RuntimeFact::BorderTexels { slot },
         RuntimeFact::StorageTextureLevels { slot },
         RuntimeFact::StorageTextureLevelViews { slot },
         RuntimeFact::SparseTexture {
@@ -374,6 +375,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::RotatedInputBlend { .. } => 90,
         RuntimeFact::OpenClMode => 91,
         RuntimeFact::RowLockstep => 92,
+        RuntimeFact::BorderTexels { .. } => 93,
     }
 }
 
@@ -381,7 +383,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..93).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..94).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -401,6 +403,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::TileFunction
                 | RuntimeFact::OutOfBoundsAlpha { .. }
                 | RuntimeFact::BicubicTexels { .. }
+                | RuntimeFact::BorderTexels { .. }
                 | RuntimeFact::SparseTexture {
                     sparse_arm: true, ..
                 }

@@ -386,6 +386,7 @@ fn specialized_push(m: &TypedModule, spec: &BTreeMap<SpecKey, u64>, mut push: Ve
                 u64::from(crate::metal::TextureSwizzleChannels::DEFAULT_WORD)
             }
             SpecKey::BicubicTexels(_) => u64::from(crate::metal::bicubic::BicubicTexels::NEUTRAL.0),
+            SpecKey::BorderTexels(_) => u64::from(crate::metal::sampler::NEUTRAL_BORDER_TEXELS),
             _ => 0,
         });
         let at = member.offset as usize;
