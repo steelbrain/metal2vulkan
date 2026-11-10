@@ -31,7 +31,9 @@
 //! the page set's ([`A`], [`B`], [`C`]), and its output is calibrated over plain buffers holding
 //! each node, and an all-zero one for an unreached member.
 
+use super::degrade_notices::on_device_with as on_device_noticed_with;
 use super::degrade_notices::{assert_made_once, made_once, on_device as on_device_noticed};
+use super::host_memory::on_device_with;
 use super::host_memory::{gpu_read, host_page, no_copy, not_importable, on_device, recording};
 use super::host_memory::{Mapping, Seen};
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
@@ -41,7 +43,7 @@ use super::rebinds::{rebind, rebind_heap};
 use super::resource_ids::DELAYED_DEALLOCATORS;
 use super::shared_kinds;
 use super::{
-    bound_buffers, buffer_with, encode_case, pipeline_state, public_case, read_buffer,
+    at_plan, bound_buffers, buffer_with, encode_case, pipeline_state, public_case, read_buffer,
     validated_device_with, CaseResources, Messages, PublicCase, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
@@ -1084,7 +1086,7 @@ fn corners(points: [f32; 6]) -> Vec<u8> {
 /// The fixture's pipeline (`rt6_restart.ll`) reads the corners from vertex buffer 0.
 #[test]
 fn a_render_pass_drawing_from_a_buffer_rebound_before_its_first_submission_reads_the_new_pages() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let pipeline = corner_pipeline(device);
         let off = [(0, corners([4.0, 4.0, 5.0, 4.0, 4.0, 5.0]))];
         let whole = [(0, corners([-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]))];
@@ -1124,7 +1126,7 @@ fn a_render_pass_drawing_from_a_buffer_rebound_before_its_first_submission_reads
 /// target is drawn whole only where both draws ran again at their own offsets.
 #[test]
 fn indexed_draws_setting_a_rebound_buffer_again_are_each_encoded_again() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let pipeline = corner_pipeline(device);
         let indices: Vec<u8> = [0u16, 1, 2]
             .into_iter()
@@ -1181,7 +1183,7 @@ fn indexed_draws_setting_a_rebound_buffer_again_are_each_encoded_again() {
 /// and the command buffer completes.
 #[test]
 fn a_render_pass_with_calls_refused_at_its_encoding_is_encoded_again() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let pipeline = corner_pipeline(device);
         let off = [(0, corners([4.0, 4.0, 5.0, 4.0, 4.0, 5.0]))];
         let whole = [(0, corners([-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]))];
@@ -1598,8 +1600,10 @@ fn a_released_buffer_s_keep_alive_holds_its_listed_pages_while_its_deallocator_r
 
 /// The release of a no-copy buffer a submitted command buffer's table lists, with a keep-alive
 /// or without one, and of one beside it that no submitted table lists.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn released_while_listed(keep_alive: bool) {
-    on_device_noticed(|device, messages| {
+    on_device_noticed_with(at_plan, |device, messages| {
         let queue = device.new_command_queue().unwrap();
         let walker = public_case(POINTER_WALKER).unwrap();
         let outputs = Outputs::new(device, &queue, &walker);
@@ -1883,7 +1887,7 @@ const REBOUND_DISPATCHES: [(bool, bool); 3] = [(false, true), (true, true), (tru
 fn a_dispatch_counts_into_the_pages_its_buffer_lies_in_at_the_first_submission() {
     // A device of its own each, whose first state's first dispatch hands its making to the pool.
     for (predicated, runs) in REBOUND_DISPATCHES {
-        on_device(|device| {
+        on_device_with(at_plan, |device| {
             let state = kernel(device, "prd_mark", false);
             for cold in [true, false] {
                 let what =

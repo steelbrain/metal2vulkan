@@ -61,16 +61,17 @@ use super::degrade_notices::{
     assert_once_allowing, forced, made_compute_kinds, shared_in_system_memory,
 };
 use super::gpu_times::{disagreeable_kinds, read_kinds};
+use super::host_memory::on_device;
+use super::host_memory::on_device_with;
 use super::host_memory::{no_copy, not_importable, recording, Mapping, Seen, GUEST_PAGE};
 use super::rebind_reach::{node, walk, Outputs, Uses, A, POINTER_WALKER};
 use super::rebinds::rebind;
 use super::sparse_textures::{lacks_sparse, SparseFacts};
 use super::{
-    buffer_with, case_bound_value_kinds, case_making_kinds, encode_case, pipeline_state,
+    at_plan, buffer_with, case_bound_value_kinds, case_making_kinds, encode_case, pipeline_state,
     public_case, read_buffer, CaseResources, Messages, WAIT,
 };
 use crate::air_library::AirLibrary;
-use crate::runtime_lane::host_memory::on_device;
 use metal2vulkan::bind::{StatusReport, TileMapping};
 use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -951,7 +952,7 @@ fn first_after(device: &Device, queue: &CommandQueue, failure: Option<&str>) -> 
 /// through resources placed in a new heap, aliased, which its fill never overwrites.
 #[test]
 fn a_new_resource_s_zeros_come_before_every_use_on_every_queue() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let name = device.name();
         let first = device.new_command_queue().unwrap();
         let second = device.new_command_queue().unwrap();
@@ -1928,7 +1929,7 @@ fn takes_host_cached_memory(device: &Device) -> bool {
 /// Prints the route (`STAGING-HANG` lines).
 #[test]
 fn cpu_copies_return_while_queued_work_waits_on_a_later_event() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let name = device.name();
         let managed = ResourceOptions::new(
             StorageMode::Managed,

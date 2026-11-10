@@ -72,7 +72,7 @@ use super::degrade_notices::{made_compute_kinds, made_render_kinds, shared_in_sy
 use super::depth_compares::run;
 use super::render_state::library;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
     validated_device_with,
 };
 use super::{Messages, ScratchCache, WAIT};
@@ -855,7 +855,7 @@ fn a_stored_depth_reads_samples_and_compares_as_metal_s() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         // The device keeps such a value, and its depth test is Metal's own or compares it as it
         // is.

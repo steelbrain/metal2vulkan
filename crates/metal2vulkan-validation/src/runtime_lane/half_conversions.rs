@@ -20,9 +20,9 @@
 //! kernel that rounds through the conversion records the note. A kernel that records it may answer
 //! the device's lanes, which the test prints as `HALF-CONVERSIONS` lines.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::driver_deviations::stage_notes;
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkProperty;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, StageSource};
@@ -242,7 +242,7 @@ fn run(device: &Device, kernel: &Kernel, air: &[u8], lanes: &[[f32; 3]]) -> Vec<
 fn half_conversions_are_metals_where_measured_and_noted_elsewhere() {
     let air = llvm_assemble_text(&library()).unwrap();
     let ties = tie_floats();
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let measured = device
             .compile_device()
             .profile()

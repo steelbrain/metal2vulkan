@@ -30,13 +30,15 @@ use super::degrade_notices::{
 use super::rate_maps::descriptor;
 use super::renders::map_render;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::candidate::runtime_case::{render_pipeline_descriptor, render_pipeline_state};
 use crate::gpu::TEST_DEVICE;
 use crate::store::CorpusStore;
 use metal2vulkan::metal::Mutability;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType, TextureUsage};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue,
     Degradation, Device, Error, EventRef, Invalid, LoadAction, Problem, RasterizationRateMap,
@@ -269,7 +271,7 @@ fn shaded_in(target: &Texture, slice: u64) -> (usize, [u64; 4], [[f32; 2]; 2]) {
 fn a_rate_mapped_pass_shades_its_physical_pixels_region_by_region() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let fixture = Fixture::new(&device);
     let half = fixture.map(0.5);
     let whole = (33 * 33, [0, 0, 32, 32], [[0.5, 0.5], [32.5, 32.5]]);
@@ -361,9 +363,15 @@ pub(super) const ZERO_LAYER_AFTER_RELEASE: [Degradation; 1] =
 /// of its own (a device's released maps of layers decide what its later maps of no layers draw),
 /// then fail on any validation message.
 fn fresh(test: impl FnOnce(&Fixture, &Messages)) {
+    fresh_with(|_| {}, test)
+}
+
+/// [`fresh`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn fresh_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Fixture, &Messages)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
     let fixture = Fixture::new(&device);
     test(&fixture, &messages);
     layer_reported_nothing_at_all(&messages);
@@ -394,7 +402,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
     };
     let whole = (33 * 33, [0, 0, 32, 32], [[0.5, 0.5], [32.5, 32.5]]);
     // `none8` and `half8`.
-    fresh(|fixture, _| {
+    fresh_with(at_plan, |fixture, _| {
         let target = filled(fixture, 8);
         fixture.draw_in(&plain(&target), corner).unwrap();
         assert_eq!(
@@ -403,7 +411,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
             "none8"
         );
     });
-    fresh(|fixture, _| {
+    fresh_with(at_plan, |fixture, _| {
         let target = filled(fixture, 8);
         fixture
             .draw(&fixture.map_of(8, &[(0.5, 0.5)]), &target, corner)
@@ -418,7 +426,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
         ("zero64", 64, 64, false),
         ("zero256on8", 256, 8, true),
     ] {
-        fresh(|fixture, messages| {
+        fresh_with(at_plan, |fixture, messages| {
             let target = filled(fixture, side);
             fixture
                 .draw(&fixture.map_of(screen, &[]), &target, |encoder| {
@@ -432,7 +440,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
         });
     }
     // `none64` and `half64`.
-    fresh(|fixture, _| {
+    fresh_with(at_plan, |fixture, _| {
         let target = filled(fixture, 64);
         fixture.draw_in(&plain(&target), |_| {}).unwrap();
         assert_eq!(
@@ -448,7 +456,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
     });
     // `after_half64`: a pass over a map of one layer, the map released, then one of none, which
     // Metal draws (its rows 0 to 15) and the runtime does not: announced, once.
-    fresh(|fixture, messages| {
+    fresh_with(at_plan, |fixture, messages| {
         {
             let half = fixture.map_of(64, &[(0.5, 0.5)]);
             let target = filled(fixture, 64);
@@ -469,7 +477,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
         assert_made_once(messages, &ZERO_LAYER_AFTER_RELEASE, &first);
     });
     // `beside_half64`: a map of one layer live beside one of none.
-    fresh(|fixture, messages| {
+    fresh_with(at_plan, |fixture, messages| {
         let half = fixture.map_of(64, &[(0.5, 0.5)]);
         let empty = fixture.map_of(64, &[]);
         let target = filled(fixture, 64);
@@ -481,7 +489,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
         assert!(!announced_after_release(messages), "beside_half64");
     });
     // `seq`: passes over a map of none, one of one layer, and the first again.
-    fresh(|fixture, messages| {
+    fresh_with(at_plan, |fixture, messages| {
         let empty = fixture.map_of(64, &[]);
         let half = fixture.map_of(64, &[(0.5, 0.5)]);
         for (name, over, zero) in [
@@ -500,7 +508,7 @@ fn a_pass_over_a_map_of_no_layers_draws_nothing() {
     });
     // `zero_before_release`: a map of none made before a map of one layer is
     // released draws nothing on Metal after the release too, and announces nothing here.
-    fresh(|fixture, messages| {
+    fresh_with(at_plan, |fixture, messages| {
         let empty = fixture.map_of(64, &[]);
         {
             let half = fixture.map_of(64, &[(0.5, 0.5)]);
@@ -718,7 +726,7 @@ fn a_reset_to_another_screen_keeps_the_screen_the_pass_took() {
             [[0.5, 0.5], [edge, edge]],
         )
     };
-    fresh(|fixture, messages| {
+    fresh_with(at_plan, |fixture, messages| {
         let device = &fixture.device;
         let identity = |side: u32| descriptor(side, side, &[(1.0, 1.0)]);
         let map_of = |side: u32| {
@@ -792,7 +800,7 @@ fn passes(
 /// runs. The runtime answers so, each hang on a queue of its own (a queue's second revokes it).
 #[test]
 fn a_pass_of_no_draw_call_over_a_mutable_map_hangs_until_one_drew() {
-    fresh(|fixture, _| {
+    fresh_with(at_plan, |fixture, _| {
         let device = &fixture.device;
         let hangs = |command_buffer: &CommandBuffer, case: &str| {
             assert_eq!(
@@ -914,7 +922,7 @@ pub(super) const RESET_UNENCODED: [Degradation; 1] = [Degradation::RateMapResetU
 /// announces [`RESET_UNENCODED`], once for two such command buffers.
 #[test]
 fn a_pass_the_runtime_cannot_encode_again_draws_by_the_map_it_took() {
-    fresh(|fixture, messages| {
+    fresh_with(at_plan, |fixture, messages| {
         let device = &fixture.device;
         let identity = (16 * 64, [0, 0, 15, 63], [[0.5, 0.5], [15.5, 63.5]]);
         for _ in 0..2 {
@@ -955,7 +963,7 @@ fn a_pass_the_runtime_cannot_encode_again_draws_by_the_map_it_took() {
 fn rate_mapped_passes_are_refused_where_metal_or_the_runtime_refuses_them() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let fixture = Fixture::new(&device);
     let half = fixture.map(0.5);
     let queue = device.new_command_queue().unwrap();

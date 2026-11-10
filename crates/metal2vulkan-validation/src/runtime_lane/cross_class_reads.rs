@@ -52,9 +52,9 @@
 //! and an M3). The device decodes the texels: through Metal's own texture unit Metal's words,
 //! elsewhere the device's own, the same through each class, announced.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::driver_deviations::half_nan;
-use super::{buffer_with, read_buffer, Messages};
+use super::{at_plan, buffer_with, read_buffer, Messages};
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::variants::compile_compute_for_shape;
 use metal2vulkan::bind::{
@@ -697,7 +697,7 @@ fn report(device: &Device, what: &str, tally: &Tally) {
 /// texture.
 #[test]
 fn cross_class_reads_are_the_native_words() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let tally = compare((device, messages), &[Op::Read], &read_lanes(), None);
         report(device, "reads", &tally);
     });
@@ -708,7 +708,7 @@ fn cross_class_reads_are_the_native_words() {
 /// constexpr sampler (an integer format's linear sample is its nearest one).
 #[test]
 fn cross_class_samples_are_the_native_words() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let ops = [
             Op::Sample(Through::Constexpr(sampler_words(false))),
             Op::Sample(Through::Constexpr(sampler_words(true))),
@@ -723,7 +723,7 @@ fn cross_class_samples_are_the_native_words() {
 /// of each format of [`FORMATS`] through each foreign declared type is the native slot's words.
 #[test]
 fn cross_class_runtime_samples_and_gathers_are_the_native_words() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let mut linear = SamplerDescriptor::new();
         linear.min_filter = SamplerMinMagFilter::Linear;
         linear.mag_filter = SamplerMinMagFilter::Linear;
@@ -795,7 +795,7 @@ fn metal_srgb_gather(bytes: &[u8], lane: [u32; 4]) -> [u32; 4] {
 /// counted.
 #[test]
 fn an_srgb_gather_through_each_class_is_the_devices_decode() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let format = PixelFormat::RGBA8UnormSRGB;
         let (w, h) = (u64::from(W), u64::from(H));
         let bytes = texels(format.as_raw(), w * h, 4);
@@ -865,7 +865,7 @@ fn an_srgb_gather_through_each_class_is_the_devices_decode() {
 /// texels) at each of two dispatches, and the device announces `cross-class-texture-neutral` once.
 #[test]
 fn an_unanswered_cross_class_access_binds_the_neutral_announced() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let pipeline = pipeline_of(device, &kernel(Op::Read, Ty::Uint));
         let mut descriptor = TextureDescriptor::texture_2d(
             PixelFormat::Depth32Float,
@@ -935,7 +935,7 @@ fn stage_notes(device: &Device, text: &str) -> BTreeSet<PrecisionNote> {
 /// `cross-class-texture-neutral`.
 #[test]
 fn argument_buffer_cross_class_reads_are_the_native_words() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let lanes = read_lanes();
         let mut pipelines: BTreeMap<(Ty, bool), ComputePipelineState> = BTreeMap::new();
         let mut state = |ty: Ty, held: bool| {
@@ -1032,7 +1032,7 @@ fn argument_buffer_cross_class_reads_are_the_native_words() {
 /// `cross-class-texture-neutral` once.
 #[test]
 fn an_argument_buffer_cross_class_sample_is_announced() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let op = Op::Sample(Through::Constexpr(sampler_words(false)));
         let pipeline = pipeline_of(device, &kernel_at(op, Ty::Float, true));
         let texture = made(device, PixelFormat::RGBA8Uint, 4);

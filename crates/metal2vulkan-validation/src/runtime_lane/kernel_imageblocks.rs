@@ -3,21 +3,23 @@
 //!
 //! - Every committed public kernel case with an explicit imageblock, and no tile pass, runs through
 //!   the runtime (its size set with `set_imageblock_size`) against its committed Metal observation,
-//!   or the output of the engine candidate run afresh where the two differ ([`census`]).
+//!   or the output of the engine candidate run afresh where the two differ ([`census_with`]).
 //! - `set_imageblock_size` takes what plain Metal takes and refuses the rest at the call, changing
 //!   nothing. A size set before the pipeline state holds for it, and an encoder that never sets one
 //!   runs a 1 by 1 imageblock, as Metal's does.
 //! - A pipeline state answers `imageblock_memory_length_for_dimensions`: 0 without an imageblock,
 //!   and for one each side rounded up to a power of two.
 
-use super::kernel_textures::census;
+use super::kernel_textures::census_with;
 use super::{
-    bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state, public_case,
-    public_cases, validated_device, CaseResources, Messages, PublicCase, ScratchCache, WAIT,
+    at_plan, bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state,
+    public_case, public_cases, validated_device_with, CaseResources, Messages, PublicCase,
+    ScratchCache, WAIT,
 };
 use crate::candidate::runtime_case::Committed;
 use crate::case::Stage;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputeCommandEncoder, Device, Error, Invalid, Problem, Size,
 };
@@ -33,17 +35,23 @@ const PLAIN: &str = "threadgroup-scratch-of-eighty-byte-elements";
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
 }
 
 /// Every committed public kernel case with an explicit imageblock, and no tile pass, passes the
-/// [`census`].
+/// [`census_with`].
 #[test]
 fn kernels_with_explicit_imageblocks_match_metal() {
     let mut cases = public_cases(|case| {
@@ -56,7 +64,7 @@ fn kernels_with_explicit_imageblocks_match_metal() {
         !cases.is_empty(),
         "no committed case has an explicit imageblock"
     );
-    census("runtime kernel imageblocks", &cases);
+    census_with(at_plan, "runtime kernel imageblocks", &cases);
 }
 
 /// `case` run once on `device` with its imageblock size left to `size`, which runs on the
@@ -97,7 +105,7 @@ fn run_sized(
 /// state holds for it, and an encoder that sets none runs 1 by 1, as Metal's kernel reads.
 #[test]
 fn an_imageblock_size_is_taken_or_refused_at_the_call() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let case = public_case(EXTENT).unwrap();
         let [width, height] = case.compute.imageblock.unwrap();
         let output = run_sized(device, &case, |encoder| {

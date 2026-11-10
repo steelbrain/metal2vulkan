@@ -19,7 +19,9 @@ use super::degrade_notices::counts as notice_counts;
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::driver_deviations::stage_notes;
 use super::extended_range_targets::half_bits;
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::VkProperty;
@@ -402,7 +404,7 @@ fn heap_linear_samples_answer_as_slot_samples() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let within = device_filters(&device);
         let mut noise = Noise(0x5eed_d499);

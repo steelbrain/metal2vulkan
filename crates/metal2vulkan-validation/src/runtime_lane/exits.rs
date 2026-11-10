@@ -39,8 +39,9 @@
 
 use super::indirect_host_steps::Setup;
 use super::{
-    bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state, public_case,
-    run_queue_waits, validated_device, CaseResources, Messages, ScratchCache,
+    at_plan, bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state,
+    public_case, run_queue_waits, validated_device, validated_device_with, CaseResources, Messages,
+    ScratchCache,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::{DeviceType, TEST_DEVICE};
@@ -482,7 +483,7 @@ fn child() {
         unsafe { libc::atexit(read_the_marker) };
     }
     let messages = Messages::default();
-    let device = validated_device(TEST_DEVICE, &messages, &cache).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, &cache, at_plan).unwrap();
     // Right after the device: the hook's later registrations, and every handler a case registers,
     // run before it, and the device's driver's and layer's handlers after it.
     // SAFETY: a handler with no arguments that never unwinds.
@@ -629,11 +630,11 @@ fn child() {
             // device made and dropped first: its making's sections register the hook again after
             // each entry point's first call since the first device's, which the last one's then
             // do not.
-            drop(validated_device(TEST_DEVICE, &messages, &cache).unwrap());
+            drop(validated_device_with(TEST_DEVICE, &messages, &cache, at_plan).unwrap());
             // SAFETY: a handler with no arguments that never unwinds.
             unsafe { libc::atexit(drop_the_held_device) };
             let before = metal2vulkan_runtime::exit_registrations();
-            let last = validated_device(TEST_DEVICE, &messages, &cache).unwrap();
+            let last = validated_device_with(TEST_DEVICE, &messages, &cache, at_plan).unwrap();
             let after = metal2vulkan_runtime::exit_registrations();
             println!("{REPORT}-REGISTRATIONS before={before:?} after={after:?}");
             *HELD.lock().unwrap_or_else(PoisonError::into_inner) = Some(last);

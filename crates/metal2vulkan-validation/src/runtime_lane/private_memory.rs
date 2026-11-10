@@ -19,7 +19,9 @@
 //! runs take the sizes in ascending order, each alone and bounded; they stop at the first size with
 //! a `STOP` or no end, so no larger size runs after a timeout or a lost device.
 
+use super::at_plan;
 use super::host_memory::on_device;
+use super::host_memory::on_device_with;
 use super::read_buffer;
 use crate::air_library::AirLibrary;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
@@ -350,7 +352,7 @@ fn held_expected(gid: u32) -> u32 {
 /// compile on every venue and answer exactly over 1, 64, 4096 and 262144 threads.
 #[test]
 fn arrays_reached_at_constant_offsets_past_the_device_answer_exactly() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let state = state_of(device, &held_kernel(), "held_words")
             .unwrap_or_else(|e| panic!("{}: {e}", device.name()));
         for threads in [1, 64, 4096, 262_144] {

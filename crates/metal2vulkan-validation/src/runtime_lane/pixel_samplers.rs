@@ -48,7 +48,9 @@ use super::degrade_notices::counts;
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::driver_deviations::stage_notes;
 use super::extended_range_targets::half_bits;
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::VkProperty;
@@ -655,7 +657,7 @@ fn pixel_samplers_answer_metal_s_texels() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let (outcomes, metal_sampler, name) = {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         eprintln!("pixel samplers on {}", device.name());
         (
             compare(&device),
@@ -770,7 +772,7 @@ fn the_argument_buffer_note_waits_for_a_pixel_state() {
     let messages = Messages::default();
     let kind = Degradation::ArgumentPixelSamplerScaling;
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let bitcode = llvm_assemble_text(&kernel(true, Through::Argument, false, false)).unwrap();
         assert!(
             stage_notes(&device, &bitcode, "k")
@@ -820,7 +822,7 @@ fn a_texel_centre_s_denormals_wait_for_a_mode_that_parts_texel_minus_one() {
     let messages = Messages::default();
     let kind = Degradation::DeviceDenormals;
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let bitcode = llvm_assemble_text(&kernel(false, Through::Runtime, false, false)).unwrap();
         assert!(
             stage_notes(&device, &bitcode, "k").contains(&PrecisionNote::DeviceDenormals),

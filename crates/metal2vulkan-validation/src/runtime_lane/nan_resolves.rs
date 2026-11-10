@@ -26,7 +26,7 @@
 
 use super::degrade_notices::counts;
 use super::renders::{blit_read, run, small_nan};
-use super::{validated_device, Messages, ScratchCache};
+use super::{at_plan, validated_device, validated_device_with, Messages, ScratchCache};
 use crate::candidate::runtime_samples::{encode as samples_of, SampleFill};
 use crate::case::{TextureFormat as CaseFormat, TextureType as CaseType};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
@@ -292,7 +292,7 @@ fn metal_resolve(pf: PixelFormat, samples: &[&[u8]]) -> Vec<u8> {
 fn drawn_nan_and_infinite_samples_resolve_by_metal_s_rule() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let name = device.name().to_owned();
     let queue = device.new_command_queue().unwrap();
     let mut silent = Vec::new();

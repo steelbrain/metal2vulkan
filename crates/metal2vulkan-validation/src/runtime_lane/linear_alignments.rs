@@ -22,11 +22,12 @@
 
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::in_place_rows;
-use super::{layer_reported_nothing_at_all, read_buffer, validated_device_with};
+use super::{at_plan, layer_reported_nothing_at_all, read_buffer, validated_device_with};
 use super::{Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, Device, Origin, PrivateCount, ResourceOptions, Size, Texture,
     TextureDescriptor,
@@ -150,10 +151,22 @@ fn on_device_of(
     cache: &ScratchCache,
     test: impl FnOnce(&Device, &Messages),
 ) {
+    on_device_of_with(|_| {}, policy, cache, test)
+}
+
+/// [`on_device_of`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_of_with(
+    adjust: fn(&mut DeviceOptions),
+    policy: HostPageTexturePolicy,
+    cache: &ScratchCache,
+    test: impl FnOnce(&Device, &Messages),
+) {
     let messages = Messages::default();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.host_page_textures = policy;
+            adjust(options)
         })
         .unwrap();
         test(&device, &messages);
@@ -167,88 +180,94 @@ fn on_device_of(
 #[test]
 fn a_texture_at_the_answered_alignment_is_in_place() {
     let cache = ScratchCache::new().unwrap();
-    on_device_of(HostPageTexturePolicy::InPlace, &cache, |device, _| {
-        let started = Instant::now();
-        let mut by_answer: BTreeMap<u64, Vec<&str>> = BTreeMap::new();
-        for &pf in PixelFormat::ALL {
-            if let Ok(answer) = device.minimum_linear_texture_alignment_for_pixel_format(pf) {
-                assert!(answer.is_power_of_two() && answer >= 16, "{pf:?}: {answer}");
-                by_answer.entry(answer).or_default().push(pf.name());
-            }
-        }
-        let formats_took = started.elapsed();
-        let own = device
-            .private_properties()
-            .count(PrivateCount::DeviceLinearTextureAlignmentBytes)
-            .value();
-        let most = by_answer.keys().max().copied();
-        assert_eq!(own, most, "the device's own is the largest of the formats'");
-        for (answer, formats) in &by_answer {
-            eprintln!(
-                "LINEAR-ALIGNMENT on {}: {answer} for {} formats: {}",
-                device.name(),
-                formats.len(),
-                formats.join(" ")
-            );
-        }
-        let counts = device.work_counts();
-        eprintln!(
-            "LINEAR-ALIGNMENT on {}: the device's own {own:?}; every format's in {:.1} ms, {} \
-             probed, {} recalled",
-            device.name(),
-            formats_took.as_secs_f64() * 1e3,
-            counts.linear_alignments_probed,
-            counts.linear_alignments_recalled
-        );
-        assert!(device.settle_in_place_checks(CHECK_WAIT));
-        let report = device.in_place_check_report();
-        eprintln!(
-            "LINEAR-ALIGNMENT on {}: the in-place check {report:?}",
-            device.name()
-        );
-        let mut in_place = 0;
-        for (pf, texel) in FORMATS {
-            let answer = device
-                .minimum_linear_texture_alignment_for_pixel_format(pf)
-                .unwrap();
-            for w in WIDTHS {
-                let at = (answer, (w * texel).next_multiple_of(answer));
-                let before = device.work_counts();
-                let Some(over) = over_pages(device, pf, (w, ROWS), at) else {
-                    eprintln!(
-                        "LINEAR-ALIGNMENT on {}: the device imports no host memory",
-                        device.name()
-                    );
-                    assert_eq!(answer, 16, "{pf:?}: Metal's where no image is in place");
-                    return;
-                };
-                let what = format!("{} {w}x{ROWS} at {at:?}", pf.name());
-                // SAFETY: the handle is only compared, while the texture lives.
-                let aliased = unsafe { over.texture.vk_image() }.is_some();
-                let counted =
-                    device.work_counts().host_textures_in_place - before.host_textures_in_place;
-                assert_eq!(counted, u64::from(aliased), "{what}: its form not counted");
-                // The verdict its texels take, `at.0` past the start of the pages.
-                let base = over.buffer.contents().map_or(0, |a| a.as_ptr() as u64);
-                let on_lines = in_place_rows::on_lines(device, base + at.0, w * texel, at.1, ROWS);
-                if in_place_rows::passed(device, "Pointer", on_lines) {
-                    assert!(aliased, "{what}: a shadow at the answered alignment");
+    on_device_of_with(
+        at_plan,
+        HostPageTexturePolicy::InPlace,
+        &cache,
+        |device, _| {
+            let started = Instant::now();
+            let mut by_answer: BTreeMap<u64, Vec<&str>> = BTreeMap::new();
+            for &pf in PixelFormat::ALL {
+                if let Ok(answer) = device.minimum_linear_texture_alignment_for_pixel_format(pf) {
+                    assert!(answer.is_power_of_two() && answer >= 16, "{pf:?}: {answer}");
+                    by_answer.entry(answer).or_default().push(pf.name());
                 }
-                in_place += u64::from(aliased);
-                let pages = over.mapping.read(0..over.buffer.length() as usize);
-                let ours = blitted(device, &over.texture, (w, ROWS), texel);
-                assert!(
-                    ours == packed(&pages, at, (w, ROWS), texel),
-                    "{what}: the blit out read other bytes than the caller's texels"
+            }
+            let formats_took = started.elapsed();
+            let own = device
+                .private_properties()
+                .count(PrivateCount::DeviceLinearTextureAlignmentBytes)
+                .value();
+            let most = by_answer.keys().max().copied();
+            assert_eq!(own, most, "the device's own is the largest of the formats'");
+            for (answer, formats) in &by_answer {
+                eprintln!(
+                    "LINEAR-ALIGNMENT on {}: {answer} for {} formats: {}",
+                    device.name(),
+                    formats.len(),
+                    formats.join(" ")
                 );
             }
-        }
-        eprintln!(
-            "LINEAR-ALIGNMENT on {}: {in_place} of {} textures at the answer in place",
-            device.name(),
-            FORMATS.len() * WIDTHS.len()
-        );
-    });
+            let counts = device.work_counts();
+            eprintln!(
+                "LINEAR-ALIGNMENT on {}: the device's own {own:?}; every format's in {:.1} ms, {} \
+             probed, {} recalled",
+                device.name(),
+                formats_took.as_secs_f64() * 1e3,
+                counts.linear_alignments_probed,
+                counts.linear_alignments_recalled
+            );
+            assert!(device.settle_in_place_checks(CHECK_WAIT));
+            let report = device.in_place_check_report();
+            eprintln!(
+                "LINEAR-ALIGNMENT on {}: the in-place check {report:?}",
+                device.name()
+            );
+            let mut in_place = 0;
+            for (pf, texel) in FORMATS {
+                let answer = device
+                    .minimum_linear_texture_alignment_for_pixel_format(pf)
+                    .unwrap();
+                for w in WIDTHS {
+                    let at = (answer, (w * texel).next_multiple_of(answer));
+                    let before = device.work_counts();
+                    let Some(over) = over_pages(device, pf, (w, ROWS), at) else {
+                        eprintln!(
+                            "LINEAR-ALIGNMENT on {}: the device imports no host memory",
+                            device.name()
+                        );
+                        assert_eq!(answer, 16, "{pf:?}: Metal's where no image is in place");
+                        return;
+                    };
+                    let what = format!("{} {w}x{ROWS} at {at:?}", pf.name());
+                    // SAFETY: the handle is only compared, while the texture lives.
+                    let aliased = unsafe { over.texture.vk_image() }.is_some();
+                    let counted =
+                        device.work_counts().host_textures_in_place - before.host_textures_in_place;
+                    assert_eq!(counted, u64::from(aliased), "{what}: its form not counted");
+                    // The verdict its texels take, `at.0` past the start of the pages.
+                    let base = over.buffer.contents().map_or(0, |a| a.as_ptr() as u64);
+                    let on_lines =
+                        in_place_rows::on_lines(device, base + at.0, w * texel, at.1, ROWS);
+                    if in_place_rows::passed(device, "Pointer", on_lines) {
+                        assert!(aliased, "{what}: a shadow at the answered alignment");
+                    }
+                    in_place += u64::from(aliased);
+                    let pages = over.mapping.read(0..over.buffer.length() as usize);
+                    let ours = blitted(device, &over.texture, (w, ROWS), texel);
+                    assert!(
+                        ours == packed(&pages, at, (w, ROWS), texel),
+                        "{what}: the blit out read other bytes than the caller's texels"
+                    );
+                }
+            }
+            eprintln!(
+                "LINEAR-ALIGNMENT on {}: {in_place} of {} textures at the answer in place",
+                device.name(),
+                FORMATS.len() * WIDTHS.len()
+            );
+        },
+    );
 }
 
 /// A texture of rows of 64 bytes at an offset of 64 (`RGBA8Unorm`, 16 texels wide), a multiple
@@ -258,60 +277,65 @@ fn a_texture_at_the_answered_alignment_is_in_place() {
 #[test]
 fn a_row_under_the_answer_is_made() {
     let cache = ScratchCache::new().unwrap();
-    on_device_of(HostPageTexturePolicy::InPlace, &cache, |device, _| {
-        let (pf, texel, w) = (PixelFormat::RGBA8Unorm, 4, 16);
-        let at = (64, 64);
-        let answer = device
-            .minimum_linear_texture_alignment_for_pixel_format(pf)
-            .unwrap();
-        assert!(device.settle_in_place_checks(CHECK_WAIT));
-        // Over host pages.
-        let before = device.work_counts();
-        if let Some(over) = over_pages(device, pf, (w, ROWS), at) {
-            let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
-            // SAFETY: the handle is only compared, while the texture lives.
-            let aliased = unsafe { over.texture.vk_image() }.is_some();
-            eprintln!(
+    on_device_of_with(
+        at_plan,
+        HostPageTexturePolicy::InPlace,
+        &cache,
+        |device, _| {
+            let (pf, texel, w) = (PixelFormat::RGBA8Unorm, 4, 16);
+            let at = (64, 64);
+            let answer = device
+                .minimum_linear_texture_alignment_for_pixel_format(pf)
+                .unwrap();
+            assert!(device.settle_in_place_checks(CHECK_WAIT));
+            // Over host pages.
+            let before = device.work_counts();
+            if let Some(over) = over_pages(device, pf, (w, ROWS), at) {
+                let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
+                // SAFETY: the handle is only compared, while the texture lives.
+                let aliased = unsafe { over.texture.vk_image() }.is_some();
+                eprintln!(
                 "LINEAR-ALIGNMENT on {}: 64-byte rows over host pages, the answer {answer}: in \
                  place {aliased}, shadows {shadowed}",
                 device.name()
             );
-            assert_eq!(shadowed, u64::from(!aliased));
-            if answer > 64 {
-                assert!(
-                    !aliased,
-                    "rows of 64 bytes in place under an answer of {answer}"
-                );
+                assert_eq!(shadowed, u64::from(!aliased));
+                if answer > 64 {
+                    assert!(
+                        !aliased,
+                        "rows of 64 bytes in place under an answer of {answer}"
+                    );
+                }
+                let pages = over.mapping.read(0..over.buffer.length() as usize);
+                let ours = blitted(device, &over.texture, (w, ROWS), texel);
+                assert!(ours == packed(&pages, at, (w, ROWS), texel));
             }
-            let pages = over.mapping.read(0..over.buffer.length() as usize);
-            let ours = blitted(device, &over.texture, (w, ROWS), texel);
-            assert!(ours == packed(&pages, at, (w, ROWS), texel));
-        }
-        // Over a buffer of the runtime's.
-        let len = at.0 + at.1 * ROWS;
-        let bytes = counting(len as usize, 5);
-        let buffer = device
-            .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
-            .unwrap();
-        let mut d = TextureDescriptor::texture_2d(pf, w, ROWS, false);
-        d.usage = TextureUsage::SHADER_READ;
-        d.resource_options = buffer.resource_options();
-        let before = device.work_counts();
-        let texture = buffer.new_texture(&d, at.0, at.1).unwrap();
-        let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
-        // SAFETY: the handle is only compared, while the texture lives.
-        let aliased = unsafe { texture.vk_image() }.is_some();
-        eprintln!(
-            "LINEAR-ALIGNMENT on {}: 64-byte rows over a buffer of the runtime's: aliased \
+            // Over a buffer of the runtime's.
+            let len = at.0 + at.1 * ROWS;
+            let bytes = counting(len as usize, 5);
+            let buffer = device
+                .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
+                .unwrap();
+            let mut d = TextureDescriptor::texture_2d(pf, w, ROWS, false);
+            d.usage = TextureUsage::SHADER_READ;
+            d.resource_options = buffer.resource_options();
+            let before = device.work_counts();
+            let texture = buffer.new_texture(&d, at.0, at.1).unwrap();
+            let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
+            // SAFETY: the handle is only compared, while the texture lives.
+            let aliased = unsafe { texture.vk_image() }.is_some();
+            eprintln!(
+                "LINEAR-ALIGNMENT on {}: 64-byte rows over a buffer of the runtime's: aliased \
              {aliased}, shadows {shadowed}",
-            device.name()
-        );
-        if answer > 64 {
-            assert_eq!((aliased, shadowed), (false, 1));
-        }
-        let ours = blitted(device, &texture, (w, ROWS), texel);
-        assert!(ours == packed(&bytes, at, (w, ROWS), texel));
-    });
+                device.name()
+            );
+            if answer > 64 {
+                assert_eq!((aliased, shadowed), (false, 1));
+            }
+            let ours = blitted(device, &texture, (w, ROWS), texel);
+            assert!(ours == packed(&bytes, at, (w, ROWS), texel));
+        },
+    );
 }
 
 /// Every format's answer on `device`, and the formats it probed and read from a record meanwhile.

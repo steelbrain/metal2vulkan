@@ -44,7 +44,7 @@ use super::generated_executions::flat_template;
 use super::host_memory::{gpu_fill, no_copy, Mapping, GUEST_PAGE};
 use super::indirect_executions::RELEASED_STATES;
 use super::resource_ids::DELAYED_DEALLOCATORS as DELAYED;
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{ArgumentDescriptor, ReplayFaults, StatusReport};
 use metal2vulkan::metal::{DataType, IndirectCommandType, ResourceUsage};
@@ -78,7 +78,13 @@ pub(super) const THREADS: usize = 64;
 /// Run `test` on a validated device, then check that the device announced the host replay once
 /// ([`HOST_STEPS`]) and, once it is dropped, that the layer reported nothing.
 fn on_device(test: impl FnOnce(&Device)) {
-    on_device_forcing(&[], test);
+    on_device_adjusted(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_adjusted(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
+    on_device_forcing_with(adjust, &[], test);
 }
 
 /// [`on_device`] of a test whose own steps force `own` too, each announced once beside
@@ -899,7 +905,7 @@ fn a_kernel_reaches_an_id_s_records_where_an_earlier_id_s_run_past_them() {
 /// that lived at its commit.
 #[test]
 fn commands_a_kernel_writes_run_on_another_queue_after_its_event() {
-    on_device(|device| {
+    on_device_adjusted(at_plan, |device| {
         for foreseen in [true, false] {
             let setup = Setup::new(device, 2);
             let event = device.new_event().unwrap();
@@ -1330,7 +1336,7 @@ fn a_buffer_of_no_command_types_encodes_its_own_id() {
 /// committed meanwhile are submitted: printed as a `STALL` line for the device.
 #[test]
 fn a_host_step_holds_back_only_its_own_command_buffer() {
-    on_device(|device| {
+    on_device_adjusted(at_plan, |device| {
         let setup = Setup::new(device, 2);
         let (stepping, other) = (
             device.new_command_queue().unwrap(),
@@ -1404,99 +1410,106 @@ fn run_written(queue: &CommandQueue, setup: &Setup) {
 #[test]
 fn a_buffer_released_during_a_later_host_step_waits_for_its_command_buffer() {
     let withheld = |options: &mut DeviceOptions| options.withhold_generated_commands = true;
-    on_device_forcing_with(withheld, &DELAYED, |device| {
-        let (queue, other) = (
-            device.new_command_queue().unwrap(),
-            device.new_command_queue().unwrap(),
-        );
-        let setup = Setup::new(device, 2);
-        let writing = queue.command_buffer().unwrap();
-        let mut encoder = writing.compute_command_encoder().unwrap();
-        setup.write(&mut encoder);
-        encoder.end_encoding().unwrap();
-        complete(&writing);
-        let scratch = device.new_buffer(256, ResourceOptions::shared()).unwrap();
-        let executing = queue.command_buffer().unwrap();
-        let memory = Mapping::anonymous(GUEST_PAGE);
-        let pointer = memory.pointer();
-        let (sender, receiver) = mpsc::channel();
-        let deallocator: Deallocator = {
-            let executing = executing.clone();
-            Box::new(move |_: NonNull<u8>, _: u64| {
-                let status = executing.status();
-                let waited = (
-                    executing.wait_until_completed(),
-                    executing.wait_until_completed_for(WAIT),
-                );
-                drop(executing);
-                drop(memory);
-                sender.send((status, waited)).unwrap();
-            })
-        };
-        // SAFETY: the deallocator releases the mapping, after the buffer's last use.
-        let buffer = unsafe {
-            no_copy(
-                device,
-                pointer,
-                GUEST_PAGE,
-                ResourceOptions::default(),
-                Some(deallocator),
-            )
-        }
-        .unwrap();
-        let (submitted, stepping) = (
-            device.new_shared_event().unwrap(),
-            device.new_shared_event().unwrap(),
-        );
-        let mut blit = executing.blit_command_encoder().unwrap();
-        blit.fill_buffer(&scratch, 0..256, 1).unwrap();
-        blit.end_encoding().unwrap();
-        executing
-            .encode_signal_event(EventRef::from(&submitted), 1)
+    on_device_forcing_with(
+        |options| {
+            withheld(options);
+            at_plan(options)
+        },
+        &DELAYED,
+        |device| {
+            let (queue, other) = (
+                device.new_command_queue().unwrap(),
+                device.new_command_queue().unwrap(),
+            );
+            let setup = Setup::new(device, 2);
+            let writing = queue.command_buffer().unwrap();
+            let mut encoder = writing.compute_command_encoder().unwrap();
+            setup.write(&mut encoder);
+            encoder.end_encoding().unwrap();
+            complete(&writing);
+            let scratch = device.new_buffer(256, ResourceOptions::shared()).unwrap();
+            let executing = queue.command_buffer().unwrap();
+            let memory = Mapping::anonymous(GUEST_PAGE);
+            let pointer = memory.pointer();
+            let (sender, receiver) = mpsc::channel();
+            let deallocator: Deallocator = {
+                let executing = executing.clone();
+                Box::new(move |_: NonNull<u8>, _: u64| {
+                    let status = executing.status();
+                    let waited = (
+                        executing.wait_until_completed(),
+                        executing.wait_until_completed_for(WAIT),
+                    );
+                    drop(executing);
+                    drop(memory);
+                    sender.send((status, waited)).unwrap();
+                })
+            };
+            // SAFETY: the deallocator releases the mapping, after the buffer's last use.
+            let buffer = unsafe {
+                no_copy(
+                    device,
+                    pointer,
+                    GUEST_PAGE,
+                    ResourceOptions::default(),
+                    Some(deallocator),
+                )
+            }
             .unwrap();
-        executing
-            .encode_wait_for_event(EventRef::from(&stepping), 1)
-            .unwrap();
-        let mut encoder = executing.compute_command_encoder().unwrap();
-        setup.execute(&mut encoder);
-        encoder.end_encoding().unwrap();
-        let (reading, read) = mpsc::channel::<()>();
-        let (go, gone) = mpsc::channel::<()>();
-        let held = Mutex::new(Some((reading, gone)));
-        executing
-            .add_executed_commands_handler(Arc::new(move |_: &ExecutedCommands| {
-                if let Some((reading, gone)) = held.lock().unwrap().take() {
-                    reading.send(()).unwrap();
-                    gone.recv_timeout(WAIT).unwrap();
-                }
-            }))
-            .unwrap();
-        executing.commit().unwrap();
-        assert!(
-            submitted.wait_until_signaled_value(1, WAIT),
-            "the first batch ran"
-        );
-        // Listed only now, after the first submission: the later batch's commands reach it.
-        gpu_fill(&other, &buffer, 0..64, 0x2d);
-        stepping.set_signaled_value(1);
-        read.recv_timeout(WAIT)
-            .expect("the host step read the records");
-        let before = device.work_counts();
-        drop(buffer);
-        assert_eq!(
-            device.work_counts().host_deallocators_delayed - before.host_deallocators_delayed,
-            1,
-            "the release waits for the step's table"
-        );
-        go.send(()).unwrap();
-        let (status, waited) = receiver
-            .recv_timeout(WAIT)
-            .expect("the deallocator ran and returned");
-        assert_eq!(status, CommandBufferStatus::Completed);
-        assert_eq!(waited, (Ok(()), Ok(())));
-        wait(&executing);
-        assert_eq!(setup.output(), expected());
-    });
+            let (submitted, stepping) = (
+                device.new_shared_event().unwrap(),
+                device.new_shared_event().unwrap(),
+            );
+            let mut blit = executing.blit_command_encoder().unwrap();
+            blit.fill_buffer(&scratch, 0..256, 1).unwrap();
+            blit.end_encoding().unwrap();
+            executing
+                .encode_signal_event(EventRef::from(&submitted), 1)
+                .unwrap();
+            executing
+                .encode_wait_for_event(EventRef::from(&stepping), 1)
+                .unwrap();
+            let mut encoder = executing.compute_command_encoder().unwrap();
+            setup.execute(&mut encoder);
+            encoder.end_encoding().unwrap();
+            let (reading, read) = mpsc::channel::<()>();
+            let (go, gone) = mpsc::channel::<()>();
+            let held = Mutex::new(Some((reading, gone)));
+            executing
+                .add_executed_commands_handler(Arc::new(move |_: &ExecutedCommands| {
+                    if let Some((reading, gone)) = held.lock().unwrap().take() {
+                        reading.send(()).unwrap();
+                        gone.recv_timeout(WAIT).unwrap();
+                    }
+                }))
+                .unwrap();
+            executing.commit().unwrap();
+            assert!(
+                submitted.wait_until_signaled_value(1, WAIT),
+                "the first batch ran"
+            );
+            // Listed only now, after the first submission: the later batch's commands reach it.
+            gpu_fill(&other, &buffer, 0..64, 0x2d);
+            stepping.set_signaled_value(1);
+            read.recv_timeout(WAIT)
+                .expect("the host step read the records");
+            let before = device.work_counts();
+            drop(buffer);
+            assert_eq!(
+                device.work_counts().host_deallocators_delayed - before.host_deallocators_delayed,
+                1,
+                "the release waits for the step's table"
+            );
+            go.send(()).unwrap();
+            let (status, waited) = receiver
+                .recv_timeout(WAIT)
+                .expect("the deallocator ran and returned");
+            assert_eq!(status, CommandBufferStatus::Completed);
+            assert_eq!(waited, (Ok(()), Ok(())));
+            wait(&executing);
+            assert_eq!(setup.output(), expected());
+        },
+    );
 }
 
 /// A command buffer's executed-commands handler sees each execution where the runtime reads its

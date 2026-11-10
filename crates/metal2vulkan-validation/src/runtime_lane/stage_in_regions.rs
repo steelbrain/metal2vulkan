@@ -17,8 +17,8 @@
 //! `stage_in_region_pair` writes `(a << 16) | b`, `a` stepping by x and `b` by y.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -476,7 +476,7 @@ fn a_thread_past_the_stage_in_region_reads_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         for case in CASES {
             let added = match case.layouts.len() {
                 1 => 0x100,

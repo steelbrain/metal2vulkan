@@ -20,8 +20,8 @@
 use super::degrade_notices::counts;
 use super::pixel_samplers::metal_sampler;
 use super::{
-    buffer_with, converted_holds, layer_reported_nothing_at_all, read_buffer, validated_device,
-    Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, converted_holds, layer_reported_nothing_at_all, read_buffer,
+    validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -280,7 +280,7 @@ fn swizzled_texture_buffers_read_metals_swizzled_texels() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let exact = metal_sampler(&device);
         let mut wrong = Vec::new();
@@ -375,7 +375,7 @@ fn a_swizzled_view_of_a_texture_buffer_reads_its_own_swizzle() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let floats = pipeline(&device, "texture_ops", "texel_buffers");
         let source = float_sources().remove(0);
         assert_eq!(source.pixel_format, PixelFormat::RGBA8Unorm);

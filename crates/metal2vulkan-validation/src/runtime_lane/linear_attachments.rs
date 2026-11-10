@@ -96,6 +96,7 @@
 //!
 //! Each prints the texture's form (`LINEAR-ATTACHMENT`).
 
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{counts, on_device};
 use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, Seen, GUEST_PAGE};
@@ -103,7 +104,7 @@ use super::in_place_rows;
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
 use super::no_copy_textures::{blending, floats, rects_beside, staged};
 use super::rebinds::rebind;
-use super::{Messages, WAIT};
+use super::{at_plan, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{
@@ -536,8 +537,10 @@ const FIRST_DIFFERING: usize = 32;
 /// time over a fresh one: its bytes hold what the same pass leaves in a private texture of the same
 /// bytes, and the bytes past `scissor` keep theirs. Where the texture is aliased by the rule both
 /// render in place, announcing nothing; elsewhere no pass counts a way.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn blends_over_the_pages(start: usize, scissor: Option<ScissorRect>, corners: &[[f32; 4]]) {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         messages.take_notices();
         let before = device.work_counts();
         let mut rule = false;
@@ -919,8 +922,10 @@ fn read_out(queue: &CommandQueue, texture: &Texture, size: [u64; 2]) -> Vec<u8> 
 /// hold what the same pass leaves in a private texture of the same bytes. Where the texture is
 /// aliased by the rule, the passes render in place, or, beside the stencil, apart over a box that
 /// holds both, merged back.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn colorless_clip(start: usize, stencil: bool) {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let before = device.work_counts();
         let states = panel_and_clip(device, stencil);
         let mut rule = false;

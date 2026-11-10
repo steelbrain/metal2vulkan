@@ -30,12 +30,13 @@
 use super::degrade_notices::counts;
 use super::heap_layouts::HEAP_LAYOUTS;
 use super::heap_metal_sizes::STACKED_NIL_ALIGNMENT;
+use super::host_memory::on_device_with;
 use super::host_memory::{gpu_fill, gpu_read, on_device, run};
 use super::presenting::Adopted;
 use super::textures::{no_texture_alone, pattern, texel_bytes};
 use super::{
-    bound_buffers, buffer_with, encode_case, layer_reported_nothing_at_all, pipeline_state,
-    public_case, read_buffer, run_case, texture_descriptor, validated_device,
+    at_plan, bound_buffers, buffer_with, encode_case, layer_reported_nothing_at_all,
+    pipeline_state, public_case, read_buffer, run_case, texture_descriptor, validated_device,
     validated_device_with, CaseResources, Messages, PublicCase, ScratchCache,
 };
 use crate::air_library::AirLibrary;
@@ -1753,7 +1754,7 @@ fn heap_texture_buffer(case: &PublicCase, index: u32, heap: &Heap, offset: u64) 
 /// writes and leaves the bytes around it; in a `Shared` and a `Private` heap.
 #[test]
 fn a_heap_texture_buffer_is_the_heap_s_bytes() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let reader = public_case(FOUR_TEXEL_READS).unwrap();
         let read = run_case(device, &reader).unwrap().output;
@@ -1842,7 +1843,7 @@ fn heap_depth_textures_keep_their_bytes() {
     // Whether the driver lays the textures apart, whether one was made in a heap, and whether
     // the fill changed every texel of the first in each storage made.
     let (apart, made, all_changed) = {
-        let device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = &validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let apart = device
             .properties()
             .driver_facts

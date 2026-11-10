@@ -18,7 +18,9 @@
 //! The lane passes when every waited command buffer completed without error with the bytes
 //! Metal's copies give, nothing crashed, and the validation layer reported nothing.
 
-use super::host_memory::{no_copy, not_importable, on_device, Mapping, GUEST_PAGE};
+use super::at_plan;
+use super::host_memory::on_device_with;
+use super::host_memory::{no_copy, not_importable, Mapping, GUEST_PAGE};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandBuffer, CommandQueue, Deallocator, Device, LoadAction, Origin,
@@ -399,7 +401,7 @@ fn task(
 /// queue copies 32 MiB at a time (the module docs).
 #[test]
 fn depth_stencil_textures_churn_across_tasks_under_load() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queues: Vec<CommandQueue> = (0..TASKS)
             .map(|_| device.new_command_queue().unwrap())
             .collect();

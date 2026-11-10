@@ -51,11 +51,11 @@
 //! records no `PrecisionNote::NativeHalfConversion`, which it does not where the profile takes
 //! `DriverDeviation::MetalHalfConversion` ([`heap_half_reads_of_every_code_round_their_float`]).
 
-use super::degrade_notices::{on_device, on_device_with};
+use super::degrade_notices::on_device_with;
 use super::half_conversions;
 use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
 use super::Messages;
-use super::{buffer_with, read_buffer};
+use super::{at_plan, buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::cache::VariantKey;
@@ -776,7 +776,7 @@ fn compare(
 /// the same texture's through a slot, bit for bit, for `float` and `half` results.
 #[test]
 fn heap_extended_reads_are_the_slot_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let floats: &[Texel] = &[Texel::Float, Texel::Half];
         let formats: Vec<(PixelFormat, u64, &[Texel])> = EXTENDED
             .iter()
@@ -809,7 +809,7 @@ fn heap_extended_reads_are_the_slot_s() {
 /// [`a_heap_set_holding_a_raw_texture_announces_its_decode`]'s.
 #[test]
 fn the_heap_set_holds_the_forms_a_heap_reads_unannounced() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let floats: &[Texel] = &[Texel::Float];
         let formats: Vec<(PixelFormat, u64, &[Texel])> = EXTENDED
             .iter()
@@ -848,7 +848,7 @@ fn the_heap_set_holds_the_forms_a_heap_reads_unannounced() {
 /// ([`a_heap_decode_s_stage_note_is_announced_where_its_command_can_name_a_raw_texture`]).
 #[test]
 fn a_heap_set_holding_a_raw_texture_announces_its_decode() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let pack = Degradation::DevicePackConversion;
         let stage = stage_notes(device, true, Texel::Float);
         let heap = pipeline(device, true, Texel::Float);
@@ -953,7 +953,7 @@ const RAW_HELD: [(PixelFormat, u64); 5] = [
 /// to the edge, no mip filter) at sampler slot 0, at [`sample_lanes`].
 #[test]
 fn heap_extended_samples_are_the_slot_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let lanes = sample_lanes();
         let mut runtime = SamplerDescriptor::new();
         runtime.min_filter = SamplerMinMagFilter::Linear;
@@ -1056,7 +1056,7 @@ fn heap_extended_samples_are_the_slot_s() {
 /// only reads the raw texture.
 #[test]
 fn a_heap_sample_the_function_does_not_emulate_refuses_a_raw_texture() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let mut mipmapped = SamplerDescriptor::new();
         mipmapped.min_filter = SamplerMinMagFilter::Linear;
         mipmapped.mag_filter = SamplerMinMagFilter::Linear;
@@ -1125,7 +1125,7 @@ fn a_heap_sample_the_function_does_not_emulate_refuses_a_raw_texture() {
 /// command announces nothing, the notice spent).
 #[test]
 fn a_raw_texture_over_a_buffer_announces_its_shadow_only_where_not_named() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let lanes = sample_lanes();
         let nearest = Through::Constexpr(sampler_words(1, false, 0, false));
         let mip = Through::Constexpr(sampler_words(1, false, 0, true));
@@ -1258,7 +1258,7 @@ fn a_raw_texture_over_a_buffer_announces_its_shadow_only_where_not_named() {
 /// announced (the module docs).
 #[test]
 fn heap_rgbx_reads_are_the_slot_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let formats: Vec<(PixelFormat, u64, &[Texel])> = RGBX
             .iter()
             .map(|&(format, bytes, integer)| (format, bytes, texels_of(integer)))
@@ -1316,7 +1316,7 @@ fn every_code(device: &Device, format: PixelFormat, bytes: u64) -> Result<Textur
 #[test]
 fn heap_half_reads_of_every_code_round_their_float() {
     use metal2vulkan::device::VkProperty;
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let measured = device
             .compile_device()
             .profile()

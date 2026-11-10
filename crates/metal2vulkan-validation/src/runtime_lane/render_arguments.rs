@@ -12,8 +12,8 @@
 
 use super::renders::{public_render, refusal, PublicRender};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, texture_with, validated_device,
-    Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, texture_with,
+    validated_device, validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::graphics::{Assembly, RenderFunction, RenderOutput};
@@ -25,6 +25,7 @@ use metal2vulkan::bind::DrawCall;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage};
 use metal2vulkan::pipeline::{LinkedFunctions, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, Device, Error, FunctionTableProblem, Invalid, LoadAction, Nil,
     PipelineOptions, Problem, Region, RenderPassDescriptor, ResourceOptions, ResourceRef,
@@ -45,10 +46,16 @@ pub(super) const ORDERED: &str =
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -392,7 +399,7 @@ fn another_devices_resources_are_refused() {
 fn render_states_give_handles_and_tables_per_stage() {
     let case = public_render(SAMPLED);
     let metal = case.metal_output.clone().unwrap();
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let bitcode = llvm_assemble(&engine_dir().join("visible_table_functions.ll")).unwrap();
         let functions = device.new_library_with_air(&bitcode).unwrap();
         let add = functions.new_function_with_name("table_add").unwrap();

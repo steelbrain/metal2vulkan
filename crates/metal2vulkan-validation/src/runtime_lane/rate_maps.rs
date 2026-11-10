@@ -2,7 +2,7 @@
 //! layer:
 //!
 //! - Every committed public kernel case whose buffers or argument buffers hold a map's parameter
-//!   data runs through the runtime ([`census`]): each map is made with
+//!   data runs through the runtime ([`census_with`]): each map is made with
 //!   `new_rasterization_rate_map` and copied into a buffer of the size it answers with
 //!   `copy_parameter_data_to_buffer`, as the Metal oracle makes its own.
 //! - A map answers Metal's queries as an M3 Max and an M4 do, a map of no layers included, its
@@ -11,9 +11,9 @@
 //!   offset of a buffer the CPU reaches, refusing the rest.
 
 use super::degrade_notices::{assert_once, counts};
-use super::kernel_textures::census;
+use super::kernel_textures::census_with;
 use super::{
-    layer_reported_nothing, layer_reported_nothing_at_all, public_cases, read_buffer,
+    at_plan, layer_reported_nothing, layer_reported_nothing_at_all, public_cases, read_buffer,
     validated_device, Messages, ScratchCache,
 };
 use crate::case::Stage;
@@ -48,7 +48,7 @@ fn kernels_reading_rate_maps_match_metal() {
         !cases.is_empty(),
         "no committed kernel case reads a rate map"
     );
-    census("runtime rate-map kernels", &cases);
+    census_with(at_plan, "runtime rate-map kernels", &cases);
 }
 
 /// Run `test` on a validated device of the lane reporting to its messages, then fail on any

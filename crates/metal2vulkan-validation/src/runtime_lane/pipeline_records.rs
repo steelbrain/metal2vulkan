@@ -75,7 +75,9 @@
 //! `validation/fixtures/public/examples/runtime_examples.ll`. The tests print the driver's data and
 //! each device's counts (`PIPELINE-RECORDS`).
 
-use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
+};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use ash::vk;
@@ -623,7 +625,7 @@ fn a_later_device_makes_every_pipeline_an_earlier_one_made_from_its_records() {
     // the records once the device is gone (the module docs).
     let (driver, targets, makings) = {
         let _driver_cache = DriverCache::fresh();
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let driver = DriverData::of(&device);
         let library = library(&device);
         let state = state(&device, &library, format);
@@ -687,7 +689,7 @@ fn a_later_device_makes_every_pipeline_an_earlier_one_made_from_its_records() {
     // The second device: the first one's directory, the driver's own cache fresh again.
     let saves = {
         let _driver_cache = DriverCache::fresh();
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let library = library(&device);
         let none = device.shader_cache_statistics();
         let state = state(&device, &library, format);

@@ -16,12 +16,13 @@
 
 use super::host_memory::run;
 use super::{
-    layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages, ScratchCache,
-    VALIDATION_LAYER,
+    at_plan, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
+    ScratchCache, VALIDATION_LAYER,
 };
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::clamped_depth;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CpuCacheMode, Device, HazardTrackingMode, LayerSetting, LayerSettingValue,
     MessageSeverity, Origin, Region, ResourceOptions, Size, StorageMode, Texture,
@@ -49,6 +50,16 @@ const SIDES: [u64; 2] = [37, 5];
 /// 15 with the check off. The layer's core checks report nothing of the command stream, which is
 /// valid. So the check stays off, and the rest of GPU-assisted validation on.
 pub(super) fn gpu_assisted_device(messages: &Messages, cache: &Path) -> Device {
+    gpu_assisted_device_with(|_| {}, messages, cache)
+}
+
+/// [`gpu_assisted_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+pub(super) fn gpu_assisted_device_with(
+    adjust: fn(&mut DeviceOptions),
+    messages: &Messages,
+    cache: &Path,
+) -> Device {
     validated_device_with(TEST_DEVICE, messages, cache, |options| {
         let set = |name: &std::ffi::CStr, on: bool| {
             let value = LayerSettingValue::Bool(on);
@@ -60,6 +71,7 @@ pub(super) fn gpu_assisted_device(messages: &Messages, cache: &Path) -> Device {
             set(c"gpuav_buffer_copies", false),
             set(c"gpuav_shader_instrumentation", false),
         ]);
+        adjust(options)
     })
     .unwrap()
 }
@@ -255,6 +267,8 @@ const ABOVE: u32 = 0x4000_4000;
 /// reported; where the device clamps, one upload clamped by a dispatch, and each texel read back
 /// clamped.
 /// `label` names the copy in `DEPTHCLAMP`'s line.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn blit_lane(label: &str, pf: PixelFormat, at: u64, options: BlitOption) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
@@ -263,7 +277,7 @@ fn blit_lane(label: &str, pf: PixelFormat, at: u64, options: BlitOption) {
         _ => ABOVE,
     };
     let (clamps, clamped, read) = {
-        let device = &gpu_assisted_device(&messages, cache.path());
+        let device = &gpu_assisted_device_with(at_plan, &messages, cache.path());
         let clamps = clamps(device);
         let [w, h] = SIDES;
         let bytes: Vec<u8> = match at {
@@ -357,7 +371,7 @@ fn a_copy_from_a_colour_texture_takes_no_depth_outside_0_1_into_a_depth_image() 
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (clamps, clamped, colour, read) = {
-        let device = &gpu_assisted_device(&messages, cache.path());
+        let device = &gpu_assisted_device_with(at_plan, &messages, cache.path());
         let clamps = clamps(device);
         let [w, h] = SIDES;
         let source = staged(device, &written(depth_bits));

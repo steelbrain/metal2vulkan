@@ -31,8 +31,8 @@
 
 use super::framebuffer_fetch::fetches;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -224,7 +224,7 @@ fn words(bytes: &[u8]) -> Vec<u32> {
 fn consecutive_fetching_draws_read_each_others_writes() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     if !fetches(&device) {
         return;
     }

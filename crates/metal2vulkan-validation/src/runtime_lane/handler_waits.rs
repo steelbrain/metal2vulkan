@@ -11,8 +11,11 @@
 //! one that would leave the device's handler threads with none free (`HandlerThreadCap`). No wait here can hang: every wait in a handler is answered at once or
 //! is for work that other threads do, and every wait of the test's own thread is bounded.
 
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, DeadlockCause, Device, Error,
     EventRef, ResourceOptions, SharedEvent, TimedOut,
@@ -45,10 +48,16 @@ type Answers = (
 /// Run `test` on a validated device, then check that once everything is dropped (the device
 /// last) the layer reported nothing.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -196,7 +205,7 @@ fn a_handler_s_waits_for_a_later_command_buffer_of_its_queue_are_refused() {
 /// once it is scheduled or completed.
 #[test]
 fn a_handler_s_waits_for_another_queue_return_as_metal_s() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let other = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(64, ResourceOptions::shared()).unwrap();
@@ -236,7 +245,7 @@ fn a_handler_s_waits_for_another_queue_return_as_metal_s() {
 /// measured order).
 #[test]
 fn a_blocked_handler_holds_back_its_queue_s_transitions_and_no_other_s() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let other = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(64, ResourceOptions::shared()).unwrap();
@@ -316,7 +325,7 @@ fn a_blocked_handler_holds_back_its_queue_s_transitions_and_no_other_s() {
 /// and the other then returns.
 #[test]
 fn a_cycle_of_handler_waits_refuses_exactly_one() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let a = device.new_command_queue().unwrap();
         let b = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(64, ResourceOptions::shared()).unwrap();
@@ -423,7 +432,7 @@ fn many_waits(device: &Device, count: usize) -> Vec<Result<(), Error>> {
 /// for one command buffer of another queue: every one returns.
 #[test]
 fn as_many_blocked_handler_waits_as_metal_ran_all_return() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let answered = many_waits(device, METAL_MEASURED);
         assert_eq!(answered.len(), METAL_MEASURED);
         assert!(answered.iter().all(Result::is_ok), "{answered:?}");
@@ -434,7 +443,7 @@ fn as_many_blocked_handler_waits_as_metal_ran_all_return() {
 /// free is refused at once, and the others return.
 #[test]
 fn the_handler_wait_that_would_leave_no_thread_free_is_refused() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let answered = many_waits(device, THREADS);
         assert_eq!(answered.len(), THREADS);
         let refused = answered
@@ -452,7 +461,7 @@ fn the_handler_wait_that_would_leave_no_thread_free_is_refused() {
 /// scheduled already returns (Metal: a completed handler's wait for scheduling returns).
 #[test]
 fn a_completed_handler_waits_for_a_later_command_buffer_s_scheduling() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(64, ResourceOptions::shared()).unwrap();
         let event: SharedEvent = device.new_shared_event().unwrap();

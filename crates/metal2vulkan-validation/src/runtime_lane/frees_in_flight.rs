@@ -15,13 +15,13 @@
 //! counts the imports freed while the busy work still ran.
 
 use super::first_use::{read_mark, release, Busy, ENDED};
-use super::host_memory::{
-    no_copy, not_importable, on_device, recording, Mapping, Seen, GUEST_PAGE,
-};
+use super::host_memory::on_device_with;
+use super::host_memory::{no_copy, not_importable, recording, Mapping, Seen, GUEST_PAGE};
 use super::keep_alives::eventually;
 use super::rebind_reach::{node, output, A, POINTER_WALKER};
 use super::{
-    bound_buffers, encode_case, pipeline_state, public_case, read_buffer, CaseResources, WAIT,
+    at_plan, bound_buffers, encode_case, pipeline_state, public_case, read_buffer, CaseResources,
+    WAIT,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
@@ -222,7 +222,7 @@ fn release_held(device: &Device, held: Held) -> Changed {
 /// each leg's outcome, with the host imports freed while the busy work ran (`FREE-IN-FLIGHT`).
 #[test]
 fn frees_while_the_gpu_is_busy_fail_no_command_buffer() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let name = device.name();
         let queue = device.new_command_queue().unwrap();
         let beside = device.new_command_queue().unwrap();

@@ -14,7 +14,9 @@
 //! `metal2vulkan_devtools::stitched`'s of `STITCHED_PAIR`, made from the library's bytes
 //! (`newLibraryWithData:`).
 
-use super::host_memory::{on_device, run};
+use super::at_plan;
+use super::host_memory::on_device_with;
+use super::host_memory::run;
 use super::read_buffer;
 use crate::air_library::AirLibrary;
 use metal2vulkan::error::Feature;
@@ -91,7 +93,7 @@ fn words(
 /// implemented, where Metal makes it.
 #[test]
 fn a_reference_of_another_type_computes_by_position() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let [caller, functions, stitched] = libraries(device);
         for case in &CASES {
             let library = if case.stitched { &stitched } else { &functions };

@@ -13,8 +13,8 @@
 use super::degrade_notices::{assert_made_once, WRAPPED};
 use super::shared_kinds;
 use super::{
-    layer_reported_nothing_at_all, loader, read_buffer, validated_device, validated_device_with,
-    Messages, ScratchCache, VALIDATION_LAYER,
+    at_plan, layer_reported_nothing_at_all, loader, read_buffer, validated_device,
+    validated_device_with, Messages, ScratchCache, VALIDATION_LAYER,
 };
 use crate::candidate::LoaderWord;
 use crate::gpu::wait::{self, SubmissionBackend};
@@ -1089,7 +1089,7 @@ fn wrapped_images_order_across_queues() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         // SAFETY: used only while the device lives; the image is destroyed after its texture
         // and every command buffer that used it.
         let raw = unsafe { device.raw() };
@@ -1320,7 +1320,7 @@ fn interop_refusals_and_shared_textures() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         // SAFETY: used only while the device lives.
         let raw = unsafe { device.raw() };
         let queue = device.new_command_queue().unwrap();
@@ -1514,7 +1514,7 @@ fn interop_refusals_and_shared_textures() {
             Error::Nil(Nil::new("new_shared_texture", Problem::StorageMode))
         );
         assert!(device.new_shared_texture(&texels).unwrap().is_shareable());
-        let other = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let other = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         assert_eq!(
             other
                 .new_shared_texture_with_handle(&handle, IdPlacement::Any)

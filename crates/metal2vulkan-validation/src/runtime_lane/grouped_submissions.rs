@@ -58,7 +58,7 @@
 
 use super::degrade_notices::counts;
 use super::{
-    layer_reported_nothing_at_all, loader, open_device, validated_device_with, Messages,
+    at_plan, layer_reported_nothing_at_all, loader, open_device, validated_device_with, Messages,
     ScratchCache, WAIT,
 };
 use crate::gpu::TEST_DEVICE;
@@ -280,6 +280,7 @@ fn completions_wake_the_scheduler_only_once_a_head_may_go() {
     let (seen, wakes) = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Exact;
+            at_plan(options)
         })
         .unwrap();
         let (first, second) = (
@@ -399,12 +400,15 @@ struct Scenario {
 /// error and fills its buffer, `E` ends at `last` (a command buffer committed after the counts
 /// are read, waiting for `E` at `last`, completes: no host call reads a plain event's value), and
 /// the layer reports nothing.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Scenario {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let counted = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = completion;
+            at_plan(options)
         })
         .unwrap();
         let merging = merges(&device);
@@ -517,6 +521,8 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
 
 /// Each scenario under both policies: grouped where the driver merges under the default, alone
 /// under `Exact`; where `waits`, a group went before a batch that waits for a signal it held.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn both_policies(steps: &[Step], last: u64, waits: bool) {
     let run = event_scenario(CompletionPolicy::Grouped, steps, last);
     let (grouped, ends) = (run.grouped, run.ends);
@@ -1202,6 +1208,8 @@ impl StepCounts {
 
 /// The module docs' run with a handler that waits for another queue's command buffer, `A` of
 /// `stretch` times the fills its calibration takes.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
@@ -1212,6 +1220,7 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Grouped;
             options.assume_submissions_merge = true;
+            at_plan(options)
         })
         .unwrap();
         let merging = merges(&device);

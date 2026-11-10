@@ -24,6 +24,7 @@
 //! table at tile buffer 1 as the kernel does, `i` its thread's index over the pass's tiles, writing
 //! word `i` of tile buffer 0.
 
+use super::at_plan;
 use super::executions::on_device_with;
 use super::host_memory::{on_device, run};
 use super::pool_slots::holding_the_space;
@@ -284,7 +285,7 @@ fn tables_and_handles_answer_as_metal_s_do() {
 /// calls, as Metal's tables are read when the dispatch runs.
 #[test]
 fn a_kernel_calls_the_functions_its_table_holds() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (caller, functions) = libraries(device);
         let function = |name: &str| functions.new_function_with_name(name).unwrap();
         let state = dispatch_state(&caller, &functions);
@@ -361,7 +362,7 @@ fn a_table_s_words_lie_outside_the_metal_address_space() {
 /// refused as Metal's validation stops it.
 #[test]
 fn a_handle_of_another_kernel_calls_this_kernel_s_function_at_its_position() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (caller, functions) = libraries(device);
         let function = |name: &str| functions.new_function_with_name(name).unwrap();
         let linked = |names: &[&str], private: &[&str]| {
@@ -546,7 +547,7 @@ fn a_buffer_at_a_vertex_table_index_reads_as_a_null_table() {
 /// as Metal's tables are read when the draw runs.
 #[test]
 fn a_vertex_function_calls_the_functions_its_stage_s_table_holds() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (_, functions) = libraries(device);
         let function = |name: &str| functions.new_function_with_name(name).unwrap();
         let state = vertex_state(device, &functions);
@@ -777,7 +778,7 @@ fn words_with_arguments(
 /// the state is readable.
 #[test]
 fn a_kernel_calls_through_the_tables_its_argument_buffer_holds() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         argument_table_calls(device);
         an_entry_set_before_the_commit_is_called(device);
     });
@@ -924,6 +925,7 @@ fn without_the_array_s_features_a_kernel_reads_its_tables_from_a_snapshot() {
             options
                 .withheld_features
                 .insert(VkFeature::ShaderStorageBufferArrayNonUniformIndexing);
+            at_plan(options)
         },
         |device| {
             let compile = device.compile_device();
@@ -1010,7 +1012,7 @@ fn a_table_past_the_storage_range_is_called_through_its_address() {
 /// nothing.
 #[test]
 fn beside_a_table_past_the_storage_range_null_and_unknown_ids_read_the_null_table() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (state, functions) = argument_dispatch_state(device);
         let _wide = wide_table(&state, &functions);
         let empty = table(&state, 0);
@@ -1085,7 +1087,7 @@ fn without_the_array_s_features_a_table_past_the_storage_range_is_called_through
 fn binary_functions_and_required_threads_answer_as_metal_s_do() {
     use metal2vulkan::metal::FunctionOptions;
     use metal2vulkan_runtime::{BinaryFunctionProblem, FunctionDescriptor, RequiredThreadsProblem};
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (caller, functions) = libraries(device);
         let with_options = |name: &str, options: FunctionOptions| {
             let mut descriptor = FunctionDescriptor::new(name);
@@ -1385,7 +1387,7 @@ fn a_handle_of_another_vertex_function_calls_this_state_s_function_at_its_positi
 fn functions_added_to_a_vertex_stage_without_its_flag_call_its_last_function() {
     use metal2vulkan::metal::FunctionOptions;
     use metal2vulkan_runtime::{FunctionDescriptor, RenderPipelineFunctionsDescriptor};
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (_, functions) = libraries(device);
         let plain = |name: &str| functions.new_function_with_name(name).unwrap();
         let compiled = |name: &str| {
@@ -1524,7 +1526,7 @@ fn binary_functions_link_as_plain_metal_links_them() {
     use metal2vulkan::metal::FunctionOptions;
     use metal2vulkan::pipeline::{MeshPipelineDescriptor, Stage};
     use metal2vulkan_runtime::{BinaryFunctionProblem, FunctionDescriptor};
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (caller, functions) = libraries(device);
         let other = llvm_assemble(&engine_dir().join("linked_other_functions.ll")).unwrap();
         let other = device.new_library_with_air(&other).unwrap();
@@ -1762,7 +1764,7 @@ fn tile_words_with(
 /// others.
 #[test]
 fn a_tile_function_calls_the_functions_its_stage_s_table_holds() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (_, functions) = libraries(device);
         let function = |name: &str| functions.new_function_with_name(name).unwrap();
         let state = tile_state_adding(device, linked_four(&functions), false);
@@ -1842,7 +1844,7 @@ fn a_tile_function_calls_the_functions_its_stage_s_table_holds() {
 fn functions_added_to_a_tile_stage_without_its_flag_call_its_last_function() {
     use metal2vulkan::metal::FunctionOptions;
     use metal2vulkan_runtime::{FunctionDescriptor, RenderPipelineFunctionsDescriptor};
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (_, functions) = libraries(device);
         let plain = |name: &str| functions.new_function_with_name(name).unwrap();
         let compiled = |name: &str| {

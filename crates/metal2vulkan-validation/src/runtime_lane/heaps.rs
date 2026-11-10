@@ -12,9 +12,9 @@ use super::host_memory::{
 };
 use super::no_copy_heaps::{no_copy_heap, HEAP};
 use super::{
-    bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state, public_case,
-    read_buffer, run_case, validated_device, CaseResources, Messages, PublicCase, ScratchCache,
-    WAIT,
+    at_plan, bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state,
+    public_case, read_buffer, run_case, validated_device, validated_device_with, CaseResources,
+    Messages, PublicCase, ScratchCache, WAIT,
 };
 use crate::candidate::device_facts::DeviceFacts;
 use crate::candidate::engine::guards::{GuardCount, GuardReach};
@@ -1619,7 +1619,7 @@ fn a_resident_set_past_the_old_search_reaches_every_live_buffer() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let queue = device.new_command_queue().unwrap();
         let walker = public_case(POINTER_WALKER).unwrap();
         let live: Vec<Buffer> = (0..=OLD_SEARCH_CAPACITY)

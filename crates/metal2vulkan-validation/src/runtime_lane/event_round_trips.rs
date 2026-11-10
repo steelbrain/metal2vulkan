@@ -26,7 +26,7 @@
 //! wait).
 
 use super::{
-    layer_reported_nothing_at_all, loader, open_device, validated_device_with, Messages,
+    at_plan, layer_reported_nothing_at_all, loader, open_device, validated_device_with, Messages,
     ScratchCache, WAIT,
 };
 use crate::gpu::TEST_DEVICE;
@@ -284,6 +284,7 @@ fn a_checked_head_waits_for_another_queue_s_signal_on_the_gpu() {
         let cache = ScratchCache::new().unwrap();
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = completion;
+            at_plan(options)
         })
         .unwrap();
         let moltenvk = device.properties().description.driver_id == Some(DriverId::MOLTENVK);
@@ -399,6 +400,7 @@ fn a_host_signal_wakes_the_scheduler_from_its_wait_on_the_gpu() {
         let cache = ScratchCache::new().unwrap();
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = completion;
+            at_plan(options)
         })
         .unwrap();
         let moltenvk = device.properties().description.driver_id == Some(DriverId::MOLTENVK);

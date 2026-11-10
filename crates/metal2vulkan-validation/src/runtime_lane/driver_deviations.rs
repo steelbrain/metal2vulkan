@@ -112,10 +112,12 @@
 //!   report of the stage passes. Elsewhere the device's own grouping draws, which the test prints,
 //!   or each state is refused, typed, where the vertex stage has no subgroups.
 
-use super::degrade_notices::{counts as notice_counts, on_device};
+use super::degrade_notices::counts as notice_counts;
+use super::degrade_notices::on_device_with;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, public_case, read_buffer, run_case,
-    validated_device, CaseResources, Messages, PublicCase, ScratchCache, METAL_ENVIRONMENT, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, public_case, read_buffer, run_case,
+    validated_device, validated_device_with, CaseResources, Messages, PublicCase, ScratchCache,
+    METAL_ENVIRONMENT, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::case::{AuthoredCase, OutputSelection, Primitive};
@@ -295,7 +297,7 @@ fn threadgroup_words_only_lockstep_orders_answer_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let lockstep = takes(&device, DriverDeviation::SimdgroupLockstep);
         let bitcode = llvm_assemble(&fixture("rtl_lockstep.ll")).unwrap();
@@ -414,7 +416,7 @@ fn float_functions_the_device_answers_are_metals() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalFloatFunctions);
         for (case_name, words) in [(PRECISE, PRECISE_DEVICE_WORDS), (FAST, FAST_DEVICE_WORDS)] {
@@ -590,7 +592,7 @@ fn cube_gradients_through_an_anisotropic_sampler_answer_as_metal() {
     let cache = ScratchCache::new().unwrap();
     let mut failures = Vec::new();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let tangents = takes(&device, DriverDeviation::GraphicsCubeGradientTangents);
         let compute = takes(&device, DriverDeviation::CubeGradientRoute);
@@ -772,7 +774,7 @@ fn half_fused_multiply_adds_the_device_answers_are_metals() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalHalfFma);
         for case_name in HALF_FMA_CASES {
@@ -893,7 +895,7 @@ fn float_denormals_read_as_metal_reads_them() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalFloatDenormals);
         let unary = takes(&device, DriverDeviation::MetalUnaryDenormals);
@@ -990,7 +992,7 @@ fn fused_pairs_answer_metals_nans_and_denormals() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalFloatDenormals);
         let canonical = takes(&device, DriverDeviation::MetalCanonicalNans);
@@ -1067,7 +1069,7 @@ fn half_quantize_rounds_as_metal_at_the_edge() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let word = |bytes: &[u8], i: usize| {
             u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap())
@@ -1191,7 +1193,7 @@ fn owned_float_fixtures_answer_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let word = |bytes: &[u8], i: usize| {
             u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap())
@@ -1389,7 +1391,7 @@ fn owned_dot_fixtures_answer_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let denormals = takes(&device, DriverDeviation::MetalFloatDenormals);
         let metals = takes(&device, DriverDeviation::MetalFloatFunctions);
@@ -1463,7 +1465,7 @@ fn minimums_and_maximums_answer_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalMinMax);
         let mut failures = Vec::new();
@@ -1550,7 +1552,7 @@ fn half_arithmetic_answers_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalHalfArithmetic);
         let mut failures = Vec::new();
@@ -2171,7 +2173,7 @@ fn fragment_simdgroup_lanes_are_metal_s() {
     let cache = ScratchCache::new().unwrap();
     let mut failures = Vec::new();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let metals = takes(&device, DriverDeviation::MetalFragmentSimdgroups);
         let r32 = (PixelFormat::R32Uint, 1);
@@ -2398,7 +2400,7 @@ fn vertex_points(
 /// the test prints, and one without them refuses each state, typed (`SubgroupOperations`).
 #[test]
 fn vertex_simdgroups_are_metal_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let compile = device.compile_device();
         let profile = compile.profile();

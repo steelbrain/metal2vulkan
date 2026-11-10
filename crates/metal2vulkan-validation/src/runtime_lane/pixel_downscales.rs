@@ -37,7 +37,8 @@ use super::argument_linear_samples::kernel;
 use super::degrade_notices::counts;
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -637,7 +638,7 @@ fn a_pixel_sampler_downscale_answers_metal_s_texels() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let (outcomes, metal_sampler) = {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         eprintln!("pixel downscales on {}", device.name());
         let outcomes: Vec<(Size, Vec<Outcome>)> = SIZES
             .iter()

@@ -19,8 +19,8 @@
 
 use super::mip_levels::{half, texture, LEVELS, SIDE};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -199,7 +199,7 @@ fn kernel_lod_queries_answer_metals_level() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let level = |l: u64, _: u64, _: u64, _: u64| l as f32;
         let textures = [

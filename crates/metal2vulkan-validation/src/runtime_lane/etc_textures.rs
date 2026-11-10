@@ -19,8 +19,9 @@
 //! through its own decode (not compared), announcing neither kind.
 
 use super::astc_textures::{blit, download, read_whole, reader, texture, upload};
-use super::degrade_notices::{counts, on_device};
-use super::{converted_holds, pixel_samplers::metal_sampler, srgb_decode_holds};
+use super::degrade_notices::counts;
+use super::degrade_notices::on_device_with;
+use super::{at_plan, converted_holds, pixel_samplers::metal_sampler, srgb_decode_holds};
 use metal2vulkan::bind::{EtcDecode, EtcTexels, PvrtcDecode};
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::metal::format::{srgb_raw_twin, vk_format, FormatEmulation};
@@ -126,7 +127,7 @@ fn other_form(pf: PixelFormat) -> PixelFormat {
 /// another texture, the blocks of each coming back unchanged.
 #[test]
 fn etc_texels_read_as_metal_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();

@@ -41,9 +41,10 @@
 //! without `VK_EXT_mesh_shader` announces its emulated mesh draws once.
 
 use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::mesh_draws::emulates;
 use super::render_state::{texels, texture};
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::ReplayFaults;
 use metal2vulkan::metal::{
@@ -653,7 +654,7 @@ fn descriptors_and_buffers_answer_as_metals() {
 /// pipeline's mesh draw of threadgroups, command 1 the grid pipeline's of threads.
 #[test]
 fn own_commands_draw_metals_words() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let (object, grid) = lane.draws_pipelines();
         for kernel in [false, true] {
@@ -699,7 +700,7 @@ fn encode_own(
 /// buffer runs first, so neither pays for the device's first work.
 #[test]
 fn a_buffer_of_mesh_draws_alone_records_no_chunk_apart() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let (object, grid) = lane.draws_pipelines();
         let ctl = words(device, &[2, 1, 0, 0]);
@@ -731,7 +732,7 @@ fn a_buffer_of_mesh_draws_alone_records_no_chunk_apart() {
 /// buffer of mesh draws draws nothing, and on its own kind's marks its 4 vertices.
 #[test]
 fn a_kernel_s_draws_of_each_kind_run_as_metals() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let (_, grid) = lane.draws_pipelines();
         let vertex = lane.vertex_pipeline();
@@ -771,7 +772,7 @@ fn a_kernel_s_draws_of_each_kind_run_as_metals() {
 /// buffer of draws of primitives, which ends Metal's process, is refused.
 #[test]
 fn the_cpu_s_mesh_draws_of_the_other_kind_draw_as_plain_metals() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let (_, grid) = lane.draws_pipelines();
         for (kind, on) in [(Kind::Threads, Kind::Groups), (Kind::Groups, Kind::Threads)] {
@@ -814,7 +815,7 @@ fn the_cpu_s_mesh_draws_of_the_other_kind_draw_as_plain_metals() {
 /// ordered: Metal's reader read the words the CPU wrote, and the lane takes either order's.
 #[test]
 fn a_command_s_barrier_orders_its_mesh_draw() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let writer = lane
             .mesh_pipeline(
@@ -959,7 +960,7 @@ impl Writer {
 /// device reads the mesh function's words, as Metal's.
 #[test]
 fn mesh_commands_read_earlier_draws_writes_as_metal_orders_them() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let pipeline = |object, mesh, fragment| {
             lane.mesh_pipeline(&lane.barrier, object, mesh, fragment, 1)
@@ -1195,7 +1196,7 @@ fn mesh_commands_read_earlier_draws_writes_as_metal_orders_them() {
 /// A kernel's reset of command 1 (`enc_reset`) leaves it drawing nothing: only command 0 draws.
 #[test]
 fn a_reset_command_draws_nothing() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let (_, grid) = lane.draws_pipelines();
         let icb = lane.icb(MESH_KINDS, true, 2);
@@ -1281,7 +1282,7 @@ fn a_pipeline_on_a_buffer_of_no_draw_of_its_kind_is_refused() {
 /// answers each case alike with 1 thread and with 32.
 #[test]
 fn a_command_s_mesh_draw_runs_with_its_own_object_threadgroup_lengths() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let lane = Lane::new(device);
         let bitcode = llvm_assemble(&engine_dir().join("icb_object_threadgroup.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();

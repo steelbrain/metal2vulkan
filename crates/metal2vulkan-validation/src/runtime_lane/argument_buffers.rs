@@ -15,15 +15,16 @@
 
 use super::kernel_textures::{absent_read_only, fresh_candidate, refusal};
 use super::{
-    bound_buffers, buffer_with, encode_case, layer_reported_nothing, layer_reported_nothing_at_all,
-    pipeline_state, public_case, public_cases, read_buffer, run_case, validated_device,
-    CaseResources, Messages, ScratchCache,
+    at_plan, bound_buffers, buffer_with, encode_case, layer_reported_nothing,
+    layer_reported_nothing_at_all, pipeline_state, public_case, public_cases, read_buffer,
+    run_case, validated_device_with, CaseResources, Messages, ScratchCache,
 };
 use crate::candidate::engine::ComputeOutput;
 use crate::case::{AuthoredCase, Stage};
 use crate::gpu::{DeviceType, TEST_DEVICE};
 use metal2vulkan::bind::{SamplerDescriptor, StatusReport};
 use metal2vulkan::metal::{PixelFormat, ResourceUsage};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     CommandBuffer, Device, ResourceId, SamplerStateOptions, Size, TextureDescriptor,
 };
@@ -44,10 +45,16 @@ const HANDLE_SAMPLER: &str =
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -58,7 +65,9 @@ fn on_device(test: impl FnOnce(&Device)) {
 /// executor run afresh on the case, or is refused honestly; the validation layer reports nothing.
 #[test]
 fn kernels_reach_buffers_through_addresses_in_argument_buffers() {
-    let census = census("buffers", |case| !case.argument_buffer_buffers.is_empty());
+    let census = census_with(at_plan, "buffers", |case| {
+        !case.argument_buffer_buffers.is_empty()
+    });
     assert!(census.matched > 0, "no case matched Metal");
 }
 
@@ -67,13 +76,13 @@ fn kernels_reach_buffers_through_addresses_in_argument_buffers() {
 /// members made, their IDs written into their owners, and its textures made resident.
 #[test]
 fn kernels_reach_textures_and_samplers_through_ids_in_argument_buffers() {
-    let census = census("textures and samplers", |case| {
+    let census = census_with(at_plan, "textures and samplers", |case| {
         !case.argument_buffer_textures.is_empty() || !case.argument_buffer_samplers.is_empty()
     });
     assert!(census.matched > 0, "no case matched Metal");
 }
 
-/// What [`census`] saw: how many cases matched Metal.
+/// What [`census_with`] saw: how many cases matched Metal.
 struct Census {
     matched: usize,
 }
@@ -81,7 +90,14 @@ struct Census {
 /// Run every committed public kernel case `select` takes, its argument buffers holding `what`:
 /// each has a clean execution report and Metal's output, or the output of the candidate executor
 /// run afresh on the case, or is refused honestly; the validation layer reports nothing.
-fn census(what: &str, select: impl Fn(&AuthoredCase) -> bool) -> Census {
+///
+/// `adjust` is applied to the options of each device it makes (`at_plan` gives them their
+/// queue plan).
+fn census_with(
+    adjust: fn(&mut DeviceOptions),
+    what: &str,
+    select: impl Fn(&AuthoredCase) -> bool,
+) -> Census {
     let cases = public_cases(|case| {
         case.stage == Stage::Kernel && case.public_source.is_some() && select(case)
     })
@@ -94,7 +110,7 @@ fn census(what: &str, select: impl Fn(&AuthoredCase) -> bool) -> Census {
     let mut differing = Vec::new();
     {
         let cache = ScratchCache::new().unwrap();
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         device_name = device.name().to_owned();
         for (name, case) in &cases {
             let run = case
@@ -205,7 +221,7 @@ fn run(command_buffer: &CommandBuffer) {
 /// for reading only (`use_resource`). Its output is its run over the CPU's address, Metal's.
 #[test]
 fn addresses_a_kernel_writes_reach_buffers_as_the_cpus_do() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let copier = public_case(WORD_COPIER).unwrap();
         let walker = public_case(POINTER_WALKER).unwrap();
@@ -322,7 +338,7 @@ fn resource_ids_are_dense_per_kind_and_reused() {
 /// (`use_resource`). Its output is its run over the CPU's IDs, Metal's.
 #[test]
 fn resource_ids_a_kernel_writes_name_resources_as_the_cpus_do() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let copier = public_case(WORD_COPIER).unwrap();
         let sampler = public_case(HANDLE_SAMPLER).unwrap();

@@ -49,7 +49,7 @@ use super::render_arguments::{output, Members, SAMPLED};
 use super::render_state::texture;
 use super::renders::public_render;
 use super::resource_ids::{distinct_sampler_states, UNLISTED};
-use super::{buffer_with, pipelines_settled, read_buffer, WAIT};
+use super::{at_plan, buffer_with, pipelines_settled, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::graphics::Assembly;
 use crate::candidate::engine::resources::pixel_format;
@@ -552,7 +552,7 @@ fn both_draws() -> IndirectCommandBufferDescriptor {
 /// draw). Windows 0 and 1 are the commands', 2 and 3 the encoder's own draws after them.
 #[test]
 fn commands_of_private_types_draw_as_the_encoder_s_draws() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let indices = permuted(device);
         for (primitive_type, reached) in PRIVATE {
             let setup = Setup::new(device);
@@ -616,7 +616,7 @@ fn commands_of_private_types_draw_as_the_encoder_s_draws() {
 /// draw's, 2 the encoder's after; each on a queue of its own (a queue's second fault revokes it).
 #[test]
 fn a_command_of_type_nine_fails_its_command_buffer_as_the_encoder_s_draw_does() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let indices = permuted(device);
         let nine = DrawPrimitiveType::Nine;
         let cases = [
@@ -824,7 +824,7 @@ fn commands_reach_what_any_encoder_of_their_command_buffer_made_resident() {
 /// kind, as plain Metal draws it, where Metal's validation stops the setter.
 #[test]
 fn a_draw_into_a_buffer_whose_records_hold_it_draws_as_on_its_own() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for types in [
             IndirectCommandType::DRAW_INDEXED,
             IndirectCommandType::DRAW_PATCHES,
@@ -1116,20 +1116,26 @@ fn a_frame_waiting_for_a_later_signal_ends(device: &Device, touches: Touches) {
 /// ([`a_frame_waiting_for_a_later_signal_ends`]).
 #[test]
 fn a_host_step_waiting_for_a_later_signal_of_another_queue_ends() {
-    on_device(|device, _| a_frame_waiting_for_a_later_signal_ends(device, Touches::Nothing));
+    on_device_with(at_plan, |device, _| {
+        a_frame_waiting_for_a_later_signal_ends(device, Touches::Nothing)
+    });
 }
 
 /// So does one whose signaller first reads the buffer the frame's draws write.
 #[test]
 fn a_host_step_waiting_for_a_later_signal_that_reads_its_writes_ends() {
-    on_device(|device, _| a_frame_waiting_for_a_later_signal_ends(device, Touches::Written));
+    on_device_with(at_plan, |device, _| {
+        a_frame_waiting_for_a_later_signal_ends(device, Touches::Written)
+    });
 }
 
 /// So does one whose signaller first reads a texture over the `Private` buffer the frame's color
 /// target lies over.
 #[test]
 fn a_host_step_waiting_for_a_later_signal_that_reads_its_target_s_buffer_ends() {
-    on_device(|device, _| a_frame_waiting_for_a_later_signal_ends(device, Touches::SharedBuffer));
+    on_device_with(at_plan, |device, _| {
+        a_frame_waiting_for_a_later_signal_ends(device, Touches::SharedBuffer)
+    });
 }
 
 /// A host step draws on what its commit compiled: commands a kernel writes, drawn by a host step
@@ -2036,7 +2042,7 @@ fn run_indirect(
 /// encoder wrote. A host step records the pass, announced once.
 #[test]
 fn a_render_execution_reads_its_range_from_a_buffer_as_metal_s_does() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         for (location, length, ran) in [
             (0u32, 4u32, 0..4),
             (1, 2, 1..3),

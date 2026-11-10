@@ -20,7 +20,8 @@
 //! and a 16x16 grid of lanes from 0.6 of the texture below it to 0.6 past it on both axes.
 
 use super::degrade_notices::on_device;
-use super::{buffer_with, read_buffer};
+use super::degrade_notices::on_device_with;
+use super::{at_plan, buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::error::{BindError, Error as CompileError, Feature};
@@ -590,7 +591,7 @@ fn an_argument_buffer_reaches_a_cubic_sampler_only_where_it_names_one() {
     use super::argument_linear_samples::{alike, device_filters, kernel};
     use super::depth_compares::{pipeline_of, run_held, Held, Through};
     use metal2vulkan_devtools::llvm_assemble_text;
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let make = |heap: bool, through: Through| {
             let text = kernel(heap, through, false, false);
             pipeline_of(device, &llvm_assemble_text(&text).unwrap(), "k")

@@ -17,9 +17,9 @@
 //! records the note and its lanes are the device's, which the test prints as `PACK-CONVERSIONS`
 //! lines.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::driver_deviations::stage_notes;
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkProperty;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, StageSource};
@@ -402,7 +402,7 @@ fn measured_pack_conversions_are_metals_where_measured_and_noted_elsewhere() {
     let packed = packed_words();
     let halves: Vec<u32> = (0..=u32::from(u16::MAX)).collect();
     let floats = float_words();
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let measured = device
             .compile_device()
             .profile()

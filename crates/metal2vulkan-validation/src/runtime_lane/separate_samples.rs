@@ -15,7 +15,8 @@
 use super::degrade_notices::counts;
 use super::render_state::stencil;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::candidate::runtime_samples::{encode, library, shape, SampleFill};
 use crate::case::TextureFormat;
@@ -202,7 +203,7 @@ fn separate_multisampled_depth_and_stencil_keep_every_sample() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         // Every aspect's copies wrong (the depth's then drawn too), or the stencil's alone, whose
         // depth the colour copies move.
@@ -435,7 +436,7 @@ fn a_separate_multisampled_stencil_keeps_every_sample() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let mut ran_any = false;
         for extent in EXTENTS {
@@ -684,7 +685,7 @@ fn fragment_depth_stores_depth_values_unchanged() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let once = stored_depths(&device, &PROBED);
         let twice = stored_depths(&device, &once);
@@ -859,7 +860,7 @@ fn fragment_depth_keeps_every_16_bit_code() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         probe_16_bit_codes(&device);
         messages.take_notices();
     }

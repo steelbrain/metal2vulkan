@@ -13,7 +13,9 @@
 //! and the lanes that differ from Metal's are counted with the largest difference, in table steps
 //! (`1/4095`), on an `SRGB-DEVICE-DECODE` line.
 
-use super::degrade_notices::{counts, on_device};
+use super::at_plan;
+use super::degrade_notices::counts;
+use super::degrade_notices::on_device_with;
 use super::pixel_samplers::metal_sampler;
 use super::rgbx_textures::run;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -60,7 +62,7 @@ fn texture(device: &Device) -> Texture {
 /// module docs).
 #[test]
 fn an_srgb_texture_reads_the_devices_decode() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let metals = metal_sampler(device);
         let texture = texture(device);

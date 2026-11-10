@@ -63,7 +63,8 @@ use super::commit_work::orders_by_ends;
 use super::degrade_notices::{assert_once, counts, FROM_HOST, GPU_TIMES, UNTIMED};
 use super::presenting::Adopted;
 use super::{
-    layer_reported_nothing_at_all, validated_device, validated_device_with, Messages, ScratchCache,
+    at_plan, layer_reported_nothing_at_all, validated_device, validated_device_with, Messages,
+    ScratchCache,
 };
 use crate::gpu::TEST_DEVICE;
 use ash::vk;
@@ -676,7 +677,7 @@ fn more_command_buffers_in_flight_than_metal_keeps_sample_buffers_are_timed() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         if Venue::of(&device).bits > 0 {
             let event: SharedEvent = device.new_shared_event().unwrap();
             let committed: Vec<CommandBuffer> = (0..IN_FLIGHT)
@@ -733,7 +734,7 @@ fn command_buffers_past_a_pool_s_slots_are_timed_by_pools_made_as_needed() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         // A device answering from the host's clock by its driver has no slots to run out of.
         if from_host_by_driver(&device) {
             eprintln!("runtime gpu times: the driver answers from the host's clock: no slots");
@@ -942,6 +943,7 @@ fn a_device_answering_gpu_times_from_the_host_writes_no_timestamps() {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.gpu_times_from_host = true;
+            at_plan(options)
         })
         .unwrap();
         let queue = device.new_command_queue().unwrap();
@@ -1301,7 +1303,7 @@ fn host_clock_gpu_times_keep_metal_s_rules() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let by_driver = from_host_by_driver(&device);
         let told = if by_driver {
             None
@@ -1309,6 +1311,7 @@ fn host_clock_gpu_times_keep_metal_s_rules() {
             Some(
                 validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
                     options.gpu_times_from_host = true;
+                    at_plan(options)
                 })
                 .unwrap(),
             )

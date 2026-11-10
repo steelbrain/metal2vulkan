@@ -17,10 +17,10 @@
 //! device without `shaderInt64`, and the device restricted to `vk12-floor` (where the profiles
 //! layer is installed) run the same kernels.
 
-use super::degrade_notices::{assert_once, counts, made_compute_kinds, on_device, on_device_with};
+use super::degrade_notices::{assert_once, counts, made_compute_kinds, on_device_with};
 use super::shared_kinds;
 use super::Messages;
-use super::{buffer_with, read_buffer};
+use super::{at_plan, buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use crate::candidate::LaneRestriction;
 use metal2vulkan::device::VkFeature;
@@ -245,7 +245,7 @@ fn reads_zero_and_completes(device: &Device, messages: &Messages, reach: Reach) 
 /// elsewhere.
 #[test]
 fn a_read_of_a_removed_argument_reads_zero_and_its_command_buffer_completes() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let addressed = device
             .compile_device()
             .profile()
@@ -266,6 +266,7 @@ fn without_buffer_addresses_a_removed_arguments_read_marks_through_the_status_bi
     on_device_with(
         |options| {
             options.withheld_features.insert(VkFeature::ShaderInt64);
+            at_plan(options)
         },
         |device, messages| reads_zero_and_completes(device, messages, Reach::Binding),
     );
@@ -294,7 +295,10 @@ fn on_vk12_floor_a_removed_arguments_read_marks_through_the_status_binding() {
             }
         };
     on_device_with(
-        |options: &mut DeviceOptions| restriction.restrict(options).unwrap(),
+        |options: &mut DeviceOptions| {
+            restriction.restrict(options).unwrap();
+            at_plan(options)
+        },
         |device, messages| {
             let restricted = restriction.check(device).unwrap();
             println!(

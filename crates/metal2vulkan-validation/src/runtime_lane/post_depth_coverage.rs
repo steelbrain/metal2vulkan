@@ -12,7 +12,8 @@
 //! clipped triangle's pixel-rate fragments (lavapipe) may refuse it for that first.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -161,7 +162,7 @@ fn the_coverage_after_the_depth_test_reads_as_metal_s() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let library = library(&device);
         let after = match pipeline(&device, &library, "pdc_after", true) {

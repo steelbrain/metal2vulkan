@@ -23,8 +23,8 @@
 use super::argument_linear_samples::{alike, device_filters};
 use super::pixel_samplers::metal_sampler;
 use super::{
-    converted_holds, layer_reported_nothing_at_all, pipeline_state, public_cases, run_with,
-    validated_device, Messages, ScratchCache,
+    at_plan, converted_holds, layer_reported_nothing_at_all, pipeline_state, public_cases,
+    run_with, validated_device_with, Messages, ScratchCache,
 };
 use crate::candidate::engine::resources::pixel_format;
 use crate::gpu::TEST_DEVICE;
@@ -70,7 +70,7 @@ fn runtime_column(output: &[u8]) -> Vec<u8> {
 fn one_pipeline_per_sampler_answers_every_bound_format_as_metal() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let cases = |entry: &str| {
         let found: Vec<_> = public_cases(|case| case.entry == entry)
             .unwrap()

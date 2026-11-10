@@ -17,7 +17,8 @@
 //!   4, leaves 5 but 1 in column 7.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -213,7 +214,7 @@ fn an_imageblock_is_per_sample_and_tested_as_metal_s() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let library = library(&device);
         let mut answers = Vec::new();

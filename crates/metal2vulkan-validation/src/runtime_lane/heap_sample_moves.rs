@@ -4,7 +4,9 @@
 //! holds, and the consumer's surface, whose it may not.
 
 use super::host_memory::run;
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -87,7 +89,8 @@ fn blit_into(queue: &CommandQueue, texture: &Texture, buffer: &Buffer, x: u64) {
 fn a_large_heap_multisample_texture_s_moves() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device: &Device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device: &Device =
+        &validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let options = ResourceOptions::new(
         StorageMode::Shared,
         CpuCacheMode::DefaultCache,

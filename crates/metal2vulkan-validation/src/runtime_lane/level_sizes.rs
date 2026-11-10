@@ -4,8 +4,8 @@
 
 use super::host_memory::run;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -99,7 +99,7 @@ fn dispatch(
 fn size_queries_at_a_level_answer_metal_s_extent() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = &validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = &validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let texture = |descriptor: &mut TextureDescriptor, usage| {
         descriptor.mipmap_level_count = descriptor.mipmap_level_count.min(3);
         descriptor.usage = usage;

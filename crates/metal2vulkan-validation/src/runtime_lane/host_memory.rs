@@ -9,18 +9,19 @@
 //! mapping, the GPU through the buffer, and each reads what the other wrote. The answers expected
 //! are Metal's, as measured on an Apple M3 Max and an M4.
 
-use super::{
-    buffer_with, encode_case, pipeline_state, public_case, read_buffer, validated_device,
-    CaseResources, Messages, ScratchCache,
-};
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
-use super::{layer_reported_nothing, validated_device_with};
+use super::layer_reported_nothing;
+use super::{
+    at_plan, buffer_with, encode_case, pipeline_state, public_case, read_buffer,
+    validated_device_with, CaseResources, Messages, ScratchCache,
+};
 use crate::candidate::engine::ComputeOutput;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use metal2vulkan::vk::DriverId;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandBufferStatus,
     CommandQueue, CopyProblem, CpuCacheMode, Deallocator, DebugMessage, Device, Error, EventRef,
@@ -418,7 +419,13 @@ pub(super) fn counting(len: usize, start: usize) -> Vec<u8> {
 /// Run `test` on a validated device, then check that once everything is dropped (the device
 /// last) the layer reported nothing.
 pub(super) fn on_device(test: impl FnOnce(&Device)) {
-    let messages = on_device_reporting(test);
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+pub(super) fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
+    let messages = on_device_reporting_with(adjust, test);
     assert!(
         messages.is_empty(),
         "the validation layer reported: {messages:#?}"
@@ -428,10 +435,19 @@ pub(super) fn on_device(test: impl FnOnce(&Device)) {
 /// Run `test` on a validated device; the failing messages reported once everything is dropped
 /// (the device last).
 fn on_device_reporting(test: impl FnOnce(&Device)) -> Vec<DebugMessage> {
+    on_device_reporting_with(|_| {}, test)
+}
+
+/// [`on_device_reporting`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_reporting_with(
+    adjust: fn(&mut DeviceOptions),
+    test: impl FnOnce(&Device),
+) -> Vec<DebugMessage> {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     messages.take()
@@ -710,7 +726,7 @@ fn a_deallocator_may_touch_the_command_buffer_that_held_its_buffer() {
 /// it ([`queue_where`]).
 #[test]
 fn a_deallocator_returns_whatever_thread_submits_past_its_completion() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let first = device.new_command_queue().unwrap();
         let on = first.vk_queue_sharing().0;
         let shared = queue_where(device, on, true).expect("a queue on the first one's VkQueue");
@@ -1334,7 +1350,7 @@ fn a_deallocator_run_by_a_completion_may_report_a_remap() {
 fn remaps_reported_from_any_thread_change_no_answer() {
     const WORKERS: usize = 4;
     const ROUNDS: usize = 24;
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let pages: Vec<Mapping> = (0..WORKERS)
             .map(|_| Mapping::anonymous(GUEST_PAGE))
             .collect();

@@ -15,8 +15,11 @@
 //! scheduled handler starts, and Metal's wait for the scheduling returns only once every
 //! scheduled handler returned.
 
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, CommitFailure, DeadlockCause, Device,
     Error, EventRef, Handler, Invalid, Problem, ResourceOptions, SharedEvent, TimedOut,
@@ -36,10 +39,16 @@ const SCHEDULER: &str = "metal2vulkan-scheduler";
 /// Run `test` on a validated device, then check that once everything is dropped (the device
 /// last) the layer reported nothing.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -276,7 +285,7 @@ fn a_command_buffer_behind_a_held_one_of_its_queue_runs_them_once_it_goes() {
 /// after the signaller's own.
 #[test]
 fn a_command_buffer_a_gpu_signal_releases_runs_them_after_the_signaller_s() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (first, second) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),

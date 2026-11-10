@@ -21,7 +21,9 @@
 
 use super::degrade_notices::counts;
 use super::depth_compares::{argument_kernel, pipeline_of, run_held, Held, Through};
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::VkProperty;
@@ -267,7 +269,7 @@ fn comparisons_read_the_level_metal_reads() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let own = !device
             .compile_device()

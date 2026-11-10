@@ -39,12 +39,13 @@
 //! (`WorkCounts::ycbcr_planes_bound`) and convert nothing; elsewhere they bind no planes.
 
 use super::argument_linear_samples::{kernel, LINEAR_EDGE};
-use super::degrade_notices::{counts, on_device};
+use super::degrade_notices::counts;
+use super::degrade_notices::on_device_with;
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::extended_range_targets::half_bits;
 use super::pixel_downscales::RENDER;
 use super::pixel_samplers::metal_sampler;
-use super::{buffer_with, read_buffer, ycbcr_in_place, ycbcr_textures, WAIT};
+use super::{at_plan, buffer_with, read_buffer, ycbcr_in_place, ycbcr_textures, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -510,8 +511,10 @@ fn a_ycbcr10_texture_over_planes_at_offsets_with_padded_rows_reads_as_metal_does
 /// The texture over a surface at `layout` read and sampled, each output's hash printed after
 /// `what` and checked against Metal's, or the bands', the grid's and the draw's against the
 /// [`twin_of`]'s where the device filters the kept image natively (the module docs).
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn samples_as_metal_does(layout: Layout, what: &str) {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         eprintln!("{what} on {}", device.name());
         let texture = texture(device, layout);
         let state = sampler(device);

@@ -26,8 +26,9 @@
 //! handle carries the class). Each access's every lane is compared with Metal's; a lane that
 //! differs is printed on a `HALF-READ-DIFFERS` line, and the test fails.
 
-use super::degrade_notices::{counts as notice_counts, on_device};
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::counts as notice_counts;
+use super::degrade_notices::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::VkProperty;
@@ -426,7 +427,7 @@ fn dispatch(
 fn half_float_reads_hand_back_metals_nans() {
     let mut report = Vec::new();
     let mut differ_total = 0;
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let _ = messages.take_notices();
         // The device's texel, a half-float NaN its own, where its texture unit is not Metal's.
         let own = !device

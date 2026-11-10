@@ -15,8 +15,9 @@
 //! the emulation on a device without `tessellationShader` writes the position to a flat varying
 //! (`patches::Path`).
 
-use super::patches::{on_path, Path};
-use super::{buffer_with, WAIT};
+use super::patches::on_path_with;
+use super::patches::Path;
+use super::{at_plan, buffer_with, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, TextureUsage, VertexFormat, VertexStepFunction};
@@ -25,6 +26,7 @@ use metal2vulkan::pipeline::{
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBufferStatus, Device, Error, LoadAction, PipelineOptions, Region,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction, TextureDescriptor,
@@ -64,11 +66,17 @@ fn a_fragment_reads_a_patch_s_position_as_its_primitive_id() {
 /// [`a_fragment_reads_a_patch_s_position_as_its_primitive_id`], emulated.
 #[test]
 fn emulated_a_fragment_reads_a_patch_s_position_as_its_primitive_id() {
-    primitive_ids(Path::Emulated);
+    primitive_ids_with(at_plan, Path::Emulated);
 }
 
 fn primitive_ids(path: Path) {
-    on_path(path, |device, name| {
+    primitive_ids_with(|_| {}, path)
+}
+
+/// [`primitive_ids`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn primitive_ids_with(adjust: fn(&mut DeviceOptions), path: Path) {
+    on_path_with(adjust, path, |device, name| {
         let pipeline = match pipeline(&device) {
             Ok(pipeline) => pipeline,
             Err(Error::Unsupported(u)) => {

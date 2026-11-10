@@ -12,10 +12,11 @@
 //! as many barriers whatever its commands' count), and no draw's vertex stage is taken to write
 //! what its fragments touch (nothing announced past the host step).
 
-use super::degrade_notices::{assert_made_once, on_device};
+use super::degrade_notices::assert_made_once;
+use super::degrade_notices::on_device_with;
 use super::indirect_host_steps::{encoding_state_set, HOST_STEPS};
 use super::render_executions::{forced_with, icb};
-use super::{buffer_with, WAIT};
+use super::{at_plan, buffer_with, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{IndirectCommandType, PixelFormat, PrimitiveType, RenderStages};
 use metal2vulkan::metal::{ResourceUsage, TextureUsage};
@@ -158,7 +159,7 @@ fn run(device: &Device, state: &RenderPipelineState, commands: u64) -> (u64, Vec
 /// writes bytes its fragments touch).
 #[test]
 fn replayed_draws_of_functions_that_write_nothing_write_no_resident_buffer() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let descriptor = descriptor(device);
         let state = device
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())

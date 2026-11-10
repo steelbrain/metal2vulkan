@@ -31,9 +31,10 @@
 //!   built), are refused typed (`Unsupported`, `Feature::Format`).
 
 use super::astc_textures::{read_whole, reader};
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{counts, on_device};
 use super::pixel_samplers::metal_sampler;
-use super::{buffer_with, converted_holds, read_buffer, WAIT};
+use super::{at_plan, buffer_with, converted_holds, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::ChromaDecode;
 use metal2vulkan::error::Feature;
@@ -203,7 +204,7 @@ fn four_two_two_textures_are_made_as_metal_makes_them() {
 /// Metal's bytes.
 #[test]
 fn four_two_two_copies_move_the_texels_bytes() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pattern = seq(ROW * SIDE, 0);
         let ee = vec![0xee; (ROW * SIDE) as usize];
         for pf in PAIRS {
@@ -419,7 +420,7 @@ fn state(device: &Device, stem: &str, entry: &str) -> ComputePipelineState {
 /// texel there (within one ulp: the device's filter converts the twin's codes).
 #[test]
 fn a_four_two_two_texture_written_by_a_kernel_keeps_its_texels() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let write = state(device, "storage_texture_write", "storage_texture_write");
         let read = state(device, "sampling", "sample_pixel");
         let queue = device.new_command_queue().unwrap();
@@ -522,7 +523,7 @@ fn metal_texels(pf: PixelFormat, bytes: &[u8]) -> Vec<[f32; 4]> {
 /// where a CPU copy decoded on the CPU.
 #[test]
 fn four_two_two_texels_read_as_metal_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let exact = metal_sampler(device);
@@ -665,7 +666,7 @@ fn four_two_two_texels_read_as_metal_s() {
 /// refused typed, the pass as the runtime's gap.
 #[test]
 fn four_two_two_render_targets_are_refused_typed() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let bitcode = llvm_assemble(&engine_dir().join("rt6_restart.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let function = |name| {

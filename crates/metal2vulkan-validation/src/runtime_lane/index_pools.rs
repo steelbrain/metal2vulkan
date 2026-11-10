@@ -35,7 +35,8 @@
 //!   during it; in all 40 the handler ran 0.07 to 1.44 ms after the later of the two.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::coverage::ROBUSTNESS_FEATURES;
@@ -43,6 +44,7 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{IndexType, PrimitiveType};
 use metal2vulkan::pipeline::{RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     host_time, Buffer, CommandBuffer, CommandQueue, Device, PipelineOptions, RenderPassDescriptor,
     RenderPipelineState,
@@ -92,8 +94,15 @@ struct Lane {
 
 impl Lane {
     fn new(messages: &Messages, cache: &ScratchCache) -> Lane {
+        Lane::new_with(|_| {}, messages, cache)
+    }
+
+    /// [`Lane::new`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+    /// their queue plan).
+    fn new_with(adjust: fn(&mut DeviceOptions), messages: &Messages, cache: &ScratchCache) -> Lane {
         let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
             options.withheld_features = ROBUSTNESS_FEATURES.into_iter().collect();
+            adjust(options)
         })
         .unwrap();
         let bitcode = llvm_assemble(&engine_dir().join("ob3_index_buffer.ll")).unwrap();
@@ -237,7 +246,7 @@ fn a_second_queue_takes_its_own_pool_block() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let lane = Lane::new(&messages, &cache);
+        let lane = Lane::new_with(at_plan, &messages, &cache);
         let queue = lane.queue();
         lane.drawn(&queue);
         assert_eq!(lane.blocks(), (1, 0), "the first queue's block");
@@ -289,7 +298,7 @@ fn a_pool_block_no_command_buffer_held_goes_after_the_quiet_period() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let lane = Lane::new(&messages, &cache);
+        let lane = Lane::new_with(at_plan, &messages, &cache);
         let idle = lane.queue();
         let rested = lane.queue();
         let busy = lane.queue();
@@ -326,7 +335,7 @@ fn a_completed_handler_waits_for_no_pool_block_made_meanwhile() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let lane = Lane::new(&messages, &cache);
+        let lane = Lane::new_with(at_plan, &messages, &cache);
         let queue = lane.queue();
         // The pipeline's first draw, which makes the first queue's block.
         lane.drawn(&queue);

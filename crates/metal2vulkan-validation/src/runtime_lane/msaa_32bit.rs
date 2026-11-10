@@ -29,7 +29,10 @@
 
 use super::degrade_notices::counts;
 use super::renders::{blit_read, run};
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device, validated_device_with, Messages,
+    ScratchCache,
+};
 use crate::candidate::runtime_samples::{encode as samples_of, SampleFill};
 use crate::case::{TextureFormat as CaseFormat, TextureType as CaseType};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
@@ -348,7 +351,7 @@ fn a_32bit_float_target_resolves_as_metal() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let queue = device.new_command_queue().unwrap();
         let samples = 4;

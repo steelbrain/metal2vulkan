@@ -22,7 +22,7 @@
 
 use super::degrade_notices::{counts, on_device, on_device_with};
 use super::ycbcr_device_reads::{assert_device_reads, device_conversions, vulkan_read};
-use super::{buffer_with, read_buffer, ycbcr_textures};
+use super::{at_plan, buffer_with, read_buffer, ycbcr_textures};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{
     ycbcr_read, SamplerDescriptor, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrRange,
@@ -620,7 +620,7 @@ fn samples_read_the_planes(device: &Device, exact: bool) -> u64 {
 /// only where the device converted a texture itself (`ycbcr_device_reads`).
 #[test]
 fn a_ycbcr_texture_s_samples_read_its_planes_in_place_where_the_memory_is_the_host_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let by_device = samples_read_the_planes(device, true);
         let notices = counts(&messages.take_notices());
         for kind in [
@@ -647,23 +647,29 @@ fn a_ycbcr_texture_reads_its_planes_in_place_under_the_defaults() {
     let defaults = |options: &mut metal2vulkan_runtime::DeviceOptions| {
         options.policy = DevicePolicy::default();
     };
-    on_device_with(defaults, |device, messages| {
-        samples_read_the_planes(device, false);
-        let notices = counts(&messages.take_notices());
-        if reads_in_place(device) {
-            for kind in [
-                Degradation::FloatSampleFilter,
-                Degradation::HalfSampleFilter,
-            ] {
-                assert_eq!(notices.get(&kind), None, "{notices:?}");
+    on_device_with(
+        |options| {
+            defaults(options);
+            at_plan(options)
+        },
+        |device, messages| {
+            samples_read_the_planes(device, false);
+            let notices = counts(&messages.take_notices());
+            if reads_in_place(device) {
+                for kind in [
+                    Degradation::FloatSampleFilter,
+                    Degradation::HalfSampleFilter,
+                ] {
+                    assert_eq!(notices.get(&kind), None, "{notices:?}");
+                }
+                assert_eq!(
+                    notices.get(&Degradation::YCbCrFilterNotExact),
+                    Some(&1),
+                    "{notices:?}"
+                );
             }
-            assert_eq!(
-                notices.get(&Degradation::YCbCrFilterNotExact),
-                Some(&1),
-                "{notices:?}"
-            );
-        }
-    });
+        },
+    );
 }
 
 /// A function that samples one texture and gathers it through one sampler (the fixture

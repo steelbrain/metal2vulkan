@@ -42,8 +42,8 @@
 use super::degrade_notices::{assert_made_once, forced, loses_depth_denormals, signs_depth_tests};
 use super::degrade_notices::{made_compute_kinds, shared_in_system_memory};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::candidate::runtime_samples::{encode, read_function};
 use crate::executor_contract::multisample::SampleRead;
@@ -448,7 +448,7 @@ fn a_buffer_copies_every_sample_of_a_multisampled_depth_or_stencil_both_ways() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let properties = device.properties();
         let defect = RuntimeDriverDefect::MultisampledDepthStencilColourCopies;

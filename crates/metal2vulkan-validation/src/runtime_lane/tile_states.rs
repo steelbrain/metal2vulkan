@@ -18,13 +18,14 @@
 //!   a draw with a tile state set.
 
 use super::render_state::texture;
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::error::DescriptorError;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
 use metal2vulkan::pipeline::{StageSource, TileRenderPipelineDescriptor};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     ArchivedPipeline, Attachment, BinaryArchiveDescriptor, BinaryArchiveMiss, Device, DrawProblem,
     Error, Invalid, Library, PipelineOption, PipelineOptions, Problem, RenderPassDescriptor,
@@ -48,10 +49,16 @@ const ALIASED: [PixelFormat; 4] = [
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
 pub(super) fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+pub(super) fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);

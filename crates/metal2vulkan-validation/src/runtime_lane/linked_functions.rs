@@ -12,7 +12,9 @@
 //! callee. Each kernel stores its callee's value at `tid + 5` to word `tid`, so word 0 is the
 //! probe's word.
 
-use super::host_memory::{on_device, run};
+use super::at_plan;
+use super::host_memory::on_device_with;
+use super::host_memory::run;
 use super::read_buffer;
 use crate::air_library::AirLibrary;
 use metal2vulkan::error::RuntimeInput;
@@ -122,7 +124,7 @@ fn needs(symbol: &str) -> Error {
 /// probe's `specialized`, `plain`, `other` and `both`.
 #[test]
 fn a_function_made_with_a_specialized_name_links_under_it() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (caller, functions) = libraries(device);
         let specialized = made(&functions, "base_fn", Some("custom_fn"), Some(scale(3.0)));
         let plain = made(&functions, "base_fn", None, Some(scale(3.0)));
@@ -158,7 +160,7 @@ fn a_function_made_with_a_specialized_name_links_under_it() {
 /// runtime's reads zero, so `base_fn` without a value stores 1.
 #[test]
 fn a_linked_function_s_constants_answer_as_metal_s_do() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (caller, functions) = libraries(device);
         let custom = |name: &str, values| made(&functions, name, Some("custom_fn"), values);
         let custom_words = |f: &Function| {

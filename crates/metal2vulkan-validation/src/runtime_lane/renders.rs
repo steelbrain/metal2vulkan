@@ -38,8 +38,9 @@
 //!   texels (measured).
 
 use super::{
-    buffer_with, layer_reported_nothing, layer_reported_nothing_at_all, metal_output, read_buffer,
-    texture_usage, validated_device, Messages, RuntimeRun, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing, layer_reported_nothing_at_all, metal_output,
+    read_buffer, texture_usage, validated_device, validated_device_with, Messages, RuntimeRun,
+    ScratchCache, WAIT,
 };
 use crate::air::reflect::FragmentImageblock;
 use crate::candidate::engine::graphics::{render_case, RenderCase};
@@ -296,7 +297,7 @@ fn public_render_cases_match_metal() {
     let device_name;
     {
         let cache = ScratchCache::new().unwrap();
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         device_name = device.name().to_owned();
         for (name, case) in &cases {
             let case = match case {
@@ -348,7 +349,8 @@ fn public_render_cases_match_metal() {
         };
         let rerun = {
             let cache = ScratchCache::new().unwrap();
-            let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+            let device =
+                validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
             run_render(&device, case)
         };
         let reported = messages.take();
@@ -975,7 +977,7 @@ fn a_code_apart(pf: PixelFormat, got: &[u8], want: &[u8]) -> bool {
 fn clears_are_the_device_s_conversion_of_the_clear_value() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let metals = device
         .properties()
         .driver_facts
@@ -1250,7 +1252,7 @@ fn empty_pass(
 fn load_and_store_actions_keep_and_clear_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let texture = holding(&device, &pattern(1));
     empty_pass(
         &device,

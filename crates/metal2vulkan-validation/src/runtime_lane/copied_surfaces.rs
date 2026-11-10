@@ -25,6 +25,8 @@
 //!
 //! Each "apart" case keeps a copy or an import of its own, for the reason its test gives.
 
+use super::at_plan;
+use super::host_memory::on_device_with;
 use super::host_memory::{host_page, no_copy, on_device, Mapping};
 use super::WAIT;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -323,7 +325,7 @@ fn rounds(device: &Device, place: Place, surface: &Surface) -> (u8, u64) {
 /// together, and after the host's wait.
 #[test]
 fn two_buffers_over_one_refused_surface_are_one_copy() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (mut missed, mut miscounted) = (Vec::new(), Vec::new());
         for place in [
             Place::CommandBuffer,

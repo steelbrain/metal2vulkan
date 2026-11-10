@@ -25,9 +25,10 @@ use super::astc_textures::{
     blit, block_count, blocks_of, decodes_astc, download, metal_texels, read_whole, reader,
     row_bytes, texels_of, texture, upload, SIDE,
 };
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{counts, on_device};
 use super::pixel_samplers::metal_sampler;
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{AstcDecode, SamplerDescriptor};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -151,7 +152,7 @@ fn differences(what: &str, got: &[[f32; 4]], want: &[[f32; 4]], limit: usize) ->
 /// of each coming back unchanged.
 #[test]
 fn astc_hdr_texels_read_as_metal_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let sampling = sampler_reader(device);

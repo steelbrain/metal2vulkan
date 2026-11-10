@@ -36,7 +36,9 @@
 //! texture over it ([`Reader::Kernel`]). The same rule orders that pair, as one resource's
 //! accesses.
 
-use super::host_memory::{no_copy, on_device, Mapping, GUEST_PAGE};
+use super::at_plan;
+use super::host_memory::on_device_with;
+use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
 use super::WAIT;
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -551,7 +553,7 @@ fn rounds_after(device: &Device, case: Case, arrival: Arrival) -> [u64; 3] {
 /// nothing ordering them are counted and reported.
 #[test]
 fn a_second_import_of_a_surface_reads_what_the_first_wrote() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let cases = [
             (Writer::Blit, Place::Encoder, Reader::Blit),
             (Writer::Clear, Place::CommandBuffer, Reader::Blit),
@@ -589,7 +591,7 @@ fn a_second_import_of_a_surface_reads_what_the_first_wrote() {
 /// counted and reported.
 #[test]
 fn a_kernel_reads_what_a_texture_over_another_import_wrote() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let cases = [
             (Writer::Clear, Place::CommandBuffer, Reader::Kernel),
             (Writer::Blit, Place::CommandBuffer, Reader::Kernel),
@@ -625,7 +627,7 @@ fn a_kernel_reads_what_a_texture_over_another_import_wrote() {
 /// the control.
 #[test]
 fn a_second_buffer_that_joined_nothing_reads_what_the_first_wrote() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let places = [
             Place::CommandBuffer,
             Place::Queue,

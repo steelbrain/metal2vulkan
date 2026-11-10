@@ -31,7 +31,7 @@ use super::host_memory::Seen;
 use super::rebind_reach::{buffer_len, buffer_over, deallocated, pages};
 use super::rebinds::rebind;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
     validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
@@ -43,6 +43,7 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus,
     ComputeCommandEncoder, ComputePipelineState, Degradation, Device, Error, EventRef,
@@ -229,15 +230,27 @@ fn complete(command_buffer: &CommandBuffer) {
 /// them (`bufferDeviceAddress` withheld), whose step module binds its places
 /// (`PredicationStepForm::Bound`); after each, require that the layer reported nothing.
 fn on_device(test: impl Fn(&Device)) {
-    on_device_noted(|device, _| test(device));
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl Fn(&Device)) {
+    on_device_noted_with(adjust, |device, _| test(device));
 }
 
 /// [`on_device`], `test` given the devices' messages too (their degrade notices among them).
 fn on_device_noted(test: impl Fn(&Device, &Messages)) {
+    on_device_noted_with(|_| {}, test)
+}
+
+/// [`on_device_noted`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_noted_with(adjust: fn(&mut DeviceOptions), test: impl Fn(&Device, &Messages)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let addressed = {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         let form = PredicationStepForm::of(device.compile_device());
         println!("PRD device {} {form:?}", device.name());
         test(&device, &messages);
@@ -252,7 +265,11 @@ fn on_device_noted(test: impl Fn(&Device, &Messages)) {
         let without = |options: &mut metal2vulkan_runtime::DeviceOptions| {
             (options.withheld_features).insert(VkFeature::BufferDeviceAddress);
         };
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), without).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            without(options);
+            adjust(options)
+        })
+        .unwrap();
         let form = PredicationStepForm::of(device.compile_device());
         assert_eq!(form, PredicationStepForm::Bound, "without device addresses");
         println!("PRD device {} {form:?}", device.name());
@@ -1178,7 +1195,7 @@ fn run_to_end(
 /// once, held, and its End in the next unit is unbalanced there.
 #[test]
 fn loops_span_their_units_encoders() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let cases: [SpanningCase; 6] = [
             (false, &[(0, 3), (5, 3), (6, 1)], |s| {
                 s.start_while(3);
@@ -1383,7 +1400,7 @@ fn put(encoder: &mut ComputeCommandEncoder, put: &ComputePipelineState, marks: &
 /// its Else inside a DoWhile, per pass: Metal's log `3 1 2 1 3 1 3 1`). Every one completes.
 #[test]
 fn loops_run_as_metal_ran() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let ok = (CommandBufferStatus::Completed, None);
         let expect = |got: (CommandBufferStatus, Option<CommandBufferError>, Vec<u32>),
                       want: &[(usize, u32)],
@@ -1636,7 +1653,7 @@ fn every_dispatch_form_runs_in_each_pass_past_the_copies() {
 /// the inner count each pass).
 #[test]
 fn a_loop_past_its_copies_runs_on() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let ok = (CommandBufferStatus::Completed, None);
         let again = || device.work_counts().predicated_loop_runs_again;
         for (n, runs) in [(65u32, 1u64), (128, 1), (1000, 15)] {

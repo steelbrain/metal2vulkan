@@ -29,9 +29,9 @@
 //! refused) is held to the device's own sample without an offset at the coordinate the rule places:
 //! the lane's own where the offset is dropped, moved by the offset where it is kept.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::pixel_samplers::own_sampler;
-use super::{buffer_with, read_buffer};
+use super::{at_plan, buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -388,7 +388,7 @@ fn the_lanes_tell_the_parent_s_rule_from_the_view_s() {
 /// Prints, per case, the results checked and those that differ, and each result that differs.
 #[test]
 fn a_view_s_offset_follows_its_parent_s_base() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let bitcode = llvm_assemble(&engine_dir().join("rrp_mirror_clamp.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let state = |kernel: &str| {

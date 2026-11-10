@@ -9,7 +9,9 @@
 //! specializations of the owned fixture `engine/unspecialized_stage_functions.ll`'s kernel
 //! `unspecialized_guarded`.
 
+use super::at_plan;
 use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::WAIT;
 use crate::air_library::AirLibrary;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
@@ -253,7 +255,7 @@ fn made(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64) {
 /// resource. The device's teardown then destroys what it kept.
 #[test]
 fn a_render_state_made_again_takes_back_its_released_variant() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let freed = [
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
@@ -293,7 +295,7 @@ fn a_render_state_made_again_takes_back_its_released_variant() {
 /// memory its dispatch read is freed with its last handles while the variant is kept.
 #[test]
 fn a_compute_state_made_again_takes_back_its_released_variant() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let freed = Arc::new(AtomicBool::new(false));
         let state = kernel_state(device, "invert_texels");
         let held = invert(device, &state, &freed);
@@ -439,7 +441,7 @@ fn drawn(device: &Device, state: &RenderPipelineState, format: PixelFormat) -> V
 fn states_of_the_same_functions_share_their_modules() {
     let alone = |format: PixelFormat| {
         let mut got = Vec::new();
-        on_device(|device, _| {
+        on_device_with(at_plan, |device, _| {
             let state = render_state(device, format);
             got = drawn(device, &state, format);
         });
@@ -449,7 +451,7 @@ fn states_of_the_same_functions_share_their_modules() {
         alone(PixelFormat::RGBA8Unorm),
         alone(PixelFormat::BGRA8Unorm),
     ];
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let before = device.work_counts();
         let rgba = render_state(device, PixelFormat::RGBA8Unorm);
         let first = drawn(device, &rgba, PixelFormat::RGBA8Unorm);

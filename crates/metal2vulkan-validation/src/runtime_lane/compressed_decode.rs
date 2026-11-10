@@ -45,13 +45,14 @@
 //! writes a texture with `replaceRegion` while a command buffer that reads it waits behind the busy
 //! kernel or a shared event, and reads the device's decode of the new blocks.
 
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{counts, on_device};
 use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
 use super::host_memory::{recording, Mapping, Seen};
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
 use super::pixel_samplers::metal_sampler;
 use super::rebinds::rebind_heap;
-use super::{buffer_with, converted_holds, read_buffer, WAIT};
+use super::{at_plan, buffer_with, converted_holds, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -427,7 +428,7 @@ fn metal_code(kind: Kind, blocks: &[u8], x: usize, y: usize, c: usize) -> u32 {
 /// differences from Metal's.
 #[test]
 fn bc1_to_bc5_texels_read_the_device_s_decode() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let facts = &device.properties().driver_facts;
         let announces = FORMATS
@@ -701,7 +702,7 @@ fn read_ordered(
 /// texture uploaded and waited for reads (the device's decode of the same blocks).
 #[test]
 fn bc_uploads_are_ordered_before_reads() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();
@@ -775,7 +776,7 @@ const EVERY_BC: [(PixelFormat, usize); 14] = [
 /// and what it reads is printed (`BCFRESH-UNFILLED`), the `Shared` one still reads zero blocks.
 #[test]
 fn new_bc_textures_read_zero_blocks() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let unfilled = super::fresh_contents::unfilled(device);
@@ -937,7 +938,7 @@ fn blocks_of(texture: &Texture, size: usize) -> Vec<u8> {
 /// released one left (its blocks read back on the CPU).
 #[test]
 fn bc_texels_follow_every_write() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();
@@ -1069,7 +1070,7 @@ fn bc_texels_follow_every_write() {
 /// replaced pages' bytes.
 #[test]
 fn a_host_heap_s_bc_textures_rebind() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let facts = &device.properties().driver_facts;
         let lacks = FORMATS
@@ -1213,7 +1214,7 @@ pub(super) fn read_after(
 /// the kernel ended, and Metal's reader that ran before the write reads the old blocks.
 #[test]
 fn writes_behind_work_in_flight_read_the_new_blocks() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let queue = device.new_command_queue().unwrap();

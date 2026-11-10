@@ -47,11 +47,12 @@
 //! the hang, as the third's is: its command buffer runs.
 
 use super::super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    buffer_with, layer_reported_nothing_at_all, read_buffer, Messages, ScratchCache, WAIT,
 };
 use super::{Lane, FORMATS, SIDE};
 use crate::gpu::TEST_DEVICE;
+use crate::runtime_lane::at_plan;
+use crate::runtime_lane::validated_device_with;
 use metal2vulkan::metal::{IndexType, TextureUsage};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue,
@@ -438,11 +439,13 @@ fn scenario(
 }
 
 /// Run each of `draws`'s scenarios on the test device and check it against `expected`.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn answers_as_metal_does(draws: &[Draw], expected: Expected) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let lane = Lane::new(device);
         let pipeline = lane.pipeline("pt_plain");
@@ -795,11 +798,13 @@ fn one(
 /// each followed by a command buffer of no draw: those run until the queue's second fault or hang
 /// completed, and from then on every command buffer of the queue fails at its commit with
 /// `AccessRevoked`, running nothing and signalling nothing, while a new queue runs.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn revokes_after(draws: &[(Draw, CommandBufferError)], revoked_from: Option<usize>) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let lane = Lane::new(device);
         let pipeline = lane.pipeline("pt_plain");

@@ -11,8 +11,11 @@
 //! reporting nothing over each test is the check that no handle of the lost `VkDevice` reached the
 //! new one.
 
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Degradation,
     Device, Error, EventRef, ResourceOptions, RuntimeGap,
@@ -44,16 +47,31 @@ pub(super) const RECOVERED: [Degradation; 1] = [Degradation::DeviceRecovered];
 /// Run `test` on a validated device with its messages, then check that once everything is dropped
 /// (the device last) the layer reported nothing.
 fn on_device(test: impl FnOnce(&Device, &Messages)) {
-    on_timed_device(|device, messages, _| test(device, messages));
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device, &Messages)) {
+    on_timed_device_with(adjust, |device, messages, _| test(device, messages));
 }
 
 /// [`on_device`], `test` also given how long the device's making took.
 fn on_timed_device(test: impl FnOnce(&Device, &Messages, Duration)) {
+    on_timed_device_with(|_| {}, test)
+}
+
+/// [`on_timed_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_timed_device_with(
+    adjust: fn(&mut DeviceOptions),
+    test: impl FnOnce(&Device, &Messages, Duration),
+) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
         let began = Instant::now();
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device, &messages, began.elapsed());
     }
     layer_reported_nothing_at_all(&messages);
@@ -176,7 +194,7 @@ fn recover_busy(device: &Device, queue: &CommandQueue) -> bool {
 /// named; the device and its queue serve on, on a new `VkDevice`.
 #[test]
 fn a_recovery_fails_the_work_in_flight_as_a_hang_and_its_victims() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let queue = device.new_command_queue().unwrap();
         queue.set_label("hung");
         let before = device.work_counts();
@@ -348,7 +366,7 @@ fn carried_objects_serve_on_the_new_vk_device() {
 /// once with `AccessRevoked`, while another queue serves on.
 #[test]
 fn a_queue_s_second_recovery_hang_revokes_it() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let queue = device.new_command_queue().unwrap();
         for hang in 1..=2 {
             let caught = (0..ATTEMPTS).any(|_| recover_busy(device, &queue));

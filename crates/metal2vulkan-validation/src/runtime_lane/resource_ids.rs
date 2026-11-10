@@ -17,7 +17,7 @@ use super::degrade_notices::{
 use super::host_memory::{no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::sparse_textures::{lacks_sparse, SparseFacts};
 use super::{
-    bound_buffers, buffer_with, case_making_kinds, creation_checked, encode_case,
+    at_plan, bound_buffers, buffer_with, case_making_kinds, creation_checked, encode_case,
     layer_reported_nothing_at_all, made_lane_device, pipeline_state, public_case, read_buffer,
     texture_descriptor, validated_device_with, CaseResources, Messages, PublicCase, ScratchCache,
 };
@@ -2207,7 +2207,7 @@ pub(super) fn distinct_sampler_states(device: &Device, count: u64) -> Vec<Sample
 /// Nothing is announced or counted (`WorkCounts::unlisted_argument_sampler_buffers`).
 #[test]
 fn late_sampler_states_past_twice_the_class_are_reached_by_their_ids() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let unlisted = || device.work_counts().unlisted_argument_sampler_buffers;
         let before = unlisted();
         for more in [20, 64] {

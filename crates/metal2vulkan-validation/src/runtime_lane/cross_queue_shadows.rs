@@ -56,8 +56,8 @@ use super::parallel_encodes::{
     ROW, SIDE, TEXEL_ROW, WORDS,
 };
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
-    ScratchCache,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache,
 };
 #[cfg(any(m2v_cpu_icd, m2v_gpu_hazards))]
 use crate::air_library::AirLibrary as _;
@@ -263,9 +263,12 @@ fn lane_device(
 
 /// [`lane_device`] under `QueueSharingPolicy::Adaptive`, its check answered: whether it shares
 /// `VkQueue`s, said where it does not.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn sharing_lane(messages: &Messages, cache: &ScratchCache) -> (Device, TexelKernels, bool) {
     let (device, kernels) = lane_device(messages, cache, |options| {
         options.policy.queue_sharing = QueueSharingPolicy::Adaptive;
+        at_plan(options)
     });
     assert!(
         device.settle_queue_switch_check(Duration::from_secs(20)),
@@ -577,7 +580,7 @@ fn a_cpu_write_while_a_command_buffer_runs_reaches_none_of_its_encoders() {
 fn an_encoder_after_a_signal_reads_what_another_queue_wrote_after_it() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    let (device, kernels) = lane_device(&messages, &cache, |_| {});
+    let (device, kernels) = lane_device(&messages, &cache, at_plan);
     let (first, second) = (
         device.new_command_queue().unwrap(),
         device.new_command_queue().unwrap(),

@@ -33,7 +33,7 @@
 //! alpha 1.
 
 use super::degrade_notices::{counts, on_device_with};
-use super::{buffer_with_options, layer_reported_nothing, read_buffer, WAIT};
+use super::{at_plan, buffer_with_options, layer_reported_nothing, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::library::Library;
@@ -496,6 +496,7 @@ fn half_nans_written_through_the_blur_keep_their_bits() {
     on_device_with(
         |options| {
             options.announce_each.insert(Degradation::DeviceNanEncoding);
+            at_plan(options)
         },
         |device, messages| {
             let names = Kind::ALL.map(Kind::name);

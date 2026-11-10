@@ -17,7 +17,8 @@
 
 use super::attachment_reads::{corners, floats, function};
 use super::degrade_notices::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
     PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureType, TextureUsage,
@@ -424,7 +425,7 @@ fn copy_out(
 #[test]
 fn a_memoryless_use_fails_its_run_of_encoders_on() {
     use Step::{Blit, BlitUses, Compute, ComputeUses, Signal};
-    on_device(|device, _messages| {
+    on_device_with(at_plan, |device, _messages| {
         let (stored, filled, last) = (42, word(0x11), word(0x77));
         let cases: [(&str, &[Step], &[u32], u64); 7] = [
             ("CcC", &[Compute, ComputeUses, Compute], &[0, 0, 0], 0),

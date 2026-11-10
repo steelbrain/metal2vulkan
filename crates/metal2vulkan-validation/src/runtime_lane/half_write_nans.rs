@@ -27,7 +27,7 @@
 //! nor `native-nan-encoding` (a heap element's, which may be any format, announces the first).
 
 use super::degrade_notices::{counts, on_device_with};
-use super::{buffer_with, layer_reported_nothing, read_buffer, WAIT};
+use super::{at_plan, buffer_with, layer_reported_nothing, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{PixelFormat, ResourceUsage, TextureUsage};
@@ -354,6 +354,7 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
         |options| {
             options.announce_each.insert(Degradation::DeviceNanEncoding);
             options.announce_each.insert(Degradation::NativeNanEncoding);
+            at_plan(options)
         },
         |device, messages| {
             for access in ["write", "read_write", "held"] {

@@ -18,7 +18,7 @@
 //! blit's copy into a buffer.
 
 use super::{
-    buffer_with, layer_reported_nothing, read_buffer, validated_device_with, Messages,
+    at_plan, buffer_with, layer_reported_nothing, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
@@ -33,6 +33,7 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{llvm_assemble, llvm_assemble_text};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandBuffer, CommandQueue, ComputePipelineState, DepthStencilState,
     Device, EventRef, IndirectCommandBufferDescriptor, LoadAction, MultisampleDepthResolveFilter,
@@ -331,9 +332,20 @@ enum Expect {
 /// Run `case` on a validated device with a kit, and check the counts it ran against `expected`
 /// and that the validation layer reported nothing.
 fn run(name: &str, expected: Expect, case: impl FnOnce(&Device, &Kit)) {
+    run_with(|_| {}, name, expected, case)
+}
+
+/// [`run`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn run_with(
+    adjust: fn(&mut DeviceOptions),
+    name: &str,
+    expected: Expect,
+    case: impl FnOnce(&Device, &Kit),
+) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
     let device_name = device.name().to_owned();
     let kit = Kit::new(&device);
     let before = Counts::of(&device.work_counts());
@@ -624,44 +636,49 @@ fn a_queue_waiting_for_an_event_reads_a_held_depth_after_its_move() {
         moved: 0,
         released: 2,
     };
-    run("two-queues", Expect::Exactly(counts), |device, kit| {
-        let other = device.new_command_queue().unwrap();
-        let event: SharedEvent = device.new_shared_event().unwrap();
-        let extent = [SIDE, SIDE];
-        for (round, (load, at, expected)) in [
-            (LoadAction::Clear, QUARTER, 0.25f32),
-            (LoadAction::Load, EIGHTH, 0.125),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let value = round as u64 + 1;
-            let reading = other.command_buffer().unwrap();
-            reading
-                .encode_wait_for_event(EventRef::from(&event), value)
+    run_with(
+        at_plan,
+        "two-queues",
+        Expect::Exactly(counts),
+        |device, kit| {
+            let other = device.new_command_queue().unwrap();
+            let event: SharedEvent = device.new_shared_event().unwrap();
+            let extent = [SIDE, SIDE];
+            for (round, (load, at, expected)) in [
+                (LoadAction::Clear, QUARTER, 0.25f32),
+                (LoadAction::Load, EIGHTH, 0.125),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let value = round as u64 + 1;
+                let reading = other.command_buffer().unwrap();
+                reading
+                    .encode_wait_for_event(EventRef::from(&event), value)
+                    .unwrap();
+                let read = encode(
+                    device,
+                    &reading,
+                    &kit.depth,
+                    SampleRead::Depth,
+                    extent,
+                    SAMPLES as u32,
+                )
                 .unwrap();
-            let read = encode(
-                device,
-                &reading,
-                &kit.depth,
-                SampleRead::Depth,
-                extent,
-                SAMPLES as u32,
-            )
-            .unwrap();
-            reading.commit().unwrap();
-            let rendering = kit.queue.command_buffer().unwrap();
-            kit.pass_in(&rendering, load, at);
-            rendering
-                .encode_signal_event(EventRef::from(&event), value)
-                .unwrap();
-            complete(&rendering);
-            reading.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(reading.error(), None);
-            let samples = floats(&read.bytes().unwrap());
-            assert_all(&samples, expected, &format!("round {round}"));
-        }
-    });
+                reading.commit().unwrap();
+                let rendering = kit.queue.command_buffer().unwrap();
+                kit.pass_in(&rendering, load, at);
+                rendering
+                    .encode_signal_event(EventRef::from(&event), value)
+                    .unwrap();
+                complete(&rendering);
+                reading.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(reading.error(), None);
+                let samples = floats(&read.bytes().unwrap());
+                assert_all(&samples, expected, &format!("round {round}"));
+            }
+        },
+    );
 }
 
 /// A compute function reads the depth through an argument buffer the encoder makes resident with

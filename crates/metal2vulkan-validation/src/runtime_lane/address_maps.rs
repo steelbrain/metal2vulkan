@@ -29,7 +29,8 @@
 //! `rrp_swizzled_storage`'s reads and write; `tob_renders`'s `tob_rect` and `tob_sample`).
 
 use super::degrade_notices::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -281,7 +282,7 @@ fn refused(error: &Error) -> bool {
 /// that differs; the lanes reach past the texture, so repeating and clamping read apart.
 #[test]
 fn a_mapped_texture_samples_as_its_mapped_sampler() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = kernels(device);
         let plain = texture(device, TextureUsage::SHADER_READ, |_| {});
         let mut wrong = Vec::new();
@@ -379,7 +380,7 @@ fn a_mapped_texture_samples_as_its_mapped_sampler() {
 /// than clamping.
 #[test]
 fn a_fragments_runtime_sampler_takes_its_textures_map() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pipeline = sampling_pipeline(device);
         let plain = texture(device, TextureUsage::SHADER_READ, |_| {});
         let mut wrong = Vec::new();
@@ -494,7 +495,7 @@ fn sampling_pipeline(device: &Device) -> RenderPipelineState {
 /// the other; and the two modes draw other texels in each half.
 #[test]
 fn draws_rebinding_a_slot_between_a_texture_and_its_mapped_twin_keep_each_view_and_sampler() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pipeline = sampling_pipeline(device);
         let plain = texture(device, TextureUsage::SHADER_READ, |_| {});
         let mapped = texture(device, TextureUsage::SHADER_READ, |d| {
@@ -668,7 +669,7 @@ fn drawn(
 /// naming the map, before anything is recorded.
 #[test]
 fn a_constexpr_sampler_samples_a_mapped_texture_through_its_variant() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let state = state(device, "a2_clamp_to_zero.ll", "a2_clamp_to_zero");
         let sampler = device
             .new_sampler_state(&sampler(
@@ -797,7 +798,7 @@ fn swizzle(s: &str) -> TextureSwizzleChannels {
 /// `RenderTarget`, which a swizzle's may not.
 #[test]
 fn a_texture_whose_alpha_reads_one_samples_as_the_swizzled_view() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = kernels(device);
         let written =
             TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET;
@@ -1002,7 +1003,7 @@ fn storage(device: &Device, kernel: &str, texture: &Texture, value: [f32; 4]) ->
 /// shaders' reads, those slots' included, read alpha 1.
 #[test]
 fn writes_keep_the_alpha_of_a_texture_whose_alpha_reads_one() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let usage =
             TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET;
         let alpha = texture(device, usage, |d| d.alpha_reads_one = true);

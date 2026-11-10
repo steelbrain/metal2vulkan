@@ -29,6 +29,7 @@
 
 use super::argument_linear_samples::{self, LINEAR_EDGE};
 use super::blits::SYSTEM_MEMORY;
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{assert_once, counts, on_device};
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::driver_deviations::stage_notes;
@@ -38,7 +39,7 @@ use super::pixel_samplers::{metal_sampler, own_sampler};
 use super::ycbcr_device_reads::{
     assert_device_reads, device_conversions, device_samples, vulkan_read, DEVICE_BOUND,
 };
-use super::{buffer_with, converted_holds, half_within, read_buffer};
+use super::{at_plan, buffer_with, converted_holds, half_within, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{
     ycbcr_read, ycbcr_texel, ycbcr_write, SamplerDescriptor, YCbCrCodes, YCbCrMatrix, YCbCrOutput,
@@ -1116,7 +1117,7 @@ fn linear_samplers(device: &Device) -> Vec<(SamplerMipFilter, SamplerState)> {
 /// whatever the image holds ([`Texels::sampled`]).
 #[test]
 fn ycbcr_textures_read_the_texels_metal_converts() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let conversions = [
@@ -1242,7 +1243,7 @@ fn half_of_step(k: u16) -> u16 {
 /// keeps its own texels for its `read()`.
 #[test]
 fn a_linear_sample_of_a_ycbcr_texture_is_metals() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let bytes = surface_bytes(9);
@@ -1274,7 +1275,7 @@ fn a_linear_sample_of_a_ycbcr_texture_is_metals() {
 /// ([`Between`]), announced as [`assert_filter_notices`] states.
 #[test]
 fn a_linear_sample_is_metals_through_each_sampler_and_result() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let bytes = surface_bytes(9);
         let surface = buffer_with(device, &bytes).unwrap();
@@ -1531,7 +1532,7 @@ fn drawn_with(
 /// `(0.40625, 0.21875)` is the kernel's `(x, y) + (0.90625, 0.71875)`.
 #[test]
 fn a_fragments_linear_sample_is_metals_through_each_sampler_and_result() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let bytes = surface_bytes(9);
         let surface = buffer_with(device, &bytes).unwrap();
@@ -1746,7 +1747,7 @@ fn assert_filter_notices(
 /// filter notice.
 #[test]
 fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let planes = surface_bytes(9);
         let surface = buffer_with(device, &planes).unwrap();
@@ -1874,7 +1875,7 @@ pub(super) const YCBCR_FILTERS: [Degradation; 1] = [Degradation::YCbCrFilterNotE
 /// (`ycbcr_device_reads`).
 #[test]
 fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let surface = buffer_with(device, &surface_bytes(9)).unwrap();
         let swizzle = TextureSwizzleChannels::new(
@@ -2134,7 +2135,7 @@ fn a_runtime_sampler_announces_the_ycbcr_filter_only_where_it_filters() {
         ("nearest, anisotropic", |d| d.max_anisotropy = 16, true),
     ];
     for (name, adjust, filters) in cases {
-        on_device(|device, messages| {
+        on_device_with(at_plan, |device, messages| {
             let kernels = Kernels::new(device);
             // The lane's pipeline states announce their own notes as they are made.
             messages.take_notices();
@@ -2391,7 +2392,7 @@ fn a_ycbcr_texture_through_an_argument_buffer_announces_its_filter_only_where_it
 /// is recorded.
 #[test]
 fn a_ycbcr_texture_sampled_through_handles_is_refused() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let surface = buffer_with(device, &surface_bytes(9)).unwrap();
         let texture = ycbcr_texture(
             &surface,
@@ -2509,7 +2510,7 @@ enum Writer {
 /// writes new codes, and the texture then reads their conversion everywhere ([`assert_uniform`]).
 #[test]
 fn ycbcr_textures_follow_writes_of_their_planes() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let surface = buffer_with(device, &uniform(0, 0, 0)).unwrap();
         let (texture, by_device) = made_by_device(device, || video_texture(&surface));
@@ -2640,7 +2641,7 @@ fn ycbcr_textures_follow_writes_of_their_planes() {
 /// notice is announced but where the device converted a texture itself (`ycbcr_device_reads`).
 #[test]
 fn a_draw_samples_the_planes_as_written_before_it() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let library = device
             .new_library_with_air(&llvm_assemble_text(&fragments()).unwrap())
@@ -2988,7 +2989,7 @@ fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
     use PixelFormat as P;
     use YCbCrMatrix::{Bt2020, Bt601, Bt709};
     use YCbCrRange::{Full, Video};
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         // The lane's pipeline states announce their own notes as they are made (a `half` read's
         // NaN encoding, `read_half`): the writes are to announce nothing past them.
@@ -3442,7 +3443,7 @@ fn code_grid(kernels: &Kernels, texels: &[u8], max: u16) -> Vec<[u16; 3]> {
 /// ([`assert_device_codes`]).
 #[test]
 fn ten_bit_textures_read_what_metal_reads() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let mut steps = Between::new(device);
@@ -3671,7 +3672,7 @@ fn textures_over_any_surface_read_what_metal_reads() {
     use PixelFormat as P;
     use YCbCrMatrix::Bt601;
     use YCbCrRange::{Full, Video};
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         let mut random = Random(91);
         let bytes: Vec<u8> = (0..LENGTH10).map(|_| random.next()).collect();
@@ -3987,7 +3988,7 @@ fn assert_half_steps(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], grid: 
 /// texels the filter of those.
 #[test]
 fn srgb_twins_read_what_metal_reads() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
@@ -4101,7 +4102,7 @@ fn srgb_twins_read_what_metal_reads() {
 /// ([`Texels::checked`]).
 #[test]
 fn ycbcr_views_as_srgb_twins_read_the_twins_texels() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         let codes = |pf: PixelFormat| ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
         let bt709 = (YCbCrRange::Full, YCbCrMatrix::Bt709);
@@ -4224,7 +4225,7 @@ fn float4_bytes(v: [f32; 4]) -> Vec<u8> {
 /// differences are counted and printed.
 #[test]
 fn ycbcr_samples_outside_read_metals_modes() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let own = own_sampler(device, messages);
         let mut filtered = 0usize;
@@ -4440,7 +4441,7 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
 /// records with the rest.
 #[test]
 fn a_constexpr_sampler_takes_a_ycbcr_map_through_one_variant() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         let library = device
             .new_library_with_air(&llvm_assemble_text(&constexpr_outside()).unwrap())
@@ -4573,7 +4574,7 @@ fn a_constexpr_sampler_takes_a_ycbcr_map_through_one_variant() {
 /// ([`assert_device_codes`]).
 #[test]
 fn eight_bit_codes_read_what_metal_reads() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
@@ -4841,7 +4842,7 @@ fn family_texture(
 /// bound (`ycbcr_device_reads`; lavapipe's 8-bit 4:4:4 ones).
 #[test]
 fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
@@ -4978,7 +4979,7 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
 /// (`ycbcr_device_reads`).
 #[test]
 fn four_two_two_and_four_four_four_views_read_their_twins_texels() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         for (seed, (pf, twin, ostype)) in (140..).zip([
             (
@@ -5035,7 +5036,7 @@ fn four_two_two_and_four_four_four_views_read_their_twins_texels() {
 /// converts the texture itself, [`assert_family_read`]).
 #[test]
 fn four_two_two_and_four_four_four_textures_copy_their_luma_codes() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         for (seed, (pf, ostype)) in (180..).step_by(2).zip([
             (PixelFormat::YCBCR84222P, "422v"),
@@ -5132,7 +5133,7 @@ fn is_half_tie(step: u16) -> bool {
 /// unit in the last place.
 #[test]
 fn ycbcr_half_gathers_round_ties_away() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         let usage = TextureUsage::SHADER_READ;
         let samplers = [
@@ -5265,7 +5266,7 @@ fn ycbcr_half_gathers_round_ties_away() {
 /// pairs at the surface's rows, past the plane, the device's reconstruction of them likewise.
 #[test]
 fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
@@ -5369,7 +5370,7 @@ fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
 /// facts name it is refused, naming the format.
 #[test]
 fn ycbcr_textures_over_plane_1_read_its_codes_as_luma() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let over_plane_1 = |surface: &Buffer,
@@ -5523,7 +5524,7 @@ const PACKED: [(PixelFormat, [&str; 2]); 6] = [
 /// packed surface plane 1's codes as its luma with chroma codes 0.
 #[test]
 fn packed_textures_read_what_metal_reads() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
@@ -5656,7 +5657,7 @@ fn packed_textures_read_what_metal_reads() {
 /// conversion.
 #[test]
 fn packed_views_read_their_twins_texels() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         for (seed, (pf, ostype)) in (350..).zip([
             (PixelFormat::YCBCR104202PPACKED, "pf20"),
@@ -5706,7 +5707,7 @@ fn packed_views_read_their_twins_texels() {
 #[test]
 fn retyped_views_read_their_luma_codes() {
     use metal2vulkan::metal::TextureSwizzle as S;
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let converted = device_samples(device);
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
@@ -5835,7 +5836,7 @@ fn retyped_views_read_their_luma_codes() {
 /// by no rule found, is refused, naming the format.
 #[test]
 fn packed_textures_copy_nothing_and_refuse_blits() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let kernels = Kernels::new(device);
         let queue = device.new_command_queue().unwrap();
         for (seed, (pf, ostype)) in (360..).zip([

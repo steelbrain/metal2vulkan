@@ -21,10 +21,9 @@
 use super::degrade_notices::counts;
 use super::host_memory::{host_page, no_copy, not_importable, Mapping};
 use super::{
-    bound_buffers, compute_descriptor, encode_case, in_shard, layer_reported_nothing,
-    layer_reported_nothing_at_all, public_case, public_cases, read_buffer, validated_device,
-    validated_device_with, wait_for_device, CaseResources, DeviceWait, Messages, PublicCase,
-    ScratchCache, WAIT,
+    at_plan, bound_buffers, compute_descriptor, encode_case, in_shard, layer_reported_nothing,
+    layer_reported_nothing_at_all, public_case, public_cases, read_buffer, validated_device_with,
+    wait_for_device, CaseResources, DeviceWait, Messages, PublicCase, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::{ComputeCase, ComputeOutput};
@@ -515,7 +514,7 @@ fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize)
     let device_name;
     {
         let cache = ScratchCache::new().unwrap();
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         device_name = device.name().to_owned();
         for (at, (name, case)) in cases.iter().enumerate() {
             let Ok(case) = case else {
@@ -817,7 +816,7 @@ pub(super) const NIL_OFFSETS: [Degradation; 1] = [Degradation::IndirectNilBuffer
 /// buffer at offset 0 announces nothing.
 #[test]
 fn a_nil_buffer_at_an_offset_binds_none_and_is_announced() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let nil_offsets = |messages: &Messages| -> Vec<Degradation> {
             let notices = messages.take_notices();
             counts(&notices);
@@ -1220,7 +1219,7 @@ fn inheriting_commands_run_the_encoder_s_state() {
 /// same output, which the case's own stride's does not.
 #[test]
 fn a_command_s_unstrided_stage_in_buffer_reads_at_the_record_s_stride() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let case = public_case(DYNAMIC).unwrap();
         let index = *case
             .compute

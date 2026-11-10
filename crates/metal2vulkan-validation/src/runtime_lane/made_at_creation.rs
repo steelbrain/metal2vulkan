@@ -8,10 +8,11 @@
 //! `validation/fixtures/public/examples/runtime_examples.ll`, and owned functions reading their
 //! vertices through a vertex descriptor (`LAYOUT_FUNCTIONS`).
 
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{counts, on_device, shared_in_system_memory};
 use super::pixel_samplers::metal_sampler;
 use super::{
-    dynamic_input_assembly, layer_reported_nothing_at_all, pipelines_settled,
+    at_plan, dynamic_input_assembly, layer_reported_nothing_at_all, pipelines_settled,
     validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
@@ -271,7 +272,7 @@ fn draw_into(
 /// key, made at its draw.
 #[test]
 fn a_state_s_first_draw_takes_the_pipeline_made_at_its_creation() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let before = device.work_counts();
         let state = state(device, "colored_fragment");
         assert_eq!(made_since(device, &before), (1, 0), "made at creation");
@@ -313,7 +314,7 @@ fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let nans = Degradation::from_precision_note(PrecisionNote::DeviceNanEncoding);
         let waits = specialized_kinds(&device, "sampled_fragment");
         assert!(
@@ -387,7 +388,7 @@ fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
 /// each class is plain and measured, as the unbound slot the prediction binds.
 #[test]
 fn a_draw_binding_a_texture_takes_the_pipeline_made_at_creation() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let metal = metal_sampler(device);
         let before = device.work_counts();
         let state = state(device, "sampled_fragment");
@@ -464,7 +465,7 @@ fn bc4_filled(device: &Device, side: u64, block: [u8; 8]) -> Texture {
 /// push field alone, and both draws take the predicted key. Each draws the blocks' red, 1.
 #[test]
 fn a_draw_of_an_unmeasured_class_takes_the_general_form_its_creation_made() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let metal = metal_sampler(device);
         let before = device.work_counts();
         let state = state(device, "sampled_fragment");
@@ -604,7 +605,7 @@ fn a_creation_makes_the_default_sampler_s_key() {
 /// library and links none.
 #[test]
 fn states_of_one_fragment_and_pass_share_its_fragment_library() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let before = device.work_counts();
         let first = state(device, "colored_fragment");
         let (libraries, linked, made, pooled) = linked_since(device, &before);
@@ -834,7 +835,7 @@ fn draw_layout(device: &Device, state: &RenderPipelineState, vertices: Vertices)
 /// takes it too.
 #[test]
 fn a_state_with_a_vertex_descriptor_makes_its_first_draw_s_pipeline_at_creation() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let before = device.work_counts();
         let state = layout_state(device, Some(LAYOUT_STRIDE));
         assert_eq!(made_since(device, &before), (1, 0), "made at creation");

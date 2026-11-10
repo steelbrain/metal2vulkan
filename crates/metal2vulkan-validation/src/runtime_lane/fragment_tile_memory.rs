@@ -26,7 +26,8 @@
 //! encoder's draws do, with the arguments the encoder set at the call.
 
 use super::tile_states::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::tile_states::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::error::{BindError, Feature};
 use metal2vulkan::metal::{
@@ -279,7 +280,7 @@ fn bitsets(rects: &[Rect]) -> Vec<u32> {
 
 #[test]
 fn fragments_share_their_tiles_memory_and_count_each_sample() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let mut multisampled = Vec::new();
         for samples in [1, 2, 4] {
@@ -356,7 +357,7 @@ fn draws_see_each_others_tile_memory_writes_in_order() {
 
 #[test]
 fn the_splat_shape_sets_its_tiles_bitsets_between_tile_dispatches() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let or = f.draw_state("or", 1);
         let clear = f.tile_state("clear");

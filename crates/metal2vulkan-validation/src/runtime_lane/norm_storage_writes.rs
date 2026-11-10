@@ -28,8 +28,9 @@
 //! (`BGR10A2Unorm`, which NVIDIA and lavapipe store through an `RGB10A2Unorm` view whose red and
 //! blue the shader exchanges), and holds each field to its channel's code.
 
+use super::at_plan;
 use super::color_writes::{field, metal, round_product, Channel, Output, CASES};
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::half_storage_writes::{written, written_texels, Form};
 use super::layer_reported_nothing;
 use metal2vulkan::error::DriverDeviation;
@@ -64,7 +65,7 @@ fn kernel_writes_store_metals_normalized_codes() {
                 )
             })
     });
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let measured = device
             .compile_device()
@@ -146,7 +147,7 @@ fn kernel_writes_store_each_channel_in_its_field() {
         })
         .collect();
     let mut differ = Vec::new();
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         for (pf, fields) in FIELDS {
             for form in Form::ALL {

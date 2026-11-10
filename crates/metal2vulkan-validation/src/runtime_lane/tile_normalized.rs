@@ -40,8 +40,8 @@
 //! typed (`Unsupported`) and said.
 
 use super::degrade_notices::made_tile_kinds;
-use super::tile_states::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::tile_states::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -489,7 +489,7 @@ fn floats(bytes: &[u8]) -> Vec<f32> {
 /// value, and the texels kept.
 #[test]
 fn a_normalized_attachment_reads_as_metal_does() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let name = device.name().to_owned();
         let cells = (SIDE * SIDE) as usize;
@@ -550,7 +550,7 @@ fn a_normalized_attachment_reads_as_metal_does() {
 /// codes; and a read after the function's own write.
 #[test]
 fn a_normalized_attachment_stores_as_metal_does() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let name = device.name().to_owned();
         let xs = inputs();
@@ -628,7 +628,7 @@ fn a_normalized_attachment_stores_as_metal_does() {
 /// `(i (2k + 1) + 37k) mod 2^b`, a bijection), each texel's value, and the texels kept.
 #[test]
 fn a_normalized_attachment_reads_through_halves_as_metal_does() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let name = device.name().to_owned();
         let tile = (SIDE * SIDE) as usize;
@@ -708,7 +708,7 @@ fn a_normalized_attachment_reads_through_halves_as_metal_does() {
 /// texel's codes.
 #[test]
 fn a_normalized_attachment_stores_halves_as_metal_does() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let name = device.name().to_owned();
         let cells = 1usize << 16;

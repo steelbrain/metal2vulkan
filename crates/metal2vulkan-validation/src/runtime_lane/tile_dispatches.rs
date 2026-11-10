@@ -2,7 +2,7 @@
 //!
 //! - Every committed public tile kernel runs through the runtime as the Metal oracle dispatches
 //!   it (`runtime_case::encoded_tile`) against its committed Metal observation, or the output of
-//!   the engine candidate run afresh where the two differ ([`census`]).
+//!   the engine candidate run afresh where the two differ ([`census_with`]).
 //!
 //! The owned fixture `k10ts_tile_grid` is the tile function of the rest: over an implicit
 //! imageblock of an `R32Float` and two `R32Uint` attachments, each of its threads reads the 2x2
@@ -24,12 +24,13 @@
 //!   function does not reach untouched, as plain Metal runs them.
 
 use super::degrade_notices::{assert_once, made_tile_kinds};
-use super::kernel_textures::census;
+use super::kernel_textures::census_with;
 use super::shared_kinds;
+use super::tile_states::on_device_with;
 use super::tile_states::{descriptor, on_device};
 use super::{
-    layer_reported_nothing_at_all, public_cases, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    at_plan, layer_reported_nothing_at_all, public_cases, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::case::Stage;
 use crate::gpu::TEST_DEVICE;
@@ -45,7 +46,7 @@ use metal2vulkan_runtime::{
 pub(super) const TILE_DISPATCHES: [Degradation; 1] = [Degradation::TileDispatchScratch];
 
 /// Every committed public tile kernel, a kernel over a tile pass's render targets (its implicit
-/// imageblock's coverage), passes the [`census`].
+/// imageblock's coverage), passes the [`census_with`].
 #[test]
 fn tile_kernels_match_metal() {
     let cases = public_cases(|case| {
@@ -58,7 +59,7 @@ fn tile_kernels_match_metal() {
     })
     .unwrap();
     assert!(!cases.is_empty(), "no committed case is a tile kernel");
-    census("runtime tile kernels", &cases);
+    census_with(at_plan, "runtime tile kernels", &cases);
 }
 
 /// The attachments' formats: the fixture's implicit imageblock.
@@ -235,7 +236,7 @@ fn a_tile_dispatch_runs_each_tile_of_the_pass() {
 /// fourth, store the matching dispatch's attachments and records, the pass's fourth color kept.
 #[test]
 fn a_tile_state_of_other_colors_past_the_ones_its_function_reaches_runs() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = |x: u64, y: u64| ((x + 100 * y) as f32).to_bits();
         let v = |x: u64, y: u64| (7 * x + y) as u32;
         let kept = |x: u64, y: u64| (0x5000_0000 + 64 * y + x) as u32;
@@ -295,7 +296,7 @@ fn a_tile_state_of_other_colors_past_the_ones_its_function_reaches_runs() {
 /// read and write each cell twice and record past each tile's 64 records.
 #[test]
 fn a_tile_dispatch_deeper_than_one_runs_one_deep() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let state = tile_state(device);
         let dispatched = |depth: u64| {
             let targets = [
@@ -366,7 +367,7 @@ fn a_tile_dispatch_announces_its_scratch_and_split_once() {
         Degradation::RenderPassSplit,
     ];
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         kinds.extend(shared_kinds(&device));
         let state = tile_state(&device);
         kinds.extend(made_tile_kinds(
@@ -585,7 +586,7 @@ fn a_region_tile_dispatch_runs_the_tiles_its_region_touches() {
         (Region::new_2d(16, 0, WRAP - 8, 16), None, &[]),
         (Region::new_2d(0, 16, 16, 8), Some(3), &[(0, 1)]),
     ];
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let state = tile_state(device);
         let f = |x: u64, y: u64| (x + 100 * y) as f32;
         let v = |x: u64, y: u64| (7 * x + y) as u32;

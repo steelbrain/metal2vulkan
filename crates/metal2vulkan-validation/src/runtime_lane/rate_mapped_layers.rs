@@ -20,7 +20,9 @@
 //!   `NotImplemented(RateMapRegions(LayeredPipeline))`, the slices unknown to the encoder.
 
 use super::rate_maps::descriptor;
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
+};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{
@@ -211,7 +213,7 @@ fn each_slice_of_a_rate_mapped_pass_is_shaded_by_its_layer() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let f = Fixture::new(&device);
         let differ = f.map(&[0.5, 1.0]);

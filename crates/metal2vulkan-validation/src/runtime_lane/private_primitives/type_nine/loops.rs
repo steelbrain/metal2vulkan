@@ -16,11 +16,13 @@
 //! error, and stops the loop as it does; one of another code does not.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, one, read_buffer, validated_device, Draw, Lane,
-    Messages, ScratchCache, WAIT,
+    buffer_with, layer_reported_nothing_at_all, one, read_buffer, Draw, Lane, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
+use crate::runtime_lane::at_plan;
+use crate::runtime_lane::validated_device_with;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
@@ -130,7 +132,7 @@ fn a_running_loop_stops_at_the_gpu_s_recovery_as_metal_s_does() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let lane = Lane::new(device);
         let pipeline = lane.pipeline("pt_plain");
@@ -224,7 +226,7 @@ fn an_injected_fault_or_hang_stops_a_running_loop_as_the_error_it_stands_for() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let state = mark_state(&device);
         let inject = |code: u64| {

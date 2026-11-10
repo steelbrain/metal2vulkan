@@ -13,10 +13,11 @@
 
 use super::host_memory::Mapping;
 use super::{
-    layer_reported_nothing_at_all, validated_device, validated_device_with, Messages, ScratchCache,
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache,
 };
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::QueueSharingPolicy;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BufferContents, BufferDescriptor, CommandBuffer, CommandQueue, DeadlockCause, Deallocator,
     Degradation, Device, Error, EventRef, HostMemory, Invalid, KeepAlive, Problem, ResourceOptions,
@@ -44,10 +45,16 @@ const DEALLOCATING: Duration = Duration::from_secs(2);
 /// Run `test` on a validated device, then check that once everything is dropped (the device
 /// last) the layer reported nothing.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -82,7 +89,7 @@ fn answered(answer: &mpsc::Receiver<Result<CommandBuffer, Error>>) -> Result<Com
 /// returns once one held uncommitted is dropped; another queue's make goes on meanwhile.
 #[test]
 fn a_queue_holds_as_many_uncompleted_command_buffers_as_metal_s() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         match device.new_command_queue_with_max_command_buffer_count(0) {
             Err(Error::Invalid(invalid)) => assert_eq!(
                 invalid,
@@ -122,7 +129,7 @@ fn a_queue_holds_as_many_uncompleted_command_buffers_as_metal_s() {
 /// once they ran, and a make after `wait_until_completed` returned never blocks.
 #[test]
 fn a_committed_command_buffer_gives_its_slot_back_once_completed() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device
             .new_command_queue_with_max_command_buffer_count(2)
             .unwrap();
@@ -267,7 +274,7 @@ fn a_command_buffer_s_slot_comes_back_as_its_completed_handlers_return() {
 /// another full queue, the make blocks until that queue's command buffer completed, and returns.
 #[test]
 fn a_handler_s_make_on_a_full_queue_returns_where_a_slot_can_come_back() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (sender, answers) = mpsc::channel();
         // Its own queue, full with its own command buffer.
         let own = device
@@ -376,7 +383,7 @@ fn a_presenting_queue_s_lock_holds_no_other_queue_where_the_device_reserved_one(
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let shared_kinds = || -> usize {
             messages
                 .take_notices()
@@ -458,6 +465,7 @@ fn a_queue_joining_another_s_busy_vk_queue_is_announced_once() {
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.queue_sharing = QueueSharingPolicy::Adaptive;
+            at_plan(options)
         })
         .unwrap();
         assert!(device.settle_queue_switch_check(WAIT), "the check settles");

@@ -33,9 +33,12 @@
 //! device: printed as `STEPS-APART` lines, the median and largest. It is ignored by default: run
 //! it by name with `--run-ignored all`.
 
-use super::degrade_notices::{counts, on_device};
+use super::degrade_notices::counts;
+use super::degrade_notices::on_device_with;
 use super::indirect_host_steps::encoding_state_set;
-use super::{buffer_with, read_buffer, validated_device_with, Messages, ScratchCache, WAIT};
+use super::{
+    at_plan, buffer_with, read_buffer, validated_device_with, Messages, ScratchCache, WAIT,
+};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -453,7 +456,7 @@ impl Drop for StepHold {
 /// commands, its queue) while the step is held: its completed handler still runs.
 #[test]
 fn another_queue_goes_on_while_a_host_step_records() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let scene = Scene::new(device);
         let rendered = device.new_event().unwrap();
         let first = device.new_command_queue().unwrap();

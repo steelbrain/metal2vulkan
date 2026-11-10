@@ -9,8 +9,9 @@
 
 use super::degrade_notices::{self as notices, counts};
 use super::host_memory::on_device;
+use super::host_memory::on_device_with;
 use super::indirect_host_steps;
-use super::{buffer_with, read_buffer, Messages, WAIT};
+use super::{at_plan, buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::indirect_commands::COMMAND_BYTES;
 use metal2vulkan::bind::ArgumentDescriptor;
@@ -2001,7 +2002,7 @@ fn buffer_identifiers_follow_metal_s_encoders() {
     let one = |device: &Device| icb(device, &compute_descriptor(), 1);
 
     // Compute: nothing for an empty encoder or a residency alone; 32 KiB for an execution.
-    notices::on_device(|device, messages| {
+    notices::on_device_with(at_plan, |device, messages| {
         messages.take_notices();
         let (params, out) = (
             params(device),
@@ -2032,7 +2033,7 @@ fn buffer_identifiers_follow_metal_s_encoders() {
         assert_eq!(identifier_notices(messages), []);
     });
     // Blit: 256 KiB at the opening; a fill's 32 KiB as it is scheduled.
-    notices::on_device(|device, messages| {
+    notices::on_device_with(at_plan, |device, messages| {
         messages.take_notices();
         let first = one(device);
         run(device, &|command_buffer| {
@@ -2054,7 +2055,7 @@ fn buffer_identifiers_follow_metal_s_encoders() {
         assert_eq!(identifier_notices(messages), []);
     });
     // Render: 384 KiB at the opening; past the model once its command buffer is scheduled.
-    notices::on_device(|device, messages| {
+    notices::on_device_with(at_plan, |device, messages| {
         messages.take_notices();
         let mut target = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 64, 64, false);
         target.usage = TextureUsage::RENDER_TARGET;
@@ -2080,7 +2081,7 @@ fn buffer_identifiers_follow_metal_s_encoders() {
         );
     });
     // A released buffer a command buffer executes keeps its range until that completes.
-    notices::on_device(|device, messages| {
+    notices::on_device_with(at_plan, |device, messages| {
         messages.take_notices();
         let (params, out) = (
             params(device),
@@ -2950,7 +2951,7 @@ fn indexed_patch_draws_read_back_what_was_set() {
 /// runtime's own consequence of the same reading, not a Metal measurement of its own).
 #[test]
 fn an_indexed_draw_on_a_buffer_of_draws_runs_nothing() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let state = render_template_state(device, true);
         // The template writes `out[(iid << 4) + vid] = params[1] + iid * 1000 + params[0] *
         // (vid + 1)` per vertex, with rasterization disabled.

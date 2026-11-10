@@ -38,7 +38,8 @@
 //!   storage's cells keep what the draws and dispatches around it wrote.
 
 use super::tile_states::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::tile_states::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{
@@ -307,7 +308,7 @@ fn splat_or_skip(f: &Fixture) -> Option<RenderPipelineState> {
 
 #[test]
 fn the_splat_shape_sets_each_pixels_bits_between_tile_dispatches() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let Some(splat) = splat_or_skip(&f) else {
             return;
@@ -353,7 +354,7 @@ fn the_splat_shape_sets_each_pixels_bits_between_tile_dispatches() {
 
 #[test]
 fn a_tile_functions_imageblock_persists_through_the_pass_and_starts_at_zero() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let clear = f.tile_state("clear");
         let add = f.tile_state("add");
@@ -426,7 +427,7 @@ fn a_tile_state_answers_its_imageblocks_sample_length_and_a_pass_of_less_keeps_n
 /// cells keep what reached them, the resolve reading them after it.
 #[test]
 fn an_aliased_layout_of_the_attachments_bytes_runs_beside_the_pass_imageblock() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let clear = f.tile_state("clear");
         let aliased = f.tile_state("aliased");
@@ -496,7 +497,7 @@ fn an_aliased_layout_of_the_attachments_bytes_runs_beside_the_pass_imageblock() 
 /// and each draw's pixel takes its own `lo`.
 #[test]
 fn another_master_of_the_cells_size_and_alignment_views_the_same_bytes() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let Some(splat) = splat_or_skip(&f) else {
             return;

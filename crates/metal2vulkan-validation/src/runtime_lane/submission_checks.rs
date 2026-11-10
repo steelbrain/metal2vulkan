@@ -29,10 +29,11 @@
 //!   flight is checked without waiting for the GPU.
 
 use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::failed_commits::{Shape, HELD, KERNEL, SHAPES};
 use super::{
-    bound_buffers, buffer_with, compute_descriptor, pipeline_state, public_case, read_buffer,
-    CaseResources, PublicCase, WAIT,
+    at_plan, bound_buffers, buffer_with, compute_descriptor, pipeline_state, public_case,
+    read_buffer, CaseResources, PublicCase, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::ComputeOutput;
@@ -117,7 +118,7 @@ impl Detach {
 #[test]
 fn a_submission_detached_behind_a_wait_fails_alone() {
     let kernel = public_case(KERNEL).unwrap();
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pipeline = pipeline_state(device, &kernel).unwrap();
         for (shape, failed) in SHAPES {
             let encoded = Shape::encode(device, &kernel, &pipeline, &format!("w{shape}"));
@@ -143,7 +144,7 @@ fn a_submission_detached_behind_a_wait_fails_alone() {
 #[test]
 fn a_submission_attached_again_behind_a_wait_runs() {
     let kernel = public_case(KERNEL).unwrap();
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pipeline = pipeline_state(device, &kernel).unwrap();
         for (shape, _) in SHAPES {
             let encoded = Shape::encode(device, &kernel, &pipeline, &format!("w{shape}"));
@@ -186,7 +187,7 @@ fn a_check_is_refused_once_committed() {
 #[test]
 fn a_commit_made_while_a_check_runs_returns_at_once_and_runs_after_the_check() {
     use std::sync::mpsc;
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let fill = |queue: &metal2vulkan_runtime::CommandQueue, buffer: &Buffer| {
             let command_buffer = queue.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -256,7 +257,7 @@ fn icb_state(device: &Device, kernel: &PublicCase) -> ComputePipelineState {
 #[test]
 fn a_buffer_reached_only_through_an_indirect_command_fails_its_submission() {
     let kernel = public_case(KERNEL).unwrap();
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pipeline = icb_state(device, &kernel);
         let compute = &kernel.compute;
         let ComputeOutput::Buffer {
@@ -587,7 +588,7 @@ impl Drop for InFlight {
 /// signal landed.
 #[test]
 fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let caller = std::thread::current().id();
         let shared = true;
         for at_commit in [false, true] {
@@ -654,7 +655,7 @@ fn a_submission_detached_while_a_gpu_signal_is_in_flight_fails() {
 /// Each run prints how long after the signaller the waiter was scheduled.
 #[test]
 fn an_event_wait_a_gpu_signal_in_flight_meets_is_checked_at_once() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for at_commit in [false, true] {
             let waited = Waited::new(device, false);
             let awaiting = device.work_counts().heads_awaiting_check_signals;
@@ -696,7 +697,7 @@ fn an_event_wait_a_gpu_signal_in_flight_meets_is_checked_at_once() {
 /// signaller's signals held at its gate), and the submission runs.
 #[test]
 fn a_wait_the_host_meets_is_checked_without_waiting_for_the_gpu() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let waited = Waited::new(device, true);
         let run = InFlight::start(device, &waited, false);
         let Waited::Shared(event) = &waited else {

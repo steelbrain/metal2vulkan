@@ -19,8 +19,8 @@
 use super::host_bytes::{buffer_output, dispatch, over, SAMPLER, TEXTURE_WRITER};
 use super::vertex_strides::pipeline;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, public_case, read_buffer, run_case,
-    validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, public_case, read_buffer, run_case,
+    validated_device, validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::gpu::TEST_DEVICE;
 use ash::vk;
@@ -222,7 +222,7 @@ fn a_callers_shared_buffer_is_a_metal_buffer() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let usage = vk::BufferUsageFlags::from(device.vk_buffer_usage());
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         // SAFETY: destroyed below, after the buffer and every command buffer.

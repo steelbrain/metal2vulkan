@@ -13,9 +13,9 @@
 //! lacks.
 
 use super::degrade_notices::{assert_made_once, assert_once, forced, on_device};
-use super::kernel_textures::census;
+use super::kernel_textures::census_with;
 use super::resolves::{color_pass, quiet, FULL, WHITE};
-use super::{public_cases, read_buffer, shared_kinds, NamedCase};
+use super::{at_plan, public_cases, read_buffer, shared_kinds, NamedCase};
 use crate::case::Stage;
 use ash::vk;
 use metal2vulkan::bind::TileMapping;
@@ -1578,7 +1578,7 @@ fn update_slice(
 /// (`runtime_case/sparse.rs`).
 #[test]
 fn sparse_cases_match_metal() {
-    census("runtime sparse kernels", &sparse_cases());
+    census_with(at_plan, "runtime sparse kernels", &sparse_cases());
 }
 
 /// Every committed public kernel case that binds a sparse texture.

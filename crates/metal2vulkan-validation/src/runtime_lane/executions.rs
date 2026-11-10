@@ -4,7 +4,7 @@
 
 use super::renders::{is_public_render, render_cases_where, run_render};
 use super::{
-    bound_buffers, encode_case, in_shard, layer_reported_nothing_at_all, pipeline_state,
+    at_plan, bound_buffers, encode_case, in_shard, layer_reported_nothing_at_all, pipeline_state,
     public_case, run_case, validated_device_with, CaseResources, Messages, ScratchCache, WAIT,
 };
 use crate::budgets::creation_within_ceiling;
@@ -41,74 +41,71 @@ pub(super) fn on_device_with(adjust: impl FnOnce(&mut DeviceOptions), test: impl
 /// ceiling. A dispatch of no threads records an execution with no `VkPipeline`.
 #[test]
 fn the_execution_record_names_each_dispatchs_compiled_pipeline() {
-    on_device_with(
-        |_| {},
-        |device| {
-            let case = public_case(KERNEL).unwrap();
-            let run = run_case(device, &case).unwrap();
-            assert_eq!(run.output, case.metal_output);
-            let [execution] = run.executions.as_slice() else {
-                panic!("{} executions, not one", run.executions.len());
-            };
-            let ExecutedPipeline::Compute(pipeline) = execution.pipeline() else {
-                panic!("a dispatch executed a render pipeline");
-            };
-            assert!(!execution.pipeline_creation().is_empty());
-            for &created in execution.pipeline_creation() {
-                creation_within_ceiling("the case's pipeline", created).unwrap();
-            }
-            let compile = device.compile_device();
-            let addressed = compile.profile().descriptors().buffer_device_address;
-            let planned = |shape| {
-                let plan = pipeline.plan(compile, shape).unwrap();
-                plan.content_digest().unwrap()
-            };
-            assert_eq!(
-                planned(execution.shape()),
-                planned(&compute_shape(&case.compute, addressed).unwrap()),
-                "the runtime planned other than the executor plans"
-            );
-            let library = Library::from_air(&case.bitcode).unwrap();
-            let function = FunctionDescriptor::new(library.function(&case.compute.entry).unwrap());
-            let (own, _) = compile_compute_for_shape(
-                compile,
-                &function,
-                execution.shape(),
-                Some(&case.compute.dispatch),
-                None,
-                &Budget::standard(),
-            )
-            .unwrap();
-            assert_eq!(pipeline.content_digest(), own.content_digest());
+    on_device_with(at_plan, |device| {
+        let case = public_case(KERNEL).unwrap();
+        let run = run_case(device, &case).unwrap();
+        assert_eq!(run.output, case.metal_output);
+        let [execution] = run.executions.as_slice() else {
+            panic!("{} executions, not one", run.executions.len());
+        };
+        let ExecutedPipeline::Compute(pipeline) = execution.pipeline() else {
+            panic!("a dispatch executed a render pipeline");
+        };
+        assert!(!execution.pipeline_creation().is_empty());
+        for &created in execution.pipeline_creation() {
+            creation_within_ceiling("the case's pipeline", created).unwrap();
+        }
+        let compile = device.compile_device();
+        let addressed = compile.profile().descriptors().buffer_device_address;
+        let planned = |shape| {
+            let plan = pipeline.plan(compile, shape).unwrap();
+            plan.content_digest().unwrap()
+        };
+        assert_eq!(
+            planned(execution.shape()),
+            planned(&compute_shape(&case.compute, addressed).unwrap()),
+            "the runtime planned other than the executor plans"
+        );
+        let library = Library::from_air(&case.bitcode).unwrap();
+        let function = FunctionDescriptor::new(library.function(&case.compute.entry).unwrap());
+        let (own, _) = compile_compute_for_shape(
+            compile,
+            &function,
+            execution.shape(),
+            Some(&case.compute.dispatch),
+            None,
+            &Budget::standard(),
+        )
+        .unwrap();
+        assert_eq!(pipeline.content_digest(), own.content_digest());
 
-            // The same case dispatched over no threads.
-            let pipeline = pipeline_state(device, &case).unwrap();
-            let mut empty = case.compute.clone();
-            empty.dispatch = Dispatch::Threads {
-                threads: [0, 1, 1],
-                threads_per_group: [1, 1, 1],
-            };
-            let resources = CaseResources::new(device, &case).unwrap();
-            let buffers = bound_buffers(device, &empty, &resources).unwrap();
-            let queue = device.new_command_queue().unwrap();
-            let command_buffer = queue.command_buffer().unwrap();
-            let mut encoder = command_buffer.compute_command_encoder().unwrap();
-            encode_case(&mut encoder, &pipeline, &empty, &buffers, &resources).unwrap();
-            encoder.end_encoding().unwrap();
-            command_buffer.commit().unwrap();
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-            let executions = command_buffer.executions();
-            let [execution] = executions.as_slice() else {
-                panic!(
-                    "{} executions of the empty dispatch, not one",
-                    executions.len()
-                );
-            };
-            assert!(matches!(execution.pipeline(), ExecutedPipeline::Compute(_)));
-            assert!(execution.pipeline_creation().is_empty());
-        },
-    );
+        // The same case dispatched over no threads.
+        let pipeline = pipeline_state(device, &case).unwrap();
+        let mut empty = case.compute.clone();
+        empty.dispatch = Dispatch::Threads {
+            threads: [0, 1, 1],
+            threads_per_group: [1, 1, 1],
+        };
+        let resources = CaseResources::new(device, &case).unwrap();
+        let buffers = bound_buffers(device, &empty, &resources).unwrap();
+        let queue = device.new_command_queue().unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+        encode_case(&mut encoder, &pipeline, &empty, &buffers, &resources).unwrap();
+        encoder.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        let executions = command_buffer.executions();
+        let [execution] = executions.as_slice() else {
+            panic!(
+                "{} executions of the empty dispatch, not one",
+                executions.len()
+            );
+        };
+        assert!(matches!(execution.pipeline(), ExecutedPipeline::Compute(_)));
+        assert!(execution.pipeline_creation().is_empty());
+    });
 }
 
 /// Each committed public render case the runtime draws records one execution: the compiled
@@ -118,29 +115,26 @@ fn the_execution_record_names_each_dispatchs_compiled_pipeline() {
 fn the_execution_record_names_each_draws_compiled_pipeline(shard: usize) {
     let cases = render_cases_where(in_shard(is_public_render, shard, EXECUTION_SHARDS));
     let mut drawn = 0usize;
-    on_device_with(
-        |_| {},
-        |device| {
-            for (name, case) in &cases {
-                let Ok(case) = case else { continue };
-                let Ok(run) = run_render(device, case) else {
-                    continue;
-                };
-                let [execution] = run.executions.as_slice() else {
-                    panic!("{name}: {} executions, not one", run.executions.len());
-                };
-                assert!(
-                    matches!(execution.pipeline(), ExecutedPipeline::Render(_)),
-                    "{name}: a draw executed a compute pipeline"
-                );
-                let [created] = execution.pipeline_creation() else {
-                    panic!("{name}: a draw recorded other than one VkPipeline");
-                };
-                creation_within_ceiling("the case's pipeline", *created).unwrap();
-                drawn += 1;
-            }
-        },
-    );
+    on_device_with(at_plan, |device| {
+        for (name, case) in &cases {
+            let Ok(case) = case else { continue };
+            let Ok(run) = run_render(device, case) else {
+                continue;
+            };
+            let [execution] = run.executions.as_slice() else {
+                panic!("{name}: {} executions, not one", run.executions.len());
+            };
+            assert!(
+                matches!(execution.pipeline(), ExecutedPipeline::Render(_)),
+                "{name}: a draw executed a compute pipeline"
+            );
+            let [created] = execution.pipeline_creation() else {
+                panic!("{name}: a draw recorded other than one VkPipeline");
+            };
+            creation_within_ceiling("the case's pipeline", *created).unwrap();
+            drawn += 1;
+        }
+    });
     eprintln!("{drawn} public render cases drawn, shard {shard} of {EXECUTION_SHARDS}");
     assert!(drawn > 0, "no public render case of shard {shard} drew");
 }

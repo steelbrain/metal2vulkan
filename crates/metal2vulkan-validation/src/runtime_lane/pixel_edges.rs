@@ -39,7 +39,8 @@ use super::depth_compares::pipeline_of;
 use super::driver_deviations::stage_notes;
 use super::pixel_samplers::metal_sampler;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -450,7 +451,7 @@ fn pixel_edges_answer_metal_s_texels() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let exact = metal_sampler(&device);
         eprintln!("pixel edges on {name} (Metal's own sampler: {exact})");
@@ -572,7 +573,7 @@ fn normalized_states_announce_no_pixel_note() {
     use metal2vulkan_runtime::Degradation as D;
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
     let name = device.name().to_owned();
     let bitcode = llvm_assemble(&engine_dir().join("px_edges.ll")).unwrap();
     let uv: Vec<u8> = [0.25f32, 0.5]

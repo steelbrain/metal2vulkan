@@ -32,13 +32,14 @@
 //!   new pages, the old pages left intact. `REBIND cost` lines print what a heap's rebind takes
 //!   with textures bound to its bytes, each of which takes a new image.
 
+use super::host_memory::on_device_with;
 use super::host_memory::{
     counting, gpu_fill, gpu_read, host_page, no_copy, not_importable, on_device, recording, run,
     Mapping, Seen, GUEST_PAGE,
 };
 use super::no_copy_heaps::{blit_into, blit_texels, no_copy_heap, shared, HEAP};
 use super::{
-    bound_buffers, encode_case, pipeline_state, public_case, read_buffer, run_case,
+    at_plan, bound_buffers, encode_case, pipeline_state, public_case, read_buffer, run_case,
     texture_descriptor, CaseResources,
 };
 use crate::candidate::engine::ComputeOutput;
@@ -817,7 +818,7 @@ const TEXEL_WRITER: &str = "write-four-bytes-into-a-storage-texel-buffer";
 /// after the rebind, writes the case's output into the pages the buffer lies in each time.
 #[test]
 fn a_texture_buffer_over_a_rebound_buffer_views_the_new_pages() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let case = public_case(TEXEL_WRITER).unwrap();
         let written = run_case(device, &case).unwrap().output;
         let ComputeOutput::Texture { binding: index, .. } = case.compute.output else {
@@ -1045,7 +1046,7 @@ const SAMPLED: &str = "sample-each-of-three-textures-through-one-dynamic-array-i
 /// there laid out as before, and the case reads them.
 #[test]
 fn a_texture_sampled_before_its_first_submission_reads_its_heap_s_new_pages() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let case = public_case(SAMPLED).unwrap();
         let expected = run_case(device, &case).unwrap().output;
         let ComputeOutput::Buffer {

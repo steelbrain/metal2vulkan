@@ -14,8 +14,8 @@
 //! `MTLDrawIndexedPrimitivesIndirectArguments` of the same values), and as the one command of an
 //! indirect command buffer of draws executed in the encoder, and stores the M3's answer each way.
 
-use super::degrade_notices::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use crate::case::{AuthoredCase, IndexType as CaseIndexType, OutputSelection, Primitive};
 use crate::store::CorpusStore;
@@ -249,7 +249,7 @@ fn drawn(device: &Device, case: &AuthoredCase, issued: Issued) -> Vec<u8> {
 fn draws_read_metal_s_base_vertex_and_base_instance() {
     let cases = cases();
     assert_eq!(cases.len(), 4, "the fixture's committed cases");
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for (case, metal) in &cases {
             for issued in [Issued::Direct, Issued::Indirect, Issued::Command] {
                 assert_eq!(

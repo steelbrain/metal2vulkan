@@ -12,7 +12,9 @@
 //! one module per stitched function, each carrying the stitching signature that describes the
 //! graph it was made from.
 
-use super::host_memory::{on_device, run};
+use super::at_plan;
+use super::host_memory::on_device_with;
+use super::host_memory::run;
 use super::read_buffer;
 use crate::air_library::AirLibrary;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, LinkedFunctions, StageSource};
@@ -83,7 +85,7 @@ fn word(device: &Device, caller: &Library, kernel: &str, linked: LinkedFunctions
 /// the probe's `private` and `functions` (20) and `deep` (25).
 #[test]
 fn a_stitched_function_computes_its_graph() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (caller, stitched) = libraries(device);
         for ((kernel, want), g) in KERNELS.iter().zip(&PROBE_GRAPHS) {
             let f = stitched.new_function_with_name(g.name).unwrap();

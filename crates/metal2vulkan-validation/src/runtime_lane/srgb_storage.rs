@@ -29,8 +29,8 @@
 //! `c` of texel `t` takes value `4t + (c + p) % 4` in pass `p` of 4, so each value reaches each
 //! channel. The kernels are the owned fixture `fpv_srgb_storage`'s.
 
-use super::degrade_notices::{counts, on_device, on_device_with};
-use super::{buffer_with, read_buffer, Messages, WAIT};
+use super::degrade_notices::{counts, on_device_with};
+use super::{at_plan, buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::{VkExtension, VkFeature};
 use metal2vulkan::metal::format::storage_image_choice;
@@ -291,7 +291,7 @@ fn write_values(half: bool) -> Vec<(f32, Vec<u8>)> {
 /// `RGBX8Unorm_sRGB` green's byte), over bytes of `0xA5`, announced `device-pack-conversion`.
 #[test]
 fn srgb_storage_writes_store_the_devices_codes() {
-    on_device(writes_store_the_devices_codes);
+    on_device_with(at_plan, writes_store_the_devices_codes);
 }
 
 /// [`srgb_storage_writes_store_the_devices_codes`] on the device made without its storage accesses
@@ -312,6 +312,7 @@ fn srgb_storage_writes_through_rgba8_store_the_devices_codes() {
             options
                 .withheld_extensions
                 .insert(VkExtension::KhrFormatFeatureFlags2);
+            at_plan(options)
         },
         |device, messages| {
             let profile = device.compile_device().profile();
@@ -419,7 +420,9 @@ fn writes_store_the_devices_codes(device: &Device, messages: &Messages) {
 /// lanes differ from Metal's quotients.
 #[test]
 fn srgb_storage_reads_are_the_devices_decode() {
-    on_device(|device, messages| reads_are_the_devices_decode(device, messages, false));
+    on_device_with(at_plan, |device, messages| {
+        reads_are_the_devices_decode(device, messages, false)
+    });
 }
 
 /// [`srgb_storage_reads_are_the_devices_decode`] on the device made without its storage accesses
@@ -437,6 +440,7 @@ fn srgb_storage_reads_through_the_unorm_alias_are_the_devices_decode() {
             options
                 .withheld_extensions
                 .insert(VkExtension::KhrFormatFeatureFlags2);
+            at_plan(options)
         },
         |device, messages| {
             let profile = device.compile_device().profile();

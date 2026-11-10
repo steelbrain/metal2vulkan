@@ -25,8 +25,8 @@
 //! refuses at commit, which a later command buffer of another queue writes again before the
 //! execution runs, runs what that one wrote, as Metal's does.
 
-use super::degrade_notices::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{
     IndirectCommandType, PixelFormat, PrimitiveType, RenderStages, ResourceUsage, TextureUsage,
@@ -316,7 +316,7 @@ const APART: [(Resident, usize); 1] = [(Resident::Nowhere, 2)];
 /// wrote, with the state it took from its argument buffer, or the CPU's records alone.
 #[test]
 fn an_execution_after_its_writer_runs_what_metal_runs() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let (green, red) = ([0, 255, 0, 255], [255, 0, 0, 255]);
         let drawn = |texel: [u8; 4], what: &str| match texel {
@@ -364,7 +364,7 @@ fn an_execution_after_its_writer_runs_what_metal_runs() {
 /// the kernel's command once the writer completed: both complete, the centre green.
 #[test]
 fn a_refused_command_another_queue_writes_again_runs_what_it_wrote() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let state = scene.render_state("irw_vertex");
         let other = scene.render_state_in("irw_vertex", PixelFormat::RGBA16Float);

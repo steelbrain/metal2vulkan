@@ -31,7 +31,9 @@
 //!   the heap's bytes in memory of its own, so the answer stays Metal's; a two-plane texture's
 //!   image lies apart from the heap's bytes, in memory of its own.
 
+use super::at_plan;
 use super::degrade_notices::{self as notices, counts};
+use super::host_memory::on_device_with;
 use super::host_memory::{on_device, run};
 use super::Messages;
 use metal2vulkan::error::{Feature, Needs};
@@ -220,7 +222,7 @@ fn metal_s_rows(
 /// Metal's do.
 #[test]
 fn four_two_two_heap_textures_take_metal_s_size_and_layout() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         // Metal's sizes.
         let shapes = [
             ([64, 32], 4096),
@@ -252,7 +254,7 @@ fn four_two_two_heap_textures_take_metal_s_size_and_layout() {
 /// side by side keep their stencil.
 #[test]
 fn x32_stencil8_heap_textures_take_a_stencil8_texture_s_size() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let shapes = [
             (TextureType::Type2D, [64, 32], 1, 1),
             (TextureType::Type2D, [6, 3], 1, 1),
@@ -295,7 +297,7 @@ fn x32_stencil8_heap_textures_take_a_stencil8_texture_s_size() {
 /// in a heap.
 #[test]
 fn two_plane_heap_textures_take_metal_s_size() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         // (type, width, height, depth, levels, slices, Metal's size and alignment).
         let shapes = [
             (TextureType::Type2D, [64, 64, 1], 1, 1, (20480, 16)),
@@ -699,7 +701,7 @@ fn formats_without_textures_answer_metal_s_stops_then_its_nil() {
 /// side by side at the answer keep their own texels.
 #[test]
 fn a_block_writes_only_texture_answers_the_size_without_the_bit() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let shapes = [
             (PixelFormat::BGRA8Unorm, TextureType::Type2D, [16, 16], 1, 1),
             (

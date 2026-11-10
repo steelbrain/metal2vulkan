@@ -28,7 +28,8 @@ use super::degrade_notices::{assert_once, made_render_kinds, made_tile_kinds};
 use super::shared_kinds;
 use super::tile_states::descriptor as tile_descriptor;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -267,7 +268,7 @@ fn a_pass_keeps_its_imageblock_across_draws_and_a_split() {
         Degradation::TileDispatchScratch,
     ];
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         kinds.extend(shared_kinds(&device));
         let fixture = Fixture::new(&device);
         if !fixture.imageblocks() {
@@ -340,7 +341,7 @@ fn imageblock_draws_are_refused_where_metal_or_the_runtime_refuses_them() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let fixture = Fixture::new(&device);
         if !fixture.imageblocks() {
             return;
@@ -426,7 +427,7 @@ fn commands_reach_the_pass_s_imageblock() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let fixture = Fixture::new(&device);
         if !fixture.imageblocks() {
             return;

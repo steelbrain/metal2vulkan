@@ -32,7 +32,7 @@ use super::color_writes::{
     half, half_toward_zero, specials, unsigned_float, unsigned_float_toward_zero,
 };
 use super::degrade_notices::{on_device, on_device_with};
-use super::{buffer_with, layer_reported_nothing, read_buffer, Messages, WAIT};
+use super::{at_plan, buffer_with, layer_reported_nothing, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::metal::{PixelFormat, ResourceUsage, TextureUsage};
@@ -258,6 +258,7 @@ fn kernel_writes_store_metals_halves() {
     on_device_with(
         |options| {
             options.announce_each.insert(Degradation::DeviceNanEncoding);
+            at_plan(options)
         },
         |device, messages| {
             for form in Form::ALL {

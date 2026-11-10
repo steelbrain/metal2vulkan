@@ -34,14 +34,15 @@
 //! The device's `isRGB10A2GammaSupported` answers as the texture's linear filter does. A
 //! difference is printed on an `RGB10A2-SRGB-DIFFERS` line.
 
-use super::degrade_notices::{counts, on_device};
+use super::degrade_notices::counts;
+use super::degrade_notices::on_device_with;
 use super::extended_range_samples::state_of;
 use super::extended_range_targets::half_value;
 use super::resolves::{lane_with, quiet, Lane};
 use super::xr_codes::{
     assert_announced, assert_counted, half_within, recorded, value_within, written_within,
 };
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::candidate::runtime_samples::{library, shape};
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::format::ExtendedRange;
@@ -270,7 +271,7 @@ fn xorshift(s: &mut u64) -> u64 {
 /// Reads, writes and samples of a 586 texture by a kernel are Metal's.
 #[test]
 fn kernels_read_write_and_sample_rgb10a2_srgb_as_metal_does() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let mut wrong = Vec::new();
         // The values within the device's conversion of Metal's, and the linear samples apart.
         let (mut moved, mut filtered) = (0, 0);

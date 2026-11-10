@@ -19,8 +19,8 @@
 //! `buf[i]` starts as `i`. Each kernel runs [`ROUNDS`] dispatches of [`N`] threads in threadgroups
 //! of [`GROUP`], each from fresh buffers.
 
-use super::tile_states::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::tile_states::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
@@ -213,7 +213,7 @@ fn run(device: &Device, bitcode: &[u8], kernel: &str) -> Vec<u32> {
 /// Every lane reads Metal's answer: what its simdgroup's lockstep gives, in every round.
 #[test]
 fn device_words_a_simdgroup_exchanges_read_metal_s_answer() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let name = device.name().to_owned();
         let bitcode = bitcode();
         let mut failed = Vec::new();

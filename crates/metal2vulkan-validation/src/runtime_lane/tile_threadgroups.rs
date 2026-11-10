@@ -25,8 +25,9 @@
 //!   `simdgroup · 32 + lane`, each at its measured place.
 
 use super::extended_range_targets::half_bits;
+use super::tile_states::on_device_with;
 use super::tile_states::{descriptor, on_device};
-use super::{read_buffer, WAIT};
+use super::{at_plan, read_buffer, WAIT};
 use metal2vulkan::error::{BindError, Feature};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
@@ -313,7 +314,7 @@ fn quad_order(qw: u64, qh: u64) -> Vec<(u64, u64)> {
 /// 30x30, 24x8, 2x18, 14x4).
 #[test]
 fn even_tile_threadgroups_take_metals_layout() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let state = state(device, "k10ts_tile_order", &[PixelFormat::R32Float]);
         let area = [SIDE, SIDE];
         let start: Vec<u8> = (0..SIDE * SIDE)
@@ -458,7 +459,7 @@ fn blurred(transpose: bool, simdgroups: u64) -> Vec<u16> {
 /// threadgroups 32 by the most simdgroups its state takes.
 #[test]
 fn a_32x32_simd_tile_blur_is_metals() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let state = state(device, "ttg_tile_simd_blur", &[PixelFormat::RGBA16Float]);
         let max = u64::from(state.max_total_threads_per_threadgroup());
         let simdgroups = 1u64 << (max / 32).clamp(1, SIDE).ilog2();

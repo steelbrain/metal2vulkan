@@ -15,6 +15,8 @@
 //! `astc-storage-neutral` once ([`ASTC_STORAGE`], [`astc_kernel_writes_leave_the_blocks`]).
 
 use super::astc_textures::{block_count, read_whole, reader, row_bytes, SIDE};
+use super::at_plan;
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{counts, on_device};
 use super::WAIT;
 use crate::air_library::AirLibrary;
@@ -219,7 +221,7 @@ fn astc_attachments_leave_the_blocks_as_metal_s() {
 /// and the device announces [`ASTC_STORAGE`] once (the module docs).
 #[test]
 fn astc_kernel_writes_leave_the_blocks() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let queue = device.new_command_queue().unwrap();
         let bitcode = llvm_assemble(&engine_dir().join("format_scout.ll")).unwrap();

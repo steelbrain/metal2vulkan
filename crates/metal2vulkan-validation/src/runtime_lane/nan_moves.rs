@@ -23,9 +23,9 @@
 //! the driver's compiler moves the negation onto the `half` before the widening, as MoltenVK's did
 //! here (every lane Metal's), which nothing states.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::driver_deviations::stage_notes;
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkProperty;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, StageSource};
@@ -267,7 +267,7 @@ fn moved_nans_are_metals_where_measured_and_noted_elsewhere() {
     let air = llvm_assemble_text(&library()).unwrap();
     let halves: Vec<u32> = (0..=u32::from(u16::MAX)).collect();
     let floats = float_words();
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let moves = device
             .compile_device()
             .profile()

@@ -73,12 +73,25 @@ pub(super) fn options_of(path: Path) -> impl FnOnce(&mut DeviceOptions) {
 /// device whose tessellator is not Apple's (MoltenVK on an Apple GPU hands the patches to Metal's):
 /// the emulation draws Metal's order.
 pub(super) fn on_path(path: Path, check: impl FnOnce(Device, &str)) {
+    on_path_with(|_| {}, path, check)
+}
+
+/// [`on_path`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+pub(super) fn on_path_with(
+    adjust: fn(&mut DeviceOptions),
+    path: Path,
+    check: impl FnOnce(Device, &str),
+) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let apple_tessellator;
     {
-        let device =
-            validated_device_with(TEST_DEVICE, &messages, cache.path(), options_of(path)).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options_of(path)(options);
+            adjust(options)
+        })
+        .unwrap();
         let description = &device.properties().description;
         apple_tessellator =
             description.driver_id == Some(DriverId::MOLTENVK) && description.vendor_id == 0x106B;

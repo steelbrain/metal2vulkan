@@ -27,8 +27,8 @@
 
 use super::degrade_notices::counts;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -455,6 +455,7 @@ fn without_sampler_anisotropy_the_emulation_answers_within_its_bounds() {
         options
             .withheld_features
             .insert(VkFeature::SamplerAnisotropy);
+        at_plan(options)
     });
 }
 

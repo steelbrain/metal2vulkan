@@ -15,7 +15,9 @@
 //! bytes) is refused on a device of 32 KiB a thread, where Metal runs it. The test accepts that
 //! refusal past `k` 1 and prints it.
 
-use super::host_memory::{on_device, run};
+use super::at_plan;
+use super::host_memory::on_device_with;
+use super::host_memory::run;
 use super::read_buffer;
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkLimit;
@@ -240,7 +242,7 @@ fn dispatch(device: &Device, state: &ComputePipelineState, depths: &[u32], mode:
 /// computes it, for each kernel and mode of the fixture, where the device holds the stack.
 #[test]
 fn recursions_answer_every_depth_metal_answers() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let air = llvm_assemble(&engine_dir().join("fpc_frames.ll")).unwrap();
         let library = device.new_library_with_air(&air).unwrap();
         for (kernel, linked, mode, root, metal) in calls() {

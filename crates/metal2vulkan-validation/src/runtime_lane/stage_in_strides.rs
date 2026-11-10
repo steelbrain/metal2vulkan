@@ -14,8 +14,8 @@
 //! - a layout of a fixed stride reads at its own, whatever stride the buffer is bound with.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -27,6 +27,7 @@ use metal2vulkan::pipeline::{
     StageInputLayoutDescriptor, StageSource,
 };
 use metal2vulkan_devtools::llvm_assemble;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, ComputeCommandEncoder, ComputePipelineState, Device,
     PipelineOptions, Region, Size,
@@ -203,10 +204,16 @@ fn read_at(what: &str, words: &[u32], s1: u32, s2: u32) {
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -217,7 +224,7 @@ fn on_device(test: impl FnOnce(&Device)) {
 /// offset form after a stride form, read at stride 0.
 #[test]
 fn a_dynamic_layout_reads_the_bound_stride_as_metal() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let pipeline = pipeline(device, true);
         for (s1, s2) in [(24, 8), (0, 16), (12, 2), (6, 0), (25, 3)] {
             let words = dispatched(device, &pipeline, |e, s| {
@@ -266,7 +273,7 @@ fn a_dynamic_layout_reads_the_bound_stride_as_metal() {
 /// takes them).
 #[test]
 fn a_stride_past_32_bits_reads_at_its_low_32_bits() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let pipeline = pipeline(device, true);
         for (s1, s2) in [(24u32, 8u32), (0, 16), (12, 2)] {
             let wide = |s: u32, k: u64| (k << 32) | u64::from(s);

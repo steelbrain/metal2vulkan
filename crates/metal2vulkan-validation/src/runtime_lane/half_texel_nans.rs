@@ -41,7 +41,7 @@
 //! lane of its pair (a NaN `0x7e00` read `0x7e02`).
 
 use super::degrade_notices::{counts, on_device_with};
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter, TextureUsage};
@@ -606,6 +606,7 @@ fn float_texel_nans_by_device_and_policy() {
                 if default {
                     options.policy = DeviceOptions::default().policy;
                 }
+                at_plan(options)
             },
             |device, messages| {
                 let (h, f, overflows) = measure(device, leg, default);

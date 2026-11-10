@@ -19,7 +19,9 @@ use super::degrade_notices::shared_in_system_memory;
 use super::degrade_notices::signs_depth_tests;
 use super::degrade_notices::{assert_made_once, clamps_depth_uploads, forced};
 use super::degrade_notices::{loses_depth_denormals, made_compute_kinds, made_render_kinds};
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
+};
 use crate::candidate::runtime_samples::SampleFill;
 use crate::candidate::runtime_samples::{encode, fill_descriptor, read_function, read_view};
 use crate::case::TextureFormat;
@@ -321,7 +323,7 @@ fn multisampled_depth_and_stencil_copy_every_sample_with_colour() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let defects = &device.properties().driver_defects;
         let maintenance8 = device.enabled().features.contains(&VkFeature::Maintenance8);

@@ -22,9 +22,10 @@
 //! held. An 8-bit normalized read is compared bit for bit with its code `c` as Metal reads it,
 //! `c / 255` correctly rounded (no channel may sit an ulp from it).
 
-use super::degrade_notices::{counts, on_device};
+use super::degrade_notices::counts;
+use super::degrade_notices::on_device_with;
 use super::pixel_samplers::metal_sampler;
-use super::{buffer_with, converted_holds, read_buffer, WAIT};
+use super::{at_plan, buffer_with, converted_holds, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
@@ -276,7 +277,7 @@ fn words(buffer: &Buffer) -> [u32; 4] {
 /// `device-texel-conversion`, within its bound (`converted_holds`).
 #[test]
 fn reads_of_a_swizzled_texture_are_swizzled() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let exact = metal_sampler(device);
         let mut normalized = false;
         for (format, name, made) in cases() {
@@ -357,7 +358,7 @@ fn writes_of(device: &Device, format: Format, name: &str, made: bool) {
 
 #[test]
 fn writes_through_a_swizzled_texture_undo_the_swizzle() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for (format, name, made) in cases() {
             writes_of(device, format, name, made);
         }
@@ -367,7 +368,7 @@ fn writes_through_a_swizzled_texture_undo_the_swizzle() {
 /// An atomic through a swizzled `R32Uint` view adds to red and returns the texel unswizzled.
 #[test]
 fn an_atomic_through_a_swizzled_view_ignores_the_swizzle() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for name in ["RRRR", "GRBA", "ARGB", "1RG0"] {
             let (texture, bound) = textures(device, Format::R32Uint, name, false);
             reset(&texture, Format::R32Uint);

@@ -15,9 +15,10 @@
 //! check every encoder's effect, the signals, the handlers and the status.
 
 use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::render_state::{texels, texture};
 use super::{
-    bound_buffers, buffer_with, encode_case, pipeline_state, public_case, read_buffer,
+    at_plan, bound_buffers, buffer_with, encode_case, pipeline_state, public_case, read_buffer,
     CaseResources, PublicCase, WAIT,
 };
 use crate::candidate::engine::ComputeOutput;
@@ -273,7 +274,7 @@ fn the_encoders_before_the_failing_one_run() {
 /// runs only once the host signals.
 #[test]
 fn a_failed_command_buffer_keeps_its_waits_and_its_signals_as_asked() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for signals in [true, false] {
             let gate = device.new_shared_event().unwrap();
             let done = device.new_shared_event().unwrap();
@@ -470,7 +471,7 @@ fn failed_for(encoders: &[EndedEncoder], detached: &Buffer) -> BTreeSet<usize> {
 #[test]
 fn the_probe_shapes_run_every_submission_but_the_detached_one() {
     let kernel = public_case(KERNEL).unwrap();
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pipeline = pipeline_state(device, &kernel).unwrap();
         for (shape, failed) in SHAPES {
             run_shape(device, &kernel, &pipeline, shape, failed);

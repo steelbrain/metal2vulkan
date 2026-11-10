@@ -10,11 +10,12 @@
 //! last handle returns.
 
 use super::{
-    layer_reported_nothing_at_all, open_device, open_devices, pipeline_state, public_case,
-    run_with, validated_device, validated_options, Messages, ScratchCache,
+    at_plan, layer_reported_nothing_at_all, open_device, open_devices, pipeline_state, public_case,
+    run_with, validated_device_with, validated_plan_options, Messages, ScratchCache,
 };
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     host_time, BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus,
     CommandQueue, CommitFailure, CpuCacheMode, Device, Error, EventRef, HazardTrackingMode,
@@ -49,10 +50,16 @@ fn options(storage: StorageMode, hazard: HazardTrackingMode) -> ResourceOptions 
 /// Run `test` on a validated device, then check that once everything is dropped (the device
 /// last) the layer reported nothing.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -167,7 +174,7 @@ fn copy_out(encoder: &mut BlitCommandEncoder, texture: &Texture, destination: &B
 /// it.
 #[test]
 fn a_wait_committed_before_its_signal_never_deadlocks() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (first, second) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -204,7 +211,7 @@ fn a_wait_committed_before_its_signal_never_deadlocks() {
 /// untracked buffers, each round committed downstream first.
 #[test]
 fn three_queues_ordered_by_events_as_paging_does() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = || device.new_command_queue().unwrap();
         let (up_queue, exec_queue, down_queue) = (queue(), queue(), queue());
         let (up, exec) = (device.new_event().unwrap(), device.new_event().unwrap());
@@ -286,7 +293,7 @@ fn three_queues_ordered_by_events_as_paging_does() {
 /// the M4) gives it, and the two never overlap (synchronization validation).
 #[test]
 fn a_tracked_buffer_across_queues_follows_the_commit_order() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (writer_queue, reader_queue) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -324,7 +331,7 @@ fn a_tracked_buffer_across_queues_follows_the_commit_order() {
 /// first, waits for the writer's signal, is scheduled after it, and reads what it wrote.
 #[test]
 fn an_event_orders_a_tracked_buffer_against_the_commit_order() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (writer_queue, reader_queue) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -361,7 +368,7 @@ fn an_event_orders_a_tracked_buffer_against_the_commit_order() {
 /// overlap (synchronization validation).
 #[test]
 fn a_tracked_texture_across_queues_follows_the_commit_order() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (writer_queue, reader_queue) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -396,7 +403,7 @@ fn a_tracked_texture_across_queues_follows_the_commit_order() {
 /// first, waits for the writer's signal, is scheduled after it, and reads what it wrote.
 #[test]
 fn an_event_orders_a_tracked_texture_against_the_commit_order() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (writer_queue, reader_queue) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -431,7 +438,7 @@ fn an_event_orders_a_tracked_texture_against_the_commit_order() {
 /// Metal's did whichever signal executed last (measured on the M3 and the M4).
 #[test]
 fn signals_of_one_event_from_two_queues_end_at_the_highest() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (first, second) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -498,7 +505,7 @@ fn a_shared_events_value_only_rises() {
 /// signals, before its completed handler (as measured on Metal).
 #[test]
 fn a_held_command_buffer_holds_back_only_its_own_queue() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (held_queue, other_queue) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -622,7 +629,7 @@ fn listeners_hear_reached_and_later_values() {
 /// a GPU wait on one is met by a signal of the other. Another device's handle is refused.
 #[test]
 fn shared_event_handles_open_the_same_event() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let event = device.new_shared_event().unwrap();
         event.set_label("paging");
@@ -653,7 +660,8 @@ fn shared_event_handles_open_the_same_event() {
         let cache = ScratchCache::new().unwrap();
         let messages = Messages::default();
         {
-            let other = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+            let other =
+                validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
             assert_eq!(
                 other.new_shared_event_with_handle(&handle).err(),
                 Some(Error::NotImplemented(RuntimeGap::SharedEventAcrossDevices))
@@ -681,7 +689,7 @@ fn shared_event_handles_open_the_same_event() {
 fn equal_options_make_one_device() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let options = validated_options(&messages, cache.path());
+    let options = validated_plan_options(&messages, cache.path());
     {
         let first = open_device(TEST_DEVICE, options.clone()).unwrap();
         let second = open_device(TEST_DEVICE, options.clone()).unwrap();
@@ -766,7 +774,7 @@ fn event_commands_are_refused_where_metal_stops_them() {
 /// which another queue's command buffer waits for.
 #[test]
 fn a_scheduled_handler_signals_a_shared_event() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (first, second) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -807,7 +815,7 @@ fn a_scheduled_handler_signals_a_shared_event() {
 /// process ends).
 #[test]
 fn a_scheduled_signal_sets_its_value_as_the_command_buffer_is_scheduled() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let (first, second) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -980,7 +988,8 @@ fn a_device_dropped_after_a_wait_is_gone_when_the_drop_returns() {
         let cache = ScratchCache::new().unwrap();
         let messages = Messages::default();
         let first = {
-            let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+            let device =
+                validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
             {
                 let pipeline = pipeline_state(&device, &case).unwrap();
                 run_with(&device, &case, &pipeline).unwrap();
@@ -1025,7 +1034,7 @@ fn a_device_dropped_after_a_wait_is_gone_when_the_drop_returns() {
             // The driver's data ends inside its own header: nothing was kept.
             assert_eq!(first.driver_saves, 0, "round {round}: {first:?}");
         }
-        let next = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let next = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         drop(next);
         layer_reported_nothing_at_all(&messages);
     }

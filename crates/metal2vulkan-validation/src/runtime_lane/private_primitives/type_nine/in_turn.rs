@@ -17,12 +17,11 @@
 //!
 //! The runtime runs nothing from the first failing pass on, as for one failure.
 
-use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache,
-};
+use super::{buffer_with, layer_reported_nothing_at_all, read_buffer, Messages, ScratchCache};
 use super::{targets, Answer, Lane, Tracked, FAULT, HANG, SCHEDULED};
 use crate::gpu::TEST_DEVICE;
+use crate::runtime_lane::at_plan;
+use crate::runtime_lane::validated_device_with;
 use metal2vulkan::metal::IndexType;
 use metal2vulkan_runtime::{
     CommandBufferError, CommandBufferStatus, CommandQueue, DrawPrimitiveType, EventRef, Region,
@@ -154,11 +153,13 @@ fn in_turn(
 /// scheduled ([`Answer::since_kernel_end`]), runs only its mark before the first pass, every event
 /// signal firing; the queue's command buffer committed right after completes cleanly after it,
 /// running where Metal's did.
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn fails_in_turn(cases: &[(&[Nine], Expected)]) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let lane = Lane::new(device);
         let pipeline = lane.pipeline("pt_plain");

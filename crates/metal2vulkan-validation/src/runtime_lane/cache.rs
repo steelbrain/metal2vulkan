@@ -22,7 +22,7 @@
 //!   cache data"): every making's data is read, nothing fails, and nothing is reported.
 
 use super::{
-    layer_reported_nothing_at_all, needs_later_steps, pipeline_state, public_case,
+    at_plan, layer_reported_nothing_at_all, needs_later_steps, pipeline_state, public_case,
     public_case_names, public_cases, run_case, run_with, validated_device, validated_device_with,
     Messages, PublicCase, ScratchCache,
 };
@@ -384,6 +384,7 @@ fn a_state_made_again_takes_the_memos_translations() {
         {
             let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
                 options.shader_cache.memory_capacity = memory_capacity;
+                at_plan(options)
             })
             .unwrap();
             let first = pipeline_state(&device, &case).unwrap();
@@ -506,7 +507,7 @@ fn makings_on_several_threads_each_read_their_own_cache() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let (statistics, failed) = {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let next = AtomicUsize::new(0);
         let failed = std::thread::scope(|scope| {
             let makers: Vec<_> = (0..MAKERS)

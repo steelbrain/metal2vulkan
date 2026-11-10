@@ -11,8 +11,8 @@
 //! · 2^(e - 24)`, exact in `float` and in `half`, and alpha 1. The kernels are the owned fixture
 //! `fpv_srgb_storage`'s, which take any `float` storage texture.
 
-use super::degrade_notices::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
@@ -196,7 +196,7 @@ fn run(
 /// Metal's word, over words of `0xA5A5A5A5`.
 #[test]
 fn shared_exponent_storage_writes_store_metals_word() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let name = device.name().to_owned();
         let floats = floats();
         let halves: Vec<[u16; 4]> = (0..=u16::MAX)
@@ -271,7 +271,7 @@ fn shared_exponent_storage_writes_store_metals_word() {
 /// `half`.
 #[test]
 fn shared_exponent_storage_reads_decode_exactly() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let name = device.name().to_owned();
         let words: Vec<u32> = (0..WIDTH as u32 * 4)
             .map(|n| (n % 32) << 27 | (n * 37 % 512) | (n * 101 % 512) << 9 | (n * 7 % 512) << 18)

@@ -32,9 +32,10 @@
 
 use super::degrade_notices::counts;
 use super::{
-    buffer_with, encode_case, in_shard, layer_reported_nothing, layer_reported_nothing_at_all,
-    pipeline_state, public_case, public_cases, read_buffer, run_case, validated_device,
-    CaseResources, Messages, NamedCase, PublicCase, ScratchCache, WAIT,
+    at_plan, buffer_with, encode_case, in_shard, layer_reported_nothing,
+    layer_reported_nothing_at_all, pipeline_state, public_case, public_cases, read_buffer,
+    run_case, validated_device_with, CaseResources, Messages, NamedCase, PublicCase, ScratchCache,
+    WAIT,
 };
 use crate::candidate::engine::variants::compile_compute_for_shape;
 use crate::candidate::engine::{compute_shape, ENGINE_EXECUTOR_ABI};
@@ -52,6 +53,7 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{FunctionDescriptor, PrecisionNote};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan::Budget;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, ComputeCommandEncoder, Degradation, Device, Error,
     ExecutedPipeline,
@@ -127,9 +129,16 @@ fn depth_range_refusal(why: &str) -> bool {
 /// its output's words that differ from Metal's, where the run completes with a clean execution
 /// report and an output of Metal's length, announces `restricted-depth-upload`, and the
 /// validation layer reports nothing; else what it did instead.
-fn clamped_run(messages: &Messages, case: &PublicCase) -> Result<usize, String> {
+///
+/// `adjust` is applied to the options of each device it makes (`at_plan` gives them their
+/// queue plan).
+fn clamped_run_with(
+    adjust: fn(&mut DeviceOptions),
+    messages: &Messages,
+    case: &PublicCase,
+) -> Result<usize, String> {
     let cache = ScratchCache::new().unwrap();
-    let device = validated_device(TEST_DEVICE, messages, cache.path()).unwrap();
+    let device = validated_device_with(TEST_DEVICE, messages, cache.path(), adjust).unwrap();
     let _ = messages.take_notices();
     let run = run_case(&device, case);
     drop(device);
@@ -184,14 +193,15 @@ fn executed_notes(run: &super::RuntimeRun) -> BTreeSet<PrecisionNote> {
 }
 
 /// Every committed public kernel case that binds a texture, a texture array or a sampler passes
-/// the [`census`], in `TEXTURE_SHARDS` tests (`in_shard`), so nextest runs the pieces in parallel.
+/// the [`census_with`], in `TEXTURE_SHARDS` tests (`in_shard`), so nextest runs the pieces in parallel.
 fn kernels_with_textures_and_samplers_match_metal(shard: usize) {
     let cases = public_cases(in_shard(binds_textures, shard, TEXTURE_SHARDS)).unwrap();
     assert!(
         !cases.is_empty(),
         "no committed case of shard {shard} binds a texture"
     );
-    census(
+    census_with(
+        at_plan,
         &format!("runtime texture kernels, shard {shard} of {TEXTURE_SHARDS}"),
         &cases,
     );
@@ -226,14 +236,17 @@ census_shards!(
 /// form of the case on this device, an output of Metal's length under the precision notes its
 /// executed stages record (the module's note), or is refused honestly (`refusal`); the validation
 /// layer reports nothing, leaks included. The counts are printed as `label`'s census line.
-pub(super) fn census(label: &str, cases: &[NamedCase]) {
+///
+/// `adjust` is applied to the options of each device it makes (`at_plan` gives them their
+/// queue plan).
+pub(super) fn census_with(adjust: fn(&mut DeviceOptions), label: &str, cases: &[NamedCase]) {
     let messages = Messages::default();
     let (mut matched, mut differing, mut refused, mut failed) =
         (0usize, Vec::new(), Vec::new(), Vec::new());
     let device_name;
     {
         let cache = ScratchCache::new().unwrap();
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         device_name = device.name().to_owned();
         for (name, case) in cases {
             let run = case
@@ -293,7 +306,7 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
             // The candidate holds no form of a case that gives a depth image a depth outside
             // `[0, 1]` on this device: the runtime's clamp, announced (the module docs).
             Err(why) if depth_range_refusal(&why) => {
-                match clamped_run(&messages, case) {
+                match clamped_run_with(adjust, &messages, case) {
                     Ok(words) => clamped.push(format!(
                         "{name}: {words} of {} words differ from Metal's, its depths outside \
                          [0, 1] clamped and announced; the candidate holds no form of it here: \
@@ -311,7 +324,8 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
         };
         let rerun = {
             let cache = ScratchCache::new().unwrap();
-            let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+            let device =
+                validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
             run_case(&device, case)
         };
         let reported = messages.take();
@@ -475,10 +489,16 @@ census_shards!(
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
 fn on_device(test: impl FnOnce(&Device, &Messages)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device, &Messages)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device, &messages);
     }
     layer_reported_nothing_at_all(&messages);
@@ -586,7 +606,7 @@ fn run_encoder(device: &Device, encode: impl FnOnce(&mut ComputeCommandEncoder))
 /// recording nothing.
 #[test]
 fn a_binds_lod_clamps_are_used_or_refused_where_used() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let case = public_case(SAMPLED).unwrap();
         let pipeline = pipeline_state(device, &case).unwrap();
         let buffers = case_buffers(device, &case);
@@ -691,7 +711,7 @@ fn dispatch(encoder: &mut ComputeCommandEncoder, case: &PublicCase) -> Result<()
 /// blocks of their own elsewhere.
 #[test]
 fn unbound_texture_and_sampler_slots_use_neutrals() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let pooled = matches!(
             device.properties().description.driver_id,
             Some(DriverId::INTEL_OPEN_SOURCE_MESA | DriverId::MESA_RADV)
@@ -740,7 +760,7 @@ fn unbound_texture_and_sampler_slots_use_neutrals() {
 /// so a texture's cached views and a state's kept samplers serve later commands.
 #[test]
 fn a_texture_case_runs_twice_alike() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for name in [SAMPLED, STORED] {
             let case = public_case(name).unwrap();
             for _ in 0..2 {

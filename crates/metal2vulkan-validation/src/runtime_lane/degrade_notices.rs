@@ -229,9 +229,9 @@ use super::word_samples_msaa::WORD_RESOLVE;
 use super::ycbcr_passes::YCBCR_PASSES;
 use super::ycbcr_textures::YCBCR_FILTERS;
 use super::{
-    case_making_kinds, creation_heard_checked, layer_reported_nothing_at_all, made_lane_device,
-    pipeline_state, public_case, run_case, run_with, shared_kinds, validated_device_with, Messages,
-    PublicCase, ScratchCache,
+    at_plan, case_making_kinds, creation_heard_checked, layer_reported_nothing_at_all,
+    made_lane_device, pipeline_state, public_case, run_case, run_with, shared_kinds,
+    validated_device_with, Messages, PublicCase, ScratchCache,
 };
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::compute_shape;
@@ -984,7 +984,7 @@ fn drops_the_fill(device: &Device, buffer: &Buffer) -> bool {
 /// options without the bit, as Metal's does.
 #[test]
 fn the_private_option_bit_drops_the_gpu_s_writes_to_no_copy_memory() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let before = device.work_counts();
         let bit = ResourceOptions::PRIVATE_BIT;
         let shared = with_private_bit(ResourceOptions::shared());
@@ -1286,7 +1286,7 @@ fn emulates_simdgroups(device: &Device, case: &PublicCase) -> bool {
 /// run on pinned subgroups wider than 8).
 #[test]
 fn dispatches_degrade_once_per_kind() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let ragged = public_case(RAGGED).unwrap();
         let partial = public_case(PARTIAL_SIMDGROUPS).unwrap();
         for case in [&ragged, &ragged, &partial, &partial] {
@@ -1453,7 +1453,7 @@ fn run_kinds(device: &Device, case: &PublicCase) -> (BTreeSet<Degradation>, BTre
 /// texel, which the stage records whatever is bound.
 #[test]
 fn runs_announce_the_notes_their_specialization_keeps_once() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let mut expected = BTreeSet::new();
         let mut held = Vec::new();
         for name in SPECIALIZED {
@@ -1522,7 +1522,7 @@ fn a_kind_asked_for_at_each_occurrence_is_announced_at_each_bind_of_a_variant() 
         (kept, announced)
     };
     let mut asked = BTreeSet::new();
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let (kept, announced) = run(device, messages);
         assert!(!kept.is_empty(), "no stage of {NOTED:?} keeps a note");
         let once: BTreeMap<Degradation, usize> = kept.keys().map(|&kind| (kind, 1)).collect();
@@ -1530,12 +1530,18 @@ fn a_kind_asked_for_at_each_occurrence_is_announced_at_each_bind_of_a_variant() 
         asked = kept.into_keys().collect();
     });
     let each = |options: &mut DeviceOptions| options.announce_each = asked.clone();
-    on_device_with(each, |device, messages| {
-        let (kept, announced) = run(device, messages);
-        let twice: BTreeMap<Degradation, usize> =
-            kept.into_iter().map(|(kind, n)| (kind, 2 * n)).collect();
-        assert_eq!(announced, twice);
-    });
+    on_device_with(
+        |options| {
+            each(options);
+            at_plan(options)
+        },
+        |device, messages| {
+            let (kept, announced) = run(device, messages);
+            let twice: BTreeMap<Degradation, usize> =
+                kept.into_iter().map(|(kind, n)| (kind, 2 * n)).collect();
+            assert_eq!(announced, twice);
+        },
+    );
 }
 
 /// A device that withholds maximal reconvergence (`shaderMaximalReconvergence`, which every venue

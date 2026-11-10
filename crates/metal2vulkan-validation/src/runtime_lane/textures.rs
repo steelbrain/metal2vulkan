@@ -4,8 +4,8 @@
 //! refusals, under the validation layer.
 
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
+    validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::candidate::runtime_samples::encode_through;
 use crate::candidate::runtime_samples::SampleFill;
@@ -509,7 +509,7 @@ fn textures_copy_levels_slices_and_views() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let rgba = PixelFormat::RGBA8Unorm;
 
         // A 2D array of 3 slices and 3 levels: each level and slice its own bytes.

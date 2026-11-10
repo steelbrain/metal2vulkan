@@ -20,12 +20,13 @@
 //! vertex to be Metal's, and the draw's pipeline to carry the form (`RuntimeFact::PrivateList`).
 
 use super::super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    buffer_with, layer_reported_nothing_at_all, read_buffer, Messages, ScratchCache, WAIT,
 };
 use super::{metal_list, Form, PRIVATE};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
+use crate::runtime_lane::at_plan;
+use crate::runtime_lane::validated_device_with;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::{IndexType, PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{
@@ -260,7 +261,7 @@ fn vertex_functions_that_write_memory_run_once_a_list_vertex() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let stores = device
             .compile_device()

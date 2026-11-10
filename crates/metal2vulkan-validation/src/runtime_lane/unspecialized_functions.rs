@@ -13,6 +13,8 @@
 //! fragment, tile, mesh and object functions reading a constant, and vertex, fragment and mesh
 //! functions reading none (`_free`).
 
+use super::at_plan;
+use super::host_memory::on_device_with;
 use super::host_memory::{on_device, run};
 use super::read_buffer;
 use crate::air_library::AirLibrary;
@@ -140,7 +142,7 @@ fn mesh(
 /// stored nothing).
 #[test]
 fn a_kernel_made_by_name_that_declares_a_constant_makes_no_compute_state() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let library = library(device);
         let call = "new_compute_pipeline_state";
         for name in ["unspecialized_guarded", "unspecialized_gate"] {

@@ -24,6 +24,7 @@
 //!   the buffer a shadowed target lies over: the render encoder encoded again, its copies and its
 //!   merged draw into the new pages.
 
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{
     assert_made_once, assert_once, counts, expected_once, made_compute_kinds, on_device,
     point_draw_kinds,
@@ -35,7 +36,7 @@ use super::line_widths::line_ties;
 use super::rebind_reach::{buffer_len, buffer_of, buffer_over, pages};
 use super::rebinds::rebind;
 use super::render_executions::{forced_with, icb};
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::RenderStages;
 use metal2vulkan::metal::{
@@ -402,7 +403,7 @@ fn shape_vertices() -> Vec<[f32; 2]> {
 /// `DriverFact::LineTiesAreMetals`); the host steps announce theirs.
 #[test]
 fn merged_draws_draw_what_the_host_step_draws() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let library = library(device);
         let state = state(device, &library);
         let draws: Vec<Draw> = vec![
@@ -477,7 +478,7 @@ fn merged_draws_draw_what_the_host_step_draws() {
 /// there).
 #[test]
 fn gpu_forms_draw_into_a_shadowed_target_what_the_host_step_draws() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let library = library(device);
         let state = state(device, &library);
         let triangles = writer(device, &library, "triangles");
@@ -630,7 +631,7 @@ fn rebound_run(
 /// fails the command buffer (`EncodedUseRebound`) or announces anything.
 #[test]
 fn a_rebind_or_a_release_before_the_first_submission_reaches_the_gpu_form_s_records_as_they_lie() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let draws: Vec<Draw> = vec![[0, 5, 1, 0], [8, 3, 2, 1], [30, 6, 3, 2]];
         let points =
             |xy: &[[f32; 2]]| pages(buffer_len(), 0, &floats(xy.iter().flatten().copied()));
@@ -698,7 +699,7 @@ fn a_rebind_or_a_release_before_the_first_submission_reaches_the_gpu_form_s_reco
 /// untouched, and the command buffer completes.
 #[test]
 fn a_rebind_of_a_shadowed_target_s_bytes_encodes_the_gpu_form_s_pass_again() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let draws: Vec<Draw> = vec![[0, 5, 1, 0], [8, 3, 2, 1], [30, 6, 3, 2]];
         // Rows of 1280 bytes for 64 texels of 16: past the 1024 a linear image of them lays.
         let rows = W * 16 + 256;

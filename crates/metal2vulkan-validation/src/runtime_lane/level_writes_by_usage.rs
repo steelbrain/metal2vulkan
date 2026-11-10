@@ -21,7 +21,7 @@
 //! their `0x11` bytes.
 
 use super::degrade_notices::{counts, on_device_with};
-use super::{buffer_with, layer_reported_nothing, read_buffer, WAIT};
+use super::{at_plan, buffer_with, layer_reported_nothing, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
@@ -234,6 +234,7 @@ fn writes_at_every_level_store_whatever_the_usage() {
             options
                 .announce_each
                 .insert(Degradation::UndeclaredUsageShadow);
+            at_plan(options)
         },
         |device, messages| {
             for (name, slice) in [("slice_at_level", true), ("write_at_level", false)] {

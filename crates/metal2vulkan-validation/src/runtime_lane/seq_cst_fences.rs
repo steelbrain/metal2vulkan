@@ -12,8 +12,8 @@
 //! which the device may or may not show (the hardware's own order), so the run says whether the
 //! device could buffer stores at all.
 
-use super::tile_states::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::tile_states::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::litmus::store_buffering;
@@ -89,7 +89,7 @@ fn both_old(device: &Device, kernel: &ComputePipelineState) -> u64 {
 /// fence and under an `acq_rel` one are printed.
 #[test]
 fn a_seq_cst_fence_forbids_store_buffering() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let name = device.name().to_owned();
         let mut counts = Vec::new();
         for (what, fence) in [

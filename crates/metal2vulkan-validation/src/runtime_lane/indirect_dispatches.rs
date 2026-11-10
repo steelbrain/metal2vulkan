@@ -36,11 +36,10 @@
 //! states `FoldedGroups`), with the host read not announced; arguments an earlier dispatch of the
 //! same encoder wrote are read; a zero group count writes nothing.
 
-use super::degrade_notices::{
-    assert_made_once, counts, forced, on_device, shared_in_system_memory,
-};
+use super::degrade_notices::on_device_with;
+use super::degrade_notices::{assert_made_once, counts, forced, shared_in_system_memory};
 use super::indirect_host_steps::state;
-use super::{buffer_with, layer_reported_nothing_at_all, read_buffer, WAIT};
+use super::{at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::StatusReport;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, RuntimeFact, StageSource};
@@ -204,7 +203,7 @@ fn run(device: &Device, sizes: Sizes, how: Encoded) -> Vec<u32> {
 /// that is not nothing.
 #[test]
 fn an_indirect_dispatch_runs_as_the_direct_dispatch_of_its_arguments() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let threads = |grid, group| Sizes::Threads { grid, group };
         let groups = |groups, group| Sizes::Threadgroups { groups, group };
         for sizes in [
@@ -229,7 +228,7 @@ fn an_indirect_dispatch_runs_as_the_direct_dispatch_of_its_arguments() {
 /// dispatch reads them when it runs.
 #[test]
 fn an_indirect_dispatch_reads_the_arguments_the_work_before_it_wrote() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let sizes = Sizes::Threads {
             grid: [10, 3, 1],
             group: [4, 2, 1],
@@ -261,7 +260,7 @@ fn an_indirect_dispatch_reads_the_arguments_the_work_before_it_wrote() {
 /// state's maximum run nothing, without an error (probes 17b and 18).
 #[test]
 fn an_indirect_dispatch_metal_runs_nothing_for_runs_nothing() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let max =
             state(device, "icb_replay_grid_template", false).max_total_threads_per_threadgroup();
         let past = [MAX_GROUP, max.div_ceil(MAX_GROUP) + 1, 1];
@@ -357,7 +356,7 @@ fn indirect_dispatches_are_refused_where_metal_refuses_them() {
 /// given but not from there.
 #[test]
 fn an_unaligned_offset_reads_at_the_multiple_below() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let threads = Sizes::Threads {
             grid: [10, 3, 1],
             group: [4, 2, 1],
@@ -554,7 +553,7 @@ fn flat_run(
 /// read is not announced.
 #[test]
 fn a_partition_oblivious_indirect_dispatch_runs_on_the_gpu() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let kernel = flat_state(device);
         let threads = |grid, group| Sizes::Threads { grid, group };
         let groups = |groups, group| Sizes::Threadgroups { groups, group };
@@ -668,7 +667,7 @@ fn folded_run(
 /// encoder wrote are read; a zero group count writes nothing; the host read is not announced.
 #[test]
 fn an_indirect_threadgroup_dispatch_runs_on_the_gpu() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let groups = |groups, group| Sizes::Threadgroups { groups, group };
         for sizes in [
             groups([3, 2, 1], [4, 2, 1]),

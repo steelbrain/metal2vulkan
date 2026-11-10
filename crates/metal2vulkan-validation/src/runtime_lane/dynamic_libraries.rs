@@ -21,6 +21,8 @@
 //!   fragment function stores `dyl_scale(x) + v` at pixel `x` of a 4x1 `R32Float` target (the
 //!   probe interpolated the varying, whose value is the same at every vertex).
 
+use super::at_plan;
+use super::host_memory::on_device_with;
 use super::host_memory::{on_device, run};
 use super::read_buffer;
 use super::render_state::texels;
@@ -471,7 +473,7 @@ fn dynamic_libraries_are_made_and_loaded_as_metal_s_are() {
 /// refused typed (`NotImplemented(LibrarySource)`): the runtime builds no MSL compiler.
 #[test]
 fn a_library_comes_from_a_metallib_alone_as_metal_s_does() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let text = format!(
             "{}declare float @air.convert.f.f32.u.i32(i32)\n\n{}",
             kernel("cl_none", "", ["%x", "0.000000e+00", "0.000000e+00"]),
@@ -528,7 +530,7 @@ fn a_library_comes_from_a_metallib_alone_as_metal_s_does() {
 /// specialization deletes needs none of its dependencies' files.
 #[test]
 fn kernels_link_their_imports_as_metal_s_do() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let dir = Scratch::new();
         let (na, nc, nv) = (dir.name("A"), dir.name("C"), dir.name("V"));
         let a = dylib(
@@ -668,7 +670,7 @@ fn kernels_link_their_imports_as_metal_s_do() {
 /// names misses, naming its kernel.
 #[test]
 fn archives_key_no_dynamic_library() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let dir = Scratch::new();
         let na = dir.name("A");
         let _a = dylib(
@@ -866,7 +868,7 @@ fn drawn(
 /// (probe 2b's section 3): the vertex stage's `dyl_add` and the fragment stage's `dyl_scale`.
 #[test]
 fn render_stages_preload_their_own_libraries() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let dir = Scratch::new();
         let _a = dylib(
             device,

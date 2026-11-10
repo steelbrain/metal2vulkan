@@ -17,8 +17,8 @@
 //!   back after an imageblock barrier (probe 7's `within` case); the words past the kept ones
 //!   read zero all the same.
 
-use super::tile_states::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::tile_states::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{StageSource, TileRenderPipelineDescriptor};
@@ -156,7 +156,7 @@ fn cells(first: u32, kept: usize) -> Vec<u32> {
 /// read zero past them (the module docs).
 #[test]
 fn a_pass_of_fewer_imageblock_bytes_keeps_the_words_below_them() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let name = device.name().to_owned();
         let fill = f.state("fill");
@@ -182,7 +182,7 @@ fn a_pass_of_fewer_imageblock_bytes_keeps_the_words_below_them() {
 /// A dispatch reads the words past the kept ones as zero after its own writes (the module docs).
 #[test]
 fn a_dispatchs_own_writes_past_the_kept_words_read_zero() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let f = Fixture::new(device);
         let name = device.name().to_owned();
         let fill_dump = f.state("fill_dump");

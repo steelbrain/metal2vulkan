@@ -66,6 +66,7 @@
 //!   `STORAGE-FORM-COST` lines.
 
 use super::{fetches, library, loading, pass, pipeline, steps, SIDE, Z};
+use crate::runtime_lane::at_plan;
 use crate::runtime_lane::degrade_notices::assert_made_once;
 use crate::runtime_lane::resolves::lane_with;
 use crate::runtime_lane::resolves::{lane, quiet, Lane, Shape, ONE};
@@ -293,7 +294,7 @@ fn a_fetched_target_takes_its_storage_form_once() {
 /// for a shared event; once it completed, the next commit takes it (the module docs).
 #[test]
 fn an_incomplete_command_buffer_holds_the_storage_form_off() {
-    let (messages, cache, lane) = lane();
+    let (messages, cache, lane) = lane_with(at_plan);
     if !fetches(&lane.device) {
         return;
     }
@@ -1102,7 +1103,7 @@ fn failing(kind: Option<EncoderKind>, seen: &Arc<AtomicUsize>) -> SubmissionChec
 /// and the next command buffer made waits for that (the module docs).
 #[test]
 fn a_checked_command_buffer_takes_the_storage_form_only_where_its_checks_pass() {
-    let (messages, cache, lane) = lane();
+    let (messages, cache, lane) = lane_with(at_plan);
     if !fetches(&lane.device) {
         return;
     }

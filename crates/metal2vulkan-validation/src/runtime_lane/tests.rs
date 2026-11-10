@@ -9,14 +9,15 @@
 //! nothing at all.
 
 use super::{
-    bound_buffers, buffer_with, buffer_with_options, encode_case, layer_reported_nothing,
-    pipeline_state, public_case, read_buffer, run_case, validated_device, CaseResources, Messages,
-    ScratchCache,
+    at_plan, bound_buffers, buffer_with, buffer_with_options, encode_case, layer_reported_nothing,
+    pipeline_state, public_case, read_buffer, run_case, validated_device, validated_device_with,
+    CaseResources, Messages, ScratchCache,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::{DeviceType, TEST_DEVICE};
 use metal2vulkan::bind::StatusReport;
 use metal2vulkan::metal::{BarrierScope, DispatchType};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, CommandBufferStatus, CpuCacheMode, Device, DeviceKind, Error, HazardTrackingMode,
     Invalid, Nil, PipelineOptions, Problem, ResourceOptions, Size, StorageMode,
@@ -211,10 +212,16 @@ fn forty_devices_one_after_another_all_open_and_go() {
 /// ([`layer_reported_nothing`]). `test` may take the messages reported so far itself, to fail at
 /// the step that caused them.
 fn on_device(test: impl FnOnce(&Device, &Messages)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device, &Messages)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device, &messages);
     }
     layer_reported_nothing(
@@ -423,7 +430,7 @@ fn an_indirect_stage_in_region_reads_as_the_direct_one() {
     use metal2vulkan_runtime::Region;
     const NAME: &str = "kernel-stage-input-word";
     let size = |axes: [u32; 3]| Size::new(axes[0].into(), axes[1].into(), axes[2].into());
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let case = public_case(NAME).unwrap();
         let Dispatch::Threads {
             threads,

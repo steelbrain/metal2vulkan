@@ -35,13 +35,15 @@
 use super::replayed_frames::pixels_hash;
 use super::replayed_textured::{page_texture, Page};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary as _;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan_devtools::llvm_assemble;
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState,
     Device, Origin, PipelineOptions, Size, Texture, WorkCounts,
@@ -237,10 +239,16 @@ fn fresh(
 /// A device under the validation layer, a queue of it and a page of [`COMMANDS`] commands, for
 /// `case`, which ends with the layer having reported nothing.
 fn run(case: impl FnOnce(&Device, &CommandQueue, &mut Page)) {
+    run_with(|_| {}, case)
+}
+
+/// [`run`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn run_with(adjust: fn(&mut DeviceOptions), case: impl FnOnce(&Device, &CommandQueue, &mut Page)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         println!(
             "KEPT-TEXTURED {}: descriptorBindingUpdateUnusedWhilePending {}",
             device.name(),
@@ -389,7 +397,7 @@ fn spun_copies(
 
 #[test]
 fn a_kept_heap_draw_reads_what_an_earlier_command_buffer_wrote() {
-    run(|device, queue, page| {
+    run_with(at_plan, |device, queue, page| {
         let shared = shared_heap(device);
         let spin = Spin::new(device, queue);
         steady(device, queue, "copies between kept steps", page);

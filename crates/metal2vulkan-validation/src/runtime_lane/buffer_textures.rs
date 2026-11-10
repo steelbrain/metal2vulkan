@@ -7,15 +7,16 @@
 
 use super::pool_slots::holding_the_space;
 use super::{
-    bound_buffers, buffer_with, encode_case, layer_reported_nothing_at_all, pipeline_state,
-    public_case, read_buffer, run_case, texture_descriptor, validated_device, CaseResources,
-    Messages, ScratchCache, WAIT,
+    at_plan, bound_buffers, buffer_with, encode_case, layer_reported_nothing_at_all,
+    pipeline_state, public_case, read_buffer, run_case, texture_descriptor, validated_device_with,
+    CaseResources, Messages, ScratchCache, WAIT,
 };
 use crate::candidate::engine::ComputeOutput;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::StatusReport;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, BufferTextureProblem, CommandBufferStatus, CopyProblem, CpuCacheMode, Device,
     Error, HazardTrackingMode, IdPlacement, Invalid, Origin, Problem, Region, ResourceOptions,
@@ -30,10 +31,16 @@ const TEXEL_CASES: [&str; 2] = [
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
 fn on_device(test: impl FnOnce(&Device)) {
+    on_device_with(|_| {}, test)
+}
+
+/// [`on_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -313,7 +320,7 @@ fn a_texture_buffers_cpu_access_is_its_buffers_bytes() {
 /// layer reports nothing (what Metal reads there is undefined, so the bytes are not compared).
 #[test]
 fn unbound_texture_buffer_slots_use_neutrals() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         for name in TEXEL_CASES {
             let case = public_case(name).unwrap();
             let pipeline = pipeline_state(device, &case).unwrap();
@@ -394,7 +401,7 @@ fn textures_over_buffers_lie_where_metal_lays_them() {
 /// which writes four bytes of a texture buffer). A view of it is not shareable.
 #[test]
 fn a_shared_texture_buffer_opens_over_its_texels() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let case = public_case(TEXEL_CASES[0]).unwrap();
         let written = run_case(device, &case).unwrap().output;
         // The case writes a 1D texture and a texture buffer; its output is the texture buffer.
@@ -514,7 +521,7 @@ fn texture_buffers_the_device_makes_lie_outside_the_metal_address_space() {
 /// `get_bytes` and a blit read the bytes at the offset itself.
 #[test]
 fn a_texture_buffer_off_16_bytes_reads_and_writes_from_below() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let mut runs = 0;
         for name in TEXEL_CASES {

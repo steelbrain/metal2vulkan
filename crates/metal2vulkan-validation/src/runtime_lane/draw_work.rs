@@ -75,7 +75,7 @@
 //! vertex buffer 0) and `tob_sample` (texture 0 through sampler 0, where its pixel lies).
 
 use super::degrade_notices::{on_device, on_device_with};
-use super::{buffer_with, pipelines_settled, WAIT};
+use super::{at_plan, buffer_with, pipelines_settled, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{BindState, SamplerDescriptor, UsedClass};
 use metal2vulkan::device::VkExtension;
@@ -87,6 +87,7 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferStatus, Device, LoadAction, PipelineOptions,
     Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
@@ -403,7 +404,7 @@ fn draws_take_the_device_s_sampler_states_only_where_they_changed() {
 /// target is the texture's.
 #[test]
 fn a_pass_that_draws_as_the_one_before_makes_no_render_pass() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
         let made = || device.work_counts().render_passes_made;
@@ -713,7 +714,7 @@ fn draws_of_another_shape_settle_again() {
 /// Before, each pass's encoder made its shapes again. Every column is drawn.
 #[test]
 fn a_pass_that_draws_as_the_one_before_makes_no_shape() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let textures = [
             solid(device, PixelFormat::RGBA8Unorm, GREEN),
@@ -755,7 +756,7 @@ fn a_pass_that_draws_as_the_one_before_makes_no_shape() {
 /// `RGBA8Unorm`, as the target, so each texel's bytes are the pixel its column stores.
 #[test]
 fn a_pass_that_binds_as_the_one_before_works_out_no_view() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let pass = |textures: &[&Texture; 2]| {
             let before = device.work_counts();
@@ -845,7 +846,7 @@ fn draws_that_change_a_slot_s_class_make_their_shapes_again() {
 /// on the device's pool, settled, have both pipelines made. Every column is drawn.
 #[test]
 fn draws_switching_pipeline_states_find_their_pipelines_again() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let pipelines = [scene.pipeline.clone(), pipeline(device, true)];
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
@@ -938,7 +939,7 @@ fn draws_switching_between_pipeline_states_of_other_states_keep_each_shape() {
 /// drawn. Not run on a device without `depthClamp`, which refuses the clamp.
 #[test]
 fn draws_of_one_state_switching_keys_find_their_pipelines_again() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
         let modes = [DepthClipMode::Clip, DepthClipMode::Clamp];
@@ -1004,7 +1005,7 @@ fn draws_into_a_pass_color_their_state_lacks_copy_no_color_set() {
     use crate::worker::alloc::thread_allocations;
     // Enough draws that what grows by doubling (the command buffer's lists) adds little to each.
     const DRAWS: u64 = 64;
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
         let mut lacked = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
@@ -1227,12 +1228,19 @@ pub(super) fn pushes(device: &Device) -> bool {
 /// device of the instance's Vulkan 1.2 has no push command and binds set 0 as a device without
 /// one does.
 pub(super) fn on_device_both_ways(test: impl Fn(&Device)) {
-    on_device(|device, _| test(device));
+    on_device_both_ways_with(|_| {}, test)
+}
+
+/// [`on_device_both_ways`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+pub(super) fn on_device_both_ways_with(adjust: fn(&mut DeviceOptions), test: impl Fn(&Device)) {
+    on_device_with(adjust, |device, _| test(device));
     on_device_with(
         |options| {
             options
                 .withheld_extensions
                 .insert(VkExtension::KhrPushDescriptor);
+            adjust(options)
         },
         |device, _| {
             assert!(!pushes(device), "withheld, the device pushes");
@@ -1259,7 +1267,7 @@ pub(super) fn on_device_both_ways(test: impl Fn(&Device)) {
 #[test]
 fn draws_of_an_unchanged_state_record_its_commands_once() {
     const DRAWS: usize = 16;
-    on_device_both_ways(|device| {
+    on_device_both_ways_with(at_plan, |device| {
         let scene = Scene::new(device);
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
         make(device, &scene, std::slice::from_ref(&scene.pipeline), &red);
@@ -1480,7 +1488,7 @@ fn draws_bind_a_set_zero_their_command_buffer_wrote_holding_the_same() {
 /// ([`on_device_both_ways`]).
 #[test]
 fn draws_of_other_bytes_push_only_what_changed() {
-    on_device_both_ways(|device| {
+    on_device_both_ways_with(at_plan, |device| {
         let scene = Scene::new(device);
         let textures = [
             solid(device, PixelFormat::RGBA8Unorm, RED),
@@ -1535,7 +1543,7 @@ fn draws_of_other_bytes_push_only_what_changed() {
 /// is drawn, through either pipeline.
 #[test]
 fn draws_switching_pipelines_keep_the_dynamic_states_set() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let pipelines = [scene.pipeline.clone(), pipeline(device, true)];
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
@@ -1578,7 +1586,7 @@ fn draws_switching_pipelines_keep_the_dynamic_states_set() {
 /// here are of such a build's.
 #[test]
 fn draws_take_their_shape_from_their_encoder_s_draws_of_the_same_inputs() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let pipelines = [scene.pipeline.clone(), pipeline(device, true)];
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
@@ -1646,7 +1654,7 @@ fn draws_take_their_shape_from_their_encoder_s_draws_of_the_same_inputs() {
 #[test]
 fn draws_alternating_states_of_one_layout_push_only_what_changed() {
     const DRAWS: usize = 8;
-    on_device_both_ways(|device| {
+    on_device_both_ways_with(at_plan, |device| {
         let scene = Scene::new(device);
         let textures = [
             solid(device, PixelFormat::RGBA8Unorm, RED),
@@ -1803,7 +1811,7 @@ const SHAPE_STRIDE: u64 = 256;
 /// ways ([`on_device_both_ways`]).
 #[test]
 fn draws_alternating_functions_of_one_layout_read_their_own_bytes() {
-    on_device_both_ways(|device| {
+    on_device_both_ways_with(at_plan, |device| {
         let scene = Scene::new(device);
         let panel = shape_pipeline(device, "zwd_panel");
         let made = device.work_counts();
@@ -1915,7 +1923,7 @@ fn draw_unrasterized(
 /// them out reports them unset; every column is drawn.
 #[test]
 fn a_draw_after_an_unrasterized_draw_sets_its_fragment_states_again() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let scene = Scene::new(device);
         let red = solid(device, PixelFormat::RGBA8Unorm, RED);
         let unrasterized = unrasterized(device);

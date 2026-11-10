@@ -18,9 +18,9 @@
 //! axes. Lanes lie at each texel edge of the 13-texel axis shifted by -3 to 3 periods, and 1 to 3
 //! ulps either side, on the centre row of the 11-texel one.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::pixel_samplers::own_sampler;
-use super::{buffer_with, read_buffer};
+use super::{at_plan, buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, TextureUsage};
@@ -253,7 +253,7 @@ fn the_lanes_reach_where_the_rules_part() {
 /// deciding ones), and each lane that differs.
 #[test]
 fn runtime_nearest_samples_read_metal_s_texel_off_the_level() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let float = texture(device, PixelFormat::R32Float, (WIDTH, HEIGHT), |x, y| {
             ((x + 16 * y) as f32).to_le_bytes()
         });

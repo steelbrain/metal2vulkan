@@ -41,8 +41,8 @@
 
 use super::kept_variants::kernel_state;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
-    validated_device_with, Messages, ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -587,7 +587,7 @@ fn a_batch_s_footprint_is_built_once_however_many_passes_look() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let page = Page::new(&device, CHECKED_DRAWS);
         let (page_queue, other) = (
@@ -684,7 +684,7 @@ fn a_replayed_execution_holds_only_what_shares_its_resources() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let name = device.name().to_owned();
         let page = Page::new(&device, CHECKED_DRAWS);
         let (page_queue, other) = (

@@ -11,6 +11,8 @@
 //! `uint(uint)` and the recursive `fpc_rec_even` and `fpc_rec_odd`, which the pipeline links;
 //! `fpc_own_*` choose among the caller's own functions, which are not visible, and link nothing.
 
+use super::at_plan;
+use super::host_memory::on_device_with;
 use super::host_memory::{on_device, run};
 use super::read_buffer;
 use crate::air_library::AirLibrary;
@@ -174,7 +176,7 @@ const SHAPES: [Shape; 9] = [
 /// phi's branches write their side words.
 #[test]
 fn pointers_chosen_at_run_time_call_the_functions_they_hold() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let libraries = libraries(device);
         for (kernel, want) in SHAPES {
             let names: &[&str] = if kernel.starts_with("fpc_own_") {
@@ -232,7 +234,7 @@ fn a_pointer_through_an_integer_calls_its_function() {
 /// address, and one holding `fpc_sq`'s equals `fpc_sq`'s.
 #[test]
 fn table_entries_and_addresses_call_and_compare_alike() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let libraries = libraries(device);
         for kernel in ["fpc_table_mix", "fpc_table_store"] {
             let state = state_of(&libraries, kernel, &LINKED, 1).unwrap();
@@ -279,7 +281,7 @@ fn recursed(odd: bool, n: u32) -> u32 {
 /// `t / 2`, up to that reach, through `fpc_rec_odd` for odd `t`.
 #[test]
 fn recursion_through_chosen_pointers_reaches_metal_s_depth() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let libraries = libraries(device);
         for k in [1, 2, 4] {
             let state = state_of(&libraries, "fpc_recurse", &LINKED[3..], k).unwrap();

@@ -36,8 +36,8 @@
 
 use super::host_memory::{no_copy, on_device, Mapping, GUEST_PAGE};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, loader, open_device, read_buffer, validated_device,
-    ycbcr_textures, Messages, ScratchCache,
+    at_plan, buffer_with, layer_reported_nothing_at_all, loader, open_device, read_buffer,
+    validated_device_with, ycbcr_textures, Messages, ScratchCache,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -416,7 +416,7 @@ fn rows_between_buffers_copy_metals_bytes() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         row_copies(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -432,7 +432,7 @@ fn long_copies_of_any_size_copy_metals_bytes() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         for (size, from, to) in [(8_294_411usize, 0usize, 0usize), (65_521, 7, 13)] {
             let len = size + 64;
             let source_bytes: Vec<u8> = (0..len).map(source_byte).collect();

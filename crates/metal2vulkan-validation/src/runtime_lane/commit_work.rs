@@ -73,7 +73,9 @@
 //!   reads pointers (2.5 ms a commit at 32768 live buffers on an Apple M4).
 
 use super::degrade_notices::{on_device, on_device_with};
-use super::{bound_buffers, encode_case, pipeline_state, public_case, CaseResources, WAIT};
+use super::{
+    at_plan, bound_buffers, encode_case, pipeline_state, public_case, CaseResources, WAIT,
+};
 use metal2vulkan::device::{BatchOrderPolicy, DriverFact};
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -332,7 +334,7 @@ fn bytes(buffer: &Buffer) -> Vec<u8> {
 /// event reaches the second value.
 #[test]
 fn a_batch_ends_in_its_last_command_buffer() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let queue = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
         // The first takes any first work the device's creation left.
@@ -414,7 +416,10 @@ fn a_batch_ends_in_its_last_command_buffer() {
 #[test]
 fn batches_with_nothing_planned_wait_for_completed_work_instead_of_a_barrier() {
     on_device_with(
-        |options| options.gpu_times_from_host = true,
+        |options| {
+            options.gpu_times_from_host = true;
+            at_plan(options)
+        },
         |device, _| {
             let by_barrier = device
                 .properties()

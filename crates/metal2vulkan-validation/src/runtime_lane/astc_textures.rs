@@ -31,9 +31,10 @@
 //! ([`astc_cpu_writes_decode_on_the_cpu`], announced `cpu-block-decode`: [`CPU_DECODES`]).
 
 use super::compressed_decode::{read_after, Behind};
+use super::degrade_notices::on_device_with;
 use super::degrade_notices::{counts, on_device};
 use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
-use super::{buffer_with, read_buffer, WAIT};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{AstcDecode, AstcTexels};
 use metal2vulkan::device::FormatUsage;
@@ -299,7 +300,7 @@ pub(super) fn download(
 /// another texture, the blocks of each coming back unchanged.
 #[test]
 fn astc_texels_read_as_metal_s() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();
@@ -638,7 +639,7 @@ fn other_space(pf: PixelFormat) -> PixelFormat {
 /// (`WorkCounts::second_twin_checks`, `second_twin_decodes`); one after the view records one.
 #[test]
 fn astc_views_in_the_other_colour_space_read_as_metal_s() {
-    on_device(|device, _messages| {
+    on_device_with(at_plan, |device, _messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();
@@ -806,7 +807,7 @@ fn astc_views_in_the_other_colour_space_read_as_metal_s() {
 /// buffer and from `get_bytes` (the module docs).
 #[test]
 fn astc_blocks_round_trip_at_every_level_and_slice() {
-    on_device(|device, _messages| {
+    on_device_with(at_plan, |device, _messages| {
         let name = device.name().to_owned();
         let mut wrong = Vec::new();
         let formats = [

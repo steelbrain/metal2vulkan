@@ -11,14 +11,15 @@
 
 use super::degrade_notices::counts;
 use super::{
-    buffer_with, encode_case, layer_reported_nothing_at_all, pipeline_state, public_case,
-    read_buffer, run_case, texture_descriptor, validated_device, CaseResources, Messages,
-    PublicCase, ScratchCache, WAIT,
+    at_plan, buffer_with, encode_case, layer_reported_nothing_at_all, pipeline_state, public_case,
+    read_buffer, run_case, texture_descriptor, validated_device, validated_device_with,
+    CaseResources, Messages, PublicCase, ScratchCache, WAIT,
 };
 use crate::candidate::engine::ComputeOutput;
 use crate::case::TextureType;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, Degradation, Device, Origin,
     ResourceOptions, Size, Texture, TextureDescriptor,
@@ -45,11 +46,14 @@ const SAMPLER: &str = "sample-each-of-three-textures-through-one-dynamic-array-i
 const BUFFER_COPIER: &str = "a-union-member-store-lands-on-the-slot-it-names";
 
 /// Run `test` on a validated device of the lane, then fail on any validation message.
-fn on_device(test: impl FnOnce(&Device)) {
+///
+/// `adjust` is applied to the options of each device it makes (`at_plan` gives them their
+/// queue plan).
+fn on_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device)) {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
         test(&device);
     }
     layer_reported_nothing_at_all(&messages);
@@ -335,7 +339,7 @@ fn kernel_after_blit(device: &Device, reader: &str, reads: &[Slot]) {
 /// and a blit's writes are in four texture buffers a kernel reads.
 #[test]
 fn texture_buffers_are_ordered_with_the_other_uses_of_their_bytes() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         blit_after_kernel(device, TEXEL_WRITER, Slot::Texture(1), 0);
         kernel_after_kernel(
             device,
@@ -367,7 +371,7 @@ const SHADOWED: u64 = 256;
 /// so; one-row textures with longer rows are shadow images everywhere.
 #[test]
 fn textures_over_buffers_are_ordered_with_the_other_uses_of_their_bytes() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         for pad in [0, SHADOWED] {
             blit_after_kernel(device, TEXTURE_WRITER, Slot::Texture(0), pad);
             kernel_after_kernel(
@@ -731,7 +735,7 @@ fn through_view(mut bound: Bound, index: u32, pixel_format: PixelFormat) -> Boun
 /// the same size, as Metal's views do (a Metal probe on the M3 Max and an M4).
 #[test]
 fn views_of_textures_over_buffers_share_their_storage() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         for (name, slot, pad) in [
             (TEXTURE_WRITER, 0, 0),
             (TEXTURE_WRITER, 0, SHADOWED),

@@ -83,8 +83,8 @@ use super::no_copy_textures::{
     staged,
 };
 use super::{
-    layer_reported_nothing, layer_reported_nothing_at_all, validated_device, validated_device_with,
-    Messages, ScratchCache, WAIT,
+    at_plan, layer_reported_nothing, layer_reported_nothing_at_all, validated_device,
+    validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -96,6 +96,7 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
+use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandQueue, DebugMessage, Degradation, Device,
     IoSurfacePlane, LoadAction, Origin, PipelineOptions, Region, RenderPassDescriptor,
@@ -856,7 +857,7 @@ fn first_use_reads_the_bytes(device: &Device, messages: &Messages, layout: Layou
 /// [`first_use_reads_the_bytes`] over each of [`LAYOUTS`], on one device.
 #[test]
 fn a_texture_s_first_use_reads_the_bytes_it_was_made_over() {
-    on_shared_device(|device, messages| {
+    on_shared_device_with(at_plan, |device, messages| {
         for layout in LAYOUTS {
             first_use_reads_the_bytes(device, messages, layout);
         }
@@ -968,7 +969,7 @@ fn first_use_over_read_only_pages(
 /// contract: RADV failed the command buffers submitted after it), so only they take the case.
 #[test]
 fn a_texture_over_read_only_pages_reads_them() {
-    on_shared_device(read_only_pages_read);
+    on_shared_device_with(at_plan, read_only_pages_read);
 }
 
 /// [`a_texture_over_read_only_pages_reads_them`] on a device that takes a texture that only reads
@@ -2038,29 +2039,49 @@ fn passes_on_one_shadow_count_once_a_command_buffer() {
 /// case prints its own reason; then fail on any validation message, leaks included. Each case
 /// takes its own validation messages first, to fail by name.
 fn on_shared_device(test: impl FnOnce(&Device, &Messages)) {
-    on_device_of(HostPageTexturePolicy::Shadow, test);
+    on_shared_device_with(|_| {}, test)
+}
+
+/// [`on_shared_device`], `adjust` applied to the options of each device it makes (`at_plan` gives them
+/// their queue plan).
+fn on_shared_device_with(adjust: fn(&mut DeviceOptions), test: impl FnOnce(&Device, &Messages)) {
+    on_device_of_with(adjust, HostPageTexturePolicy::Shadow, test);
 }
 
 /// [`on_shared_device`] on a device of `HostPageTexturePolicy::InPlace`, once its check answered
 /// (printed, `IN-PLACE-CHECK`).
+/// Its devices take their queue plan (`at_plan`): the work of the tests that call it
+/// changes placements under the lane's queue limits.
 fn on_in_place_device(test: impl FnOnce(&Device, &Messages)) {
-    on_device_of(HostPageTexturePolicy::InPlace, |device, messages| {
-        assert!(device.settle_in_place_checks(CHECK_WAIT));
-        for line in device.in_place_check_report() {
-            eprintln!("IN-PLACE-CHECK on {}: {line}", device.name());
-        }
-        test(device, messages);
-    });
+    on_device_of_with(
+        at_plan,
+        HostPageTexturePolicy::InPlace,
+        |device, messages| {
+            assert!(device.settle_in_place_checks(CHECK_WAIT));
+            for line in device.in_place_check_report() {
+                eprintln!("IN-PLACE-CHECK on {}: {line}", device.name());
+            }
+            test(device, messages);
+        },
+    );
 }
 
 /// [`on_shared_device`] on a device of `policy`.
-fn on_device_of(policy: HostPageTexturePolicy, test: impl FnOnce(&Device, &Messages)) {
+///
+/// `adjust` is applied to the options of each device it makes (`at_plan` gives them their
+/// queue plan).
+fn on_device_of_with(
+    adjust: fn(&mut DeviceOptions),
+    policy: HostPageTexturePolicy,
+    test: impl FnOnce(&Device, &Messages),
+) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.announce_each.insert(Degradation::ShadowedTexture);
             options.policy.host_page_textures = policy;
+            adjust(options)
         })
         .unwrap();
         test(&device, &messages);
@@ -2228,7 +2249,7 @@ fn reads_and_blits_as_metal(device: &Device, messages: &Messages, layout: Layout
 /// it. Every layout on one device.
 #[test]
 fn a_texture_that_only_reads_keeps_every_byte_of_its_pages() {
-    on_shared_device(every_layout_reads_and_blits_as_metal);
+    on_shared_device_with(at_plan, every_layout_reads_and_blits_as_metal);
 }
 
 /// [`a_texture_that_only_reads_keeps_every_byte_of_its_pages`] on a device that takes such a
@@ -2252,7 +2273,7 @@ fn every_layout_reads_and_blits_as_metal(device: &Device, messages: &Messages) {
 /// (`WorkCounts::shadow_copies`), and read the pages' texels. Every layout on one device.
 #[test]
 fn a_padded_texture_that_only_reads_is_a_shadow() {
-    on_shared_device(|device, messages| {
+    on_shared_device_with(at_plan, |device, messages| {
         for layout in LAYOUTS.into_iter().filter(Layout::padded) {
             let queue = device.new_command_queue().unwrap();
             let usage = TextureUsage::SHADER_READ;
@@ -2337,7 +2358,7 @@ fn a_padded_texture_that_renders_or_writes_is_a_shadow() {
 /// copies and reason. Every layout on one device.
 #[test]
 fn a_padded_texture_that_only_reads_over_an_ordinary_buffer_keeps_its_bytes() {
-    on_shared_device(|device, messages| {
+    on_shared_device_with(at_plan, |device, messages| {
         for layout in LAYOUTS.into_iter().filter(Layout::padded) {
             let queue = device.new_command_queue().unwrap();
             let len = layout.bpr * layout.h;

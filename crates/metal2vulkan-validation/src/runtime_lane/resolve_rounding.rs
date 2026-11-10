@@ -47,10 +47,12 @@
 //! runs before the runtime resolved so (at 2b41d71d) measured each driver's own average, which
 //! `DriverFact::ColorResolveAverageIsMetals` records.
 
+use super::at_plan;
+use super::buffer_with;
+use super::resolves::lane_with;
 use super::resolves::{lane, quiet, Lane};
 use crate::candidate::runtime_samples::{encode_through, library, shape};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
-use crate::runtime_lane::buffer_with;
 use metal2vulkan::bind::{SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS};
 use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::format::WordAttachment;
@@ -1371,7 +1373,7 @@ fn a_maps_form_pass_resolves_bgra8_as_announced() {
 /// clear's value, the sRGB curve's for a colour channel and the value itself for alpha.
 #[test]
 fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
-    let (messages, _cache, lane) = lane();
+    let (messages, _cache, lane) = lane_with(at_plan);
     let name = lane.device.name().to_owned();
     let side = 64u32;
     for (pf, [r, g, b, a], metal) in [

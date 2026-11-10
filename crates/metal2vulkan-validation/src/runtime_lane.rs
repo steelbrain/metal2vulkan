@@ -1311,8 +1311,7 @@ pub fn validated_options(messages: &Messages, cache: &Path) -> DeviceOptions {
 /// gives, the device says so (`metal2vulkan-queue-limits-reached`), which fails the run
 /// ([`QUEUE_LIMITS_REACHED`](crate::candidate::runtime_case::QUEUE_LIMITS_REACHED)): a test whose
 /// work places a second command queue, a presenting, unshared, reserved or extra one, or reads the
-/// device's queue sharing, makes its device with the plan through its own `adjust`
-/// (`options.queue_limits = None`).
+/// device's queue sharing, makes its device with the plan through its own `adjust` ([`at_plan`]).
 pub const LANE_QUEUE_LIMITS: QueueLimits = QueueLimits {
     round_robin: 1,
     presenting: 0,

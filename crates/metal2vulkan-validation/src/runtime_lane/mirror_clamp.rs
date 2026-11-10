@@ -22,9 +22,9 @@
 //! linear weight is a quarter and every answer is exact; a comparison's reference at a lane's own
 //! sixteenth plus a half.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::pixel_samplers::{own_sampler, shifted, REACH};
-use super::{buffer_with, read_buffer};
+use super::{at_plan, buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -297,7 +297,7 @@ fn the_lanes_reach_past_the_level_both_ways() {
 /// those that differ, and each lane that differs.
 #[test]
 fn mirror_clamped_samples_read_metal_s_texels() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let mut wrong = Vec::new();
         for n in [6u32, 8] {
             let float = texture(device, PixelFormat::R32Float, n, |j| j as f32 + 1.0);

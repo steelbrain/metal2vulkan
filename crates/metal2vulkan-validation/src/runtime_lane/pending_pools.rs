@@ -18,7 +18,9 @@
 
 use super::host_memory::Mapping;
 use super::no_copy_textures::{floats, rects_beside, staged};
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
+};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
@@ -136,7 +138,7 @@ fn command_buffers_let_go_of_while_pending_keep_their_pools_until_they_ran() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
         let drawing = Drawing {
             inline: rects_beside(&device, PixelFormat::BGRA8Unorm, true, None),
             beside_depth: rects_beside(

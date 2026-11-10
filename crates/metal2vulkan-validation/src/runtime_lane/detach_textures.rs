@@ -34,10 +34,13 @@
 //! - **A two-plane extended-range heap texture** made in a detached heap answers its descriptor.
 
 use super::degrade_notices::on_device as on_device_noticed;
+use super::degrade_notices::on_device_with as on_device_noticed_with;
 use super::depth_compares::made_pipeline_of;
 use super::host_memory::on_device;
 use super::rebind_reach::{heap_member, member_over, rebind_heap_to, rebind_to, A, B};
-use super::{bound_buffers, encode_case, pipeline_state, public_case, CaseResources, PublicCase};
+use super::{
+    at_plan, bound_buffers, encode_case, pipeline_state, public_case, CaseResources, PublicCase,
+};
 use super::{buffer_with, texture_descriptor, WAIT};
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::error::{Capability, Feature, Needs};
@@ -797,7 +800,7 @@ attributes #8 = { nounwind willreturn memory(argmem: readwrite) }
 /// that feature (`Unsupported(ArgumentBufferTextures)` naming it).
 #[test]
 fn a_storage_read_after_an_unnamed_storage_write_reads_the_sink_and_is_announced_once() {
-    on_device_noticed(|device, messages| {
+    on_device_noticed_with(at_plan, |device, messages| {
         let query = QueryRead::new(device);
         let Some(bytes) = Bytes::new(device, Over::Heap) else {
             return;

@@ -16,8 +16,8 @@
 //! the green field. The kernels are the owned fixture `fpv_rgbx_textures`'s, each at its
 //! thread's texel of a 16 by 16 texture.
 
-use super::degrade_notices::{counts, on_device, on_device_with};
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::{counts, on_device_with};
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::error::{Feature, Needs};
@@ -192,7 +192,7 @@ fn one(read: Read) -> u32 {
 /// kernel's red, green and blue the twin's, its alpha 1.
 #[test]
 fn rgbx_reads_take_alpha_one() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         let name = device.name().to_owned();
         let mut differ = Vec::new();
         for (i, (pf, twin, bytes, _, read)) in FORMATS.into_iter().enumerate() {
@@ -257,7 +257,7 @@ fn values(read: Read, bits: u32, seed: u64) -> Vec<u8> {
 /// the X field is the texel's own green exactly.
 #[test]
 fn rgbx_writes_store_green_as_x() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let mut differ = Vec::new();
         // The sRGB texels within the bound but not the twin's bytes.
@@ -367,57 +367,63 @@ fn rgbx_fills_store_metals_bytes() {
     let each = |options: &mut DeviceOptions| {
         options.announce_each = [Degradation::DeviceColorConversion].into_iter().collect();
     };
-    on_device_with(each, |device, messages| {
-        let mut differ = Vec::new();
-        for (pf, wants) in cases {
-            let bytes = FORMATS.iter().find(|f| f.0 == pf).unwrap().2;
-            let texture = texture(device, pf, &vec![0xA5u8; TEXELS * bytes]);
-            let pattern: Vec<u8> = (0..16u8).map(|k| 0x80 + 7 * k).collect();
-            let fills = [None, Some(colors[0]), Some(colors[1]), Some(colors[2])];
-            let wants = [
-                hex(&pattern[..bytes]),
-                wants[0].into(),
-                wants[1].into(),
-                wants[2].into(),
-            ];
-            for (color, want) in fills.into_iter().zip(wants) {
-                let queue = device.new_command_queue().unwrap();
-                let command_buffer = queue.command_buffer().unwrap();
-                let mut blit = command_buffer.blit_command_encoder().unwrap();
-                let region = Region::new_2d(0, 0, SIDE, SIDE);
-                match color {
-                    None => blit.fill_texture(&texture, 0, 0, region, &pattern),
-                    Some(c) => blit.fill_texture_color(&texture, 0, 0, region, c, None),
-                }
-                .unwrap();
-                let converted = super::degrade_notices::counts(&messages.take_notices())
-                    .contains_key(&Degradation::DeviceColorConversion);
-                blit.end_encoding().unwrap();
-                command_buffer.commit().unwrap();
-                command_buffer.wait_until_completed_for(WAIT).unwrap();
-                assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-                let got = bytes_of(&texture, bytes);
-                let metal: Vec<u8> = (0..want.len())
-                    .step_by(2)
-                    .map(|i| u8::from_str_radix(&want[i..i + 2], 16).unwrap())
-                    .collect();
-                let wrong = got
-                    .chunks_exact(bytes)
-                    .filter(|&texel| {
-                        let near = || {
-                            super::color_fills::fields_apart(pf, texel, &metal)
-                                .is_some_and(|apart| !apart.nans)
-                        };
-                        texel != metal && !(converted && near())
-                    })
-                    .count();
-                if wrong > 0 {
-                    differ.push(format!("{pf:?} {color:?}: {wrong} texels not {want}"));
+    on_device_with(
+        |options| {
+            each(options);
+            at_plan(options)
+        },
+        |device, messages| {
+            let mut differ = Vec::new();
+            for (pf, wants) in cases {
+                let bytes = FORMATS.iter().find(|f| f.0 == pf).unwrap().2;
+                let texture = texture(device, pf, &vec![0xA5u8; TEXELS * bytes]);
+                let pattern: Vec<u8> = (0..16u8).map(|k| 0x80 + 7 * k).collect();
+                let fills = [None, Some(colors[0]), Some(colors[1]), Some(colors[2])];
+                let wants = [
+                    hex(&pattern[..bytes]),
+                    wants[0].into(),
+                    wants[1].into(),
+                    wants[2].into(),
+                ];
+                for (color, want) in fills.into_iter().zip(wants) {
+                    let queue = device.new_command_queue().unwrap();
+                    let command_buffer = queue.command_buffer().unwrap();
+                    let mut blit = command_buffer.blit_command_encoder().unwrap();
+                    let region = Region::new_2d(0, 0, SIDE, SIDE);
+                    match color {
+                        None => blit.fill_texture(&texture, 0, 0, region, &pattern),
+                        Some(c) => blit.fill_texture_color(&texture, 0, 0, region, c, None),
+                    }
+                    .unwrap();
+                    let converted = super::degrade_notices::counts(&messages.take_notices())
+                        .contains_key(&Degradation::DeviceColorConversion);
+                    blit.end_encoding().unwrap();
+                    command_buffer.commit().unwrap();
+                    command_buffer.wait_until_completed_for(WAIT).unwrap();
+                    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+                    let got = bytes_of(&texture, bytes);
+                    let metal: Vec<u8> = (0..want.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&want[i..i + 2], 16).unwrap())
+                        .collect();
+                    let wrong = got
+                        .chunks_exact(bytes)
+                        .filter(|&texel| {
+                            let near = || {
+                                super::color_fills::fields_apart(pf, texel, &metal)
+                                    .is_some_and(|apart| !apart.nans)
+                            };
+                            texel != metal && !(converted && near())
+                        })
+                        .count();
+                    if wrong > 0 {
+                        differ.push(format!("{pf:?} {color:?}: {wrong} texels not {want}"));
+                    }
                 }
             }
-        }
-        assert!(differ.is_empty(), "RGBX fills not Metal's: {differ:#?}");
-    });
+            assert!(differ.is_empty(), "RGBX fills not Metal's: {differ:#?}");
+        },
+    );
 }
 
 /// A pass rendering into an RGBX texture, with `RenderTarget` usage or without, and the mipmaps
@@ -425,7 +431,7 @@ fn rgbx_fills_store_metals_bytes() {
 /// stores there.
 #[test]
 fn rgbx_passes_and_mipmaps_are_refused() {
-    on_device(|device, _| {
+    on_device_with(at_plan, |device, _| {
         for (pf, ..) in FORMATS {
             for usage in [
                 TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,

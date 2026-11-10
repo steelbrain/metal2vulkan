@@ -15,10 +15,11 @@
 //! outside a buffer changes.
 
 use super::degrade_notices::{assert_made_once, forced, shared_in_system_memory, HOST_BYTES};
+use super::host_memory::on_device_with;
 use super::host_memory::{no_copy, on_device, run, Mapping, GUEST_PAGE};
 use super::render_state::{quiet, rows, validated, Probe, EMPTY, FULL, PASS, WHITE};
 use super::{
-    buffer_with, encode_case, pipeline_state, public_case, read_buffer, run_case,
+    at_plan, buffer_with, encode_case, pipeline_state, public_case, read_buffer, run_case,
     texture_descriptor, CaseResources, PublicCase,
 };
 use crate::candidate::engine::ComputeOutput;
@@ -269,7 +270,7 @@ pub(super) fn dispatch(
 /// over textures of its own.
 #[test]
 fn textures_over_bytes_that_start_past_their_vkbuffer_copy_through_staging() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let case = public_case(SAMPLER).unwrap();
         let expected = run_case(device, &case).unwrap().output;
@@ -300,7 +301,7 @@ fn textures_over_bytes_that_start_past_their_vkbuffer_copy_through_staging() {
 /// texture's bytes its run over buffers of its own.
 #[test]
 fn texture_buffers_over_bytes_that_start_past_their_vkbuffer() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         for at in [2, 4] {
             let case = public_case(TEXEL_WRITER).unwrap();
@@ -356,7 +357,7 @@ fn texture_buffers_over_bytes_that_start_past_their_vkbuffer() {
 /// from.
 #[test]
 fn staged_texture_buffers_over_the_same_bytes_see_each_others_writes() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let writer = public_case(TEXEL_WRITER).unwrap();
         let written = run_case(device, &writer).unwrap().output;

@@ -51,9 +51,9 @@ use super::host_memory::Mapping;
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
 use super::pixel_samplers::metal_sampler;
 use super::{
-    bound_buffers, converted_holds, encode_case, layer_reported_nothing_at_all, pipeline_state,
-    public_case, read_buffer, validated_device, CaseResources, Messages, PublicCase, ScratchCache,
-    WAIT,
+    at_plan, bound_buffers, converted_holds, encode_case, layer_reported_nothing_at_all,
+    pipeline_state, public_case, read_buffer, validated_device, CaseResources, Messages,
+    PublicCase, ScratchCache, WAIT,
 };
 use crate::candidate::engine::ComputeOutput;
 use crate::gpu::TEST_DEVICE;
@@ -1128,7 +1128,7 @@ fn other_space(pf: PixelFormat) -> PixelFormat {
 /// write's. A device with the format reads through its own decode (not compared).
 #[test]
 fn pvrtc_texels_read_as_metal_s() {
-    super::degrade_notices::on_device(|device, messages| {
+    super::degrade_notices::on_device_with(at_plan, |device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let exact = metal_sampler(device);

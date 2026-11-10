@@ -32,10 +32,10 @@
 //! - [`cross_class_queries_are_the_textures_size`]: a slot of another class that the function
 //!   only queries answers the texture's width and height.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::on_device_with;
 use super::driver_deviations::half_nan;
 use super::extended_range_targets::half_value;
-use super::{buffer_with, read_buffer, Messages};
+use super::{at_plan, buffer_with, read_buffer, Messages};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::format::sampled_type;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -543,7 +543,7 @@ fn neutral_announced(messages: &Messages) -> BTreeSet<Degradation> {
 /// 16 bits (a float format's: the native `half` read's bits); none announces the neutral.
 #[test]
 fn cross_class_storage_and_buffer_reads_are_the_native_words() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let mut pipelines: BTreeMap<(Kind, Ty), ComputePipelineState> = BTreeMap::new();
         let (mut checked, mut differ, mut skipped, mut nonzero) = (0usize, 0usize, 0usize, 0usize);
         let mut nans = 0usize;
@@ -703,7 +703,7 @@ fn metal_store(lane: u32, sixteen: bool, bits: u32, signed: bool) -> i64 {
 /// class as through one of another; none announces the neutral.
 #[test]
 fn integer_writes_store_metals_saturated_words() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let mut pipelines: BTreeMap<(Kind, Ty), ComputePipelineState> = BTreeMap::new();
         let (mut checked, mut differ, mut skipped, mut saturated) = (0usize, 0usize, 0usize, 0);
         let _ = messages.take_notices();
@@ -788,7 +788,7 @@ fn integer_writes_store_metals_saturated_words() {
 /// `0x7fc00000`. None announces the neutral.
 #[test]
 fn integer_writes_into_float_formats_store_the_bits_as_floats() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         use PixelFormat as P;
         let mut pipelines: BTreeMap<(Kind, Ty), ComputePipelineState> = BTreeMap::new();
         let (mut checked, mut differ, mut skipped) = (0usize, 0usize, 0usize);
@@ -910,7 +910,7 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
 /// zero); none announces the neutral.
 #[test]
 fn cross_class_queries_are_the_textures_size() {
-    on_device(|device, messages| {
+    on_device_with(at_plan, |device, messages| {
         let mut pipelines: BTreeMap<Ty, ComputePipelineState> = BTreeMap::new();
         let (mut checked, mut differ) = (0usize, 0usize);
         let _ = messages.take_notices();

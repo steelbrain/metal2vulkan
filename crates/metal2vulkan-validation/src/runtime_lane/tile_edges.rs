@@ -17,7 +17,8 @@
 
 use super::no_copy_textures::{floats, rects, staged};
 use super::tile_states::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::tile_states::on_device_with;
+use super::{at_plan, buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{StageSource, TileRenderPipelineDescriptor};
@@ -162,7 +163,7 @@ fn run(
 /// 0.5, 127.5 codes, as 127, Metal 128).
 #[test]
 fn cells_past_the_attachment_hold_metals_values_when_the_pass_begins() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let read = state(device, "cfb_tn_read4");
         let either = !(device.properties().driver_facts)
             .contains(&metal2vulkan::device::DriverFact::ColorClearIsMetals);

@@ -44,7 +44,9 @@
 //! deallocator of a no-copy buffer it copied from, which the program let go of while the copy
 //! waited behind busy work, and which goes once the command buffer lets go of what it held.
 
+use super::at_plan;
 use super::first_use::{release, Busy};
+use super::host_memory::on_device_with;
 use super::host_memory::{no_copy, not_importable, on_device, Mapping, GUEST_PAGE};
 use metal2vulkan_runtime::{
     host_time, Buffer, CommandBuffer, CommandBufferStatus, Deallocator, Device, EventRef,
@@ -349,7 +351,7 @@ fn property_reads_wait_for_no_submission_and_no_busy_work() {
 /// before the wait.
 #[test]
 fn kernel_times_show_neither_while_their_command_buffer_waits_for_an_event() {
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let queue = device.new_command_queue().unwrap();
         let other = device.new_command_queue().unwrap();
         let name = device.name();

@@ -95,7 +95,7 @@
 //! device's queues under the layer are `handles`, `command_queues` and the rest).
 
 use super::{
-    nothing_reported_without_the_layer, validated_device_with, Messages, ScratchCache,
+    at_plan, nothing_reported_without_the_layer, validated_device_with, Messages, ScratchCache,
     VALIDATION_LAYER,
 };
 use crate::air_library::AirLibrary;
@@ -987,7 +987,8 @@ fn four_queues_storm_as_metal_s_do() {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options
                 .layers
-                .retain(|layer| layer.as_c_str() != VALIDATION_LAYER)
+                .retain(|layer| layer.as_c_str() != VALIDATION_LAYER);
+            at_plan(options)
         })
         .unwrap();
         let runtime = Runtime::new(device);
