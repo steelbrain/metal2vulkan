@@ -733,9 +733,9 @@
         "scheduled_where_submitted": 4,
         "scheduler_passes": 6,
         "scheduler_passes_by_waiters": 4,
-        "scheduler_sleeps": 6,
+        "scheduler_sleeps": 7,
         "scheduler_wakes_commit": 4,
-        "scheduler_wakes_host": 2,
+        "scheduler_wakes_host": 3,
         "shader_modules_made": 2,
         "shadow_copies": 6,
         "shadow_keeps.compute_whole": 1,
@@ -755,7 +755,7 @@
         "trail_waits": 4,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 4,
-        "wakes_spared": 30
+        "wakes_spared": 29
       },
       "moving": {
         "host_steps_recorded": 0

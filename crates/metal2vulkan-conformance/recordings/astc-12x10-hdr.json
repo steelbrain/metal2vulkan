@@ -374,6 +374,7 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 4,
         "command_buffers_submitted": 9,
+        "command_pools_made": 1,
         "commands_recorded.begin_command_buffer": 4,
         "commands_recorded.cmd_bind_descriptor_sets": 2,
         "commands_recorded.cmd_bind_pipeline": 2,

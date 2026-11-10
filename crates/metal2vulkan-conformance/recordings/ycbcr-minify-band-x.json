@@ -387,7 +387,6 @@
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
         "scheduler_passes": 4,
-        "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 2,
@@ -401,7 +400,7 @@
         "variant_pipelines_made": 2,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 8,
+        "wakes_spared": 7,
         "ycbcr_planes_bound": 1,
         "ycbcr_planes_images_kept_conversion": 1,
         "ycbcr_textures_in_place": 1

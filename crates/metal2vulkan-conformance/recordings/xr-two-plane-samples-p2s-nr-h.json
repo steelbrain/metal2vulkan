@@ -405,9 +405,6 @@
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "degraded": [
-        "metal2vulkan-degrade-bicubic-filter-arithmetic"
-      ],
       "bounds": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 2,
@@ -484,9 +481,9 @@
         "scheduled_where_submitted": 2,
         "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 2,
-        "scheduler_sleeps": 4,
+        "scheduler_sleeps": 5,
         "scheduler_wakes_commit": 2,
-        "scheduler_wakes_host": 2,
+        "scheduler_wakes_host": 3,
         "shader_modules_made": 4,
         "slot_returns": 2,
         "spare_command_pools_taken": 2,

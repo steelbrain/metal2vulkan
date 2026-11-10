@@ -1221,7 +1221,7 @@
         "command_buffers_begun_encoders": 21,
         "command_buffers_begun_internal": 9,
         "command_buffers_submitted": 43,
-        "commands_recorded.begin_command_buffer": 42,
+        "commands_recorded.begin_command_buffer": 43,
         "commands_recorded.cmd_bind_descriptor_sets": 33,
         "commands_recorded.cmd_bind_pipeline": 33,
         "commands_recorded.cmd_clear_color_image": 29,

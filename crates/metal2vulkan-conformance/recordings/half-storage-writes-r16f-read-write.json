@@ -366,7 +366,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 1,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 7
+        "wakes_spared": 8
       },
       "moving": {
         "gate_waits_slept": 0

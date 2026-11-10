@@ -503,7 +503,7 @@
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 7
+        "wakes_spared": 8
       },
       "composed": {
         "argument_samplers_taken": 2,

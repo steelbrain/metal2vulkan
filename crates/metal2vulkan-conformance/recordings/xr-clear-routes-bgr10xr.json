@@ -2057,6 +2057,7 @@
         "render_passes_made": 3,
         "resident_textures_looked_at": 4,
         "scheduled_where_submitted": 16,
+        "scheduler_passes": 1,
         "scheduler_passes_by_waiters": 16,
         "scheduler_sleeps": 16,
         "scheduler_wakes_commit": 16,

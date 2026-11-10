@@ -773,7 +773,6 @@
         "command_buffers_begun_batch_work": 1,
         "command_buffers_begun_encoders": 12,
         "command_buffers_submitted": 13,
-        "command_pools_made": 1,
         "commands_recorded.begin_command_buffer": 13,
         "commands_recorded.cmd_copy_buffer_to_image": 38,
         "commands_recorded.cmd_copy_image": 2,
@@ -787,6 +786,7 @@
         "completion_arms": 12,
         "completion_arms_after_a_wake": 12,
         "completion_waiter_parks": 12,
+        "device_memory_allocated": 205520896,
         "encoder_command_buffers_begun": 12,
         "fence_waits": 12,
         "finales_folded": 12,
@@ -824,6 +824,7 @@
       "composed": {
         "blocks_ahead_waited_for": 3,
         "buffer_blocks_made_ahead": 2,
+        "device_memory_allocated": 205520896,
         "image_blocks_made_ahead": 1,
         "plain_buffer_blocks_made": 2,
         "queues_sharing_a_vk_queue": 0

@@ -3690,11 +3690,11 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 34,
         "scheduled_where_submitted": 33,
-        "scheduler_passes": 77,
-        "scheduler_passes_by_waiters": 29,
-        "scheduler_sleeps": 69,
+        "scheduler_passes": 74,
+        "scheduler_passes_by_waiters": 30,
+        "scheduler_sleeps": 70,
         "scheduler_wakes_commit": 33,
-        "scheduler_wakes_host": 36,
+        "scheduler_wakes_host": 37,
         "shader_modules_made": 12,
         "slot_returns": 33,
         "spare_command_pools_taken": 33,
@@ -3704,7 +3704,7 @@
         "variant_pipelines_made": 23,
         "variants_taken_back": 13,
         "wakes_completion_waiters": 33,
-        "wakes_spared": 246
+        "wakes_spared": 245
       },
       "composed": {
         "blocks_ahead_hurried": 1,

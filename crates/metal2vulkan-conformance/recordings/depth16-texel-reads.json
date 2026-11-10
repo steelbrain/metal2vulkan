@@ -262,7 +262,7 @@
         "argument_tables_retained": 512,
         "bare_starts": 512,
         "batches_held_past_a_look": 2,
-        "batches_submitted_by_waiters": 509,
+        "batches_submitted_by_waiters": 508,
         "batches_with_none_pending": 512,
         "blocks_ahead_waited_for": 3,
         "bound_notices_made": 1,
@@ -304,7 +304,7 @@
         "functions_translated": 2,
         "gate_waits": 512,
         "gate_waits_slept": 512,
-        "heads_held_for_host_steps": 7,
+        "heads_held_for_host_steps": 6,
         "heap_tables_worked_out": 2,
         "host_steps_recorded": 2,
         "image_blocks_made_ahead": 1,
@@ -331,11 +331,11 @@
         "queues_sharing_a_vk_queue": 1,
         "resident_textures_looked_at": 512,
         "scheduled_where_submitted": 512,
-        "scheduler_passes": 103,
+        "scheduler_passes": 33,
         "scheduler_passes_by_waiters": 512,
-        "scheduler_sleeps": 516,
+        "scheduler_sleeps": 517,
         "scheduler_wakes_commit": 512,
-        "scheduler_wakes_host": 4,
+        "scheduler_wakes_host": 5,
         "shader_modules_made": 2,
         "slot_returns": 512,
         "spare_command_pools_taken": 512,
@@ -344,7 +344,7 @@
         "trail_waits": 512,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 512,
-        "wakes_spared": 3586
+        "wakes_spared": 3585
       },
       "moving": {
         "gate_waits_slept": 494
