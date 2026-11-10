@@ -5109,10 +5109,11 @@ pub struct WorkCounts {
     /// making holding the submissions as one without the fill does.
     pub plain_block_fills_missed: u64,
     /// The pooled blocks of plain memory made so far without the fill they would take (the module
-    /// docs of `memory.rs`, "Blocks filled exportable first"): after a fill that missed, the next
-    /// 2 such blocks are made plain, then one is filled, a probe, the plain makings between probes
-    /// doubling with each further miss in a row up to 32, until a probe saves. 0 on a device
-    /// whose plain allocations hold no submission, and where no fill missed.
+    /// docs of `memory.rs`, "Blocks filled exportable first"): once 2 of a device's last 4 fills
+    /// missed, the next 2 such blocks are made plain, then one is filled, a probe, the plain
+    /// makings between probes doubling with each probe that missed up to 32, until a probe saves.
+    /// 0 on a device whose plain allocations hold no submission, and where fills missed only
+    /// alone.
     pub plain_block_fills_skipped: u64,
     /// The buffers of the runtime's own and the program's made so far in a plain block, not one
     /// allocated exportable, on a device that allocates such blocks, while the device's in-place

@@ -122,12 +122,14 @@
 //!   (`WorkCounts::plain_block_fills_saved` and `plain_block_fills_missed`). It costs the making
 //!   thread the fill's allocation and free besides the block's (on the 780M about 10 to 13 ms and
 //!   4 to 6 ms for 64 MiB, the free clearing the pages for the pool), off every submission's way:
-//!   docs/FAST-PATHS.md. A device fills first only while its fills save ([`Fills`]): after a fill
-//!   that missed, the next [`FILL_BACKOFF_FIRST`] makings are plain ones, then one is filled, a
-//!   probe, the plain makings between probes doubling with each further miss in a row up to
-//!   [`FILL_BACKOFF_MOST`], until a probe saves (`plain_block_fills_skipped`). A fill that missed
-//!   made the kernel fill pages twice, high orders compacted and reclaimed for both allocations,
-//!   where a host short of free memory spends that time across every process.
+//!   docs/FAST-PATHS.md. A device fills first only while its fills save ([`Fills`]): once
+//!   [`FILL_STOP_MISSES`] of its last [`FILL_RECENT`] fills missed, the next
+//!   [`FILL_BACKOFF_FIRST`] makings are plain ones, then one is filled, a probe, the plain makings
+//!   between probes doubling with each probe that missed up to [`FILL_BACKOFF_MOST`], until a
+//!   probe saves (`plain_block_fills_skipped`). A fill that missed made the kernel fill pages
+//!   twice, high orders compacted and reclaimed for both allocations, where a host short of free
+//!   memory spends that time across every process; a lone miss is a race of the fill's pages
+//!   with the block's allocation, which a quiet host sees too.
 //!
 //! - **Buffers in the runtime's own pages** ([`Holds::PageBuffers`],
 //!   [`Memory::page_buffer_blocks`]). On a device that imports host pointers, whose submission
@@ -202,10 +204,18 @@ pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 /// (about 10 ms).
 const FILL_SAVED_BELOW: Duration = Duration::from_millis(1);
 
-/// The makings a device leaves unfilled after a fill that missed (its block's own allocation took
-/// [`FILL_SAVED_BELOW`] or longer), before the next is filled, a probe: doubled for each further
-/// miss in a row, up to [`FILL_BACKOFF_MOST`] ([`Fills`], the module docs, "Blocks filled
-/// exportable first").
+/// The fills whose outcomes a device keeps ([`Fills`]), and how many of them that missed (their
+/// block's own allocation took [`FILL_SAVED_BELOW`] or longer) stop its fills: a lone miss is a
+/// race, the block's allocation running before the fill's pages were back in the kernel's pool
+/// (on a quiet host, a fill whose free left its pages to the kernel's deferred delete, or another
+/// block's making taking them), where misses that come together are the host's state: the pool
+/// emptied by reclaim, or the block's allocation compacting and reclaiming for high orders again.
+const FILL_RECENT: u32 = 4;
+const FILL_STOP_MISSES: u32 = 2;
+
+/// The makings a device leaves unfilled once its fills stopped ([`FILL_STOP_MISSES`]), before the
+/// next is filled, a probe: doubled for each probe that missed, up to [`FILL_BACKOFF_MOST`]
+/// ([`Fills`], the module docs, "Blocks filled exportable first").
 const FILL_BACKOFF_FIRST: u32 = 2;
 
 /// The most makings a device leaves unfilled between two probes ([`FILL_BACKOFF_FIRST`]).
@@ -1488,10 +1498,11 @@ pub(super) enum Fill {
 /// What a device's fills through an exportable allocation measured lately, which decides whether
 /// its next pooled block of plain memory is filled first (the module docs, "Blocks filled
 /// exportable first"), shared by every making of the device: its threads that make blocks ahead
-/// and the calls that make their own. While its last fill saved (its block's own allocation took
-/// less than [`FILL_SAVED_BELOW`]), every making is filled; after a miss, the next
-/// [`FILL_BACKOFF_FIRST`] makings are not, then one is, a probe, the makings left unfilled doubling
-/// with each further miss in a row up to [`FILL_BACKOFF_MOST`], until a probe saves.
+/// and the calls that make their own. Every making is filled until [`FILL_STOP_MISSES`] of the
+/// last [`FILL_RECENT`] fills missed (their block's own allocation took [`FILL_SAVED_BELOW`] or
+/// longer); then the next [`FILL_BACKOFF_FIRST`] makings are not, then one is, a probe, the
+/// makings left unfilled doubling with each probe that missed up to [`FILL_BACKOFF_MOST`]; a probe
+/// that saves brings every making's fill back, the misses before it forgotten.
 #[derive(Debug, Default)]
 pub(super) struct Fills {
     state: Mutex<FillsState>,
@@ -1500,8 +1511,11 @@ pub(super) struct Fills {
 /// [`Fills`]' record.
 #[derive(Debug, Default)]
 struct FillsState {
-    /// The fills that missed since the last that saved.
-    missed_in_a_row: u32,
+    /// The outcomes of the last [`FILL_RECENT`] fills since the fills last came back, a set bit a
+    /// miss, the newest lowest.
+    recent: u32,
+    /// Where the fills stopped: the probes that missed since.
+    stopped: Option<u32>,
     /// The makings not filled since the last that was.
     skipped: u32,
 }
@@ -1510,11 +1524,12 @@ impl Fills {
     /// Whether a making that may fill its block first does ([`Fills`]).
     pub(super) fn fill_next(&self) -> bool {
         let mut state = lock(&self.state);
-        let backoff = match state.missed_in_a_row {
-            0 => 0,
-            missed => (FILL_BACKOFF_FIRST << (missed - 1).min(16)).min(FILL_BACKOFF_MOST),
+        let fill = match state.stopped {
+            None => true,
+            Some(missed) => {
+                state.skipped >= (FILL_BACKOFF_FIRST << missed.min(16)).min(FILL_BACKOFF_MOST)
+            }
         };
-        let fill = state.skipped >= backoff;
         state.skipped = match fill {
             true => 0,
             false => state.skipped + 1,
@@ -1526,10 +1541,19 @@ impl Fills {
     /// [`FILL_SAVED_BELOW`] ([`Fills`]).
     pub(super) fn filled(&self, saved: bool) {
         let mut state = lock(&self.state);
-        state.missed_in_a_row = match saved {
-            true => 0,
-            false => state.missed_in_a_row.saturating_add(1),
-        };
+        match (state.stopped, saved) {
+            (None, _) => {
+                state.recent = ((state.recent << 1) | u32::from(!saved)) & ((1 << FILL_RECENT) - 1);
+                if state.recent.count_ones() >= FILL_STOP_MISSES {
+                    state.stopped = Some(0);
+                }
+            }
+            (Some(_), true) => {
+                state.stopped = None;
+                state.recent = 0;
+            }
+            (Some(missed), false) => state.stopped = Some(missed.saturating_add(1)),
+        }
     }
 }
 

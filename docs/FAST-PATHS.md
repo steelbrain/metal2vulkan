@@ -1122,12 +1122,13 @@ driver's. Each is open work.
   plain block either way. `WorkCounts::plain_block_fills_saved` counts the fills whose block was
   then allocated in under 1 ms (`FILL_SAVED_BELOW`), `plain_block_fills_missed` the others, so
   a host's runs show whether its kernel recycled the pages. A device fills first only while its
-  fills save (`memory.rs`'s `Fills`): after a fill that missed, the next 2 such blocks are made
-  plain, then one is filled, a probe, the plain makings between probes doubling with each further
-  miss in a row up to 32, until a probe saves (`WorkCounts::plain_block_fills_skipped` counts the
-  plain ones). A fill that missed had the kernel fill the block's pages twice, and on a host short
-  of free memory compact and reclaim for their high orders twice, which that host's every process
-  waits on. On a Radeon 780M (RADV PHOENIX, Mesa
+  fills save (`memory.rs`'s `Fills`): once 2 of its last 4 fills missed, the next 2 such blocks
+  are made plain, then one is filled, a probe, the plain makings between probes doubling with each
+  probe that missed up to 32, until a probe saves (`WorkCounts::plain_block_fills_skipped` counts
+  the plain ones). A fill that missed had the kernel fill the block's pages twice, and on a host
+  short of free memory compact and reclaim for their high orders twice, which that host's every
+  process waits on; a lone miss is a race, which a quiet host sees too. On a Radeon 780M (RADV
+  PHOENIX, Mesa
   26.2.6, Linux 7.3.1), the kernel's page pools emptied before each run, the arms of the row
   above, two runs each, without the fill and with it (turnarounds of 8 ms or more a phase, of
   17 ms or more, the slowest, and the makings' `vkAllocateMemory` in all; the makings the same,

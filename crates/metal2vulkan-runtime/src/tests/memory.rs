@@ -802,19 +802,20 @@ fn short_buffers_are_placed_without_gaps() {
 }
 
 /// A device fills its plain blocks first while its fills save (`memory.rs`, "Blocks filled
-/// exportable first"): after a miss it leaves the next 2 makings plain, then probes, the plain
-/// makings between probes doubling with each missed probe up to 32; a probe that saves brings the
-/// fills back.
+/// exportable first"): a lone miss among saves stops nothing; once 2 of its last 4 fills missed,
+/// it leaves the next 2 makings plain, then probes, the plain makings between probes doubling with
+/// each missed probe up to 32; a probe that saves brings the fills back, the misses before it
+/// forgotten.
 #[test]
-fn fills_back_off_after_a_miss_and_a_saved_probe_brings_them_back() {
+fn fills_stop_once_two_of_the_last_four_miss_and_a_saved_probe_brings_them_back() {
     let fills = Fills::default();
-    // Unmeasured, and while fills save, every block is filled.
-    for _ in 0..4 {
+    // Unmeasured, and while fills save or miss alone, every block is filled.
+    for saved in [
+        true, true, false, true, true, true, false, true, true, true, false,
+    ] {
         assert!(fills.fill_next());
-        fills.filled(true);
+        fills.filled(saved);
     }
-    // A miss leaves the next 2 makings unfilled, then probes; each missed probe doubles the
-    // makings left unfilled, up to 32.
     let decided =
         |fills: &Fills, makings| (0..makings).map(|_| fills.fill_next()).collect::<Vec<_>>();
     let probe = |unfilled| {
@@ -822,9 +823,14 @@ fn fills_back_off_after_a_miss_and_a_saved_probe_brings_them_back() {
         probe.push(true);
         probe
     };
+    // The miss above and two saves, then a second miss: 2 of the last 4 missed.
+    for saved in [true, true] {
+        assert!(fills.fill_next());
+        fills.filled(saved);
+    }
     assert!(fills.fill_next());
     fills.filled(false);
-    for unfilled in [2, 4, 8, 16, 32, 32, 32] {
+    for unfilled in [2, 4, 8, 16, 32, 32] {
         assert_eq!(decided(&fills, unfilled + 1), probe(unfilled), "{unfilled}");
         fills.filled(false);
     }
@@ -837,7 +843,9 @@ fn fills_back_off_after_a_miss_and_a_saved_probe_brings_them_back() {
     for _ in 0..40 {
         assert!(fills.fill_next(), "a saved probe brings the fills back");
     }
-    // A lone miss after fills that saved backs off from the start.
+    // The misses before the probe are forgotten: one more alone stops nothing; two in a row do.
     fills.filled(false);
-    assert_eq!(decided(&fills, 3), probe(2), "a lone miss backs off again");
+    assert!(fills.fill_next());
+    fills.filled(false);
+    assert_eq!(decided(&fills, 3), probe(2));
 }
