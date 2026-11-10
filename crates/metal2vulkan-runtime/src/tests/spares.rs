@@ -4,9 +4,9 @@
 
 use crate::descriptor_arena::{Room, SetNeeds};
 use crate::spares::{
-    keep_command_pool, keep_descriptor_pool, keep_idle_command_pool, take_command_pool,
+    keep_command_pool, keep_descriptor_pool, keep_idle_command_pool, past_held, take_command_pool,
     take_descriptor_pool, take_idle, take_to_begin, CommandPool, DescriptorPool, DESCRIPTORS,
-    DESCRIPTOR_POOLS, IDLE_FOR, RECENT_USES,
+    DESCRIPTOR_POOLS, HELD, IDLE_FOR, RECENT_USES,
 };
 use ash::vk::{self, Handle};
 use std::collections::VecDeque;
@@ -380,9 +380,96 @@ fn a_spare_left_idle_sheds_its_command_buffers_and_goes_back_the_oldest() {
     );
 }
 
+/// Command pool `n` holding `primaries` and `secondaries` command buffers, given back.
+fn holding(n: u64, primaries: u64, secondaries: u64) -> CommandPool {
+    let mut pool = CommandPool::new(vk::CommandPool::from_raw(n), 0);
+    for (level, count, base) in [
+        (vk::CommandBufferLevel::PRIMARY, primaries, 0),
+        (vk::CommandBufferLevel::SECONDARY, secondaries, 1 << 20),
+    ] {
+        for at in 0..count {
+            pool.made(
+                level,
+                vk::CommandBuffer::from_raw((n << 32) + base + at + 1),
+            );
+        }
+    }
+    assert!(pool.given_back(Instant::now()).is_empty());
+    pool
+}
+
+/// Past [`HELD`] command buffers in the spares and a pool given back, the oldest spares that hold
+/// any are taken out to shed theirs, until the rest hold at most that many; a pool given back that
+/// alone holds more gives up its last made past it, secondaries first and one kept, never its
+/// primary begun ahead.
+#[test]
+fn the_spares_and_a_pool_given_back_hold_at_most_held_command_buffers() {
+    let third = HELD as u64 / 3;
+    let mut pools = vec![
+        holding(1, third, third),
+        CommandPool::new(vk::CommandPool::from_raw(2), 0),
+        holding(3, third, 0),
+        holding(4, third, 0),
+    ];
+    let mut given = holding(5, 0, third);
+    let (oldest, past) = past_held(&mut pools, 0, &mut given);
+    let raws = |pools: &[CommandPool]| {
+        pools
+            .iter()
+            .map(|pool| pool.raw.as_raw())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(raws(&oldest), [1], "the oldest that holds any");
+    assert!(past.is_empty(), "the pool given back is kept whole");
+    assert_eq!(
+        raws(&pools),
+        [2, 3, 4],
+        "the rest stay, the empty one among them"
+    );
+    let held = |pools: &[CommandPool]| pools.iter().map(CommandPool::held).sum::<usize>();
+    assert!(held(&pools) + given.held() <= HELD);
+    // Within the bound, nothing is taken out.
+    let (oldest, past) = past_held(&mut pools, 0, &mut given);
+    assert!(oldest.is_empty() && past.is_empty());
+    // A pool given back of more than the bound alone.
+    let over = HELD as u64 + 10;
+    let mut given = holding(6, 4, over);
+    given.begun = Some(vk::CommandBuffer::from_raw(99));
+    let (oldest, past) = past_held(&mut pools, 0, &mut given);
+    assert_eq!(raws(&oldest), [3, 4], "every spare that holds any");
+    assert_eq!(given.held(), HELD, "the pool given back keeps the bound");
+    assert_eq!(past.len() as u64, 4 + over + 1 - HELD as u64);
+    let last = (6 << 32) + (1 << 20) + over;
+    assert_eq!(
+        past.first(),
+        Some(&vk::CommandBuffer::from_raw(last - past.len() as u64 + 1)),
+        "its last made secondaries"
+    );
+    assert_eq!(given.begun, Some(vk::CommandBuffer::from_raw(99)));
+    // Past the bound in primaries and the begun one, a secondary is kept.
+    let mut given = holding(7, HELD as u64 + 5, 3);
+    given.begun = Some(vk::CommandBuffer::from_raw(98));
+    let (_, past) = past_held(&mut Vec::new(), 0, &mut given);
+    assert_eq!(
+        past.len(),
+        5 + 3 + 1,
+        "two secondaries, then seven primaries"
+    );
+    assert_eq!(given.held(), HELD);
+    given.taken();
+    assert!(given.reuse(vk::CommandBufferLevel::SECONDARY).is_some());
+    // What the pools out of the spares hold counts: the pool given back keeps the rest.
+    let mut given = holding(8, 200, 100);
+    let (_, past) = past_held(&mut Vec::new(), HELD - 100, &mut given);
+    assert_eq!((past.len(), given.held()), (200, 100));
+    let mut given = holding(9, 2, 1);
+    let (_, past) = past_held(&mut Vec::new(), HELD + 1, &mut given);
+    assert_eq!(past.len(), 2, "the primaries, a secondary kept");
+}
+
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod device {
-    use super::RECENT_USES;
+    use super::{HELD, RECENT_USES};
     use crate::command_buffer::kept_barriers::KEPT;
     use crate::tests::freed_memory::device;
     use crate::{Buffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions};
@@ -399,6 +486,11 @@ mod device {
     /// The encoders filling buffers of their own that each command buffer after the trims test's
     /// frees adds to the one before.
     const STEP: usize = 16;
+
+    /// The command buffers alive at once of the held test, each in a pool of its own, and the
+    /// blit encoders of each: two together past the spares' bound.
+    const APART: usize = 3;
+    const EACH: usize = HELD / 2 + 64;
 
     /// The longest a command buffer, or the spares' count, is waited for.
     const WAIT: Duration = Duration::from_secs(30);
@@ -485,6 +577,56 @@ mod device {
             after <= before + 2,
             "{after} held after {more} command buffers of one encoder, {before} before the burst"
         );
+        drop((target, queue, device));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Command buffers of many encoders alive at once, each in a pool of its own, leave the
+    /// spares holding at most [`HELD`] command buffers once each was given back, where each pool
+    /// kept its peak before: the oldest spares shed theirs. On ANV below Xe-HP each command
+    /// buffer a spare kept held a block of the device's binding-table pool (`spares.rs`).
+    #[test]
+    fn command_buffers_alive_at_once_leave_the_spares_holding_at_most_held() {
+        let scratch = std::env::temp_dir().join(format!("m2v-spares-held-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let device = device(&scratch);
+        let queue = device.new_command_queue().unwrap();
+        let target = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let begun = device.work_counts().command_buffers_begun;
+        let command_buffers: Vec<_> = (0..APART)
+            .map(|_| {
+                let command_buffer = queue.command_buffer().unwrap();
+                for at in 0..EACH {
+                    let mut blit = command_buffer.blit_command_encoder().unwrap();
+                    blit.fill_buffer(&target, 0..256, at as u8).unwrap();
+                    blit.end_encoding().unwrap();
+                }
+                command_buffer
+            })
+            .collect();
+        for command_buffer in &command_buffers {
+            command_buffer.commit().unwrap();
+        }
+        for command_buffer in &command_buffers {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        }
+        drop(command_buffers);
+        device.shared().frees.drain();
+        let begun = device.work_counts().command_buffers_begun - begun;
+        let held = device.shared().spares.command_buffers_held();
+        let freed_on = device.shared().spares.freed_on();
+        println!(
+            "SPARES-HELD {}: {APART} command buffers of {EACH} blit encoders alive at once began \
+             {begun} command buffers; the spares hold {held}, frees ran {} times",
+            device.name(),
+            freed_on.len()
+        );
+        assert!(
+            begun as usize > HELD,
+            "the command buffers began {begun}, within the bound"
+        );
+        assert!(held <= HELD, "the spares hold {held}, past {HELD}");
         drop((target, queue, device));
         let _ = std::fs::remove_dir_all(&scratch);
     }

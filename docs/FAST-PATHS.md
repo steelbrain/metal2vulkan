@@ -1499,3 +1499,13 @@ else.
   and one of a range holding a chunk whose last recording was not plain (a mesh or patch draw, a
   draw that splits its instance or needs work around it, one that meets a notice its device
   announces at each occurrence), until a write reaches that chunk. Not announced.
+
+- **On ANV below Xe-HP, a device holds at most 16,384 command buffers that recorded a binding
+  table, in flight, in recording or kept** (Mesa 26.2.4, `anv_device.c`): each takes a 64 KiB
+  block of the device's 1 GiB binding-table pool, freed only as the command buffer is begun
+  again, reset or freed, and a recording past them fails with `OutOfMemory(Device)` where Metal
+  runs it. A render pass whose draws record in a secondary command buffer takes two, the
+  secondary and the primary that begins it: on ms01's Iris Xe one command buffer of render
+  passes, each a draw beside a cleared depth target, failed so at the end of its 8,087th pass,
+  the spares holding 424 command buffers. The spare command pools keep at most 4,096 of them
+  (`spares.rs`), which leaves the rest to the command buffers committed and in recording.
