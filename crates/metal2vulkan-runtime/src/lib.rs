@@ -283,7 +283,7 @@ pub use depth_stencil::DepthStencilState;
 pub use device::{
     DebugMessage, Device, DeviceHandles, DeviceKind, DeviceOptions, ExtraQueue, LayerSetting,
     LayerSettingValue, MessageKind, MessageSeverity, MessageSink, PhysicalDeviceIdentity,
-    RawDevice, ReservedQueue,
+    QueueLimits, RawDevice, ReservedQueue,
 };
 pub use dirty_pages::{DirtyPages, DirtyStamp};
 #[cfg(unix)]

@@ -297,6 +297,48 @@ pub struct DeviceOptions {
     /// is the queue's only submitter: its submissions there sit in no command queue's order, and
     /// hold none back. 0 by default. No Metal counterpart: a Vulkan-side option.
     pub reserved_queues: u32,
+    /// Fewer `VkQueue`s for each device than its queue plan takes: at most
+    /// [`round_robin`](QueueLimits::round_robin) for the round robin its command queues share,
+    /// and at most [`presenting`](QueueLimits::presenting) reserved for presenting queues. `None`
+    /// (the default) takes the plan: the round robin up to 16 (at least four where the families
+    /// have them, NVIDIA's graphics family of 16 giving it 14) and two for presenting.
+    ///
+    /// What it changes: how many `VkQueue`s the device makes, and so what making and dropping it
+    /// cost. Each queue is made with the device and destroyed with it: on an RTX 5080 Laptop GPU
+    /// (NVIDIA 615.71.09), one device made and dropped at a time, the plan's 17 queues (14 for the
+    /// round robin, 2 for presenting and the staging queue) took 445 ms in `vkCreateDevice` and
+    /// 110 ms in `vkDestroyDevice`, and 2 queues (limits of one for the round robin and none for
+    /// presenting) 145 ms and 44 ms, about 20 ms a queue to make; and the driver makes devices
+    /// one at a time across processes. On a device whose families have no queue to spare (RADV's
+    /// and lavapipe's one graphics queue) the limits leave the plan as it is.
+    ///
+    /// What it costs a program: its command queues share `VkQueue`s past the limit, so one
+    /// queue's command buffers wait behind another's whole command buffer where Metal's would not
+    /// ([`CommandQueue`](crate::CommandQueue)); a queue made by
+    /// [`Device::new_command_queue_unshared`](crate::Device::new_command_queue_unshared) may share
+    /// too, and one made for presenting past the limit's shares with the round robin
+    /// (`shared-present-queue`) or with an earlier presenting queue. The reserved and extra
+    /// queues take the queues the limits leave. Wherever the limits change a placement from what
+    /// the plan gives, the device says so in an informational message
+    /// (`metal2vulkan-queue-limits-reached`, through [`messages`](Self::messages) or on stderr):
+    /// a command queue, unshared or not, that takes a `VkQueue` another took where the plan gives
+    /// it one of its own; a presenting queue past the limit's where the plan reserves it one;
+    /// reserved or extra queues placed otherwise than the plan places them (as the device is
+    /// made); and each read of the device's queue sharing (`Device::settle_queue_switch_check`,
+    /// `Device::queue_switch_check_report`) on a device whose queues the limits changed. No Metal
+    /// counterpart: a Vulkan-side option, for tests and tools that make many devices.
+    pub queue_limits: Option<QueueLimits>,
+}
+
+/// The most `VkQueue`s a device takes for its command queues ([`DeviceOptions::queue_limits`]).
+/// No Metal counterpart: a Vulkan-side option.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct QueueLimits {
+    /// The most the round robin its command queues share takes: at least one (0 is taken as 1),
+    /// and the plan's ceiling of 16 at most.
+    pub round_robin: u32,
+    /// The most reserved for presenting queues: the plan's two at most.
+    pub presenting: u32,
 }
 
 impl std::fmt::Debug for DeviceOptions {
@@ -330,6 +372,7 @@ impl std::fmt::Debug for DeviceOptions {
             pipeline_records,
             extra_queues,
             reserved_queues,
+            queue_limits,
         } = self;
         f.debug_struct("DeviceOptions")
             .field("policy", policy)
@@ -370,6 +413,7 @@ impl std::fmt::Debug for DeviceOptions {
                     .collect::<Vec<_>>(),
             )
             .field("reserved_queues", reserved_queues)
+            .field("queue_limits", queue_limits)
             .finish()
     }
 }
@@ -1074,6 +1118,25 @@ pub(crate) fn queue_plan(
     families: &[vk::QueueFamilyProperties],
     reserved: u32,
 ) -> Option<QueuePlan> {
+    queue_plan_within(families, reserved, None)
+}
+
+/// [`queue_plan`] within `limits` (`DeviceOptions::queue_limits`): the round robin at most
+/// `limits.round_robin` (at least one, its floor of [`LEAST_QUEUES`] no more than that) and at
+/// most `limits.presenting` queues reserved for presenting, limits past the plan's taking the
+/// plan's. `None` is the plan.
+pub(crate) fn queue_plan_within(
+    families: &[vk::QueueFamilyProperties],
+    reserved: u32,
+    limits: Option<QueueLimits>,
+) -> Option<QueuePlan> {
+    let (ceiling, presenting) = match limits {
+        None => (ROUND_ROBIN_CEILING, PRESENT_QUEUES),
+        Some(limits) => (
+            limits.round_robin.clamp(1, ROUND_ROBIN_CEILING),
+            limits.presenting.min(PRESENT_QUEUES),
+        ),
+    };
     let wanted = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
     let (primary, first) = families
         .iter()
@@ -1093,12 +1156,12 @@ pub(crate) fn queue_plan(
     let mut order = (0..first.queue_count)
         .flat_map(|index| taken.iter().map(move |&family| (family, index)))
         .collect::<Vec<_>>();
-    let past = (PRESENT_QUEUES as usize).saturating_add(reserved as usize);
+    let past = (presenting as usize).saturating_add(reserved as usize);
     let round_robin = (order.len().saturating_sub(past))
-        .clamp(LEAST_QUEUES as usize, ROUND_ROBIN_CEILING as usize)
+        .clamp(LEAST_QUEUES.min(ceiling) as usize, ceiling as usize)
         .min(order.len());
     let mut rest = order.split_off(round_robin).into_iter();
-    let present = rest.by_ref().take(PRESENT_QUEUES as usize).collect();
+    let present = rest.by_ref().take(presenting as usize).collect();
     let reserved = rest.take(reserved as usize).collect();
     // Transfers alone (sparse binding and protected memory aside: no graphics, compute, video or
     // optical flow work), and copies of any texel.
@@ -1128,6 +1191,60 @@ pub(crate) fn queue_plan(
         staging,
     })
 }
+
+/// What the queue plan gives a device of `families` whose queue limits
+/// (`DeviceOptions::queue_limits`) gave it `plan` and `extra_places`, for `reserved` reserved and
+/// `extra` extra queues asked for: where the limits changed any of it, the plan's; `None` where
+/// they changed nothing.
+pub(crate) fn planned_queues(
+    families: &[vk::QueueFamilyProperties],
+    reserved: u32,
+    extra: &[vk::QueueFlags],
+    plan: &QueuePlan,
+    extra_places: &[Option<(u32, u32)>],
+) -> Option<PlannedQueues> {
+    let mut planned = queue_plan(families, reserved)?;
+    let planned_extra = extra_queue_places(families, &mut planned, extra);
+    (planned != *plan || planned_extra != extra_places).then(|| PlannedQueues {
+        round_robin: planned.queues.len(),
+        presenting: planned.present.len(),
+        reserved: planned.reserved,
+        extra: planned_extra,
+    })
+}
+
+/// What the queue plan gives a device whose queue limits changed its queues ([`planned_queues`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlannedQueues {
+    /// The round robin's `VkQueue`s.
+    pub(crate) round_robin: usize,
+    /// The `VkQueue`s reserved for presenting queues.
+    pub(crate) presenting: usize,
+    /// The queues reserved for the caller, each its family and index there.
+    pub(crate) reserved: Vec<(u32, u32)>,
+    /// Each extra queue's place, `None` for one the device has none of.
+    pub(crate) extra: Vec<Option<(u32, u32)>>,
+}
+
+/// Whether the `made`th queue counted from 0 of the round robin, or of the presenting queues,
+/// that the limits give `limited` `VkQueue`s takes one another took where the plan's `planned`
+/// give it one of its own (`DeviceOptions::queue_limits`).
+pub(crate) fn shares_past_limit(made: u64, limited: usize, planned: usize) -> bool {
+    made >= limited as u64 && made < planned as u64
+}
+
+/// The informational message a device whose queue limits changed what the queue plan gives says
+/// where they did, `what` saying what (`DeviceOptions::queue_limits`).
+pub(crate) fn queue_limits_reached(device: &str, what: &str) -> String {
+    format!(
+        "metal2vulkan: on {device}, {what}: the device's queue limits \
+         (DeviceOptions::queue_limits) changed that from what its queue plan gives \
+         [{QUEUE_LIMITS_REACHED}]"
+    )
+}
+
+/// The id name of the informational message of [`queue_limits_reached`].
+pub(crate) const QUEUE_LIMITS_REACHED: &str = "metal2vulkan-queue-limits-reached";
 
 /// The queue of each of `asked` (`DeviceOptions::extra_queues`) on a device of `families` whose
 /// own queues are `plan`'s, in `asked`'s order, `None` for one the device has none of: a queue the
@@ -1689,8 +1806,19 @@ pub(super) fn create_on(
             .raw
             .get_physical_device_queue_family_properties(physical)
     };
-    let mut plan = queue_plan(&families, options.reserved_queues).ok_or(Error::NoDevice)?;
+    let mut plan = queue_plan_within(&families, options.reserved_queues, options.queue_limits)
+        .ok_or(Error::NoDevice)?;
     let extra_places = extra_queue_places(&families, &mut plan, &options.extra_queues);
+    let planned = options.queue_limits.and_then(|_| {
+        planned_queues(
+            &families,
+            options.reserved_queues,
+            &options.extra_queues,
+            &plan,
+            &extra_places,
+        )
+    });
+    let reserved_places = plan.reserved.clone();
     let queue_family = plan.primary;
     let api = description.api_version;
     let mut set = enable_set(&description, options);
@@ -1940,6 +2068,7 @@ pub(super) fn create_on(
         loader_word,
         queue_family,
         present_queues: plan.present.len(),
+        planned: (planned.as_ref()).map(|planned| (planned.round_robin, planned.presenting)),
         queues: plan.queues.into_iter().chain(plan.present).collect(),
         staging: plan.staging,
         reserved_queues: plan.reserved,
@@ -2003,6 +2132,30 @@ pub(super) fn create_on(
     }
     if let Some(text) = reserved_queues_absent(options.reserved_queues, reserved, device.name()) {
         device.inform(RESERVED_QUEUES_ABSENT, text);
+    }
+    if let Some(planned) = &planned {
+        if planned.reserved != reserved_places {
+            let what = format!(
+                "the queues reserved for the caller are {reserved_places:?} (family, index), \
+                 where the plan reserves {:?}",
+                planned.reserved
+            );
+            device.inform(
+                QUEUE_LIMITS_REACHED,
+                queue_limits_reached(device.name(), &what),
+            );
+        }
+        if planned.extra != extra_places {
+            let what = format!(
+                "the extra queues are at {extra_places:?} (family, index), where the plan places \
+                 them at {:?}",
+                planned.extra
+            );
+            device.inform(
+                QUEUE_LIMITS_REACHED,
+                queue_limits_reached(device.name(), &what),
+            );
+        }
     }
     if let Some(why) = cache_kept {
         let object = format!("the device, on {}", device.name());
@@ -2128,6 +2281,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         pipeline_records: _,
         extra_queues,
         reserved_queues,
+        queue_limits,
     } = a;
     *policy == b.policy
         && *layers == b.layers
@@ -2154,6 +2308,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *withheld_attachment_formats == b.withheld_attachment_formats
         && *extra_queues == b.extra_queues
         && *reserved_queues == b.reserved_queues
+        && *queue_limits == b.queue_limits
 }
 
 /// The group of `made` for `options`: the live one, or a new one on a new instance. Its index.

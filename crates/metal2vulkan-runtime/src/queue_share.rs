@@ -820,7 +820,9 @@ impl Device {
     /// benchmarks that hold a device's command queues to the mapping they measure.
     #[doc(hidden)]
     pub fn settle_queue_switch_check(&self, timeout: Duration) -> bool {
-        self.current().settle_queue_switch_check_now(timeout)
+        let current = self.current();
+        current.note_sharing_read("Device::settle_queue_switch_check");
+        current.settle_queue_switch_check_now(timeout)
     }
 
     /// [`Device::settle_queue_switch_check`] on the generation that serves (`device/line.rs`).
@@ -847,7 +849,27 @@ impl Device {
     /// for the lanes and benchmarks that report it.
     #[doc(hidden)]
     pub fn queue_switch_check_report(&self) -> String {
-        self.current().queue_switch_check_report_now()
+        let current = self.current();
+        current.note_sharing_read("Device::queue_switch_check_report");
+        current.queue_switch_check_report_now()
+    }
+
+    /// Where the device's queue limits changed its round robin's or presenting queues'
+    /// `VkQueue`s from the queue plan's, say that its queue sharing was read through `call`
+    /// (`DeviceOptions::queue_limits`).
+    fn note_sharing_read(&self, call: &str) {
+        let Some((taken, planned)) = self.shared().queues_limited() else {
+            return;
+        };
+        let what = format!(
+            "its queue sharing was read ({call}) with {} VkQueue(s) for the round robin and {} \
+             for presenting queues, where the plan gives {} and {}",
+            taken.0, taken.1, planned.0, planned.1
+        );
+        self.inform(
+            crate::device::QUEUE_LIMITS_REACHED,
+            crate::device::queue_limits_reached(self.name(), &what),
+        );
     }
 
     /// [`Device::queue_switch_check_report`] on the generation that serves (`device/line.rs`).

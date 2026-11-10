@@ -37,9 +37,10 @@ pub(crate) mod submit_stalls;
 
 pub use adopt::RawDevice;
 pub(crate) use compiles::holding;
+pub(crate) use create::{queue_limits_reached, QUEUE_LIMITS_REACHED};
 pub use create::{
     DebugMessage, DeviceOptions, LayerSetting, LayerSettingValue, MessageKind, MessageSeverity,
-    MessageSink,
+    MessageSink, QueueLimits,
 };
 pub use handles::{DeviceHandles, ExtraQueue, ReservedQueue};
 pub use properties::{DeviceKind, PhysicalDeviceIdentity};
@@ -273,6 +274,13 @@ pub(super) struct DeviceShared {
     /// The presenting queues made so far on the reserved `VkQueue`s: the next one takes the
     /// reserved queue this modulo their number.
     presenting_made: AtomicU64,
+    /// Where the device's queue limits changed its queues (`DeviceOptions::queue_limits`), the
+    /// queue plan's round robin and presenting `VkQueue`s: what the device's notes of the limits
+    /// compare with (`Device::next_queue`).
+    planned: Option<(usize, usize)>,
+    /// The presenting queues made so far, on a reserved `VkQueue` or not, counted only where
+    /// `planned` is.
+    presenting_asked: AtomicU64,
     /// Whether its command queues share `VkQueue`s, and its check's verdict
     /// (`queue_share.rs`). Shared with the check's thread, which holds no device handle
     /// (`queue_switch_check.rs`).
@@ -937,6 +945,15 @@ impl DeviceShared {
         self.round_robin
     }
 
+    /// Where the device's queue limits changed its round robin's or presenting queues'
+    /// `VkQueue`s from the queue plan's (`DeviceOptions::queue_limits`), how many it took of
+    /// each and how many the plan gives.
+    pub(crate) fn queues_limited(&self) -> Option<((usize, usize), (usize, usize))> {
+        let planned = self.planned?;
+        let taken = (self.round_robin, self.queues.len() - self.round_robin);
+        (taken != planned).then_some((taken, planned))
+    }
+
     /// A Vulkan sampler of `info`, counted against the device's `maxSamplerAllocationCount`
     /// (`SamplerCount`): refused, `Error::SamplerLimit`, where that many are live. Whoever
     /// destroys it gives the count back (`DeviceShared::sampler_destroyed`).
@@ -1577,8 +1594,11 @@ impl Device {
     /// Past the round robin's queues it gives one an earlier logical queue took, whose
     /// submissions this queue's then wait behind where Metal's queues would not
     /// (`device/create.rs`'s `ROUND_ROBIN_CEILING`): counted,
-    /// `WorkCounts::queues_sharing_a_vk_queue`.
-    pub(super) fn next_queue(&self) -> (u64, usize) {
+    /// `WorkCounts::queues_sharing_a_vk_queue`. Where the device's queue limits gave it the
+    /// `VkQueue` another took and the queue plan gives it one of its own, the device says so
+    /// (`DeviceOptions::queue_limits`), `noted` naming the queue; never for `None`, a presenting
+    /// queue's, which `Device::next_presenting_queue` notes.
+    pub(super) fn next_queue(&self, noted: Option<&str>) -> (u64, usize) {
         let id = self.shared().contexts.fresh();
         let made = self
             .shared()
@@ -1587,7 +1607,23 @@ impl Device {
         if made >= self.shared().round_robin as u64 {
             self.shared().counts.queue_shared_a_vk_queue();
         }
-        (id, (made % self.shared().round_robin as u64) as usize)
+        let vk_queue = (made % self.shared().round_robin as u64) as usize;
+        if let (Some(queue), Some((planned, _))) = (noted, self.shared().planned) {
+            if create::shares_past_limit(made, self.shared().round_robin, planned) {
+                let what = format!(
+                    "{queue} took VkQueue {vk_queue}, which another took, as the round robin's \
+                     queue {} of its {} VkQueue(s), where the plan's {planned} give it one of its \
+                     own",
+                    made + 1,
+                    self.shared().round_robin
+                );
+                self.inform(
+                    create::QUEUE_LIMITS_REACHED,
+                    create::queue_limits_reached(self.name(), &what),
+                );
+            }
+        }
+        (id, vk_queue)
     }
 
     /// A new logical queue's identity alone, for one whose `VkQueue` is chosen otherwise
@@ -1600,6 +1636,20 @@ impl Device {
     /// queues reserved for presenting, in turn. `None` where the device reserved none.
     pub(super) fn next_presenting_queue(&self) -> Option<(u64, usize)> {
         let reserved = self.shared().queues.len() - self.shared().round_robin;
+        if let Some((_, planned)) = self.shared().planned {
+            let asked = (self.shared().presenting_asked).fetch_add(1, Ordering::Relaxed);
+            if create::shares_past_limit(asked, reserved, planned) {
+                let what = format!(
+                    "presenting queue {} shares a VkQueue, the device's queue limits reserving \
+                     {reserved} for presenting queues, where the plan reserves {planned}",
+                    asked + 1
+                );
+                self.inform(
+                    create::QUEUE_LIMITS_REACHED,
+                    create::queue_limits_reached(self.name(), &what),
+                );
+            }
+        }
         if reserved == 0 {
             return None;
         }
@@ -1637,6 +1687,9 @@ pub(super) struct Parts {
     pub(super) queues: Vec<(u32, u32)>,
     /// How many of `queues`, the last, are reserved for presenting queues (fewer than all).
     pub(super) present_queues: usize,
+    /// Where the device's queue limits changed its queues (`DeviceOptions::queue_limits`), the
+    /// queue plan's round robin and presenting `VkQueue`s; `None` for an adopted device.
+    pub(super) planned: Option<(usize, usize)>,
     /// The queue reserved for staging copies, its family and index there, outside `queues`
     /// (`staging.rs`): `None` for an adopted device, or where the families have no more.
     pub(super) staging: Option<(u32, u32)>,
@@ -1763,6 +1816,7 @@ impl Device {
             queue_family,
             queues: queue_places,
             present_queues,
+            planned,
             staging: staging_place,
             reserved_queues: reserved_places,
             extra_queues: extra_places,
@@ -2573,6 +2627,8 @@ impl Device {
             buffer_families,
             round_robin_made: AtomicU64::new(0),
             presenting_made: AtomicU64::new(0),
+            planned,
+            presenting_asked: AtomicU64::new(0),
             queue_switch: Arc::new(crate::queue_share::QueueSwitch::new(
                 invariant.compile.policy().queue_sharing,
             )),

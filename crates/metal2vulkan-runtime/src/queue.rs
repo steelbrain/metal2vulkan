@@ -500,11 +500,11 @@ impl Device {
     /// the round robin's next, announced (`shared-present-queue`).
     fn place_queue(&self, kind: Kind) -> (u64, usize) {
         match kind {
-            Kind::RoundRobin => self.next_queue(),
+            Kind::RoundRobin => self.next_queue(Some("a command queue")),
             Kind::Unshared => match self.place_unshared() {
                 Some(vk_queue) => (self.new_queue_id(), vk_queue),
                 None => {
-                    let (id, vk_queue) = self.next_queue();
+                    let (id, vk_queue) = self.next_queue(Some("an unshared command queue"));
                     self.shared().queues[vk_queue].share.unshared_took();
                     (id, vk_queue)
                 }
@@ -520,7 +520,7 @@ impl Device {
                                 .to_owned(),
                         )
                     });
-                    self.next_queue()
+                    self.next_queue(None)
                 }
             },
         }

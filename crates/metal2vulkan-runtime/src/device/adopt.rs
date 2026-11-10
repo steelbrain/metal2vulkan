@@ -329,6 +329,7 @@ impl Device {
             queue_family: raw.queue_family,
             queues: vec![(raw.queue_family, raw.queue_index)],
             present_queues: 0,
+            planned: None,
             staging: None,
             reserved_queues: Vec::new(),
             extra_queues: Vec::new(),
