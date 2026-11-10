@@ -43,7 +43,7 @@
 //!   piece with the turn. A thread asking is busy, so the pool starts another for a piece handed
 //!   meanwhile, up to its threads.
 
-use super::budget::{self, Budget, Candidate, Urgency};
+use super::budget::{self, Asked, Budget, Candidate, Urgency};
 use crate::device::lock;
 use crate::exit_guard::{self, Call};
 use std::cell::Cell;
@@ -174,6 +174,10 @@ struct State {
 struct Queued {
     number: u64,
     urgency: Urgency,
+    /// The rank something that came to wait for it asked, shared with its place: once it runs,
+    /// its thread's turn reads it where the piece lends that turn for a wait
+    /// (`budget::without_turn`), to take it again at the rank it rose to.
+    asked: Arc<Asked>,
     /// When it was handed here: it ages from then (`budget::aged`).
     handed: Instant,
     work: Work,
@@ -196,10 +200,10 @@ impl PoolQueue {
         lock(&self.state).next_rank(self.budget.age(), ahead_free)
     }
 
-    /// The piece [`next_rank`](Self::next_rank) ranks, taken, with its rank unaged and whether
-    /// nothing waits for it: for the budget, which hands it to the thread it gives the turn
-    /// (`budget.rs`).
-    pub(crate) fn next_piece(&self, ahead_free: bool) -> Option<(Work, Candidate)> {
+    /// The piece [`next_rank`](Self::next_rank) ranks, taken, with its rank unaged, whether
+    /// nothing waits for it, and what was asked of it: for the budget, which hands it to the
+    /// thread it gives the turn (`budget.rs`).
+    pub(crate) fn next_piece(&self, ahead_free: bool) -> Option<(Work, Candidate, Arc<Asked>)> {
         lock(&self.state).next_piece(self.budget.age(), ahead_free)
     }
 }
@@ -226,12 +230,16 @@ impl State {
     }
 
     /// The next piece to run, taken, as [`next_rank`](Self::next_rank) ranks it, with its rank
-    /// unaged (its urgency, its number) and whether nothing waits for it.
-    fn next_piece(&mut self, age: Duration, ahead_free: bool) -> Option<(Work, Candidate)> {
+    /// unaged (its urgency, its number), whether nothing waits for it, and what was asked of it.
+    fn next_piece(
+        &mut self,
+        age: Duration,
+        ahead_free: bool,
+    ) -> Option<(Work, Candidate, Arc<Asked>)> {
         let ((_, number), ahead) = self.next_rank(age, ahead_free)??;
         let at = self.work.iter().position(|q| q.number == number)?;
         let queued = self.work.remove(at)?;
-        Some((queued.work, ((queued.urgency, number), ahead)))
+        Some((queued.work, ((queued.urgency, number), ahead), queued.asked))
     }
 }
 
@@ -240,13 +248,18 @@ impl State {
 pub(crate) struct Place {
     shared: Weak<PoolQueue>,
     number: u64,
+    /// What was asked of the piece, which its thread's turn reads once it runs
+    /// ([`Queued::asked`]).
+    asked: Arc<Asked>,
 }
 
 impl Place {
     /// Something waits for the piece, as `urgency` says (the module docs): it runs before every
-    /// piece waiting of a lower rank. No change where it started, or ranks as high already; a
-    /// rank never falls.
+    /// piece waiting of a lower rank. Where it started, its thread takes a turn it lends for a
+    /// wait again at this rank (`budget::without_turn`), and nothing else changes; no change
+    /// where it ranks as high already; a rank never falls.
     pub(crate) fn hasten(&self, urgency: Urgency) {
+        self.asked.raise(urgency);
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
@@ -320,16 +333,19 @@ impl Pool {
                 None => work(),
             }
         });
+        let asked = Arc::new(Asked::new());
         let mut state = lock(&self.shared.state);
         state.work.push_back(Queued {
             number,
             urgency,
+            asked: Arc::clone(&asked),
             handed,
             work,
         });
         let place = Place {
             shared: Arc::downgrade(&self.shared),
             number,
+            asked,
         };
         if state.free >= state.work.len() || state.threads >= self.shared.makers() {
             drop(state);
@@ -356,7 +372,7 @@ impl Pool {
         // No thread: the work waiting runs here, in its order.
         let age = self.shared.budget.age();
         let waiting: Vec<Work> = std::iter::from_fn(|| state.next_piece(age, true))
-            .map(|(work, _)| work)
+            .map(|(work, _, _)| work)
             .collect();
         drop(state);
         for work in waiting {

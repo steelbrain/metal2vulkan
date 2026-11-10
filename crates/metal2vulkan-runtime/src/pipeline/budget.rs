@@ -57,7 +57,7 @@
 //!   that waits for its twin's making in the air (`flight.rs`), and a caller that waits for
 //!   another's making of a pipeline library it links (`libraries.rs`, `Library::made`), gives
 //!   its thread's turn back for the wait and takes one again after it at the rank it was given
-//!   at ([`without_turn`]).
+//!   at, or at the rank a pool's piece rose to while it ran ([`without_turn`]).
 //! - **A pool's turn is its next piece's.** A pool's thread is given its turn together with the
 //!   piece the turn was ranked by, taken from the pool under the budget's lock ([`pool_turn`]), so
 //!   no piece runs on a turn another piece's rank won; and a thread asking counts as busy, so a
@@ -134,13 +134,15 @@ static PROCESS: OnceLock<Arc<Budget>> = OnceLock::new();
 /// The counter tickets are drawn from (a pool's pieces' numbers too): one order for the process.
 static TICKETS: AtomicU64 = AtomicU64::new(0);
 
-/// The turn a thread holds: its budget, whether it is an ahead turn, and the rank it was given at
-/// (its asker's urgency and ticket, unaged), at which a lent turn is taken again
+/// The turn a thread holds: its budget, whether it is an ahead turn, the rank it was given at
+/// (its asker's urgency and ticket, unaged), and for a pool's piece what something that came to
+/// wait for it asked since: a lent turn is taken again at the more urgent of the two
 /// ([`without_turn`]).
 struct Held {
     budget: Arc<Budget>,
     ahead: bool,
     rank: Rank,
+    asked: Option<Arc<Asked>>,
 }
 
 thread_local! {
@@ -361,8 +363,11 @@ pub(crate) struct Turn {
 
 impl Drop for Turn {
     fn drop(&mut self) {
-        HELD.with(|held| held.borrow_mut().take());
-        self.budget.give_back(self.ahead);
+        // A turn lent and taken again at a rank that rose meanwhile may be of the other kind
+        // ([`Again`]): the thread's note says which it holds now.
+        let held = HELD.with(|held| held.borrow_mut().take());
+        self.budget
+            .give_back(held.map_or(self.ahead, |held| held.ahead));
     }
 }
 
@@ -471,11 +476,13 @@ impl Budget {
                 // A pool's thread takes the piece its rank was, under this lock (taken before the
                 // pool's, never under it), so no other piece runs on the turn: one it may take
                 // as `ahead_free` says, whose own `ahead` the turn is counted by.
-                let (piece, rank, ahead) = match asker {
-                    Asker::Thread(urgency, ticket, _) => (None, (urgency, ticket), ahead),
+                let (piece, rank, ahead, asked) = match asker {
+                    Asker::Thread(urgency, ticket, _) => (None, (urgency, ticket), ahead, None),
                     Asker::Pool(queue) => {
                         match queue.upgrade().and_then(|q| q.next_piece(ahead_free)) {
-                            Some((work, (rank, ahead))) => (Some(work), rank, ahead),
+                            Some((work, (rank, ahead), asked)) => {
+                                (Some(work), rank, ahead, Some(asked))
+                            }
                             None => {
                                 drop(state);
                                 self.freed.notify_all();
@@ -495,6 +502,7 @@ impl Budget {
                         budget,
                         ahead,
                         rank,
+                        asked,
                     })
                 });
                 // The next asker may have a turn too.
@@ -572,9 +580,11 @@ pub(crate) fn helper_turn<M>(
 
 /// Run `wait` holding no turn (the module docs' "no making waits on another while it holds a
 /// turn"): where this thread holds one (a pool's piece), it is given back for the wait and taken
-/// again after it, by an unwinding wait too, as an asker of the rank it was given at, so it is an
-/// ahead turn again where it was one; the holder of the thread's [`Turn`] gives that back at its
-/// end as before. Its wait counts in the making's wait ([`take_waited`]).
+/// again after it, by an unwinding wait too, as an asker of the rank it was given at, or of the
+/// rank a pool's piece rose to since (`Place::hasten`: a commit came to wait for it while it
+/// ran), so it is an ahead turn again where it was one and nothing came to wait for it; the
+/// holder of the thread's [`Turn`] gives back the turn it holds then at its end. Its wait counts
+/// in the making's wait ([`take_waited`]).
 pub(crate) fn without_turn<T>(wait: impl FnOnce() -> T) -> T {
     let Some(held) = HELD.with(|held| held.borrow_mut().take()) else {
         return wait();
@@ -591,14 +601,25 @@ struct Again(Held);
 
 impl Drop for Again {
     fn drop(&mut self) {
-        let (urgency, ticket) = self.0.rank;
+        let (given, ticket) = self.0.rank;
+        // The turn's own rank, or the rank its piece rose to while it ran: one nothing waits for
+        // takes an ahead turn, as the turn lent was (its urgency `Ahead`), and any other, one
+        // a commit came to wait for meanwhile among them, a turn of the rest. Taken again at the
+        // rank it was given, such a piece would wait for an ahead turn behind every program's
+        // making until it aged ([`AGE`]), with a committed command buffer waiting for it.
+        let raised = (self.0.asked.as_ref()).and_then(|asked| asked.get());
+        let urgency = raised.map_or(given, |raised| raised.min(given));
         let asked = Instant::now();
-        // An asker of the turn's own rank: one nothing waits for takes an ahead turn, as the
-        // turn lent was (its urgency `Ahead`), and any other a turn of the rest.
         let _ = self
             .0
             .budget
             .take_held(Asker::Thread(urgency, ticket, asked));
+        // The piece's asks stay its turn's, for a later lend.
+        HELD.with(|held| {
+            if let Some(held) = held.borrow_mut().as_mut() {
+                held.asked = self.0.asked.clone();
+            }
+        });
         let waited = asked.elapsed();
         WAITED.with(|cell| cell.set(cell.get() + waited));
     }
@@ -710,6 +731,53 @@ mod tests {
         go.send(()).unwrap();
         until(|| order.lock().unwrap().len() == 2);
         assert_eq!(*order.lock().unwrap(), ["waited", "piece"]);
+        until(|| budget.census() == (0, 0));
+    }
+
+    /// A pool's piece that lends its turn for a wait, and that a commit comes to wait for
+    /// meanwhile (`Place::hasten`), takes a turn again at the committed rank: one past the ahead
+    /// turns, though a piece nothing waits for holds the one ahead turn, and not after it ages.
+    /// Every turn is given back as the kind it was taken as once both end.
+    #[test]
+    fn a_piece_hastened_while_it_lends_its_turn_takes_one_again_at_its_new_rank() {
+        let budget = Arc::new(Budget::aging(2, 1, Duration::from_secs(600)));
+        let pool = Pool::within(Arc::clone(&budget));
+        let (lent, waiting) = mpsc::channel();
+        let (go, wait) = mpsc::channel::<()>();
+        let (finished, done) = mpsc::channel();
+        let place = pool.run(Box::new(move || {
+            without_turn(|| {
+                lent.send(()).unwrap();
+                wait.recv().unwrap();
+            });
+            assert!(holds_turn());
+            finished.send(()).unwrap();
+        }));
+        waiting.recv().unwrap();
+        until(|| budget.census() == (0, 0));
+        // A piece nothing waits for takes the one ahead turn and holds it.
+        let (release, gate) = mpsc::channel::<()>();
+        let (started, running) = mpsc::channel();
+        pool.run(Box::new(move || {
+            started.send(()).unwrap();
+            gate.recv().unwrap();
+        }));
+        running.recv().unwrap();
+        assert_eq!(budget.census(), (1, 0));
+        place.hasten(Urgency::Committed);
+        go.send(()).unwrap();
+        done.recv_timeout(Duration::from_secs(30))
+            .expect("the hastened piece waited for the ahead turn");
+        release.send(()).unwrap();
+        until(|| budget.census() == (0, 0));
+        // The ahead turn came back as one: a piece nothing waits for takes it, a waited making
+        // the other.
+        let held = waited_turn(&budget, ticket());
+        let (ran, runs) = mpsc::channel();
+        pool.run(Box::new(move || ran.send(()).unwrap()));
+        runs.recv_timeout(Duration::from_secs(30))
+            .expect("no ahead turn came back");
+        drop(held);
         until(|| budget.census() == (0, 0));
     }
 
