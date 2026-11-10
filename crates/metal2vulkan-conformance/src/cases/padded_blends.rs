@@ -60,7 +60,7 @@ const DUAL_HALF: &str = "xrb_dual_half";
 const COUNT: usize = (WIDTH * HEIGHT) as usize;
 
 /// The padded formats, as targets whose words Metal copies.
-const PADDED: [Format; 5] = [
+pub(super) const PADDED: [Format; 5] = [
     Format {
         slug: "r10x6",
         format: PixelFormat::R10UnormX6,

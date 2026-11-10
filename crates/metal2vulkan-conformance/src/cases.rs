@@ -126,6 +126,7 @@ pub mod mesh_pipeline_reflection;
 pub mod nearest_positions;
 pub mod norm_storage_writes;
 pub mod padded_blends;
+pub mod padded_fetch;
 pub mod pass_attachment_pairs;
 pub mod pass_bound_pairs;
 pub mod pass_bytes;
@@ -401,6 +402,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in padded_blends::all() {
+        cases.push(Box::new(case));
+    }
+    for case in padded_fetch::all() {
         cases.push(Box::new(case));
     }
     cases.push(Box::new(texture_buffer_fills::streams()));
