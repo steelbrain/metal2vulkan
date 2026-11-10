@@ -1942,14 +1942,14 @@ fn a_mesh_functions_buffer_writes_need_no_stage_store_feature() {
 }
 
 /// A mesh render pipeline's answers to Metal's mesh queries (`RenderPipeline::mesh_info`), on
-/// every committed profile, emulated or not: each stage's thread limit is the descriptor's maximum,
-/// else the function's `[[max_total_threads_per_threadgroup(n)]]`, else 1024, within the device's
-/// limit for the stage (the task and mesh stages' invocations, or the compute stage's where it
-/// runs them as compute work); the widths are 32; the mesh grid is the descriptor's maximum, else
-/// 2^20 whatever the object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`, within the
-/// device's `maxMeshWorkGroupTotalCount` where it runs mesh functions natively. Without an object
-/// function the object stage answers 0 and 0. A required size leaves the limits. Each as an M3
-/// Max answers (`mesh_pipeline_limits.m`).
+/// every committed profile, emulated or not: each stage's thread limit is the least of the
+/// descriptor's maximum, the function's `[[max_total_threads_per_threadgroup(n)]]`, the threads of
+/// the stage's required size and 1024, within the device's limit for the stage (the task and mesh
+/// stages' invocations, or the compute stage's where it runs them as compute work); the widths are
+/// 32; the mesh grid is the descriptor's maximum, else 2^20 whatever the object function's
+/// `[[max_total_threadgroups_per_mesh_grid(n)]]`, within the device's `maxMeshWorkGroupTotalCount`
+/// where it runs mesh functions natively. Without an object function the object stage answers 0
+/// and 0. Each as an M3 Max answers on a first compile (`mesh_pipeline_limits.m`).
 #[test]
 fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
     use crate::budget::Budget;
@@ -2007,8 +2007,8 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
             answers(object.min(1024), mesh.min(1024), 32, total.min(1 << 20)),
             "{stem}"
         );
-        // The descriptor's maxima, a grid past 2^20 among them, and a required size, which
-        // leaves them.
+        // The descriptor's maxima, a grid past 2^20 among them, and a required size of the
+        // object maximum's threads.
         let mut limited = d.clone();
         limited.max_total_threads_per_object_threadgroup = Some(64);
         limited.max_total_threads_per_mesh_threadgroup = Some(32);
@@ -2019,10 +2019,26 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
             "{stem}"
         );
         limited.max_total_threadgroups_per_mesh_grid = Some(1 << 21);
-        limited.required_threads_per_object_threadgroup = Some([16, 2, 1]);
+        limited.required_threads_per_object_threadgroup = Some([32, 2, 1]);
         assert_eq!(
             info(&limited),
             answers(object.min(64), mesh.min(32), 32, total.min(1 << 21)),
+            "{stem}"
+        );
+        // A required size alone gives its stage its threads (an M3 Max's first compile answers 64
+        // for `required-object-32x2` and 32 for `required-mesh-16x2`).
+        let mut required = d.clone();
+        required.required_threads_per_object_threadgroup = Some([32, 2, 1]);
+        assert_eq!(
+            info(&required),
+            answers(object.min(64), mesh.min(1024), 32, total.min(1 << 20)),
+            "{stem}"
+        );
+        required.required_threads_per_object_threadgroup = None;
+        required.required_threads_per_mesh_threadgroup = Some([16, 2, 1]);
+        assert_eq!(
+            info(&required),
+            answers(object.min(1024), mesh.min(32), 32, total.min(1 << 20)),
             "{stem}"
         );
         // The functions' own maxima (`mesh_outputs_object`'s 64 threads, `mesh_outputs_triangles`'
@@ -2042,6 +2058,17 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
             total.min(32),
             "{stem}"
         );
+        // A required size below the function's own maximum gives its stage its threads (an M3
+        // Max's first compile answers 32 for `required-object-32-attribute-64`).
+        own.max_total_threads_per_object_threadgroup = None;
+        own.max_total_threads_per_mesh_threadgroup = None;
+        own.max_total_threadgroups_per_mesh_grid = None;
+        own.required_threads_per_mesh_threadgroup = Some([16, 1, 1]);
+        assert_eq!(
+            info(&own),
+            answers(object.min(64), mesh.min(16), 32, total.min(1 << 20)),
+            "{stem}"
+        );
         // Without an object function.
         let mut alone = MeshPipelineDescriptor::new(stage(&draws, "mesh_draws_grid"));
         alone.rasterization_enabled = false;
@@ -2053,7 +2080,7 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
         alone.required_threads_per_mesh_threadgroup = Some([16, 2, 1]);
         assert_eq!(
             info(&alone),
-            answers(0, mesh.min(1024), 0, total.min(1 << 20)),
+            answers(0, mesh.min(32), 0, total.min(1 << 20)),
             "{stem}"
         );
     }
@@ -2063,8 +2090,8 @@ fn a_mesh_pipeline_answers_metals_mesh_queries_within_the_device() {
 /// (`InvalidDescriptor(MeshPipeline)`, measured on an M3 Max, `mesh_pipeline_limits.m`), on every
 /// committed profile, and the descriptors beside each are made: a required size with an axis of
 /// 0, of more than 1024 threads or more than its stage's maximum, or of an object stage without an
-/// object function; a maximum past 1024; a mesh stage's required size of other threads than its
-/// maximum (an object stage's of fewer is made); a function's maximum other than the
+/// object function; a maximum past 1024; a required size of other threads than its stage's
+/// maximum, in either stage (Metal's first compile); a function's maximum other than the
 /// descriptor's; a payload past 16384 bytes. An amplification count of 0 is refused as a render
 /// pipeline's, and one of 2 is made, as Metal makes it ([`an_amplified_mesh_pipeline_draws_one_amplification`]).
 #[test]
@@ -2179,6 +2206,28 @@ fn a_mesh_descriptor_metal_refuses_is_refused_as_its_rule() {
                 }),
             ),
             (
+                with(&|d| {
+                    d.max_total_threads_per_object_threadgroup = Some(64);
+                    d.required_threads_per_object_threadgroup = Some([32, 1, 1]);
+                }),
+                refused(P::MaxThreadsDiffer {
+                    stage: Stage::Object,
+                    specified: 32,
+                    max: 64,
+                }),
+            ),
+            (
+                with(&|d| {
+                    d.max_total_threads_per_object_threadgroup = Some(64);
+                    d.required_threads_per_object_threadgroup = Some([16, 2, 1]);
+                }),
+                refused(P::MaxThreadsDiffer {
+                    stage: Stage::Object,
+                    specified: 32,
+                    max: 64,
+                }),
+            ),
+            (
                 with(&|d| d.payload_memory_length = Some(16385)),
                 refused(P::PayloadOverLimit {
                     length: 16385,
@@ -2205,7 +2254,7 @@ fn a_mesh_descriptor_metal_refuses_is_refused_as_its_rule() {
             (
                 with(&|d| {
                     d.max_total_threads_per_object_threadgroup = Some(64);
-                    d.required_threads_per_object_threadgroup = Some([32, 1, 1]);
+                    d.required_threads_per_object_threadgroup = Some([64, 1, 1]);
                 }),
                 None,
             ),

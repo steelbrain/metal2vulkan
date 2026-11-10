@@ -1286,13 +1286,14 @@ impl RenderPipelineState {
     }
 
     /// `maxTotalThreadsPerObjectThreadgroup`: a mesh state's
-    /// ([`MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup`]): the descriptor's
-    /// maximum, else the object function's `[[max_total_threads_per_threadgroup(n)]]`, else
-    /// 1024, as an M3 Max answers, held to this device's limit for the stage where that is lower
-    /// (the task stage's invocations with `VK_EXT_mesh_shader`, else the compute stage's), as a
-    /// compute state's `maxTotalThreadsPerThreadgroup` is. 0 for a mesh state without an object
-    /// function, where an M3 Max answers 3 (docs/API.md, accepted differences), and for any
-    /// other state. A draw is not held to it.
+    /// ([`MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup`]): the least of the
+    /// descriptor's maximum, the object function's `[[max_total_threads_per_threadgroup(n)]]`,
+    /// the threads of the required object size and 1024, as an M3 Max answers on a first compile,
+    /// held to this device's limit for the stage where that is lower (the task stage's
+    /// invocations with `VK_EXT_mesh_shader`, else the compute stage's), as a compute state's
+    /// `maxTotalThreadsPerThreadgroup` is. 0 for a mesh state without an object function, where
+    /// an M3 Max answers 3 (docs/API.md, accepted differences), and for any other state. A draw
+    /// is not held to it.
     pub fn max_total_threads_per_object_threadgroup(&self) -> u32 {
         self.mesh_info()
             .map_or(0, |i| i.max_total_threads_per_object_threadgroup)

@@ -1058,12 +1058,13 @@ fn mesh_draws_answer_as_plain_metal_and_refuse_the_rest() {
 
 /// A mesh state answers Metal's queries on this device, and a descriptor Metal refuses is refused
 /// naming Metal's rule (`Compile(InvalidDescriptor(MeshPipeline))`, as an M3 Max refuses each,
-/// `mesh_pipeline_limits.m`): each stage's thread limit is the descriptor's maximum, else 1024,
-/// within the device's limit for the stage (the task and mesh stages' invocations with
-/// `VK_EXT_mesh_shader`, else the compute stage's), the widths 32, the mesh grid the
-/// descriptor's maximum, else 2^20, within the device's `maxMeshWorkGroupTotalCount` where it
-/// runs mesh functions natively; the required sizes are the descriptor's, and change no limit;
-/// without an object function the object stage answers 0. Each answer and refusal is printed.
+/// `mesh_pipeline_limits.m`, on a first compile): each stage's thread limit is the least of the
+/// descriptor's maximum, the threads of the stage's required size and 1024, within the device's
+/// limit for the stage (the task and mesh stages' invocations with `VK_EXT_mesh_shader`, else the
+/// compute stage's), the widths 32, the mesh grid the descriptor's maximum, else 2^20, within the
+/// device's `maxMeshWorkGroupTotalCount` where it runs mesh functions natively; the required sizes
+/// are the descriptor's; without an object function the object stage answers 0. Each answer and
+/// refusal is printed.
 #[test]
 fn a_mesh_state_answers_metals_queries_and_refuses_what_metal_refuses() {
     use metal2vulkan::error::{DescriptorError, MeshPipelineProblem as P};
@@ -1127,7 +1128,7 @@ fn a_mesh_state_answers_metals_queries_and_refuses_what_metal_refuses() {
         limited.max_total_threads_per_object_threadgroup = Some(64);
         limited.max_total_threads_per_mesh_threadgroup = Some(32);
         limited.max_total_threadgroups_per_mesh_grid = Some(8);
-        limited.required_threads_per_object_threadgroup = Some([16, 2, 1]);
+        limited.required_threads_per_object_threadgroup = Some([32, 2, 1]);
         limited.required_threads_per_mesh_threadgroup = Some([32, 1, 1]);
         let state = make(&limited).unwrap_or_else(|e| panic!("limited on {name}: {e}"));
         eprintln!("MESH-ANSWERS limited on {name}: {:?}", answers(&state));
@@ -1138,7 +1139,17 @@ fn a_mesh_state_answers_metals_queries_and_refuses_what_metal_refuses() {
         );
         assert_eq!(
             state.required_threads_per_object_threadgroup(),
-            size([16, 2, 1])
+            size([32, 2, 1])
+        );
+        // A required size alone gives its stage its threads.
+        let mut required = plain.clone();
+        required.required_threads_per_object_threadgroup = Some([32, 2, 1]);
+        let state = make(&required).unwrap_or_else(|e| panic!("required on {name}: {e}"));
+        eprintln!("MESH-ANSWERS required on {name}: {:?}", answers(&state));
+        assert_eq!(
+            answers(&state),
+            [object.min(64), mesh.min(1024), 32, 32, total.min(1 << 20)],
+            "required on {name}"
         );
         assert_eq!(
             state.required_threads_per_mesh_threadgroup(),
@@ -1207,6 +1218,18 @@ fn a_mesh_state_answers_metals_queries_and_refuses_what_metal_refuses() {
                 }),
                 P::MaxThreadsDiffer {
                     stage: Stage::Mesh,
+                    specified: 32,
+                    max: 64,
+                },
+            ),
+            (
+                "required-object-32-max-64",
+                with(&plain, &|d| {
+                    d.max_total_threads_per_object_threadgroup = Some(64);
+                    d.required_threads_per_object_threadgroup = Some([32, 1, 1]);
+                }),
+                P::MaxThreadsDiffer {
+                    stage: Stage::Object,
                     specified: 32,
                     max: 64,
                 },

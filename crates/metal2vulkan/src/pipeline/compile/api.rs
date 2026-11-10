@@ -693,15 +693,21 @@ impl Device {
                 limits.mesh.max_mesh_work_group_invocations,
             )
         };
-        // Metal's: the least of 1024, the function's own maximum and the descriptor's (Metal's 0
-        // is none), within the device's.
-        let threads = |f: &CompiledFunction, given: Option<u32>, device: u32| {
-            [f.artifact().kernel.max_total_threads, given]
-                .into_iter()
-                .flatten()
-                .filter(|&n| n > 0)
-                .fold(METAL_MAX_THREADS.min(device), u32::min)
-        };
+        // Metal's on a first compile: the least of 1024, the function's own maximum, the
+        // descriptor's (Metal's 0 is none) and the threads of the stage's required size (Metal's
+        // all-zero size is none), within the device's.
+        let threads =
+            |f: &CompiledFunction, given: Option<u32>, required: Option<[u32; 3]>, device: u32| {
+                let required = required_size(required).map(|axes| {
+                    let threads: u64 = axes.iter().map(|&axis| u64::from(axis)).product();
+                    u32::try_from(threads).unwrap_or(u32::MAX)
+                });
+                [f.artifact().kernel.max_total_threads, given, required]
+                    .into_iter()
+                    .flatten()
+                    .filter(|&n| n > 0)
+                    .fold(METAL_MAX_THREADS.min(device), u32::min)
+            };
         let width = self.metal_properties().thread_execution_width;
         // The descriptor's, else Metal's: an object function's
         // `[[max_total_threadgroups_per_mesh_grid(n)]]` changes nothing Metal answers.
@@ -715,11 +721,17 @@ impl Device {
         };
         MeshPipelineMetalInfo {
             max_total_threads_per_object_threadgroup: object.map_or(0, |o| {
-                threads(o, d.max_total_threads_per_object_threadgroup, object_limit)
+                threads(
+                    o,
+                    d.max_total_threads_per_object_threadgroup,
+                    d.required_threads_per_object_threadgroup,
+                    object_limit,
+                )
             }),
             max_total_threads_per_mesh_threadgroup: threads(
                 mesh,
                 d.max_total_threads_per_mesh_threadgroup,
+                d.required_threads_per_mesh_threadgroup,
                 mesh_limit,
             ),
             object_thread_execution_width: object.map_or(0, |_| width),
@@ -1468,8 +1480,8 @@ fn required_size(required: Option<[u32; 3]>) -> Option<[u32; 3]> {
 
 /// Metal's refusals of mesh descriptor `d` before any compile ([`MeshPipelineProblem`]), in
 /// Metal's order: those its descriptor validation ends the process at (the required sizes, an
-/// amplification count of 0), then the creation's errors over the thread maxima, the mesh
-/// stage's required size and the payload length.
+/// amplification count of 0), then the creation's errors over the thread maxima, each stage's
+/// required size beside its maximum and the payload length.
 fn check_mesh_fields(d: &MeshPipelineDescriptor) -> Result<(), Error> {
     let stages = [
         (
@@ -1532,18 +1544,18 @@ fn check_mesh_fields(d: &MeshPipelineDescriptor) -> Result<(), Error> {
             }));
         }
     }
-    // The mesh stage's required size gives its threads, as its function's maximum does; an
-    // object stage's does not.
-    let required = required_size(d.required_threads_per_mesh_threadgroup);
-    let max = d
-        .max_total_threads_per_mesh_threadgroup
-        .filter(|&max| max > 0);
-    if let (Some(required), Some(max)) = (required, max) {
+    // A stage's required size gives its threads, as its function's maximum does, in either
+    // stage: Metal's first compile refuses a maximum of other threads.
+    for (stage, required, max) in stages {
+        let (Some(required), Some(max)) = (required_size(required), max.filter(|&max| max > 0))
+        else {
+            continue;
+        };
         // Within the limit, so within `u32`.
         let specified = required.iter().product::<u32>();
         if specified != max {
             return Err(mesh_refusal(MeshPipelineProblem::MaxThreadsDiffer {
-                stage: Stage::Mesh,
+                stage,
                 specified,
                 max,
             }));

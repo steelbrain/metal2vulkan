@@ -568,14 +568,15 @@ impl RuntimeDependency {
 }
 
 /// Answers to Metal's queries of a mesh render pipeline's state (`MTLRenderPipelineState`'s
-/// mesh properties), as an M3 Max under macOS 27.0.1 answers them (`mesh_pipeline_limits.m`).
-/// Each thread limit is Metal's: the descriptor's maximum, else the stage function's own
-/// `[[max_total_threads_per_threadgroup(n)]]`, else 1024 (Metal refuses the two apart and either
-/// above 1024, [`MeshPipelineProblem`](crate::error::MeshPipelineProblem)), held to this device's
+/// mesh properties), as an M3 Max under macOS 27.0.1 answers them on a first compile of the
+/// functions (`mesh_pipeline_limits.m`). Each thread limit is Metal's: the least of the
+/// descriptor's maximum, the stage function's own `[[max_total_threads_per_threadgroup(n)]]`,
+/// the threads of the stage's required threadgroup size and 1024 (Metal refuses a descriptor
+/// maximum other than the function's or the required size's threads, and any of them above
+/// 1024, [`MeshPipelineProblem`](crate::error::MeshPipelineProblem)), held to this device's
 /// limit for the stage where that is lower: `maxTaskWorkGroupInvocations` and
 /// `maxMeshWorkGroupInvocations` with `VK_EXT_mesh_shader`, and `maxComputeWorkGroupInvocations`
 /// where the device runs both stages as compute work (`DeviceProfile::emulates_mesh_shading`).
-/// A required threadgroup size changes none of them, as on Metal.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

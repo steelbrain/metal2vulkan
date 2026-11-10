@@ -2021,10 +2021,12 @@ pub enum MeshPipelineProblem {
     /// with or without an object function.
     MaxThreadsOverLimit { stage: Stage, max: u32, limit: u32 },
     /// `stage`'s descriptor maximum `max` beside other `specified` threads: those of its
-    /// function's `[[max_total_threads_per_threadgroup(n)]]`, or of the mesh stage's required
-    /// size. The creation fails, code 3, "Kernel specified max total threads per threadgroup (64)
-    /// must match compute pipeline specified max total threads per threadgroup (32)". An object
-    /// stage's required size of fewer threads than its maximum is made.
+    /// function's `[[max_total_threads_per_threadgroup(n)]]`, or of the stage's required size.
+    /// The creation fails, code 3, "Kernel specified max total threads per threadgroup (64)
+    /// must match compute pipeline specified max total threads per threadgroup (32)". Metal
+    /// refuses a required size so on its first compile of the stage's function; it makes it
+    /// once it compiled that function under the same maximum and a required size of the
+    /// maximum's threads, which this refusal does not follow.
     MaxThreadsDiffer {
         stage: Stage,
         specified: u32,
