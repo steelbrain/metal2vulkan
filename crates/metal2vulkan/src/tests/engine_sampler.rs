@@ -498,7 +498,9 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
 /// for an integer texture's centre, where the slot's word states pixel coordinates. An argument
 /// buffer's sampler records no `DeviceDenormals`: `ArgumentPixelSamplerScaling`, which the runtime
 /// announces only while a pixel state lives, records its centre's reading. The depth comparison
-/// records `RestrictedDepthRange`, as MoltenVK exposes no `VK_EXT_depth_range_unrestricted`.
+/// records `RestrictedDepthRange`, as MoltenVK exposes no `VK_EXT_depth_range_unrestricted`. An
+/// argument buffer's raw texture sampled through the runtime slot holds its filter's
+/// `BicubicFilterArithmetic` only under the bound sampler's word (`SpecKey::BoundSamplerWord`).
 #[test]
 fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
     use crate::pipeline::sym::SpecKey;
@@ -540,12 +542,7 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
             None,
             &[N::GradFromBias],
         ),
-        (
-            "handles",
-            "argument_buffer_runtime_sampler",
-            None,
-            &[N::BicubicFilterArithmetic],
-        ),
+        ("handles", "argument_buffer_runtime_sampler", None, &[]),
         (
             "px_samplers",
             "px_sample_argument",
@@ -621,6 +618,19 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
         {
             assert!(
                 !fixture.starts_with("px_") && n.when.iter().all(|c| c.all.iter().any(pixel_state)),
+                "{what}: {n:?}"
+            );
+        }
+        // An emulated filter's note through the runtime slot: under the bound sampler's word.
+        for n in a
+            .specialized
+            .iter()
+            .filter(|n| n.note == N::BicubicFilterArithmetic)
+        {
+            assert!(
+                n.when
+                    .iter()
+                    .all(|c| c.all.iter().all(|t| t.key == SpecKey::BoundSamplerWord(s))),
                 "{what}: {n:?}"
             );
         }
