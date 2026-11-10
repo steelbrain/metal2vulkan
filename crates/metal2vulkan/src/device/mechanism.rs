@@ -105,6 +105,7 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::TileAttachmentFormat { .. } => Mechanism::KeyProjection,
         // The binder specializes the alpha from the bound texture's pixel format.
         RuntimeFact::OutOfBoundsAlpha { .. } => Mechanism::Specialization,
+        RuntimeFact::BorderTexels { .. } => Mechanism::Specialization,
         // The bound format's treatment is specialized; the planner refuses an unmeasured
         // format.
         RuntimeFact::BicubicTexels { .. } => Mechanism::Specialization,

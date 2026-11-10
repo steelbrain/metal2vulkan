@@ -758,6 +758,37 @@ fn through(m: vk::ComponentMapping, texel: [bool; 4]) -> [bool; 4] {
 pub(crate) const BORDER_COLORS: [[bool; 4]; 3] =
     [[false; 4], [false, false, false, true], [true; 4]];
 
+/// The `SpecKey::BorderTexels` of a texture of `pf` made with `swizzle`: bit `3c + b` is set where
+/// channel `c` (0 red to 3 alpha) of Metal's border texel ([`border_texel`]) for border color `b`
+/// (`MTLSamplerBorderColor`'s value, as [`BORDER_COLORS`] orders them) reads 1, not 0: the texel a
+/// Metal 4.1 read through a sampler hands back at an index outside the level on a border axis
+/// (`lower::texture::Through`). A color format's channels are its own
+/// ([`channels`](crate::metal::format::channels)). A depth or stencil format reads as red, green
+/// and blue, alpha 1: an Apple M3 Max (macOS 27.0.1) reads `Depth32Float` through a
+/// `texture2d<float>` as `(d, d, d, 1)` and its border as `(0, 0, 0, 1)`, `(0, 0, 0, 1)` and
+/// `(1, 1, 1, 1)` for the three colors; the other depth and stencil formats take that rule, an
+/// inference. `None` for a format of no stated channels (the placeholders).
+pub(crate) fn border_texels(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> Option<u32> {
+    let present = match crate::metal::format::is_depth_stencil(pf) {
+        true => [true, true, true, false],
+        false => crate::metal::format::channels(pf)?,
+    };
+    let mut bits = 0;
+    for (b, color) in (0u32..).zip(BORDER_COLORS) {
+        for (c, one) in (0u32..).zip(border_texel(pf, present, swizzle, color)) {
+            if one {
+                bits |= 1 << (3 * c + b);
+            }
+        }
+    }
+    Some(bits)
+}
+
+/// The [`border_texels`] of a slot bound to nothing, whose neutral texture reads zero: a
+/// four-channel format's without a swizzle (alpha 1 under opaque black, every channel 1 under
+/// opaque white).
+pub(crate) const NEUTRAL_BORDER_TEXELS: u32 = 0b110_100_100_100;
+
 /// Metal's texel at the border of a texture of `pf` whose channels are `present` (red, green, blue,
 /// alpha), made with `swizzle`, for the border color `color` (`[r, g, b, a]`, each 0 or 1): each
 /// channel the format has is the color's, but `A8Unorm`'s alpha, which is the color's red, and a
@@ -1002,6 +1033,14 @@ impl SamplerWord {
         | Self::ADDRESS[1]
         | Self::ADDRESS[2]
         | Self::BORDER;
+    /// The fields a Metal 4.1 read through a runtime sampler reads of its word
+    /// (`lower::texture::Through`): the address modes, which decide whether an index outside the
+    /// level reads the edge or the border texel; the border color; and the mip filter, which decides
+    /// whether the read reads at its level or the base level. The filters, coordinates,
+    /// comparison, reduction and anisotropy change nothing the read hands back (measured on an Apple
+    /// M3 Max), so samplers that differ only there share its pipeline.
+    pub const READ_STATE: u32 =
+        Self::MIP_FILTER | Self::ADDRESS[0] | Self::ADDRESS[1] | Self::ADDRESS[2] | Self::BORDER;
     /// The word of `desc`.
     pub fn of(desc: &SamplerDescriptor) -> SamplerWord {
         let mut w = 0;

@@ -221,6 +221,9 @@ pub(crate) fn bound_value(
         SpecKey::OutOfBoundsAlpha(slot) => bound_texture(shape, slot)
             .and_then(TextureShape::out_of_bounds_alpha)
             .unwrap_or(0),
+        SpecKey::BorderTexels(slot) => bound_texture(shape, slot)
+            .and_then(TextureShape::border_texels)
+            .unwrap_or(u64::from(metal::sampler::NEUTRAL_BORDER_TEXELS)),
         SpecKey::BicubicTexels(slot) => resources.bicubic_texels(slot)?,
         SpecKey::TexelFormat(slot) => resources.texel_format(slot),
         SpecKey::UnmeasuredTexels(slot) => resources.unmeasured_texels(slot),

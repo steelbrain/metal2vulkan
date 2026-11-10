@@ -781,6 +781,11 @@ pub enum RuntimeFact {
     /// word does not fit its workgroup memory; the binder refuses a draw that leaves a partial
     /// object threadgroup of that one (`NotImplemented(MeshShading)`).
     PartialObjectThreadgroups,
+    /// The function reads the texture bound to the slot through a sampler whose addressing may
+    /// read the border texel (Metal 4.1 `read(sampler s, ...)`): that texel is the border color in
+    /// the bound pixel format's channels, through the texture's swizzle, which the shader takes from
+    /// `SpecKey::BorderTexels`, which the binder sets from the bound texture.
+    BorderTexels { slot: SlotRef },
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.

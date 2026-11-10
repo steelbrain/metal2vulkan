@@ -1195,7 +1195,7 @@ pub(super) fn pixel_coordinates(
 
 /// The word of the runtime sampler `pixel` names: a slot's `SamplerState` specialization (masked by
 /// the fields the function reads), or an argument buffer's sampler table entry's.
-pub(super) fn sampler_word(
+pub(crate) fn sampler_word(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     pixel: Pixel,

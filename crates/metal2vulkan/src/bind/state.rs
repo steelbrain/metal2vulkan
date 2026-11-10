@@ -2113,6 +2113,13 @@ impl TextureShape {
         crate::metal::format::out_of_bounds_alpha_one(self.pixel_format()).map(u64::from)
     }
 
+    /// The `SpecKey::BorderTexels` of a slot bound to this texture: Metal's border texels of its
+    /// pixel format and swizzle (`metal::sampler::border_texels`). `None` for a placeholder pixel
+    /// format, whose slot reads its neutral.
+    pub(crate) fn border_texels(&self) -> Option<u64> {
+        crate::metal::sampler::border_texels(self.pixel_format(), self.swizzle()).map(u64::from)
+    }
+
     /// The bound texture's swizzle: a texture's or a texture buffer's.
     pub(crate) fn swizzle(&self) -> metal::TextureSwizzleChannels {
         match *self {

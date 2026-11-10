@@ -869,6 +869,13 @@ pub enum SpecKey {
     /// index buffer holds, which bounds nothing, so an indexed step runs its check whatever the
     /// key says.
     StageInReach,
+    /// Metal's border texels of the texture bound to the slot (`u32`, default a four-channel
+    /// format's without a swizzle): bit `3c + b` is set where channel `c` (0 red to 3 alpha) of the
+    /// texel a read through a sampler hands back at an index outside the level on a border axis
+    /// reads 1 for border color `b` (`MTLSamplerBorderColor`'s value), the format's channels and
+    /// the texture's swizzle deciding it (`metal::sampler::border_texels`,
+    /// `RuntimeFact::BorderTexels`).
+    BorderTexels(SlotRef),
 }
 
 impl SpecKey {

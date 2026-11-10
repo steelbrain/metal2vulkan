@@ -163,6 +163,7 @@ mod select;
 mod shared;
 
 pub use constexpr::{address_modes, constexpr_desc, state_of, state_words};
+pub(crate) use emit::sampler_word;
 pub use emit::{hoisted_gradients, sampling_value};
 pub use select::{select_heap_sampling, select_sampling};
 pub(crate) use shared::{shared_value, Candidates};
@@ -1076,6 +1077,9 @@ pub struct RuntimeSlot {
     /// An emulated anisotropic sample reads it ([`anisotropic`]): the function reads its word's
     /// anisotropy and mip filter and its `SpecKey::SamplerAnisotropy` specialization.
     pub emulated: bool,
+    /// A Metal 4.1 read through it addresses its texel by its word (`texture::Through`): the
+    /// function reads its word's address modes, border color, and mip filter.
+    pub reads: bool,
 }
 
 impl RuntimeSlot {
@@ -1100,6 +1104,9 @@ impl RuntimeSlot {
         }
         if self.texels {
             fields |= SamplerWord::LINEAR_FILTER;
+        }
+        if self.reads {
+            fields |= SamplerWord::READ_STATE;
         }
         fields
     }
@@ -1597,6 +1604,7 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error
                 texels: false,
                 min_level: false,
                 emulated: false,
+                reads: false,
             });
     }
     Ok(())

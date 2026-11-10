@@ -204,6 +204,9 @@ pub struct SlotPlan {
     /// `OutOfBoundsAlpha` specialization gives (`RuntimeFact::OutOfBoundsAlpha`): a read the shader
     /// checks, or a level-view read under any check, past the bound level count.
     pub oob_alpha: bool,
+    /// A read of the slot through a sampler may read the border texel, which the slot's
+    /// `BorderTexels` specialization gives (`RuntimeFact::BorderTexels`).
+    pub border_texels: bool,
     /// The device is left both an out-of-bounds store and an out-of-bounds load of the slot, so
     /// its variable is decorated `Volatile`; set by [`finish`].
     pub volatile: bool,
@@ -265,6 +268,7 @@ impl SlotPlan {
             uses: Uses::default(),
             presence: false,
             oob_alpha: false,
+            border_texels: false,
             volatile: false,
             sparse_arm: false,
             tile_map: false,

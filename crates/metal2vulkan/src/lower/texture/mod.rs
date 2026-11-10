@@ -59,12 +59,36 @@
 //! before indexing). A cube face or cube index out of range addresses a layer past the 2D-array
 //! view, never another cube's face.
 //!
-//! **Clamp-to-edge reads** (MSL 4.1 §6.13). Metal 4.1's `read(sampler s, ...)` through a constexpr
-//! `address::clamp_to_edge` sampler of default state reads the base level wherever its level is
-//! one of the texture's (the sampler has no mip filter), its signed coordinate (plus its offset)
-//! clamped into that level before the access, so only its level, layer, face, or sample index can
-//! be out of bounds, contained as above ([`Edge`]). A read through another constexpr sampler
-//! state or an argument sampler is refused.
+//! **Reads through a sampler** (MSL 4.1 §6.13, [`Through`]). Metal 4.1's `read(sampler s, coord
+//! [, offset][, lod])` is addressed by `s`'s state: a constexpr sampler's fields, a runtime
+//! `[[sampler(n)]]`'s word (`SpecKey::SamplerState` with `SamplerWord::READ_STATE`), or an
+//! argument buffer's sampler's table entry. Measured on an Apple M3 Max (macOS 27.0.1, Apple metal
+//! 32023.922, `-std=metal4.1`), each texel naming itself, over 2D (`RGBA32Float`, `RG32Float`,
+//! `R32Float`, `R32Uint`, `RGBA32Uint`, `RGBA32Sint`, `R8Unorm`, `A8Unorm`, `BGRA8Unorm`,
+//! `Depth32Float`, two swizzled views), 2D array, 3D, 1D, `read_write` 2D and texture buffer
+//! textures of one or two levels, through every address mode, border color and mip filter, per axis
+//! and mixed, constexpr, runtime and argument-buffer samplers alike:
+//! - Its level, under a mip filter (nearest or linear alike), is its own; without one, the base
+//!   level. A level past the texture's, or an array layer past its layers, reads zero in every
+//!   lane: not the out-of-bounds texel, whose alpha is the format's, and not through a swizzle.
+//! - Its signed coordinate plus its offset is tested per axis against that level's extent.
+//!   Outside it, an axis whose address mode is `clamp_to_zero` or `clamp_to_border` reads the
+//!   border texel, the sampler's border color (under `clamp_to_zero` too) in the format's channels
+//!   through the texture's swizzle (`metal::sampler::border_texels`), which a slot's
+//!   `BorderTexels` specialization states; every other mode (`clamp_to_edge`, `repeat`,
+//!   `mirrored_repeat`, `mirror_clamp_to_edge`) clamps the index into the level.
+//! - A texture buffer's index outside it reads its first texel under every edge mode, but a runtime
+//!   `[[sampler(n)]]`'s `clamp_to_edge`, which clamps it (an argument buffer's sampler's reads the
+//!   first texel too).
+//! - The filters, coordinates, comparison, anisotropy, reduction and LOD clamp change nothing.
+//!
+//! So the level, plane coordinate and layer are addressed before the access, and only a sample
+//! index can be out of bounds as a plain read's, contained as above. A heap element's handle
+//! states whether its format has alpha, which gives the transparent black border texel (the
+//! out-of-bounds texel) alone: a heap element read through a sampler that may read another border
+//! color is not implemented, nor is a `ulong` texel's border. A cube's read through a sampler
+//! (unclamped on the M3), a sparse one's (its residency unmeasured) and a `read_write` texture's
+//! at a computed level (Metal 4.1 has no such overload) are refused.
 //!
 //! **Storage levels**. A storage access reaches its view's base level only
 //! (`OpImageRead`/`OpImageWrite` take no `Lod`). A storage slot that is read or written at a level
@@ -284,8 +308,8 @@ pub struct Read {
     /// the alpha): a slot's `OutOfBoundsAlpha` specialization, or a heap element's
     /// out-of-bounds-alpha flag, which its handle carries; otherwise it is 0.
     pub alpha: bool,
-    /// A Metal 4.1 read through a clamp-to-edge sampler ([`Edge`]).
-    pub edge: Option<Edge>,
+    /// A Metal 4.1 read through a sampler ([`Through`]).
+    pub through: Option<Through>,
     /// The read takes an 8-bit sRGB texel's codes from its slot's image, which holds the format's
     /// UNORM twin (`LoweringInputs::srgb_textures`), and decodes them by the device's transfer
     /// (`emit::srgb_texel`, `RuntimeFact::SrgbTexture`).
@@ -349,7 +373,7 @@ pub struct Read {
 /// specialized alpha); the level views' count, index clamp, level test, and select; a heap
 /// element's access chain, load, and null select or guard; the sparse arm ([`RESIDENCY_WORDS`]) and
 /// the word's select outside the image, with its own in-bounds test where the shader has none; a
-/// clamp-to-edge read's size query, offset, and signed clamp; a `half` texel's call of the
+/// read through a sampler's addressing ([`Through::words`]); a `half` texel's call of the
 /// conversion routine or exact rounding, or an sRGB texel's raw decode; the lanes Metal reads as
 /// constants; the reinterpretation of another class's words; and each sibling of a heap read with
 /// its class test and branch, and a `half` read's merge of its arms' bits.
@@ -376,7 +400,7 @@ fn read_words(r: &Read) -> u32 {
             0
         }
         + r.heap_conversions.words(true)
-        + if r.edge.is_some() { 64 } else { 0 }
+        + r.through.map_or(0, Through::words)
         + if r.raw || r.srgb_codes {
             SRGB_DECODE_WORDS
         } else if r.extended.is_some() {
@@ -402,16 +426,66 @@ fn read_words(r: &Read) -> u32 {
     own + declared + siblings + half_bits
 }
 
-/// A Metal 4.1 `read(sampler s, ...)` through a constexpr clamp-to-edge sampler (MSL 4.1
-/// §6.13): its signed plane coordinate, plus `offset` where it has one, is clamped into the
-/// image's base level, which it reads where its level is one of the image's, so only a level,
-/// layer, face, or sample index is out of bounds (each as a plain read's). Measured on the M3 Max
-/// (macOS 27.0.1, a 2D texture of two levels): a level of 1 reads level 0, clamped into level 0's
-/// extent; a level of 2 reads zero.
+/// A Metal 4.1 `read(sampler s, ...)` (MSL 4.1 §6.13), measured on the M3 Max (macOS 27.0.1,
+/// module docs): its signed plane coordinate, plus `offset` where it has one, is addressed by
+/// `sampler`'s state at the level it reads ([`ReadSampler`]); a level or layer outside the image
+/// reads zero in every lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Edge {
+pub struct Through {
     /// The per-component offset (2D, 2D array, and 3D; Metal requires `-8..=7`), where not zero.
     pub offset: Option<ValueId>,
+    pub sampler: ReadSampler,
+}
+
+/// The sampler state a read through a sampler addresses by: per plane axis (`s`, `t`, `r`)
+/// whether an index outside the level reads the border texel (`clamp_to_zero` and
+/// `clamp_to_border`) or the edge (every other mode), the border color, and whether it has a mip
+/// filter, which reads at the read's level rather than the base level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadSampler {
+    /// A constexpr sampler's state; `color` is `MTLSamplerBorderColor`'s value.
+    Constant {
+        border: [bool; 3],
+        color: u32,
+        mip: bool,
+    },
+    /// Runtime sampler slot `n`'s word, its `SamplerState` specialization
+    /// (`lower::sampler::RuntimeSlot::reads`).
+    Slot(u32),
+    /// An argument buffer's sampler, by its handle's value: its sampler table entry's word.
+    Heap(ValueId),
+}
+
+impl Through {
+    /// The estimated words a read through a sampler adds to a plain read: the level's test and
+    /// choice, the size query, the offset, the signed clamp and each lane's test, the zero
+    /// texel's selection; a runtime sampler's word fields; and where it may read the border, the
+    /// border texel's lanes and their selection.
+    pub fn words(self) -> u32 {
+        let state = match self.sampler {
+            ReadSampler::Constant { .. } => 0,
+            ReadSampler::Slot(_) => 40,
+            ReadSampler::Heap(_) => 40 + crate::memory::handles::ENTRY_FIELD_WORDS,
+        };
+        let border = if self.sampler.bordered() { 64 } else { 0 };
+        96 + state + border
+    }
+}
+
+impl ReadSampler {
+    /// Whether an index outside the level may read the border texel.
+    pub fn bordered(self) -> bool {
+        match self {
+            ReadSampler::Constant { border, .. } => border.contains(&true),
+            ReadSampler::Slot(_) | ReadSampler::Heap(_) => true,
+        }
+    }
+
+    /// Whether the border texel it may read is the transparent black one, whatever the bound
+    /// format: the out-of-bounds texel, which a heap element's handle states.
+    fn transparent(self) -> bool {
+        matches!(self, ReadSampler::Constant { color, .. } if color == crate::metal::SamplerBorderColor::TransparentBlack.as_raw())
+    }
 }
 
 impl Read {
@@ -975,6 +1049,9 @@ pub struct Declared {
     /// Metal's out-of-bounds texel in the shader and observes its alpha: a read under
     /// [`ReadCheck::Shader`], or a level-view read under any check.
     pub oob_alpha: BTreeMap<u32, SValue>,
+    /// The `BorderTexels` specialization constant (a `u32`) of each slot one of whose reads
+    /// through a sampler may read the border texel.
+    pub border_texels: BTreeMap<u32, SValue>,
     /// The set-1 heap array of each declared heap class.
     pub heap: BTreeMap<ImageHandleClass, GlobalId>,
     /// The `SparseTexture` specialization constant of each slot with a sparse arm or a tile-map
@@ -1176,6 +1253,18 @@ pub fn declare(
                 ConstBits(0),
             )?;
             d.oob_alpha.insert(*index, mb.const_value(c)?);
+        }
+        if s.border_texels {
+            let u = mb.ty(SType::Int {
+                width: 32,
+                signed: false,
+            })?;
+            let c = mb.spec(
+                crate::pipeline::sym::SpecKey::BorderTexels(s.slot),
+                u,
+                ConstBits(u64::from(crate::metal::sampler::NEUTRAL_BORDER_TEXELS)),
+            )?;
+            d.border_texels.insert(*index, mb.const_value(c)?);
         }
         if s.sparse_arm || s.tile_map || s.sparse_writes {
             let b = mb.ty(SType::Bool)?;
@@ -3018,19 +3107,22 @@ fn select_read_as(
         },
         None => (texel, None),
     };
-    let edge = read_edge(cx, ops, m)?;
-    // A cube's read through the clamp-to-edge sampler clamps nothing: the M3 reads zero at a
-    // coordinate past the face's extent at the read's level, and the base level's texel at one
-    // within it. That read is not built, so it is refused.
-    if edge.is_some() && shape.dim == ImageDim::Cube {
+    let through = read_through(cx, ops, m)?;
+    // A cube's read through a sampler clamps nothing: the M3 reads zero at a coordinate past the
+    // face's extent at the read's level, and the base level's texel at one within it. That read
+    // is not built, so it is refused.
+    if through.is_some() && shape.dim == ImageDim::Cube {
         return Err(refuse());
     }
-    // Metal 4.1's `sparse_read(sampler s, ...)` is an edge read whose status word the function
-    // observes. What clamp-to-edge addressing does to the residency of a sparse texture's texels
-    // the specification does not say, and the M3 measured it only over a texture that is not
-    // sparse (resident throughout), so it is refused.
-    if edge.is_some() && status_use(cx, at).is_some() {
+    // Metal 4.1's `sparse_read(sampler s, ...)` is a read through a sampler whose status word the
+    // function observes. What the sampler's addressing does to the residency of a sparse
+    // texture's texels the specification does not say, and the M3 measured it only over a
+    // texture that is not sparse (resident throughout), so it is refused.
+    if through.is_some() && status_use(cx, at).is_some() {
         return Err(refuse());
+    }
+    if let Some(t) = through {
+        select_through(cx, image, texel, t)?;
     }
     let residency = residency(cx, at, image)?;
     let (storage, write_only) = image_access(cx, image)?;
@@ -3067,6 +3159,11 @@ fn select_read_as(
     // A storage read at a level reads the slot's level views, and past the bound level count
     // selects Metal's out-of-bounds texel on every profile.
     let level_views = storage && level.is_some();
+    // Metal 4.1's reads of a `read_write` texture through a sampler take no level (AIR passes the
+    // constant 0), so one at a level its function computes is not built.
+    if level_views && through.is_some() {
+        return Err(refuse());
+    }
     // Metal's out-of-bounds alpha is the bound format's (1 where it has none): a read the shader
     // checks, or tests against its level views, whose alpha the function observes takes it from the
     // slot's specialization, or from a heap element's handle-table entry. So does one whose
@@ -3091,7 +3188,10 @@ fn select_read_as(
     // A `ulong` read's lanes past the first are Metal's constants `(0, 0, 1)` in and out of
     // bounds, never the image's. A swizzled read may return the alpha in any lane, so it observes
     // the alpha wherever the function reads a lane.
-    let observed = (check == ReadCheck::Shader || level_views || residency)
+    // A heap element read through a sampler selects that texel as its transparent black border
+    // texel too (`select_through`).
+    let bordered_heap = image.heap() && through.is_some_and(|t| t.sampler.bordered());
+    let observed = (check == ReadCheck::Shader || level_views || residency || bordered_heap)
         && texel.lanes == 4
         && !matches!(texel.conv, TexelConv::U64Words { .. })
         && (swizzle || storage_swizzle || alpha_read(cx, at));
@@ -3213,7 +3313,7 @@ fn select_read_as(
         residency,
         check,
         alpha,
-        edge,
+        through,
         raw,
         srgb_codes,
         swizzle,
@@ -3229,45 +3329,38 @@ fn select_read_as(
     })
 }
 
-/// The sampler state whose read the MSL 4.1 specification states (§6.13): `constexpr
-/// sampler(address::clamp_to_edge)`'s, as Apple's `metal -std=metal4.1` encodes it (clamp-to-edge
-/// on every axis, and the default for every other field).
-const EDGE_SAMPLER_WORD: u64 = 0x007B_FF00_0008_0049;
-
 /// The addressing of read `ops`. Metal's sampler-less `read` passes the front end's read sampler
 /// (`air.get_read_sampler`), which addresses nothing, and a zero offset. Metal 4.1's `read(sampler
-/// s, ...)` passes `s` and its offset: "Clamp-to-edge applies only when the texture coordinate
-/// (after adding the offset) falls out of bounds. It doesn't apply to other parameters such as
-/// face, array, or lod" (MSL 4.1 §6.13). That is exact for a constexpr sampler whose state is
-/// [`EDGE_SAMPLER_WORD`]'s, an [`Edge`], whose level the M3 measured. The M3 also reads through
-/// the other address modes, border colors, and mip filters (`repeat` and `mirrored_repeat` as
-/// clamp-to-edge, `clamp_to_zero` and `clamp_to_border` the border color, and a mip filter at the
-/// read's level), but those reads are not built, and an argument sampler's state is
-/// the binder's, so either is refused. The specification's overloads take `int` coordinates and
-/// offsets; a narrower lane, which lowering holds zero-extended, has no overload whose meaning it
-/// could take, so it is refused too.
-fn read_edge(cx: &SelectCx<'_>, ops: &Operands<'_>, m: &mut Meter) -> Result<Option<Edge>, Error> {
+/// s, ...)` passes `s` and its offset, a [`Through`] read of `s`'s state: a constexpr sampler's
+/// fields, a runtime `[[sampler(n)]]`'s word, or an argument buffer's sampler's table entry. A
+/// sampler of several candidates, or the null or absent one, is refused. The specification's
+/// overloads take `int` coordinates and offsets; a narrower lane, which lowering holds
+/// zero-extended, has no overload whose meaning it could take, so it is refused too.
+fn read_through(
+    cx: &SelectCx<'_>,
+    ops: &Operands<'_>,
+    m: &mut Meter,
+) -> Result<Option<Through>, Error> {
     let offset = ops.get(TexRole::Offset).filter(|o| !is_zero(cx, *o));
-    let edge = match ops.get(TexRole::Sampler) {
-        None => false,
-        Some(s) if read_sampler(cx, s) => false,
+    let sampler = match ops.get(TexRole::Sampler) {
+        None => None,
+        Some(s) if read_sampler(cx, s) => None,
         Some(s) => {
-            let Some(want) = crate::air::abi::SamplerState::from_words([EDGE_SAMPLER_WORD, 0])
-            else {
-                return Err(cx.invariant("the clamp-to-edge sampler state does not decode"));
+            let sampler = match crate::lower::access::handle::heap_sampler_target(cx, s)? {
+                Some(h) => ReadSampler::Heap(h),
+                None => match crate::lower::access::handle::sampler_target(cx, s, m)? {
+                    HandleTarget::One(Candidate::Constexpr { global, .. }) => {
+                        let Some((_, state)) =
+                            cx.entry.static_samplers.iter().find(|(g, _)| *g == global)
+                        else {
+                            return Err(cx.invariant("a constexpr sampler without its state"));
+                        };
+                        constant_read_sampler(state)
+                    }
+                    HandleTarget::One(Candidate::Sampler(n)) => ReadSampler::Slot(n),
+                    _ => return Err(refuse()),
+                },
             };
-            let state = match crate::lower::access::handle::sampler_target(cx, s, m)? {
-                HandleTarget::One(Candidate::Constexpr { global, .. }) => cx
-                    .entry
-                    .static_samplers
-                    .iter()
-                    .find(|(g, _)| *g == global)
-                    .map(|(_, state)| *state),
-                _ => None,
-            };
-            if state != Some(want) {
-                return Err(refuse());
-            }
             let int = |v: Value| {
                 cx.value_ty(v)
                     .and_then(|t| cx.entry.module.types().int_bits(t))
@@ -3277,16 +3370,80 @@ fn read_edge(cx: &SelectCx<'_>, ops: &Operands<'_>, m: &mut Meter) -> Result<Opt
             if !coordinate || ops.get(TexRole::Offset).is_some_and(|o| !int(o)) {
                 return Err(refuse());
             }
-            true
+            Some(sampler)
         }
     };
-    match (edge, offset) {
-        (true, o) => Ok(Some(Edge {
+    match (sampler, offset) {
+        (Some(sampler), o) => Ok(Some(Through {
             offset: o.map(|o| id(cx, o)).transpose()?,
+            sampler,
         })),
-        (false, None) => Ok(None),
+        (None, None) => Ok(None),
         // A sampler-less read has no offset.
-        (false, Some(_)) => Err(refuse()),
+        (None, Some(_)) => Err(refuse()),
+    }
+}
+
+/// The addressing of constexpr sampler state `state` for a read: its fields that address one
+/// texel. Its filters, coordinates, comparison, anisotropy, reduction, LOD clamp and bias change
+/// nothing (module docs). AIR holds `clamp_to_border` with a transparent black border as
+/// `clamp_to_zero`, which reads that color.
+fn constant_read_sampler(state: &crate::air::abi::SamplerState) -> ReadSampler {
+    use crate::air::abi::{AddressMode, BorderColor, MipFilter};
+    use crate::metal::SamplerBorderColor;
+    let border = [state.address_s, state.address_t, state.address_r]
+        .map(|a| matches!(a, AddressMode::ClampToZero | AddressMode::ClampToBorder));
+    let color = match state.border_color {
+        BorderColor::TransparentBlack => SamplerBorderColor::TransparentBlack,
+        BorderColor::OpaqueBlack => SamplerBorderColor::OpaqueBlack,
+        BorderColor::OpaqueWhite => SamplerBorderColor::OpaqueWhite,
+    };
+    ReadSampler::Constant {
+        border,
+        color: color.as_raw(),
+        mip: state.mip_filter != MipFilter::None,
+    }
+}
+
+/// Plan what read through a sampler `t` of `image` reads besides the image: a runtime slot's
+/// word (`RuntimeSlot::reads`), and where an index outside the level may read the border texel, a
+/// slot's `BorderTexels` specialization (`RuntimeFact::BorderTexels`). A heap element's handle
+/// states only whether its format has alpha, which gives the transparent black border texel
+/// alone, so a read of one that may read another border color is not implemented; nor is a
+/// `ulong` texel's border, which is not measured.
+fn select_through(
+    cx: &mut SelectCx<'_>,
+    image: ImageRef,
+    texel: TexelForm,
+    t: Through,
+) -> Result<(), Error> {
+    if let ReadSampler::Slot(n) = t.sampler {
+        match cx.families.sampler.slots.get_mut(&n) {
+            Some(s) => s.reads = true,
+            None => return Err(cx.invariant("an unplanned sampler slot")),
+        }
+    }
+    if !t.sampler.bordered() {
+        return Ok(());
+    }
+    if matches!(texel.conv, TexelConv::U64Words { .. }) {
+        return Err(Unsupported::not_implemented(Feature::Lowering(LowerFamily::Texture)).into());
+    }
+    match image {
+        ImageRef::Slot(index) => {
+            let Some(s) = cx.families.texture.slots.get_mut(&index) else {
+                return Err(cx.invariant("an unplanned texture slot"));
+            };
+            s.border_texels = true;
+            let slot = s.slot;
+            cx.facts
+                .insert(crate::pipeline::facts::RuntimeFact::BorderTexels { slot });
+            Ok(())
+        }
+        ImageRef::Heap { .. } if t.sampler.transparent() => Ok(()),
+        ImageRef::Heap { .. } => {
+            Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into())
+        }
     }
 }
 
