@@ -2145,12 +2145,11 @@ pub(crate) fn unattached_colors_written(
 /// interlock, the state of every attachment the entry reads through a `[[color(n)]]` input of a
 /// constant index (one an instruction of its specialized body uses: an input the function's
 /// constants leave unread reads nothing), of every extended-range attachment it writes that the
-/// pass blends (whose blend the
-/// function computes from the texel it reads) or writes unblended under a mask of some of the codes
-/// one word holds (`color_writes::merged_extended`), of every attachment held with its channels
-/// rotated whose blend the function computes (`color_writes::shader_rotated_blend`, in either form
-/// below), and of every attachment variant `v`'s instance keeps
-/// out of its subpass that the entry writes through its first output
+/// pass blends (whose blend the function computes from the texel it reads) or writes unblended
+/// under a mask of some of the codes one word holds (`color_writes::merged_extended`), of every
+/// attachment held with its channels rotated whose blend the function computes
+/// (`color_writes::shader_rotated_blend`, in either form below), and of every attachment variant
+/// `v`'s instance keeps out of its subpass that the entry writes through its first output
 /// (`VariantKey::interlocked_colors`); `None` on another device or for an entry that declares none
 /// of them. On a device that orders fetch through rasterization-order input attachments, the state
 /// of every extended-range attachment the entry writes that the pass blends (whose blend the
