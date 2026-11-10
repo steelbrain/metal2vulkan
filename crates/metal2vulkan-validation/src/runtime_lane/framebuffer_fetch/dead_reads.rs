@@ -185,7 +185,7 @@ fn a_framebuffer_read_dead_after_specialization_draws_as_a_plain_pipeline() {
         );
         let drawn = two_draws(&lane, &messages, &dead);
         let mut exact = 0;
-        for (i, texel) in drawn.texels.chunks_exact(4).enumerate() {
+        for (i, texel) in drawn.texels.as_chunks::<4>().0.iter().enumerate() {
             for (c, (&got, &want)) in texel.iter().zip(&DEAD_TEXEL).enumerate() {
                 assert!(
                     got.abs_diff(want) <= 1,
