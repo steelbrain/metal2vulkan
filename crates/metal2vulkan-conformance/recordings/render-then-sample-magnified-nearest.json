@@ -485,7 +485,7 @@
         "metal2vulkan-degrade-half-output-fast-math-blend"
       ],
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 2,
         "argument_objects_retained": 3,
         "argument_samplers_taken": 2,
@@ -540,7 +540,7 @@
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
         "creation_pipelines_drawn": 2,
-        "creation_pipelines_made": 3,
+        "creation_pipelines_made": 2,
         "creation_render_pipelines_drawn": 2,
         "creation_render_pipelines_made": 3,
         "descriptor_keys_built": 2,
@@ -603,7 +603,7 @@
         "stage_tables_read_in_part": 8,
         "submit_infos": 1,
         "trail_waits": 1,
-        "variant_pipelines_made": 3,
+        "variant_pipelines_made": 2,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
@@ -660,13 +660,13 @@
         "variant_pipelines_made": 2
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 2,
-        "creation_pipelines_made": 3,
+        "creation_pipelines_made": 2,
         "pipeline_layouts_made": 2,
         "pooled_memory_blocks_made": 3,
         "shader_modules_made": 4,
-        "variant_pipelines_made": 3
+        "variant_pipelines_made": 2
       },
       "per_state": {
         "pipelines": 2,
