@@ -125,7 +125,9 @@ impl ExtendedShadows {
             .zip(&descriptor.color_attachments)
             .filter_map(|(index, color)| {
                 let texture = color.texture.as_ref()?;
-                // Not the padded and bfloat forms, whose tile memory is unmeasured.
+                // Not the padded forms, whose shadow the translator does not build
+                // (`lower::fragment::fetch`), nor the bfloat forms, whose tile memory is
+                // unmeasured: their draws keep the codes, announced.
                 let form = ExtendedRange::of(texture.pixel_format())
                     .filter(|form| !form.padded() && !form.bfloat())?;
                 let tile = match color.load_action {

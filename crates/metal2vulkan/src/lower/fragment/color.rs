@@ -224,7 +224,8 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
                 index: color,
             }));
         }
-        // A padded 10-bit attachment's tile value is not measured.
+        // What a fetch reads of a padded 10-bit attachment's tile is not measured (a blend's
+        // destination is: `fetch`'s storage form, `input_blend`).
         if e.form.padded() {
             let refused = Unsupported::not_implemented(Feature::FramebufferFetch);
             return Err(refused.at_attachment(Attachment::Color(color)).into());

@@ -2644,8 +2644,8 @@ fn a_pass_renders_only_the_ycbcr_formats_whose_store_is_matched() {
 /// `BGR10_XR` has no alpha. A padded form's channels read `c / 1023`: `0.33371`'s `half` is not
 /// code 341's (the M3 Max's tile held the `half`: a premultiplied blend of `(0, 0, 0, 0.5)` over
 /// that clear stored code 171 where code 341's value gives 170), nor `0.5`'s code 512's, while 0
-/// and 1 are; only the channels a padded form has count. The bfloat forms' tile memory is
-/// unmeasured.
+/// and 1 are (but `RG10Unorm_X12_sRGB`'s 1, whose code reads back linear); only the channels a
+/// padded form has count. The bfloat forms' tile memory is unmeasured.
 #[test]
 fn clears_read_back_where_their_halves_are_their_codes_values() {
     let planes = ExtendedRange::Planes { srgb: false };
@@ -2676,7 +2676,9 @@ fn clears_read_back_where_their_halves_are_their_codes_values() {
         ExtendedRange::Rgb10A2Srgb,
     ] {
         assert_eq!(form.clear_read_back([0.0; 4]), Some(true), "{form:?}");
-        assert_eq!(form.clear_read_back([1.0; 4]), Some(true), "{form:?}");
+        // `RG10Unorm_X12_sRGB` writes 1 as code 137 (Metal's table), which reads `137 / 1023`.
+        let one = form != ExtendedRange::Rg10X12Srgb;
+        assert_eq!(form.clear_read_back([1.0; 4]), Some(one), "{form:?}");
     }
     let r10 = ExtendedRange::R10X6;
     assert_eq!(

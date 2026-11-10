@@ -1791,7 +1791,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         };
         // The instance's `half` shadow of an extended-range attachment, held as the
         // attachment's storage image holds its samples (one, multisampled or planes), of a form
-        // whose tile memory is measured (not a padded or bfloat one). The shadow is the
+        // whose shadow is built (not a padded or bfloat one). The shadow is the
         // attachment's tile value only where every write of it keeps it, so a shadowed attachment
         // the storage form does not take is refused whatever the policy: an unordered input
         // attachment would neither read nor write it.
