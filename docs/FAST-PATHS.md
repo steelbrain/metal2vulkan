@@ -1541,12 +1541,25 @@ else.
   draw that splits its instance or needs work around it, one that meets a notice its device
   announces at each occurrence), until a write reaches that chunk. Not announced.
 
-- **On ANV below Xe-HP, a device holds at most 16,384 command buffers that recorded a binding
-  table, in flight, in recording or kept** (Mesa 26.2.4, `anv_device.c`): each takes a 64 KiB
-  block of the device's 1 GiB binding-table pool, freed only as the command buffer is begun
-  again, reset or freed, and a recording past them fails with `OutOfMemory(Device)` where Metal
-  runs it. A render pass whose draws record in a secondary command buffer takes two, the
-  secondary and the primary that begins it: on ms01's Iris Xe one command buffer of render
-  passes, each a draw beside a cleared depth target, failed so at the end of its 8,087th pass,
-  the spares holding 424 command buffers. The spare command pools keep at most 4,096 of them
-  (`spares.rs`), which leaves the rest to the command buffers committed and in recording.
+- **On ANV below Xe-HP, a device holds at most 16,384 command buffers begun, in flight, in
+  recording or kept** (Mesa 26.2.4 and 26.2.6, `anv_device.c`): each takes a 64 KiB block of the
+  device's 1 GiB binding-table pool, freed only as the command buffer is begun again, reset or
+  freed. An encoder's recording past them fails with `OutOfMemory(Device)` or `EncoderAbandoned`
+  where Metal runs it, and a submission that begins command buffers past them crashed in the
+  driver where it recorded a clear. A render pass whose first instance records inline takes one
+  command buffer (`render/inline_first.rs`; a pass beside a depth/stencil attachment it loads or
+  clears and stores among them), and one whose draws record in a secondary takes two (a pass
+  that stores its depth or stencil `DontCare`, Metal's default for them, or loads one
+  `DontCare`, a multisampled, layered or resolved pass, and the other kinds
+  `WorkCounts::passes_not_inline_*` count). A batch begins one more before each of the first
+  2,048 encoders of its command buffer that needs a barrier, and none past them (`encoder.rs`,
+  `WorkCounts::encoders_barriered_at_open`). On ms01's Iris Xe one command buffer of 10,000 render
+  passes, each a draw beside a cleared depth target, runs in 12,049 command buffers
+  (`tests::many_passes`); one of such passes recorded inline encoded 16,173 and refused to open
+  the next, and one of passes that take a secondary failed at the end of its 8,087th, the
+  spares holding 424 command buffers. A command buffer of passes recorded inline, its targets'
+  first clears in its submission (`texture/first_move.rs`), ran with 14,000 passes, and with
+  14,300 its submission went past the pool and crashed in the driver as it recorded those
+  clears: such a command buffer of more than about 14,100 encoders can end the process there,
+  where Metal runs it. The spare command pools keep at most 4,096 command buffers (`spares.rs`),
+  which leaves the rest to the command buffers committed and in recording.
