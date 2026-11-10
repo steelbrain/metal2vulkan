@@ -879,7 +879,9 @@ fn an_argument_buffer_texture_reads_its_border_texels_from_its_table_entry() {
             base(Want::Border(b)),
         ));
     }
+    let not_implemented = Unsupported::not_implemented(Feature::ArgumentBufferTextures);
     let mut ran = Vec::new();
+    let mut entries_ran = std::collections::BTreeSet::new();
     for (stem, dev) in devices {
         for (entry, sampler, rows) in &reads {
             let lib = Library::from_air(&bc).expect("library");
@@ -888,7 +890,11 @@ fn an_argument_buffer_texture_reads_its_border_texels_from_its_table_entry() {
                 ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
             let pipe = match dev.compile_compute_pipeline(&desc, &Budget::standard()) {
                 Ok(p) => p,
-                Err(Error::Unsupported(u)) if u.feature == Feature::ArgumentBufferTextures => {
+                // A device without the descriptor-indexing features a handle heap needs.
+                Err(Error::Unsupported(u))
+                    if u.feature == Feature::ArgumentBufferTextures
+                        && u.needs != not_implemented.needs =>
+                {
                     continue
                 }
                 Err(e) => panic!("{stem}: {entry}: {e}"),
@@ -1067,11 +1073,16 @@ fn an_argument_buffer_texture_reads_its_border_texels_from_its_table_entry() {
                 }
             }
             ran.push(class);
+            entries_ran.insert(*entry);
         }
     }
     ran.sort();
     ran.dedup();
     assert_eq!(ran, ALL);
+    assert_eq!(
+        entries_ran.into_iter().collect::<Vec<_>>(),
+        ["rt_heap_arg", "rt_heap_ow", "rt_heap_zero"]
+    );
 }
 
 /// Metal's border texels per format (`metal::sampler::border_texels`), as the M3 Max read them
