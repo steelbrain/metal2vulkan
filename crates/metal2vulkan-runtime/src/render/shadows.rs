@@ -15,7 +15,8 @@
 //!   buffer keeps its bytes, Metal's answer (a Metal probe on the M3 Max and an M4, and the
 //!   DontCare-store probe, `kept_bytes.rs`). A pass that reaches no tile
 //!   (`clear_reach::PassReach::Nothing`) leaves a color attachment it loads, resolves nothing from
-//!   and stores (or stores `DontCare`) as it was, as Metal loads and stores only the tiles a draw
+//!   and stores (or stores `DontCare`) as it was (but one it loads after a clear before it past
+//!   the render area, `ColorTarget::cleared_ahead`, which is copied in and back), as Metal loads and stores only the tiles a draw
 //!   reaches: where its texture's shadow is an image of a buffer's bytes, nothing is copied in or
 //!   back. A pass whose draws do reach tiles, some or (where it clears and stores an attachment)
 //!   every one, changes a color attachment it loads (as the encoder set its load, so no clear
@@ -767,7 +768,7 @@ fn attachment_shadows(
                     copies: Arc::clone(copies),
                     writes: stores,
                     overwrites,
-                    kept: !reached,
+                    kept: !reached && !color.cleared_ahead,
                     area: area.map(|area| instance.unwrap_or(area)),
                     loads: area,
                     // A color it loads and stores inside its draws' scissors: Metal's store
@@ -852,8 +853,11 @@ fn color_take(
     // Vulkan's load and store write back what they read. Nothing resolves from it, so the
     // pass needs none of the texels: a texture over a buffer's bytes in its own image takes
     // no copy in, and nothing is copied back.
+    // One a clear before the pass cleared past the render area is changed, though it loads
+    // (`ColorTarget::cleared_ahead`).
     let untouched = !reached
         && color.load == LoadAction::Load
+        && !color.cleared_ahead
         && matches!(color.store, StoreAction::Store | StoreAction::DontCare)
         && color.resolve.is_none()
         && color.copied_resolve.is_none()

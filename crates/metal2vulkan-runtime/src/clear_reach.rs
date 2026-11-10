@@ -896,6 +896,7 @@ impl ReachClears {
                         .filter(|color| color.load == LoadAction::Clear && color.planes.is_none())
                     {
                         color.load = LoadAction::Load;
+                        color.cleared_ahead = true;
                     }
                 }
                 Reached::DepthStencil { depth, stencil } => {

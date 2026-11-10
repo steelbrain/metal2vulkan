@@ -766,6 +766,11 @@ pub(super) struct ColorTarget {
     /// (`render.rs`), announces it ([`degrade_clear_conversion`]). `None` elsewhere: such a
     /// clear's note is announced as the pass is laid out ([`layout`]).
     pub(super) withheld_clear: Option<[f64; 4]>,
+    /// A clear before the pass cleared the attachment over its reach past the render area, which
+    /// the pass then loads (`clear_reach::ReachClears::load_in_pass`): the pass changes its
+    /// texels though its load is `Load`, which a pass that reaches no tile leaves alone otherwise
+    /// (`render/shadows.rs`).
+    pub(super) cleared_ahead: bool,
 }
 
 impl std::fmt::Debug for ColorTarget {
@@ -790,6 +795,7 @@ impl std::fmt::Debug for ColorTarget {
             .field("stand_in", &self.stand_in)
             .field("planes", &self.planes)
             .field("withheld_clear", &self.withheld_clear)
+            .field("cleared_ahead", &self.cleared_ahead)
             .finish()
     }
 }
@@ -1684,6 +1690,7 @@ pub(super) fn layout(
             stand_in,
             planes: None,
             withheld_clear,
+            cleared_ahead: false,
         }));
     }
     while colors.last().is_some_and(Option::is_none) {
