@@ -1,10 +1,10 @@
 // What plain Metal makes of a fragment function that declares an input whose read its function
 // constant makes dead: a `[[color(0)]]` input in a raster order group, a `const device` buffer in
 // one, a `[[color(0)]]` input of an output in one, and a `[[color(1)]]` input of a color the
-// pipeline has no pixel format for. The reference of `metal2vulkan`'s
-// `tests::engine_dead_reads` and the runtime lanes `runtime_lane::color_groups` and
-// `runtime_lane::extra_colors`, over the owned fixture `engine/dfk_dead_rog` (its source is
-// repeated here, with `color_groups`' `cg_cover`).
+// pipeline has no pixel format for. The reference of `metal2vulkan`'s `tests::engine_dead_reads`
+// and `tests::engine_color_groups`, and of the runtime lane `runtime_lane::color_groups`, over the
+// owned fixture `engine/dfk_dead_rog` (its source is repeated here, with `color_groups`'
+// `cg_cover`).
 //
 // Build (no cargo target needed):
 //   clang -fobjc-arc -O1 -fmodules -o dead_ordered_and_unattached_reads \
@@ -21,6 +21,18 @@
 // closed form's (`tint` at the pixel center, `tint`'s swizzles, the clear for a color nothing
 // draws, zero for the color the pipeline lacks; a live read's value plus `tint`) and its first
 // texel's halves.
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (`rasterOrderGroupsSupported` YES), with
+// `MTL_DEBUG_LAYER` unset and set alike (the layer reported nothing):
+//
+//   color, buffer, output   the state is made and the draw completes, dead and live; every texel of
+//                           every color is the closed form's (64 of 64), the dead read's `tint` at
+//                           color 0, the live one's read plus `tint` (color 0's first texel
+//                           (0.03125, 0.46875, 0.96875, 0.25) dead; (0.0625, 0.71875, 0.96875,
+//                           0.75) for a color read live, (0.15625, 0.71875, 1.34375, 0.75) for the
+//                           buffer's).
+//   lacks                   no state, dead and live: "Shaders reads from a color attachment whose
+//                           pixel format is MTLPixelFormatInvalid".
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
