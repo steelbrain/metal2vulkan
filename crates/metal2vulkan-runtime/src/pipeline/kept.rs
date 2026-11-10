@@ -22,11 +22,11 @@
 //!   them all. A kept instance of a vertex and fragment function of a few instructions each
 //!   (`tests/kept_variants.rs`, `what_a_kept_instance_holds`, release builds) held 333 KiB of
 //!   resident memory on lavapipe (three runs alike), 1022 KiB of GTT on RADV on a Radeon 780M (two
-//!   runs alike), and 158 KiB and 794 KiB of physical footprint on MoltenVK on an M3 Max (two runs,
-//!   the first compiling its functions cold): about 83 MiB, 256 MiB and up to 199 MiB at the bound
-//!   for such pipelines (larger functions not measured). A state made again from a kept instance
-//!   took 26 to 40 us at the median on each, with 64 or with 256 kept (the linear scan of the
-//!   instances included), against 73 to 151 us where its `VkPipeline` was made again. A kept
+//!   runs alike), and 792 KiB of physical footprint on MoltenVK on an M3 Max (four runs alike; 158
+//!   KiB in one whose functions Metal compiled cold): about 83 MiB, 256 MiB and 198 MiB at the
+//!   bound for such pipelines (larger functions not measured). A state made again from a kept
+//!   instance took 26 to 40 us at the median on each, with 64 or with 256 kept (the linear scan of
+//!   the instances included), against 73 to 151 us where its `VkPipeline` was made again. A kept
 //!   instance's immutable samplers count against the device's limit (`SamplerLimit`) while it is
 //!   kept: a sampler the device refuses there evicts the least recently released instance that
 //!   holds any first ([`Kept::evict_for_samplers`]), in a program's call, and is made again.
