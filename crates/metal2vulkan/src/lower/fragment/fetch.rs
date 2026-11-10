@@ -1997,14 +1997,11 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         let refused = Unsupported::not_implemented(Feature::Format);
         return Err(refused.at_attachment(Attachment::Color(c.color)).into());
     }
-    // What a fetch reads of a padded 10-bit attachment's tile is not measured (its blend's
-    // destination is, [`blended`]).
-    if sc.view.extended.is_some_and(ExtendedRange::padded) {
-        let refused = Unsupported::not_implemented(Feature::FramebufferFetch);
-        return Err(refused.at_attachment(Attachment::Color(c.color)).into());
-    }
     class_of(c.form, sc.view.read_class(), c.color, false)?;
-    // An extended-range texel converts by the device's arithmetic.
+    // An extended-range or padded 10-bit texel converts by the device's arithmetic, its read the
+    // tile value of its codes ([`value`]). After a clear or an earlier draw of the pass Metal's
+    // tile holds their `half`, which the codes do not keep: the runtime announces
+    // `extended-range-blends-stored-codes` there.
     if let Some(e) = sc.view.extended {
         cx.families.arith.converts(e);
     }

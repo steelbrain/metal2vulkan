@@ -198,7 +198,10 @@ pub fn decode(
 /// `BGRA10_XR_sRGB`'s are clamped to 1022 and decoded ([`decode`]), `BGR10_XR_sRGB`'s and the
 /// two-plane twin's decoded and then clamped to the linear values of codes 0 and 1022,
 /// `[-384 / 510, 638 / 510]`; a padded form's every code is decoded as it is (code 1023 is one);
-/// each lane is the device's narrowing of that value to `half`. Alpha is [`decode`]'s.
+/// each lane is the device's narrowing of that value to `half`. Alpha is [`decode`]'s. A padded
+/// form's fetch reads so on Metal: each loaded code's value rounded to `half`, a `float` input's
+/// too, an sRGB twin's colour through Metal's table (every code of each padded form on the M3 Max
+/// under macOS 27.0.1, `probes/padded_fetch.m` of the conformance crate).
 pub fn tile_value(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, raw: Value) -> BResult<Value> {
     let c = codes(fb, form, raw)?;
     if form.padded() {
