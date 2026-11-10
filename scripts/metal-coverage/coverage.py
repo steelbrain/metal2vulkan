@@ -26,7 +26,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 TABLE = HERE / "coverage.tsv"
 DOC = ROOT / "docs" / "METAL-COVERAGE.md"
-SDK = "macOS 27.0 SDK (Xcode 27.0, 27A266a)"
+SDK = "macOS 27.2 SDK (Xcode 27.2, 27B52)"
 
 STATUS = OrderedDict([("I", "implemented"), ("M", "missing"), ("O", "out of scope")])
 SIZES = ["S", "M", "L", "XL"]
