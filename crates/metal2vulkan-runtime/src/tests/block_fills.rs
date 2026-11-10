@@ -3,7 +3,8 @@
 //! identity says its plain allocations hold its submissions
 //! (`DriverFact::PlainAllocationsHoldSubmissions`) and that exports pooled memory as an opaque
 //! file descriptor (`memory::fd_buffer_types`), each such block counted as filled
-//! (`WorkCounts::plain_block_fills_saved` or `plain_block_fills_missed`), and on no other device.
+//! (`WorkCounts::plain_block_fills_saved` or `plain_block_fills_missed`) or as left unfilled after
+//! the device's fills missed (`plain_block_fills_skipped`), and on no other device.
 //! The run makes `Private` textures until the pool of images made [`BLOCKS`] blocks and reads the
 //! device's counts of fills.
 //!
@@ -65,11 +66,12 @@ fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions
     }
     let saved = counts.plain_block_fills_saved - start.plain_block_fills_saved;
     let missed = counts.plain_block_fills_missed - start.plain_block_fills_missed;
+    let skipped = counts.plain_block_fills_skipped - start.plain_block_fills_skipped;
     let blocks = image_blocks(&start, &counts);
     println!(
         "BLOCK-FILLS {}: plain allocations hold its submissions {holds}, blocks filled first of \
          memory types {types:#x}; of {blocks} blocks of images made, {saved} filled first and \
-         made under 1 ms, {missed} filled first and not",
+         made under 1 ms, {missed} filled first and not, {skipped} left unfilled after misses",
         device.name(),
     );
     #[cfg(all(m2v_gpu, target_os = "linux"))]
@@ -84,9 +86,9 @@ fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions
                 "a device whose plain allocations hold its submissions fills no type first"
             );
             assert!(
-                saved + missed >= blocks,
-                "{blocks} blocks of images, {} filled first",
-                saved + missed
+                saved + missed + skipped >= blocks,
+                "{blocks} blocks of images, {} filled first or left unfilled after misses",
+                saved + missed + skipped
             );
         }
         false => {
@@ -95,9 +97,9 @@ fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions
                 "a device whose plain allocations hold no submission fills types first"
             );
             assert_eq!(
-                saved + missed,
+                saved + missed + skipped,
                 0,
-                "a device whose plain allocations hold no submission filled blocks first"
+                "a device whose plain allocations hold no submission decided fills"
             );
         }
     }

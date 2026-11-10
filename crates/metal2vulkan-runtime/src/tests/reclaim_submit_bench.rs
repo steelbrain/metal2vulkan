@@ -90,6 +90,18 @@
 //!   submission.
 //! - **Nothing made**: the copies' buffers alone.
 //!
+//! Two arms take the images arm's textures under another second phase, **pinned**, for what a
+//! host whose free memory lies between pages that compaction cannot move does to a block's making
+//! (a desktop that ran GPU work for long: the device's own pages are not movable): the host's free
+//! memory is taken by private anonymous memory as for the fragmenting, every other page given
+//! back, then [`PINNED_BYTES`] of the device's system heap is allocated in pieces of
+//! [`PINNED_PIECE_BYTES`], which take those single pages, and the anonymous memory is let go, so
+//! that the free memory lies in short runs between the device's pages, `MemAvailable` high, and
+//! each high-order page allocation reclaims and compacts in vain before it takes smaller pages.
+//! **Images, pinned** makes its blocks as the device decides, **Images, pinned, unfilled** with no
+//! plain block filled exportable first (`Memory::fill_plain_blocks`), for the hold a plain making
+//! keeps there.
+//!
 //! Four arms ask instead whether memory allocated exportable holds one queue's work behind
 //! another's, as memory that synchronizes implicitly would: **Two queues, private**, **Two
 //! queues, exportable**, **Two queues, opaque fd** and **Two queues, both** each allocate
@@ -232,6 +244,10 @@ const ANON_LOW_BYTES: u64 = 2 * GIB;
 const PIECE_BYTES: u64 = 256 * MIB;
 /// The least `MemAvailable` at which the pressing thread maps another piece.
 const FLOOR_BYTES: u64 = 3 * GIB / 2;
+/// The pinned phase's allocations of the device's system heap, and their size: one piece takes 16
+/// pages, so that where the free memory lies in single pages each piece scatters 16 of them.
+const PINNED_BYTES: u64 = 2 * GIB;
+const PINNED_PIECE_BYTES: u64 = 64 * 1024;
 /// The slowest submissions and makings printed per phase.
 const SLOWEST: usize = 8;
 /// The formats the export facts ask of images.
@@ -436,6 +452,65 @@ impl Drop for Pressing {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
             thread.join().unwrap();
+        }
+    }
+}
+
+/// The pinned phase's allocations of the device's system heap (the module docs), freed by the
+/// drop.
+struct Pinning {
+    device: ash::Device,
+    pieces: Vec<vk::DeviceMemory>,
+}
+
+impl Pinning {
+    /// The host's free memory left between the device's pages (the module docs), what it took
+    /// printed for arm `label`.
+    fn start(device: &Device, label: &str, system_heap: u32) -> Pinning {
+        let (free, room) = (meminfo("MemFree"), cgroup_room());
+        let length = (free.saturating_sub(FRAGMENT_SPARE_BYTES))
+            .min(room.saturating_sub(CGROUP_SPARE_BYTES + PINNED_BYTES))
+            / PAGE
+            * PAGE;
+        let fragments = Anonymous::new(length, false);
+        for page in (0..length / PAGE).step_by(2) {
+            // SAFETY: a page of the bench's own mapping, which nothing else uses.
+            unsafe {
+                libc::madvise(
+                    (fragments.start + page * PAGE) as *mut libc::c_void,
+                    PAGE as usize,
+                    libc::MADV_DONTNEED,
+                )
+            };
+        }
+        let pieces = (0..PINNED_BYTES / PINNED_PIECE_BYTES)
+            .map(|_| allocate(device, system_heap, PINNED_PIECE_BYTES, None))
+            .collect();
+        drop(fragments);
+        eprintln!(
+            "RECLAIM-SUBMIT {label}: the pinning took {} MiB of {} MiB free, the cgroup's room {} \
+             MiB, and the device's {} MiB in pieces of {} KiB; MemFree {} MiB, MemAvailable {} \
+             MiB",
+            length >> 20,
+            free >> 20,
+            room.min(u64::MAX >> 1) >> 20,
+            PINNED_BYTES >> 20,
+            PINNED_PIECE_BYTES >> 10,
+            meminfo("MemFree") >> 20,
+            meminfo("MemAvailable") >> 20,
+        );
+        Pinning {
+            device: device.shared().vk().clone(),
+            pieces,
+        }
+    }
+}
+
+impl Drop for Pinning {
+    fn drop(&mut self) {
+        for &memory in &self.pieces {
+            // SAFETY: nothing uses the memory.
+            unsafe { crate::release::object(&self.device, memory) };
         }
     }
 }
@@ -759,7 +834,7 @@ fn phase(
          dedicated blocks added {}; \
          blocks of the runtime's buffers made exportable {}, made plain {}, plain blocks of \
          buffers made {}; buffers in plain blocks awaiting the check {}, by its refusal {}; \
-         plain blocks filled exportable first {}, of them missed {}; reclaim: {}; blocks live {}, \
+         plain blocks filled exportable first {}, of them missed {}, left unfilled after misses {}; reclaim: {}; blocks live {}, \
          empty {}; MemAvailable {} MiB",
         device.name(),
         submits.len(),
@@ -788,6 +863,7 @@ fn phase(
         (counts.plain_block_fills_saved + counts.plain_block_fills_missed)
             - (earlier.plain_block_fills_saved + earlier.plain_block_fills_missed),
         counts.plain_block_fills_missed - earlier.plain_block_fills_missed,
+        counts.plain_block_fills_skipped - earlier.plain_block_fills_skipped,
         reclaim.join(", "),
         counts.memory_blocks_live,
         counts.empty_memory_blocks_live,
@@ -1005,11 +1081,28 @@ enum Arm {
     Nothing,
 }
 
+/// The second phase's pressure (the module docs): the host's free memory in single pages between
+/// pages of anonymous memory, or in short runs between the device's own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pressure {
+    Fragmented,
+    Pinned,
+}
+
 /// Run the arm `label` (the module docs).
 fn arm(label: &str, arm: Arm) {
+    arm_under(label, arm, Pressure::Fragmented, true);
+}
+
+/// Run the arm `label` (the module docs), its second phase under `pressure`, its plain blocks
+/// filled exportable first as the device decides where `fills`, else never.
+fn arm_under(label: &str, arm: Arm, pressure: Pressure, fills: bool) {
     use vk::MemoryPropertyFlags as P;
     let scratch = Scratch::new();
     let device = device(&scratch.0);
+    if !fills {
+        crate::device::lock(&device.shared().memory).fill_plain_blocks(0);
+    }
     if device.shared().host_import.is_err() {
         eprintln!("RECLAIM-SUBMIT: the device imports no host memory here: not run");
         return;
@@ -1102,17 +1195,18 @@ fn arm(label: &str, arm: Arm) {
         }
     };
     buddies("before the fragmenting");
-    let pressing = Pressing::start(label);
+    let (pressing, pinning, name) = match pressure {
+        Pressure::Fragmented => (Some(Pressing::start(label)), None, "pressed"),
+        Pressure::Pinned => (
+            None,
+            Some(Pinning::start(&device, label, system_heap())),
+            "pinned",
+        ),
+    };
     buddies("after it");
-    phase(
-        &device,
-        on,
-        (label, "pressed"),
-        (PRESSED, making),
-        &mut made,
-    );
+    phase(&device, on, (label, name), (PRESSED, making), &mut made);
     buddies("after the pressed phase");
-    drop(pressing);
+    drop((pressing, pinning));
     drop((source, middle, out, made.buffers, made.textures));
     for memory in made.raw {
         // SAFETY: nothing uses the memory.
@@ -1572,6 +1666,20 @@ fn reclaim_submit_bench_images_bursts() {
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_images_scrolled() {
     arm("images scrolled, made by the runtime", Arm::ImagesScrolled);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_pinned() {
+    let label = "images, made by the runtime, pinned";
+    arm_under(label, Arm::Images, Pressure::Pinned, true);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_pinned_unfilled() {
+    let label = "images, made by the runtime, pinned, unfilled";
+    arm_under(label, Arm::Images, Pressure::Pinned, false);
 }
 
 #[test]

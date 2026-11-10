@@ -5108,6 +5108,11 @@ pub struct WorkCounts {
     /// pages (its page pool emptied, or the fill's pages taken meanwhile), which it filled, its
     /// making holding the submissions as one without the fill does.
     pub plain_block_fills_missed: u64,
+    /// The pooled blocks of plain memory made so far without the fill they would take, since the
+    /// device's last fills missed (the module docs of `memory.rs`, "Blocks filled exportable
+    /// first"): after two misses in a row a device fills only every eighth such block, a probe,
+    /// until a fill saves again. 0 on a device whose plain allocations hold no submission.
+    pub plain_block_fills_skipped: u64,
     /// The buffers of the runtime's own and the program's made so far in a plain block, not one
     /// allocated exportable, on a device that allocates such blocks, while the device's in-place
     /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): on its first run
@@ -8219,6 +8224,7 @@ impl Device {
             page_buffer_blocks_plain: fd_blocks.pages_plain,
             plain_block_fills_saved: fd_blocks.fills_saved,
             plain_block_fills_missed: fd_blocks.fills_missed,
+            plain_block_fills_skipped: fd_blocks.fills_skipped,
             image_blocks_made_ahead: ahead.images_ahead,
             image_blocks_made_in_place: ahead.images_in_place,
             blocks_ahead_waited_for: ahead.waited_for,

@@ -197,6 +197,21 @@ pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 /// (about 10 ms).
 const FILL_SAVED_BELOW: Duration = Duration::from_millis(1);
 
+/// The fills in a row that may spare their block's making less than half of its work before a
+/// device fills its plain blocks first no more, but for a probe ([`FILL_PROBE_EVERY`]): [`Fills`].
+/// A fill spares its block's own allocation what the fill's allocation, of the same size and
+/// type, did in its place: where the block's took less than [`FILL_SAVED_BELOW`], or at most half
+/// as long as the fill's, the fill spared it; where longer, the kernel handed the block other
+/// pages or made it compact and reclaim again for high orders, and the fill only doubled the work
+/// (the module docs, "Blocks filled exportable first"). One such fill alone may be another
+/// allocation's taking the pages meanwhile; two in a row are the host's state.
+const FILL_STOP_AFTER: u32 = 2;
+
+/// While a device's fills are stopped ([`FILL_STOP_AFTER`]), the plain makings in a row of which
+/// the last is filled all the same, so that its outcome says whether fills save again: a probe's
+/// miss costs one fill in this many makings ([`Fills`]).
+const FILL_PROBE_EVERY: u32 = 8;
+
 /// What a pooled block of images holds past [`BLOCK_BYTES`], as a fraction of it: a sixteenth
 /// ([`Memory::pooled_bytes`]). A driver's image takes more than its texels: RADV on a Radeon 780M
 /// and Iris Xe's driver place a `Private` `RGBA8Unorm` texture of 1024 x 1024 (4 MiB of texels)
@@ -1454,10 +1469,66 @@ pub(super) struct Block {
     /// tests alone.
     #[cfg(test)]
     took: Duration,
-    /// Where its pages were filled through an exportable allocation first (the module docs,
-    /// "Blocks filled exportable first"), whether its own allocation then took less than
-    /// [`FILL_SAVED_BELOW`].
-    filled: Option<bool>,
+    /// Where its making was one whose pages are filled through an exportable allocation first
+    /// (the module docs, "Blocks filled exportable first"): what became of the fill.
+    filled: Option<Fill>,
+}
+
+/// What became of a pooled block of plain memory's fill through an exportable allocation (the
+/// module docs, "Blocks filled exportable first").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Fill {
+    /// Filled, and its own allocation then took less than [`FILL_SAVED_BELOW`].
+    Saved,
+    /// Filled, and its own allocation took longer.
+    Missed,
+    /// Not filled: the device's recent fills missed ([`Fills`]).
+    Skipped,
+}
+
+/// What a device's fills through an exportable allocation measured lately, which decides whether
+/// its next pooled block of plain memory is filled first (the module docs, "Blocks filled
+/// exportable first"), shared by every making of the device: its threads that make blocks ahead
+/// and the calls that make their own. A fill counts as sparing its block where the block's own
+/// allocation took less than [`FILL_SAVED_BELOW`] or at most half as long as the fill's
+/// ([`FILL_STOP_AFTER`]).
+#[derive(Debug, Default)]
+pub(super) struct Fills {
+    state: Mutex<FillsState>,
+}
+
+/// [`Fills`]' record.
+#[derive(Debug, Default)]
+struct FillsState {
+    /// The fills that spared their block's making less than half its work since the last that
+    /// spared more.
+    missed_in_a_row: u32,
+    /// The makings in a row that were not filled since the last that was.
+    skipped: u32,
+}
+
+impl Fills {
+    /// Whether a making that may fill its block first does: unless the last [`FILL_STOP_AFTER`]
+    /// fills spared their blocks too little, where only every [`FILL_PROBE_EVERY`]th making in a
+    /// row does, a probe.
+    pub(super) fn fill_next(&self) -> bool {
+        let mut state = lock(&self.state);
+        let fill = state.missed_in_a_row < FILL_STOP_AFTER || state.skipped + 1 >= FILL_PROBE_EVERY;
+        state.skipped = match fill {
+            true => 0,
+            false => state.skipped + 1,
+        };
+        fill
+    }
+
+    /// A fill's outcome: whether it spared its block's making ([`Fills`]).
+    pub(super) fn filled(&self, spared: bool) {
+        let mut state = lock(&self.state);
+        state.missed_in_a_row = match spared {
+            true => 0,
+            false => state.missed_in_a_row.saturating_add(1),
+        };
+    }
 }
 
 /// The external memory a placement's memory is, as an image bound in it names it
@@ -1966,6 +2037,8 @@ pub(super) struct Memory {
     /// exportable allocation first, as bits (the module docs, "Blocks filled exportable first"):
     /// none on a device whose plain allocations hold no submission.
     fill_types: u32,
+    /// What the device's fills measured lately, which decides each one ([`Fills`]).
+    fills: Arc<Fills>,
     /// The memory types whose [`Holds::PageBuffers`] blocks are pages the runtime maps and
     /// imports, as bits, or why there are none ([`Memory::page_buffer_blocks`]).
     page_buffer_types: Result<u32, &'static str>,
@@ -2160,9 +2233,11 @@ pub(super) struct FdBlocks {
     pub(super) pages_plain: u64,
     /// The blocks whose pages were filled through an exportable allocation first (the module
     /// docs, "Blocks filled exportable first") and whose own allocation then took less than
-    /// [`FILL_SAVED_BELOW`], and those whose allocation took longer.
+    /// [`FILL_SAVED_BELOW`], those whose allocation took longer, and those not filled since the
+    /// device's recent fills missed ([`Fills`]).
     pub(super) fills_saved: u64,
     pub(super) fills_missed: u64,
+    pub(super) fills_skipped: u64,
 }
 
 /// The counts of the blocks of the pool host copies place in ([`Memory::host_copy_pool`]).
@@ -2208,6 +2283,7 @@ impl Memory {
             fd_address_types: None,
             fd_buffer_types: Err("the device was not asked for exportable buffer memory"),
             fill_types: 0,
+            fills: Arc::default(),
             fd_blocks: FdBlocks::default(),
             page_buffer_types: Err("the device was not asked for imports of its own pages"),
             page_unit: 1,
@@ -2981,8 +3057,9 @@ impl Memory {
             self.say_block(what, &block);
         }
         match block.filled {
-            Some(true) => self.fd_blocks.fills_saved += 1,
-            Some(false) => self.fd_blocks.fills_missed += 1,
+            Some(Fill::Saved) => self.fd_blocks.fills_saved += 1,
+            Some(Fill::Missed) => self.fd_blocks.fills_missed += 1,
+            Some(Fill::Skipped) => self.fd_blocks.fills_skipped += 1,
             None => {}
         }
         match holds {
@@ -3099,6 +3176,7 @@ impl Memory {
             families: self.buffer_families.clone(),
             zero_images: self.zero_images,
             fill_types: self.fill_types,
+            fills: Arc::clone(&self.fills),
         }
     }
 
@@ -3732,6 +3810,8 @@ struct BlockMaker {
     zero_images: bool,
     /// As [`Memory`]'s.
     fill_types: u32,
+    /// As [`Memory`]'s.
+    fills: Arc<Fills>,
 }
 
 impl BlockMaker {
@@ -3923,15 +4003,20 @@ impl BlockMaker {
         }
         // A pooled block of plain memory of a type whose plain allocations hold the submissions
         // while the kernel fills their pages has them filled first by an exportable allocation,
-        // which holds none, freed at once (the module docs, "Blocks filled exportable first").
+        // which holds none, freed at once (the module docs, "Blocks filled exportable first"),
+        // unless the device's recent fills missed.
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         let filling = Instant::now();
-        let fill = handle.is_none()
+        let fill = (handle.is_none()
             && dedicated_to == vk::Buffer::null()
-            && self.fill_types & 1 << type_index != 0;
+            && self.fill_types & 1 << type_index != 0)
+            .then(|| self.fills.fill_next());
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         let _ = making_parts::take_fill(-1);
-        let filled = fill && self.fill_first(device, info.allocation_size, type_index);
+        let filled = match fill {
+            Some(true) => self.fill_first(device, info.allocation_size, type_index),
+            _ => None,
+        };
         let allocating = Instant::now();
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         let before = making_parts::thread_times();
@@ -4024,16 +4109,29 @@ impl BlockMaker {
             carried: false,
             #[cfg(test)]
             took: began.elapsed(),
-            filled: filled.then(|| allocated - allocating < FILL_SAVED_BELOW),
+            filled: match (fill, filled) {
+                (Some(true), Some(fill_took)) => {
+                    let took = allocated - allocating;
+                    self.fills
+                        .filled(took < FILL_SAVED_BELOW || took <= fill_took / 2);
+                    Some(match took < FILL_SAVED_BELOW {
+                        true => Fill::Saved,
+                        false => Fill::Missed,
+                    })
+                }
+                // The driver refused the exportable allocation: the block's own filled its pages.
+                (Some(true), None) | (None, _) => None,
+                (Some(false), _) => Some(Fill::Skipped),
+            },
         })
     }
 
     /// Fill `bytes` of pages of memory type `type_index` through an allocation exportable as
     /// [`FD_BLOCKS_HANDLE`], a buffer object of its own reservation, freed at once, so that the
     /// next allocation of that type takes them from the kernel's page pool (the module docs,
-    /// "Blocks filled exportable first"): whether the allocation was made. Where the driver
-    /// refuses it, the block's own allocation fills them, as everywhere else.
-    fn fill_first(&self, device: &ash::Device, bytes: u64, type_index: u32) -> bool {
+    /// "Blocks filled exportable first"): how long the allocation took, where it was made. Where
+    /// the driver refuses it, the block's own allocation fills them, as everywhere else.
+    fn fill_first(&self, device: &ash::Device, bytes: u64, type_index: u32) -> Option<Duration> {
         let mut exportable = vk::ExportMemoryAllocateInfo::default().handle_types(FD_BLOCKS_HANDLE);
         let info = vk::MemoryAllocateInfo::default()
             .allocation_size(bytes)
@@ -4041,18 +4139,20 @@ impl BlockMaker {
             .push_next(&mut exportable);
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         let began = making_parts::moment();
+        let allocating = Instant::now();
         // SAFETY: `info` and its chain live for the call; the type index is the device's, and the
         // device exports pooled memory as the handle type ([`Memory::fill_plain_blocks`]).
         let Ok(memory) = (unsafe { crate::creation::allocate_memory(device, &info) }) else {
-            return false;
+            return None;
         };
+        let took = allocating.elapsed();
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         let allocated = making_parts::moment();
         // SAFETY: nothing uses the memory, never mapped nor bound.
         unsafe { release::object(device, memory) };
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         making_parts::filled(began, allocated, making_parts::moment());
-        true
+        Some(took)
     }
 }
 

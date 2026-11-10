@@ -1,6 +1,7 @@
 use crate::memory::{
     candidates, fd_buffer_types, host_cached, host_cached_placement, host_incoherent, kept_budget,
-    overflow_candidates, MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
+    overflow_candidates, Fills, MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES,
+    KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -797,5 +798,36 @@ fn short_buffers_are_placed_without_gaps() {
             .unwrap();
         assert_eq!((at, offset), (block, end), "{length} bytes");
         end = offset + requirements.size;
+    }
+}
+
+/// A device fills its plain blocks first while its fills save (`memory.rs`, "Blocks filled
+/// exportable first"): after two misses in a row it fills only every eighth such block, a probe,
+/// and a probe that saves brings the fills back; a probe that misses keeps them stopped.
+#[test]
+fn fills_stop_after_two_misses_in_a_row_and_a_saved_probe_brings_them_back() {
+    let fills = Fills::default();
+    // Unmeasured, and after a lone miss, every block is filled.
+    for saved in [true, false, true, false, true] {
+        assert!(fills.fill_next());
+        fills.filled(saved);
+    }
+    assert!(fills.fill_next());
+    fills.filled(false);
+    assert!(fills.fill_next(), "one miss stops nothing");
+    fills.filled(false);
+    // Two in a row: seven makings in a row go unfilled, the eighth probes.
+    let decided = |fills: &Fills| (0..8).map(|_| fills.fill_next()).collect::<Vec<_>>();
+    let probe = [false, false, false, false, false, false, false, true];
+    assert_eq!(decided(&fills), probe);
+    fills.filled(false);
+    assert_eq!(
+        decided(&fills),
+        probe,
+        "a missed probe keeps the fills stopped"
+    );
+    fills.filled(true);
+    for _ in 0..16 {
+        assert!(fills.fill_next(), "a saved probe brings the fills back");
     }
 }
