@@ -87,8 +87,8 @@ fn role_layouts(role: &ParamRole) -> [Option<StructRef>; 2] {
 /// does a group on a parameter the body never uses ([module docs](self)).
 pub(super) fn declared(cx: &SelectCx<'_>) -> bool {
     let e = cx.entry;
-    let used = crate::lower::users::params_used(cx.body);
-    let params = || e.ep.params.iter().filter(|b| used.contains(&b.param));
+    let used = &crate::lower::users::params_used(cx.body);
+    let params = || e.ep.params.iter().filter(move |b| used.contains(&b.param));
     let read = |attachment| {
         params()
             .any(|b| matches!(b.role, ParamRole::ColorInput { index, .. } if index == attachment))
