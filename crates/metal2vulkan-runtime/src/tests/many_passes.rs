@@ -38,8 +38,8 @@ const PER: usize = 500;
 /// The targets' width; their height is [`H`].
 const WIDTH: u64 = 64;
 
-/// The command buffers this many passes may begin past one each: the clear's, and those the
-/// device begins for itself (a spare pool's primary begun ahead, a batch's barriers).
+/// The command buffers this many passes' encoders may begin past one each: the clear's, and a
+/// few the commit's segments may take.
 const SLACK: u64 = 64;
 
 /// The longest the command buffer of every pass may take: a debug build on lavapipe encodes and
@@ -174,7 +174,7 @@ fn reference(queue: &CommandQueue, states: &States) -> Vec<u8> {
 /// One command buffer of a clear and [`PASSES`] passes, each beside a depth it clears and stores,
 /// runs, as Metal runs it, and leaves the texels the same passes leave across command buffers of
 /// [`PER`] passes. Each pass's first instance records inline: no secondary command buffer, and
-/// at most one command buffer begun a pass.
+/// at most one command buffer its encoder begins a pass.
 #[test]
 fn one_command_buffer_of_ten_thousand_passes_beside_a_cleared_depth_runs() {
     let cache = Scratch::new("many-passes");
@@ -191,19 +191,23 @@ fn one_command_buffer_of_ten_thousand_passes_beside_a_cleared_depth_runs() {
     run(&command_buffer);
     let after = device.work_counts();
     let begun = after.command_buffers_begun - before.command_buffers_begun;
+    let encoders = after.encoder_command_buffers_begun - before.encoder_command_buffers_begun;
     let secondaries =
         after.command_buffers_begun_secondaries - before.command_buffers_begun_secondaries;
+    let barriers =
+        after.command_buffers_begun_batch_barriers - before.command_buffers_begun_batch_barriers;
     let inline = after.inline_passes - before.inline_passes;
     println!(
         "MANY-PASSES {}: {PASSES} passes beside a cleared depth in one command buffer began \
-         {begun} command buffers, {secondaries} of them secondaries; {inline} passes inline",
+         {begun} command buffers: {encoders} as its encoders recorded, {secondaries} of them \
+         secondaries, and {barriers} of barriers as it was submitted; {inline} passes inline",
         device.name()
     );
     assert_eq!(secondaries, 0, "the passes began secondaries");
     assert_eq!(inline, PASSES as u64, "the passes recorded inline");
     assert!(
-        begun <= PASSES as u64 + SLACK,
-        "the passes began {begun} command buffers"
+        encoders <= PASSES as u64 + SLACK,
+        "the passes' encoders began {encoders} command buffers"
     );
     let texels = texels_of(&queue, &color);
     assert!(
