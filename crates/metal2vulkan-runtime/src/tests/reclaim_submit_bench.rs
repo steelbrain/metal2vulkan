@@ -779,7 +779,8 @@ fn phase(
          dedicated blocks added {}; \
          blocks of the runtime's buffers made exportable {}, made plain {}, plain blocks of \
          buffers made {}; buffers in plain blocks awaiting the check {}, by its refusal {}; \
-         reclaim: {}; blocks live {}, empty {}; MemAvailable {} MiB",
+         plain blocks filled exportable first {}, of them missed {}; reclaim: {}; blocks live {}, \
+         empty {}; MemAvailable {} MiB",
         device.name(),
         submits.len(),
         over(&submits, 8.0),
@@ -804,6 +805,9 @@ fn phase(
         counts.plain_buffer_blocks_made - earlier.plain_buffer_blocks_made,
         counts.fd_blocks_awaited - earlier.fd_blocks_awaited,
         counts.fd_blocks_refused - earlier.fd_blocks_refused,
+        (counts.plain_block_fills_saved + counts.plain_block_fills_missed)
+            - (earlier.plain_block_fills_saved + earlier.plain_block_fills_missed),
+        counts.plain_block_fills_missed - earlier.plain_block_fills_missed,
         reclaim.join(", "),
         counts.memory_blocks_live,
         counts.empty_memory_blocks_live,
@@ -886,17 +890,19 @@ fn print_makings(
         let all = makings.iter().map(|making| making.took[at]);
         (ms(all.clone().sum()), ms(all.max().unwrap_or_default()))
     };
-    let [addresses, allocate, map, bind] = [0, 1, 2, 3].map(part);
+    let [addresses, fill, allocate, map, bind] = [0, 1, 2, 3, 4].map(part);
     let on_cpu: Duration = makings.iter().map(|making| making.on_cpu).sum();
     let runnable: Duration = makings.iter().map(|making| making.runnable).sum();
     let ahead = makings.iter().filter(|making| making.ahead).count();
     eprintln!(
         "RECLAIM-SUBMIT {arm}, {name}: makings {} ({ahead} ahead), ms summed and slowest: buffer \
-         of addresses {:.1}, {:.2}; vkAllocateMemory {:.1}, {:.2} (on a CPU {:.1}, waiting for one \
-         {:.1}); mapping {:.2}, {:.2}; binding {:.2}, {:.2}",
+         of addresses {:.1}, {:.2}; exportable fill {:.1}, {:.2}; vkAllocateMemory {:.1}, {:.2} \
+         (on a CPU {:.1}, waiting for one {:.1}); mapping {:.2}, {:.2}; binding {:.2}, {:.2}",
         makings.len(),
         addresses.0,
         addresses.1,
+        fill.0,
+        fill.1,
         allocate.0,
         allocate.1,
         ms(on_cpu),
@@ -907,10 +913,10 @@ fn print_makings(
         bind.1,
     );
     let mut slowest: Vec<_> = makings.iter().collect();
-    slowest.sort_by_key(|making| std::cmp::Reverse(making.took[1]));
+    slowest.sort_by_key(|making| std::cmp::Reverse(making.took[2]));
     for making in slowest.into_iter().take(SLOWEST) {
         let began = clock.1 + making.allocating.duration_since(clock.0).as_secs_f64();
-        let ended = began + making.took[1].as_secs_f64();
+        let ended = began + making.took[2].as_secs_f64();
         let within = |times: &[(Duration, f64)]| {
             let inside = (times.iter()).filter(|&&(_, at)| at >= began && at < ended);
             (
@@ -921,17 +927,19 @@ fn print_makings(
         let ((count, submit), (_, turnaround)) = (within(submits), within(turnarounds));
         eprintln!(
             "RECLAIM-SUBMIT {arm}, {name}: making of {} MiB {} at {began:.3}: vkAllocateMemory \
-             {:.2} ms (on a CPU {:.2}, waiting for one {:.2}), mapping {:.2}, buffer of addresses \
-             {:.2} and its binding {:.2}; submissions begun within it {count}, the longest \
-             commit_and_submit {submit:.2} ms, turnaround {turnaround:.2} ms",
+             {:.2} ms (on a CPU {:.2}, waiting for one {:.2}), after an exportable fill of {:.2}, \
+             mapping {:.2}, buffer of addresses {:.2} and its binding {:.2}; submissions begun \
+             within it {count}, the longest commit_and_submit {submit:.2} ms, turnaround \
+             {turnaround:.2} ms",
             making.bytes >> 20,
             if making.ahead { "ahead" } else { "in place" },
-            ms(making.took[1]),
+            ms(making.took[2]),
             ms(making.on_cpu),
             ms(making.runnable),
-            ms(making.took[2]),
-            ms(making.took[0]),
+            ms(making.took[1]),
             ms(making.took[3]),
+            ms(making.took[0]),
+            ms(making.took[4]),
         );
     }
 }

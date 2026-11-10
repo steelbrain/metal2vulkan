@@ -5096,6 +5096,18 @@ pub struct WorkCounts {
     /// The blocks of those buffers made so far as any block of buffers: of a memory type the
     /// device imports no such pages as, or where the system or the driver refused them.
     pub page_buffer_blocks_plain: u64,
+    /// The pooled blocks of plain memory made so far whose pages were filled through an
+    /// exportable allocation first, freed at once, and whose own allocation then took less than
+    /// 1 ms (the module docs of `memory.rs`, "Blocks filled exportable first"): it took the
+    /// fill's pages from the kernel's page pool, so its making held the device's submissions for
+    /// no longer. 0 on a device whose plain allocations hold no submission
+    /// (`DriverFact::PlainAllocationsHoldSubmissions`), whose blocks are made by their own
+    /// allocation alone.
+    pub plain_block_fills_saved: u64,
+    /// Those whose own allocation took 1 ms or more after the fill: the kernel handed it other
+    /// pages (its page pool emptied, or the fill's pages taken meanwhile), which it filled, its
+    /// making holding the submissions as one without the fill does.
+    pub plain_block_fills_missed: u64,
     /// The buffers of the runtime's own and the program's made so far in a plain block, not one
     /// allocated exportable, on a device that allocates such blocks, while the device's in-place
     /// check of them was pending (`in_place.rs`'s `Device::fd_blocks_checked`): on its first run
@@ -8205,6 +8217,8 @@ impl Device {
             plain_buffer_blocks_made: fd_blocks.plain_buffers,
             page_buffer_blocks_made: fd_blocks.pages,
             page_buffer_blocks_plain: fd_blocks.pages_plain,
+            plain_block_fills_saved: fd_blocks.fills_saved,
+            plain_block_fills_missed: fd_blocks.fills_missed,
             image_blocks_made_ahead: ahead.images_ahead,
             image_blocks_made_in_place: ahead.images_in_place,
             blocks_ahead_waited_for: ahead.waited_for,

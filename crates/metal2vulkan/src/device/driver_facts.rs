@@ -1504,6 +1504,23 @@ pub enum DriverFact {
     /// before the pass by a render pass of its own, which the pass then loads (`clear_reach.rs` in
     /// the runtime), memoryless and unstored ones too.
     ClearedDepthAtStandardPositions,
+    /// A cost fact (the module docs): an allocation of memory of a heap that is not device-local
+    /// made with no export holds every submission of the process while the kernel fills its pages,
+    /// under the reservation of the process's GPU address space, which each submission's ioctl
+    /// takes too; one made exportable, a buffer object of its own reservation, holds none; and the
+    /// pages of an allocation freed reach the kernel's page pool, from which the next allocation
+    /// of their kind takes them in a fraction of a millisecond. Measured with the runtime's reclaim
+    /// bench (`tests::reclaim_submit_bench` in the runtime, the kernel's page pools drained before
+    /// each run): a 64 MiB allocation of the system heap filled from the page allocator took 9.7
+    /// to 10.6 ms at the median, nearly all of it on a CPU in the kernel, and held the submission
+    /// made meanwhile for as long, where one that took the pages of a 64 MiB allocation freed 20 ms
+    /// earlier took 0.12 to 0.31 ms. On a driver with it the runtime fills a pooled block of plain
+    /// memory of such a heap through an exportable allocation of the block's size and type, freed
+    /// at once, before the block's own allocation (`memory.rs` in the runtime, "Blocks filled
+    /// exportable first"); elsewhere a block's allocation is its only one. No answer changes, only
+    /// which allocation the kernel's fill holds back. RADV on the Radeon 780M, Mesa 26.2.6 under
+    /// Linux 7.3.1; held on the GPU measured alone.
+    PlainAllocationsHoldSubmissions,
 }
 
 impl DriverFact {
@@ -2034,6 +2051,17 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 ///
 /// Not re-measured at 1.4.2, and taken there as at 1.4.1: `InterlockedPassSplitNoSlower`, a cost
 /// fact whose 1.4.1 timing needed a scratch build that keeps such a pass whole.
+///
+/// `PlainAllocationsHoldSubmissions`, a cost fact, measured by the runtime's reclaim bench
+/// (`tests::reclaim_submit_bench`, its remade arms and its making parts, the kernel's TTM page
+/// pools drained before each run) on RADV on the Radeon 780M (RADV PHOENIX, Mesa 26.2.6, Linux
+/// 7.3.1): a command buffer committed about every millisecond waited for each 64 MiB block's
+/// making that began before it, 10 to 29 ms, 90 to 96% of the making on a CPU in the kernel; a
+/// plain allocation of 64 MiB took 9.7 to 10.6 ms at the median from the page allocator and 0.12
+/// to 0.31 ms from the pages of one freed 20 ms before; and with each block's pages filled
+/// through an exportable allocation freed at once, 0 and 1 of about 7000 and 14000 turnarounds a
+/// phase took 8 ms or more, where with plain allocations 11 to 13 did. Every other driver and
+/// GPU is unmeasured, its blocks allocated as before.
 pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     Measured {
         fact: DriverFact::RobustIndexFetchReadsZero,
@@ -2336,6 +2364,11 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         DriverFact::ClearedDepthAtStandardPositions,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RX_550),
+    ),
+    mesa_on(
+        DriverFact::PlainAllocationsHoldSubmissions,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
 ];
 

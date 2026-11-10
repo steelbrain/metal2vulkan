@@ -1,5 +1,6 @@
 //! The parts of each block's making, for the reclaim bench (`tests::reclaim_submit_bench`): how
-//! long the buffer of addresses, `vkAllocateMemory`, the mapping and the buffer's binding took,
+//! long the buffer of addresses, the fill, `vkAllocateMemory`, the mapping and the buffer's
+//! binding took,
 //! and how much of `vkAllocateMemory` the making thread spent on a CPU
 //! (`/proc/thread-self/schedstat`), so that the bench can line each making up with the
 //! submissions it held.
@@ -16,9 +17,10 @@ pub(crate) struct MakingParts {
     pub(crate) ahead: bool,
     /// When its `vkAllocateMemory` began.
     pub(crate) allocating: Instant,
-    /// How long its buffer of addresses' making, `vkAllocateMemory`, the mapping and the buffer's
-    /// binding took.
-    pub(crate) took: [Duration; 4],
+    /// How long its buffer of addresses' making, its pages' fill through an exportable
+    /// allocation (`memory.rs`, "Blocks filled exportable first"), `vkAllocateMemory`, the
+    /// mapping and the buffer's binding took.
+    pub(crate) took: [Duration; 5],
     /// The time the making thread ran on a CPU during `vkAllocateMemory`, and the time it waited
     /// for one.
     pub(crate) on_cpu: Duration,

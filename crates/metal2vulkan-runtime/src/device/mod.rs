@@ -2308,6 +2308,23 @@ impl Device {
                 Err(why) => (Err(why), None),
             };
             memory.fd_buffer_blocks(blocks);
+            // The pages of its plain blocks are filled through an exportable allocation first where
+            // its plain allocations hold the process's submissions while the kernel fills them,
+            // and it exports pooled memory as an opaque file descriptor (`memory.rs`'s "Blocks
+            // filled exportable first"): of the heaps that are not device-local, with unified
+            // memory.
+            let holds = metal2vulkan::device::DriverFact::PlainAllocationsHoldSubmissions;
+            let fills = match &functions {
+                Some(functions)
+                    if properties.description.driver_facts().contains(&holds)
+                        && pooled(functions) =>
+                {
+                    let unified = properties.has_unified_memory;
+                    crate::memory::fd_buffer_types(&memory_properties, unified, Ok(())).unwrap_or(0)
+                }
+                _ => 0,
+            };
+            memory.fill_plain_blocks(fills);
             // As a dma-buf where it enables the route's extensions, which name
             // `VK_KHR_external_memory_fd`, and the foreign family its acquire names.
             let dma_buf_functions = functions.filter(|_| dma_buf && foreign_family);

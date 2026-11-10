@@ -3023,6 +3023,8 @@ field	metal2vulkan-runtime::WorkCounts.pipeline_pool_busy	pub pipeline_pool_busy
 field	metal2vulkan-runtime::WorkCounts.pipelines_linked	pub pipelines_linked: u64
 field	metal2vulkan-runtime::WorkCounts.pipelines_pooled	pub pipelines_pooled: u64
 field	metal2vulkan-runtime::WorkCounts.pitched_host_images	pub pitched_host_images: u64
+field	metal2vulkan-runtime::WorkCounts.plain_block_fills_missed	pub plain_block_fills_missed: u64
+field	metal2vulkan-runtime::WorkCounts.plain_block_fills_saved	pub plain_block_fills_saved: u64
 field	metal2vulkan-runtime::WorkCounts.plain_buffer_blocks_made	pub plain_buffer_blocks_made: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_backings_made	pub pooled_backings_made: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_memory_blocks_freed	pub pooled_memory_blocks_freed: u64
@@ -11781,6 +11783,7 @@ variant	metal2vulkan-runtime::DriverFact::InterlockedPassSplitNoSlower	Interlock
 variant	metal2vulkan-runtime::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan-runtime::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan-runtime::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
+variant	metal2vulkan-runtime::DriverFact::PlainAllocationsHoldSubmissions	PlainAllocationsHoldSubmissions
 variant	metal2vulkan-runtime::DriverFact::PositionedDepthReadAtStandardPositions	PositionedDepthReadAtStandardPositions
 variant	metal2vulkan-runtime::DriverFact::QueueFailuresReportedByMessenger	QueueFailuresReportedByMessenger
 variant	metal2vulkan-runtime::DriverFact::RobustIndexFetchReadsZero	RobustIndexFetchReadsZero
@@ -13077,6 +13080,7 @@ variant	metal2vulkan::device::DriverFact::InterlockedPassSplitNoSlower	Interlock
 variant	metal2vulkan::device::DriverFact::LineTiesAreMetals	LineTiesAreMetals
 variant	metal2vulkan::device::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan::device::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
+variant	metal2vulkan::device::DriverFact::PlainAllocationsHoldSubmissions	PlainAllocationsHoldSubmissions
 variant	metal2vulkan::device::DriverFact::PositionedDepthReadAtStandardPositions	PositionedDepthReadAtStandardPositions
 variant	metal2vulkan::device::DriverFact::QueueFailuresReportedByMessenger	QueueFailuresReportedByMessenger
 variant	metal2vulkan::device::DriverFact::RobustIndexFetchReadsZero	RobustIndexFetchReadsZero

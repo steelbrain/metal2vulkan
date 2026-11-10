@@ -418,6 +418,7 @@ const HEAP_MULTISAMPLE_COLORS: DriverFact =
 const LINE_TIES: DriverFact = DriverFact::LineTiesAreMetals;
 const SUBPIXEL_SNAP: DriverFact = DriverFact::SubpixelSnapIsMetals;
 const CLEARED_DEPTH: DriverFact = DriverFact::ClearedDepthAtStandardPositions;
+const PLAIN_HOLDS: DriverFact = DriverFact::PlainAllocationsHoldSubmissions;
 
 /// Each committed profile's driver has the runtime's driver facts its rows name, on its vendor and
 /// GPU, at its release as at any other.
@@ -441,11 +442,29 @@ fn the_committed_profiles_drivers_have_their_facts() {
     let expected: BTreeMap<String, Vec<DriverFact>> = [
         (
             "amd-780m-hawkpoint-radv",
-            vec![ZERO, FETCH, SPLIT, COLOR_BLOCKS, BC6H, BC7, ONE_OF_METALS],
+            vec![
+                ZERO,
+                FETCH,
+                SPLIT,
+                COLOR_BLOCKS,
+                BC6H,
+                BC7,
+                ONE_OF_METALS,
+                PLAIN_HOLDS,
+            ],
         ),
         (
             "amd-780m-radv",
-            vec![ZERO, FETCH, SPLIT, COLOR_BLOCKS, BC6H, BC7, ONE_OF_METALS],
+            vec![
+                ZERO,
+                FETCH,
+                SPLIT,
+                COLOR_BLOCKS,
+                BC6H,
+                BC7,
+                ONE_OF_METALS,
+                PLAIN_HOLDS,
+            ],
         ),
         ("amd-rdna2-apu-radv", vec![ZERO]),
         ("amd-rdna3-radv", vec![ZERO]),
