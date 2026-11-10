@@ -2051,6 +2051,10 @@ pub(super) struct Memory {
     /// `vkAllocateMemory`, mapping and buffer of addresses), wherever it was made.
     #[cfg(test)]
     pub(crate) longest_making: Duration,
+    /// The time every making of a block added took ([`BlockMaker::make`]), summed, for the
+    /// reclaim bench.
+    #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+    pub(crate) makings_took: Duration,
     /// The pooled blocks a call made itself in a pool whose blocks are made ahead, by their
     /// bytes, since a test last cleared it ([`AheadBlocks::made_in_place`]).
     #[cfg(test)]
@@ -2251,6 +2255,8 @@ impl Memory {
             kept_budget_stand_in: None,
             #[cfg(test)]
             longest_making: Duration::ZERO,
+            #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+            makings_took: Duration::ZERO,
             #[cfg(test)]
             in_place_bytes: std::collections::BTreeMap::new(),
             #[cfg(all(test, m2v_gpu, target_os = "linux"))]
@@ -3023,6 +3029,10 @@ impl Memory {
         #[cfg(test)]
         {
             self.longest_making = self.longest_making.max(block.took);
+        }
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        {
+            self.makings_took += block.took;
         }
         if block.exported.is_none() && !block.fd && !block.pooled_pages {
             self.plain_block_made(block.size, block.took);

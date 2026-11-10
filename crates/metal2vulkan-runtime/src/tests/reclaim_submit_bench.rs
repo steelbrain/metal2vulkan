@@ -126,8 +126,12 @@
 //! every plain block of buffers made (`WorkCounts::plain_buffer_blocks_made`), and its buffers laid
 //! in plain blocks while the check was pending or once it refused such blocks; the size its pooled
 //! blocks of plain memory were made of at the end (`memory.rs`'s "Pooling"); the host's reclaim over
-//! the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction stalls,
-//! allocation stalls, pages swapped out); the memory the fragmenting took, the host's free memory
+//! the phase (`/proc/vmstat`: pages kswapd and direct reclaim scanned, compaction stalls, failed
+//! and succeeded compactions, the pages compaction scanned to migrate and to take as free and
+//! those it isolated, allocation stalls, pages swapped out), the time some and all of the host's
+//! tasks stalled on memory (`/proc/pressure/memory`), the time every block added took to make
+//! summed, the memory the runtime allocated and the process's resident memory (`VmRSS`) at the
+//! phase's end; the memory the fragmenting took, the host's free memory
 //! and the cgroup's room it was sized from; the free blocks of each order before and after the
 //! fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions', turnarounds'
 //! and makings' `CLOCK_MONOTONIC` times, to line up with a kernel trace taken beside the run.
@@ -286,7 +290,17 @@ impl Drop for Anonymous {
 
 /// A `/proc/meminfo` field, in bytes.
 fn meminfo(field: &str) -> u64 {
-    let text = std::fs::read_to_string("/proc/meminfo").unwrap();
+    kib_field("/proc/meminfo", field)
+}
+
+/// A `/proc/self/status` field, in bytes.
+fn status(field: &str) -> u64 {
+    kib_field("/proc/self/status", field)
+}
+
+/// The field `field` of the file at `path`, of lines `field: <KiB> kB`, in bytes.
+fn kib_field(path: &str, field: &str) -> u64 {
+    let text = std::fs::read_to_string(path).unwrap();
     let line = text
         .lines()
         .find(|line| line.split(':').next() == Some(field))
@@ -321,15 +335,20 @@ fn cgroup_room() -> u64 {
 }
 
 /// The `/proc/vmstat` counts the bench prints, in its order.
-const VMSTAT: [&str; 5] = [
+const VMSTAT: [&str; 10] = [
     "pgscan_kswapd",
     "pgscan_direct",
     "compact_stall",
+    "compact_fail",
+    "compact_success",
+    "compact_migrate_scanned",
+    "compact_free_scanned",
+    "compact_isolated",
     "allocstall_normal",
     "pswpout",
 ];
 
-fn vmstat() -> [u64; 5] {
+fn vmstat() -> [u64; VMSTAT.len()] {
     let text = std::fs::read_to_string("/proc/vmstat").unwrap();
     VMSTAT.map(|name| {
         (text.lines())
@@ -337,6 +356,18 @@ fn vmstat() -> [u64; 5] {
                 let (key, value) = line.split_once(' ')?;
                 (key == name).then(|| value.trim().parse().unwrap())
             })
+            .unwrap_or(0)
+    })
+}
+
+/// The microseconds some and all of the host's tasks have stalled on memory
+/// (`/proc/pressure/memory`'s `total`s), zero where it is not readable.
+fn memory_pressure() -> [u64; 2] {
+    let text = std::fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
+    ["some", "full"].map(|kind| {
+        (text.lines())
+            .filter(|line| line.split_whitespace().next() == Some(kind))
+            .find_map(|line| line.rsplit_once("total=")?.1.trim().parse().ok())
             .unwrap_or(0)
     })
 }
@@ -613,12 +644,13 @@ fn phase(
     let (bytes_before, unused_before, phase_began) = {
         let mut memory = crate::device::lock(&device.shared().memory);
         memory.longest_making = Duration::ZERO;
+        memory.makings_took = Duration::ZERO;
         memory.in_place_bytes.clear();
         memory.image_placements.clear();
         let unused = memory.unused_frees.len();
         (memory.turnover_bytes(), unused, Instant::now())
     };
-    let before = (vmstat(), device.work_counts());
+    let before = (vmstat(), device.work_counts(), memory_pressure());
     let stop = AtomicBool::new(false);
     let (submits, turnarounds, makes) = std::thread::scope(|scope| {
         let maker = (std::thread::Builder::new().name("reclaim-make".to_owned()))
@@ -636,14 +668,16 @@ fn phase(
         stop.store(true, Ordering::Relaxed);
         (submits, turnarounds, maker.join().unwrap())
     });
-    let after = (vmstat(), device.work_counts());
-    let (longest, in_place, bytes_after) = {
+    let after = (vmstat(), device.work_counts(), memory_pressure());
+    let (longest, took, allocated, in_place, bytes_after) = {
         let memory = crate::device::lock(&device.shared().memory);
         let sizes: Vec<String> = (memory.in_place_bytes.iter())
             .map(|(bytes, count)| format!("{count} of {} MiB", bytes >> 20))
             .collect();
         (
             memory.longest_making,
+            memory.makings_took,
+            memory.allocated(),
             sizes.join(", "),
             memory.turnover_bytes(),
         )
@@ -748,6 +782,16 @@ fn phase(
         placements.join(", "),
         ahead.join(", "),
         unused.join(", ")
+    );
+    let stalled = |at: usize| (after.2[at] - before.2[at]) as f64 * 1e-3;
+    eprintln!(
+        "RECLAIM-SUBMIT {arm}, {name}: memory: blocks made took {:.1} ms in all; memory stalls, \
+         some {:.1} ms, full {:.1} ms; allocated {} MiB; VmRSS {} MiB",
+        took.as_secs_f64() * 1e3,
+        stalled(0),
+        stalled(1),
+        allocated >> 20,
+        status("VmRSS") >> 20,
     );
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest submissions {slow}");
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest turnarounds {slow_turns}");
