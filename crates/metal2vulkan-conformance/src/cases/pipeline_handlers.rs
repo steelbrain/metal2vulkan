@@ -342,7 +342,7 @@ pub fn all() -> Vec<PipelineHandlerCase> {
             fixture: TILE_FIXTURE,
             entry: TILE,
             described: Described::Tile(
-                TilePipelineSpec::new(TILE, &TILE_ATTACHMENTS).limited(512),
+                TilePipelineSpec::new(TILE, &TILE_ATTACHMENTS, 512),
                 options,
             ),
         });
@@ -394,7 +394,7 @@ pub fn all() -> Vec<PipelineHandlerCase> {
             fixture: RENDER_FIXTURE,
             entry: VERTEX,
             described: Described::Tile(
-                TilePipelineSpec::new(VERTEX, &TILE_ATTACHMENTS).limited(512),
+                TilePipelineSpec::new(VERTEX, &TILE_ATTACHMENTS, 512),
                 BINDING_INFO,
             ),
         },

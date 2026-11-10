@@ -8146,9 +8146,8 @@ impl MetalSide {
                     .setPixelFormat(MTLPixelFormat(format.as_raw() as usize));
             }
         }
-        if let Some(limit) = spec.max_total_threads_per_threadgroup {
-            descriptor.setMaxTotalThreadsPerThreadgroup(limit as usize);
-        }
+        descriptor
+            .setMaxTotalThreadsPerThreadgroup(spec.max_total_threads_per_threadgroup as usize);
         descriptor.setThreadgroupSizeMatchesTileSize(spec.threadgroup_size_matches_tile_size);
         Ok(descriptor)
     }

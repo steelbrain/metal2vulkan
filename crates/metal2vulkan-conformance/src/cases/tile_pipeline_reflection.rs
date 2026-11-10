@@ -77,7 +77,9 @@
 //! difference reads `MTLBindingTypeImageblock` against `MTLBindingTypeThreadgroupMemory` rather
 //! than 17 against 1.
 
-use crate::case::{Abort, Case, Failure, Input, MetalSource, Side, TilePipelineSpec};
+use crate::case::{
+    Abort, Case, Failure, Input, MetalSource, Side, TilePipelineSpec, METAL_TILE_THREADS,
+};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::pipeline_option_reflection::MASKS;
 use crate::recording::ShaderRef;
@@ -129,7 +131,7 @@ impl TilePipelineReflectionCase {
 
     /// The descriptor the case states.
     fn spec(&self) -> TilePipelineSpec<'static> {
-        let spec = TilePipelineSpec::new(self.entry, &ATTACHMENTS);
+        let spec = TilePipelineSpec::new(self.entry, &ATTACHMENTS, METAL_TILE_THREADS);
         match self.tile_sized {
             true => spec.tile_sized(),
             false => spec,

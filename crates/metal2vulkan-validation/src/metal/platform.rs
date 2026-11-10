@@ -1233,8 +1233,9 @@ pub(super) fn threads_per_threadgroup_within_limit(
     let total = threads_per_threadgroup_total(threads_per_threadgroup, what)?;
     if total > limit {
         return Err(format!(
-                "{what} dispatch asks for {total} threads a threadgroup ({threads_per_threadgroup:?}),                  but the pipeline permits {limit}"
-            ));
+            "{what} dispatch asks for {total} threads a threadgroup \
+             ({threads_per_threadgroup:?}), but the pipeline permits {limit}"
+        ));
     }
     Ok(())
 }

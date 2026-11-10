@@ -10,9 +10,11 @@ fn a_threadgroup_wider_than_the_pipeline_permits_is_refused() {
     assert_eq!(within([16, 16, 1], 256, "Metal tile"), Ok(()));
     assert_eq!(within([16, 16, 1], 257, "Metal tile"), Ok(()));
     let refused = within([16, 16, 1], 4, "Metal tile").expect_err("256 threads exceed 4");
-    assert!(refused.contains("256 threads"), "{refused}");
-    assert!(refused.contains("permits 4"), "{refused}");
-    assert!(refused.starts_with("Metal tile "), "{refused}");
+    assert_eq!(
+        refused,
+        "Metal tile dispatch asks for 256 threads a threadgroup ([16, 16, 1]), but the pipeline \
+         permits 4"
+    );
     assert_eq!(within([1, 1, 1], 1, "Metal compute"), Ok(()));
     let overflow = within([u32::MAX, u32::MAX, u32::MAX], usize::MAX, "Metal compute")
         .expect_err("the product overflows a thread count");

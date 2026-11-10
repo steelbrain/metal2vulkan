@@ -6875,7 +6875,9 @@ impl RuntimeSide<'_> {
         {
             *slot = Some(*format);
         }
-        descriptor.max_total_threads_per_threadgroup = spec.max_total_threads_per_threadgroup;
+        // Metal's 0 is no limit.
+        descriptor.max_total_threads_per_threadgroup =
+            Some(spec.max_total_threads_per_threadgroup).filter(|&limit| limit != 0);
         descriptor.threadgroup_size_matches_tile_size = spec.threadgroup_size_matches_tile_size;
         Ok(descriptor)
     }

@@ -31,14 +31,18 @@
 //! Where a device holds fewer threads than Metal does, the dispatch Metal runs is refused typed as
 //! the device's gap, and the run stops at that call, so the row reads as the refusal it is rather
 //! than as one divergence per cell a refused dispatch never wrote. The state's
-//! `maxTotalThreadsPerThreadgroup`, where its descriptor states no limit, is then the device's
-//! limit, below Metal's 1024, and reads as the same gap (`Sites::device_gap`): lavapipe's emulated
-//! 32-lane simdgroups hold 960 threads of the SIMD blur's pipeline.
+//! `maxTotalThreadsPerThreadgroup`, where its descriptor's limit is Metal's own maximum
+//! ([`METAL_TILE_THREADS`]), is then the device's limit, below Metal's 1024, and reads as the same
+//! gap (`Sites::device_gap`): lavapipe's emulated 32-lane simdgroups hold 960 threads of the SIMD
+//! blur's pipeline.
+//!
+//! Every state states its limit ([`TilePipelineSpec::max_total_threads_per_threadgroup`] says why
+//! a state of none would answer the compiler's history on a re-record).
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     Abort, Case, Failure, Handle, Input, MetalSource, Side, TextureRole, TextureSpec,
-    TilePipelineSpec, TileStep,
+    TilePipelineSpec, TileStep, METAL_TILE_THREADS,
 };
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -142,7 +146,7 @@ enum Shape {
     /// threadgroups per 32x32 tile in order.
     Order {
         passes: &'static [&'static [[u32; 2]]],
-        limit: Option<u32>,
+        limit: u32,
         tile_sized: bool,
     },
     /// `k10ts_tile_grid` dispatched 8x8 per 16x16 tile over a 40x24 pass, tile-sized.
@@ -169,7 +173,7 @@ pub fn all() -> Vec<TileThreadgroups> {
             name: "tile-order-32x32",
             shape: Shape::Order {
                 passes: &[&[[SIDE, SIDE]]],
-                limit: None,
+                limit: METAL_TILE_THREADS,
                 tile_sized: false,
             },
         },
@@ -177,7 +181,7 @@ pub fn all() -> Vec<TileThreadgroups> {
             name: "tile-order-past-the-states-limit",
             shape: Shape::Order {
                 passes: &[&[[SIDE, SIDE], [16, 16]]],
-                limit: Some(256),
+                limit: 256,
                 tile_sized: false,
             },
         },
@@ -185,7 +189,7 @@ pub fn all() -> Vec<TileThreadgroups> {
             name: "tile-order-even-threadgroups",
             shape: Shape::Order {
                 passes: EVEN_SHAPES,
-                limit: None,
+                limit: METAL_TILE_THREADS,
                 tile_sized: false,
             },
         },
@@ -193,7 +197,7 @@ pub fn all() -> Vec<TileThreadgroups> {
             name: "tile-order-tile-sized-16x16",
             shape: Shape::Order {
                 passes: &[&[[16, 16]]],
-                limit: None,
+                limit: METAL_TILE_THREADS,
                 tile_sized: true,
             },
         },
@@ -352,40 +356,40 @@ impl TileThreadgroups {
     fn specs(&self) -> Vec<(String, TilePipelineSpec<'static>)> {
         match self.shape {
             // The three states the lane makes of one descriptor: Metal's own maximum, a limit
-            // below it, and a limit that is not a threadgroup of even sides.
+            // below it, and a limit that is not a threadgroup of even sides. The lane's first
+            // states no limit; here it states Metal's maximum, which an Apple M3 Max answers for
+            // no limit, as every state here states its limit.
             Shape::ThreadLimits => vec![
                 (
-                    "state-unlimited".to_owned(),
-                    TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS),
+                    "state-limited-1024".to_owned(),
+                    TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS, METAL_TILE_THREADS),
                 ),
                 (
                     "state-limited-512".to_owned(),
-                    TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS).limited(512),
+                    TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS, 512),
                 ),
                 (
                     "state-limited-1000".to_owned(),
-                    TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS).limited(1000),
+                    TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS, 1000),
                 ),
             ],
             Shape::Order {
                 limit, tile_sized, ..
             } => {
-                let mut spec = TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS);
-                if let Some(limit) = limit {
-                    spec = spec.limited(limit);
-                }
-                if tile_sized {
-                    spec = spec.tile_sized();
-                }
+                let spec = TilePipelineSpec::new(ORDER, &ORDER_ATTACHMENTS, limit);
+                let spec = match tile_sized {
+                    true => spec.tile_sized(),
+                    false => spec,
+                };
                 vec![("state".to_owned(), spec)]
             }
             Shape::Grid => vec![(
                 "state".to_owned(),
-                TilePipelineSpec::new(GRID, &GRID_ATTACHMENTS).tile_sized(),
+                TilePipelineSpec::new(GRID, &GRID_ATTACHMENTS, METAL_TILE_THREADS).tile_sized(),
             )],
             Shape::Blur { .. } => vec![(
                 "state".to_owned(),
-                TilePipelineSpec::new(BLUR, &BLUR_ATTACHMENTS),
+                TilePipelineSpec::new(BLUR, &BLUR_ATTACHMENTS, METAL_TILE_THREADS),
             )],
         }
     }
@@ -789,14 +793,15 @@ impl Case for TileThreadgroups {
         let passed = self.passes(side, state, sites);
         // The device-gap ruling the dispatch gets, carried to the getter it is sized by: where the
         // device refused a dispatch Metal ran of the state as its own gap, and the state's
-        // descriptor states no limit, its `maxTotalThreadsPerThreadgroup` is the device's limit
-        // (Metal's 1024 where the device holds a threadgroup of 1024, the device's own below it),
-        // so an answer below Metal's is the same gap and not a divergence of ours.
+        // descriptor states Metal's own maximum, its `maxTotalThreadsPerThreadgroup` is the
+        // device's limit (Metal's 1024 where the device holds a threadgroup of 1024, the device's
+        // own below it), so an answer below Metal's is the same gap and not a divergence of ours.
         let lacks = passed
             .as_ref()
             .err()
             .and_then(|abort| abort.failure.lacks.as_deref());
-        if let Some(lacks) = lacks.filter(|_| spec.max_total_threads_per_threadgroup.is_none()) {
+        let own_maximum = spec.max_total_threads_per_threadgroup == METAL_TILE_THREADS;
+        if let Some(lacks) = lacks.filter(|_| own_maximum) {
             sites.device_gap(
                 &format!("{name}-facts/max_total_threads_per_threadgroup"),
                 format!(

@@ -2486,6 +2486,11 @@ pub trait Side {
     }
 }
 
+/// Metal's largest tile threadgroup: the `maxTotalThreadsPerThreadgroup` an Apple M3 Max answers
+/// for a tile state whose descriptor states no limit, and so the limit a case states where it
+/// means Metal's own maximum ([`TilePipelineSpec::max_total_threads_per_threadgroup`]).
+pub const METAL_TILE_THREADS: u32 = 1024;
+
 /// A tile render pipeline a case makes: `MTLTileRenderPipelineDescriptor`'s facts the cases state.
 ///
 /// The attachment formats are the case's own rather than one fixed format, because a tile
@@ -2497,28 +2502,30 @@ pub struct TilePipelineSpec<'a> {
     pub entry: &'a str,
     /// The color attachment formats, at attachment index 0 up in this order.
     pub attachments: &'a [PixelFormat],
-    /// `maxTotalThreadsPerThreadgroup`: `None` is Metal's 0, the pipeline's own maximum.
-    pub max_total_threads_per_threadgroup: Option<u32>,
+    /// `maxTotalThreadsPerThreadgroup`, which every case states and each side sets, as the compute
+    /// limit cases state theirs ([`crate::pipeline_limits::ComputeLimitsSpec`]); 0 is Metal's
+    /// default, the pipeline's own maximum. A state of no limit is answered from the compiler's
+    /// history: Metal keeps a tile pipeline it compiled and answers a later descriptor of the same
+    /// function that differs only in `requiredThreadsPerThreadgroup` with the first one's limit,
+    /// in the same process or a later one (an Apple M3 Max, macOS 27.0.1), so a re-record of a
+    /// state of no limit could take another pipeline's answer. A stated limit separates the
+    /// pipelines, as the validation oracle's tile pipelines state theirs; a case that means
+    /// Metal's own maximum states [`METAL_TILE_THREADS`].
+    pub max_total_threads_per_threadgroup: u32,
     /// `threadgroupSizeMatchesTileSize`.
     pub threadgroup_size_matches_tile_size: bool,
 }
 
 impl<'a> TilePipelineSpec<'a> {
-    /// The tile function `entry` over `attachments`, with Metal's defaults for the rest.
-    pub const fn new(entry: &'a str, attachments: &'a [PixelFormat]) -> Self {
+    /// The tile function `entry` over `attachments`, under a `maxTotalThreadsPerThreadgroup` of
+    /// `limit`, with Metal's defaults for the rest.
+    pub const fn new(entry: &'a str, attachments: &'a [PixelFormat], limit: u32) -> Self {
         Self {
             entry,
             attachments,
-            max_total_threads_per_threadgroup: None,
+            max_total_threads_per_threadgroup: limit,
             threadgroup_size_matches_tile_size: false,
         }
-    }
-
-    /// The descriptor with `maxTotalThreadsPerThreadgroup` set to `limit`.
-    #[must_use]
-    pub const fn limited(mut self, limit: u32) -> Self {
-        self.max_total_threads_per_threadgroup = Some(limit);
-        self
     }
 
     /// The descriptor with `threadgroupSizeMatchesTileSize` set.
@@ -2535,11 +2542,7 @@ impl<'a> TilePipelineSpec<'a> {
         for format in self.attachments {
             out.extend(format.as_raw().to_le_bytes());
         }
-        out.extend(
-            self.max_total_threads_per_threadgroup
-                .unwrap_or(0)
-                .to_le_bytes(),
-        );
+        out.extend(self.max_total_threads_per_threadgroup.to_le_bytes());
         out.push(u8::from(self.threadgroup_size_matches_tile_size));
         out
     }

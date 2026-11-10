@@ -62,12 +62,12 @@
                       }
                     },
                     {
-                      "name": "tile-pipeline:state-unlimited",
+                      "name": "tile-pipeline:state-limited-1024",
                       "observed": {
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "2cdc8a7ebbb43baa9fb8c8fd93fb1f97e44d630446ac1950c8090dfbbbedb478"
+                          "hex": "f371e74419a1d87b07021bd1ff630c514b9b45a98506ba519974be32f303b5c7"
                         }
                       }
                     },
@@ -105,7 +105,7 @@
                   }
                 },
                 {
-                  "name": "state-unlimited",
+                  "name": "state-limited-1024",
                   "observed": {
                     "value": {
                       "variant": {
@@ -116,7 +116,7 @@
                   }
                 },
                 {
-                  "name": "state-unlimited-facts",
+                  "name": "state-limited-1024-facts",
                   "observed": {
                     "value": "absent"
                   },
