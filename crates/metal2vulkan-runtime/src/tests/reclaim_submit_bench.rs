@@ -59,8 +59,12 @@
 //! - **Images in bursts, made by the runtime**: the images arm's textures, [`BURST`] back to back
 //!   every [`BURST_EVERY`], at most [`IMAGE_TEXTURES`] a phase: a burst needs more blocks than one,
 //!   as a scroll's new tiles do.
-//! - **Images, small blocks**, **Images of mixed sizes, small blocks** and **Images in bursts,
-//!   small blocks**: those three arms on a device told first of a slow making
+//! - **Images scrolled, made by the runtime**: the bursts arm's textures, each past the
+//!   [`SCROLL_WINDOW`] newest released as it is made, as a scroll releases the tiles it left
+//!   behind: the oldest blocks empty as the newest fill, so that the phase's churn shows what an
+//!   emptied block costs, kept for the next placements, freed once it stayed empty, or made again.
+//! - **Images, small blocks**, **Images of mixed sizes, small blocks**, **Images in bursts,
+//!   small blocks** and **Images scrolled, small blocks**: those four arms on a device told first of a slow making
 //!   (`Memory::plain_block_made`, as `tests::plain_blocks` tells it), so that its pooled blocks of
 //!   plain memory are 17 MiB from the start, as a host whose makings were slow made them (a
 //!   consumer's guest on a fragmented Radeon 780M). A liberty: the device made no such making;
@@ -170,6 +174,8 @@ const IMAGE_TEXTURES: usize = 192;
 /// between bursts.
 const BURST: usize = 16;
 const BURST_EVERY: Duration = Duration::from_millis(500);
+/// The scrolled arm's live textures: three bursts' (192 MiB of texels).
+const SCROLL_WINDOW: usize = 3 * BURST;
 /// The mixed images arm's textures, in turn, one a frame at 60 Hz, at most [`MIXED_TEXTURES`] a
 /// phase: six of 4 MiB, one of 14.1 MiB (2560 x 1440) and one of 31.6 MiB (3840 x 2160), 836 MiB
 /// a phase.
@@ -464,6 +470,9 @@ enum Making {
     ImagesMixed,
     /// The runtime's `Private` textures in bursts (the module docs).
     ImagesBursts,
+    /// The runtime's `Private` textures in bursts, the oldest past a window released (the module
+    /// docs).
+    ImagesScrolled,
     /// Allocations of `bytes` of the memory type `index`, [`RAW_BYTES`] a phase, exportable as
     /// `export`'s handle type where given.
     Raw {
@@ -495,7 +504,7 @@ fn make(
         Making::Scroll => (SCROLL_EVERY, SCROLL_BUFFERS),
         Making::Images => (IMAGE_EVERY, IMAGE_TEXTURES),
         Making::ImagesMixed => (IMAGE_EVERY, MIXED_TEXTURES),
-        Making::ImagesBursts => (BURST_EVERY, IMAGE_TEXTURES),
+        Making::ImagesBursts | Making::ImagesScrolled => (BURST_EVERY, IMAGE_TEXTURES),
         Making::Raw { bytes, .. } => (
             RAW_EVERY.mul_f64(bytes as f64 / (64 * MIB) as f64),
             (RAW_BYTES / bytes) as usize,
@@ -521,7 +530,10 @@ fn make(
                     .new_exportable_buffer(RUNTIME_BUFFER_BYTES, ResourceOptions::private())
                     .unwrap(),
             ),
-            Making::Images | Making::ImagesMixed | Making::ImagesBursts => {
+            Making::Images
+            | Making::ImagesMixed
+            | Making::ImagesBursts
+            | Making::ImagesScrolled => {
                 let (width, height) = match making {
                     Making::ImagesMixed => MIXED_SIDES[times.len() % MIXED_SIDES.len()],
                     _ => (IMAGE_SIDE, IMAGE_SIDE),
@@ -531,6 +543,9 @@ fn make(
                 descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
                 descriptor.resource_options = ResourceOptions::private();
                 made.textures.push(device.new_texture(&descriptor).unwrap());
+                if making == Making::ImagesScrolled && made.textures.len() > SCROLL_WINDOW {
+                    drop(made.textures.remove(0));
+                }
             }
             Making::Raw {
                 index,
@@ -541,7 +556,7 @@ fn make(
         }
         times.push((began.elapsed(), at));
         match making {
-            Making::ImagesBursts if times.len() % BURST != 0 => {}
+            Making::ImagesBursts | Making::ImagesScrolled if times.len() % BURST != 0 => {}
             _ => std::thread::sleep(every),
         }
     }
@@ -771,6 +786,8 @@ enum Arm {
     ImagesMixed,
     /// The runtime's textures in bursts.
     ImagesBursts,
+    /// The runtime's textures in bursts, the oldest past a window released.
+    ImagesScrolled,
     SystemHeap {
         bytes: u64,
         export: Option<Handle>,
@@ -830,6 +847,7 @@ fn arm_with(label: &str, arm: Arm, small: bool) {
         Arm::Images => Making::Images,
         Arm::ImagesMixed => Making::ImagesMixed,
         Arm::ImagesBursts => Making::ImagesBursts,
+        Arm::ImagesScrolled => Making::ImagesScrolled,
         Arm::SystemHeap { bytes, export } => Making::Raw {
             index: system_heap(),
             bytes,
@@ -1352,6 +1370,12 @@ fn reclaim_submit_bench_images_bursts() {
 
 #[test]
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_scrolled() {
+    arm("images scrolled, made by the runtime", Arm::ImagesScrolled);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_images_small_blocks() {
     let label = "images, made by the runtime, small blocks";
     arm_with(label, Arm::Images, true);
@@ -1369,6 +1393,13 @@ fn reclaim_submit_bench_images_mixed_small_blocks() {
 fn reclaim_submit_bench_images_bursts_small_blocks() {
     let label = "images in bursts, made by the runtime, small blocks";
     arm_with(label, Arm::ImagesBursts, true);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_scrolled_small_blocks() {
+    let label = "images scrolled, made by the runtime, small blocks";
+    arm_with(label, Arm::ImagesScrolled, true);
 }
 
 #[test]
