@@ -432,12 +432,13 @@ mod tests {
         // A give-back slow to run, as on a loaded host: it frees the two allocated ahead.
         count.give_back_with(Box::new(move |giving| {
             let count = weak.upgrade().unwrap();
-            std::thread::spawn(move || {
+            crate::exit_guard::spawn(std::thread::Builder::new(), move || {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 count.give();
                 count.give();
                 drop(giving);
-            });
+            })
+            .unwrap();
         }));
         for _ in 0..2 {
             assert!(count.take());
