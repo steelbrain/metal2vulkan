@@ -121,7 +121,7 @@ use crate::air::ir::{Call, Const, Value};
 use crate::device::profile::FloatFunctions;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::error::{
-    Attachment, Capability, DescriptorError, Error, Feature, RuntimeInput, Unsupported,
+    Attachment, Capability, DescriptorError, Error, Feature, MetalAnswer, RuntimeInput, Unsupported,
 };
 use crate::lower::arith::{math, ops, pack, FloatFmt, Form, Held};
 use crate::lower::dispatch::KernelBuiltin;
@@ -551,6 +551,7 @@ fn build(cx: &SelectCx<'_>) -> Result<TilePlan, Error> {
         let Some(&pixel_format) = formats.get(&color) else {
             return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                 index: color,
+                metal: MetalAnswer::NilWithError,
             }));
         };
         let aliased = aliased_colors.contains(&color);

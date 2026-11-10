@@ -1847,6 +1847,20 @@ pub enum RuntimeInput {
     UniformVaryings,
 }
 
+/// How Metal answers a pipeline it refuses, where a [`DescriptorError`] carries it
+/// ([`DescriptorError::ColorAttachment`]): measured with plain Metal, no API validation layer, on
+/// an Apple M3 Max under macOS 27.0.1.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MetalAnswer {
+    /// The creation call answers nil and an `NSError` (code 3, in the GPU driver's error domain,
+    /// `AGXMetalG15X_M1` on the device measured), and the process goes on.
+    NilWithError,
+    /// Metal's descriptor validation asserts ("Render Pipeline Descriptor Validation") and the
+    /// process ends (`SIGABRT`). Also the answer of a case whose Metal answer is not measured.
+    EndsProcess,
+}
+
 /// The caller's descriptor or request is inconsistent.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1872,12 +1886,29 @@ pub enum DescriptorError {
     /// at: a set attribute names it and it has no layout, or it has a layout of a nonzero or
     /// dynamic stride and no set attribute names it.
     VertexLayout { layout: u32 },
-    /// A color attachment format without a fragment output, or of the wrong type class; one a
-    /// fragment output has fewer components for than its channels; one whose blend reads a
-    /// second output the function does not write, or writes without the first; a bfloat one
-    /// (`R16Bfloat`, `RG16Bfloat`, `RGBA16Bfloat`) with blending enabled; or an integer
-    /// attachment 0 under alpha to coverage (Metal refuses each pipeline).
-    ColorAttachment { index: u32 },
+    /// Color attachment `index` and the pipeline's function or blend disagree, and Metal refuses
+    /// the pipeline. `metal` is how, as plain Metal answers each case on an Apple M3 Max under
+    /// macOS 27.0.1 (`metal2vulkan-conformance/probes/color_attachment_answers.m`):
+    ///
+    /// - [`MetalAnswer::NilWithError`]: an output, or a `[[color(n)]]` input, of another numeric
+    ///   class than the attachment's format ("output of type half4 is not compatible with a
+    ///   MTLPixelFormatRGBA8Uint color attachment."; "input of type uint4 is not compatible
+    ///   ..."); an output with fewer components than the format's channels ("fragment shader
+    ///   color output does not have enough components for the pixel format"); a blend of the
+    ///   second source whose function writes no second output, or no first ("Fragment shader
+    ///   does not write to render target color(0), index(1) that is required for blending"); and
+    ///   a `[[color(n)]]` input, or a tile function's imageblock member, of an attachment without
+    ///   a format ("Shaders reads from a color attachment whose pixel format is
+    ///   MTLPixelFormatInvalid"; "Invalid pixel format for render target 1").
+    /// - [`MetalAnswer::EndsProcess`]: blending enabled on a bfloat attachment (`R16Bfloat`,
+    ///   `RG16Bfloat`, `RGBA16Bfloat`), whatever the function writes and with no function ("the
+    ///   pixelformat MTLPixelFormatRGBA16Bfloat for this render target is not blendable"); and
+    ///   alpha to coverage over an integer attachment 0, rasterizing or not
+    ///   ("MTLRenderPipelineDescriptor with alphaToCoverageEnabled requires a float/unorm pixel
+    ///   format"). Also a `StageSource::Compiled` tile function compiled under another format of
+    ///   the attachment than the descriptor gives it: Metal compiles a tile function for its
+    ///   pipeline, so the case has no Metal answer to measure, and is answered as unmeasured.
+    ColorAttachment { index: u32, metal: MetalAnswer },
     /// A raw Metal enum value outside the known set.
     UnknownEnumValue { ty: &'static str, value: u32 },
     /// A pipeline descriptor without a required stage.

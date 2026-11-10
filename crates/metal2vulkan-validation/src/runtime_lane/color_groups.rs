@@ -52,7 +52,8 @@ use crate::gpu::TEST_DEVICE;
 use crate::observation::PROFILES_LAYER;
 use metal2vulkan::device::VkLimit;
 use metal2vulkan::error::{
-    Capability, DescriptorError, Error as CompileError, Feature, RuntimeDriverDefect, Unsupported,
+    Capability, DescriptorError, Error as CompileError, Feature, MetalAnswer, RuntimeDriverDefect,
+    Unsupported,
 };
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
@@ -851,7 +852,10 @@ fn dead_scene(lane: &Lane, five: &[usize]) {
     }
     // A color input without an attachment, read or not: Metal's pipeline error.
     let unattached = Error::Compile(CompileError::InvalidDescriptor(
-        DescriptorError::ColorAttachment { index: 1 },
+        DescriptorError::ColorAttachment {
+            index: 1,
+            metal: MetalAnswer::NilWithError,
+        },
     ));
     for reads in [false, true] {
         let made = dead_pipeline(lane, (&lane.rog, "dfr_lacks"), &[0], reads);

@@ -1637,7 +1637,7 @@ mod tests {
 
     /// A fragment row whose outputs have fewer than four components compiles: its attachments have
     /// no more channels than its outputs write, which the product, as Metal, requires (a `uint2`
-    /// target into `RGBA32Uint` was `InvalidDescriptor(ColorAttachment { index: 2 })`).
+    /// target into `RGBA32Uint` was `InvalidDescriptor(ColorAttachment { index: 2, .. })`).
     #[test]
     fn a_fragment_row_with_narrow_outputs_compiles_into_its_derived_attachments() {
         let Some(bitcode) = fixture("signed_color.ll") else {

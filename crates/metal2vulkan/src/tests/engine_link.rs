@@ -16,7 +16,9 @@ use std::sync::Arc;
 use crate::budget::SPIRV_WORDS;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{DescriptorError, Error, Feature, LowerFamily, Needs, RuntimeInput};
+use crate::error::{
+    DescriptorError, Error, Feature, LowerFamily, MetalAnswer, Needs, RuntimeInput,
+};
 use crate::library::{FunctionArtifact, FunctionConstantValues};
 use crate::metal::{BlendFactor, PixelFormat, VertexFormat};
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
@@ -261,14 +263,20 @@ fn pipeline_mismatches_are_typed_refusals() {
     r.color_attachments[2] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
     assert_eq!(
         link(&[&v, &f], &render(&r), &p).unwrap_err(),
-        Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 2 })
+        Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+            index: 2,
+            metal: MetalAnswer::NilWithError,
+        })
     );
     // A signed-integer attachment: the fragment compiled for an unsigned one declares the output
     // `uint`, so it is a stage of another pipeline.
     r.color_attachments[2] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Sint));
     assert_eq!(
         link(&[&v, &f], &render(&r), &p).unwrap_err(),
-        Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 2 })
+        Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+            index: 2,
+            metal: MetalAnswer::NilWithError,
+        })
     );
     // An absent attachment discards the output.
     r.color_attachments[2] = None;
@@ -509,7 +517,10 @@ fn a_signed_integer_attachment_takes_an_int_output() {
         assert_eq!(color_class(&plain, 1), Some(IoNumeric::Uint), "{stem}");
         assert_eq!(
             link(&[&v, &plain], &render(&signed_targets()), &p).unwrap_err(),
-            Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 1 }),
+            Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                index: 1,
+                metal: MetalAnswer::NilWithError,
+            }),
             "{stem}"
         );
         let mut unsigned = signed_targets();
@@ -517,7 +528,10 @@ fn a_signed_integer_attachment_takes_an_int_output() {
             Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
         assert_eq!(
             link(&[&v, &f], &render(&unsigned), &p).unwrap_err(),
-            Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 1 }),
+            Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                index: 1,
+                metal: MetalAnswer::NilWithError,
+            }),
             "{stem}"
         );
     }
@@ -548,7 +562,10 @@ fn dual_source_blending_needs_the_second_output() {
     );
     assert_eq!(
         link(&[&v, &single], &render(&r), &p).unwrap_err(),
-        Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 0 })
+        Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+            index: 0,
+            metal: MetalAnswer::NilWithError,
+        })
     );
 }
 

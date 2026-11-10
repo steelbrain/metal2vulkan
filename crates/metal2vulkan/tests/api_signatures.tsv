@@ -1482,6 +1482,7 @@ enum	metal2vulkan::error::LinearNeed	#[derive(Clone, Copy, Debug, PartialEq, Eq,
 enum	metal2vulkan::error::LinkProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LinkProblem
 enum	metal2vulkan::error::LowerFamily	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum LowerFamily
 enum	metal2vulkan::error::MeshPipelineProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MeshPipelineProblem
+enum	metal2vulkan::error::MetalAnswer	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MetalAnswer
 enum	metal2vulkan::error::Needs	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Needs
 enum	metal2vulkan::error::Permanence	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Permanence
 enum	metal2vulkan::error::PrivateRenderField	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum PrivateRenderField
@@ -13712,7 +13713,7 @@ variant	metal2vulkan::error::ContainerError::NoAirSlice	NoAirSlice
 variant	metal2vulkan::error::ContainerError::Truncated	Truncated { need: u64, have: u64 }
 variant	metal2vulkan::error::ContainerError::UnsupportedContainerVersion	UnsupportedContainerVersion { major: u16, minor: u16 }
 variant	metal2vulkan::error::DescriptorError::AmbiguousEntry	AmbiguousEntry { requested: DiagName }
-variant	metal2vulkan::error::DescriptorError::ColorAttachment	ColorAttachment { index: u32 }
+variant	metal2vulkan::error::DescriptorError::ColorAttachment	ColorAttachment { index: u32, metal: MetalAnswer }
 variant	metal2vulkan::error::DescriptorError::ComputePipeline	ComputePipeline { problem: ComputePipelineProblem }
 variant	metal2vulkan::error::DescriptorError::DeviceDescription	DeviceDescription { detail: String }
 variant	metal2vulkan::error::DescriptorError::DuplicateColorOutput	DuplicateColorOutput { color: u32, index: u32 }
@@ -13991,6 +13992,8 @@ variant	metal2vulkan::error::MeshPipelineProblem::RequiredEmptyAxis	RequiredEmpt
 variant	metal2vulkan::error::MeshPipelineProblem::RequiredOverLimit	RequiredOverLimit { stage: Stage, threads: u64, limit: u32 }
 variant	metal2vulkan::error::MeshPipelineProblem::RequiredOverMax	RequiredOverMax { stage: Stage, threads: u64, max: u32 }
 variant	metal2vulkan::error::MeshPipelineProblem::RequiredWithoutObjectFunction	RequiredWithoutObjectFunction { required: [u32; 3] }
+variant	metal2vulkan::error::MetalAnswer::EndsProcess	EndsProcess
+variant	metal2vulkan::error::MetalAnswer::NilWithError	NilWithError
 variant	metal2vulkan::error::Needs::AnyOf	AnyOf(Vec<Vec<Capability>>)
 variant	metal2vulkan::error::Needs::DeviceCapability	DeviceCapability(&'static str)
 variant	metal2vulkan::error::Needs::DriverDefect	DriverDefect(DriverWorkaround)

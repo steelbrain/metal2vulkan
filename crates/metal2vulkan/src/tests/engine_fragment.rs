@@ -3022,6 +3022,7 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
         match pipeline(&safe, "stage_io_fragment_point") {
             Err(Error::InvalidDescriptor(crate::error::DescriptorError::ColorAttachment {
                 index: 0,
+                metal: crate::error::MetalAnswer::NilWithError,
             })) => {}
             r => panic!("{stem}: no second output: {:?}", r.map(|_| ())),
         }

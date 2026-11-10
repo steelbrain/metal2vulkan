@@ -28,7 +28,7 @@ use crate::device::requirements::{Requirements, VkExtension, VkFeature, VkLimit,
 use crate::device::{mechanism, Device, DeviceProfile};
 use crate::error::{
     ComputePipelineProblem, DescriptorError, Error, Feature, InternalError, InternalKind,
-    MeshPipelineProblem, RuntimeInput, Unsupported,
+    MeshPipelineProblem, MetalAnswer, RuntimeInput, Unsupported,
 };
 use crate::library::{CompiledFunction, FunctionArtifact, FunctionCompileKey};
 use crate::lower::select::LowerInputs;
@@ -314,7 +314,7 @@ impl Device {
     /// render area, binding each attachment it reaches (`WriteSource::TileAttachment`). A
     /// `Compiled` tile function must have been compiled under the same formats: one compiled
     /// without tile inputs is `InvalidDescriptor(StageMismatch)`, and one that stages an attachment
-    /// the descriptor gives another format (`RuntimeFact::TileAttachmentFormat`) is
+    /// the descriptor gives another format, or none (`RuntimeFact::TileAttachmentFormat`), is
     /// `InvalidDescriptor(ColorAttachment)`. A multisampled pass (`raster_sample_count` above 1) is
     /// `Unsupported{TileShading, NotImplemented}`: what its imageblock's samples are is not read.
     /// The tile function's recursion is sized for `d`'s `maxCallStackDepth` as a compute kernel's
@@ -1408,7 +1408,10 @@ fn check_tile_threadgroup(
 
 /// Each attachment the tile function of artifact `a` stages has the format it was compiled for in
 /// `d`: a `Compiled` tile function compiled under other formats is
-/// `InvalidDescriptor(ColorAttachment)` (a `Function` one is compiled under `d`'s).
+/// `InvalidDescriptor(ColorAttachment)` (a `Function` one is compiled under `d`'s). It answers
+/// Metal's nil and `NSError` where `d` gives the attachment no format, as Metal answers a tile
+/// function reaching one; under another format it answers `EndsProcess`, the answer of a case
+/// with no Metal counterpart.
 fn check_tile_formats(a: &FunctionArtifact, d: &TileRenderPipelineDescriptor) -> Result<(), Error> {
     for fact in &a.facts {
         let RuntimeFact::TileAttachmentFormat { color, format } = *fact else {
@@ -1417,11 +1420,17 @@ fn check_tile_formats(a: &FunctionArtifact, d: &TileRenderPipelineDescriptor) ->
         let given = usize::try_from(color)
             .ok()
             .and_then(|i| d.color_attachment_formats.get(i).copied().flatten());
-        if given != Some(format) {
-            return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
-                index: color,
-            }));
-        }
+        // Without a format, Metal's answer; under another, compiled for another pipeline, which
+        // has no Metal counterpart.
+        let metal = match given {
+            Some(given) if given == format => continue,
+            Some(_) => MetalAnswer::EndsProcess,
+            None => MetalAnswer::NilWithError,
+        };
+        return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+            index: color,
+            metal,
+        }));
     }
     Ok(())
 }

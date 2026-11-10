@@ -21,7 +21,7 @@ use super::render_state::texture;
 use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::error::DescriptorError;
+use metal2vulkan::error::{DescriptorError, MetalAnswer};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
 use metal2vulkan::pipeline::{StageSource, TileRenderPipelineDescriptor};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -188,7 +188,10 @@ fn a_tile_state_is_refused_where_metal_refuses_it() {
                 state(device, &missing),
                 Err(Error::Compile(
                     metal2vulkan::error::Error::InvalidDescriptor(
-                        DescriptorError::ColorAttachment { index: 0 }
+                        DescriptorError::ColorAttachment {
+                            index: 0,
+                            metal: MetalAnswer::NilWithError,
+                        }
                     )
                 ))
             ),

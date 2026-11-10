@@ -25,7 +25,7 @@ use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DevicePolicy};
-use crate::error::{DescriptorError, Error, Feature};
+use crate::error::{DescriptorError, Error, Feature, MetalAnswer};
 use crate::library::{FunctionConstantValue, FunctionConstantValues, Library};
 use crate::metal::{DataType, PixelFormat};
 use crate::pipeline::artifact::RenderPipeline;
@@ -236,6 +236,7 @@ fn a_color_input_without_an_attachment_is_refused_dead_or_live() {
                 match made {
                     Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                         index: 1,
+                        metal: MetalAnswer::NilWithError,
                     })) => {}
                     Ok(()) => misses.entry("made".into()).or_default().push(what),
                     Err(e) => misses

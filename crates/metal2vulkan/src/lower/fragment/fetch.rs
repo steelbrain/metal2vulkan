@@ -319,8 +319,8 @@ use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
 use crate::error::{
-    Attachment, Capability, DescriptorError, Error, ExtendedRangeBlend, Feature, RuntimeInput,
-    Unsupported,
+    Attachment, Capability, DescriptorError, Error, ExtendedRangeBlend, Feature, MetalAnswer,
+    RuntimeInput, Unsupported,
 };
 use crate::lower::arith::{extended_range, narrow, ops, pack, FloatFmt, Form, Held};
 use crate::lower::emit::EmitCx;
@@ -995,6 +995,7 @@ pub(crate) fn storage_form(
             .flatten()
             .ok_or(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                 index: color,
+                metal: MetalAnswer::NilWithError,
             }))?;
     let pf = attachment.pixel_format;
     // A packed 16-bit attachment the device samples but does not render renders through a view of
@@ -1525,7 +1526,10 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .is_some_and(|e| e.form.bfloat())
     });
     if let Some(&(color, _)) = bfloat {
-        let invalid = DescriptorError::ColorAttachment { index: color };
+        let invalid = DescriptorError::ColorAttachment {
+            index: color,
+            metal: MetalAnswer::EndsProcess,
+        };
         return Err(Error::InvalidDescriptor(invalid));
     }
     let fetched = colors_read(cx, &body.used)?;
@@ -1663,7 +1667,10 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 a.blending_enabled && a.equation.is_some_and(|eq| eq.reads_second_source())
             });
         if reads_second && second.is_none() {
-            let invalid = DescriptorError::ColorAttachment { index: color };
+            let invalid = DescriptorError::ColorAttachment {
+                index: color,
+                metal: MetalAnswer::NilWithError,
+            };
             return Err(Error::InvalidDescriptor(invalid));
         }
         let generic_of = |view: StorageView, exact: &mut bool| {
@@ -1978,6 +1985,7 @@ fn class_of(form: Form, numeric: SampledType, color: u32, write: bool) -> Result
     if !ok {
         return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
             index: color,
+            metal: MetalAnswer::NilWithError,
         }));
     }
     if write && numeric == SampledType::Sint && !matches!(form.held, Held::Int { bits: 32, .. }) {
@@ -2129,6 +2137,7 @@ pub fn select_output(
     if color_output_components(pf).is_some_and(|n| form.lanes < n) {
         return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
             index: color,
+            metal: MetalAnswer::NilWithError,
         }));
     }
     plan_sample(cx)?;

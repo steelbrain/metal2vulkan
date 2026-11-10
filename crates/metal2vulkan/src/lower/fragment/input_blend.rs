@@ -55,7 +55,8 @@ use std::collections::BTreeMap;
 use crate::air::abi::{AbiInt, OutputRole};
 use crate::air::ir::TypeId as AirTypeId;
 use crate::error::{
-    Attachment, DescriptorError, Error, ExtendedRangeBlend, Feature, RuntimeInput, Unsupported,
+    Attachment, DescriptorError, Error, ExtendedRangeBlend, Feature, MetalAnswer, RuntimeInput,
+    Unsupported,
 };
 use crate::lower::arith::{extended_range, FloatFmt, Form};
 use crate::lower::emit::EmitCx;
@@ -211,7 +212,10 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                     return Err(tied(Unsupported::not_implemented(gap).into()));
                 }
                 None => {
-                    let invalid = DescriptorError::ColorAttachment { index: color };
+                    let invalid = DescriptorError::ColorAttachment {
+                        index: color,
+                        metal: MetalAnswer::NilWithError,
+                    };
                     return Err(Error::InvalidDescriptor(invalid));
                 }
             }

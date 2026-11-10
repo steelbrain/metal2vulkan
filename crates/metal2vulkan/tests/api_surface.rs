@@ -200,6 +200,7 @@ surface! {
         enum ExtendedRangeBlend N;
         enum RuntimeInput N;
         enum DescriptorError N;
+        enum MetalAnswer N;
         enum DynamicLibraryProblem N;
         enum MeshPipelineProblem N;
         enum ComputePipelineProblem N;
@@ -1472,7 +1473,10 @@ fn a_signed_integer_attachment_compiles_the_fragment_for_it() {
             dev.compile_render_pipeline(&foreign, &Budget::standard())
                 .unwrap_err(),
             metal2vulkan::error::Error::InvalidDescriptor(
-                metal2vulkan::error::DescriptorError::ColorAttachment { index: 1 }
+                metal2vulkan::error::DescriptorError::ColorAttachment {
+                    index: 1,
+                    metal: metal2vulkan::error::MetalAnswer::NilWithError,
+                }
             ),
             "{stem}"
         );

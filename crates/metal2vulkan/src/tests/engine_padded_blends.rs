@@ -21,7 +21,7 @@ use std::path::Path;
 
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{DescriptorError, Error, Needs};
+use crate::error::{DescriptorError, Error, MetalAnswer, Needs};
 use crate::library::{FunctionArtifact, Library};
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::RenderPipeline;
@@ -299,7 +299,10 @@ fn a_blend_into_a_bfloat_attachment_is_metals_pipeline_error() {
     let Some(fills) = assembled("rt6_samples") else {
         return;
     };
-    let invalid = Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 0 });
+    let invalid = Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+        index: 0,
+        metal: MetalAnswer::EndsProcess,
+    });
     let fills = (fills.as_slice(), "rt6_fill_vertex", "rt6_fill_rgba16float");
     let (mut refused, mut unblended) = (0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {

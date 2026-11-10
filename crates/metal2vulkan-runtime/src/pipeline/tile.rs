@@ -7,9 +7,10 @@
 //!   as `compile_tile_pipeline` compiles it, with a compute state's variants, stand-ins, memo,
 //!   archives and disk cache. What the compile refuses is refused (`Compile`, `Unsupported`):
 //!   among it a function that reaches an attachment without a format in the descriptor
-//!   (`InvalidDescriptor(ColorAttachment)`), where Metal's creation answers "Invalid pixel format
-//!   for render target 0", and a member whose type the attachment's format does not hold, which
-//!   Metal's API validation stops (an M3 Max and an M4).
+//!   (`InvalidDescriptor(ColorAttachment)` answering `MetalAnswer::NilWithError`), where Metal's
+//!   creation answers nil and "Invalid pixel format for render target 0", and a member whose
+//!   type the attachment's format does not hold, which Metal's API validation stops (an M3 Max
+//!   and an M4).
 //! - **Answers.** A tile pipeline's state answers its descriptor's
 //!   `threadgroup_size_matches_tile_size`, no indirect command buffers, and a
 //!   `max_total_threads_per_threadgroup`. That is the threads of the descriptor's

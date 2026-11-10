@@ -36,7 +36,7 @@
 //! is built: the output's write stores the raw texel of Metal's blend over the texel the input
 //! attachment reads, which `stage_io` writes through the output variable as it writes [`encode`]'s.
 
-use crate::error::{DescriptorError, Error, Feature, Unsupported};
+use crate::error::{DescriptorError, Error, Feature, MetalAnswer, Unsupported};
 use crate::lower::arith::extended_range;
 use crate::lower::arith::texel_round::{self, HalfRounding};
 use crate::lower::arith::{FloatFmt, Form, Held};
@@ -83,7 +83,10 @@ pub(super) fn plan(
     // A blend into a bfloat attachment is Metal's pipeline error (link refuses it whatever the
     // function writes there).
     if e.blended && e.form.bfloat() {
-        let invalid = DescriptorError::ColorAttachment { index: color };
+        let invalid = DescriptorError::ColorAttachment {
+            index: color,
+            metal: MetalAnswer::EndsProcess,
+        };
         return Err(Error::InvalidDescriptor(invalid));
     }
     let blended = e.blended && !cx.families.fragment.input_blends.contains_key(&color);

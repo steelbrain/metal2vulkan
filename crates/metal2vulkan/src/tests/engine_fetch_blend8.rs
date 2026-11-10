@@ -32,7 +32,7 @@ use std::path::Path;
 
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{Attachment, DescriptorError, Error, Feature, Needs};
+use crate::error::{Attachment, DescriptorError, Error, Feature, MetalAnswer, Needs};
 use crate::library::{FunctionArtifact, Library};
 use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::PrecisionNote;
@@ -493,7 +493,10 @@ fn a_second_source_blend_without_its_output_is_refused_as_metal_refuses_it() {
             let inputs = state(&p, PixelFormat::BGRA8Unorm, eq, ColorWriteMask::ALL);
             let what = format!("{stem} {eq:?}");
             match compile_with(&fast, "fbl8_over_loaded", &p, &inputs) {
-                Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 0 })) => {
+                Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                    index: 0,
+                    metal: MetalAnswer::NilWithError,
+                })) => {
                     checked += 1;
                 }
                 Err(e) if device_gap(&e) => eprintln!("{what}: {e}"),

@@ -18,7 +18,8 @@
 //!   unmodified, and an extended-range one (a padded 10-bit one among them) no blend: its raw
 //!   unsigned format blends nothing, and nothing is written to blend. A bfloat attachment with
 //!   blending enabled is `InvalidDescriptor(ColorAttachment)` whatever the function writes: Metal's
-//!   pipeline validation asserts that the format is not blendable. That is what Metal
+//!   pipeline validation asserts that the format is not blendable, ending the process
+//!   (`MetalAnswer::EndsProcess`). That is what Metal
 //!   does where measured: an unblended attachment the function reads
 //!   through framebuffer fetch but has no output for, which a draw's later fragments read as
 //!   loaded; an attachment without an output whose blend would change it (`Zero`/`Zero`,
@@ -131,7 +132,9 @@
 //! - **Fragment outputs**: a color output to an attachment the descriptor sets must have the
 //!   attachment's numeric class (`float` to a float, normalized, or sRGB format, `uint` to an
 //!   unsigned-integer one, `int` to a signed-integer one); an output of another class is Metal's
-//!   pipeline error or a fragment compiled for other attachments (`ColorAttachment`). An integer
+//!   pipeline error (nil and an `NSError`: `ColorAttachment` answering
+//!   `MetalAnswer::NilWithError`, as each `ColorAttachment` below does unless it says otherwise)
+//!   or a fragment compiled for other attachments. An integer
 //!   output is declared `int` exactly when the fragment compiled under its attachment in
 //!   `LoweringInputs::signed_color_attachments`, so a `uint` output to a signed-integer attachment
 //!   is a stage compiled for another pipeline. An output to an absent attachment is discarded, as
@@ -146,9 +149,10 @@
 //!   four-component float output there (none, fewer components, or an integer one) Metal's
 //!   coverage stays the rasterizer's, measured at 1 and 4 samples, while Vulkan requires an alpha
 //!   output at location 0 (`VUID-VkGraphicsPipelineCreateInfo-alphaToCoverageEnable-08891`), so
-//!   link turns it off. Over an integer attachment 0 it is Metal's pipeline error
-//!   (`ColorAttachment`). Over an `A8Unorm` attachment 0 whose image holds Metal's alpha in red
-//!   (`R8_UNORM`, no `A8_UNORM`), the output holds Metal's alpha in its alpha lane too
+//!   link turns it off. Over an integer attachment 0 it is Metal's pipeline error, whose descriptor
+//!   validation ends the process (`ColorAttachment`, `MetalAnswer::EndsProcess`). Over an
+//!   `A8Unorm` attachment 0 whose image holds Metal's alpha in red (`R8_UNORM`, no `A8_UNORM`),
+//!   the output holds Metal's alpha in its alpha lane too
 //!   (`StageIo::alpha_in_red_colors`), so Vulkan's coverage, which reads the output's alpha
 //!   whatever the format keeps (the specification's multisample coverage section: "All alpha
 //!   values in this section refer only to the alpha component of the fragment shader output that
@@ -187,8 +191,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::device::requirements::{FormatUsage, VkFeature, VkLimit, VkProperty};
 use crate::device::{DeviceProfile, DriverWorkaround};
 use crate::error::{
-    Attachment, Capability, DescriptorError, DriverDeviation, Error, Feature, RuntimeInput,
-    Unsupported,
+    Attachment, Capability, DescriptorError, DriverDeviation, Error, Feature, MetalAnswer,
+    RuntimeInput, Unsupported,
 };
 use crate::metal;
 use crate::metal::format::{
@@ -379,6 +383,7 @@ pub fn graphics_state(
     if let Some(index) = unblendable {
         return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
             index: index as u32,
+            metal: MetalAnswer::EndsProcess,
         }));
     }
     let mut color_attachments = Vec::with_capacity(used as usize);
@@ -609,6 +614,7 @@ pub fn graphics_state(
                 .flatten()
                 .ok_or(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                     index: color,
+                    metal: MetalAnswer::NilWithError,
                 }))?;
             // An input attachment of an image holding Metal's channels rotated reads them so: a
             // color input of one is not modelled, which a stage compiled for the attachment refuses
@@ -1064,8 +1070,9 @@ pub(crate) fn coverage_notes(g: &GraphicsState, p: &DeviceProfile) -> FixedFunct
 /// Whether the pipeline's alpha to coverage stays enabled (see the module docs): only over a
 /// fragment output whose alpha it reads, a four-component float first output at attachment 0.
 /// Without one, Metal's coverage is the rasterizer's, as with alpha to coverage off. A
-/// descriptor that enables it over an integer attachment 0 is Metal's pipeline error; that was
-/// measured with rasterization on, and is refused with it off as well (unmeasured).
+/// descriptor that enables it over an integer attachment 0 is Metal's pipeline error, whose
+/// descriptor validation asserts and ends the process with rasterization on and off (an Apple M3
+/// Max under macOS 27.0.1, `color_attachment_answers.m`).
 fn reads_alpha_to_coverage(
     r: &RenderLinkInputs,
     fs: Option<&StageInterface>,
@@ -1082,6 +1089,7 @@ fn reads_alpha_to_coverage(
     if integer {
         return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
             index: 0,
+            metal: MetalAnswer::EndsProcess,
         }));
     }
     // An extended-range attachment 0 is written as raw texels, whose alpha the coverage cannot
@@ -1271,7 +1279,12 @@ fn check_outputs(
     states: &[Option<ColorAttachmentState>],
     p: &DeviceProfile,
 ) -> Result<(), Error> {
-    let invalid = |index: u32| Error::InvalidDescriptor(DescriptorError::ColorAttachment { index });
+    let invalid = |index: u32| {
+        Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+            index,
+            metal: MetalAnswer::NilWithError,
+        })
+    };
     let mut written = BTreeSet::new();
     let mut second = BTreeSet::new();
     for o in &fs.io.outputs {

@@ -1043,6 +1043,48 @@ fn device_gaps_name_what_the_device_lacks() {
     );
 }
 
+/// A storage-form read or write of another numeric class than its attachment's format is Metal's
+/// pipeline error, which Metal answers nil and an `NSError` ("input of type uint4 is not
+/// compatible with a MTLPixelFormatRGBA8Unorm color attachment.", "output of type uint4 ...": an
+/// Apple M3 Max under macOS 27.0.1, `color_attachment_answers.m`); a read or write of the
+/// format's class is planned.
+#[test]
+fn a_read_or_write_of_another_class_is_refused_as_metal_answers_it() {
+    let uint4 = Form {
+        held: Held::Int {
+            bits: 32,
+            container: 32,
+        },
+        lanes: 4,
+    };
+    let float4 = Form {
+        held: Held::Float(FloatFmt::F32),
+        lanes: 4,
+    };
+    let refused = Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+        index: 1,
+        metal: MetalAnswer::NilWithError,
+    }));
+    for write in [false, true] {
+        for (form, numeric) in [
+            (uint4, SampledType::Float),
+            (float4, SampledType::Uint),
+            (float4, SampledType::Sint),
+        ] {
+            let got = class_of(form, numeric, 1, write);
+            assert_eq!(got, refused, "{form:?} into {numeric:?}, write {write}");
+        }
+        for (form, numeric) in [
+            (float4, SampledType::Float),
+            (uint4, SampledType::Uint),
+            (uint4, SampledType::Sint),
+        ] {
+            let got = class_of(form, numeric, 1, write);
+            assert_eq!(got, Ok(()), "{form:?} into {numeric:?}, write {write}");
+        }
+    }
+}
+
 /// No attachment at the color read refuses the pipeline whatever the form.
 #[test]
 fn a_missing_attachment_is_a_descriptor_error() {
@@ -1051,7 +1093,8 @@ fn a_missing_attachment_is_a_descriptor_error() {
     assert_eq!(
         storage_form(0, &none, false, READS, &p),
         Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
-            index: 0
+            index: 0,
+            metal: MetalAnswer::NilWithError,
         }))
     );
 }

@@ -34,7 +34,7 @@
 //!   pipeline's attachments does not.
 
 use super::*;
-use crate::error::{DescriptorError, Error, Needs, RuntimeInput};
+use crate::error::{DescriptorError, Error, MetalAnswer, Needs, RuntimeInput};
 use crate::metal::format::ClearRoute;
 use crate::metal::ColorWriteMask;
 use crate::pipeline::descriptor::ColorAttachmentDescriptor;
@@ -455,7 +455,10 @@ fn fragment_outputs_to_bfloat_targets_write_raw_codes() {
             // the device orders fetch only through the interlock) and at link, with no fragment
             // function too.
             let what = format!("{stem} {pf:?} blended");
-            let invalid = Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 0 });
+            let invalid = Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                index: 0,
+                metal: MetalAnswer::EndsProcess,
+            });
             let r = pipeline_of(pf, ColorWriteMask::ALL, true);
             for entry in ["rt6_fill_rgba32float", "rt6_fill_rgba16float"] {
                 let e = compile_with(&bc, entry, &p, &blended_inputs(&r, &p)).expect_err(&what);
@@ -657,7 +660,10 @@ fn unmodelled_extended_range_targets_are_refused() {
                 assert!(
                     matches!(
                         e,
-                        Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 0 })
+                        Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                            index: 0,
+                            metal: MetalAnswer::NilWithError,
+                        })
                     ),
                     "{what} {entry}: {e}"
                 );

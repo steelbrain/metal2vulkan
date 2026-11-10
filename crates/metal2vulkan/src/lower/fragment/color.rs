@@ -71,7 +71,9 @@ use crate::air::abi::{AbiInt, OutputRole, ParamBinding, ParamRole};
 
 use crate::air::ir::{ArgIdx, TypeId as AirTypeId, Value};
 use crate::device::requirements::VkFeature;
-use crate::error::{Attachment, Capability, DescriptorError, Error, Feature, Unsupported};
+use crate::error::{
+    Attachment, Capability, DescriptorError, Error, Feature, MetalAnswer, Unsupported,
+};
 use crate::lower::arith::legal::{form_on, refuse_int64_interface};
 use crate::lower::arith::{extended_range, narrow, ops, Form, Held};
 use crate::lower::emit::EmitCx;
@@ -222,6 +224,7 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         if !form.is_float() {
             return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                 index: color,
+                metal: MetalAnswer::NilWithError,
             }));
         }
         cx.families.arith.converts(e.form);
@@ -256,6 +259,7 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         if !form.is_float() {
             return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                 index: color,
+                metal: MetalAnswer::NilWithError,
             }));
         }
         cx.families

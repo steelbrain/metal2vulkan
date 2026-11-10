@@ -65,7 +65,7 @@ use metal2vulkan::bind::{
     BindShape, BindState, BoundBuffer, DrawCall, IndexBufferRef, RasterizationRateMap,
     RateMapRegions, RegionLimits, StageTable, TessellationFactorBuffer, TessellationFactors,
 };
-use metal2vulkan::error::{DescriptorError, Error};
+use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan::metal::{self, RenderStages};
 use metal2vulkan::pipeline::Stage as ShaderStage;
@@ -1108,7 +1108,10 @@ impl RenderTemplate {
         descriptor.vertex_descriptor = self.vertex_descriptor.clone();
         for (&index, attachment) in &self.color_attachments {
             let slot = descriptor.color_attachments.get_mut(index as usize).ok_or(
-                Error::InvalidDescriptor(DescriptorError::ColorAttachment { index }),
+                Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                    index,
+                    metal: MetalAnswer::EndsProcess,
+                }),
             )?;
             *slot = Some(*attachment);
         }

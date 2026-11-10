@@ -28,7 +28,7 @@ use crate::companion::Companion;
 use crate::engine::RowSource;
 use crate::literal::LiteralResources;
 use metal2vulkan::bind::{BindShape, BindState, BoundBuffer};
-use metal2vulkan::error::{DescriptorError, Error};
+use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan::pipeline::Stage as ShaderStage;
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, MeshPipelineDescriptor, StageSource};
@@ -230,7 +230,10 @@ impl MeshTemplate {
         descriptor.rasterization_enabled = self.rasterization;
         for (&index, attachment) in &self.color_attachments {
             let slot = descriptor.color_attachments.get_mut(index as usize).ok_or(
-                Error::InvalidDescriptor(DescriptorError::ColorAttachment { index }),
+                Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                    index,
+                    metal: MetalAnswer::EndsProcess,
+                }),
             )?;
             *slot = Some(*attachment);
         }

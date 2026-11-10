@@ -28,7 +28,9 @@
 use metal2vulkan::bind::{BindShape, Dispatch, TextureShape};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::{Device, DeviceProfile};
-use metal2vulkan::error::{DescriptorError, Error, InternalError, InternalKind, RuntimeInput};
+use metal2vulkan::error::{
+    DescriptorError, Error, InternalError, InternalKind, MetalAnswer, RuntimeInput,
+};
 use metal2vulkan::metal::format::storage_image_choice;
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
@@ -178,6 +180,7 @@ pub fn compile_tile_for_shape(
                 .and_then(|index| descriptor.color_attachment_formats.get_mut(index))
                 .ok_or(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                     index,
+                    metal: MetalAnswer::EndsProcess,
                 }))?;
             *attachment = Some(format);
         }

@@ -44,7 +44,7 @@ use crate::bind::{
 use crate::budget::Budget;
 use crate::device::profile::DeviceProfile;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{BindError, DescriptorError, Error, Feature, Needs, RuntimeInput};
+use crate::error::{BindError, DescriptorError, Error, Feature, MetalAnswer, Needs, RuntimeInput};
 use crate::library::Library;
 use crate::lower::select::{LowerInputs, Plan};
 use crate::lower::texture::TexelClass;
@@ -1209,7 +1209,8 @@ fn tile_refusals_are_typed() {
     assert_eq!(
         dev.compile_tile_pipeline(&missing, &b).map(|_| ()),
         Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
-            index: 1
+            index: 1,
+            metal: MetalAnswer::NilWithError,
         }))
     );
     let mut msaa = descriptor(
@@ -1256,7 +1257,8 @@ fn tile_refusals_are_typed() {
             PixelFormat::R32Uint
         ]),
         Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
-            index: 1
+            index: 1,
+            metal: MetalAnswer::EndsProcess,
         }))
     );
 }

@@ -36,7 +36,8 @@ use crate::cache::Hash256;
 use crate::cache::VariantKey;
 use crate::device::DeviceProfile;
 use crate::error::{
-    DescriptorError, DiagName, Error, Feature, InternalError, InternalKind, Unsupported,
+    DescriptorError, DiagName, Error, Feature, InternalError, InternalKind, MetalAnswer,
+    Unsupported,
 };
 use crate::library::function::FunctionSource;
 use crate::library::{
@@ -289,6 +290,7 @@ fn color_inputs_attached(spec: &air::Entry, inputs: InputsFrom<'_>) -> Result<()
         if !attached {
             return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                 index: color,
+                metal: MetalAnswer::NilWithError,
             }));
         }
     }

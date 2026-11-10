@@ -786,6 +786,13 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   fewer components than its attachment's channels, a blend that reads the second output without
   the first, alpha to coverage over an integer attachment 0. Function-constant values that put two
   outputs at one attachment are `InvalidDescriptor(DuplicateColorOutput)`.
+- `ColorAttachment`'s `metal` is how plain Metal answers the pipeline (measured on an Apple M3 Max
+  under macOS 27.0.1): `MetalAnswer::NilWithError`, nil and an `NSError` (code 3), for an output or
+  color input of another numeric class than its attachment, an output with fewer components, a
+  blend of the second source without both outputs, and a color input or tile imageblock member of
+  an attachment without a format; `MetalAnswer::EndsProcess`, Metal's descriptor validation
+  asserting, for a blend into a bfloat attachment and for alpha to coverage over an integer
+  attachment 0. A layer that answers as Metal does ends the process only for the second.
 - On a device without `independentBlend`, attachments the function does not write copy the blend
   state of those it does; where those differ the pipeline is refused, naming the feature.
 - A packed 16-bit attachment (`A1BGR5Unorm`, `ABGR4Unorm`, `BGRA4Unorm`) of a format the device
