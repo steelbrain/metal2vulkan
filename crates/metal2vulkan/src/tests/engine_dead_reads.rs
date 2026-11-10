@@ -22,12 +22,14 @@
 use std::collections::BTreeMap;
 
 use crate::budget::Budget;
+use crate::cache::VariantKey;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DevicePolicy};
 use crate::error::{DescriptorError, Error, Feature};
 use crate::library::{FunctionConstantValue, FunctionConstantValues, Library};
 use crate::metal::{DataType, PixelFormat};
 use crate::pipeline::artifact::RenderPipeline;
+use crate::pipeline::compile::StageEntries;
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
@@ -205,8 +207,9 @@ fn a_raster_order_group_on_an_input_dead_after_specialization_takes_no_interlock
 
 /// A color input without an attachment is Metal's pipeline error whether or not the specialized
 /// body reads it (the module docs): `dfr_lacks` beside a pipeline of color 0 alone is
-/// `InvalidDescriptor(ColorAttachment)` at index 1, dead and live, on `lavapipe` and `moltenvk-m3`.
-/// With color 1 in the pipeline, the dead read compiles.
+/// `InvalidDescriptor(ColorAttachment)` at index 1, dead and live, on `lavapipe` and `moltenvk-m3`,
+/// compiled and keyed (`Device::render_variant_key`, which a runtime's creation asks first). With
+/// color 1 in the pipeline, the dead read compiles.
 #[test]
 fn a_color_input_without_an_attachment_is_refused_dead_or_live() {
     let (Some(vs), Some(fs)) = (fixture("color_groups"), fixture("dfk_dead_rog")) else {
@@ -222,13 +225,24 @@ fn a_color_input_without_an_attachment_is_refused_dead_or_live() {
                 if reads { "live" } else { "dead" }
             );
             let d = specialized(&vs, &fs, "dfr_lacks", &[0], reads);
-            match dev.compile_render_pipeline(&d, &budget) {
-                Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment { index: 1 })) => {}
-                Ok(_) => misses.entry("made".into()).or_default().push(what),
-                Err(e) => misses
-                    .entry(format!("refused: {e}"))
-                    .or_default()
-                    .push(what),
+            // The compile, and the keys a runtime's creation asks for first, which compiles each
+            // stage under the inputs they name.
+            let keys = dev
+                .render_variant_key(&d, &VariantKey::new(), &budget, &StageEntries::new())
+                .map(|_| ());
+            let compiled = dev.compile_render_pipeline(&d, &budget).map(|_| ());
+            for (how, made) in [("compiled", compiled), ("keyed", keys)] {
+                let what = format!("{what}, {how}");
+                match made {
+                    Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                        index: 1,
+                    })) => {}
+                    Ok(()) => misses.entry("made".into()).or_default().push(what),
+                    Err(e) => misses
+                        .entry(format!("refused: {e}"))
+                        .or_default()
+                        .push(what),
+                }
             }
         }
         let d = specialized(&vs, &fs, "dfr_lacks", &[0, 1], false);
