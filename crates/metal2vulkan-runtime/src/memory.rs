@@ -3929,6 +3929,8 @@ impl BlockMaker {
         let fill = handle.is_none()
             && dedicated_to == vk::Buffer::null()
             && self.fill_types & 1 << type_index != 0;
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        let _ = making_parts::take_fill(-1);
         let filled = fill && self.fill_first(device, info.allocation_size, type_index);
         let allocating = Instant::now();
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
@@ -3945,6 +3947,8 @@ impl BlockMaker {
         let allocated = Instant::now();
         #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         let after = making_parts::thread_times();
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        let allocated_on = making_parts::cpu();
         let host_visible = self.host_visible & 1 << type_index != 0;
         let mapped = if host_visible {
             // SAFETY: the memory is host-visible, unmapped, and mapped whole once.
@@ -3999,6 +4003,7 @@ impl BlockMaker {
                 ],
                 on_cpu: after.0.saturating_sub(before.0),
                 runnable: after.1.saturating_sub(before.1),
+                fill: making_parts::take_fill(allocated_on),
             });
         Ok(Block {
             memory,
@@ -4034,13 +4039,19 @@ impl BlockMaker {
             .allocation_size(bytes)
             .memory_type_index(type_index)
             .push_next(&mut exportable);
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        let began = making_parts::moment();
         // SAFETY: `info` and its chain live for the call; the type index is the device's, and the
         // device exports pooled memory as the handle type ([`Memory::fill_plain_blocks`]).
         let Ok(memory) = (unsafe { crate::creation::allocate_memory(device, &info) }) else {
             return false;
         };
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        let allocated = making_parts::moment();
         // SAFETY: nothing uses the memory, never mapped nor bound.
         unsafe { release::object(device, memory) };
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        making_parts::filled(began, allocated, making_parts::moment());
         true
     }
 }

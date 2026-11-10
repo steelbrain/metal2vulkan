@@ -929,6 +929,12 @@ fn print_makings(
         in_fills.iter().filter(|&&took| took >= 8.0).count(),
         in_fills.iter().copied().fold(0.0, f64::max),
     );
+    for line in makings
+        .iter()
+        .filter_map(crate::memory::making_parts::fill_line)
+    {
+        eprintln!("RECLAIM-SUBMIT {arm}, {name}: fill of {line}");
+    }
     let mut slowest: Vec<_> = makings.iter().collect();
     slowest.sort_by_key(|making| std::cmp::Reverse(making.took[2]));
     for making in slowest.into_iter().take(SLOWEST) {

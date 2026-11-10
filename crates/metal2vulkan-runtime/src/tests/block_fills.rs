@@ -36,6 +36,8 @@ fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions
         .driver_facts
         .contains(&DriverFact::PlainAllocationsHoldSubmissions);
     let types = crate::device::lock(&device.shared().memory).fill_types();
+    #[cfg(all(m2v_gpu, target_os = "linux"))]
+    let earlier = crate::memory::making_parts::MAKINGS.lock().unwrap().len();
     let start = device.work_counts();
     let mut held: Vec<Texture> = Vec::new();
     let mut counts = start;
@@ -69,6 +71,12 @@ fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions
          made under 1 ms, {missed} filled first and not",
         device.name(),
     );
+    #[cfg(all(m2v_gpu, target_os = "linux"))]
+    for making in &crate::memory::making_parts::MAKINGS.lock().unwrap()[earlier..] {
+        if let Some(line) = crate::memory::making_parts::fill_line(making) {
+            println!("BLOCK-FILLS {}: fill of {line}", device.name());
+        }
+    }
     match holds {
         true => {
             assert_ne!(
