@@ -4,9 +4,10 @@
 //! in `Boolean` mode a nonzero value when any sample of the draws while it was set passed and 0
 //! otherwise, in `Counting` mode the samples that passed; an offset set with no draw after it gets
 //! 0, an offset the encoder never set keeps its bytes, and a later pass rewrites only its own
-//! offsets (measured on an M4 with macOS 27.0.1). The nonzero `Boolean` value is the device's: an
-//! Apple M3 Max writes 1, Metal on the AMD Radeon Pro 5300M and the Intel UHD Graphics 630
-//! (macOS 26.7.1) the samples that passed, and the runtime the device's occlusion query's result
+//! offsets (Metal's answers on an Apple M3 Max with macOS 27.0.1, which the conformance suite's
+//! `visibility` cases record). The nonzero `Boolean` value is the device's: an Apple M3 Max writes
+//! 1, Metal on the AMD Radeon Pro 5300M and the Intel UHD Graphics 630 (macOS 26.7.1) the samples
+//! that passed, and the runtime the device's occlusion query's result
 //! (`Degradation::DeviceBooleanVisibility`).
 //!
 //! - **Queries.** Each mode set is an occlusion query of the encoder's own pools, begun in the

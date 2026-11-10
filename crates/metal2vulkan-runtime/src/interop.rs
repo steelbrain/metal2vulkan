@@ -512,7 +512,19 @@ impl SharedEvent {
     /// semaphore of an event made exportable, [`export_semaphore_fd`](Self::export_semaphore_fd)),
     /// soon: every later signal of the
     /// event and every wait for a value it reaches waits for it, the runtime's command buffers'
-    /// on their queues included, and a reservation never signalled stalls them for good. Where
+    /// on their queues included, and a reservation never signalled stalls them for good. A
+    /// command buffer's wait for such a value is held on the host, never on a `VkQueue`, but a
+    /// command buffer that signals the event after the reservation waits for the reserved signal
+    /// on its `VkQueue` before its own signal. So does a texture's `get_bytes` or
+    /// `replace_region` behind such a command buffer on a device that copies textures through a
+    /// submission of its own on its first `VkQueue` (one with no `VK_EXT_host_image_copy` and no
+    /// queue family of transfers alone, such as RADV on an RX 550): a thread submits the signal
+    /// before it makes such a call. Those command buffers may be submitted before the signal is,
+    /// so the caller's submission depends on none of them: it waits for no such command buffer's
+    /// completion, and goes to a queue no command queue submits to (an extra or reserved queue,
+    /// [`DeviceHandles::extra_queues`](crate::DeviceHandles::extra_queues),
+    /// [`DeviceHandles::reserved_queues`](crate::DeviceHandles::reserved_queues)), or to a
+    /// command queue's `VkQueue` ([`CommandQueue::with_vk_queue`]) behind none of them. Where
     /// the submission fails, the caller signals the semaphore to `counter` from the host
     /// (`vkSignalSemaphore`) once the semaphore reached `after`, so the rest goes on. The
     /// semaphore's other contract is [`vk_semaphore`](Self::vk_semaphore)'s; the runtime holds

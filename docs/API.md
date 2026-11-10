@@ -4039,9 +4039,9 @@ bound.
   `VkProperty::DeviceSampling`), its level clamp the descriptor's as given (a `lodMinClamp` past
   level 15, past every texture's last level, handed as 15, which reads the same level; Metal holds it on a
   `1/64` grid, and its nearest mip filter reads the lower level at a clamp halfway between two,
-  where the device may read the upper) and a subnormal coordinate the device's to read (Metal reads it as a zero before
-  addressing). That includes a
-  linear sample of a two-plane YCbCr texture, whose texels hold Metal's reads exactly: the device's
+  where the device may read the upper) and a subnormal coordinate the device's to read (Metal reads
+  a normalized one as a zero before addressing, and a negative pixel one as texel -1). That includes
+  a linear sample of a two-plane YCbCr texture, whose texels hold Metal's reads exactly: the device's
   filter of them lands within 1.183 codes (1/255) of Metal's sum on the format's grid, so a draw
   binding such a texture makes no pipeline of its own.
 - `metal2vulkan-degrade-native-transcendentals` (precision). `PrecisionNote::NativeTranscendentals`:
