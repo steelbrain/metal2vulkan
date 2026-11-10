@@ -4,7 +4,7 @@ source_filename = "-"
 target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
-%struct.Rows = type { [7 x <4 x float>], [4 x <4 x half>] }
+%struct.Rows = type { [8 x <4 x float>], [4 x <4 x half>] }
 
 @_ZL6k_qnan = internal unnamed_addr addrspace(2) global float undef, align 4
 @_Z6k_qnan.MTL_FC_INIT_2_f = linkonce_odr hidden local_unnamed_addr addrspace(2) externally_initialized constant float undef, section "air.fc_initializer", align 4
@@ -47,21 +47,23 @@ define void @sfold(<4 x float> addrspace(1)* nocapture noundef readonly "air-buf
   %26 = fdiv fast <4 x float> %15, %6
   %27 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 0, i64 6
   store <4 x float> %26, <4 x float> addrspace(1)* %27, align 16, !tbaa !25, !alias.scope !31, !noalias !28
-  %28 = load half, half addrspace(2)* @_ZL5h_nan, align 2, !tbaa !35
-  %29 = insertelement <4 x half> poison, half %28, i64 0
-  %30 = shufflevector <4 x half> %29, <4 x half> poison, <4 x i32> zeroinitializer
-  %31 = fadd fast <4 x half> %30, %7
-  %32 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 0
-  store <4 x half> %31, <4 x half> addrspace(1)* %32, align 16, !tbaa !25, !alias.scope !31, !noalias !28
-  %33 = fsub fast <4 x half> %30, %7
-  %34 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 1
-  store <4 x half> %33, <4 x half> addrspace(1)* %34, align 8, !tbaa !25, !alias.scope !31, !noalias !28
-  %35 = fdiv fast <4 x half> %30, %7
-  %36 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 2
-  store <4 x half> %35, <4 x half> addrspace(1)* %36, align 16, !tbaa !25, !alias.scope !31, !noalias !28
-  %37 = fmul fast <4 x half> %30, %7
-  %38 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 3
-  store <4 x half> %37, <4 x half> addrspace(1)* %38, align 8, !tbaa !25, !alias.scope !31, !noalias !28
+  %28 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 0, i64 7
+  store <4 x float> %6, <4 x float> addrspace(1)* %28, align 16, !tbaa !25, !alias.scope !31, !noalias !28
+  %29 = load half, half addrspace(2)* @_ZL5h_nan, align 2, !tbaa !35
+  %30 = insertelement <4 x half> poison, half %29, i64 0
+  %31 = shufflevector <4 x half> %30, <4 x half> poison, <4 x i32> zeroinitializer
+  %32 = fadd fast <4 x half> %31, %7
+  %33 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 0
+  store <4 x half> %32, <4 x half> addrspace(1)* %33, align 16, !tbaa !25, !alias.scope !31, !noalias !28
+  %34 = fsub fast <4 x half> %31, %7
+  %35 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 1
+  store <4 x half> %34, <4 x half> addrspace(1)* %35, align 8, !tbaa !25, !alias.scope !31, !noalias !28
+  %36 = fdiv fast <4 x half> %31, %7
+  %37 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 2
+  store <4 x half> %36, <4 x half> addrspace(1)* %37, align 16, !tbaa !25, !alias.scope !31, !noalias !28
+  %38 = fmul fast <4 x half> %31, %7
+  %39 = getelementptr inbounds %struct.Rows, %struct.Rows addrspace(1)* %1, i64 %4, i32 1, i64 3
+  store <4 x half> %38, <4 x half> addrspace(1)* %39, align 8, !tbaa !25, !alias.scope !31, !noalias !28
   ret void
 }
 
@@ -105,8 +107,8 @@ attributes #3 = { nounwind readnone willreturn }
 !10 = !{}
 !11 = !{!12, !13, !15}
 !12 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"in"}
-!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !14, !"air.arg_type_size", i32 144, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"Rows", !"air.arg_name", !"out"}
-!14 = !{i32 0, i32 16, i32 7, !"float4", !"f", i32 112, i32 8, i32 4, !"half4", !"h"}
+!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !14, !"air.arg_type_size", i32 160, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"Rows", !"air.arg_name", !"out"}
+!14 = !{i32 0, i32 16, i32 8, !"float4", !"f", i32 128, i32 8, i32 4, !"half4", !"h"}
 !15 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}
 !16 = !{!"air.compile.denorms_disable"}
 !17 = !{!"air.compile.fast_math_enable"}
