@@ -30,14 +30,15 @@ fn image_blocks(start: &WorkCounts, counts: &WorkCounts) -> u64 {
 fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions() {
     let scratch = std::env::temp_dir().join(format!("m2v-block-fills-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
+    // Every making of the process is printed, from the device's creation on.
+    #[cfg(all(m2v_gpu, target_os = "linux"))]
+    let base = Instant::now();
     let device = device(&scratch);
     let holds = device
         .properties()
         .driver_facts
         .contains(&DriverFact::PlainAllocationsHoldSubmissions);
     let types = crate::device::lock(&device.shared().memory).fill_types();
-    #[cfg(all(m2v_gpu, target_os = "linux"))]
-    let earlier = crate::memory::making_parts::MAKINGS.lock().unwrap().len();
     let start = device.work_counts();
     let mut held: Vec<Texture> = Vec::new();
     let mut counts = start;
@@ -72,10 +73,9 @@ fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions
         device.name(),
     );
     #[cfg(all(m2v_gpu, target_os = "linux"))]
-    for making in &crate::memory::making_parts::MAKINGS.lock().unwrap()[earlier..] {
-        if let Some(line) = crate::memory::making_parts::fill_line(making) {
-            println!("BLOCK-FILLS {}: fill of {line}", device.name());
-        }
+    for making in crate::memory::making_parts::MAKINGS.lock().unwrap().iter() {
+        let line = crate::memory::making_parts::making_line(making, base);
+        println!("BLOCK-FILLS {}: making of {line}", device.name());
     }
     match holds {
         true => {

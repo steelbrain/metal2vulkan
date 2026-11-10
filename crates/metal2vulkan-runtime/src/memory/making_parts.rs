@@ -35,6 +35,8 @@ pub(crate) struct MakingParts {
 /// `BlockMaker::fill_first`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FillParts {
+    /// When the exportable allocation began.
+    pub(crate) began: Instant,
     /// How long the exportable allocation took and its free took.
     pub(crate) allocate: Duration,
     pub(crate) free: Duration,
@@ -84,6 +86,7 @@ pub(super) fn moment() -> FillMoment {
 /// Record the calling thread's fill of these moments, for its block's making to take.
 pub(super) fn filled(began: FillMoment, allocated: FillMoment, freed: FillMoment) {
     FILL.set(Some(FillParts {
+        began: began.0,
         allocate: allocated.0 - began.0,
         free: freed.0 - allocated.0,
         allocate_on_cpu: allocated.1 .0.saturating_sub(began.1 .0),
@@ -100,29 +103,37 @@ pub(super) fn take_fill(cpu: i32) -> Option<FillParts> {
     })
 }
 
-/// A line of `making`'s fill, where it was filled first: the exportable allocation's and its
-/// free's times (on a CPU), the block's own allocation's (on a CPU, waiting for one), and the CPUs
-/// each ended on.
-pub(crate) fn fill_line(making: &MakingParts) -> Option<String> {
-    let fill = making.fill?;
+/// A line of `making`: when its `vkAllocateMemory` began, from `base`, and how long it took (on a
+/// CPU, waiting for one), and, where it was filled first, whether the fill saved, when it began,
+/// the exportable allocation's and its free's times (on a CPU) and [`FillParts::cpus`].
+pub(crate) fn making_line(making: &MakingParts, base: Instant) -> String {
     let ms = |took: Duration| took.as_secs_f64() * 1e3;
-    Some(format!(
-        "{} MiB {}: fill allocated {:.2} ms (on a CPU {:.2}), freed {:.2} ms (on a CPU {:.2}); \
-         own vkAllocateMemory {:.2} ms (on a CPU {:.2}, waiting for one {:.2}), {}; CPUs {:?}",
+    let at = |instant: Instant| ms(instant.saturating_duration_since(base));
+    let own = format!(
+        "{} MiB {} at {:.1} ms: vkAllocateMemory {:.2} ms (on a CPU {:.2}, waiting for one {:.2})",
         making.bytes >> 20,
         if making.ahead { "ahead" } else { "in place" },
-        ms(fill.allocate),
-        ms(fill.allocate_on_cpu),
-        ms(fill.free),
-        ms(fill.free_on_cpu),
+        at(making.allocating),
         ms(making.took[2]),
         ms(making.on_cpu),
         ms(making.runnable),
+    );
+    let Some(fill) = making.fill else {
+        return format!("{own}, not filled first");
+    };
+    format!(
+        "{own}, {}; filled first from {:.1} ms: allocated {:.2} ms (on a CPU {:.2}), freed {:.2} \
+         ms (on a CPU {:.2}); CPUs {:?}",
         if making.took[2] < super::FILL_SAVED_BELOW {
             "saved"
         } else {
             "missed"
         },
+        at(fill.began),
+        ms(fill.allocate),
+        ms(fill.allocate_on_cpu),
+        ms(fill.free),
+        ms(fill.free_on_cpu),
         fill.cpus,
-    ))
+    )
 }
