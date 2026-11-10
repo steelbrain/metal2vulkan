@@ -43,7 +43,7 @@ pub(crate) struct FillParts {
     /// The time the making thread ran on a CPU during the exportable allocation, and during its
     /// free.
     pub(crate) allocate_on_cpu: Duration,
-    pub(crate) free_on_cpu: Duration,
+    pub(crate) freeing_on_cpu: Duration,
     /// The CPUs the making thread ran on as the exportable allocation began, as it ended, as its
     /// free ended and as the block's own allocation ended (`sched_getcpu`).
     pub(crate) cpus: [i32; 4],
@@ -90,7 +90,7 @@ pub(super) fn filled(began: FillMoment, allocated: FillMoment, freed: FillMoment
         allocate: allocated.0 - began.0,
         free: freed.0 - allocated.0,
         allocate_on_cpu: allocated.1 .0.saturating_sub(began.1 .0),
-        free_on_cpu: freed.1 .0.saturating_sub(allocated.1 .0),
+        freeing_on_cpu: freed.1 .0.saturating_sub(allocated.1 .0),
         cpus: [began.2, allocated.2, freed.2, -1],
     }));
 }
@@ -148,7 +148,7 @@ pub(crate) fn making_line(making: &MakingParts, base: (Instant, f64)) -> String 
         ms(fill.allocate),
         ms(fill.allocate_on_cpu),
         ms(fill.free),
-        ms(fill.free_on_cpu),
+        ms(fill.freeing_on_cpu),
         fill.cpus,
     )
 }
