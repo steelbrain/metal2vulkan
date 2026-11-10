@@ -4633,7 +4633,7 @@ impl RenderLowering {
         // The pass's clears write a new texture's unwritten texels where they reach it: through
         // another image only where the pass stores the aspect, whose copy back writes it
         // (`fresh_unwritten.rs`). Before its `DontCare` loads take clears below.
-        FreshUnwritten::cleared(core.command_buffer(), &layout)?;
+        FreshUnwritten::cleared(core.command_buffer(), &layout, called)?;
         let count = instances.len();
         // The tiles the pass's draws reach, as far as the host decides them, before the
         // `DontCare` loads below become `Clear` loads (`clear_reach.rs`): where they reach the
@@ -4855,7 +4855,7 @@ impl RenderLowering {
         let tiled = |taken: bool| taken && tiles.is_some();
         let own_box = |c: &render_pass::ColorTarget, own: &StandIn| {
             let [width, height] = match c.load == LoadAction::Clear {
-                true => clear_reach::cleared(&layout, c.target.extent, called),
+                true => clear_reach::cleared(&layout, &own.own, called),
                 false => layout.extent,
             };
             own.area.unwrap_or([0, 0, width, height])
@@ -4906,7 +4906,7 @@ impl RenderLowering {
                 cleared |= aspect.is_some_and(|a| a.load == LoadAction::Clear && stores(a.store));
             }
             let [width, height] = match cleared {
-                true => clear_reach::cleared(&layout, own.own.extent, called),
+                true => clear_reach::cleared(&layout, &own.own, called),
                 false => layout.extent,
             };
             let area = [0, 0, width, height];
@@ -5322,7 +5322,7 @@ impl RenderLowering {
                     (None, None) => Some(&ds.target),
                 };
                 let own = own.ok_or_else(|| internal("a NaN clear depth without its texture"))?;
-                let extent = clear_reach::cleared(&layout, own.extent, called);
+                let extent = clear_reach::cleared(&layout, own, called);
                 Some(NanDepthWrite::plan(core.command_buffer(), own, extent)?)
             }
             _ => None,

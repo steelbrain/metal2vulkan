@@ -12,9 +12,11 @@
 //!   image holds. The tracker keeps, per level, layer and aspect, the boxes of texels no write has
 //!   covered yet, so writes of parts that together cover the level write it as one whole write
 //!   does. What counts as a write of a box:
-//!   - a render pass's clear of an attachment, over the pass's render area in the attachment's
-//!     layers (a 3D attachment's depth planes), in each aspect it clears, logged as its encoder
-//!     ends ([`FreshUnwritten::cleared`]; as its encoder ends, not as it is made). Where the pass
+//!   - a render pass's clear of an attachment, over the clear's reach (`clear_reach.rs`: past the
+//!     render area where the pass stores the aspect, but in separate depth and stencil
+//!     textures) in the attachment's layers (a 3D attachment's depth planes), in each aspect it
+//!     clears, logged as its encoder ends ([`FreshUnwritten::cleared`]; as its encoder ends, not
+//!     as it is made). Where the pass
 //!     renders the attachment through another image (a stand-in copied to and from it, separate
 //!     depth and stencil textures' scratch), the clear reaches the texture only by the copy back,
 //!     so it counts only where the pass stores that aspect: a `DontCare` store leaves the texture's
@@ -70,6 +72,7 @@
 //! read) announces it as a write that may store such a value does (`signed-depth-test`, where the
 //! device's test is not Metal's), and the texture is no longer noted.
 
+use super::clear_reach;
 use super::command_buffer::CommandBuffer;
 use super::device::lock;
 use super::error::Error;
@@ -693,7 +696,7 @@ impl FreshUnwritten {
             return Ok(());
         }
         let loads = |aspect: &Aspect| aspect.load == LoadAction::Load;
-        pass_targets(layout, loads, |target, aspects| {
+        pass_targets(layout, loads, |target, aspects, _| {
             let texels = pass_texels(target, layout.extent)?;
             if let Some(key) = image_key(&target.texture, &texels)? {
                 let event = FreshEvent::Read {
@@ -729,22 +732,32 @@ impl FreshUnwritten {
         Ok(())
     }
 
-    /// A render pass of `maker`'s, of `layout`, ends (its layout as the pass decided it, before
-    /// its `DontCare` loads take clears, `clear_reach.rs`): each attachment's texture is written
-    /// over the render area in its layers in each aspect the pass clears, where the clear
-    /// reaches it, logged for the commit: an attachment the pass renders itself, or one it
-    /// renders through another image (a stand-in copied to and from it, separate depth and
-    /// stencil textures' scratch) where the pass stores that aspect, whose copy back writes it.
-    /// Where such a pass does not store it (`DontCare`), or renders through a backing nothing
-    /// copies back, the texture keeps its texels, as Metal keeps them, and stays unwritten.
-    pub(super) fn cleared(maker: &CommandBuffer, layout: &PassLayout) -> Result<(), Error> {
+    /// A render pass of `maker`'s, of `layout`, a pass with a draw call where `called`, ends (its
+    /// layout as the pass decided it, before its `DontCare` loads take clears, `clear_reach.rs`):
+    /// each attachment's texture is written in its layers in each aspect the pass clears, where
+    /// the clear reaches it, over the clear's reach past the render area where the pass stores
+    /// that aspect (`clear_reach::cleared`; [`pass_targets`]), else over the render area, logged
+    /// for the commit: an attachment the pass renders itself, or one it renders through another
+    /// image (a stand-in copied to and from it, separate depth and stencil textures' scratch)
+    /// where the pass stores that aspect, whose copy back writes it. Where such a pass does not
+    /// store it (`DontCare`), or renders through a backing nothing copies back, the texture keeps
+    /// its texels, as Metal keeps them, and stays unwritten.
+    pub(super) fn cleared(
+        maker: &CommandBuffer,
+        layout: &PassLayout,
+        called: bool,
+    ) -> Result<(), Error> {
         let fresh = &maker.device().shared().fresh;
         if !fresh.any() {
             return Ok(());
         }
         let clears = |aspect: &Aspect| aspect.load == LoadAction::Clear && aspect.reaches;
-        pass_targets(layout, clears, |target, aspects| {
-            let texels = pass_texels(target, layout.extent)?;
+        pass_targets(layout, clears, |target, aspects, past| {
+            let extent = match past {
+                true => clear_reach::cleared(layout, target, called),
+                false => layout.extent,
+            };
+            let texels = pass_texels(target, extent)?;
             if let Some(key) = image_key(&target.texture, &texels)? {
                 let event = FreshEvent::Written {
                     key,
@@ -878,12 +891,17 @@ struct Aspect {
 /// `each` of each attachment's own texture in `layout` (a stand-in's own, separate depth and
 /// stencil textures each in its aspect), with the aspects for which `test` holds, where any does;
 /// a hidden depth and stencil, and an aspect no attachment names (`keep_depth`, `keep_stencil`),
-/// never. It lists them in no storage of its own: a pass begins and ends with a noted texture
-/// live elsewhere and allocates nothing for that (the module docs, **Cheap**).
+/// never. With them, whether a `Clear` load of those aspects writes the texture past the render
+/// area, over its reach (`clear_reach::cleared`): where the pass stores the aspect (the runtime
+/// clears the reach of a stored `Clear` load alone, `ReachClears`), or writes a NaN clear depth
+/// before it (`nan_clear.rs`), but in a separate depth or stencil texture, whose scratch is
+/// measured apart (`depth_stencil_scratch.rs`). It lists them in no storage of its own: a pass
+/// begins and ends with a noted texture live elsewhere and allocates nothing for that (the
+/// module docs, **Cheap**).
 fn pass_targets<'a>(
     layout: &'a PassLayout,
     test: impl Fn(&Aspect) -> bool,
-    mut each: impl FnMut(&'a Target, ImageAspectFlags) -> Result<(), Error>,
+    mut each: impl FnMut(&'a Target, ImageAspectFlags, bool) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let stores = |store: StoreAction| {
         matches!(
@@ -903,6 +921,7 @@ fn pass_targets<'a>(
             each(
                 stand_in.map_or(&color.target, |s| &s.own),
                 ImageAspectFlags::COLOR,
+                stores(color.store),
             )?;
         }
     }
@@ -942,6 +961,11 @@ fn pass_targets<'a>(
         };
         let aspects =
             by(&ds.depth, ds.keep_depth, depth) | by(&ds.stencil, ds.keep_stencil, stencil);
+        let past = |aspect: &Option<AspectTarget>, flag| match aspect {
+            Some(a) if ds.separate.is_none() && (a.written_nan || stores(a.store)) => flag,
+            _ => ImageAspectFlags::empty(),
+        };
+        let past = past(&ds.depth, depth) | past(&ds.stencil, stencil);
         let own: [Option<(&Target, ImageAspectFlags)>; 2] = match (&ds.separate, &ds.stand_in) {
             (Some(separate), _) => [
                 separate.depth.as_ref().map(|t| (t, depth)),
@@ -951,8 +975,10 @@ fn pass_targets<'a>(
             (None, None) => [Some((&ds.target, depth | stencil)), None],
         };
         for (target, its) in own.into_iter().flatten() {
-            if !(aspects & its).is_empty() {
-                each(target, aspects & its)?;
+            for (part, reaches) in [(aspects & its & past, true), (aspects & its & !past, false)] {
+                if !part.is_empty() {
+                    each(target, part, reaches)?;
+                }
             }
         }
     }

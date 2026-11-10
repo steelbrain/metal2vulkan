@@ -248,7 +248,7 @@ pub(super) fn opens_inline(
             // late. Else the first action ruled out.
             let loaded = match color.load {
                 LoadAction::Load => (area != layout.extent).then_some(ActionsRefused::UnequalReach),
-                LoadAction::Clear => (clear_reach::cleared(layout, target.extent, true) != area)
+                LoadAction::Clear => (clear_reach::cleared(layout, target, true) != area)
                     .then_some(ActionsRefused::UnequalReach),
                 LoadAction::DontCare => Some(ActionsRefused::DontCareLoad),
             };
@@ -285,7 +285,7 @@ fn inline_area(layout: &PassLayout) -> [u32; 2] {
         .find(|color| !(color.memoryless || super::memoryless(&color.target)));
     match first {
         Some(color) if color.load == LoadAction::Clear => {
-            clear_reach::cleared(layout, color.target.extent, true)
+            clear_reach::cleared(layout, &color.target, true)
         }
         _ => layout.extent,
     }
