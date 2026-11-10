@@ -21,15 +21,21 @@
 //! - **`bundle_read`**: as `bundle`, the encoder making nothing resident for writing.
 //! - **`bundle_both`**: as `bundle`, what the encoder makes resident made so for the vertex and
 //!   fragment stages, as a browser's bind groups visible to both are.
+//! - **`bundle_first_use`**: as `bundle`, each frame's commands naming a state of their own, made
+//!   before the first frame and drawn by no command before its frame, as a page's render bundle
+//!   first draws with pipelines it made earlier: each frame's command buffer is the first to draw
+//!   with its state, so the `VkPipeline`s its draws take are made for it (the commit settles them,
+//!   `render/executions.rs`), and `METAL2VULKAN_LOG_PIPELINES=1` prints each making and its wait.
 //!
 //! [`EXTRA_VAR`] has the render encoder make that many more buffers resident for reading, and
 //! [`FRAMES_VAR`] sets the frames a stream runs.
 //!
 //! Printed as `HOST-STEP-FRAMES` lines: per frame, its commit to its kernel start (the scheduler's
 //! first submission), the kernel start to the kernel end (its last batch submitted), the end to its
-//! completion, and the work counts that moved over the frame.
+//! completion, its commit to its completion, and the work counts that moved over the frame.
 
 use super::host_memory::{no_copy, Mapping, GUEST_PAGE};
+use super::indirect_command_buffers::render_template_state;
 use super::indirect_host_steps;
 use super::render_executions::{icb, pass, Setup, WINDOW};
 use super::{buffer_with, read_buffer, validated_device_with, Messages, ScratchCache, WAIT};
@@ -37,7 +43,8 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::metal::{IndirectCommandType, RenderStages, ResourceUsage};
 use metal2vulkan_runtime::{
     host_time, Buffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Device,
-    IndirectCommandBuffer, IndirectCommandBufferDescriptor, ResourceOptions, Size, WorkCounts,
+    IndirectCommandBuffer, IndirectCommandBufferDescriptor, RenderPipelineState, ResourceOptions,
+    Size, WorkCounts,
 };
 use std::collections::BTreeMap;
 use std::ptr::NonNull;
@@ -61,11 +68,13 @@ enum Shape {
     Inherited,
     /// Nothing inherited, a buffer of each command's own, a no-copy one where `no_copy`; `out`
     /// made resident for the vertex stage's writes where `writes`; what is made resident for
-    /// the fragment stage too where `fragment`, as a browser's bind groups are.
+    /// the fragment stage too where `fragment`, as a browser's bind groups are; each frame's
+    /// commands naming a state of their own, first drawn in that frame, where `first_use`.
     Bundle {
         no_copy: bool,
         writes: bool,
         fragment: bool,
+        first_use: bool,
     },
 }
 
@@ -184,9 +193,17 @@ impl Frames {
         }
     }
 
+    /// Set `state` on every command: a state its commands name in no earlier frame.
+    fn name_state(&self, state: &RenderPipelineState) {
+        for index in 0..COMMANDS {
+            let command = self.icb.indirect_render_command_at(index).unwrap();
+            command.set_render_pipeline_state(state).unwrap();
+        }
+    }
+
     /// One frame on `queue`, committed and waited for: its commit to its kernel start, the kernel
-    /// start to its end, and the end to its completion, in ms.
-    fn frame(&self, queue: &CommandQueue) -> (f64, f64, f64) {
+    /// start to its end, the end to its completion, and its commit to its completion, in ms.
+    fn frame(&self, queue: &CommandQueue) -> (f64, f64, f64, f64) {
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder.set_compute_pipeline_state(&self.writer).unwrap();
@@ -247,7 +264,12 @@ impl Frames {
             command_buffer.kernel_end_time(),
         );
         let ms = |seconds: f64| seconds * 1000.0;
-        (ms(start - committed), ms(end - start), ms(completed - end))
+        (
+            ms(start - committed),
+            ms(end - start),
+            ms(completed - end),
+            ms(completed - committed),
+        )
     }
 }
 
@@ -301,9 +323,21 @@ fn measure(stream: &str, shape: Shape, beside_queues: bool) {
         .ok()
         .map(|text| text.parse::<usize>().expect(FRAMES_VAR))
         .unwrap_or(FRAMES);
+    // Each frame's own state, all made before the first frame, as a page makes its pipelines.
+    let first_use: Vec<RenderPipelineState> = match shape {
+        Shape::Bundle {
+            first_use: true, ..
+        } => (0..count)
+            .map(|_| render_template_state(&frames.device, true))
+            .collect(),
+        _ => Vec::new(),
+    };
     for frame in 0..count {
+        if let Some(state) = first_use.get(frame) {
+            frames.name_state(state);
+        }
         let before = fields(&frames.device.work_counts());
-        let (to_start, submitting, to_completion) = frames.frame(&queue);
+        let (to_start, submitting, to_completion, whole) = frames.frame(&queue);
         let after = fields(&frames.device.work_counts());
         let moved: Vec<String> = after
             .iter()
@@ -314,7 +348,8 @@ fn measure(stream: &str, shape: Shape, beside_queues: bool) {
             .collect();
         eprintln!(
             "HOST-STEP-FRAMES {name}: {stream}: frame {frame}: commit to kernel start {to_start:.2} \
-             ms, kernel start to end {submitting:.2} ms, end to completion {to_completion:.2} ms"
+             ms, kernel start to end {submitting:.2} ms, end to completion {to_completion:.2} ms, \
+             commit to completion {whole:.2} ms"
         );
         eprintln!(
             "HOST-STEP-FRAMES {name}: {stream}: frame {frame}: moved: {}",
@@ -381,6 +416,7 @@ fn host_step_frames_bundle() {
             no_copy: false,
             writes: true,
             fragment: false,
+            first_use: false,
         },
         false,
     );
@@ -395,6 +431,7 @@ fn host_step_frames_bundle_no_copy() {
             no_copy: true,
             writes: true,
             fragment: false,
+            first_use: false,
         },
         false,
     );
@@ -409,6 +446,7 @@ fn host_step_frames_bundle_read() {
             no_copy: false,
             writes: false,
             fragment: false,
+            first_use: false,
         },
         false,
     );
@@ -423,6 +461,22 @@ fn host_step_frames_bundle_both() {
             no_copy: false,
             writes: true,
             fragment: true,
+            first_use: false,
+        },
+        false,
+    );
+}
+
+#[test]
+#[ignore = "a measurement: run it alone, in release"]
+fn host_step_frames_bundle_first_use() {
+    measure(
+        "bundle_first_use",
+        Shape::Bundle {
+            no_copy: false,
+            writes: true,
+            fragment: false,
+            first_use: true,
         },
         false,
     );
