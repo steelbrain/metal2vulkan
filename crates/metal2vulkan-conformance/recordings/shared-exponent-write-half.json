@@ -299,6 +299,7 @@
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
+        "device_memory_allocated": 276824192,
         "dispatch_pipelines_pooled": 1,
         "dispatch_shapes_made": 1,
         "dispatch_used_resources_listed": 1,
@@ -337,7 +338,6 @@
         "resident_textures_looked_at": 1,
         "scheduled_where_submitted": 1,
         "scheduler_passes": 4,
-        "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 2,
@@ -350,7 +350,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 1,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 8
+        "wakes_spared": 7
       },
       "moving": {
         "gate_waits_slept": 0
@@ -372,6 +372,7 @@
         "commands_recorded.cmd_pipeline_barrier": 0,
         "commands_recorded.cmd_push_constants": 0,
         "commands_recorded.end_command_buffer": 0,
+        "device_memory_allocated": 276824192,
         "dispatch_used_resources_listed": 1,
         "host_copy_blocks_made_in_place": 0,
         "host_copy_blocks_readied": 1,

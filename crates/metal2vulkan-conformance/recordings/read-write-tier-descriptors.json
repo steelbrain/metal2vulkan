@@ -3525,7 +3525,7 @@
         "object_churn.buffers_evicted": 3,
         "object_churn.buffers_parked": 30,
         "object_churn.buffers_recycled": 27,
-        "object_churn.images_evicted": 232,
+        "object_churn.images_evicted": 231,
         "object_churn.images_own_memory": 232,
         "object_churn.images_parked": 232,
         "object_churn.textures_image": 232,
@@ -3534,7 +3534,7 @@
         "object_churn.vk_buffers_destroyed": 3,
         "object_churn.vk_buffers_made": 3,
         "object_churn.vk_image_bindings": 232,
-        "object_churn.vk_images_destroyed": 232,
+        "object_churn.vk_images_destroyed": 231,
         "object_churn.vk_images_made": 232,
         "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3

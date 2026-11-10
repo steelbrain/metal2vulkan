@@ -2364,7 +2364,7 @@
         "resident_textures_looked_at": 20,
         "sampler_sets_made": 1,
         "scheduled_where_submitted": 20,
-        "scheduler_passes": 12,
+        "scheduler_passes": 10,
         "scheduler_passes_by_waiters": 20,
         "scheduler_sleeps": 20,
         "scheduler_wakes_commit": 20,

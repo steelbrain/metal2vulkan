@@ -914,7 +914,7 @@
         "functions_translated": 2,
         "gate_waits": 12,
         "gate_waits_slept": 12,
-        "heads_held_for_host_steps": 6,
+        "heads_held_for_host_steps": 7,
         "heap_tables_worked_out": 2,
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 1,
@@ -943,9 +943,9 @@
         "scheduled_where_submitted": 12,
         "scheduler_passes": 13,
         "scheduler_passes_by_waiters": 11,
-        "scheduler_sleeps": 17,
+        "scheduler_sleeps": 16,
         "scheduler_wakes_commit": 12,
-        "scheduler_wakes_host": 5,
+        "scheduler_wakes_host": 4,
         "shader_modules_made": 2,
         "slot_returns": 12,
         "spare_command_pools_taken": 12,
@@ -954,7 +954,7 @@
         "trail_waits": 12,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 12,
-        "wakes_spared": 85
+        "wakes_spared": 86
       },
       "moving": {
         "gate_waits_slept": 8

@@ -269,21 +269,14 @@
       ],
       "bounds": {
         "addressable_buffers_made": 2,
-        "blocks_ahead_unused": 1,
         "blocks_ahead_waited_for": 3,
         "buffer_blocks_made_ahead": 2,
         "device_memory_allocated": 205520896,
         "image_blocks_made_ahead": 1,
-        "memory_frees.blocks": 1,
-        "memory_frees.kept_stale": 1,
-        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 24624,
         "object_churn.buffers_parked": 1,
         "object_churn.buffers_recycled": 1,
-        "object_churn.vk_buffers_destroyed": 1,
-        "object_churn.vk_memory_freed": 1,
         "plain_buffer_blocks_made": 2,
-        "pooled_memory_blocks_freed": 1,
         "pooled_memory_blocks_made": 3
       },
       "moving": {

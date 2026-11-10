@@ -273,6 +273,15 @@
       "validated": "ran"
     }
   ],
+  "costs": [
+    {
+      "venue": "Apple M3 Max",
+      "runs": 0,
+      "measured": "no measurement: the run stopped before the case finished (refused unsupported: Unsupported { feature: ArgumentBufferTextures, needs: NotImplemented, location: Some(Function { func: \"rt_heap_ow\", block: Some(0), inst: Some(7) }), symbol: None }, at pipeline/rt_heap_ow)",
+      "bounds": {},
+      "unmeasurable": "refused unsupported: Unsupported { feature: ArgumentBufferTextures, needs: NotImplemented, location: Some(Function { func: \"rt_heap_ow\", block: Some(0), inst: Some(7) }), symbol: None }, at pipeline/rt_heap_ow"
+    }
+  ],
   "times": [
     {
       "leg": "metal",

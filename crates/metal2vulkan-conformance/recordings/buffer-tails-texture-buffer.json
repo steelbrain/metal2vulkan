@@ -952,7 +952,7 @@
         "row_copies": 6,
         "row_copy_regions": 6,
         "scheduled_where_submitted": 7,
-        "scheduler_passes": 6,
+        "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 7,
         "scheduler_sleeps": 9,
         "scheduler_wakes_commit": 7,

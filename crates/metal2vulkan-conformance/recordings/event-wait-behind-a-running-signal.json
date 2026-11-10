@@ -363,11 +363,11 @@
         "completed_where_seen": 2,
         "completion_arms": 7,
         "completion_arms_after_a_wake": 4,
-        "completion_waiter_parks": 4,
+        "completion_waiter_parks": 5,
+        "completion_waiter_parks_timed_out": 1,
         "device_memory_allocated": 473956352,
         "empty_memory_blocks_live": 1,
         "encoder_command_buffers_begun": 4,
-        "encoder_primaries_begun_ahead": 1,
         "event_waits_met": 1,
         "fence_waits": 7,
         "fills_recorded": 386,
@@ -399,11 +399,11 @@
         "slot_returns": 4,
         "spare_command_pools_taken": 4,
         "submit_infos": 4,
-        "submit_stalls_on_work": 1,
+        "submit_stalls_on_work": 2,
         "trail_waits": 2,
         "wakes_completion_waiters": 4,
         "wakes_handler_threads": 4,
-        "wakes_spared": 33
+        "wakes_spared": 34
       },
       "composed": {
         "addressable_buffers_made": 3,
