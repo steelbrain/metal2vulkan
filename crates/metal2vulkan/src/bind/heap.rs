@@ -323,6 +323,44 @@ pub(crate) const HELD: u32 = 1;
 /// bfloat one, whose sample reads the nearest texel under either filter.
 pub(crate) const FILTERED: u32 = 2;
 
+/// The bit of `SpecKey::HeapNanFamilies` of a 16-bit float format: its written `half` NaN is
+/// Metal's on a device of `DriverDeviation::MetalHalfTexelWrites`.
+pub(crate) const NAN_SIXTEEN: u32 = 1;
+
+/// The bit of `SpecKey::HeapNanFamilies` of a 32-bit float format: its written `half` NaN is
+/// Metal's on a device of `DriverDeviation::MetalNanMoves`.
+pub(crate) const NAN_WIDE: u32 = 2;
+
+/// The bit of `SpecKey::HeapNanFamilies` of a packed small float format (`RG11B10Float`,
+/// `RGB9E5Float`): its written NaN is Metal's on a device of `DriverDeviation::MetalSmallFloatNans`.
+pub(crate) const NAN_SMALL: u32 = 4;
+
+/// The bit of `SpecKey::HeapNanFamilies` of a float format of none of those families whose texels
+/// may hold a NaN: its written NaN is the device's.
+pub(crate) const NAN_OTHER: u32 = 8;
+
+/// The bit of `SpecKey::HeapNanFamilies` of a texture of pixel format `pf`: its class's family
+/// (`metal::texel_format::TexelFormat`, as `lower::texture::half_write_nans` tests a bound
+/// texture's), or 0 for a format whose texels hold no NaN (normalized, sRGB, extended-range,
+/// another packed one) or that a float texture does not view (integer, stencil).
+pub(crate) fn nan_family(pf: metal::PixelFormat) -> u32 {
+    use crate::metal::bicubic::BicubicTexels as B;
+    use crate::metal::texel_format::{PackedTexels, TexelFormat};
+    use crate::pipeline::sym::SampledType;
+    if crate::metal::format::sampled_type(pf) != Some(SampledType::Float) {
+        return 0;
+    }
+    let class = crate::metal::format::bound_texel_format(pf);
+    let family = class & (B::LINEAR | B::HALF | TexelFormat::NAN_FREE);
+    match class & TexelFormat::PACKED_MASK {
+        p if p == PackedTexels::SmallFloat.class().0 => NAN_SMALL,
+        0 if family == B::HALF => NAN_SIXTEEN,
+        0 if family == B::LINEAR => NAN_WIDE,
+        0 if family == 0 => NAN_OTHER,
+        _ => 0,
+    }
+}
+
 /// The form of `ExtendedRange::HEAP_READ` by whose raw texels alone a heap holds a texture of
 /// `facts` (an unswizzled, not sparse texture of one sample of such a form), else `None`: its
 /// sampled float classes hold the neutral ([`heap_element`]), which a function's read passes

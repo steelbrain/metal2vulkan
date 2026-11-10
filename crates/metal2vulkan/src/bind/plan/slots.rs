@@ -376,7 +376,7 @@ fn heap_raw(
 }
 
 /// The `SpecKey::HeapNanFamilies` of `stage` for `shape`: the bit of each family
-/// (`lower::texture::nan_family`) of the heap members of `shape` that reach `stage` (as for
+/// (`bind::heap::nan_family`) of the heap members of `shape` that reach `stage` (as for
 /// [`heap_ycbcr`]), whose texels a stage's `half` write may store a NaN in.
 fn heap_nan_families(
     shape: &BindShape,
@@ -387,7 +387,7 @@ fn heap_nan_families(
         .iter()
         .map(|m| match m.shape {
             TextureShape::Texture { pixel_format, .. } => {
-                crate::lower::texture::nan_family(pixel_format)
+                crate::bind::heap::nan_family(pixel_format)
             }
             TextureShape::Buffer { .. } => 0,
         })
