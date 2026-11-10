@@ -890,6 +890,7 @@ fn a_heap_decode_s_stage_note_is_announced_where_its_command_can_name_a_raw_text
     let pack = Degradation::DevicePackConversion;
     let each = |options: &mut DeviceOptions| {
         options.announce_each = [pack].into_iter().collect();
+        at_plan(options);
     };
     on_device_with(each, |device, messages| {
         let stage = stage_notes(device, true, Texel::Float);
