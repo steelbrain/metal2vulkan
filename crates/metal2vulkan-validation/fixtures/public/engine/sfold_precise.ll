@@ -4,7 +4,7 @@ source_filename = "-"
 target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
-%struct.Rows = type { [15 x <4 x float>], [7 x <4 x half>], [8 x i8] }
+%struct.Rows = type { [18 x <4 x float>], [7 x <4 x half>], [8 x i8] }
 
 @_ZL6k_zero = internal unnamed_addr addrspace(2) global float undef, align 4
 @_Z6k_zero.MTL_FC_INIT_0_f = linkonce_odr hidden local_unnamed_addr addrspace(2) externally_initialized constant float undef, section "air.fc_initializer", align 4
@@ -27,96 +27,107 @@ define void @sfold(ptr addrspace(1) noundef readonly captures(none) "air-buffer-
   %4 = zext i32 %2 to i64
   %5 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %4
   %6 = load <4 x float>, ptr addrspace(1) %5, align 16, !tbaa !29, !alias.scope !32, !noalias !35
-  %7 = load float, ptr addrspace(2) @_ZL6k_zero, align 4, !tbaa !37
-  %8 = insertelement <4 x float> poison, float %7, i64 0
-  %9 = shufflevector <4 x float> %8, <4 x float> poison, <4 x i32> zeroinitializer
-  %10 = fmul <4 x float> %6, %9
-  %11 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 0
-  store <4 x float> %10, ptr addrspace(1) %11, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %12 = load float, ptr addrspace(2) @_ZL9k_negzero, align 4, !tbaa !37
-  %13 = insertelement <4 x float> poison, float %12, i64 0
-  %14 = shufflevector <4 x float> %13, <4 x float> poison, <4 x i32> zeroinitializer
-  %15 = fmul <4 x float> %6, %14
-  %16 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 1
-  store <4 x float> %15, ptr addrspace(1) %16, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %17 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 2
-  store <4 x float> %15, ptr addrspace(1) %17, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %18 = load float, ptr addrspace(2) @_ZL6k_qnan, align 4, !tbaa !37
-  %19 = insertelement <4 x float> poison, float %18, i64 0
-  %20 = shufflevector <4 x float> %19, <4 x float> poison, <4 x i32> zeroinitializer
-  %21 = fadd <4 x float> %6, %20
-  %22 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 3
-  store <4 x float> %21, ptr addrspace(1) %22, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %23 = load float, ptr addrspace(2) @_ZL6k_snan, align 4, !tbaa !37
-  %24 = insertelement <4 x float> poison, float %23, i64 0
-  %25 = shufflevector <4 x float> %24, <4 x float> poison, <4 x i32> zeroinitializer
-  %26 = fadd <4 x float> %6, %25
-  %27 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 4
-  store <4 x float> %26, ptr addrspace(1) %27, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %28 = fsub <4 x float> %6, %25
-  %29 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 5
-  store <4 x float> %28, ptr addrspace(1) %29, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %30 = fsub <4 x float> %20, %6
-  %31 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 6
-  store <4 x float> %30, ptr addrspace(1) %31, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %32 = fmul <4 x float> %6, %25
-  %33 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 7
-  store <4 x float> %32, ptr addrspace(1) %33, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %34 = fdiv <4 x float> %6, %20
-  %35 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 8
-  store <4 x float> %34, ptr addrspace(1) %35, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %36 = fdiv <4 x float> %25, %6
-  %37 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 9
-  store <4 x float> %36, ptr addrspace(1) %37, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %38 = tail call <4 x float> @air.fma.v4f32(<4 x float> %6, <4 x float> %6, <4 x float> %20) #3
-  %39 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 10
-  store <4 x float> %38, ptr addrspace(1) %39, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %40 = tail call <4 x float> @air.fma.v4f32(<4 x float> %25, <4 x float> %6, <4 x float> %6) #3
-  %41 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 11
-  store <4 x float> %40, ptr addrspace(1) %41, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %42 = fadd <4 x float> %19, %24
-  %43 = shufflevector <4 x float> %42, <4 x float> poison, <4 x i32> zeroinitializer
-  %44 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 12
-  store <4 x float> %43, ptr addrspace(1) %44, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %45 = fmul <4 x float> %19, %24
-  %46 = shufflevector <4 x float> %45, <4 x float> poison, <4 x i32> zeroinitializer
-  %47 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 13
-  store <4 x float> %46, ptr addrspace(1) %47, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %48 = fmul <4 x float> %8, %19
-  %49 = shufflevector <4 x float> %48, <4 x float> poison, <4 x i32> zeroinitializer
-  %50 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 14
-  store <4 x float> %49, ptr addrspace(1) %50, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %51 = tail call <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %6) #3
-  %52 = load half, ptr addrspace(2) @_ZL6h_zero, align 2, !tbaa !39
-  %53 = insertelement <4 x half> poison, half %52, i64 0
-  %54 = shufflevector <4 x half> %53, <4 x half> poison, <4 x i32> zeroinitializer
-  %55 = fmul <4 x half> %51, %54
-  %56 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 0
-  store <4 x half> %55, ptr addrspace(1) %56, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %57 = load half, ptr addrspace(2) @_ZL9h_negzero, align 2, !tbaa !39
-  %58 = insertelement <4 x half> poison, half %57, i64 0
-  %59 = shufflevector <4 x half> %58, <4 x half> poison, <4 x i32> zeroinitializer
-  %60 = fmul <4 x half> %51, %59
-  %61 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 1
-  store <4 x half> %60, ptr addrspace(1) %61, align 8, !tbaa !29, !alias.scope !35, !noalias !32
-  %62 = load half, ptr addrspace(2) @_ZL5h_nan, align 2, !tbaa !39
-  %63 = insertelement <4 x half> poison, half %62, i64 0
-  %64 = shufflevector <4 x half> %63, <4 x half> poison, <4 x i32> zeroinitializer
-  %65 = fadd <4 x half> %51, %64
-  %66 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 2
-  store <4 x half> %65, ptr addrspace(1) %66, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %67 = fsub <4 x half> %64, %51
-  %68 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 3
-  store <4 x half> %67, ptr addrspace(1) %68, align 8, !tbaa !29, !alias.scope !35, !noalias !32
-  %69 = fdiv <4 x half> %64, %51
-  %70 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 4
-  store <4 x half> %69, ptr addrspace(1) %70, align 16, !tbaa !29, !alias.scope !35, !noalias !32
-  %71 = tail call <4 x half> @air.fma.v4f16(<4 x half> %51, <4 x half> %51, <4 x half> %64) #3
-  %72 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 5
-  store <4 x half> %71, ptr addrspace(1) %72, align 8, !tbaa !29, !alias.scope !35, !noalias !32
-  %73 = fmul <4 x half> %51, %64
-  %74 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 6
+  %7 = tail call <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %6) #3
+  %8 = load float, ptr addrspace(2) @_ZL6k_zero, align 4, !tbaa !37
+  %9 = insertelement <4 x float> poison, float %8, i64 0
+  %10 = shufflevector <4 x float> %9, <4 x float> poison, <4 x i32> zeroinitializer
+  %11 = fmul <4 x float> %6, %10
+  %12 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 0
+  store <4 x float> %11, ptr addrspace(1) %12, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %13 = load float, ptr addrspace(2) @_ZL9k_negzero, align 4, !tbaa !37
+  %14 = insertelement <4 x float> poison, float %13, i64 0
+  %15 = shufflevector <4 x float> %14, <4 x float> poison, <4 x i32> zeroinitializer
+  %16 = fmul <4 x float> %6, %15
+  %17 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 1
+  store <4 x float> %16, ptr addrspace(1) %17, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %18 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 2
+  store <4 x float> %16, ptr addrspace(1) %18, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %19 = load float, ptr addrspace(2) @_ZL6k_qnan, align 4, !tbaa !37
+  %20 = insertelement <4 x float> poison, float %19, i64 0
+  %21 = shufflevector <4 x float> %20, <4 x float> poison, <4 x i32> zeroinitializer
+  %22 = fadd <4 x float> %6, %21
+  %23 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 3
+  store <4 x float> %22, ptr addrspace(1) %23, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %24 = load float, ptr addrspace(2) @_ZL6k_snan, align 4, !tbaa !37
+  %25 = insertelement <4 x float> poison, float %24, i64 0
+  %26 = shufflevector <4 x float> %25, <4 x float> poison, <4 x i32> zeroinitializer
+  %27 = fadd <4 x float> %6, %26
+  %28 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 4
+  store <4 x float> %27, ptr addrspace(1) %28, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %29 = fsub <4 x float> %6, %26
+  %30 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 5
+  store <4 x float> %29, ptr addrspace(1) %30, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %31 = fsub <4 x float> %21, %6
+  %32 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 6
+  store <4 x float> %31, ptr addrspace(1) %32, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %33 = fmul <4 x float> %6, %26
+  %34 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 7
+  store <4 x float> %33, ptr addrspace(1) %34, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %35 = fdiv <4 x float> %6, %21
+  %36 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 8
+  store <4 x float> %35, ptr addrspace(1) %36, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %37 = fdiv <4 x float> %26, %6
+  %38 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 9
+  store <4 x float> %37, ptr addrspace(1) %38, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %39 = tail call <4 x float> @air.fma.v4f32(<4 x float> %6, <4 x float> %6, <4 x float> %21) #3
+  %40 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 10
+  store <4 x float> %39, ptr addrspace(1) %40, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %41 = tail call <4 x float> @air.fma.v4f32(<4 x float> %26, <4 x float> %6, <4 x float> %6) #3
+  %42 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 11
+  store <4 x float> %41, ptr addrspace(1) %42, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %43 = fadd <4 x float> %20, %25
+  %44 = shufflevector <4 x float> %43, <4 x float> poison, <4 x i32> zeroinitializer
+  %45 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 12
+  store <4 x float> %44, ptr addrspace(1) %45, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %46 = fmul <4 x float> %20, %25
+  %47 = shufflevector <4 x float> %46, <4 x float> poison, <4 x i32> zeroinitializer
+  %48 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 13
+  store <4 x float> %47, ptr addrspace(1) %48, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %49 = fmul <4 x float> %9, %20
+  %50 = shufflevector <4 x float> %49, <4 x float> poison, <4 x i32> zeroinitializer
+  %51 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 14
+  store <4 x float> %50, ptr addrspace(1) %51, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %52 = fsub <4 x float> %25, %20
+  %53 = shufflevector <4 x float> %52, <4 x float> poison, <4 x i32> zeroinitializer
+  %54 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 15
+  store <4 x float> %53, ptr addrspace(1) %54, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %55 = fdiv <4 x float> %20, %25
+  %56 = shufflevector <4 x float> %55, <4 x float> poison, <4 x i32> zeroinitializer
+  %57 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 16
+  store <4 x float> %56, ptr addrspace(1) %57, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %58 = tail call <4 x float> @air.fma.v4f32(<4 x float> %26, <4 x float> %21, <4 x float> %21) #3
+  %59 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 0, i64 17
+  store <4 x float> %58, ptr addrspace(1) %59, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %60 = load half, ptr addrspace(2) @_ZL6h_zero, align 2, !tbaa !39
+  %61 = insertelement <4 x half> poison, half %60, i64 0
+  %62 = shufflevector <4 x half> %61, <4 x half> poison, <4 x i32> zeroinitializer
+  %63 = fmul <4 x half> %7, %62
+  %64 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 0
+  store <4 x half> %63, ptr addrspace(1) %64, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %65 = load half, ptr addrspace(2) @_ZL9h_negzero, align 2, !tbaa !39
+  %66 = insertelement <4 x half> poison, half %65, i64 0
+  %67 = shufflevector <4 x half> %66, <4 x half> poison, <4 x i32> zeroinitializer
+  %68 = fmul <4 x half> %7, %67
+  %69 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 1
+  store <4 x half> %68, ptr addrspace(1) %69, align 8, !tbaa !29, !alias.scope !35, !noalias !32
+  %70 = load half, ptr addrspace(2) @_ZL5h_nan, align 2, !tbaa !39
+  %71 = insertelement <4 x half> poison, half %70, i64 0
+  %72 = shufflevector <4 x half> %71, <4 x half> poison, <4 x i32> zeroinitializer
+  %73 = fadd <4 x half> %7, %72
+  %74 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 2
   store <4 x half> %73, ptr addrspace(1) %74, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %75 = fsub <4 x half> %72, %7
+  %76 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 3
+  store <4 x half> %75, ptr addrspace(1) %76, align 8, !tbaa !29, !alias.scope !35, !noalias !32
+  %77 = fdiv <4 x half> %72, %7
+  %78 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 4
+  store <4 x half> %77, ptr addrspace(1) %78, align 16, !tbaa !29, !alias.scope !35, !noalias !32
+  %79 = fmul <4 x half> %7, %72
+  %80 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 5
+  store <4 x half> %79, ptr addrspace(1) %80, align 8, !tbaa !29, !alias.scope !35, !noalias !32
+  %81 = tail call <4 x half> @air.fma.v4f16(<4 x half> %7, <4 x half> %7, <4 x half> %72) #3
+  %82 = getelementptr inbounds %struct.Rows, ptr addrspace(1) %1, i64 %4, i32 1, i64 6
+  store <4 x half> %81, ptr addrspace(1) %82, align 16, !tbaa !29, !alias.scope !35, !noalias !32
   ret void
 }
 
@@ -174,8 +185,8 @@ attributes #3 = { nounwind willreturn memory(none) }
 !10 = !{}
 !11 = !{!12, !13, !15}
 !12 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"in"}
-!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !14, !"air.arg_type_size", i32 304, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"Rows", !"air.arg_name", !"out"}
-!14 = !{i32 0, i32 16, i32 15, !"float4", !"f", i32 240, i32 8, i32 7, !"half4", !"h"}
+!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.struct_type_info", !14, !"air.arg_type_size", i32 352, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"Rows", !"air.arg_name", !"out"}
+!14 = !{i32 0, i32 16, i32 18, !"float4", !"f", i32 288, i32 8, i32 7, !"half4", !"h"}
 !15 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}
 !16 = !{!"air.compile.denorms_disable"}
 !17 = !{!"air.compile.fast_math_disable"}
