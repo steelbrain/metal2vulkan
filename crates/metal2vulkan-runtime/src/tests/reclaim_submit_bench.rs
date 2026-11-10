@@ -54,8 +54,8 @@
 //!   [`IMAGE_TEXTURES`] a phase: the runtime's pool of images grows, its blocks made ahead
 //!   (`memory/ready.rs`), plain blocks whose making holds the device's submissions on RADV.
 //! - **Images of mixed sizes, made by the runtime**: the same, in turn the sizes of
-//!   [`MIXED_SIDES`] (a frame's textures and two screen-sized ones, larger than a small block), at
-//!   most [`MIXED_TEXTURES`] a phase.
+//!   [`MIXED_SIDES`] (a frame's textures and two screen-sized ones), at most [`MIXED_TEXTURES`] a
+//!   phase.
 //! - **Images in bursts, made by the runtime**: the images arm's textures, [`BURST`] back to back
 //!   every [`BURST_EVERY`], at most [`IMAGE_TEXTURES`] a phase: a burst needs more blocks than one,
 //!   as a scroll's new tiles do.
@@ -63,12 +63,6 @@
 //!   [`SCROLL_WINDOW`] newest released as it is made, as a scroll releases the tiles it left
 //!   behind: the oldest blocks empty as the newest fill, so that the phase's churn shows what an
 //!   emptied block costs, kept for the next placements, freed once it stayed empty, or made again.
-//! - **Images, small blocks**, **Images of mixed sizes, small blocks**, **Images in bursts,
-//!   small blocks** and **Images scrolled, small blocks**: those four arms on a device told first of a slow making
-//!   (`Memory::plain_block_made`, as `tests::plain_blocks` tells it), so that its pooled blocks of
-//!   plain memory are 17 MiB from the start, as a host whose makings were slow made them (a
-//!   consumer's guest on a fragmented Radeon 780M). A liberty: the device made no such making;
-//!   the arms ask what the runtime does once its blocks are that small, whatever the host.
 //! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
 //!   the device's first memory type that is host-visible and host-coherent but not device-local or
 //!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of
@@ -192,8 +186,7 @@ const SCROLL_EVERY: Duration = Duration::from_millis(30);
 const IMAGE_SIDE: u64 = 1024;
 const IMAGE_EVERY: Duration = Duration::from_micros(16_667);
 const IMAGE_TEXTURES: usize = 192;
-/// The burst arm's textures back to back (64 MiB of texels, four blocks of 17 MiB), and the gap
-/// between bursts.
+/// The burst arm's textures back to back (64 MiB of texels), and the gap between bursts.
 const BURST: usize = 16;
 const BURST_EVERY: Duration = Duration::from_millis(500);
 /// The scrolled arm's live textures: three bursts' (192 MiB of texels).
@@ -999,20 +992,9 @@ enum Arm {
 
 /// Run the arm `label` (the module docs).
 fn arm(label: &str, arm: Arm) {
-    arm_with(label, arm, false);
-}
-
-/// Run the arm `label` (the module docs), on a device told first of a pooled block's making that
-/// took four times `memory::MAKING_BOUND` where `small` (`Memory::plain_block_made`), so that its
-/// pooled blocks of plain memory are of the least size from the start.
-fn arm_with(label: &str, arm: Arm, small: bool) {
     use vk::MemoryPropertyFlags as P;
     let scratch = Scratch::new();
     let device = device(&scratch.0);
-    if small {
-        let mut memory = crate::device::lock(&device.shared().memory);
-        memory.plain_block_made(crate::memory::BLOCK_BYTES, crate::memory::MAKING_BOUND * 4);
-    }
     if device.shared().host_import.is_err() {
         eprintln!("RECLAIM-SUBMIT: the device imports no host memory here: not run");
         return;
@@ -1115,10 +1097,6 @@ fn arm_with(label: &str, arm: Arm, small: bool) {
         &mut made,
     );
     buddies("after the pressed phase");
-    eprintln!(
-        "RECLAIM-SUBMIT {label}: pooled blocks of plain memory made of {} MiB at the end",
-        crate::device::lock(&device.shared().memory).plain_block_bytes() >> 20
-    );
     drop(pressing);
     drop((source, middle, out, made.buffers, made.textures));
     for memory in made.raw {
@@ -1579,34 +1557,6 @@ fn reclaim_submit_bench_images_bursts() {
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_images_scrolled() {
     arm("images scrolled, made by the runtime", Arm::ImagesScrolled);
-}
-
-#[test]
-#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
-fn reclaim_submit_bench_images_small_blocks() {
-    let label = "images, made by the runtime, small blocks";
-    arm_with(label, Arm::Images, true);
-}
-
-#[test]
-#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
-fn reclaim_submit_bench_images_mixed_small_blocks() {
-    let label = "images of mixed sizes, made by the runtime, small blocks";
-    arm_with(label, Arm::ImagesMixed, true);
-}
-
-#[test]
-#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
-fn reclaim_submit_bench_images_bursts_small_blocks() {
-    let label = "images in bursts, made by the runtime, small blocks";
-    arm_with(label, Arm::ImagesBursts, true);
-}
-
-#[test]
-#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
-fn reclaim_submit_bench_images_scrolled_small_blocks() {
-    let label = "images scrolled, made by the runtime, small blocks";
-    arm_with(label, Arm::ImagesScrolled, true);
 }
 
 #[test]

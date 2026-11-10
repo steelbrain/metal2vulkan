@@ -318,8 +318,6 @@ random on honest work. Each reason is written at its site in `cost.rs` with the 
   other side is thread arrival cannot be deterministic while that side is not;
 - one that moves when something has sat **past its quiet period**, which is a question about
   elapsed time;
-- `device_memory_allocated`, the bytes of blocks whose size follows **how long the device's
-  earlier makings took** (smaller after one took longer than 8 ms);
 - `completed_waits`, which charges a case for waits belonging to whatever ran before it.
 
 A count in the `SPARED` table is gated from below only while it is gated at all: `racy` wins, so a

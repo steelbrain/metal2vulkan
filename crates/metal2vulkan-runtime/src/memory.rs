@@ -5,18 +5,9 @@
 //!   made outside a heap, and later a Metal heap (step 7: a heap is one block, its resources placed
 //!   at offsets).
 //! - **Pooling.** Resources share blocks of [`BLOCK_BYTES`], so `maxMemoryAllocationCount` (4096
-//!   on many devices) stays out of reach. A request larger than half a block takes a dedicated
-//!   block of its own size. Where a block of plain memory (allocated with no export) took longer
-//!   than [`MAKING_BOUND`] to make, the device's later pooled blocks of plain memory are made of
-//!   the largest power of two its rate makes within the bound with a sixteenth of it besides
-//!   ([`PLAIN_BLOCK_SLACK`]), the power of two at least [`MIN_PLAIN_BLOCK_BYTES`]
-//!   ([`Memory::plain_block_made`]), a placement larger than such a block taking one of the
-//!   least power of two so made that holds it: on RADV such a block shares the reservation of
-//!   the process's buffer objects, and its making holds every submission of the process for as
-//!   long as it runs (a Radeon 780M whose free memory lay in single pages took 9 to 27 ms at the
-//!   median for 64 MiB; `docs/FAST-PATHS.md`'s known gaps).
-//!   The blocks of exportable buffers keep their size: each is a buffer object of its own
-//!   reservation, whose making holds no submission.
+//!   on many devices) stays out of reach; a block of images holds a sixteenth besides
+//!   ([`IMAGE_BLOCK_SLACK`]), so that four images of a quarter of a block fit in one. A request
+//!   larger than half a block takes a dedicated block of its own size.
 //! - **Kept for reuse.** A block that empties is kept for the next placements rather than freed:
 //!   a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] empty ones are kept in its pool, and
 //!   past that, as a dedicated one of the runtime's own memory, while the empty blocks kept in its
@@ -198,12 +189,6 @@ mod ready;
 /// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 
-/// The longest a making of a block of plain memory may take before the device's later pooled
-/// blocks of plain memory are made smaller ([`Memory::plain_block_made`]): half a frame at 60 Hz.
-/// On RADV such a making holds every submission of the process for as long as it runs (the module
-/// docs), so a frame submitted meanwhile is late by what is left of it.
-pub(super) const MAKING_BOUND: Duration = Duration::from_millis(8);
-
 /// The longest a block's own allocation may take, its pages filled through an exportable
 /// allocation first (the module docs, "Blocks filled exportable first"), for the fill to count as
 /// having spared the submissions (`WorkCounts::plain_block_fills_saved`): one that took the fill's
@@ -212,20 +197,12 @@ pub(super) const MAKING_BOUND: Duration = Duration::from_millis(8);
 /// (about 10 ms).
 const FILL_SAVED_BELOW: Duration = Duration::from_millis(1);
 
-/// The smallest power of two a pooled block of plain memory is made of
-/// ([`Memory::plain_block_made`]), its [`PLAIN_BLOCK_SLACK`] besides.
-pub(super) const MIN_PLAIN_BLOCK_BYTES: u64 = 16 << 20;
-
-/// What a pooled block of plain memory made smaller than [`Memory::block_bytes`] holds past the
-/// power of two it is made of, as a fraction of that power: a sixteenth ([`pooled_block_bytes`]).
-/// A driver's image takes more than its texels: RADV places a `Private` `RGBA8Unorm` texture of
-/// 1024 x 1024 (4 MiB of texels) in 4 MiB and 16 KiB on a Radeon 780M and 4 MiB and 16,408 bytes
-/// on an RX 550, each at an alignment of 64 KiB, so a block of 16 MiB held three of them, not
-/// four, and the textures of a guest's scroll took a third more blocks than their texels fill.
-/// With a sixteenth besides, a block holds four images of a quarter of its power of two whose
-/// metadata and alignment take up to 256 KiB each, two of a half up to 512 KiB, and one of the
-/// whole up to 1 MiB.
-pub(super) const PLAIN_BLOCK_SLACK: u64 = 16;
+/// What a pooled block of images holds past [`BLOCK_BYTES`], as a fraction of it: a sixteenth
+/// ([`Memory::pooled_bytes`]). A driver's image takes more than its texels: RADV on a Radeon 780M
+/// and Iris Xe's driver place a `Private` `RGBA8Unorm` texture of 1024 x 1024 (4 MiB of texels)
+/// in 4 MiB and 16 KiB, at an alignment of 64 KiB. With a sixteenth besides, a block holds four
+/// images of a quarter of a block whose metadata and alignment take up to 1 MiB each.
+pub(super) const IMAGE_BLOCK_SLACK: u64 = 16;
 
 /// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget
 /// ([`Pool::release`], [`Memory::kept_budget`]). In a pool the encodings place in, one of them is
@@ -908,9 +885,6 @@ pub(super) struct Pool<T> {
     kept_bytes: u64,
     /// When it last grew: a pooled block added to it while it held another ([`Pool::grew`]).
     grew: Option<Instant>,
-    /// The bytes of the largest block a placement larger than its blocks took within
-    /// [`KEPT_EMPTY_FOR`] of the last such placement, and when that was ([`Pool::took_large`]).
-    large: Option<(u64, Instant)>,
 }
 
 #[derive(Debug)]
@@ -964,7 +938,6 @@ impl<T> Default for Pool<T> {
             freed_bytes: 0,
             kept_bytes: 0,
             grew: None,
-            large: None,
         }
     }
 }
@@ -1324,46 +1297,16 @@ impl<T> Pool<T> {
         self.grew
     }
 
-    /// A placement larger than its blocks took a pooled block of `bytes` at `now`
-    /// ([`pooled_block_bytes`]): blocks of that size are made ahead for it while such placements
-    /// are recent (`memory/ready.rs`).
-    fn took_large(&mut self, bytes: u64, now: Instant) {
-        let recent = self.large(now).unwrap_or(0);
-        self.large = Some((bytes.max(recent), now));
-    }
-
-    /// The bytes of the largest block a placement larger than its blocks took within
-    /// [`KEPT_EMPTY_FOR`] before `now`, of the placements since one came after a longer gap.
-    fn large(&self, now: Instant) -> Option<u64> {
-        let (bytes, at) = self.large?;
-        (now.saturating_duration_since(at) < KEPT_EMPTY_FOR).then_some(bytes)
-    }
-
     /// Whether it holds a pooled block.
     fn holds_pooled(&self) -> bool {
         self.blocks.iter().flatten().any(|block| !block.dedicated)
     }
 
     /// Whether it holds a pooled block, its blocks of `bytes`, and lacks the room its next block
-    /// is made ahead below ([`Pool::ahead_room`]): near its next block, which is made ahead
+    /// is made ahead below ([`ahead_room`]): near its next block, which is made ahead
     /// (`memory/ready.rs`).
     fn near_next(&mut self, bytes: u64) -> bool {
-        let room = self.ahead_room(bytes);
-        self.holds_pooled() && !self.has_room(room)
-    }
-
-    /// The longest free range below which it gets its next block made ahead, its blocks of
-    /// `bytes` ([`ahead_room`]): three quarters of the largest of `bytes` and its pooled blocks.
-    /// A pool still filling a block made before its blocks of plain memory were made smaller
-    /// ([`Memory::plain_block_made`]) keeps its next block ahead as it did for that block: by three
-    /// quarters of the small block, a pool on a Radeon 780M whose one 64 MiB block had 12.4 MiB
-    /// left kept none ahead, and its next texture of 2560 x 1440 (15.1 MiB) waited for its block
-    /// (`tests::blocks_ahead`'s mixed sizes, told of a slow making at its fourth texture).
-    fn ahead_room(&self, bytes: u64) -> u64 {
-        let pooled = (self.blocks.iter().flatten())
-            .filter(|block| !block.dedicated)
-            .map(|block| block.size);
-        ahead_room(pooled.fold(bytes, u64::max))
+        self.holds_pooled() && !self.has_room(ahead_room(bytes))
     }
 
     /// Every block's payload, emptying the pool.
@@ -1999,11 +1942,9 @@ pub(super) struct Memory {
     /// The buffers' pools by memory type, then the images' ([`Memory::pool`]).
     pools: Vec<Pool<Block>>,
     block_bytes: u64,
-    /// The power of two a pooled block of plain memory is made of now, its [`PLAIN_BLOCK_SLACK`]
-    /// besides ([`pooled_block_bytes`]): [`Memory::block_bytes`], made smaller at each making
-    /// that took longer than [`MAKING_BOUND`], down to [`MIN_PLAIN_BLOCK_BYTES`]
-    /// ([`Memory::plain_block_made`]).
-    plain_block_bytes: u64,
+    /// A pooled block of images' size: [`Memory::block_bytes`] and its [`IMAGE_BLOCK_SLACK`],
+    /// at most the device's largest allocation.
+    image_block_bytes: u64,
     /// Blocks are allocated with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`: the device enabled
     /// `bufferDeviceAddress`, so buffers carry device addresses.
     device_address: bool,
@@ -2256,7 +2197,8 @@ impl Memory {
                 .collect(),
             types,
             block_bytes: BLOCK_BYTES.min(max_allocation.max(1)),
-            plain_block_bytes: BLOCK_BYTES.min(max_allocation.max(1)),
+            image_block_bytes: (BLOCK_BYTES + BLOCK_BYTES / IMAGE_BLOCK_SLACK)
+                .min(max_allocation.max(1)),
             device_address,
             address_types: None,
             fd_address_types: None,
@@ -2365,6 +2307,13 @@ impl Memory {
             });
         }
         self.fill_types = types;
+    }
+
+    /// The memory types whose pooled blocks of plain memory are filled through an exportable
+    /// allocation first ([`Memory::fill_plain_blocks`]), as bits, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn fill_types(&self) -> u32 {
+        self.fill_types
     }
 
     /// Make the blocks of [`Holds::PageBuffers`] of the memory types `types` names (as bits) of
@@ -2776,59 +2725,20 @@ impl Memory {
         grew || pool.near_next(bytes)
     }
 
-    /// The blocks `pool` keeps made ahead (`memory/ready.rs`), its blocks of `bytes`: as many of
-    /// `bytes` as come to one block of [`Memory::block_bytes`] or more, at least one, so that a
-    /// pool whose blocks of plain memory are made smaller ([`Memory::plain_block_made`]) keeps
-    /// at least the bytes ahead it kept before (four of 17 MiB for one of 64 MiB); and one of the
-    /// bytes of the largest block its placements larger than its blocks took lately
-    /// ([`Pool::large`]), where they did.
-    fn ahead_sizes(&mut self, pool: (Holds, u32), bytes: u64) -> (Option<u64>, u64) {
-        let bytes = bytes.max(1);
-        let large =
-            (self.pool(pool.0, pool.1).large(Instant::now())).filter(|&large| large > bytes);
-        (large, self.block_bytes.div_ceil(bytes).max(1))
-    }
-
-    /// The blocks made ahead for `pool` a call that needs a block of `least` bytes or more takes
-    /// ([`ready::Need`]): one below the bytes of its placements larger than its blocks lately
-    /// ([`Pool::large`]) leaves blocks of those bytes to them.
-    fn need(&mut self, pool: (Holds, u32), least: u64) -> ready::Need {
-        let large = self.pool(pool.0, pool.1).large(Instant::now());
-        let most = match large {
-            Some(large) if least < large => large - 1,
-            _ => u64::MAX,
-        };
-        ready::Need { least, most }
-    }
-
-    /// Of the blocks `pool`, its blocks of `bytes`, keeps made ahead ([`ahead_sizes`]), those
-    /// `held` lacks (the bytes of each block made, being made and still to make): the larger
-    /// first. Its own blocks are counted in bytes together with its room ([`Pool::room`]): none
-    /// lacks while those held and its room come to their worth ([`ahead_sizes`]'s count of
-    /// them) or more, and once they come to less, as many as bring those held to that worth. So a
-    /// block just taken from them, which leaves the pool a whole block of room, is made again
-    /// as soon as a placement takes any of that room, not only once the pool lacks room for a
-    /// whole block: the room left then is less than the next creation calls' placements may
-    /// take before the making ends (a 31.6 MiB texture after a 64 MiB block was taken).
-    ///
-    /// [`ahead_sizes`]: Self::ahead_sizes
+    /// The block `pool`, its blocks of `bytes`, lacks of the one it keeps made ahead
+    /// (`memory/ready.rs`), `held` the bytes of each block made, being made and still to make:
+    /// counted in bytes together with its room ([`Pool::room`]), one where those held and its
+    /// room come to less than a block. So a block just taken from them, which leaves the pool a
+    /// whole block of room, is made again as soon as a placement takes any of that room, not only
+    /// once the pool lacks room for a whole block: the room left then is less than the next
+    /// creation calls' placements may take before the making ends (a 31.6 MiB texture after a
+    /// 64 MiB block was taken).
     fn lacking(&mut self, pool: (Holds, u32), bytes: u64, held: &[u64]) -> Vec<u64> {
-        let (large, count) = self.ahead_sizes(pool, bytes);
-        let mut lacking = Vec::new();
-        if let Some(large) = large {
-            if !held.iter().any(|&size| size >= large) {
-                lacking.push(large);
-            }
+        let have: u64 = held.iter().sum();
+        match self.pool(pool.0, pool.1).room().saturating_add(have) < bytes {
+            true => vec![bytes],
+            false => Vec::new(),
         }
-        // Its own blocks: those below its large placements' bytes, which those leave to them.
-        let below = large.unwrap_or(u64::MAX);
-        let have: u64 = held.iter().filter(|&&size| size < below).sum();
-        let worth = count * bytes;
-        if self.pool(pool.0, pool.1).room().saturating_add(have) < worth {
-            let more = worth.saturating_sub(have) / bytes.max(1);
-            lacking.extend((0..more).map(|_| bytes));
-        }
-        lacking
     }
 
     /// What a making ahead for `pool` is made through, once [`keep_room`] gave it.
@@ -2842,9 +2752,9 @@ impl Memory {
         })
     }
 
-    /// Keep `pool`'s blocks made ahead, its blocks of `bytes` (`memory/ready.rs`,
-    /// [`ahead_sizes`](Self::ahead_sizes)): those it lacks made after the blocks its thread
-    /// still makes, or on a new thread, once a burst of the device's queue uses ended.
+    /// Keep `pool`'s block made ahead, its blocks of `bytes` (`memory/ready.rs`,
+    /// [`lacking`](Self::lacking)): one it lacks made after the blocks its thread still makes, or
+    /// on a new thread, once a burst of the device's queue uses ended.
     fn keep_ahead(&mut self, pool: (Holds, u32), bytes: u64) {
         let held = match self.readying_at(pool) {
             Some(at) => self.readying[at].held(),
@@ -2868,37 +2778,27 @@ impl Memory {
         }
     }
 
-    /// A call's wait for a block of `least` bytes or more made ahead for `pool`, its blocks of
-    /// `bytes` (`memory/ready.rs`; within [`need`](Self::need)), where none is made: the block
-    /// being made or still to make, or else one queued first for the call, its thread started
-    /// where it has none, the rest of the pool's blocks kept ahead after it where the pool keeps
-    /// them ([`growing`](Self::growing)). A pool's first block is made alone: the rest of a
-    /// block's worth of small blocks behind it (three of 16 MiB) waited unused for a pool that
-    /// stayed within that block, and went after [`KEPT_EMPTY_FOR`], to be made again
-    /// (`tests::reclaim_submit_bench`'s small-blocks arms on a Radeon 780M: nine such blocks a
-    /// device). `None` where the pool host copies place in reads a
-    /// block's pages now, as a page's first touch may wait behind the program's GPU work, before
-    /// [`keep_room`] gave the makings what they are made through, or where no thread starts.
-    fn wait_for(&mut self, pool: (Holds, u32), bytes: u64, least: u64) -> Option<ready::Waiter> {
-        let need = self.need(pool, least);
+    /// A call's wait for a block of `least` bytes or more made ahead for `pool`
+    /// (`memory/ready.rs`), where none is made: the block being made or still to make, or else
+    /// one queued first for the call, its thread started where it has none. A pool's first block
+    /// is made alone. `None` where the pool host copies place in reads a block's pages now, as a
+    /// page's first touch may wait behind the program's GPU work, before [`keep_room`] gave the
+    /// makings what they are made through, or where no thread starts.
+    fn wait_for(&mut self, pool: (Holds, u32), least: u64) -> Option<ready::Waiter> {
         let making = self.making(pool)?;
         let host_copies = self.host_copy_pool == Some(Some(pool));
         match self.readying_at(pool) {
             Some(at) => {
                 let readying = &mut self.readying[at];
-                let waiter = readying.waiter(need, host_copies)?;
-                match readying.will_hold(need) || readying.queue(making, &[least], true) {
+                let waiter = readying.waiter(least, host_copies)?;
+                match readying.will_hold(least) || readying.queue(making, &[least], true) {
                     true => Some(waiter),
                     false => None,
                 }
             }
             None => {
-                let rest = match self.growing(pool) {
-                    true => self.lacking(pool, bytes, &[least]),
-                    false => Vec::new(),
-                };
-                let sizes = std::iter::once(least).chain(rest).collect();
-                let (readying, waiter) = ready::Readying::start(making, pool, sizes, Some(need))?;
+                let sizes = [least].into();
+                let (readying, waiter) = ready::Readying::start(making, pool, sizes, Some(least))?;
                 self.readying.push(readying);
                 waiter
             }
@@ -2906,14 +2806,13 @@ impl Memory {
     }
 
     /// Add the smallest block of `least` bytes or more made ahead for `pool` and not yet added to
-    /// it (`memory/ready.rs`; within [`need`](Self::need)): whether one was added. A readying
+    /// it (`memory/ready.rs`): whether one was added. A readying
     /// whose thread ended and that holds no block more goes.
     fn add_ready(&mut self, pool: (Holds, u32), least: u64) -> bool {
         let Some(at) = self.readying_at(pool) else {
             return false;
         };
-        let need = self.need(pool, least);
-        let made = self.readying[at].take_block(need);
+        let made = self.readying[at].take_block(least);
         if self.readying[at].finished() && !self.readying[at].has_block() {
             self.readying.swap_remove(at).end();
         }
@@ -3098,9 +2997,6 @@ impl Memory {
         {
             self.makings_took += block.took;
         }
-        if block.exported.is_none() && !block.fd && !block.pooled_pages {
-            self.plain_block_made(block.size, block.took);
-        }
         self.allocated += size;
         let heap = self.heap_of(type_index);
         if let Some((_, live)) = self.heaps.get_mut(heap) {
@@ -3114,15 +3010,13 @@ impl Memory {
         pool.add_as(size, dedicated, block, used, zeroed)
     }
 
-    /// The bytes of a pooled block made for `pool` with room for half of it
-    /// ([`pooled_block_bytes`]).
+    /// The bytes of a pooled block made for `pool`: [`Memory::block_bytes`], and a block of
+    /// images' [`Memory::image_block_bytes`].
     fn pooled_bytes(&self, pool: (Holds, u32)) -> u64 {
-        let types = (
-            self.fd_buffer_types.unwrap_or(0),
-            self.page_buffer_types.unwrap_or(0),
-        );
-        let plain = plain(pool, types.0, types.1).then_some(self.plain_block_bytes);
-        pooled_block_bytes(self.block_bytes, plain, 0)
+        match pool.0 {
+            Holds::Images => self.image_block_bytes,
+            _ => self.block_bytes,
+        }
     }
 
     /// The bytes of each live pooled block that holds `holds`, of every memory type, for the
@@ -3149,19 +3043,6 @@ impl Memory {
             let pool = self.pool_ref(holds, type_index);
             (pool.blocks.iter().flatten()).filter(|block| !block.dedicated)
         })
-    }
-
-    /// For each pool of `holds` that keeps blocks made ahead, its memory type's index and the bytes
-    /// of its blocks made ahead and not yet added, and of those still to make
-    /// (`memory/ready.rs`), for the crate's device tests. Each pool keeps its own: the pool host
-    /// copies place in ([`Memory::host_copy_pool`]) is one of images beside theirs where its
-    /// type differs.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(super) fn ahead_bytes(&self, holds: Holds) -> Vec<(u32, u64)> {
-        (self.readying.iter())
-            .filter(|ready| ready.pool().0 == holds)
-            .map(|ready| (ready.pool().1, ready.outstanding_bytes()))
-            .collect()
     }
 
     /// Every pool that keeps blocks made ahead, with the bytes of its blocks made ahead and not
@@ -3197,36 +3078,6 @@ impl Memory {
             .collect()
     }
 
-    /// The bytes a pooled block of plain memory is made of now ([`Memory::plain_block_made`]), for
-    /// the crate's tests.
-    #[cfg(test)]
-    pub(super) fn plain_block_bytes(&self) -> u64 {
-        self.plain_block_bytes
-    }
-
-    /// A block of plain memory of `size` bytes was made in `took` (`vkAllocateMemory`, its
-    /// mapping and its buffer of addresses): where that is longer than [`MAKING_BOUND`], the later
-    /// pooled blocks of plain memory are made of the largest power of two that the making's rate
-    /// (`size` in `took`) makes within the bound with its [`PLAIN_BLOCK_SLACK`] besides, where
-    /// that is smaller than the one they are made of now, at least [`MIN_PLAIN_BLOCK_BYTES`]. A
-    /// block that took that long held every submission of the process on RADV as long, and a
-    /// block's making there takes about as much longer as the block is larger. Never made larger
-    /// again: the host's state that made it slow (its free memory in single pages, no freed pages
-    /// at hand in the kernel's pools) comes back.
-    pub(super) fn plain_block_made(&mut self, size: u64, took: Duration) {
-        if took <= MAKING_BOUND {
-            return;
-        }
-        let within = u128::from(size) * MAKING_BOUND.as_nanos() / took.as_nanos();
-        let within = u64::try_from(within).unwrap_or(u64::MAX);
-        let fits = match within.checked_ilog2() {
-            Some(log) if with_slack(1 << log) <= within => 1 << log,
-            Some(log) => 1 << log >> 1,
-            None => 0,
-        };
-        self.plain_block_bytes = self.plain_block_bytes.min(fits.max(MIN_PLAIN_BLOCK_BYTES));
-    }
-
     /// What making a block takes, copied out so that the block is made with the memory's lock
     /// released ([`place`], [`keep_room`]).
     fn maker(&self) -> BlockMaker {
@@ -3235,7 +3086,7 @@ impl Memory {
             .fold(0, |bits, (index, _)| bits | 1 << index);
         BlockMaker {
             block_bytes: self.block_bytes,
-            plain_block_bytes: self.plain_block_bytes,
+            image_block_bytes: self.image_block_bytes,
             host_visible,
             fd_types: self.fd_buffer_types.unwrap_or(0),
             page_types: self.page_buffer_types.unwrap_or(0),
@@ -3477,14 +3328,14 @@ impl Memory {
         }
         // A block made ahead for a pool that stopped growing that long ago, where the pool has
         // room for three quarters of a block, so that it is no longer near its next block
-        // ([`Pool::ahead_room`], `memory/ready.rs`).
+        // ([`ahead_room`], `memory/ready.rs`).
         let mut at = 0;
         while at < self.readying.len() {
             let (holds, type_index) = self.readying[at].pool();
             let started = self.readying[at].started();
             let bytes = self.pooled_bytes((holds, type_index));
             let pool = self.pool(holds, type_index);
-            let room = pool.ahead_room(bytes);
+            let room = ahead_room(bytes);
             let since = pool.grew(None).map_or(started, |grew| grew.max(started));
             let unused = now.saturating_duration_since(since) >= KEPT_EMPTY_FOR
                 && pool.has_room(room)
@@ -3852,49 +3703,13 @@ impl Memory {
     }
 }
 
-/// Whether the blocks of `pool` are of plain memory, allocated with no export
-/// ([`BlockMaker::make`]): not those of exportable buffers ([`Holds::handle`]), nor those of
-/// [`Holds::FdBuffers`] of a memory type `fd_types` names (as bits), which are allocated
-/// exportable as [`FD_BLOCKS_HANDLE`], nor those of [`Holds::PageBuffers`] of a memory type
-/// `page_types` names, which are pages the runtime maps and imports.
-fn plain((holds, type_index): (Holds, u32), fd_types: u32, page_types: u32) -> bool {
-    let named = |types: u32| types & 1 << type_index != 0;
-    holds.handle().is_none()
-        && !(holds == Holds::FdBuffers && named(fd_types))
-        && !(holds == Holds::PageBuffers && named(page_types))
-}
-
-/// The bytes of a pooled block that holds a placement of `size` bytes, at most half of
-/// `block_bytes` ([`place`]): `block_bytes` where its blocks are allocated exportable (`plain`
-/// `None`) or those of plain memory are made of `block_bytes`; else the power of two `plain`
-/// says a pooled block of plain memory is made of now ([`Memory::plain_block_made`]), or the
-/// least power of two larger that holds the placement, each with its [`PLAIN_BLOCK_SLACK`]
-/// besides ([`with_slack`]), at most `block_bytes`.
-pub(super) fn pooled_block_bytes(block_bytes: u64, plain: Option<u64>, size: u64) -> u64 {
-    match plain {
-        Some(plain) if plain < block_bytes => {
-            let holds = std::iter::successors(Some(plain), |base| base.checked_mul(2))
-                .map(with_slack)
-                .find(|&bytes| bytes >= size);
-            holds.unwrap_or(block_bytes).min(block_bytes)
-        }
-        _ => block_bytes,
-    }
-}
-
-/// A pooled block of plain memory made of the power of two `base`, with its [`PLAIN_BLOCK_SLACK`]
-/// besides.
-fn with_slack(base: u64) -> u64 {
-    base + base / PLAIN_BLOCK_SLACK
-}
-
 /// What making a block of the runtime's memory takes ([`Memory::maker`]): a copy of the memory's
 /// constants, so that the block is made with its lock released.
 struct BlockMaker {
     /// A pooled block's size ([`BLOCK_BYTES`], or the device's largest allocation).
     block_bytes: u64,
     /// As [`Memory`]'s.
-    plain_block_bytes: u64,
+    image_block_bytes: u64,
     /// The host-visible memory types, as bits: a block of one is mapped whole.
     host_visible: u32,
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits.
@@ -3916,11 +3731,12 @@ struct BlockMaker {
 }
 
 impl BlockMaker {
-    /// The bytes of a pooled block made for `pool` that holds a placement of `size` bytes, at
-    /// most half a block ([`place`]; [`pooled_block_bytes`]).
-    fn pooled_bytes(&self, pool: (Holds, u32), size: u64) -> u64 {
-        let plain = plain(pool, self.fd_types, self.page_types).then_some(self.plain_block_bytes);
-        pooled_block_bytes(self.block_bytes, plain, size)
+    /// The bytes of a pooled block made for `pool` ([`Memory::pooled_bytes`]).
+    fn pooled_bytes(&self, pool: (Holds, u32)) -> u64 {
+        match pool.0 {
+            Holds::Images => self.image_block_bytes,
+            _ => self.block_bytes,
+        }
     }
 
     /// A new block of `size` bytes of memory type `type_index` that holds `holds`, with a buffer
@@ -4899,7 +4715,7 @@ fn place(
         let pool = (holds, type_index);
         let block_size = match dedicated {
             true => size,
-            false => maker.pooled_bytes(pool, size),
+            false => maker.pooled_bytes(pool),
         };
         if fit == Fit::Pooled {
             let mut guard = lock(memory);
@@ -4917,33 +4733,19 @@ fn place(
                     return Ok(guard.mark_overflowed(placement, overflowing));
                 }
             }
-            // A pooled placement without room: a block made ahead for the pool of its block's
-            // size or more, rather than one of the placement's own (`memory/ready.rs`), waited for
-            // where none is made: the one being made or still to make, or else one the ready
-            // thread makes first for it. A placement larger than the pool's blocks, which takes a
-            // block of its own size ([`pooled_block_bytes`]), has blocks of that size kept ahead
-            // while such placements are recent. Made here: one of the pool host copies place in
-            // while that pool's making reads a block's pages, which may wait behind the
-            // program's GPU work, which no placement waits for.
-            if !dedicated {
-                let large = block_size > guard.pooled_bytes(pool);
-                if large {
-                    guard
-                        .pool(pool.0, pool.1)
-                        .took_large(block_size, Instant::now());
-                }
-                if guard.makes_ahead(pool) && take_ready(memory, guard, pool, block_size) {
-                    let mut guard = lock(memory);
-                    if large {
-                        let bytes = guard.pooled_bytes(pool);
-                        guard.keep_ahead(pool, bytes);
-                    }
-                    if let Some(placement) =
-                        guard.place_pooled(device, pool, (size, align), addressed, class)?
-                    {
-                        ready_after_placing(&mut guard, pool, size);
-                        return Ok(guard.mark_overflowed(placement, overflowing));
-                    }
+            // A pooled placement without room: a block made ahead for the pool, rather than one
+            // of the placement's own (`memory/ready.rs`), waited for where none is made: the one
+            // being made or still to make, or else one the ready thread makes first for it. Made
+            // here: one of the pool host copies place in while that pool's making reads a block's
+            // pages, which may wait behind the program's GPU work, which no placement waits for.
+            if !dedicated && guard.makes_ahead(pool) && take_ready(memory, guard, pool, block_size)
+            {
+                let mut guard = lock(memory);
+                if let Some(placement) =
+                    guard.place_pooled(device, pool, (size, align), addressed, class)?
+                {
+                    ready_after_placing(&mut guard, pool, size);
+                    return Ok(guard.mark_overflowed(placement, overflowing));
                 }
             }
         }
@@ -5078,7 +4880,7 @@ pub(super) fn keep_room(
         .filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers && !page(holds));
     for &pool in first.chain(rest) {
         let addressed = pool.0.buffers().then_some(&**counts);
-        let bytes = maker.pooled_bytes(pool, 0);
+        let bytes = maker.pooled_bytes(pool);
         keep_pool_room(memory, device, (&maker, addressed), (pool, bytes));
         ready_if_growing(&mut lock(memory), pool);
     }
@@ -5203,8 +5005,7 @@ fn take_ready<'a>(
         if guard.add_ready(pool, need) {
             return true;
         }
-        let bytes = guard.pooled_bytes(pool);
-        let Some(waiter) = guard.wait_for(pool, bytes, need) else {
+        let Some(waiter) = guard.wait_for(pool, need) else {
             return false;
         };
         drop(guard);

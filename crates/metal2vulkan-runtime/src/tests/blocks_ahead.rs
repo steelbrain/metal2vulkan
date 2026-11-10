@@ -20,7 +20,7 @@
 
 use super::freed_memory::device;
 use crate::device::queue_quiet::QueueQuiet;
-use crate::memory::{Holds, BLOCK_BYTES, MAKING_BOUND, MIN_PLAIN_BLOCK_BYTES};
+use crate::memory::Holds;
 use crate::{Buffer, Device, Error, ResourceOptions, Texture, TextureDescriptor, WorkCounts};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
@@ -46,25 +46,8 @@ const MOST: usize = 400;
 /// The creation calls that place nothing in the host copies' pool once its making ended.
 const CREATIONS: usize = 20;
 
-/// The side of the small-blocks runs' `RGBA8Unorm` textures: 4 MiB, four to a block of 16 MiB
-/// and a sixteenth.
-const TEXTURE_SIDE: u64 = 1024;
-
-/// The large-blocks run's textures larger than a block of 16 MiB and a sixteenth: 20 MiB, each in
-/// a block of 32 MiB and a sixteenth ([`LARGE_EVERY`] textures one of them), and how many it
-/// makes; then the textures of [`TEXTURE_SIDE`] it makes back to back, 96 MiB, more than its own
-/// blocks made ahead hold.
-const LARGE_SIDES: (u64, u64) = (2560, 2048);
-const BURST: usize = 24;
-const LARGE_EVERY: usize = 4;
-const LARGE_TEXTURES: usize = 4;
-
-/// The most textures the small-blocks run makes, well past what `GROWTH` blocks hold.
+/// The most textures a run makes, well past what `GROWTH` blocks hold.
 const MOST_TEXTURES: usize = 64;
-
-/// A pooled block of plain memory of the least size (`memory::PLAIN_BLOCK_SLACK`): 16 MiB and a
-/// sixteenth.
-const SMALL_BLOCK: u64 = MIN_PLAIN_BLOCK_BYTES + MIN_PLAIN_BLOCK_BYTES / 16;
 
 /// A scratch directory for a device's shader cache, removed when dropped.
 struct Scratch(std::path::PathBuf);
@@ -94,18 +77,6 @@ fn makings_ended(device: &Device) {
         );
         std::thread::sleep(Duration::from_millis(1));
     }
-}
-
-/// A device told of a pooled block's making that took four times `memory::MAKING_BOUND`, so that
-/// it makes its pooled blocks of plain memory of the least size (`Memory::plain_block_made`).
-fn small_blocks_device(scratch: &Scratch) -> Device {
-    let device = device(&scratch.0);
-    {
-        let mut memory = crate::device::lock(&device.shared().memory);
-        memory.plain_block_made(BLOCK_BYTES, MAKING_BOUND * 4);
-        assert_eq!(memory.plain_block_bytes(), MIN_PLAIN_BLOCK_BYTES);
-    }
-    device
 }
 
 /// A `Private` `RGBA8Unorm` texture of `width` by `height` on `device`, sampled and rendered to,
@@ -256,15 +227,13 @@ fn a_growing_pool_of_exportable_buffers_gets_its_new_blocks_made_ahead() {
 
 /// A pool's first block is made alone: a pool keeps blocks ahead only while it grows or is near
 /// its next block (`Memory::growing`), and a pool that takes one block and stays within it does
-/// neither. The rest of a block's worth of small blocks once queued behind each pool's first
-/// block (three of 16 MiB) waited unused and went after `KEPT_EMPTY_FOR`: on a Radeon 780M, nine
-/// blocks of 16 MiB a device in `tests::reclaim_submit_bench`'s small-blocks arms, made and freed
-/// for nothing. The pool host copies place in keeps its own blocks ahead from the device's first
-/// creation call, by design, and is left out.
+/// neither, so no block is made behind its first to wait unused and go after `KEPT_EMPTY_FOR`.
+/// The pool host copies place in keeps its own blocks ahead from the device's first creation
+/// call, by design, and is left out.
 #[test]
 fn a_pool_s_first_block_is_made_alone() {
     let scratch = Scratch::new("first-alone");
-    let device = small_blocks_device(&scratch);
+    let device = device(&scratch.0);
     let buffer = device.new_buffer(64 << 10, ResourceOptions::private());
     let mut held: Vec<Texture> = Vec::new();
     texture(&device, (256, 256), &mut held);
@@ -290,81 +259,20 @@ fn a_pool_s_first_block_is_made_alone() {
     drop(buffer.unwrap());
 }
 
-/// A pool whose blocks of plain memory are made small after a slow making
-/// (`Memory::plain_block_made`) keeps as many of them made ahead as come to one block of
-/// `memory::BLOCK_BYTES` or more, at least the bytes it kept ahead before they were made small
-/// (four of 17 MiB), and no creation call makes a block of the pool itself while one can be made
-/// ahead: where none is made or under way, the call starts the pool's making and waits for its
-/// first block, the pool's first block among them. With one small block ahead at a time, a
-/// guest's creation calls on a Radeon 780M whose blocks were made of 16 MiB made 82 to 114 blocks
-/// of images themselves.
+/// The textures of a pool of images pack as many to a block as their texels' bytes fill: four
+/// `RGBA8Unorm` textures of 2048 x 2048 (16 MiB of texels each, a quarter of `memory::BLOCK_BYTES`)
+/// to a block, whatever metadata the driver's image carries past its texels within the block's
+/// sixteenth besides (`memory::IMAGE_BLOCK_SLACK`). The run makes [`PACKED`] of them, one at a
+/// time, and counts the pool's blocks of images, printing each image's bytes and alignment as the
+/// driver asked them.
 #[test]
-fn a_pool_of_small_blocks_keeps_a_block_s_bytes_ahead_and_no_creation_call_makes_one() {
-    let scratch = Scratch::new("small-blocks");
-    let device = small_blocks_device(&scratch);
-    let start = device.work_counts();
-    let blocks = |counts: &WorkCounts| {
-        (counts.image_blocks_made_ahead + counts.image_blocks_made_in_place)
-            - (start.image_blocks_made_ahead + start.image_blocks_made_in_place)
-    };
-    let mut held: Vec<Texture> = Vec::new();
-    let mut counts = start;
-    // The most each pool of images kept ahead, by its memory type: the textures' pool, and the
-    // pool host copies place in where the device copies color textures on the host and its type
-    // differs (an Iris Xe's host-cached type), which keeps its own.
-    let mut most_ahead = std::collections::BTreeMap::<u32, u64>::new();
-    // One texture at a time, every making it started ended before the next: what this holds is
-    // where each block is made and what is kept ahead, not how soon a making ends.
-    while blocks(&counts) < GROWTH {
-        texture(&device, (TEXTURE_SIDE, TEXTURE_SIDE), &mut held);
-        counts = device.work_counts();
-        let ahead = crate::device::lock(&device.shared().memory).ahead_bytes(Holds::Images);
-        for (type_index, bytes) in ahead {
-            let most = most_ahead.entry(type_index).or_default();
-            *most = (*most).max(bytes);
-        }
-    }
-    let host_copies = crate::device::lock(&device.shared().memory).host_copies_pool();
-    let in_place = counts.image_blocks_made_in_place - start.image_blocks_made_in_place;
-    let ahead = counts.image_blocks_made_ahead - start.image_blocks_made_ahead;
-    println!(
-        "BLOCKS-AHEAD {}: {} textures of 4 MiB in blocks of {} KiB; of the images' pool's {} \
-         blocks, {ahead} made ahead, {in_place} in place, {} waited for; most kept ahead by \
-         memory type {:?} KiB; host copies' pool {host_copies:?}",
-        device.name(),
-        held.len(),
-        SMALL_BLOCK >> 10,
-        blocks(&counts),
-        counts.blocks_ahead_waited_for - start.blocks_ahead_waited_for,
-        (most_ahead.iter())
-            .map(|(&type_index, &bytes)| (type_index, bytes >> 10))
-            .collect::<Vec<_>>(),
-    );
-    assert_eq!(in_place, 0, "a creation call made a block of images itself");
-    // Four blocks of 17 MiB: the fewest that come to 64 MiB or more.
-    let worth = 4 * SMALL_BLOCK;
-    assert!(
-        !most_ahead.is_empty() && most_ahead.values().all(|&most| most == worth),
-        "a pool of images kept other than a block's worth ahead: {most_ahead:?} bytes by memory \
-         type"
-    );
-}
-
-/// The textures of a pool of small blocks pack as many to a block as their texels' bytes fill:
-/// four `RGBA8Unorm` textures of 1024 x 1024 (4 MiB of texels each, a quarter of the 16 MiB a
-/// small block is made of, `memory::PLAIN_BLOCK_SLACK`) to a block, whatever metadata the
-/// driver's image carries past its texels: RADV's take about 4 MiB and 16 KiB at an alignment of
-/// 64 KiB, three to a block of 16 MiB. The run makes [`PACKED`] of them, one at a time, and counts
-/// the pool's blocks of images, printing each image's bytes and alignment as the driver asked
-/// them.
-#[test]
-fn small_blocks_hold_four_textures_of_a_quarter_block_each() {
+fn a_block_of_images_holds_four_textures_of_a_quarter_block_each() {
     let scratch = Scratch::new("pack");
-    let device = small_blocks_device(&scratch);
+    let device = device(&scratch.0);
     let start = device.work_counts();
     let mut held: Vec<Texture> = Vec::new();
     for _ in 0..PACKED {
-        texture(&device, (TEXTURE_SIDE, TEXTURE_SIDE), &mut held);
+        texture(&device, (PACKED_SIDE, PACKED_SIDE), &mut held);
     }
     let counts = device.work_counts();
     let made = (counts.image_blocks_made_ahead + counts.image_blocks_made_in_place)
@@ -375,103 +283,22 @@ fn small_blocks_hold_four_textures_of_a_quarter_block_each() {
     let placements = memory.image_placements.clone();
     drop(memory);
     println!(
-        "BLOCKS-AHEAD {}: {PACKED} textures of 1024 x 1024 in pooled blocks of {sizes:?} bytes, \
-         {made} added since the first texture: {used} hold a texture; images placed by bytes and \
-         alignment {placements:?}",
+        "BLOCKS-AHEAD {}: {PACKED} textures of {PACKED_SIDE} x {PACKED_SIDE} in pooled blocks of \
+         {sizes:?} bytes, {made} added since the first texture: {used} hold a texture; images \
+         placed by bytes and alignment {placements:?}",
         device.name(),
     );
     assert!(
         used <= PACKED / 4,
-        "{PACKED} textures of a quarter of a small block lie in {used} blocks, not {}",
+        "{PACKED} textures of a quarter of a block lie in {used} blocks, not {}",
         PACKED / 4
     );
 }
 
-/// The textures `small_blocks_hold_four_textures_of_a_quarter_block_each` makes.
-const PACKED: usize = 16;
-
-/// A pool of small blocks whose placements larger than its blocks, each taking a block of its
-/// own size (`memory::pooled_block_bytes`), are recent keeps a block of that size made ahead
-/// too, which the calls that need one of the pool's own blocks leave to them: the first such
-/// placement waits for the ready thread's making of its block, each later one finds its block
-/// made, and a burst of the pool's own blocks' textures that outruns their makings leaves it made;
-/// no creation call makes a block itself. What the pool holds made is read before each of those
-/// placements, not the device's count of waits, which counts other pools' blocks too.
-#[test]
-fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead() {
-    let scratch = Scratch::new("large-blocks");
-    let device = small_blocks_device(&scratch);
-    let shared = device.shared();
-    let large_block = 2 * SMALL_BLOCK;
-    let made = || crate::device::lock(&shared.memory).ahead_made(Holds::Images);
-    let start = device.work_counts();
-    let mut held: Vec<Texture> = Vec::new();
-    let mut missed = Vec::new();
-    // One texture at a time, every making it started ended before the next.
-    for at in 0..LARGE_EVERY * LARGE_TEXTURES {
-        let large = at % LARGE_EVERY == LARGE_EVERY - 1;
-        if large && at >= LARGE_EVERY && !made().contains(&large_block) {
-            missed.push(at);
-        }
-        let sides = match large {
-            true => LARGE_SIDES,
-            false => (TEXTURE_SIDE, TEXTURE_SIDE),
-        };
-        texture(&device, sides, &mut held);
-    }
-    let before_burst = made();
-    // Back to back with a use of the queues held open, so that a making of the pool's own blocks
-    // waits for a pause the use never leaves unless a call hurries it: the calls that find none of
-    // them made leave the block of 34 MiB made.
-    let after_burst = {
-        let _in_use = InUse::new(&shared.queue_quiet);
-        for _ in 0..BURST {
-            let mut descriptor = TextureDescriptor::texture_2d(
-                PixelFormat::RGBA8Unorm,
-                TEXTURE_SIDE,
-                TEXTURE_SIDE,
-                false,
-            );
-            descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-            descriptor.resource_options = ResourceOptions::private();
-            held.push(device.new_texture(&descriptor).unwrap());
-        }
-        made()
-    };
-    makings_ended(&device);
-    let counts = device.work_counts();
-    let in_place = counts.image_blocks_made_in_place - start.image_blocks_made_in_place;
-    let sizes = crate::device::lock(&shared.memory).pooled_block_sizes(Holds::Images);
-    let mib = |sizes: &[u64]| sizes.iter().map(|size| size >> 20).collect::<Vec<_>>();
-    println!(
-        "BLOCKS-AHEAD {}: {} textures, one of 20 MiB every {LARGE_EVERY} then {BURST} back to \
-         back, in blocks of {} KiB; blocks of images made ahead {}, in place {in_place}; the 20 \
-         MiB textures after the first found no block of 34 MiB made at {missed:?}; made ahead \
-         before the burst {:?} MiB, after it {:?} MiB; the pool's blocks {:?} MiB",
-        device.name(),
-        held.len(),
-        SMALL_BLOCK >> 10,
-        counts.image_blocks_made_ahead - start.image_blocks_made_ahead,
-        mib(&before_burst),
-        mib(&after_burst),
-        mib(&sizes),
-    );
-    assert_eq!(in_place, 0, "a creation call made a block of images itself");
-    assert_eq!(
-        sizes.iter().filter(|&&size| size == large_block).count(),
-        LARGE_TEXTURES,
-        "the 20 MiB textures did not each take a block of 34 MiB"
-    );
-    assert!(
-        missed.is_empty(),
-        "20 MiB textures found no block of 34 MiB made ahead at {missed:?}"
-    );
-    assert!(
-        after_burst.contains(&large_block),
-        "the burst's calls took the block of 34 MiB made ahead: {:?} MiB",
-        mib(&after_burst)
-    );
-}
+/// The textures `a_block_of_images_holds_four_textures_of_a_quarter_block_each` makes, and their
+/// side.
+const PACKED: usize = 8;
+const PACKED_SIDE: u64 = 2048;
 
 /// The sizes of the mixed-sizes run's `RGBA8Unorm` textures, in turn: six of 4 MiB, one of
 /// 14.1 MiB (2560 x 1440) and one of 31.6 MiB (3840 x 2160), as `tests::reclaim_submit_bench`'s
@@ -494,56 +321,19 @@ const MIXED_ROUNDS: usize = 4;
 /// for a making they started themselves (textures 8, 16 and 24) while the pool's blocks made
 /// ahead were counted by whole blocks of room, and on a Radeon 780M
 /// `tests::reclaim_submit_bench`'s mixed arm waited for 8 of its 13 blocks of images in its quiet
-/// phase. Where the device's makings were slow and its blocks of images were made smaller
-/// (`Memory::plain_block_made`, lavapipe), the first texture larger than them waits for its
-/// block of its own size, which nothing foretold
-/// (`placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead`); no other.
+/// phase.
 #[test]
 fn mixed_sizes_find_their_blocks_made_ahead() {
-    mixed_sizes(None);
-}
-
-/// As `mixed_sizes_find_their_blocks_made_ahead`, the device told of a slow making
-/// (`Memory::plain_block_made`) before the run's fourth texture, while its pool of images fills
-/// its first block of 64 MiB: its blocks of images made smaller from then on, the pool keeps its
-/// next block made ahead as it did for the block it fills (`Pool::ahead_room`). By three quarters
-/// of a small block, a Radeon 780M's pool, its 64 MiB block left with 12.4 MiB, kept none ahead,
-/// and its next texture of 2560 x 1440 (15.1 MiB) waited for its block (texture 11, two runs of
-/// two), as it did in the memory tests' runs where a slow making of the host's came that early.
-#[test]
-fn mixed_sizes_after_blocks_made_smaller_find_their_blocks_made_ahead() {
-    mixed_sizes(Some(SMALLER_AT));
-}
-
-/// The texture of the mixed-sizes run before which
-/// `mixed_sizes_after_blocks_made_smaller_find_their_blocks_made_ahead` tells the device of a slow
-/// making.
-const SMALLER_AT: usize = 4;
-
-/// The mixed-sizes run (`mixed_sizes_find_their_blocks_made_ahead`), the device told of a slow
-/// making before texture `smaller_at` where given.
-fn mixed_sizes(smaller_at: Option<usize>) {
-    let scratch = Scratch::new(match smaller_at {
-        Some(_) => "mixed-smaller",
-        None => "mixed",
-    });
+    let scratch = Scratch::new("mixed");
     let device = device(&scratch.0);
     let shared = device.shared();
     let ahead = || crate::device::lock(&shared.memory).ahead_blocks();
-    let plain = || crate::device::lock(&shared.memory).plain_block_bytes();
     let mut held: Vec<Texture> = Vec::new();
     texture(&device, MIXED_SIDES[0], &mut held);
     let start = ahead();
-    let (mut waits, mut first_large) = (Vec::new(), None);
+    let mut waits = Vec::new();
     for at in 1..MIXED_SIDES.len() * MIXED_ROUNDS {
-        if smaller_at == Some(at) {
-            let mut memory = crate::device::lock(&shared.memory);
-            memory.plain_block_made(BLOCK_BYTES, MAKING_BOUND * 4);
-        }
         let (width, height) = MIXED_SIDES[at % MIXED_SIDES.len()];
-        if first_large.is_none() && width * height * 4 > plain() {
-            first_large = Some(at);
-        }
         let before = ahead().images_waited_for;
         texture(&device, (width, height), &mut held);
         let after = ahead();
@@ -568,13 +358,14 @@ fn mixed_sizes(smaller_at: Option<usize>) {
     let end = ahead();
     let blocks =
         (end.images_ahead + end.images_in_place) - (start.images_ahead + start.images_in_place);
+    let sizes = crate::device::lock(&shared.memory).pooled_block_sizes(Holds::Images);
     println!(
-        "BLOCKS-AHEAD {}: {} textures of mixed sizes in blocks of {} MiB; after the first, {blocks} \
-         blocks of images, {} made ahead, {} waited for (at textures {waits:?}; the first larger \
-         than the blocks {first_large:?}), {} in place",
+        "BLOCKS-AHEAD {}: {} textures of mixed sizes in blocks of {:?} KiB; after the first, \
+         {blocks} blocks of images, {} made ahead, {} waited for (at textures {waits:?}), {} in \
+         place",
         device.name(),
         held.len(),
-        plain() >> 20,
+        sizes.iter().map(|size| size >> 10).collect::<Vec<_>>(),
         end.images_ahead - start.images_ahead,
         end.images_waited_for - start.images_waited_for,
         end.images_in_place - start.images_in_place,
@@ -583,12 +374,9 @@ fn mixed_sizes(smaller_at: Option<usize>) {
         end.images_in_place, start.images_in_place,
         "a creation call made a block of images itself"
     );
-    let unforetold: Vec<usize> = (waits.iter().copied())
-        .filter(|&at| Some(at) != first_large)
-        .collect();
     assert!(
-        unforetold.is_empty(),
-        "creation calls waited for a block of images at textures {unforetold:?}"
+        waits.is_empty(),
+        "creation calls waited for a block of images at textures {waits:?}"
     );
 }
 
@@ -613,8 +401,7 @@ impl Drop for InUse<'_> {
 /// submissions to end cuts that wait short and waits for the block's allocation alone. Each attempt
 /// starts once every making ended, so that the pool's next making is a new one, which waits for
 /// quiet: a pool's thread makes the blocks queued while it runs one after another with no wait of
-/// their own, and on an RTX 5080 (its blocks made of 16 MiB after a slow making, two of the
-/// test's buffers to a block) creation calls back to back beside the runtime suite's first half
+/// their own, and on an RTX 5080 creation calls back to back beside the runtime suite's first half
 /// kept its one thread making through up to 235 calls, and through [`MOST`] beside both halves.
 #[test]
 fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allocation_alone() {

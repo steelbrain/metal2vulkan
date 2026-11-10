@@ -37,22 +37,13 @@
 //!   like a guest's scroll on the 780M (from 20 to 63 live blocks of 64 MiB in about 20 s, about 4
 //!   a second) finds a block made when it needs one; and, grown or not, once the pool is near its
 //!   next block (`Pool::near_next`: it holds a pooled block and lacks room for three quarters of
-//!   one, of the largest it holds, `Pool::ahead_room`, a quarter of a block before the half block
-//!   `keep_room` keeps), so that its first growth, and the first after a pause, finds one made
-//!   too, where a guest's
+//!   one, `memory::ahead_room`, a quarter of a block before the half block `keep_room` keeps), so
+//!   that its first growth, and the first after a pause, finds one made too, where a guest's
 //!   scroll on a Radeon 780M made its buffers' pool's first growth in place, on the guest's
 //!   thread (`tests::reclaim_submit_bench`'s scroll arm: of each phase's 8 blocks, the first was
 //!   made in place in three runs out of three, quiet and fragmented, and none is now). A pool
-//!   keeps a block's worth of bytes ahead: as many of its blocks as come to one block of
-//!   `memory::BLOCK_BYTES` or more (one of 64 MiB; four where its blocks of plain memory are made
-//!   of 17 MiB after a slow making, `Memory::plain_block_made`); and, while its placements larger
-//!   than its blocks are recent (the last within `KEPT_EMPTY_FOR`), each of which takes a block of
-//!   its own size (`memory::pooled_block_bytes`), one block of the largest such size besides
-//!   them, which a call that needs one of the pool's own blocks leaves to those placements, so
-//!   that a burst of textures that outruns the makings of the pool's own blocks does not take it
-//!   (`tests::blocks_ahead`). Its own blocks are counted in bytes with its room
-//!   (`Memory::lacking`): it lacks them once those made ahead and the longest free range of its
-//!   blocks come to less than their worth, and then as many as bring those made ahead to it. So
+//!   keeps one block ahead, counted in bytes with its room (`Memory::lacking`): it lacks one once
+//!   the blocks made ahead and the longest free range of its blocks come to less than a block. So
 //!   the block a call just took, which leaves a whole block of room, is made again as soon as a
 //!   placement takes any of that room, not once the pool lacks room for a whole block: on an RX 550
 //!   a 31.6 MiB texture placed in a 64 MiB block just taken left less than the half block the next
@@ -60,28 +51,23 @@
 //!   (`tests::blocks_ahead`'s mixed sizes, at textures 8, 16 and 24 of 32). A placement of a
 //!   quarter of a block or more starts the making there and then (`memory::place`), not at the
 //!   next creation call. They are made one after another once a burst ended; those it lacks are
-//!   queued after the blocks its thread still makes, or made on a new thread where that ended. So each making stays as short as its block, and the pool's growth
-//!   still finds its blocks made: with one block of 16 MiB ahead at a time, a guest's scroll on a
-//!   Radeon 780M whose blocks were made so made 82 to 114 blocks of images on its own threads and
-//!   waited for 110 to 159 of those made ahead. It keeps them for as long as it stays near its
-//!   next block; none for a pool with room for three quarters of a block. And for the host
-//!   copies' pool once that lacks room for half a block, the first by the device's first creation
-//!   call, before the program queued work. A pool of exportable buffers, which the creation calls
-//!   themselves place in, gets its blocks started the same way once it grew or is near its next
-//!   block, so that the creation call that finds no room there takes a block made ahead rather
-//!   than make one on the program's thread (on a Radeon 780M a creation call that made such a
-//!   64 MiB block itself took 10.0 to 15.0 ms in three of four phases of
-//!   `tests::reclaim_submit_bench`, quiet and fragmented, and none took over 0.3 ms with the
-//!   blocks made ahead); none of its blocks is made by a creation call that places nothing there.
+//!   queued after the blocks its thread still makes, or made on a new thread where that ended. It
+//!   keeps them for as long as it stays near its next block; none for a pool with room for three
+//!   quarters of a block. And for the host copies' pool once that lacks room for half a block,
+//!   the first by the device's first creation call, before the program queued work. A pool of
+//!   exportable buffers, which the creation calls themselves place in, gets its blocks started
+//!   the same way once it grew or is near its next block, so that the creation call that finds
+//!   no room there takes a block made ahead rather than make one on the program's thread (on a
+//!   Radeon 780M a creation call that made such a 64 MiB block itself took 10.0 to 15.0 ms in
+//!   three of four phases of `tests::reclaim_submit_bench`, quiet and fragmented, and none took
+//!   over 0.3 ms with the blocks made ahead); none of its blocks is made by a creation call that places nothing there.
 //! - **Added where room is needed.** A creation call that finds such a pool without room for
 //!   half a block (`memory::keep_room`), and a placement that finds no room (`memory::place`),
 //!   add the pool's smallest block made ahead of the size they need. Where none is made they wait
 //!   for the one being made or still to make, or else for one the pool's thread makes first for
-//!   them, the thread started where the pool has none, the rest of its block's worth made after
-//!   it where the pool grows (`Memory::growing`; a pool's first block is made alone, as the rest
-//!   behind it waited unused where the pool stayed within it): no two threads make blocks for the
-//!   same pool, none is made only to be freed, and a call
-//!   makes no block of a pool whose blocks are made ahead where a making can serve it. A making
+//!   them, the thread started where the pool has none: no two threads make blocks for the same
+//!   pool, none is made only to be freed, and a call makes no block of a pool whose blocks are
+//!   made ahead where a making can serve it. A making
 //!   still waiting for a burst's end when a call comes allocates at once, so that the call waits
 //!   for the allocation alone, never for the program's own submissions to pause; while a call
 //!   waits the thread reads no page, the pages left unread faulting in at their first touch, as a
@@ -194,30 +180,16 @@ struct State {
 }
 
 impl State {
-    /// Whether a block of bytes within `need` is made.
-    fn holds(&self, need: Need) -> bool {
-        self.made.iter().any(|made| need.fits(made.block.size))
+    /// Whether a block of `least` bytes or more is made.
+    fn holds(&self, least: u64) -> bool {
+        self.made.iter().any(|made| made.block.size >= least)
     }
 
-    /// Whether a block of bytes within `need` is made, being made or still to make.
-    fn will_hold(&self, need: Need) -> bool {
-        self.holds(need)
-            || self.making.is_some_and(|bytes| need.fits(bytes))
-            || self.to_make.iter().any(|&bytes| need.fits(bytes))
-    }
-}
-
-/// The bytes of a block a call can take: `least` or more, `most` at most.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Need {
-    pub(super) least: u64,
-    pub(super) most: u64,
-}
-
-impl Need {
-    /// Whether a block of `bytes` is within it.
-    fn fits(self, bytes: u64) -> bool {
-        (self.least..=self.most).contains(&bytes)
+    /// Whether a block of `least` bytes or more is made, being made or still to make.
+    fn will_hold(&self, least: u64) -> bool {
+        self.holds(least)
+            || self.making.is_some_and(|bytes| bytes >= least)
+            || self.to_make.iter().any(|&bytes| bytes >= least)
     }
 }
 
@@ -231,21 +203,21 @@ pub(super) struct Made {
     pub(super) waited_for: bool,
 }
 
-/// A call's wait for a readying's block of bytes within `need` ([`Readying::waiter`]), with no
+/// A call's wait for a readying's block of `least` bytes or more ([`Readying::waiter`]), with no
 /// lock of the memory held: counted among the waiting from its making to its drop, so that the
 /// thread reads no page meanwhile.
 pub(super) struct Waiter {
     shared: Arc<Shared>,
-    need: Need,
+    least: u64,
 }
 
 impl Waiter {
-    /// A wait on `shared` for a block of bytes within `need`, counted from now.
-    fn new(shared: &Arc<Shared>, need: Need) -> Waiter {
+    /// A wait on `shared` for a block of `least` bytes or more, counted from now.
+    fn new(shared: &Arc<Shared>, least: u64) -> Waiter {
         shared.waiting.fetch_add(1, Ordering::SeqCst);
         Waiter {
             shared: Arc::clone(shared),
-            need,
+            least,
         }
     }
 
@@ -257,10 +229,10 @@ impl Waiter {
             .go
             .compare_exchange(WAIT, NOW, Ordering::AcqRel, Ordering::Acquire);
         let mut state = lock(&shared.state);
-        while !state.holds(self.need) && !state.ended {
+        while !state.holds(self.least) && !state.ended {
             state = (shared.changed.wait(state)).unwrap_or_else(PoisonError::into_inner);
         }
-        state.holds(self.need)
+        state.holds(self.least)
     }
 }
 
@@ -282,13 +254,13 @@ pub(super) struct MadeWith {
 impl Readying {
     /// Start making blocks of `sizes` bytes for `pool`, one after another, on a thread of its own:
     /// once a burst of the device's queue uses ended, or at once for a call that waits for a
-    /// block of bytes within `need`, whose wait it gives back. `None` where the host cannot start
+    /// block of `need` bytes or more, whose wait it gives back. `None` where the host cannot start
     /// a thread.
     pub(super) fn start(
         making: MadeWith,
         pool: (Holds, u32),
         sizes: VecDeque<u64>,
-        need: Option<Need>,
+        need: Option<u64>,
     ) -> Option<(Readying, Option<Waiter>)> {
         let go = match need {
             Some(_) => NOW,
@@ -383,9 +355,9 @@ impl Readying {
         !lock(&self.shared.state).made.is_empty()
     }
 
-    /// Whether a block of bytes within `need` is made, being made or still to make.
-    pub(super) fn will_hold(&self, need: Need) -> bool {
-        lock(&self.shared.state).will_hold(need)
+    /// Whether a block of `least` bytes or more is made, being made or still to make.
+    pub(super) fn will_hold(&self, least: u64) -> bool {
+        lock(&self.shared.state).will_hold(least)
     }
 
     /// The bytes of each of its blocks made and not yet added, being made, and still to make.
@@ -412,21 +384,21 @@ impl Readying {
         self.held().iter().sum()
     }
 
-    /// Its smallest block made and not yet added of bytes within `need`, taken.
-    pub(super) fn take_block(&self, need: Need) -> Option<Made> {
+    /// Its smallest block made and not yet added of `least` bytes or more, taken.
+    pub(super) fn take_block(&self, least: u64) -> Option<Made> {
         let mut state = lock(&self.shared.state);
         let at = (state.made.iter().enumerate())
-            .filter(|(_, made)| need.fits(made.block.size))
+            .filter(|(_, made)| made.block.size >= least)
             .min_by_key(|(_, made)| made.block.size)
             .map(|(at, _)| at)?;
         state.made.remove(at)
     }
 
-    /// A wait for its block of bytes within `need`, to run with no lock of the memory held.
+    /// A wait for its block of `least` bytes or more, to run with no lock of the memory held.
     /// `None` where `unless_reading` and its thread reads a block's pages now: a page's first
     /// touch may wait behind the program's GPU work (the module docs).
-    pub(super) fn waiter(&self, need: Need, unless_reading: bool) -> Option<Waiter> {
-        let waiter = Waiter::new(&self.shared, need);
+    pub(super) fn waiter(&self, least: u64, unless_reading: bool) -> Option<Waiter> {
+        let waiter = Waiter::new(&self.shared, least);
         // Counted first: a thread that begins its reads after this sees the wait and reads none,
         // and one that began them before is seen here.
         match unless_reading && self.shared.reading.load(Ordering::SeqCst) {

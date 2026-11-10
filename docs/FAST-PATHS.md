@@ -962,9 +962,9 @@ driver's. Each is open work.
   for each command buffer. Metal's command buffers wait for no such making. Not announced.
 - **On NVIDIA, a command buffer submitted while the runtime makes or frees a memory block completes
   as that call ends; emptied blocks are kept so that a returning working set makes none again.**
-  The runtime's memory blocks (`memory.rs`: pooled blocks of 64 MiB, or smaller where a making
-  took longer than 8 ms (the row on plain blocks below), blocks of their own for placements past
-  half of 64 MiB, and the blocks exportable buffers share) are made with
+  The runtime's memory blocks (`memory.rs`: pooled blocks of 64 MiB, 68 MiB for images (the row on
+  plain blocks below), blocks of their own for placements past half of 64 MiB, and the blocks
+  exportable buffers share) are made with
   `vkAllocateMemory` and freed with `vkFreeMemory`, which hold every submission on NVIDIA's driver
   (the row above has their times). A block that empties is kept for the next placements: past its
   pool's two pooled ones, while the empty blocks kept in its heap stay within an eighth of the
@@ -988,22 +988,17 @@ driver's. Each is open work.
   clip still makes its blocks: 16 allocations, against 44 when each picture had an allocation of
   its own, with 3 to 5 commits waiting 1 ms or more (longest 10.9 to 19.6 ms): its blocks'
   `vkAllocateMemory` holds every submission. A pool that grew, and one near its next block (it
-  holds a pooled block and lacks room for three quarters of one, of the largest it holds, its first
-  growth among them), gets
-  a block's worth of bytes made ahead (`memory/ready.rs`; the pools of exportable buffers, which
-  hold the pictures, among them): as many of its blocks as come to one 64 MiB block or more
-  (four of 17 MiB in a plain pool of smaller blocks), and while its
-  placements larger than a plain pool's smaller blocks are recent, one block of their size
-  besides, one `vkAllocateMemory` each, right after a burst of the device's submissions ended.
-  Its own blocks are counted in bytes with its free room: they are made again once those made
-  ahead and its room come to less than a block's worth, a placement of a quarter of a block or
-  more starting their making at once rather than at the next creation call. A
-  creation call that needs one while its making still waits for that end makes it at once and
-  waits for it, as for a block made in place, and one that finds none of its size made waits for
-  the ready thread to make it first. A pool near its next block keeps those blocks at rest for as
-  long as it stays so: 64 MiB a pool at most (68 MiB of 17 MiB blocks), and one block of its
-  large placements' size more (34 MiB) while those are recent, counted against the kept empty blocks' budget. Metal's command buffers wait for no allocation. Not
-  announced.
+  holds a pooled block and lacks room for three quarters of one, its first growth among them),
+  gets one block made ahead (`memory/ready.rs`; the pools of exportable buffers, which hold the
+  pictures, among them), one `vkAllocateMemory`, right after a burst of the device's submissions
+  ended. It is counted in bytes with the pool's free room: made again once the block made ahead
+  and that room come to less than a block, a placement of a quarter of a block or more starting
+  its making at once rather than at the next creation call. A creation call that needs one while
+  its making still waits for that end makes it at once and waits for it, as for a block made in
+  place, and one that finds none made waits for the ready thread to make it first. A pool near its
+  next block keeps that block at rest for as long as it stays so, 64 MiB a pool at most (68 MiB
+  for images), counted against the kept empty blocks' budget. Metal's command buffers wait for no
+  allocation. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
   unobserved: about 1 µs a submission for each such block held.** Where the device has unified memory and a heap that is not
@@ -1075,59 +1070,72 @@ driver's. Each is open work.
   every type is device-local (ANV, MoltenVK, lavapipe) and those without unified memory place as
   before, in plain blocks. No switch: no answer of Metal's changes. Not announced.
 - **On RADV, a command buffer submitted while the runtime makes a block of plain memory waits for
-  that making; a device whose making of such a block took longer than 8 ms makes its later
-  pooled ones smaller, down to 17 MiB.** A block allocated with no export (`memory.rs`: the
+  that making; pooled blocks stay 64 MiB.** A block allocated with no export (`memory.rs`: the
   blocks of images, of heaps, of buffers that declare their padding unobserved, and of every
   buffer where the device's buffers lie in plain blocks; not the runtime's own pages, which it
   imports) shares the reservation of the process's buffer objects on RADV, and its
   `vkAllocateMemory` holds every submission of the process while the kernel fills its pages (the
-  row above). Where such a making (`vkAllocateMemory`, its mapping and its buffer of addresses)
-  takes longer than `MAKING_BOUND` (8 ms, half a frame at 60 Hz), the device's later pooled
-  blocks of plain memory are made of the largest power of two that making's rate makes within
-  it with a sixteenth of it besides (`PLAIN_BLOCK_SLACK`), the power of two at least
-  `MIN_PLAIN_BLOCK_BYTES` (16 MiB, so 17 MiB blocks; `Memory::plain_block_made`), and a
-  placement larger than such a block, up to 32 MiB, takes a pooled block of the least power of
-  two so made that holds it (34 MiB); past 32 MiB it takes a block of its own where no pooled block has room, as before, which
-  smaller blocks have less often. The size is never made larger again, after a single slow
-  making too (a host's passing load): the rule follows each device's own makings, on every
-  driver. On a Radeon 780M (RADV PHOENIX, Mesa 26.2.6), the kernel's page pools emptied before
-  each run (through debugfs, the measurement's method alone: with freed pages in them a block
-  of 16 to 64 MiB took 0.1 to 0.3 ms), a `Private` texture made every 16.7 ms beside a command
-  buffer committed about every millisecond (`tests::reclaim_submit_bench`, two runs of each arm
-  against the base, interleaved): with 1024x1024 textures, the base's 64 MiB blocks took 9.4 and
-  9.8 ms at the median on a quiet host and 26.6 and 12.7 ms on one whose free memory lay in
-  single pages (the slowest 38.5 ms), and left 13 and 13 turnarounds of 8 ms or more a phase on
-  each (8 and 4 of 17 ms or more on the second, the slowest 40.0 ms); the rule took the blocks to
-  32 MiB after the first making (5.3 ms at the median) and to 16 MiB on the fragmented host (3.6
-  and 3.1 ms, the slowest 12.4 ms), and left 0 and 0 on the quiet host and 16 and 7 on the
-  fragmented one, none of 17 ms or more (the slowest 14.3 ms); the slowest creation call took 0.6
-  and 3.4 ms there against 24.9 and 22.9 ms. With a frame's textures mixed with 2560x1440 and
-  3840x2160 ones, 1 and 0 against 14 and 14 on the quiet host, and 14 and 11 (none of 17 ms or
-  more, the slowest 16.0 ms) against 13 and 13 (9 and 5, the slowest 32.3 ms) on the fragmented
-  one; each 3840x2160 texture, a little over 32 MiB, took a block of its own made on its
-  creating thread (12 a phase, 10.4 and 11.4 ms at the median on the fragmented host), where the
-  base placed it in the room of a 64 MiB block, and the slowest creation call took 16.4 and 15.6
-  ms against 26.2 and 26.1 ms. The 16 MiB makings that still took 8 ms or more are the host's
-  fragmentation at the least size. The trade: more allocations, 26 a phase on the quiet host and
-  60 on the fragmented one where the base made 13, each a `VkDeviceMemory` the device's
-  `maxMemoryAllocationCount` counts (Vulkan's least is 4096, 68 GiB of 17 MiB blocks), and a
-  texture between 17 and 34 MiB takes a block of 34 MiB. On the 780M
-  `vkQueueSubmit` took 0.121 to 0.136 ms each with the rule's 26 to 60 blocks a phase, and 0.119
-  to 0.140 ms with the base's 13 (the 1024x1024 arm's phases). Whether a driver that names every
-  allocation in each submission pays for more blocks is unaudited: ANV and NVIDIA were not
-  measured with them. A device whose 64 MiB
-  makings take longer than 8 ms makes its blocks smaller whether or not a making holds its
-  submissions: NVIDIA's `vkAllocateMemory` takes about 11 ms for 64 MiB (the GPU pool row above,
-  where it holds every submission too), so its blocks are expected to be 32 MiB there. On the M3
-  Max (MoltenVK 1.4.2), over the conformance suite's cost measurement (eight rounds of 1233
-  cases), a 64 MiB block took 1.1 ms at the median and 1.6 ms at the slowest, and blocks of their
-  own of 256 MiB and 1 GiB up to 17 and 21 ms, whose rate keeps 64 MiB: its blocks stayed 64 MiB.
-  One of 61 makings of 64 MiB took 8.15 ms among tests that press the host's memory, which takes
-  that device's blocks to 32 MiB. So the conformance suite's cost gate reports
-  `device_memory_allocated` and no longer gates it: with the size held at 16 MiB, that cost
-  measurement moved its gated bound in one case (192 MiB to 48 MiB) and none of
-  `pooled_memory_blocks_made`'s, which stays gated. No switch: no answer of Metal's changes. Not
-  announced.
+  row above), unless the next row's fill left those pages at hand. Pooled blocks are 64 MiB on
+  every device, and a block of images 68 MiB: a sixteenth besides (`IMAGE_BLOCK_SLACK`), since a
+  driver's image takes more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a
+  `Private` `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, at an alignment of 64 KiB), so
+  that four images of a quarter of a block fit in one. On a Radeon 780M (RADV PHOENIX, Mesa
+  26.2.6), the kernel's page pools emptied before each run (through debugfs, the measurement's
+  method alone: with freed pages in them a block of 16 to 64 MiB took 0.1 to 0.3 ms), a `Private`
+  texture made every 16.7 ms beside a command buffer committed about every millisecond
+  (`tests::reclaim_submit_bench`, two runs of each arm), a 64 MiB making took 10 to 12 ms on a
+  quiet host and 10 to 31 ms on one whose free memory lay in single pages, 90 to 96% of it on a
+  CPU inside `vkAllocateMemory` (the kernel's page allocation, clearing and compaction; its
+  mapping 0.02 to 0.1 ms), and each held the submissions as long: with textures of 1024x1024, of
+  mixed sizes and in bursts, 12 to 14 turnarounds of 8 ms or more a phase (up to 5 of 17 ms or
+  more, the slowest 32.1 ms), 13 to 15 makings a phase holding 125 to 201 ms in all. Smaller
+  blocks shorten each hold and add makings: with blocks of 17 MiB, 0 to 8 turnarounds of 8 ms or
+  more a phase (none of 17 ms, the slowest 14.5 ms), 45 to 55 makings a phase holding 138 to
+  230 ms in all, and each texture past 17 MiB in a block of its own. No switch: no answer of
+  Metal's changes. Not announced.
+- **On RADV on a Radeon 780M, a block of plain memory has its pages filled through an exportable
+  allocation first, so that its own making holds no submission; this relies on the kernel
+  recycling freed pages, and is performance only.** On a device whose driver identity carries
+  `DriverFact::PlainAllocationsHoldSubmissions` (RADV on the Radeon 780M, measured: the row
+  above) and that exports pooled memory as an opaque file descriptor (`memory.rs`'s
+  `fd_buffer_types`: the types of a heap that is not device-local, with unified memory), each
+  pooled block of plain memory of such a type is made after an allocation of its size and type
+  exportable as an opaque file descriptor, freed at once (`Memory::fill_plain_blocks`,
+  `BlockMaker::make_as`). That allocation is a buffer object of its own reservation, so the
+  kernel fills its pages while it holds no submission; its free returns them to amdgpu's TTM page
+  pool, and the block's own allocation takes them from there. The dependency, plainly: amdgpu
+  and TTM return a freed buffer object's pages to their pool, which is the kernel's behaviour and
+  no Vulkan guarantee. Where the kernel hands the block other pages (the pool emptied by its
+  shrinker, or the pages taken by another allocation meanwhile), the block's allocation fills
+  them and holds the submissions, a plain making as without the fill; the block is the same
+  plain block either way. `WorkCounts::plain_block_fills_saved` counts the fills whose block was
+  then allocated in under 1 ms (`FILL_SAVED_BELOW`), `plain_block_fills_missed` the others, so
+  a host's runs show whether its kernel recycled the pages. On a Radeon 780M (RADV PHOENIX, Mesa
+  26.2.6, Linux 7.3.1), the kernel's page pools emptied before each run, the arms of the row
+  above, two runs each, without the fill and with it (turnarounds of 8 ms or more a phase, of
+  17 ms or more, the slowest, and the makings' `vkAllocateMemory` in all; the makings the same,
+  13 to 15 a phase, 3 to 5 in the scrolled arm's quiet phase):
+
+  | Arm, phase | Without: 8 ms, 17 ms, slowest, held | With: 8 ms, 17 ms, slowest, held |
+  |---|---|---|
+  | 1024x1024, quiet | 13 and 13, 0, 10.9 ms, 126 to 132 ms | 0 and 0, 0, 1.5 ms, 1.4 ms |
+  | 1024x1024, fragmented | 13 and 12, 1 and 1, 27.5 ms, 135 to 139 ms | 1 and 0, 0, 8.8 ms, 2.6 to 11.1 ms |
+  | Bursts, quiet | 12 and 12, 0, 11.2 ms, 125 to 127 ms | 0 and 0, 0, 1.0 ms, 1.7 to 1.8 ms |
+  | Bursts, fragmented | 13 and 13, 1 and 0, 17.6 ms, 133 to 135 ms | 1 and 0, 0, 13.8 ms, 2.2 to 16.9 ms |
+  | Mixed sizes, quiet | 13 and 13, 0, 11.6 ms, 136 to 141 ms | 0 and 0, 0, 1.6 ms, 1.5 to 1.6 ms |
+  | Mixed sizes, fragmented | 13 and 14, 3 and 5, 32.1 ms, 184 to 201 ms | 1 and 2, 0, 9.8 ms, 11.8 to 20.9 ms |
+  | Scrolled, quiet | 2 and 3, 0, 11.6 ms, 36 to 38 ms | 0 and 0, 0, 1.3 ms, 0.7 ms |
+
+  The turnarounds of 8 ms or more left with the fill are its misses: 1 or 2 makings of a
+  fragmented phase's 13 or 14 whose block filled its own pages (8.6 to 14.0 ms). The cost is the
+  making thread's (the ready thread, off every submission's way): the exportable allocation (10
+  to 13 ms for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the pool) besides the
+  block's own, so that a block's making took 45 to 74% longer on the quiet host (about 13.7 ms
+  against 9.3 ms) and 33 to 96% longer on the fragmented one. The plain making it replaces ran
+  90 to 96% on a CPU; how much of the fill's time is on a CPU was not measured apart. Every other
+  device makes its plain blocks with no fill: lavapipe, ANV on an Iris Xe and NVIDIA's driver
+  have no such fact. No switch: no answer of Metal's changes. Not announced.
+
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
   `event.rs`), and an event's release destroys it where it goes. On the RTX 5080 Laptop GPU both
