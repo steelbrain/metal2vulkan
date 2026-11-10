@@ -305,10 +305,10 @@ fn a_state_s_first_draw_takes_the_pipeline_made_at_its_creation() {
 /// pipeline's key carries). Each draw binds an `RGBA16Float` texture, which takes the pipeline
 /// made at creation (`a_draw_binding_a_texture_takes_the_pipeline_made_at_creation`); every kind
 /// the first draw announces is one the stage specializes ([`specialized_kinds`]), or, on a device
-/// without unified memory, `SharedInSystemMemory` for the draw's `Shared` buffer. On a device that
-/// samples through Metal's own texture unit the creation makes the predicted key's general form,
-/// and hands the predicted key itself to the pool right after (`pipeline/render/residual.rs`):
-/// both counted once the pool settles, and neither announcing anything before a draw.
+/// without unified memory, `SharedInSystemMemory` for the draw's `Shared` buffer. The creation
+/// makes that one pipeline on every device, counted once the pool settles: where the device
+/// samples through Metal's own texture unit too, the predicted key's plain `half` arm is no
+/// constant of its general form (`pipeline/render/residual.rs`).
 #[test]
 fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
     let cache = ScratchCache::new().unwrap();
@@ -326,12 +326,10 @@ fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
         let before = device.work_counts();
         let state = state(&device, "sampled_fragment");
         pipelines_settled(&device);
-        let metal = metal_sampler(&device);
         assert_eq!(
             made_since(&device, &before),
-            (1 + u64::from(metal), 0),
-            "the predicted key's pipeline, made at creation, and its general form where the \
-             device samples through Metal's texture unit ({metal})"
+            (1, 0),
+            "the predicted key's pipeline, made at creation, alone"
         );
         let at_creation = counts(&messages.take_notices());
         let created = device.work_counts();
@@ -382,22 +380,20 @@ fn a_pipeline_made_at_creation_announces_at_its_first_draw() {
 /// draw binds. A draw of `sampled_fragment` binding nothing takes the pipeline made at creation,
 /// and so do draws binding an `RGBA8Unorm` or an `RGBA16Float` texture, each sampling its texels:
 /// the class of the format the slot binds reaches the function as a push field, not as the
-/// pipeline's specialization. On a device that samples through Metal's own texture unit the
-/// creation makes the predicted key's general form too (`pipeline/render/residual.rs`), and the
-/// predicted key, made on the pool right after, is the one these draws take once the pool settles:
-/// each class is plain and measured, as the unbound slot the prediction binds.
+/// pipeline's specialization. On a device that samples through Metal's own texture unit too, the
+/// creation makes the predicted key alone, its texture slot's plain `half` arm
+/// (`pipeline/render/residual.rs`), which these draws take: each class is plain and measured, as
+/// the unbound slot the prediction binds. No draw takes a general form.
 #[test]
 fn a_draw_binding_a_texture_takes_the_pipeline_made_at_creation() {
     on_device_with(at_plan, |device, _| {
-        let metal = metal_sampler(device);
         let before = device.work_counts();
         let state = state(device, "sampled_fragment");
         pipelines_settled(device);
         assert_eq!(
             made_since(device, &before),
-            (1 + u64::from(metal), 0),
-            "made at creation, with the general form where the device samples through Metal's \
-             texture unit ({metal})"
+            (1, 0),
+            "made at creation, the predicted key alone"
         );
         let created = device.work_counts();
         draw(device, &state, PrimitiveType::Triangle);
@@ -460,9 +456,10 @@ fn bc4_filled(device: &Device, side: u64, block: [u8; 8]) -> Texture {
 /// draws at once with the pipeline its state's creation made. On a device that samples through
 /// Metal's own texture unit the class keys apart from the prediction (`SpecKey::UnmeasuredTexels`
 /// 1, where the unbound slot the prediction binds has 0), so the draw takes its key's general form,
-/// the one the creation made (`pipeline/render/residual.rs`), and hands its own key's making to
-/// the pool, which nothing waits for; once made, a second draw takes it. Elsewhere the class is a
-/// push field alone, and both draws take the predicted key. Each draws the blocks' red, 1.
+/// which is the predicted key the creation made (`pipeline/render/residual.rs`), and hands its own
+/// key's making to the pool, which nothing waits for; once made, a second draw takes it. Elsewhere
+/// the class is a push field alone, and both draws take the predicted key. Each draws the blocks'
+/// red, 1.
 #[test]
 fn a_draw_of_an_unmeasured_class_takes_the_general_form_its_creation_made() {
     on_device_with(at_plan, |device, _| {
@@ -472,9 +469,8 @@ fn a_draw_of_an_unmeasured_class_takes_the_general_form_its_creation_made() {
         let created = pipelines_settled(device);
         assert_eq!(
             made_since(device, &before),
-            (1 + u64::from(metal), 0),
-            "made at creation, with the general form where the device samples through Metal's \
-             texture unit ({metal})"
+            (1, 0),
+            "made at creation, the predicted key alone"
         );
         // Both endpoints 255, every index 0: red 1, and Metal's green 0, blue 0 and alpha 1.
         let red = bc4_filled(device, SIDE, [0xff, 0xff, 0, 0, 0, 0, 0, 0]);
@@ -492,9 +488,9 @@ fn a_draw_of_an_unmeasured_class_takes_the_general_form_its_creation_made() {
                 drawn.creation_pipelines_drawn - created.creation_pipelines_drawn,
             ),
             (metal_count, metal_count, 1),
-            "the draw took the general form, made at creation, and began its own key's making \
-             where the device samples through Metal's texture unit ({metal}); elsewhere the \
-             predicted key"
+            "the draw took its general form, the predicted key made at creation, and began its \
+             own key's making where the device samples through Metal's texture unit ({metal}); \
+             elsewhere the predicted key"
         );
         assert_eq!(
             made_since(device, &created),

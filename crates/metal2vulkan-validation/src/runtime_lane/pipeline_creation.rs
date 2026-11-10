@@ -861,8 +861,8 @@ fn quadrants(
 /// pipelines made already: one state drawn binding each of four formats into a quadrant each, then
 /// as a line, under a `Counting` visibility query. The format draws take the `VkPipeline` the
 /// state's creation made, on every device: each format's class reaches the function as a push
-/// field, and none keys apart (where the device samples through Metal's own texture unit, the
-/// creation's predicted key, or its general form while the pool still makes the predicted key,
+/// field, and none keys apart (where the device samples through Metal's own texture unit, each is
+/// a plain class whose `half` conversion is measured, which takes the creation's predicted key,
 /// `pipeline/render/residual.rs`). The line, whose key no creation predicts, hands its making to the
 /// pool; none is made at a draw; the command buffer completes, and a command buffer committed
 /// after it on its queue completes after it. The same draws again,

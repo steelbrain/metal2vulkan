@@ -1,5 +1,6 @@
 //! A key's general form (`pipeline/render/residual.rs`): each constant with an arm that serves
-//! every binding at that arm, the others as the key has them.
+//! every binding at that arm, the others as the key has them. A texture slot's plain `half` arm
+//! keeps its value: it serves the plain classes alone, and a creation predicts it.
 
 use crate::pipeline::general_form;
 use metal2vulkan::cache::SpecializationKey;
@@ -52,20 +53,25 @@ fn key(values: [u32; 5]) -> SpecializationKey {
 #[test]
 fn the_general_form_zeroes_the_constants_whose_zero_serves_every_binding() {
     let general = general_form(constants().into_iter(), &key([1, 1, 1, 5, 3]));
-    // The sampler's word and the bicubic class keep their values: no arm of theirs serves every
-    // binding.
-    assert_eq!(general, Some(key([0, 0, 0, 5, 3])));
-    // A plain-class or unbound texture's key and a measured class's alike.
-    let general = general_form(constants().into_iter(), &key([0, 1, 0, 5, 3]));
+    // The plain arm, the sampler's word and the bicubic class keep their values: no arm of theirs
+    // serves every binding the key's does not.
+    assert_eq!(general, Some(key([0, 1, 0, 5, 3])));
+    // An unmeasured plain class's key: its general form is the key of an unbound or measured
+    // plain class, the one a creation predicts.
+    let general = general_form(constants().into_iter(), &key([0, 1, 1, 5, 3]));
+    assert_eq!(general, Some(key([0, 1, 0, 5, 3])));
+    // A class the plain arm does not serve keeps the routine's arm.
+    let general = general_form(constants().into_iter(), &key([1, 0, 1, 5, 3]));
     assert_eq!(general, Some(key([0, 0, 0, 5, 3])));
 }
 
 #[test]
 fn a_key_in_its_general_form_has_none_of_its_own() {
-    assert_eq!(
-        general_form(constants().into_iter(), &key([0, 0, 0, 5, 3])),
-        None
-    );
+    // An unbound or measured plain class's key, which a creation predicts, and one of the
+    // routine's arm.
+    for values in [[0, 1, 0, 5, 3], [0, 0, 0, 5, 3]] {
+        assert_eq!(general_form(constants().into_iter(), &key(values)), None);
+    }
     // A constant the key's stages do not declare is not the general form's to set.
     assert_eq!(
         general_form(std::iter::empty(), &key([1, 1, 1, 5, 3])),

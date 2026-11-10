@@ -4697,8 +4697,8 @@ pub struct WorkCounts {
     /// Draws and dispatches whose key's `VkPipeline` was not made, which were recorded at once
     /// with the made one of its general form, each of the key's uniform-view slots read at its
     /// residual (which reads the same bytes at every bind offset) and, for a draw on a device that
-    /// samples through Metal's own texture unit, each texture slot converted to `half` by its
-    /// class's routine (exact for every class): none waited for its key's making.
+    /// samples through Metal's own texture unit, each texture slot's unmeasured `half` class
+    /// unnamed (which no instruction reads): none waited for its key's making.
     pub residual_form_draws: u64,
     /// Of the makings draws and dispatches began, those whose command took its key's general
     /// form meanwhile: makings on the device's pool that nothing waits for.

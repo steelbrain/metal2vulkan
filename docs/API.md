@@ -4310,29 +4310,28 @@ each item named states the rule in full.
   form the pipeline takes, and the residual is 0 wherever the range starts at the bind offset. A
   slot bound to nothing is read at its residual too (0), so a draw that leaves such slots unbound
   takes the creation's pipeline itself. On MoltenVK a texture slot a function converts to `half`
-  converts its texels by the class routine (`PlainHalfTexels` 0, the bound class read from push
-  data), which rounds a plain class's `float` texel to nearest even as the plain arm does (the arm
-  Metal's compiler can fold into the image instruction, which a slot bound to nothing or to a plain
-  class takes: every class but a YCbCr field on the grid 8192), and its `UnmeasuredTexels`, which
-  no instruction reads, is at 0 (a class whose `half` conversion is not measured, BC4 to BC7 and
-  the linear ASTC formats among them, takes 1). Where the predicted key is not its own general form
-  (a slot of the plain arm), the creation hands it to the pool right after, behind the makings
-  something waits for, and a draw binding a plain, measured class takes it once made. A draw whose
-  own pipeline (which reads such a buffer slot at the bind offset alone, converts by the plain arm,
-  or names an unmeasured class) is not made, and whose key's general form's is, draws with that one
-  at once; its own is made on the pool behind the makings something waits for, and later draws
-  take it. So a draw binding a texture of an unmeasured class waits for no compile of its own.
-  Only GPU time moves for the draws before it lands (`WorkCounts::residual_form_draws`,
-  `residual_form_makings`): on ANV the residual form's reads are loads where the other form's are
-  pushed constants; on MoltenVK the class routine converts each `half` read in place of the image
-  instruction's own conversion. The creation of a state
-  whose predicted key is not its general form makes two pipelines, the second on the pool, nothing
-  waiting for it. On MoltenVK every key reads its buffer slots at their residual (the two forms
-  measured alike there), so a draw's bind offsets choose no pipeline there. A constant with no arm
-  that serves every binding stays a pipeline per value, made at the first draw of it: a sampler's
-  state (`SamplerState`, each sampler word a sampling emulation of its own), whether a pixel
-  sampler is a nearest one (`NearestPixelSampler`, whose sample reads its texel's centre) and how
-  the bicubic filter treats the bound format's texels (`BicubicTexels`).
+  has its `UnmeasuredTexels`, which no instruction reads, at 0 (a class whose `half` conversion is
+  not measured, BC4 to BC7 and the linear ASTC formats among them, takes 1), and its
+  `PlainHalfTexels` at 1, as a slot bound to nothing takes: the plain arm, which Metal's compiler
+  can fold into the image instruction and which every plain class takes (every class but a YCbCr
+  field on the grid 8192, which takes the class routine, `PlainHalfTexels` 0, and makes its own
+  pipeline at its draw, as any key the creation did not predict). Where the predicted key is not
+  its own general form (a buffer slot read at the bind offset, on a device that reads views
+  there), the creation hands it to the pool right after, behind the makings something waits for.
+  A draw whose own pipeline (which reads such a buffer slot at the bind offset alone, or names an
+  unmeasured class) is not made, and whose key's general form's is, draws with that one at once;
+  its own is made on the pool behind the makings something waits for, and later draws take it.
+  So a draw binding a texture of an unmeasured class waits for no compile of its own, and runs
+  the instructions its own key runs. Only GPU time moves for the draws before their own lands
+  (`WorkCounts::residual_form_draws`, `residual_form_makings`): on ANV the residual form's reads
+  are loads where the other form's are pushed constants. On MoltenVK every key reads its buffer
+  slots at their residual (the two forms measured alike there), so a draw's bind offsets choose no
+  pipeline there, and a creation makes one pipeline. A constant with no arm that serves every
+  binding stays a pipeline per value, made at the first draw of it: the `half` conversion's arm
+  (`PlainHalfTexels`, above), a sampler's state (`SamplerState`, each sampler word a sampling
+  emulation of its own), whether a pixel sampler is a nearest one (`NearestPixelSampler`, whose
+  sample reads its texel's centre) and how the bicubic filter treats the bound format's texels
+  (`BicubicTexels`).
 - **A dispatch's `VkPipeline` is made while the dispatch goes on**, the same way: one pipeline per
   threadgroup size and edge region, made on the pool. A compute state whose descriptor states
   `requiredThreadsPerThreadgroup` -- the threadgroup every dispatch of the state must have -- makes

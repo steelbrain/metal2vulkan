@@ -1,9 +1,8 @@
 //! A draw's key's general form: a draw whose own `VkPipeline` is not made draws at once with its
 //! general form's where that one is made, and its own is made on the device's pool meanwhile,
 //! nothing waiting for it. The general form is the key with each constant that has an arm valid
-//! for every binding at that arm ([`general_form`]); its first such constant was the uniform
-//! views' (the residual form, below), and the texel routes' are the others (the end of these
-//! docs).
+//! for every binding at that arm, at that arm ([`general_form`]): the uniform views' (the residual
+//! form, below) and the unmeasured texel class's (the end of these docs).
 //!
 //! A buffer slot a function reads through a uniform view declares the boolean specialization
 //! `SpecKey::RangeAtBindOffset`. A draw's plan sets it to 1 where the slot's descriptor range starts
@@ -56,40 +55,39 @@
 //!   Such a making may outlast its draw's command buffer, which does not wait for it
 //!   (`WorkCounts::pipeline_pool_busy` says when the pool holds none).
 //!
-//! **The texel routes' general arms.** On a device that samples through Metal's own texture unit
-//! (MoltenVK), a texture slot a function converts to `half` declares two booleans more, each with
-//! an arm that serves every bound format exactly:
+//! **The texel routes.** On a device that samples through Metal's own texture unit (MoltenVK), a
+//! texture slot a function converts to `half` declares two booleans more:
 //!
-//! - `SpecKey::PlainHalfTexels` at 0 converts each texel by the class routine, the bound class
-//!   read from push data, which for a plain class (`TexelFormat::plain_on_metal_sampler`: every
-//!   class but a YCbCr field on the grid `8192`) rounds the `float` texel to nearest even as the
-//!   plain arm (1) does; the plain arm lets Metal's compiler fold the conversion into the image
-//!   instruction (`lower::texture::half`). A slot bound to nothing, or to a plain class, takes 1,
-//!   and a draw binding a YCbCr field on the grid `8192` takes 0.
 //! - `SpecKey::UnmeasuredTexels` names the bound class to the slot's precision note alone: no
 //!   instruction reads it, so both values run alike, and 0 is its general arm. A slot bound to
 //!   nothing takes 0, and a draw binding a class whose `half` conversion is not measured
 //!   (`TexelFormat::unmeasured_on_metal_sampler`: BC4 to BC7 and the linear ASTC formats among
-//!   them) 1.
+//!   them) 1. A state's creation predicts no texture bound, so such a draw keys apart from the
+//!   predicted key, and its general form is the predicted key itself: the draw takes the pipeline
+//!   the creation made at once while its own is made.
+//! - `SpecKey::PlainHalfTexels` keeps the value the draw's own binding gives it, and is no
+//!   constant of the general form. At 0 each texel converts by the class routine, the bound class
+//!   read from push data, which serves every class; at 1 by the plain arm, which lets Metal's
+//!   compiler fold the conversion into the image instruction (`lower::texture::half`) and serves
+//!   every plain class (`TexelFormat::plain_on_metal_sampler`: every class but a YCbCr field on
+//!   the grid `8192`), rounding the `float` texel to nearest even as the routine does for those.
+//!   A slot bound to nothing, or to a plain class, takes 1, and a draw binding a YCbCr field on
+//!   the grid `8192` takes 0. A creation predicts the plain arm, which every draw of a plain class
+//!   takes, and makes that one pipeline: were 0 the general form, it would make a pipeline of the
+//!   routine's arm too, which a draw of a plain class takes only while its own is still made. A
+//!   draw binding a YCbCr field on the grid `8192` makes its own key, as a draw of any key its
+//!   creation did not predict; on a device whose memory is the host's such a slot reads its planes
+//!   in place, in a variant of its own (`VariantKey::ycbcr_in_place`), which no creation predicts
+//!   either.
 //!
-//! A state's creation predicts no texture bound, so a draw of the predicted variant binding a
-//! class of either kind keys apart from the predicted key: with that key alone made, such a draw
-//! would make a pipeline of its own at the draw, a compile its command buffer waits for (and past
-//! its bound drops the draw, `PipelineWaitPolicy::Bounded`). So a state's creation makes its
-//! predicted key's general form, which every draw of that variant can take, and hands its
-//! predicted key itself, where it differs (its texture slots' `PlainHalfTexels` at 1, as unbound
-//! slots take), to the pool right after, at the rank nothing waits for: a draw binding a plain,
-//! measured class takes it once made, and every other draw of the variant takes the general form
-//! at once while its own is made (`predicted.rs`). The cost: such a creation makes two pipelines,
-//! the second on the pool, nothing waiting for it; and GPU time, until a draw's own key lands, of
-//! the class routine at each `half` conversion of an image instruction's texel in place of the
-//! device's own conversion.
+//! A draw that takes its key's general form runs the instructions its own key runs but for the
+//! residual's reads in place of the bind offset's: an unmeasured class's draw runs its own key's.
 //!
 //! Constants with no arm that serves every binding stay as before, each value a pipeline of its
-//! own: `SpecKey::SamplerState` (each sampler word a sampling emulation of its own),
-//! `SpecKey::NearestPixelSampler` (a nearest pixel sampler's sample at its texel's centre, which
-//! the other arm's quotient does not read exactly) and `SpecKey::BicubicTexels` (how Metal's bicubic
-//! filter treats each format's texels).
+//! own: `SpecKey::PlainHalfTexels` (above), `SpecKey::SamplerState` (each sampler word a sampling
+//! emulation of its own), `SpecKey::NearestPixelSampler` (a nearest pixel sampler's sample at its
+//! texel's centre, which the other arm's quotient does not read exactly) and
+//! `SpecKey::BicubicTexels` (how Metal's bicubic filter treats each format's texels).
 //!
 //! [`general_form`]: RenderVariant::general_form
 //! [`residual_form`]: RenderVariant::residual_form
@@ -126,9 +124,8 @@ impl RenderVariant {
     }
 
     /// `specialization` with each of the variant's constants that has an arm serving every binding
-    /// at that arm, its general form (the module docs): `SpecKey::RangeAtBindOffset`,
-    /// `SpecKey::PlainHalfTexels` and `SpecKey::UnmeasuredTexels` at 0; `None` where every one of
-    /// them is there already.
+    /// at that arm, its general form (the module docs): `SpecKey::RangeAtBindOffset` and
+    /// `SpecKey::UnmeasuredTexels` at 0; `None` where every one of them is there already.
     pub(crate) fn general_form(
         &self,
         specialization: &SpecializationKey,
@@ -213,10 +210,10 @@ pub(crate) fn residual_form<'a>(
 
 /// `specialization` with each constant of `constants` (a pipeline's stages', each its ID and its
 /// meaning) that has an arm serving every binding at that arm (the module docs):
-/// `SpecKey::RangeAtBindOffset` (the residual form's), `SpecKey::PlainHalfTexels` and
-/// `SpecKey::UnmeasuredTexels`, each at 0; `None` where every one of them is 0 there already. A
-/// constant `specialization` gives no entry takes the module's default: 0 for the first and last,
-/// and a plan gives every `PlainHalfTexels` its value.
+/// `SpecKey::RangeAtBindOffset` (the residual form's) and `SpecKey::UnmeasuredTexels`, each at 0;
+/// `None` where every one of them is 0 there already. A constant `specialization` gives no entry
+/// takes the module's default, 0. `SpecKey::PlainHalfTexels` keeps its value: its plain arm
+/// serves only the plain classes.
 pub(crate) fn general_form(
     constants: impl Iterator<Item = (u32, SpecKey)> + Clone,
     specialization: &SpecializationKey,
@@ -226,9 +223,7 @@ pub(crate) fn general_form(
             at == id
                 && matches!(
                     key,
-                    SpecKey::RangeAtBindOffset(_)
-                        | SpecKey::PlainHalfTexels(_)
-                        | SpecKey::UnmeasuredTexels(_)
+                    SpecKey::RangeAtBindOffset(_) | SpecKey::UnmeasuredTexels(_)
                 )
         })
     };

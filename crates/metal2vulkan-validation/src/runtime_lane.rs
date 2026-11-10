@@ -57,8 +57,9 @@ const WAIT: Duration = Duration::from_secs(60);
 
 /// `device`'s work counts once its pipeline pool holds no piece (`WorkCounts::pipeline_pool_busy`),
 /// waiting at most [`WAIT`]: a draw that took its key's general form does not wait for its own
-/// key's making, which may outlast the draw's command buffer, and a state's creation hands its
-/// predicted key's making to the pool after its general form's, not waiting for it.
+/// key's making, which may outlast the draw's command buffer, and under
+/// `PipelineWaitPolicy::Bounded` a state's creation hands its predicted key's making to the pool
+/// and returns.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 fn pipelines_settled(device: &Device) -> metal2vulkan_runtime::WorkCounts {
     let until = std::time::Instant::now() + WAIT;

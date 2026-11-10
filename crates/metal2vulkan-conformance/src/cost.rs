@@ -2652,13 +2652,13 @@ mod the_creation_prediction {
     /// multisampled blend into an extended-range color: a creation predicts those
     /// (`PassShape::keyed`, the point guard, the shadows), and their draws take its pipeline.
     ///
-    /// **Two of the draws class's 31 are an open bug, not coverage.**
-    /// `render-then-sample-magnified-nearest` and `-linear` each make one pipeline no draw takes,
-    /// 3 made and 2 taken: a state whose fragment function converts a texture's texels to `half`
-    /// makes its predicted key's general form at its creation and hands the predicted key itself
-    /// to the pool, and their draws take the predicted key, so the general form is made for
-    /// nothing. Not making the general form where the prediction is plain is the fix, and lowers
-    /// this class's ceiling by 2.
+    /// **Two of the draws class's 31 are the recordings', no longer the runtime's.**
+    /// `render-then-sample-magnified-nearest` and `-linear` each record 3 made and 2 taken: a state
+    /// whose fragment function converts a texture's texels to `half` made its predicted key's
+    /// general form at its creation, the class routine's arm, beside the predicted key its draws
+    /// take. A general form keeps the predicted plain arm (`render/residual.rs`), so such a
+    /// creation makes the one pipeline its draws take: the rows' next measurement reads 2 and 2,
+    /// and lowers this class's ceiling by 2.
     ///
     /// # Why the total cannot hold this
     ///

@@ -16,13 +16,14 @@
 //!   unbound one is. A draw that leaves those slots unbound takes this key itself; the draws that
 //!   bind them do so at offsets the creation cannot know, and the residual form reads the same
 //!   bytes at every one: a draw whose own key is not made takes it at once while its own is made.
-//!   On a device that reads every view at its residual (MoltenVK) it is their own key. The key
-//!   made is the general form of that (`render/residual.rs`): each texture slot's
-//!   `SpecKey::PlainHalfTexels` at 0 too, the class routine that converts every bound class, and
-//!   its `SpecKey::UnmeasuredTexels` at 0, so a draw of any texture takes it at once while its own
-//!   key is made; the key with those slots' `PlainHalfTexels` at 1, as unbound ones take, which a
-//!   draw binding a plain, measured class takes, is handed to the pool right after, at the rank
-//!   nothing waits for, and nothing waits for it.
+//!   On a device that reads every view at its residual (MoltenVK) it is their own key.
+//!   The key made is the general form of that (`render/residual.rs`), each texture slot's
+//!   `SpecKey::UnmeasuredTexels` at 0 too, as an unbound slot's is, so a draw binding a class
+//!   whose `half` conversion is not measured takes it at once while its own key is made; its
+//!   `SpecKey::PlainHalfTexels` at 1, as an unbound slot's is, the plain arm every draw of a plain
+//!   class takes. Where the key differs from its general form (a uniform-view slot at its bind
+//!   offset, on a device that reads views there), the key itself is handed to the pool right
+//!   after, at the rank nothing waits for, and nothing waits for it.
 //! - **The tests**: for a fragment function that stores a color through the interlocked storage
 //!   form before its depth and stencil tests (`RuntimeFact::TestedStorageWrites`) in a pipeline
 //!   with a depth or stencil attachment, tests that drop fragments but write neither attachment and
@@ -77,9 +78,9 @@
 //! separate depth and stencil formats, a fragment function that writes depth) makes nothing here.
 //! The key is the draw's own key type: a draw that takes the same key takes the pipeline made, and
 //! so does a draw whose key differs only in constants the general form sets (a uniform-view slot
-//! read at the bind offset alone, a texture slot's plain `half` arm or its unmeasured class), until
-//! its own key's pipeline, made on the pool meanwhile, is made (`render/residual.rs`); any other
-//! draw makes its own, as before. Nothing an answer depends on changes, only when the
+//! read at the bind offset alone, a texture slot's unmeasured class), until its own key's
+//! pipeline, made on the pool meanwhile, is made (`render/residual.rs`); any other draw makes its
+//! own, as before. Nothing an answer depends on changes, only when the
 //! driver is called. A failed making is not kept and refuses nothing: the draw that needs the key
 //! meets it as before.
 //!
@@ -128,10 +129,10 @@ use std::sync::Arc;
 
 impl GraphicsState {
     /// Make the `VkPipeline` of the key the state's first draw is predicted to take (the module
-    /// docs), now, in its general form, which a draw of every binding can take
-    /// (`render/residual.rs`); where the key differs from that form, hand the key itself to the
-    /// device's pool right after, at the rank nothing waits for, for the draws that bind what the
-    /// prediction names. A key whose pass is refused is left to its draw.
+    /// docs), now, in its general form, which a draw whose key differs only in that form's
+    /// constants can take (`render/residual.rs`); where the key differs from that form, hand the
+    /// key itself to the device's pool right after, at the rank nothing waits for, for the draws
+    /// that bind what the prediction names. A key whose pass is refused is left to its draw.
     pub(crate) fn make_at_creation(&self) {
         let Some((variant, key)) = self.predicted() else {
             return;
