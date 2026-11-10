@@ -77,16 +77,20 @@
 //!   through the texture's swizzle (`metal::sampler::border_texels`), which a slot's
 //!   `BorderTexels` specialization states; every other mode (`clamp_to_edge`, `repeat`,
 //!   `mirrored_repeat`, `mirror_clamp_to_edge`) clamps the index into the level.
-//! - A texture buffer's index outside it reads its first texel under every edge mode, but a runtime
-//!   `[[sampler(n)]]`'s `clamp_to_edge`, which clamps it (an argument buffer's sampler's reads the
-//!   first texel too).
+//! - A texture buffer's index outside it is addressed as the first texel of a row past its one row:
+//!   it reads the border texel where the `t` axis's mode is a border mode, else its first texel,
+//!   whatever the `s` and `r` axes' modes; but a runtime `[[sampler(n)]]` whose `s` mode is
+//!   `clamp_to_edge` clamps the index (an argument buffer's sampler's reads as a constexpr one's).
+//!   The axes were told apart through runtime samplers (the conformance family `read_through`),
+//!   constexpr samplers with every axis alike.
 //! - The filters, coordinates, comparison, anisotropy, reduction and LOD clamp change nothing.
 //!
 //! So the level, plane coordinate and layer are addressed before the access, and only a sample
 //! index can be out of bounds as a plain read's, contained as above. A heap element's handle
 //! states whether its format has alpha, which gives the transparent black border texel (the
-//! out-of-bounds texel) alone: a heap element read through a sampler that may read another border
-//! color is not implemented, nor is a `ulong` texel's border. A cube's read through a sampler
+//! out-of-bounds texel) alone, and not through the element's swizzle (`docs/FAST-PATHS.md`'s
+//! known gaps): a heap element read through a sampler that may read another border color is not
+//! implemented, nor is a `ulong` texel's border. A cube's read through a sampler
 //! (unclamped on the M3), a sparse one's (its residency unmeasured) and a `read_write` texture's
 //! at a computed level (Metal 4.1 has no such overload) are refused.
 //!

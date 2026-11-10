@@ -250,6 +250,146 @@
                           "hex": "0e71c971971bc2309e85b1fb19704f3f9b958f316bb2478cb2d6fde8c8b47420"
                         }
                       }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/s-border",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b87bf05d8ea623d3d2a314fc4e2b8b2ff1c0a2868db2cdbd86a069d722ad4fb8"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/t-border",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6fad66ec1d78a3b026046f9ba49015aa15608ce5c7f042952f76bf490dcabff2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/r-border",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ac49f22164bf823c713f3b85868c2156d28d5f7a02858b0066863f497a6d1675"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/st-border",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ade91dd49fc547a59cb011297953b3a2ade2435cc527dfb81970b63238b9fc9f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/sr-border",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cd959d5e58f107bfa0ae1dbba779ec0ce8abe68249b0791dbd04347cb412f726"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/tr-border",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b2c5b12c47a155d612838363bf618c62c04d00f272997e68ab0d08c5bc01a4b4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/s-zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "262b1d9976b4a75dc287486e2c851cf4012354c1bc697af18eac01c95e45b013"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/t-zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "417b83032de2bdd8600bcc804cc5cf2bec9748de51ad9bf5d064351f91507f2a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/s-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "726859cf2b14d19e5ad7b1bb7008c72d0d767a11b6d224383b2502ea622418ca"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/t-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b0d9d199e2b57ea8cdc60e4c662183d2c2c1cbc0270eae1001cc0a2b89207c1d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/r-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "655b08c6cf9f727963c87121d7e6d9687b71da7797b52910b570d2a305aa9372"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/s-mirrored",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "56a16cbb5329975c1ff4e43e1f1fac24c592d3568c0751bc539aeaebcdb6bc0f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/s-border-t-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c19aec7543ded09cb4f53441cd59f2f5d85e66fcd5def6adb484fdec2d6f31ec"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg_buffer/s-border-t-mirrored",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8ad8a5a5ac6f873cca89567ea51ad11961098797dbe2e0258483fb4d70cf1faa"
+                        }
+                      }
                     }
                   ]
                 },
@@ -1089,6 +1229,846 @@
                   }
                 },
                 {
+                  "name": "rt_arg_buffer/s-border/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-border/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-border/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-border/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-border/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-border/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-border/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-border/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-border/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-border/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-border/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/st-border/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/st-border/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/st-border/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/st-border/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/st-border/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/sr-border/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/sr-border/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/sr-border/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/sr-border/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/sr-border/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/tr-border/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/tr-border/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/tr-border/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/tr-border/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/tr-border/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-zero/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-zero/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-zero/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-zero/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-zero/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-zero/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-zero/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-zero/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-zero/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-zero/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/t-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/r-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-mirrored/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-mirrored/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-mirrored/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-mirrored/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-mirrored/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-mirrored/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-mirrored/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-mirrored/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-mirrored/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg_buffer/s-border-t-mirrored/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
                   "name": "words",
                   "observed": {
                     "value": "absent"
@@ -1411,6 +2391,370 @@
                       "observed": {
                         "value": {
                           "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/s-border",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQAAIA/AICAQwBAAEQAQEBEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/t-border",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAAAAQQAAhEMAAAJEAABCRAAAAEEAAIRDAAACRAAAQkQAAIA/AICAQwBAAEQAQEBEAAAAQQAAhEMAAAJEAABCRAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/r-border",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAAAAQQAAhEMAAAJEAABCRAAAAEEAAIRDAAACRAAAQkQAAIA/AICAQwBAAEQAQEBEAAAAQQAAhEMAAAJEAABCRAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/st-border",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/sr-border",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQAAIA/AICAQwBAAEQAQEBEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/tr-border",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAAAAQQAAhEMAAAJEAABCRAAAAEEAAIRDAAACRAAAQkQAAIA/AICAQwBAAEQAQEBEAAAAQQAAhEMAAAJEAABCRAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/s-zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQAAIA/AICAQwBAAEQAQEBEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/t-zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAAAAQQAAhEMAAAJEAABCRAAAAEEAAIRDAAACRAAAQkQAAIA/AICAQwBAAEQAQEBEAAAAQQAAhEMAAAJEAABCRAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/s-repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQAAIA/AICAQwBAAEQAQEBEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/t-repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAAAAQQAAhEMAAAJEAABCRAAAAEEAAIRDAAACRAAAQkQAAIA/AICAQwBAAEQAQEBEAAAAQQAAhEMAAAJEAABCRAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/r-repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAAAAQQAAhEMAAAJEAABCRAAAAEEAAIRDAAACRAAAQkQAAIA/AICAQwBAAEQAQEBEAAAAQQAAhEMAAAJEAABCRAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/s-mirrored",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQAAIA/AICAQwBAAEQAQEBEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/s-border-t-repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQAAIA/AICAQwBAAEQAQEBEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQ="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 128
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 8,
+                            "image_pitch": 128,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg_buffer/s-border-t-mirrored",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPwCAgEMAQABEAEBARAAAgEAAAIJDAAABRAAAQUQAAABBAACEQwAAAkQAAEJEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQAAIA/AICAQwBAAEQAQEBEAACAPwCAgEMAQABEAEBARAAAgD8AgIBDAEAARABAQEQ="
                         },
                         "shape": {
                           "bytes": {

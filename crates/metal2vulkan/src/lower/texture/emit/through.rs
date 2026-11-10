@@ -49,8 +49,9 @@ pub(super) struct State {
     border: [Flag; 3],
     /// The read reads at its level, not the base level: the sampler has a mip filter.
     mip: Flag,
-    /// A texture buffer's index outside it reads the nearest texel, not the first: a runtime
-    /// `[[sampler(n)]]` whose `s` address mode is `clamp_to_edge` (module docs).
+    /// A texture buffer's index outside it reads the nearest texel, neither the first nor the
+    /// border: a runtime `[[sampler(n)]]` whose `s` address mode is `clamp_to_edge` (module
+    /// docs).
     buffer_clamps: Flag,
     /// The border color, `MTLSamplerBorderColor`'s value: a constant, or the word's field.
     color: Result<u32, SValue>,
@@ -144,8 +145,9 @@ pub(super) struct Addressed {
 /// one) through a sampler of state `s`. Its level, where the image's, is its own under a mip
 /// filter, else the base level. Its signed plane coordinate plus its offset is tested lane-wise
 /// against the image's size at that level and clamped into `[0, size - 1]`; a lane outside on a
-/// border axis reads the border texel, and a texture buffer's index outside reads its first texel
-/// unless the sampler clamps it ([`State::buffer_clamps`]). The layer is composed unclamped
+/// border axis reads the border texel, and a texture buffer's index outside reads its first texel,
+/// or the border texel where the `t` axis is a border axis, unless the sampler clamps it
+/// ([`State::buffer_clamps`]). The layer is composed unclamped
 /// ([`compose`]), and tested against the image's layers.
 pub(super) fn address(
     cx: &mut EmitCx<'_>,
@@ -200,7 +202,10 @@ pub(super) fn address(
     let zero = u32s(fb, lanes, 0)?;
     let clamped = fb.glsl(GlslOp::SMax, &[below, zero])?;
     let within = fb.binary(BinOp::ULessThan, plane, extent)?;
-    // A lane outside on a border axis.
+    // A lane outside on a border axis. A texture buffer's index is addressed as the first texel
+    // of a row outside its one row: the `t` axis's mode says whether that is the border texel, and
+    // a sampler that clamps the index never reads it (module docs).
+    let buffer = matches!(decl.dim, Dim::Buffer);
     let mut border = None;
     for a in 0..lanes {
         let inside = match lanes {
@@ -208,12 +213,23 @@ pub(super) fn address(
             _ => fb.composite_extract(within, &[u32::from(a)])?,
         };
         let outside = fb.unary(UnOp::LogicalNot, inside)?;
-        if let Some(out) = s.border[usize::from(a)].and(fb, outside)? {
+        let axis = if buffer { 1 } else { usize::from(a) };
+        if let Some(out) = s.border[axis].and(fb, outside)? {
             border = Some(match border {
                 Some(b) => fb.binary(BinOp::LogicalOr, b, out)?,
                 None => out,
             });
         }
+    }
+    if buffer {
+        border = match (border, s.buffer_clamps) {
+            (_, Flag::Known(true)) | (None, _) => None,
+            (Some(b), Flag::Known(false)) => Some(b),
+            (Some(b), Flag::Value(clamps)) => {
+                let kept = fb.unary(UnOp::LogicalNot, clamps)?;
+                Some(fb.binary(BinOp::LogicalAnd, b, kept)?)
+            }
+        };
     }
     // A texture buffer's index outside reads its first texel where the sampler does not clamp it.
     let plane = match decl.dim {
