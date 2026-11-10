@@ -15,16 +15,21 @@
 //! Printed (`KEPT-VARIANTS`): each round's creations' median and slowest time, and the process's
 //! memory after each (`spares_bench::process_memory`).
 //!
+//! [`a_sampler_past_the_limit_evicts_a_kept_instance_first`]: the kept instances' immutable
+//! samplers count against the device's limit while kept, and give way to a sampler the program
+//! needs rather than refuse it.
+//!
 //! [`what_a_kept_instance_holds`] is a release benchmark, ignored: it measures what a kept
 //! instance costs in memory and what a creation costs at the bound.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`). The
-//! functions are those of the owned fixture
-//! `validation/fixtures/public/engine/unspecialized_stage_functions.ll` (`llvm-as`).
+//! functions are those of the owned fixtures `unspecialized_stage_functions` and `device_level`
+//! (`validation/fixtures/public/engine/*.ll`, `llvm-as`).
 
 use super::blit_holds::{exact_waits_device, Scratch};
 use super::spares_bench::process_memory;
 use crate::pipeline::kept::KEPT;
+use crate::sampler::SamplerCount;
 use crate::{Device, Function, Library, PipelineOptions, WorkCounts};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{DataType, PixelFormat};
@@ -36,10 +41,11 @@ use std::time::{Duration, Instant};
 /// the 16 the kept variants once held.
 const STATES: usize = 64;
 
-/// The fixture's library on `device`.
-fn library(device: &Device) -> Library {
+/// The library of the owned fixture `name` on `device`.
+fn library(device: &Device, name: &str) -> Library {
     let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/engine/unspecialized_stage_functions.ll");
+        .join("../metal2vulkan-validation/fixtures/public/engine")
+        .join(format!("{name}.ll"));
     let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
     device.new_library_with_compile_library(
         metal2vulkan::library::Library::from_air(&bitcode).unwrap(),
@@ -111,7 +117,7 @@ fn spread(times: &[Duration]) -> String {
 fn released_states_made_again_take_their_variants_back() {
     let scratch = Scratch::new("kept-variants");
     let device = exact_waits_device(&scratch.0);
-    let library = library(&device);
+    let library = library(&device, "unspecialized_stage_functions");
     let vertex = library
         .new_function_with_name("unspecialized_vertex_free")
         .unwrap();
@@ -163,7 +169,7 @@ fn released_states_made_again_take_their_variants_back() {
 fn what_a_kept_instance_holds() {
     let scratch = Scratch::new("kept-instance");
     let device = exact_waits_device(&scratch.0);
-    let library = library(&device);
+    let library = library(&device, "unspecialized_stage_functions");
     let vertex = library
         .new_function_with_name("unspecialized_vertex_free")
         .unwrap();
@@ -209,4 +215,85 @@ fn what_a_kept_instance_holds() {
         spread(&again_times),
         work(&after_evicting, &again)
     );
+}
+
+/// Samplers taken from the device's count (`SamplerCount`) and given back as it goes, whatever
+/// the test asserted meanwhile.
+struct Taken<'a>(&'a SamplerCount, u32);
+
+impl Drop for Taken<'_> {
+    fn drop(&mut self) {
+        for _ in 0..self.1 {
+            self.0.give();
+        }
+    }
+}
+
+/// A state's immutable sampler past the device's limit takes the room a released state's kept
+/// instance holds: that instance goes, its sampler with it, and the creation is not refused. The
+/// device's count is taken to its limit beside the kept instance's sampler, so the room is the
+/// instance's alone. The states' fragment functions sample through two different constexpr
+/// samplers (`device_level`'s `nearest_mips` and `linear_mips`), so neither shares the other's
+/// set; each is released in turn, so each later creation evicts the other, and neither is taken
+/// back.
+#[test]
+fn a_sampler_past_the_limit_evicts_a_kept_instance_first() {
+    let scratch = Scratch::new("kept-samplers");
+    let device = exact_waits_device(&scratch.0);
+    let stages = library(&device, "unspecialized_stage_functions");
+    let vertex = stages
+        .new_function_with_name("unspecialized_vertex_free")
+        .unwrap();
+    let sampling = library(&device, "device_level");
+    let descriptor_of = |name: &str| {
+        let fragment = sampling.new_function_with_name(name).unwrap();
+        let mut descriptor =
+            RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
+        descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+        descriptor.color_attachments[0] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm));
+        descriptor
+    };
+    let (nearest, linear) = (
+        descriptor_of("dl_nearest_mips"),
+        descriptor_of("dl_linear_mips"),
+    );
+    let options = PipelineOptions::default();
+    let count = &device.shared().sampler_count;
+    let live = count.live();
+    drop(
+        device
+            .new_render_pipeline_state(&nearest, &options)
+            .unwrap(),
+    );
+    assert_eq!(
+        count.live(),
+        live + 1,
+        "the released state's kept instance holds its immutable sampler"
+    );
+    let mut taken = Taken(count, 0);
+    while count.take().is_ok() {
+        taken.1 += 1;
+    }
+    let before = device.work_counts();
+    let made = device.new_render_pipeline_state(&linear, &options);
+    assert!(
+        made.is_ok(),
+        "a state whose sampler a kept instance made room for: {:?}",
+        made.err()
+    );
+    drop(made);
+    let again = device.new_render_pipeline_state(&nearest, &options);
+    assert!(
+        again.is_ok(),
+        "the first state made again, its sampler's room the second's kept instance: {:?}",
+        again.err()
+    );
+    assert_eq!(
+        device.work_counts().variants_taken_back - before.variants_taken_back,
+        0,
+        "each instance was evicted before its state was made again"
+    );
+    drop(again);
+    drop(taken);
 }
