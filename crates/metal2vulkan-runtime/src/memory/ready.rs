@@ -25,11 +25,13 @@
 //! program's queued GPU work: once the GPU idled into runtime suspend, the kernel clears a new
 //! block's memory before handing it out, the clear is ordered after every submission of the
 //! process (the block shares the process's GPU address space's reservation), and a fault on any
-//! of the process's memory waits for it. On an RX 7900 XTX (Mesa 26.2.6, kernel 7.3.1) the first
-//! `replace_region` into a texture placed in a block made behind about 1.5 s of queued fills
-//! waited 516 to 684 ms in that clear (`amdgpu_gem_fault` in `dma_resv_wait_timeout`,
-//! `tests/zeroed_start.rs`); awake, the kernel hands out memory it had cleared, and the write
-//! took 160 us. A block not mapped has no page to read.
+//! of the process's memory waits for it. In an RX 7900 XTX's device-local memory (Mesa 26.2.6,
+//! kernel 7.3.1), a host write into a texture's image in a block made behind about 1.5 s of
+//! queued fills waited 516 to 684 ms in that clear (`amdgpu_gem_fault` in
+//! `dma_resv_wait_timeout`), and 160 us where the kernel handed out memory it had cleared. That
+//! GPU copies its color textures on the staging queue (`texture/staging_copy.rs`), so this pool
+//! holds no image there; how long a first touch waits on the devices whose color textures copy
+//! on the host is unmeasured. A block not mapped has no page to read.
 //!
 //! - **Ahead.** `memory::keep_room`, which the device's creation calls run, starts a making for a
 //!   pool the encodings and commits place in once the pool grew (a second or later pooled block
@@ -99,9 +101,9 @@
 //!   `host_copy_blocks_readied`), those made while a call waited (`blocks_ahead_waited_for`; of
 //!   them those whose wait for a burst's end the call cut short, `blocks_ahead_hurried`), and
 //!   those whose wait for a burst's end reached [`QUIET_MOST`] (`blocks_ahead_past_quiet_wait`).
-//! - **Not what a suspend evicts.** Where the kernel moves a block out of device memory as the GPU
-//!   suspends and back at the next submission, the mapping's pages go with the move, and the first
-//!   touch after it waits for the moves back (docs/FAST-PATHS.md, known gaps).
+//! - **Not a suspend's resume.** Where the GPU idles into runtime suspend while a program runs,
+//!   the next submission waits for the kernel to resume the device, which no block made ahead
+//!   spares (docs/FAST-PATHS.md, known gaps).
 
 use super::{Block, BlockMaker, Holds};
 use crate::device::functions::Functions;

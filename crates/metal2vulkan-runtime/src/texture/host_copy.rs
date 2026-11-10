@@ -52,13 +52,13 @@
 //!   block before (`Placement::fresh`) it moves to `GENERAL` out of that layout on the host
 //!   ([`transition_from`]): its zeros are the driver's, and no write of the host's touches its
 //!   memory as it is made. Elsewhere it moves out of `UNDEFINED`, which any image may whatever
-//!   its layout, and is zeroed as above. On an RX 7900 XTX (RADV, Mesa 26.2.6) the host's write
-//!   of zeros into new memory waited for the program's queued GPU work, 0.2 to 1.1 s behind
-//!   about 1.5 s of fills, and the zeroed start took 0.3 ms (`tests/zeroed_start.rs`). Counted:
-//!   `WorkCounts::images_started_zeroed`. Where the GPU had idled into runtime suspend, the first
-//!   CPU write into a block made then waited there instead, 516 to 684 ms, in the kernel's clear
-//!   of the block's memory; the blocks of the pool these images place in are made ready ahead,
-//!   every page of their mapping read before any image is placed in them (`memory/ready.rs`).
+//!   its layout, and is zeroed as above. In an RX 7900 XTX's device-local memory (RADV, Mesa
+//!   26.2.6) the host's write of zeros into new memory waited for the program's queued GPU work,
+//!   0.2 to 1.1 s behind about 1.5 s of fills, and the zeroed start took 0.3 ms
+//!   (`tests/zeroed_start.rs`); that GPU copies its color textures on the staging queue, as
+//!   above. Counted: `WorkCounts::images_started_zeroed`. The blocks of the pool these images
+//!   place in are made ready ahead, every page of their mapping read before any image is placed
+//!   in them, as a first touch may wait for the memory's kernel work (`memory/ready.rs`).
 //! - **Copied.** `replace_region` copies the caller's bytes into the image on the host, straight
 //!   from them where they are laid out packed
 //!   (`HostLayout::is_packed`), else from packed bytes, and `get_bytes` copies the image's texels

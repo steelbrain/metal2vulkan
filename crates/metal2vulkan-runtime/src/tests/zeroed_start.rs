@@ -4,14 +4,15 @@
 //! `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` with no write of the host's
 //! (`WorkCounts::images_started_zeroed`); and many made in turn take pooled blocks, as without it.
 //!
-//! The host's write of zeros into new memory waited for the program's queued GPU work on an RX
-//! 7900 XTX (RADV, Mesa 26.2.6): 0.2 to 1.1 s behind about 1.5 s of fills. Where the GPU had
-//! idled into runtime suspend, the first CPU write into a texture placed in a block made then
-//! waited so instead, in the kernel's clear of the block; the blocks host copies place in are
-//! made ready ahead, every page read, from the device's first creation call on
-//! (`memory/ready.rs`), so the texture's block is one made before the fills, and no such block
-//! is made in place (`WorkCounts::host_copy_blocks_made_in_place`). Run as a process's first
-//! device work after the GPU idled 5 s (its autosuspend delay there) to see that case.
+//! The host's write of zeros into new memory may wait for the program's queued GPU work: in an
+//! RX 7900 XTX's device-local memory (RADV, Mesa 26.2.6) it waited 0.2 to 1.1 s behind about
+//! 1.5 s of fills. Where a texture copies on the host, the blocks host copies place in are made
+//! ready ahead, every page read, from the device's first creation call on (`memory/ready.rs`),
+//! so the texture's block is one made before the fills, and no such block is made in place
+//! (`WorkCounts::host_copy_blocks_made_in_place`). Where a color texture copies on the staging
+//! queue instead (NVIDIA's, an RX 7900 XTX's: `texture/staging_copy.rs`), the staging queue
+//! writes its zeros, and the test holds that the making waits for none of the busy work and that
+//! the texture reads zero.
 //!
 //! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -106,8 +107,8 @@ fn a_shared_texture_made_while_the_gpu_is_busy_waits_for_none_of_it_and_reads_ze
         "the making waited {took:?} for the GPU's busy work"
     );
     // Where its image copies on the host: elsewhere (a color texture on a device with a staging
-    // queue and no host-cached memory, NVIDIA's; `texture/staging_copy.rs`) the staging queue
-    // writes its zeros.
+    // queue and no device-local memory the host caches, NVIDIA's or an RX 7900 XTX's;
+    // `texture/staging_copy.rs`) the staging queue writes its zeros.
     let hosted = after.images_started_on_the_host - before.images_started_on_the_host;
     if zeroed && hosted == 1 {
         assert_eq!(
