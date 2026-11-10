@@ -91,7 +91,17 @@
 //!   answered `Fails` (1.1 to 2.6 us against 1.2 to 3.0), and it answered `Unchecked`, so its long
 //!   buffers took no fresh pages where the others' did. Tries that all split so answer `Fails` for
 //!   the device's life, unrecorded, where the last one's floors fall short of the margin, and
-//!   `Unchecked` only past it.
+//!   `Unchecked` only past it. Load moves the merge's floors either way, its halves agreeing: in
+//!   one full run of the runtime's and the validation crate's device tests on the Radeon 780M
+//!   (RADV, Mesa 26.2.6, Linux 7.3.1), 32 of 2,527 devices answered `Fails`, one call of four at
+//!   0.6 to 1.2 of the calls apart where a quiet device's is 0.35; and on the M3 Max beside loops
+//!   of the runtime's device tests (MoltenVK 1.4.2), M3_HOLDS of M3_ANSWERS answered `Holds`, at
+//!   0.29 and up where its quiet tries are 0.81 to 0.91 (2026-11-10). One try recorded each, for
+//!   the kernel's release. So a merge verdict is recorded only where its try's floors are clear of
+//!   that load ([`merge_clear`]: a `Holds` at most [`MERGE_HOLDS_CLEAR`] of the calls apart, a
+//!   `Fails` at least [`MERGE_FAILS_CLEAR`]) and each of [`MERGE_REPEATS`] tries more answers it
+//!   so ([`merge_tried`]); short of that it answers for the device's life, unrecorded, and the
+//!   next device measures again.
 //! - **Its verdicts** are `Pending` until it answers, and the device takes the form a driver
 //!   without each answer takes: every batch its own call, its long buffers placed and cleared as
 //!   ever, every pointer import kept. `Unchecked` where a check could not run (no
@@ -102,10 +112,12 @@
 //!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed once a try, over pages
 //!   written once; and on Linux three copies of 256 bytes; each timed check again, at most
 //!   [`TRIES`] times in all, where its halves disagree, and the import tax's [`TAX_REPEATS`]
-//!   tries more where it answers `Holds` past its margin. The probe's rounds took 3 to 12 ms on
-//!   those devices.
+//!   tries more where it answers `Holds` past its margin, and the merge's [`MERGE_REPEATS`] where
+//!   its answer is clear of the load beside it. The probe's rounds took 3 to 12 ms on those
+//!   devices.
 //! - **Kept.** Once every check answered and each timed check's answer earned its record (no
-//!   check's tries all disagreed; an import tax `Holds` passed its margin and repeated, above),
+//!   check's tries all disagreed; the merge's answer was clear of the load and repeated, and an
+//!   import tax `Holds` passed its margin and repeated, above),
 //!   the verdicts are written as one record in the shader cache's content directory
 //!   (`shader_cache/store.rs`), named by the driver's identity, the kernel's release (the import
 //!   tax is the kernel's work on RADV), the check's version and the runtime's ([`record_name`]):
@@ -176,6 +188,19 @@ pub(crate) const TRIES: usize = 3;
 /// The most one call of the merge's infos costs, as a share of its calls apart, where the driver
 /// merges them.
 pub(crate) const MERGE_RATIO: f64 = 0.6;
+
+/// The most one call of the merge's infos costs, as a share of its calls apart, over a whole try,
+/// for a `Holds` to be recorded ([`merge_clear`]): the quiet Radeon 780M's is 0.35.
+pub(crate) const MERGE_HOLDS_CLEAR: f64 = 0.5;
+
+/// The least one call of the merge's infos costs, as a share of its calls apart, over a whole try,
+/// for a `Fails` to be recorded ([`merge_clear`]): the quiet M3 Max's (MoltenVK 1.4.2) are 0.81
+/// to 0.91.
+pub(crate) const MERGE_FAILS_CLEAR: f64 = 0.75;
+
+/// The tries more a merge verdict past its clear bound answers again, each so, before it is
+/// recorded ([`merge_tried`]).
+pub(crate) const MERGE_REPEATS: usize = 2;
 
 /// The bytes of the imports the tax check holds, in all: past each import's own cost, a
 /// length's (amdgpu's work a page), half the shortest buffer of the runtime's own that takes fresh
@@ -310,6 +335,8 @@ pub(crate) struct SubmitChecks {
     /// The import tax answered `Holds` short of its margin, so `Fails`, in this process
     /// ([`tax_tried`]).
     short: AtomicBool,
+    /// The merge answered short of its record, in this process ([`merge_tried`]).
+    merge_unearned: AtomicBool,
     /// The merge check holds without its answer, and no record is kept
     /// (`DeviceOptions::assume_submissions_merge`).
     merge_assumed: bool,
@@ -344,6 +371,7 @@ impl SubmitChecks {
             split: AtomicU64::new(0),
             unearned: AtomicBool::new(false),
             short: AtomicBool::new(false),
+            merge_unearned: AtomicBool::new(false),
             merge_assumed,
             tax_tries: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
@@ -498,6 +526,18 @@ pub(crate) fn merge_verdict(merged: i64, apart: i64) -> Verdict {
     }
 }
 
+/// Whether a merge try's `floors` over the whole try, `(merged, apart)`, are clear of the load
+/// beside it for `verdict` to be recorded: a `Holds` at most [`MERGE_HOLDS_CLEAR`] of the calls
+/// apart, a `Fails` at least [`MERGE_FAILS_CLEAR`] of them ([`merge_tried`]).
+pub(crate) fn merge_clear(verdict: Verdict, (merged, apart): (i64, i64)) -> bool {
+    let share = |bound: f64| bound * apart as f64;
+    match verdict {
+        Verdict::Holds => apart > 0 && merged as f64 <= share(MERGE_HOLDS_CLEAR),
+        Verdict::Fails => apart > 0 && merged as f64 >= share(MERGE_FAILS_CLEAR),
+        _ => false,
+    }
+}
+
 /// The import tax's verdict from the floors of a phase with the import held and of one without.
 pub(crate) fn tax_verdict(held: i64, bare: i64) -> Verdict {
     match held - bare > tax_bound(bare) {
@@ -571,8 +611,9 @@ fn floor(times: &[i64]) -> i64 {
 
 /// The version of what the checks measure, of what earns a record and of how it is named and
 /// framed: a change to any bumps it, and a record of another version is never read (one of 3 may
-/// hold an import tax `Holds` short of [`TAX_MARGIN`]).
-pub(crate) const CHECK_VERSION: u32 = 5;
+/// hold an import tax `Holds` short of [`TAX_MARGIN`], one of 5 a merge verdict of one loaded
+/// try).
+pub(crate) const CHECK_VERSION: u32 = 6;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -848,6 +889,10 @@ impl Device {
             true => ", its import tax Holds short of its margin",
             false => "",
         };
+        let merge_unearned = match checks.merge_unearned.load(Ordering::Relaxed) {
+            true => ", its merge answer short of a record",
+            false => "",
+        };
         let tax_tries = match checks.tax_tries.load(Ordering::Relaxed) {
             0 => String::new(),
             tries => format!(", {tries} import tax tries"),
@@ -860,7 +905,7 @@ impl Device {
             "merge {:?}{assumed} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
              {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
              follows {:?}, \
-             {took}{split}{unearned}{short}{tax_tries} (floors)",
+             {took}{split}{merge_unearned}{unearned}{short}{tax_tries} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
             us(m.apart),
@@ -1071,7 +1116,7 @@ fn run(parts: &Parts, made: Made) {
 /// stopped the checks.
 fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
     let checks = &parts.checks;
-    let (merges, (merged, apart), merge_kept) = tried(checks, || merge(parts, objects))?;
+    let (merges, (merged, apart), merge_kept) = merge_tried(checks, || merge(parts, objects))?;
     if !checks.merge_assumed {
         checks.set(Check::Merge, merges);
     }
@@ -1111,6 +1156,37 @@ pub(crate) fn tried(
         checks.split.fetch_add(1, Ordering::Relaxed);
     }
     Some((Verdict::Unchecked, floors, false))
+}
+
+/// The merge's verdict and floors over its tries of `once` ([`tried`]), and whether they may be
+/// recorded (the module docs, "Load beside it"). A `Holds` or a `Fails` is recorded only where its
+/// try's floors are clear of the load beside it ([`merge_clear`]) and each of [`MERGE_REPEATS`]
+/// tries more answers it so again; short of that it answers for the device's life alone, with the
+/// floors of its first try, and the next device measures again; a refused call ends the repeats,
+/// unrecorded. Tries that all split, or a refused call, answer as [`tried`] does. `None` where the
+/// check stops.
+pub(crate) fn merge_tried(
+    checks: &SubmitChecks,
+    mut once: impl FnMut() -> Option<Option<Timed>>,
+) -> Option<(Verdict, (i64, i64), bool)> {
+    let (verdict, floors, kept) = tried(checks, &mut once)?;
+    if verdict == Verdict::Unchecked {
+        return Some((verdict, floors, kept));
+    }
+    let mut earned = merge_clear(verdict, floors);
+    for _ in 0..MERGE_REPEATS {
+        if !earned {
+            break;
+        }
+        earned = match once()? {
+            Some(again) => again.verdict == Some(verdict) && merge_clear(verdict, again.floors),
+            None => false,
+        };
+    }
+    if !earned {
+        checks.merge_unearned.store(true, Ordering::Relaxed);
+    }
+    Some((verdict, floors, earned))
 }
 
 /// The import tax's verdict and floors over its tries of `once` ([`tried`]), and whether they may

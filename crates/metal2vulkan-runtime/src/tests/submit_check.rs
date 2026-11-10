@@ -3,9 +3,10 @@
 
 use crate::in_place::DriverIdentity;
 use crate::submit_check::{
-    decode, encode, merge_try, merge_verdict, record_name, tax_clear, tax_holds, tax_tried,
-    tax_try, tax_verdict, tried, Measured, SubmitChecks, Timed, Verdict, MERGE_RATIO, ROUNDS,
-    TAX_FLOOR, TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
+    decode, encode, merge_clear, merge_tried, merge_try, merge_verdict, record_name, tax_clear,
+    tax_holds, tax_tried, tax_try, tax_verdict, tried, Measured, SubmitChecks, Timed, Verdict,
+    MERGE_FAILS_CLEAR, MERGE_HOLDS_CLEAR, MERGE_RATIO, MERGE_REPEATS, ROUNDS, TAX_FLOOR,
+    TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
 };
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
@@ -200,6 +201,95 @@ fn tries_that_all_disagree_are_unchecked_and_unrecorded() {
         (Some((Verdict::Unchecked, (1, 2), false)), TRIES)
     );
     assert_eq!(tried(&checks, || None), None, "a stopped check");
+}
+
+/// What the merge's tries answer ([`merge_tried`]) where each answers the next of `answers` (the
+/// last again past them), and how many it made.
+fn merge_answers(answers: &[Option<Timed>]) -> (Option<(Verdict, (i64, i64), bool)>, usize) {
+    let checks = SubmitChecks::new(false);
+    let mut tries = 0;
+    let answered = merge_tried(&checks, || {
+        let answer = answers[tries.min(answers.len() - 1)];
+        tries += 1;
+        Some(answer)
+    });
+    (answered, tries)
+}
+
+/// A merge try that answered `verdict` with `floors` over the whole try.
+fn merge_answer(verdict: Option<Verdict>, floors: (i64, i64)) -> Option<Timed> {
+    Some(Timed { verdict, floors })
+}
+
+/// A merge verdict is recorded only where its try's floors are clear of the load beside it and
+/// each of [`MERGE_REPEATS`] tries more answers it so: the quiet Radeon 780M's `Holds` and the
+/// quiet M3 Max's `Fails` are recorded after their repeats. The loaded tries of a full run of the
+/// device tests answer for the device's life alone, unrecorded, where one try alone recorded
+/// them before ([`tried`]): the Radeon 780M's `Fails` at 0.69 of its calls apart, and the M3
+/// Max's `Holds` at 0.29, clear but not repeated.
+#[test]
+fn a_merge_verdict_is_recorded_only_clear_of_the_load_and_repeated() {
+    let holds = |floors| merge_answer(Some(Verdict::Holds), floors);
+    let fails = |floors| merge_answer(Some(Verdict::Fails), floors);
+    let radeon = (9_200, 26_500);
+    let recorded = (Some((Verdict::Holds, radeon, true)), 1 + MERGE_REPEATS);
+    assert_eq!(
+        merge_answers(&[holds(radeon)]),
+        recorded,
+        "the quiet Radeon 780M"
+    );
+    let m3 = (6_100, 7_000);
+    let recorded = (Some((Verdict::Fails, m3, true)), 1 + MERGE_REPEATS);
+    assert_eq!(merge_answers(&[fails(m3)]), recorded, "the quiet M3 Max");
+    let loaded_radeon = (63_779, 92_121);
+    let loaded_m3 = (4_542, 15_833);
+    for (answer, verdict, floors, name) in [
+        (
+            fails(loaded_radeon),
+            Verdict::Fails,
+            loaded_radeon,
+            "the loaded Radeon 780M",
+        ),
+        (
+            holds(loaded_m3),
+            Verdict::Holds,
+            loaded_m3,
+            "the loaded M3 Max",
+        ),
+    ] {
+        let checks = SubmitChecks::new(false);
+        let before = tried(&checks, || Some(answer));
+        assert_eq!(before, Some((verdict, floors, true)), "{name}, one try");
+        let again = match verdict {
+            Verdict::Fails => holds(radeon),
+            _ => fails(m3),
+        };
+        let unrecorded = Some((verdict, floors, false));
+        assert_eq!(merge_answers(&[answer, again]).0, unrecorded, "{name}");
+    }
+    let unrecorded = (Some((Verdict::Holds, radeon, false)), 2);
+    for (again, why) in [
+        (fails(m3), "a repeat that fails"),
+        (holds((15_000, 26_500)), "a repeat short of the clear bound"),
+        (merge_answer(None, radeon), "a repeat that splits"),
+        (None, "a repeat refused"),
+    ] {
+        assert_eq!(merge_answers(&[holds(radeon), again]), unrecorded, "{why}");
+    }
+    let apart = 10_000;
+    let at = |bound: f64| (bound * apart as f64) as i64;
+    assert!(merge_clear(Verdict::Holds, (at(MERGE_HOLDS_CLEAR), apart)));
+    assert!(!merge_clear(
+        Verdict::Holds,
+        (at(MERGE_HOLDS_CLEAR) + 1, apart)
+    ));
+    assert!(merge_clear(Verdict::Fails, (at(MERGE_FAILS_CLEAR), apart)));
+    assert!(!merge_clear(
+        Verdict::Fails,
+        (at(MERGE_FAILS_CLEAR) - 1, apart)
+    ));
+    assert!(!merge_clear(Verdict::Unchecked, radeon));
+    assert!(!merge_clear(Verdict::Holds, (0, 0)));
 }
 
 /// What the import tax's tries answer ([`tax_tried`]) where each answers the next of `answers`
