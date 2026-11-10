@@ -2059,6 +2059,10 @@ pub(super) struct AheadBlocks {
     pub(super) past_quiet_wait: u64,
     /// The blocks made ahead that went unused, their pool no longer growing ([`Memory::sweep_stale`]).
     pub(super) unused: u64,
+    /// Of `waited_for`, the blocks of images, for the crate's tests: `WorkCounts` counts the waits
+    /// of every pool.
+    #[cfg(test)]
+    pub(super) images_waited_for: u64,
 }
 
 impl AheadBlocks {
@@ -2071,6 +2075,10 @@ impl AheadBlocks {
             _ => self.buffers_ahead += 1,
         }
         self.waited_for += u64::from(waited_for);
+        #[cfg(test)]
+        {
+            self.images_waited_for += u64::from(waited_for && holds == Holds::Images);
+        }
         self.hurried += u64::from(waited == Some(Waited::Asked));
         self.past_quiet_wait += u64::from(waited == Some(Waited::Bound));
     }

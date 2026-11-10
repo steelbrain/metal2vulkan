@@ -59,6 +59,12 @@
 //! - **Images in bursts, made by the runtime**: the images arm's textures, [`BURST`] back to back
 //!   every [`BURST_EVERY`], at most [`IMAGE_TEXTURES`] a phase: a burst needs more blocks than one,
 //!   as a scroll's new tiles do.
+//! - **Images, small blocks**, **Images of mixed sizes, small blocks** and **Images in bursts,
+//!   small blocks**: those three arms on a device told first of a slow making
+//!   (`Memory::plain_block_made`, as `tests::plain_blocks` tells it), so that its pooled blocks of
+//!   plain memory are 16 MiB from the start, as a host whose makings were slow made them (a
+//!   consumer's guest on a fragmented Radeon 780M). A liberty: the device made no such making;
+//!   the arms ask what the runtime does once its blocks are that small, whatever the host.
 //! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
 //!   the device's first memory type that is host-visible and host-coherent but not device-local or
 //!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of
@@ -727,9 +733,20 @@ enum Arm {
 
 /// Run the arm `label` (the module docs).
 fn arm(label: &str, arm: Arm) {
+    arm_with(label, arm, false);
+}
+
+/// Run the arm `label` (the module docs), on a device told first of a pooled block's making that
+/// took four times `memory::MAKING_BOUND` where `small` (`Memory::plain_block_made`), so that its
+/// pooled blocks of plain memory are of the least size from the start.
+fn arm_with(label: &str, arm: Arm, small: bool) {
     use vk::MemoryPropertyFlags as P;
     let scratch = Scratch::new();
     let device = device(&scratch.0);
+    if small {
+        let mut memory = crate::device::lock(&device.shared().memory);
+        memory.plain_block_made(crate::memory::BLOCK_BYTES, crate::memory::MAKING_BOUND * 4);
+    }
     if device.shared().host_import.is_err() {
         eprintln!("RECLAIM-SUBMIT: the device imports no host memory here: not run");
         return;
@@ -1279,6 +1296,27 @@ fn reclaim_submit_bench_images_mixed() {
 #[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
 fn reclaim_submit_bench_images_bursts() {
     arm("images in bursts, made by the runtime", Arm::ImagesBursts);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_small_blocks() {
+    let label = "images, made by the runtime, small blocks";
+    arm_with(label, Arm::Images, true);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_mixed_small_blocks() {
+    let label = "images of mixed sizes, made by the runtime, small blocks";
+    arm_with(label, Arm::ImagesMixed, true);
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_images_bursts_small_blocks() {
+    let label = "images in bursts, made by the runtime, small blocks";
+    arm_with(label, Arm::ImagesBursts, true);
 }
 
 #[test]

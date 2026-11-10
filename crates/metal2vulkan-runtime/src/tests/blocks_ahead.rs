@@ -388,6 +388,81 @@ fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead()
     );
 }
 
+/// The sizes of the mixed-sizes run's `RGBA8Unorm` textures, in turn: six of 4 MiB, one of
+/// 14.1 MiB (2560 x 1440) and one of 31.6 MiB (3840 x 2160), as `tests::reclaim_submit_bench`'s
+/// mixed arm makes them, and how many times it makes the eight.
+const MIXED_SIDES: [(u64, u64); 8] = [
+    (1024, 1024),
+    (1024, 1024),
+    (1024, 1024),
+    (2560, 1440),
+    (1024, 1024),
+    (1024, 1024),
+    (1024, 1024),
+    (3840, 2160),
+];
+const MIXED_ROUNDS: usize = 4;
+
+/// A pool of 64 MiB blocks whose placements take up to half a block each keeps its next block
+/// made ahead of the call that needs it: after the pool's first block, no creation call waits for
+/// a block of images, and none makes one. On a Radeon 780M, `tests::reclaim_submit_bench`'s mixed
+/// arm waited for 8 of its 13 blocks of images in its quiet phase, each making started only as
+/// the call needed it.
+#[test]
+fn mixed_sizes_find_their_blocks_made_ahead() {
+    let scratch = Scratch::new("mixed");
+    let device = device(&scratch.0);
+    let shared = device.shared();
+    let ahead = || crate::device::lock(&shared.memory).ahead_blocks();
+    let mut held: Vec<Texture> = Vec::new();
+    texture(&device, MIXED_SIDES[0], &mut held);
+    let start = ahead();
+    let mut waits = Vec::new();
+    for at in 1..MIXED_SIDES.len() * MIXED_ROUNDS {
+        let before = ahead().images_waited_for;
+        texture(&device, MIXED_SIDES[at % MIXED_SIDES.len()], &mut held);
+        let after = ahead();
+        if after.images_waited_for > before {
+            waits.push(at);
+        }
+        println!(
+            "BLOCKS-AHEAD-MIXED {}: texture {at} of {:?}: images made ahead {}, waited for {}, \
+             in place {}; made ahead now {:?} MiB",
+            device.name(),
+            MIXED_SIDES[at % MIXED_SIDES.len()],
+            after.images_ahead - start.images_ahead,
+            after.images_waited_for - start.images_waited_for,
+            after.images_in_place - start.images_in_place,
+            (crate::device::lock(&shared.memory)
+                .ahead_made(Holds::Images)
+                .iter())
+            .map(|size| size >> 20)
+            .collect::<Vec<_>>(),
+        );
+    }
+    let end = ahead();
+    let blocks =
+        (end.images_ahead + end.images_in_place) - (start.images_ahead + start.images_in_place);
+    println!(
+        "BLOCKS-AHEAD {}: {} textures of mixed sizes in blocks of {} MiB; after the first, {blocks} \
+         blocks of images, {} made ahead, {} waited for (at textures {waits:?}), {} in place",
+        device.name(),
+        held.len(),
+        crate::device::lock(&shared.memory).plain_block_bytes() >> 20,
+        end.images_ahead - start.images_ahead,
+        end.images_waited_for - start.images_waited_for,
+        end.images_in_place - start.images_in_place,
+    );
+    assert_eq!(
+        end.images_in_place, start.images_in_place,
+        "a creation call made a block of images itself"
+    );
+    assert!(
+        waits.is_empty(),
+        "creation calls waited for a block of images at textures {waits:?}"
+    );
+}
+
 /// A use of the device's queues held open while it lives (`device/queue_quiet.rs`): a making's
 /// wait for a burst's end sees a use under way throughout, so no pause ends it.
 struct InUse<'a>(&'a QueueQuiet);
