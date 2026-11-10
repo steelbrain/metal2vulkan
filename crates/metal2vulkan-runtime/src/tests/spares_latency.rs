@@ -5,8 +5,10 @@
 //! buffers. Each command buffer's status is read on a thread of its own from its commit until it
 //! reads final; the time from then to its first completed handler, and to its waiter's return, is
 //! taken for that last command buffer and for those before it, whose give-backs free none. Each
-//! round waits [`SETTLE`] after its burst and after its last command buffer, so that what a
-//! give-back left to the device's free thread ran before the next command buffer takes the pool.
+//! round waits two spans of [`RECENT_FOR`] after its burst, so that the burst's use is past the
+//! spans a pool keeps the command buffers of, and [`SETTLE`] after its last command buffer, so
+//! that what a give-back left to the device's free thread ran before the next command buffer
+//! takes the pool.
 //!
 //! Printed (`SPARES-LATENCY`): the medians and slowest of both, and the rounds whose burst's
 //! command buffers went from the spares. Ignored: run it alone, by name, under `--cfg m2v_gpu`
@@ -14,7 +16,7 @@
 //! `cargo nextest run -p metal2vulkan-runtime --lib --release --run-ignored all spares_latency
 //! --no-capture`.
 
-use crate::spares::RECENT_USES;
+use crate::spares::{RECENT_FOR, RECENT_USES};
 use crate::tests::freed_memory::device;
 use crate::{Buffer, CommandBufferStatus, CommandQueue, ResourceOptions};
 use std::sync::{Arc, Mutex};
@@ -29,7 +31,7 @@ const ROUNDS: usize = 32;
 /// The longest a command buffer is waited for.
 const WAIT: Duration = Duration::from_secs(30);
 
-/// How long a round waits after its burst and after its last command buffer.
+/// How long a round waits after its last command buffer.
 const SETTLE: Duration = Duration::from_millis(50);
 
 /// Commit a command buffer of `queue` of `encoders` blit encoders, each filling `target`, and
@@ -96,7 +98,7 @@ fn spares_latency() {
     let mut freed = 0;
     for _ in 0..ROUNDS {
         measured(&queue, &target, BURST);
-        std::thread::sleep(SETTLE);
+        std::thread::sleep(2 * RECENT_FOR);
         let held = device.shared().spares.command_buffers_held();
         for use_ in 1..=RECENT_USES {
             let (handler, wait) = measured(&queue, &target, 1);
