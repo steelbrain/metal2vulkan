@@ -440,3 +440,84 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
     assert!(unordered > 0, "no profile orders fetch in neither form");
     assert!(bfloat > 0, "no bfloat fetch was refused");
 }
+
+/// An unblended bfloat attachment (`R16Bfloat`, `RG16Bfloat`, `RGBA16Bfloat`) the draw moves into
+/// the interlocked storage form (named in `LoweringInputs::framebuffer_fetch`, as a render pass
+/// instance names a color it keeps out of its subpass for other draws) is written there as the
+/// fixed-function path writes it: Metal's bfloat code of the output's `half`
+/// (`extended_color::bfloat_output`), and under a mask of some channels the texel's kept channels
+/// as the attachment held them (the raw lanes of the texel the write read, as the fixed-function
+/// write mask keeps them). On every committed profile that orders fetch through the pixel
+/// interlock alone, `rt6_samples`' `float4` and `half4` fills compile with color 0 a written
+/// storage attachment under every mask and pass L3, the `float4` fill recording the pipeline's
+/// `textureWriteRoundingMode` its write rounds by. The same functions without the naming take no
+/// storage form (the control). Before, a write of some channels failed inside the lowering, and
+/// a write of every one stored a kernel write's code, which drops the low bits.
+#[test]
+fn an_unblended_bfloat_attachment_is_written_in_the_storage_form() {
+    use crate::lower::fragment::interlock_orders;
+    let Some(fills) = assembled("rt6_samples") else {
+        return;
+    };
+    let masks = [
+        ColorWriteMask::ALL,
+        ColorWriteMask::RED,
+        ColorWriteMask::GREEN.union(ColorWriteMask::ALPHA),
+        ColorWriteMask::NONE,
+    ];
+    let inputs = |p: &DeviceProfile, pf: PixelFormat, mask: ColorWriteMask, named: bool| {
+        let mut r = RenderLinkInputs::new();
+        let mut c = ColorAttachmentDescriptor::new(pf);
+        c.write_mask = mask;
+        r.color_attachments[0] = Some(c);
+        let mut inputs = fragment_inputs(&r, p);
+        if named {
+            inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
+                [0],
+                &r.color_attachments,
+                false,
+                false,
+                1,
+            ));
+        }
+        inputs
+    };
+    let mut checked = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        if !interlock_orders(&p) {
+            continue;
+        }
+        for pf in BFLOAT {
+            for fill in ["rt6_fill_rgba32float", "rt6_fill_rgba16float"] {
+                for mask in masks {
+                    let what = format!("{stem} {pf:?} {fill} {mask:?}");
+                    let a = match compile_with(&fills, fill, &p, &inputs(&p, pf, mask, true)) {
+                        Ok(a) => a,
+                        Err(e) if device_gap(&e) => {
+                            eprintln!("{what}: {e}");
+                            continue;
+                        }
+                        Err(e) => panic!("{what}: {e}"),
+                    };
+                    assert_eq!(fetched(&a), Some((true, None)), "{what}: {:?}", a.facts);
+                    // A `float` output rounds by the pipeline's mode, which link holds.
+                    if mask != ColorWriteMask::NONE {
+                        let rounds = (fill == "rt6_fill_rgba32float")
+                            .then_some(crate::metal::TextureWriteRoundingMode::TowardZero);
+                        assert_eq!(a.interface.io.texture_write_rounding, rounds, "{what}");
+                    }
+                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+                    // The control: unnamed, the attachment is the fixed function's.
+                    let plain = compile_with(&fills, fill, &p, &inputs(&p, pf, mask, false))
+                        .unwrap_or_else(|e| panic!("{what}: unnamed: {e}"));
+                    assert_eq!(fetched(&plain), None, "{what}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        checked > 0,
+        "no interlock profile wrote a bfloat attachment"
+    );
+}

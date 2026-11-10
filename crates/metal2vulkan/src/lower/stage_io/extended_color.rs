@@ -145,7 +145,8 @@ pub(super) fn raw_components(
 /// attachment `e` (the module docs): the lanes completed to four as [`held`] completes them, a
 /// `float` output rounded to `half` toward zero (saturating at 65504) or, where
 /// `e.nearest_even`, to nearest even, then each lane's bfloat code nearest, ties to even, a NaN
-/// `0x7fc0` (`arith::extended_range::bfloat_stored`). Integer operations on the bits alone.
+/// `0x7fc0` (`arith::extended_range::bfloat_stored`). Integer operations on the bits alone. The
+/// storage form's unblended write stores it too (`lower::fragment::fetch`).
 pub(crate) fn bfloat_output(
     fb: &mut FunctionBuilder<'_>,
     e: ExtendedRangeColor,
@@ -189,8 +190,8 @@ pub(crate) fn texel(
 /// The value [`texel`] encodes for output `x` (form `f`) to an attachment held in `form`, a
 /// `vec4` of `half` values: the lanes completed to four, a `float` output rounded to `half`.
 /// Metal's tile holds it until the store, which the storage form's shadow of the attachment keeps
-/// (`lower::fragment::fetch`). Not a bfloat form's, whose rounding is the pipeline's
-/// ([`bfloat_output`]) and which takes no storage form.
+/// (`lower::fragment::fetch`). Not a bfloat form's, whose rounding is the pipeline's and whose
+/// store rounds to the nearest code ([`bfloat_output`]).
 pub(crate) fn held(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,

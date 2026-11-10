@@ -174,7 +174,10 @@
 //! (`extended_range::encode_keeping`), as Metal keeps a masked channel's code: the form a mask of
 //! some of the codes one word holds takes (`BGR10_XR`'s, the two-plane forms' color word,
 //! `color_writes::merged_extended`), which no mask of the raw components gives. One whose mask
-//! covers none of them stores nothing, as above.
+//! covers none of them stores nothing, as above. A bfloat attachment's unblended write stores the
+//! code Metal's render pass stores, as its color attachment's write does
+//! (`stage_io::extended_color::bfloat_output`), and keeps the code of each channel a mask leaves
+//! out, a component of its own; its blend is Metal's pipeline error, and a fetch of it is refused.
 //!
 //! **The `half` shadow**: Metal's tile memory holds such an attachment as `half` through a render
 //! pass and rounds it to the codes only at the store, so a blend or a fetch onto what an earlier
@@ -332,7 +335,9 @@ use crate::metal::format::{
 use crate::metal::ColorWriteMask;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::lower_inputs::{BlendEquation, FetchedAttachment, FramebufferFetchInputs};
+use crate::pipeline::lower_inputs::{
+    BlendEquation, ExtendedRangeColor, FetchedAttachment, FramebufferFetchInputs,
+};
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SampledType, Stage};
 use crate::pipeline::StorageAttachmentUse;
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
@@ -2107,6 +2112,12 @@ pub fn select_output(
             return Err(Unsupported::not_implemented(Feature::Format).into());
         }
         cx.families.arith.converts(e);
+        // A bfloat attachment's `float` output rounds to `half` by the pipeline's
+        // `textureWriteRoundingMode` (`bfloat_written`), which link holds the pipeline's to.
+        if e.bfloat() && form.float_fmt() == Some(crate::lower::arith::FloatFmt::F32) {
+            let mode = cx.inputs.texture_write_rounding;
+            cx.families.stage_io.interface.texture_write_rounding = Some(mode);
+        }
     }
     let pf = cx
         .inputs
@@ -2723,6 +2734,10 @@ pub(super) fn emit_return(
                 held = shadow;
                 texel
             }
+            // A bfloat attachment's write, never shadowed (`plan`).
+            (Some(range), None) if range.bfloat() => {
+                bfloat_written(cx, fb, color, &sc, range, (form, part))?
+            }
             (Some(range), None) if sc.view.merges() => {
                 let (texel, shadow) = merged_extended(cx, fb, color, &sc, range, (form, part))?;
                 held = shadow;
@@ -3179,6 +3194,46 @@ fn merged_extended(
         false => None,
     };
     Ok((stored, held))
+}
+
+/// The raw texel an unblended write of output `part` (of `form`) to bfloat attachment `color`
+/// (held in `range`) stores: the code Metal's render pass stores of it, as the attachment's color
+/// attachment stores it (`stage_io::extended_color::bfloat_output`, at the pipeline's
+/// `textureWriteRoundingMode`, [`StorageColor::nearest_even`]), the channels a write mask keeps
+/// ([`StorageView::kept`]) as the texel read first inside the interlock holds them. Each channel is
+/// a component of its own, so a kept channel keeps its code.
+fn bfloat_written(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+    sc: &StorageColor,
+    range: ExtendedRange,
+    (form, part): (Form, SValue),
+) -> BResult<SValue> {
+    let rounding = match sc.nearest_even {
+        true => crate::metal::TextureWriteRoundingMode::NearestEven,
+        false => crate::metal::TextureWriteRoundingMode::TowardZero,
+    };
+    let e = ExtendedRangeColor::new(range, false).with_rounding(rounding);
+    let stored = stage_io::extended_color::bfloat_output(fb, e, form, part)?;
+    if !sc.view.merges() {
+        return Ok(stored);
+    }
+    let texel = read_texel(cx, fb, color, sc)?;
+    let lanes: Vec<u32> = [
+        vk::ColorComponentFlags::R,
+        vk::ColorComponentFlags::G,
+        vk::ColorComponentFlags::B,
+        vk::ColorComponentFlags::A,
+    ]
+    .into_iter()
+    .zip(0..4u32)
+    .map(|(c, lane)| match sc.view.kept.contains(c) {
+        true => 4 + lane,
+        false => lane,
+    })
+    .collect();
+    fb.vector_shuffle(stored, texel, &lanes)
 }
 
 fn blended(
