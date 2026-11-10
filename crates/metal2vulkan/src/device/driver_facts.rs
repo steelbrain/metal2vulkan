@@ -1514,12 +1514,10 @@ pub enum DriverFact {
     /// each run): a 64 MiB allocation of the system heap filled from the page allocator took 9.7
     /// to 10.6 ms at the median, nearly all of it on a CPU in the kernel, and held the submission
     /// made meanwhile for as long, where one that took the pages of a 64 MiB allocation freed 20 ms
-    /// earlier took 0.12 to 0.31 ms. On a driver with it the runtime fills a pooled block of plain
-    /// memory of such a heap through an exportable allocation of the block's size and type, freed
-    /// at once, before the block's own allocation (`memory.rs` in the runtime, "Blocks filled
-    /// exportable first"); elsewhere a block's allocation is its only one. No answer changes, only
-    /// which allocation the kernel's fill holds back. RADV on the Radeon 780M, Mesa 26.2.6 under
-    /// Linux 7.3.1; held on the GPU measured alone.
+    /// earlier took 0.12 to 0.31 ms. The runtime makes a pooled block of plain memory by its own
+    /// allocation alone on every driver, this one too, so that its making holds the submissions
+    /// (`docs/FAST-PATHS.md`, known gaps). RADV on the Radeon 780M, Mesa 26.2.6 under Linux
+    /// 7.3.1; held on the GPU measured alone.
     PlainAllocationsHoldSubmissions,
 }
 
@@ -2058,10 +2056,8 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// 7.3.1): a command buffer committed about every millisecond waited for each 64 MiB block's
 /// making that began before it, 10 to 29 ms, 90 to 96% of the making on a CPU in the kernel; a
 /// plain allocation of 64 MiB took 9.7 to 10.6 ms at the median from the page allocator and 0.12
-/// to 0.31 ms from the pages of one freed 20 ms before; and with each block's pages filled
-/// through an exportable allocation freed at once, 0 and 1 of about 7000 and 14000 turnarounds a
-/// phase took 8 ms or more, where with plain allocations 11 to 13 did. Every other driver and
-/// GPU is unmeasured, its blocks allocated as before.
+/// to 0.31 ms from the pages of one freed 20 ms before. Every other driver and GPU is
+/// unmeasured.
 pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     Measured {
         fact: DriverFact::RobustIndexFetchReadsZero,

@@ -1079,8 +1079,8 @@ driver's. Each is open work.
   buffer where the device's buffers lie in plain blocks; not the runtime's own pages, which it
   imports) shares the reservation of the process's buffer objects on RADV, and its
   `vkAllocateMemory` holds every submission of the process while the kernel fills its pages (the
-  row above), unless the next row's fill left those pages at hand. Pooled blocks are 64 MiB on
-  every device, and a block of images 68 MiB: a sixteenth besides (`IMAGE_BLOCK_SLACK`), since a
+  row above). Pooled blocks are 64 MiB on every device, and a block of images 68 MiB: a
+  sixteenth besides (`IMAGE_BLOCK_SLACK`), since a
   driver's image takes more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a
   `Private` `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, and one of 2048x2048 in 16 MiB
   and 64 KiB, at an alignment of 64 KiB), so that four images of a quarter of a block fit in one:
@@ -1097,95 +1097,13 @@ driver's. Each is open work.
   more, the slowest 32.1 ms), 13 to 15 makings a phase holding 125 to 201 ms in all. Smaller
   blocks shorten each hold and add makings: with blocks of 17 MiB, 0 to 8 turnarounds of 8 ms or
   more a phase (none of 17 ms, the slowest 14.5 ms), 45 to 55 makings a phase holding 138 to
-  230 ms in all, and each texture past 17 MiB in a block of its own. No switch: no answer of
+  230 ms in all, and each texture past 17 MiB in a block of its own. A block's own allocation
+  is its only one: the runtime does not first fill its pages through an exportable allocation of
+  its size, freed at once. On a Radeon 780M under memory pressure most such fills missed (the
+  kernel handed the block other pages), so that the kernel compacted for both allocations: in a
+  scroll of a consumer's guest, every frame gap of 100 ms or more lay within one block making's
+  direct compaction (46 to 164 ms), and with no fill there were none. No switch: no answer of
   Metal's changes. Not announced.
-- **On RADV on a Radeon 780M, a block of plain memory has its pages filled through an exportable
-  allocation first, so that its own making holds no submission; this relies on the kernel
-  recycling freed pages, and is performance only.** On a device whose driver identity carries
-  `DriverFact::PlainAllocationsHoldSubmissions` (RADV on the Radeon 780M, measured: the row
-  above) and that exports pooled memory as an opaque file descriptor (`memory.rs`'s
-  `fd_buffer_types`: the types of a heap that is not device-local, with unified memory), each
-  pooled block of plain memory of such a type is made after an allocation of its size and type
-  exportable as an opaque file descriptor, freed at once (`Memory::fill_plain_blocks`,
-  `BlockMaker::make_as`). That allocation is a buffer object of its own reservation, so the
-  kernel fills its pages while it holds no submission; its free returns them to amdgpu's TTM page
-  pool, and the block's own allocation takes them from there. The dependency, plainly: amdgpu
-  and TTM return a freed buffer object's pages to their pool, which is the kernel's behaviour and
-  no Vulkan guarantee. Where the kernel hands the block other pages (the pool emptied by its
-  shrinker, or the pages taken by another allocation meanwhile), the block's allocation fills
-  them and holds the submissions, a plain making as without the fill; the block is the same
-  plain block either way. `WorkCounts::plain_block_fills_saved` counts the fills whose block was
-  then allocated in under 1 ms (`FILL_SAVED_BELOW`), `plain_block_fills_missed` the others, so
-  a host's runs show whether its kernel recycled the pages. A device fills first only while its
-  fills save (`memory.rs`'s `Fills`): once 3 of its last 4 fills missed, the next 2 such blocks
-  are made plain, then one is filled, a probe, the plain makings between probes doubling with each
-  probe that missed up to 32, until a probe saves (`WorkCounts::plain_block_fills_skipped` counts
-  the plain ones). A fill that missed had the kernel fill the block's pages twice, and on a host
-  short of free memory compact and reclaim for their high orders twice, which every process of
-  that host waits on. A miss alone or in a pair is a race, which a quiet host sees too: of 18
-  misses in `tests::reclaim_submit_bench`'s quiet phases on um870 and gem10 (six runs of three to
-  five arms), 17 were fills whose free returned in 0.06 to 0.20 ms, the pages left to the
-  kernel's deferred delete, the block allocated before they were back (most frees take 2.3 ms or
-  more, returning the pages); under um870's pressed phase, 44 of 47 misses freed in 2.7 ms or
-  more, and the base's came in runs of up to 6. On a Radeon 780M (RADV PHOENIX, Mesa 26.2.6,
-  Linux 7.3.1), the kernel's page pools emptied before each run, the arms of the row above, two
-  runs each, without the fill and with it (turnarounds of 8 ms or more a phase, of 17 ms or more,
-  the slowest, and the makings' `vkAllocateMemory` in all; the makings the same, 13 to 15 a
-  phase, 3 to 5 in the scrolled arm's quiet phase):
-
-  | Arm, phase | Without: 8 ms, 17 ms, slowest, held | With: 8 ms, 17 ms, slowest, held |
-  |---|---|---|
-  | 1024x1024, quiet | 13 and 13, 0, 10.9 ms, 126 to 132 ms | 0 and 0, 0, 1.5 ms, 1.4 ms |
-  | 1024x1024, fragmented | 13 and 12, 1 and 1, 27.5 ms, 135 to 139 ms | 1 and 0, 0, 8.8 ms, 2.6 to 11.1 ms |
-  | Bursts, quiet | 12 and 12, 0, 11.2 ms, 125 to 127 ms | 0 and 0, 0, 1.0 ms, 1.7 to 1.8 ms |
-  | Bursts, fragmented | 13 and 13, 1 and 0, 17.6 ms, 133 to 135 ms | 1 and 0, 0, 13.8 ms, 2.2 to 16.9 ms |
-  | Mixed sizes, quiet | 13 and 13, 0, 11.6 ms, 136 to 141 ms | 0 and 0, 0, 1.6 ms, 1.5 to 1.6 ms |
-  | Mixed sizes, fragmented | 13 and 14, 3 and 5, 32.1 ms, 184 to 201 ms | 1 and 2, 0, 9.8 ms, 11.8 to 20.9 ms |
-  | Scrolled, quiet | 2 and 3, 0, 11.6 ms, 36 to 38 ms | 0 and 0, 0, 1.3 ms, 0.7 ms |
-
-  The turnarounds of 8 ms or more left with the fill are mostly its misses: 1 or 2 makings of a
-  fragmented phase's 13 or 14 whose block filled its own pages (8.6 to 14.0 ms). With blocks of
-  images of 68 MiB, as made now (the same arms, three runs), a quiet phase had 0 or 1 such
-  turnarounds, no fill missed and the makings' `vkAllocateMemory` 1.2 to 2.0 ms in all; a fragmented
-  one 0 to 4 (the slowest 33.1 ms, behind a missed block whose allocation took 29.4 ms), 0 to 2 of
-  its 12 or 13 fills missed; of 957 submissions begun while a fill ran (one run), 1 turned around in
-  8 ms or more (14.0 ms, fragmented), and in another run a 24.0 ms one began within a 32 ms fill on
-  the fragmented host. In a process that submits nothing (`tests::block_fills`, four runs on each
-  780M below) 0 or 1 of 5 fills missed.
-
-  The decision, `tests::reclaim_submit_bench`'s images arm, two runs each of three binaries
-  interleaved: the base (every block filled, development before the decision), the decision, and
-  the arm with no fill (`reclaim_submit_bench_images_unfilled`), the kernel's TTM page pools
-  emptied (through the shrinker's debugfs) before each arm and again before its pressed phase. On
-  um870's Radeon 780M (RADV, the device Mesa names PHOENIX, Mesa 26.2.6, Linux 7.3.1-1-cachyos;
-  the pressed phase's fragmenting took 14.8 to 15.9 GiB of 15.8 to 18.3 GiB free, and the
-  bench's process saw 3,707 to 4,835 compactions an arm), per pressed phase of 12 makings, base,
-  decision, no fill: the fills that missed 4 and 3, 3 (the decision never stopping) and 4 of 6
-  (stopping: 6 makings plain), none; turnarounds of 8 ms or more 19 and 4, 5 and 11, 11 and 17,
-  of 17 ms or more 1 and 1, 1 and 2, 8 and 9, the slowest 150 and 45 ms, 82 and 128 ms, 164 and
-  59 ms; the ready thread's makings (a fill's allocation and free and the block's allocation) 419
-  and 461 ms, 379 and 343 ms, 494 and 292 ms, of which in compaction 269 and 299 ms, 215 and 203
-  ms, 374 and 179 ms; block-sized buffer objects 2.0, 2.0 and 1.5, and 1.0 a making. In its quiet
-  phase the decision filled every block as the base did (1 miss alone in 26 fills) with no
-  turnaround of 8 ms or more, where the arm with no fill had 12 of them in each run (the slowest
-  9.4 and 10.0 ms). On gem10's Radeon 780M (PHOENIX, the same Mesa and kernel; the fragmenting
-  took 9.7 to 9.9 GiB of 17.4 to 21.1 GiB free, so that neither phase compacted), with the images
-  and bursts arms: the base's fills missed 3 of 100 and the decision's 2 of 100, never 3 of 4, so
-  that it made no block plain; the turnarounds of 8 ms or more were 0 to 3 a phase with the base,
-  0 with the decision and 7 to 12 with no fill.
-
-  The cost is the making thread's (the ready thread, off every submission's way): the exportable
-  allocation (10 to 13 ms for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the
-  pool; the two about 16 ms a 68 MiB block on the quiet host, at most 17.3 ms) besides the block's
-  own, so that a block's making took 45 to 74% longer on the quiet host (about 13.7 ms against
-  9.3 ms) and 33 to 96% longer on the fragmented one. The plain making it replaces ran 90 to 96%
-  on a CPU; the fill's allocation and free ran 91 to 99% and 85 to 100% on a CPU (the tenth and
-  ninetieth percentiles of the quiet phases' saved fills above, um870 and gem10). Each fill also
-  maps its buffer object, so that the ready thread makes page tables for it too: in an images arm
-  on um870 above, 439 page-table buffer objects (4 KiB of VRAM) with every block filled, 276 with
-  the decision and 124 with no fill, for 26 blocks each. Every other device makes its plain blocks
-  with no fill, its driver identity without the fact (`tests::block_fills`: lavapipe and ANV on an
-  Iris Xe fill none). No switch: no answer of Metal's changes. Not announced.
 
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,

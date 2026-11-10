@@ -1,7 +1,6 @@
 use crate::memory::{
     candidates, fd_buffer_types, host_cached, host_cached_placement, host_incoherent, kept_budget,
-    overflow_candidates, Fills, MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES,
-    KEPT_EMPTY_FOR,
+    overflow_candidates, MemoryClass, Pool, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -799,55 +798,4 @@ fn short_buffers_are_placed_without_gaps() {
         assert_eq!((at, offset), (block, end), "{length} bytes");
         end = offset + requirements.size;
     }
-}
-
-/// A device fills its plain blocks first while its fills save (`memory.rs`, "Blocks filled
-/// exportable first"): misses alone or in pairs stop nothing; once 3 of its last 4 fills missed,
-/// it leaves the next 2 makings plain, then probes, the plain makings between probes doubling with
-/// each missed probe up to 32; a probe that saves brings the fills back, the misses before it
-/// forgotten.
-#[test]
-fn fills_stop_once_three_of_the_last_four_miss_and_a_saved_probe_brings_them_back() {
-    let fills = Fills::default();
-    // Unmeasured, and while fills save or miss alone or in pairs, every block is filled.
-    for saved in [
-        true, false, true, true, false, false, true, true, true, false,
-    ] {
-        assert!(fills.fill_next());
-        fills.filled(saved);
-    }
-    let decided =
-        |fills: &Fills, makings| (0..makings).map(|_| fills.fill_next()).collect::<Vec<_>>();
-    let probe = |unfilled| {
-        let mut probe = vec![false; unfilled];
-        probe.push(true);
-        probe
-    };
-    // The miss above, a miss and a save, then a miss: 3 of the last 4 missed.
-    for saved in [false, true] {
-        assert!(fills.fill_next());
-        fills.filled(saved);
-    }
-    assert!(fills.fill_next());
-    fills.filled(false);
-    for unfilled in [2, 4, 8, 16, 32, 32] {
-        assert_eq!(decided(&fills, unfilled + 1), probe(unfilled), "{unfilled}");
-        fills.filled(false);
-    }
-    assert_eq!(
-        decided(&fills, 33),
-        probe(32),
-        "the backoff stays at its most"
-    );
-    fills.filled(true);
-    for _ in 0..40 {
-        assert!(fills.fill_next(), "a saved probe brings the fills back");
-    }
-    // The misses before the probe are forgotten: two more stop nothing; a third does.
-    for _ in 0..2 {
-        fills.filled(false);
-        assert!(fills.fill_next());
-    }
-    fills.filled(false);
-    assert_eq!(decided(&fills, 3), probe(2));
 }
