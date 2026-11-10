@@ -8,8 +8,9 @@
 //! access on constant vectors and aggregates. SCCP does **no float arithmetic folding**: the
 //! device's denormal and fast-math behavior is the lowering's contract. It reads what a float
 //! constant is ([`Folder::float_class`]) for the answers an operation's constant operand decides
-//! whatever the others hold: a NaN operand, quieted ([`Folder::quiet_nan`]), and a product's
-//! `+0` under `nnan` and `nsz` ([`Folder::float_zero`]). Anything else, and any
+//! whatever the others hold: a NaN operand, as it is beside a value only the run knows and quieted
+//! ([`Folder::quiet_nan`]) where every operand is a constant, and a product's `+0` under `nnan`
+//! and `nsz` ([`Folder::float_zero`]). Anything else, and any
 //! operation whose result would be poison (division by zero, an oversized shift, an out-of-range
 //! element), is left unfolded. A fold never guesses: `None` means "not a constant here".
 //!
@@ -468,10 +469,11 @@ impl Folder<'_> {
         self.mk(ty, Const::Float(bits), m).map(Some)
     }
 
-    /// What the float constant `c` is to SCCP's float folds: a scalar, or a vector each lane of
-    /// which is, a zero of either sign (`zeroinitializer` included) or a NaN. A vector of mixed
-    /// lanes, or with an `undef` or `poison` lane, is [`FloatClass::Other`], as is anything not a
-    /// float constant.
+    /// What the float constant `c` is to SCCP's float folds: a zero of either sign (a scalar, a
+    /// vector each lane of which is one, `zeroinitializer` included), or a NaN (a scalar, or a
+    /// vector each lane of which is a NaN or `poison`, at least one a NaN, as LLVM's `m_NaN`
+    /// matches it). Anything else is [`FloatClass::Other`]: a vector of mixed lanes, one with an
+    /// `undef` lane, or a zero with a `poison` lane, and anything not a float constant.
     pub fn float_class(&self, c: ConstId, m: &mut Meter) -> Result<FloatClass, Error> {
         let Some(ty) = self.ty(c) else {
             return Ok(FloatClass::Other);
@@ -485,18 +487,30 @@ impl Folder<'_> {
             }
             (Some(Type::Vector { .. }), Some(Const::Aggregate(lanes))) => {
                 m.tick(u32::try_from(lanes.len()).unwrap_or(u32::MAX))?;
-                let mut class = None;
+                let (mut zeros, mut nans) = (0, 0);
                 for &lane in lanes.iter() {
-                    let this = self.scalar_class(lane);
-                    if this == FloatClass::Other || class.is_some_and(|c| c != this) {
-                        return Ok(FloatClass::Other);
+                    match self.scalar_class(lane) {
+                        FloatClass::Zero => zeros += 1,
+                        FloatClass::Nan => nans += 1,
+                        FloatClass::Other if self.poison(lane) => {}
+                        FloatClass::Other => return Ok(FloatClass::Other),
                     }
-                    class = Some(this);
                 }
-                Ok(class.unwrap_or(FloatClass::Other))
+                Ok(if zeros == lanes.len() {
+                    FloatClass::Zero
+                } else if nans > 0 && zeros == 0 {
+                    FloatClass::Nan
+                } else {
+                    FloatClass::Other
+                })
             }
             _ => Ok(self.scalar_class(c)),
         }
+    }
+
+    /// Whether `c` is `poison`.
+    fn poison(&self, c: ConstId) -> bool {
+        matches!(self.value(c), Some(Const::Poison))
     }
 
     /// [`Folder::float_class`] of a scalar.
@@ -524,9 +538,9 @@ impl Folder<'_> {
         }
     }
 
-    /// The NaN constant `c` (a scalar, or a vector each lane of which is one), each NaN quieted:
-    /// its sign and payload kept and its quiet bit, the top mantissa bit, set. LLVM's
-    /// `propagateNaN` of a NaN operand.
+    /// The NaN constant `c` ([`FloatClass::Nan`]) with each NaN quieted, its sign and payload kept
+    /// and its quiet bit, the top mantissa bit, set; a `poison` lane stays `poison`. What constant
+    /// folding of an operation whose every operand is a constant makes of its first NaN operand.
     pub fn quiet_nan(&mut self, c: ConstId, m: &mut Meter) -> Result<Option<ConstId>, Error> {
         self.transient(m, |f, m| f.quiet_nan_in(c, m))
     }
@@ -543,6 +557,10 @@ impl Folder<'_> {
         };
         let mut quiet = Vec::with_capacity(lanes.len());
         for lane in lanes {
+            if self.poison(lane) {
+                quiet.push(lane);
+                continue;
+            }
             match self.quiet_scalar(lane, m)? {
                 Some(q) => quiet.push(q),
                 None => return Ok(None),

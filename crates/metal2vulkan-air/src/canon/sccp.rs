@@ -20,15 +20,16 @@
 //!   reads of an undefined constant vary from read to read, zero and the false way among them; its
 //!   predicate gates nothing, whether negated or not (Metal probes).
 //! - A float operation a constant operand decides, whatever the run computes for the others, is
-//!   that constant, as LLVM's simplification of the operation decides it but for its poison step
+//!   that constant, as Metal's compiler decides it once the constants are bound
 //!   ([`Solver::float_fold`]): an `fadd`, `fsub`, `fmul`, `fdiv` or `air.fma` with a NaN operand
-//!   (every lane a NaN) is the first such operand, quieted, and an `fmul` under `nnan` and `nsz`
-//!   with an operand every lane of which is a zero is `+0`. SCCP computes no float arithmetic:
-//!   these are the answers no operand the run computes can change. Metal answers so once the
-//!   operand is a bound function constant: a NaN, and `+0` for a NaN or an infinity times a zero,
-//!   on the Apple M3 Max, the AMD Radeon Pro 5300M and the Intel UHD Graphics 630 (macOS 27.0.1),
-//!   the M3's NaN the operand's, quieted. A device given the operation itself answers otherwise:
-//!   MoltenVK 1.4.2 `0` for a quotient by a NaN, and MoltenVK and RADV a NaN for the products.
+//!   (every lane a NaN or `poison`) is the first such operand, as it is beside a value only the
+//!   run knows and quieted where every operand is a constant, and an `fmul` under `nnan` and
+//!   `nsz` with an operand every lane of which is a zero is `+0`. SCCP computes no float
+//!   arithmetic: these are the answers no operand the run computes can change. Under `nnan` such a
+//!   NaN makes the AIR's value `poison`, which any answer refines; the NaN is Metal's answer for
+//!   a fragment's output (the Apple M3 Max, the AMD Radeon Pro 5300M and the Intel UHD Graphics
+//!   630, macOS 27.0.1), where a device given the operation answers otherwise (MoltenVK 1.4.2 `0`
+//!   for a quotient by a NaN, MoltenVK and RADV a NaN for an infinity or a NaN times a zero).
 //!
 //! Afterwards unreachable blocks are deleted, branches on constants become unconditional, PHIs
 //! keep one entry per remaining edge, and instructions with a constant value are replaced by it.
@@ -898,12 +899,13 @@ impl<'b> Solver<'b> {
 
     /// A float operation over `ops` (`fadd`, `fsub`, `fmul`, `fdiv`, or `air.fma`; `product` for
     /// `fmul`) with the fast-math flags `fmf`, typed `ty`, decided by its constant operands
-    /// whatever the others hold, as LLVM simplifies the operation (`simplifyFPOp`,
-    /// `simplifyFMAFMul`) but for its poison step: an operand that is a NaN, the first in operand
-    /// order, is the result, quieted; then a product under `nnan` and `nsz` with an operand each
-    /// lane of which is a zero of either sign is `+0`. `Top` while an operand before the deciding
-    /// one is unknown. `None` where no operand decides it, and wherever one is an unsupplied
-    /// constant's undefined value, which keeps its own reading.
+    /// whatever the others hold, as Metal's compiler decides it once the constants are bound. A NaN
+    /// operand, the first in operand order, is the result: as it is beside an operand only the run
+    /// knows (LLVM's `propagateNaN` as Metal's compiler has it, with no poison step for `nnan`),
+    /// and quieted where every operand is a constant (constant folding). Otherwise a product under
+    /// `nnan` and `nsz` with an operand each lane of which is a zero of either sign is `+0`. `Top`
+    /// while an operand is unknown. `None` where no operand decides it, and wherever one is an
+    /// unsupplied constant's undefined value, which keeps its own reading.
     fn float_fold(
         &self,
         (product, fmf): (bool, FastMath),
@@ -912,20 +914,26 @@ impl<'b> Solver<'b> {
         cx: &mut Context<'_>,
         m: &mut Meter,
     ) -> Result<Option<Lat>, Error> {
-        if ops.iter().any(|&v| matches!(self.lat(v), Lat::Fc(_))) {
-            return Ok(None);
-        }
-        let mut zero = false;
+        let (mut nan, mut zero, mut run) = (None, false, false);
         for &v in ops {
             match self.lat(v) {
+                Lat::Fc(_) => return Ok(None),
                 Lat::Top => return Ok(Some(Lat::Top)),
+                Lat::Bottom => run = true,
                 Lat::Const(k) => match cx.folder.float_class(k, m)? {
-                    FloatClass::Nan => return Ok(cx.folder.quiet_nan(k, m)?.map(Lat::Const)),
+                    FloatClass::Nan => {
+                        nan.get_or_insert(k);
+                    }
                     FloatClass::Zero => zero = true,
                     FloatClass::Other => {}
                 },
-                Lat::Fc(_) | Lat::Bottom => {}
             }
+        }
+        if let Some(k) = nan {
+            if run {
+                return Ok(Some(Lat::Const(k)));
+            }
+            return Ok(cx.folder.quiet_nan(k, m)?.map(Lat::Const));
         }
         if product && zero && fmf.contains(FastMath::NNAN) && fmf.contains(FastMath::NSZ) {
             return Ok(Some(Lat::Const(cx.folder.float_zero(ty, m)?)));
