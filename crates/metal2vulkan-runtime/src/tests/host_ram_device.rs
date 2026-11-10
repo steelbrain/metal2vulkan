@@ -771,7 +771,10 @@ fn the_ahead_thread_leaves_the_allocation_limit_to_the_objects() {
 /// before those chunks went: the allocation that finds the limit waits for that give-back, and
 /// is made, rather than refused while chunks no object took hold the device's allocations
 /// (`allocations.rs`). The objects have the whole rest of the limit, as Metal, which holds no
-/// such chunks, would give them.
+/// such chunks, would give them, but for the blocks of the runtime's own pools made meanwhile
+/// (`Allocations::room_ahead` leaves the runtime's work the room past the margin): on the M3 Max
+/// under MoltenVK a pool of buffers makes the device's first pooled block in that room, once the
+/// chunks went (a block made ahead that a placement waited for), where lavapipe makes none here.
 #[test]
 fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     const GIVE_BACK_HELD: Duration = Duration::from_millis(500);
@@ -784,6 +787,7 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     allocations.hold_give_backs(GIVE_BACK_HELD);
     let waits = allocations.give_back_waits();
     let begun = Instant::now();
+    let start = device.work_counts();
     let object = at.object_past(&device);
     // At once: the room the margin left, and the untaken chunks' once they went back.
     let untaken = u64::from(AHEAD) - 1;
@@ -791,10 +795,15 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     let (made, refused) = dedicated_until_refused(&device, limit, at.page);
     let took = begun.elapsed();
     let full = device.work_counts();
+    // The runtime's pooled blocks live at the refusal that were not before the object.
+    let pooled =
+        |counts: &crate::WorkCounts| counts.memory_blocks_live + counts.empty_memory_blocks_live;
+    let own = pooled(&full).saturating_sub(pooled(&start));
     eprintln!(
         "HOST-RAM: a limit of {limit}: the give-back held {GIVE_BACK_HELD:?}; {} buffers of \
-         blocks of their own made at once of a room of {room} in {took:?}, the next refused \
-         ({refused:?}); {} chunks given back, {} live then; {} waits for the give-back",
+         blocks of their own made at once of a room of {room} in {took:?}, beside {own} block(s) \
+         of the runtime's pools, the next refused ({refused:?}); {} chunks given back, {} live \
+         then; {} waits for the give-back",
         made.len(),
         at.given(&full),
         at.chunks_live(&full),
@@ -807,7 +816,7 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     );
     assert_eq!(at.given(&full), untaken, "the untaken chunks went back");
     assert!(
-        made.len() >= room as usize,
+        made.len() as u64 + own >= u64::from(room),
         "the objects lacked part of the rest of the limit ({refused:?})"
     );
     assert!(
