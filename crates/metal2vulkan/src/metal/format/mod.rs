@@ -1262,9 +1262,11 @@ fn copies_only_repr(pf: PixelFormat) -> Repr {
 /// texels: the fragment function computes Metal's blend in the shader, inside the pixel
 /// interlock, from the texel it reads. `Ok` where the device orders fetch through the pixel
 /// interlock alone and that form is exact for an attachment of `pf` written whole under a blend
-/// Metal's model holds; else what blocks it. A pipeline's own blend, write mask or output may still
-/// be refused by name (`Feature::ExtendedRangeBlend`), as [`rotated_channels`]' blends are per
-/// pipeline. Another format answers `NotImplemented(Format)`.
+/// Metal's model holds (a padded 10-bit form's among them); else what blocks it. A pipeline's own
+/// blend, write mask or output may still be refused by name (`Feature::ExtendedRangeBlend`), as
+/// [`rotated_channels`]' blends are per pipeline. A bfloat format answers `NotRepresentable(Format)`:
+/// Metal blends none (`compile_render_pipeline` refuses such a blend
+/// `InvalidDescriptor(ColorAttachment)`). Another format answers `NotImplemented(Format)`.
 pub fn extended_range_blend(pf: PixelFormat, profile: &DeviceProfile) -> Result<(), Unsupported> {
     crate::lower::fragment::extended_range_blend(pf, profile)
 }
