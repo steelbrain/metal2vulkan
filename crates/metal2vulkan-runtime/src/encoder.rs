@@ -17,7 +17,19 @@
 //!   with its uses: in an encoder whose commands Metal runs in order (blits, serial dispatches) it
 //!   gets the barrier those uses need after the earlier commands. `end` hands the encoder's summary
 //!   to the command buffer; the scheduler records the barriers between encoders, batches and queues
-//!   as it submits each batch.
+//!   as it submits each batch, each in a command buffer of its own it begins before the encoder's.
+//! - **Encoders past [`PLANNED_BARRIERS`]** of their command buffer begin their own
+//!   `VkCommandBuffer` with a barrier from everything before ([`EncoderCore::open`]), and the
+//!   scheduler begins none before them where that one still leads the encoder's
+//!   (`command_buffer/submit.rs`): a batch begins at most that many command buffers for its
+//!   encoders' barriers however many encoders it holds. A driver may hold device memory of a
+//!   fixed pool for each command buffer until it is begun again, reset or freed: ANV below
+//!   Xe-HP (Mesa 26.2.6, `anv_device.c`) holds a 64 KiB block of its 1 GiB binding-table pool
+//!   for each, 16,384 at most, and on ms01's Iris Xe a submission that began command buffers
+//!   past them crashed in the driver as it recorded a clear (`tests::many_passes`). The barrier
+//!   from everything orders all the encoder's commands after all before it on the queue, so it
+//!   holds every barrier the scheduler would plan before the encoder; it also orders commands
+//!   that need no barrier. Counted: `WorkCounts::encoders_barriered_at_open`.
 //! - **Shadowed textures** (`shadow.rs`). The encoder copies a 2D texture or array over a buffer,
 //!   or a texture buffer viewed through a staging buffer, from the buffer before the commands
 //!   that use it, and back after the ones that write it, as commands of its own; `end` copies
@@ -97,6 +109,12 @@ struct CoreRoom(Box<MaybeUninit<EncoderCore>>);
 /// end hands the core on through each step as a pointer rather than its state; its open takes the
 /// box an ended encoder gave back, so the box costs no allocation once the device has one.
 #[derive(Default)]
+/// The encoders of a command buffer whose barriers the scheduler plans and records before each in
+/// a command buffer of barriers of its own (the module docs): each later encoder's own begins
+/// with a barrier from everything before. Past twice the 706 render passes of a frame split at
+/// every indexed draw, in one command buffer (`tests::linear_runs`'s `CHUNK_PASSES`).
+pub(crate) const PLANNED_BARRIERS: usize = 2048;
+
 pub(crate) struct SpareCores(Mutex<Vec<CoreRoom>>);
 
 impl SpareCores {
@@ -124,6 +142,10 @@ pub(super) struct Recorded {
     pub(super) encoder: usize,
     /// Its `VkCommandBuffer`s, in order; once its batch is submitted, each segment's among them.
     pub(super) raws: Vec<vk::CommandBuffer>,
+    /// The encoder's own `VkCommandBuffer` that began with a barrier from everything before
+    /// (`EncoderCore::open`): where it is still the first of `raws`, its batch records no
+    /// command buffer of barriers before the part (`command_buffer/submit.rs`).
+    pub(super) barriered: Option<vk::CommandBuffer>,
     /// Its segments, in order, until its batch is submitted.
     pub(super) segments: Vec<Segment>,
     /// What the encoder used, for the barriers its submission records; each segment's uses join
@@ -342,6 +364,11 @@ pub(super) struct EncoderCore {
     /// commands meanwhile record into `raw`, which goes before it in submission order, as they go
     /// before a pass recorded at its end.
     pass: Option<vk::CommandBuffer>,
+    /// The `VkCommandBuffer` the encoder opened in, which [`open`](Self::open) began with a
+    /// barrier from everything before: past the first [`PLANNED_BARRIERS`] encoders of its
+    /// command buffer. Not `recorded`: a pass may hold it, and what records before that pass
+    /// goes in another before it, which leads the encoder's then.
+    barriered: Option<vk::CommandBuffer>,
     /// The encoder's `VkCommandBuffer`s ended before a segment, in order.
     ended: Vec<vk::CommandBuffer>,
     /// The segments it left for commit, `executions_at` counting its own executions.
@@ -606,6 +633,15 @@ impl EncoderCore {
         }
         // The first encoder of a timed command buffer writes its start first (`gpu_time.rs`).
         command_buffer.open_start(&mut state, raw);
+        // Past the encoders whose barriers the scheduler plans, a barrier from everything before
+        // leads the encoder's commands (the module docs).
+        let barriered = (state.encoders_ended() >= PLANNED_BARRIERS).then(|| {
+            // SAFETY: the command buffer was just begun, outside a render pass, under the state
+            // lock; only this encoder records it.
+            unsafe { Barrier::everything().record(shared.vk(), raw) };
+            shared.counts.encoder_barriered_at_open();
+            raw
+        });
         state.encoder_open = true;
         // Made under the protection options set now (`command_buffer/protection.rs`).
         state.protected_made();
@@ -628,6 +664,7 @@ impl EncoderCore {
             raw,
             recorded: false,
             pass: None,
+            barriered,
             ended: Vec::new(),
             segments: Vec::new(),
             left_out: 0,
@@ -774,6 +811,7 @@ impl EncoderCore {
             raw,
             recorded: false,
             pass: None,
+            barriered: None,
             ended: Vec::new(),
             segments: Vec::new(),
             left_out: 0,
@@ -2664,6 +2702,7 @@ impl EncoderCore {
         let EncoderCore {
             mut open,
             raw,
+            barriered,
             mut ended,
             segments,
             left_out,
@@ -2753,6 +2792,7 @@ impl EncoderCore {
                 Recorded {
                     encoder,
                     raws: Vec::new(),
+                    barriered,
                     segments: Vec::new(),
                     summary: summary.fences_only(),
                     sparse: Vec::new(),
@@ -2780,6 +2820,7 @@ impl EncoderCore {
                 Recorded {
                     encoder,
                     raws,
+                    barriered,
                     segments,
                     summary,
                     sparse: Vec::new(),

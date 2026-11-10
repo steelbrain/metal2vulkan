@@ -2764,6 +2764,7 @@ field	metal2vulkan-runtime::WorkCounts.driver_diagnostics_withheld	pub driver_di
 field	metal2vulkan-runtime::WorkCounts.empty_memory_blocks_live	pub empty_memory_blocks_live: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_command_buffers_begun	pub encoder_command_buffers_begun: u64
 field	metal2vulkan-runtime::WorkCounts.encoder_primaries_begun_ahead	pub encoder_primaries_begun_ahead: u64
+field	metal2vulkan-runtime::WorkCounts.encoders_barriered_at_open	pub encoders_barriered_at_open: u64
 field	metal2vulkan-runtime::WorkCounts.encoders_reencoded	pub encoders_reencoded: u64
 field	metal2vulkan-runtime::WorkCounts.event_signals_behind_merge	pub event_signals_behind_merge: u64
 field	metal2vulkan-runtime::WorkCounts.event_waits_met	pub event_waits_met: u64

@@ -35,13 +35,15 @@
 //!   left idle does, until they hold at most that many; where that leaves more, the pool given
 //!   back frees its last made past them, a secondary kept ([`past_held`]). A command buffer
 //!   holds what its recording took of the driver's device-wide pools until it is begun again,
-//!   reset or freed, and a pool's recent uses bound only its own. ANV below Xe-HP (Mesa 26.2.4,
-//!   `anv_device.c`) takes a 64 KiB block of a 1 GiB binding-table pool for each command buffer
-//!   that records a binding table, so a device holds at most 16,384 such command buffers at once,
-//!   and the next one's recording fails with `VK_ERROR_OUT_OF_DEVICE_MEMORY`, which no message
-//!   reports. On ms01's Iris Xe one command buffer of render passes, each a draw beside a cleared
-//!   depth target in a primary and a secondary of its own, failed so at the end of its 8,087th
-//!   pass, the spares holding 424 command buffers. A test's frames of 707 and then 1,413 such
+//!   reset or freed, and a pool's recent uses bound only its own. ANV below Xe-HP (Mesa 26.2.4
+//!   and 26.2.6, `anv_device.c`) takes a 64 KiB block of a 1 GiB binding-table pool for each
+//!   command buffer begun, so a device holds at most 16,384 command buffers at once, and a
+//!   recording past them fails with `VK_ERROR_OUT_OF_DEVICE_MEMORY`, which no message reports,
+//!   or crashes in the driver. On ms01's Iris Xe one command buffer of render passes, each a draw
+//!   beside a cleared depth target in a primary and a secondary of its own, failed so at the end
+//!   of its 8,087th pass, the spares holding 424 command buffers; such a pass records inline in
+//!   one now (`render/inline_first.rs`), and past the first 2,048 encoders of a command buffer
+//!   its batch begins no command buffer of barriers before each (`encoder.rs`). A test's frames of 707 and then 1,413 such
 //!   passes, each frame a command buffer of its own whose pool kept its peak, left the spares
 //!   holding up to 9,771 command buffers of earlier frames before a frame of 1,413 passes, and
 //!   failed so in 6 of 79 runs beside the runtime suite, each where they held 9,716 to 9,771

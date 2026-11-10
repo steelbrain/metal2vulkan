@@ -257,6 +257,7 @@ pub(crate) struct Counters {
     untouched_passes_skipped: AtomicU64,
     inline_passes: AtomicU64,
     inline_passes_split: AtomicU64,
+    encoders_barriered_at_open: AtomicU64,
     kept_draws_carried: AtomicU64,
     kept_draws_carry_dropped: [AtomicU64; CarryDropped::COUNT],
     inline_split_instances: AtomicU64,
@@ -2778,6 +2779,13 @@ impl Counters {
     /// recorded after a barrier for the encoder's earlier commands (`tracker::EncoderUses`).
     pub(crate) fn command_barrier(&self) {
         self.command_barriers.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder past the first `PLANNED_BARRIERS` of its command buffer began its own command
+    /// buffer with a barrier from everything before (`encoder.rs`).
+    pub(crate) fn encoder_barriered_at_open(&self) {
+        self.encoders_barriered_at_open
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A render pass's first instance began inline in a primary command buffer of its encoder's
@@ -5497,6 +5505,13 @@ pub struct WorkCounts {
     pub command_buffers_begun_batch_barriers: u64,
     /// Of `command_buffers_begun`, barrier command buffers recorded to keep.
     pub command_buffers_begun_kept_barriers: u64,
+    /// Encoders past the first 2,048 of their command buffer, each of whose own command buffers
+    /// began with a barrier from everything before on its queue, so its batch begins no command
+    /// buffer of barriers before it (the barriers the scheduler plans for the first 2,048 are
+    /// recorded so): a batch of any number of encoders begins at most 2,048 command buffers for
+    /// their barriers. Such a barrier orders every command of the encoder after every command
+    /// before it, where Metal orders only those whose resources meet.
+    pub encoders_barriered_at_open: u64,
     /// Of `command_buffers_begun`, the device's own submissions' and staging submissions'.
     pub command_buffers_begun_internal: u64,
     /// Of `encoder_command_buffers_begun`, the encoders' own `VkCommandBuffer`s begun ahead: a
@@ -8482,6 +8497,7 @@ impl Device {
             unrun_instances_ended: counters.unrun_instances_ended.load(Ordering::Relaxed),
             untouched_passes_skipped: counters.untouched_passes_skipped.load(Ordering::Relaxed),
             inline_passes: counters.inline_passes.load(Ordering::Relaxed),
+            encoders_barriered_at_open: counters.encoders_barriered_at_open.load(Ordering::Relaxed),
             kept_draws_carried: counters.kept_draws_carried.load(Ordering::Relaxed),
             kept_draws_carry_dropped_between: carry_dropped(CarryDropped::Between),
             kept_draws_carry_dropped_layout: carry_dropped(CarryDropped::Layout),

@@ -5,11 +5,10 @@
 //! A secondary per instance costs GPU time and CPU on every driver measured: on ms01's Iris Xe
 //! (ANV) about 11 us of GPU and 8 us of recording CPU per pass, on a Radeon 780M (RADV) and an
 //! RTX 5080 about 1 to 3 us of each, whatever the draw count. And a secondary is one more
-//! command buffer a pass holds until its command buffer completes: on ANV below Xe-HP each that
-//! records a binding table takes a 64 KiB block of the device's 1 GiB binding-table pool until it
-//! is begun again, reset or freed (`spares.rs`), so one command buffer of passes that each
-//! recorded a primary and a secondary failed at the end of its 8,087th pass on ms01's Iris Xe
-//! (`tests::many_passes`). Everything else of the pass records as before, at its end; only where
+//! command buffer a pass holds until its command buffer completes: on ANV below Xe-HP each begun
+//! takes a 64 KiB block of the device's 1 GiB binding-table pool until it is begun again, reset
+//! or freed (`spares.rs`), so one command buffer of passes that each recorded a primary and a
+//! secondary failed at the end of its 8,087th pass on ms01's Iris Xe (`tests::many_passes`). Everything else of the pass records as before, at its end; only where
 //! the first instance's commands go changes.
 //!
 //! - **The command buffer.** The pass takes the encoder's own command buffer where nothing has

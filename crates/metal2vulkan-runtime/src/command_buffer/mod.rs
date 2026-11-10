@@ -1019,6 +1019,11 @@ impl State {
         self.status != CommandBufferStatus::NotEnqueued || self.queued_commit.is_some()
     }
 
+    /// How many of the command buffer's encoders ended so far: the place of the next.
+    pub(super) fn encoders_ended(&self) -> usize {
+        self.ended.len()
+    }
+
     /// An encoder of `kind` ended, its commands' uses and bindings having named `keys`, having
     /// made `residency` resident (a compute or render encoder's): it joins the ended encoders,
     /// with the event waits and signals encoded before it, and what it made resident joins the

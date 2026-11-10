@@ -84,6 +84,7 @@ impl CommandBuffer {
             Recorded {
                 encoder,
                 raws: recorded.raws,
+                barriered: None,
                 segments: Vec::new(),
                 summary: recorded.summary,
                 sparse: Vec::new(),

@@ -769,12 +769,23 @@ impl CommandBufferShared {
             work.push(self.record_barriers(&mut state, &globals, &entries, stamps)?);
         }
         for (offset, barrier) in barriers.iter().enumerate() {
+            let moves = held_moves.transitions(offset);
+            // An encoder whose own command buffer leads it, begun with a barrier from everything
+            // before (`encoder.rs`, past `PLANNED_BARRIERS`), holds the barrier planned before
+            // it: no command buffer of barriers goes there, but one that also carries the
+            // completed work's barrier, the start or a held depth's move.
+            let part = &state.recorded[start + offset];
+            let barriered = (part.barriered).is_some_and(|raw| part.raws.first() == Some(&raw));
+            if barriered && completed_barrier.is_none() && start_stamp.is_none() && moves.is_empty()
+            {
+                work.extend(&part.raws);
+                continue;
+            }
             let globals: Vec<Barrier> = completed_barrier
                 .take()
                 .into_iter()
                 .chain(*barrier)
                 .collect();
-            let moves = held_moves.transitions(offset);
             if !globals.is_empty() || start_stamp.is_some() || !moves.is_empty() {
                 started |= offset == 0;
                 let stamps = Stamps {
