@@ -2434,7 +2434,10 @@ fn a_frame_s_pass_opens_allocate_within_their_bound() {
     eprintln!("FRAME-COST {device}: {each:.2} allocations a pass open, at most {bound} kept");
     assert!(
         each <= bound,
-        "{each:.2} allocations a pass open, more than {bound}"
+        "{each:.2} allocations a pass open, more than {bound}; each open's, in order: {:?}",
+        (frame.open.iter())
+            .map(|open| open.allocations.unwrap())
+            .collect::<Vec<_>>()
     );
 }
 
