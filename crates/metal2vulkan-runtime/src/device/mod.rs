@@ -655,7 +655,7 @@ pub(super) struct DeviceShared {
     pub(super) pipeline_pool: crate::pipeline::pool::Pool,
     /// The thread that lets go of what a released state's pool pieces gave back as they ended
     /// (`pipeline/reaper.rs`).
-    pub(super) reaper: crate::pipeline::reaper::Reaper,
+    pub(super) reaper: Arc<crate::pipeline::reaper::Reaper>,
     /// The trails its threads open between a signal and their last let-go of what they held for
     /// the work, which a command buffer's waiters wait for (`trails.rs`).
     pub(crate) trails: Arc<crate::trails::Trails>,

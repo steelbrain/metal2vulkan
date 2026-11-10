@@ -1167,10 +1167,9 @@ where
 /// the scheduler's (`scheduler/`), each `VkQueue`'s waiter, which makes the completion turns
 /// (`command_buffer/completion.rs`), every thread of the handler
 /// pool (`contexts/`), the device's lowering thread (`render/lowering_worker.rs`), and a predicated loop's check's (`command_buffer/rerun.rs`),
-/// whose work the program's command buffers wait for. A thread one
-/// of them starts (the reaper a pipeline state's last release
-/// starts on a handler thread, a program's thread made in a handler) does not take either: it
-/// starts at the default class on macOS ([`spawn`]), and with no floor on Linux.
+/// whose work the program's command buffers wait for. A thread one of them starts (a program's
+/// thread made in a handler) does not take either: it starts at the default class on macOS
+/// ([`spawn`]), and with no floor on Linux.
 pub(crate) fn spawn_user_interactive<F, T>(
     builder: std::thread::Builder,
     f: F,
@@ -1300,14 +1299,13 @@ fn run_at_user_interactive() {
     // before.
     //
     // Reset on fork: a thread this one starts begins with no floor (`uclamp_fork`). Without it,
-    // every thread started from one of these would keep the floor for its life: the reaper a
-    // pipeline state's last release starts on a handler thread, the notices thread, a pipeline
-    // pool's or a compile's thread started by a program's call in a handler, a program's own
-    // thread made there. The kernel's reset also starts such a thread at `SCHED_OTHER` where this
-    // one runs at a real-time policy, and at nice 0 where this one's nice is negative
-    // (`sched_fork`); `SCHED_BATCH`, `SCHED_IDLE` and a nice of 0 or more carry over as before. A
-    // thread without `CAP_SYS_NICE` cannot clear the setting again, the program's code in a
-    // handler included.
+    // every thread started from one of these would keep the floor for its life: the notices
+    // thread, a pipeline pool's or a compile's thread started by a program's call in a handler, a
+    // program's own thread made there. The kernel's reset also starts such a thread at
+    // `SCHED_OTHER` where this one runs at a real-time policy, and at nice 0 where this one's nice
+    // is negative (`sched_fork`); `SCHED_BATCH`, `SCHED_IDLE` and a nice of 0 or more carry over as
+    // before. A thread without `CAP_SYS_NICE` cannot clear the setting again, the program's code
+    // in a handler included.
     //
     // Host-wide: the first call with a utilization clamp since the host booted turns the kernel's
     // clamp accounting on (`static_branch_enable(&sched_uclamp_used)` in `uclamp_validate`) for

@@ -20,14 +20,15 @@
 //!   releasing thread.
 //! - **A release never waits** (the coordinator's rule: Metal's release never blocks, and a
 //!   making takes 20 to 50 s on NVIDIA). The state's release lets go of what was kept and given
-//!   back at once; a piece running then gives back to the device's reaper (`reaper.rs`), which
-//!   the release started, and its thread lets go of it. Where the host cannot start that thread,
-//!   the piece lets go of it itself. A piece that panics drops what it took on its thread.
+//!   back at once, and starts no thread; a piece running then gives back to the device's reaper
+//!   (`reaper.rs`), which the piece starts unless it runs, and its thread lets go of it. Where
+//!   the host cannot start that thread, the piece lets go of it itself. A piece that panics drops
+//!   what it took on its thread.
 //! - **With its trail.** A piece that settled its making before it gives back gives back with the
 //!   trail it opened before the settle (`trails.rs`): it closes once the state keeps what was
 //!   given back, or once the reaper (or the piece, without one) let go of it.
 
-use super::reaper::{Reaper, Reaps};
+use super::reaper::Reaper;
 use crate::device::lock;
 use crate::trails::Trail;
 use std::collections::HashMap;
@@ -42,8 +43,8 @@ struct Holds<T> {
     /// The state let go: no piece takes what was kept any more.
     closed: bool,
     /// Where the pieces running as the state let go give back: the device's reaper, which the
-    /// release started; `None` before, and where the host could not start it.
-    reaps: Option<Reaps>,
+    /// first of them starts; `None` before.
+    reaper: Option<Arc<Reaper>>,
     /// The leases not ended.
     running: usize,
     next: u64,
@@ -69,7 +70,7 @@ impl<T: Send + 'static> PieceHolds<T> {
         Arc::new(PieceHolds {
             state: Mutex::new(Holds {
                 closed: false,
-                reaps: None,
+                reaper: None,
                 running: 0,
                 next: 0,
                 waiting: HashMap::new(),
@@ -96,12 +97,13 @@ impl<T: Send + 'static> PieceHolds<T> {
     }
 
     /// The state's release, returning at once: no piece takes what was kept any more; a piece
-    /// running gives back to `reaper`, started here; everything kept is let go of on this thread.
-    pub(crate) fn close(&self, reaper: &Reaper) {
+    /// running gives back to `reaper`, which it starts ([`Lease::give_back`]), never this
+    /// release; everything kept is let go of on this thread.
+    pub(crate) fn close(&self, reaper: &Arc<Reaper>) {
         let mut state = lock(&self.state);
         state.closed = true;
         if state.running > 0 {
-            state.reaps = reaper.start();
+            state.reaper = Some(Arc::clone(reaper));
         }
         state.waiting.clear();
         state.given_back.clear();
@@ -133,8 +135,8 @@ struct Reaped<T> {
 impl<T: Send + 'static> Lease<T> {
     /// Give back what remains of what the piece took, and end the lease: kept by the state until
     /// a hand-over's thread or the state's release lets go of it, or, once the state let go,
-    /// handed to the reaper. `trail`, the piece's where it settled its making before, closes
-    /// once the state keeps it, or once it was let go of.
+    /// handed to the reaper, whose thread it starts unless it runs. `trail`, the piece's where it
+    /// settled its making before, closes once the state keeps it, or once it was let go of.
     pub(crate) fn give_back(self, held: T, trail: Option<Trail>) {
         let mut state = lock(&self.holds.state);
         if !state.closed {
@@ -143,14 +145,17 @@ impl<T: Send + 'static> Lease<T> {
             drop(trail);
             return;
         }
-        match &state.reaps {
+        // The reaper's thread starts here, outside the lock, which the release takes: a start
+        // can wait (`reaper.rs`).
+        let reaper = state.reaper.clone();
+        drop(state);
+        match reaper.and_then(|reaper| reaper.start()) {
             Some(reaps) => reaps.reap(Box::new(Reaped {
                 _held: held,
                 _trail: trail,
             })),
-            // No reaper thread: let go of it here, outside the lock, then of the trail.
+            // No reaper thread: let go of it here, then of the trail.
             None => {
-                drop(state);
                 drop(held);
                 drop(trail);
             }
@@ -196,7 +201,7 @@ mod tests {
     #[test]
     fn what_a_piece_gave_back_goes_on_the_next_hand_over_s_thread() {
         let (noted, dropped) = mpsc::channel();
-        let reaper = Reaper::default();
+        let reaper = Arc::new(Reaper::default());
         let holds = PieceHolds::new();
         let keeping = holds.keep(Noted(noted.clone()));
         exit_guard::spawn(Builder::new(), move || {
@@ -222,7 +227,7 @@ mod tests {
     #[test]
     fn a_piece_of_a_released_state_takes_nothing() {
         let (noted, dropped) = mpsc::channel();
-        let reaper = Reaper::default();
+        let reaper = Arc::new(Reaper::default());
         let holds = PieceHolds::new();
         let keeping = holds.keep(Noted(noted));
         holds.close(&reaper);
@@ -235,12 +240,13 @@ mod tests {
         );
     }
 
-    /// The state's release returns while a piece runs, and what the piece gives back as it
-    /// ends goes on the reaper's thread, never on the piece's.
+    /// The state's release returns while a piece runs, and starts no thread (a start can wait,
+    /// `reaper.rs`); what the piece gives back as it ends goes on the reaper's thread, which the
+    /// piece started, never on the piece's.
     #[test]
     fn the_state_s_release_returns_while_a_piece_runs_and_the_reaper_lets_go_of_it() {
         let (noted, dropped) = mpsc::channel();
-        let reaper = Reaper::default();
+        let reaper = Arc::new(Reaper::default());
         let holds = PieceHolds::new();
         let keeping = holds.keep(Noted(noted));
         let (started, running) = mpsc::channel();
@@ -258,8 +264,10 @@ mod tests {
             dropped.try_recv().is_err(),
             "the release let go of the running piece's"
         );
+        assert!(!reaper.runs(), "the release started the reaper's thread");
         end.send(()).unwrap();
         piece.join().unwrap();
+        assert!(reaper.runs(), "the piece did not start the reaper's thread");
         assert_eq!(dropped.recv_timeout(WAIT).unwrap(), "metal2vulkan-reaper");
         reaper.stop();
     }
@@ -278,7 +286,7 @@ mod tests {
         }
         let trails = Arc::new(Trails::default());
         let (noted, dropped) = mpsc::channel();
-        let reaper = Reaper::default();
+        let reaper = Arc::new(Reaper::default());
         let holds = PieceHolds::new();
         let keeping = holds.keep(Counted(Arc::clone(&trails), noted));
         let (started, running) = mpsc::channel();

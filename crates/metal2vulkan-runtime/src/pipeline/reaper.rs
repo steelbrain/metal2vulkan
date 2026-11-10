@@ -2,9 +2,13 @@
 //! of what a released render state's pool pieces give back as they end, so the state's release
 //! returns at once and a pool thread is never the last holder of the device.
 //!
-//! - **Started by a release.** A state released while a piece of its own is running starts the
-//!   thread ([`Reaper::start`], on the releasing thread), unless it runs; until then the device
-//!   has none.
+//! - **Started by a released state's piece.** A piece of a state released while it ran starts the
+//!   thread as it gives back ([`Reaper::start`], on the pool's thread), unless it runs; until then
+//!   the device has none. The release only notes the reaper (`piece_holds.rs`), as a thread's
+//!   start can wait: on an Intel Iris Xe (Mesa 26.2.6) beside the runtime suite, 20 of 8,655
+//!   releases that started the thread took 16 to 32 ms, and in the 8 timed by part the start took
+//!   all of it but 0.1 ms, the releasing thread asleep (one voluntary switch, at most 1.2 ms on a
+//!   CPU and 0.7 ms waiting for one).
 //! - **What a piece gave back.** Such a piece, as it ends, hands what it took ([`Reaps::reap`]),
 //!   with the trail it opened before settling its making (`trails.rs`), which closes after it;
 //!   the thread lets go of each, in turn, outside any section of the exit guard: each release of a
@@ -47,6 +51,12 @@ struct Queue {
 }
 
 impl Reaper {
+    /// Whether its thread was started and not yet joined.
+    #[cfg(test)]
+    pub(crate) fn runs(&self) -> bool {
+        lock(&self.thread).is_some()
+    }
+
     /// Start the thread unless it runs, and where the pieces hand what they give back; `None`
     /// where the host cannot start a thread.
     pub(crate) fn start(&self) -> Option<Reaps> {
