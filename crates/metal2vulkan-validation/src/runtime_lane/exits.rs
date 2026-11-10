@@ -1560,10 +1560,12 @@ fn a_dropped_command_buffer_completes_once_its_event_is_signalled() {
 
 /// Devices made again in a long-lived process register the exit hook no more while what they
 /// load stays loaded: with one device held, whose instance keeps the Vulkan loader, the driver and
-/// the layers loaded, 16 devices made and dropped after two that warm up add no registration at a
-/// device, one after each of their instances (a layer registers an exit handler at each), and the
-/// sections' registrations stay within their bound (one after each pipeline making, priming's
-/// included, aside).
+/// the layers loaded, 16 devices made and dropped after two that warm up add a registration at a
+/// device only where the process loaded a shared object as that device was made (a host's driver
+/// manifest whose library the loader loads and drops again at each instance loads one at each;
+/// where nothing loads, none), one after each of their instances (a layer registers an exit
+/// handler at each), and the sections' registrations stay within their bound (one after each
+/// pipeline making, priming's included, aside).
 #[test]
 fn devices_made_again_register_the_exit_hook_no_more() {
     let cache = ScratchCache::new().unwrap();
@@ -1574,14 +1576,25 @@ fn devices_made_again_register_the_exit_hook_no_more() {
             drop(validated_device(TEST_DEVICE, &messages, cache.path()).unwrap());
         }
         let before = metal2vulkan_runtime::exit_registrations();
+        let mut loads = before.loads;
+        let mut made_after_a_load = 0;
         for _ in 0..16 {
             drop(validated_device(TEST_DEVICE, &messages, cache.path()).unwrap());
+            let now = metal2vulkan_runtime::exit_registrations().loads;
+            if now.is_none() || now != loads {
+                made_after_a_load += 1;
+            }
+            loads = now;
         }
         let after = metal2vulkan_runtime::exit_registrations();
-        println!("runtime exit registrations: {before:?}, then after 16 devices {after:?}");
+        println!(
+            "runtime exit registrations: {before:?}, then after 16 devices, {made_after_a_load} \
+             of them made as the process loaded a shared object, {after:?}"
+        );
         assert_eq!(
-            after.at_devices, before.at_devices,
-            "devices made again registered the hook"
+            after.at_devices - before.at_devices,
+            made_after_a_load,
+            "devices made again registered the hook past one per device made after a load"
         );
         assert_eq!(
             after.at_instances - before.at_instances,

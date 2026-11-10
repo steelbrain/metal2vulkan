@@ -1658,6 +1658,10 @@ pub struct Registrations {
     /// The most the sections can make: one per entry point of the table at each load a device
     /// was made after, the process's first device's included (It was one per entry point), and 64.
     pub section_bound: u64,
+    /// The shared objects the process has loaded so far, unloaded ones included, as the rule
+    /// that registers the hook at a device after a load counts them; `None` where the host keeps
+    /// no count, and every device registers.
+    pub loads: Option<u64>,
 }
 
 /// This process's [`Registrations`] so far.
@@ -1669,6 +1673,7 @@ pub fn registrations() -> Registrations {
         during_makings: DURING_MAKINGS.load(Ordering::Relaxed),
         total: INSTALLED.load(Ordering::Relaxed),
         section_bound: Call::ALL.len() as u64 * LOADS.load(Ordering::Relaxed).max(1) + 64,
+        loads: loaded::count(),
     }
 }
 
