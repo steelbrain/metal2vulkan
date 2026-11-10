@@ -624,7 +624,9 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         .vertex
         .iter()
         .any(|f| matches!(f.role, MeshFieldRole::PointSize) && !f.gated_off);
-    if point_size {
+    // The rasterizer reads a vertex's size for points alone: a line or triangle mesh's size draws
+    // nothing, whatever the device's largest point.
+    if point_size && shape.topology == MeshTopology::Point {
         crate::lower::stage_io::note_device_point_size(cx);
     }
     // Staged indices are the wrapper's workgroup words, held to the stage's limit whether or not

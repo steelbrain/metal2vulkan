@@ -3993,11 +3993,13 @@ bound.
   sampler slot whose word states anisotropy (under that word alone). An argument buffer's
   anisotropic sampler, which the function cannot record, is refused there (`SamplerAnisotropy`).
 - `metal2vulkan-degrade-device-point-size` (precision). `PrecisionNote::DevicePointSize`: A vertex
-  function writes `[[point_size]]`, or a mesh function `set_point_size`, on a device whose
-  `pointSizeRange` ends below Metal's largest point, 511 pixels (`Limits::max_point_size`: 255 on
-  ANV, 256 on lavapipe). Announced at the first draw of such a pipeline that rasterizes points: a
-  draw of `MTLPrimitiveTypePoint`, or a mesh draw whose mesh function outputs points. A draw of
-  lines or triangles of the same pipeline is Metal's exactly and announces nothing.
+  function writes `[[point_size]]`, or a mesh function that outputs points `set_point_size`, on a
+  device whose `pointSizeRange` ends below Metal's largest point, 511 pixels
+  (`Limits::max_point_size`: 255 on ANV, 256 on lavapipe). A line or triangle mesh's size draws
+  nothing, and its function records no note. Announced at the first draw of such a pipeline that
+  rasterizes points: a draw of `MTLPrimitiveTypePoint`, or a mesh draw of a mesh function that
+  outputs points. A draw of lines or triangles of the same pipeline is Metal's exactly and
+  announces nothing.
 - `metal2vulkan-degrade-clipped-coverage-split` (precision). `PrecisionNote::ClippedCoverageSplit`:
   A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]` on a device whose
   rasterizer is not Apple's (`DriverWorkaround::ClippedCoverageNotMetals`): Apple's GPU draws a

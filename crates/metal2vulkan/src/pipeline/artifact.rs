@@ -1564,8 +1564,9 @@ pub enum PrecisionNote {
     /// function does not know, is refused there (`SamplerAnisotropy`). Validation derives no
     /// tolerance from it.
     DeviceAnisotropicFilter,
-    /// A vertex function writes `[[point_size]]`, or a mesh function `set_point_size`, on a device
-    /// whose `pointSizeRange` ends below Metal's largest point, 511 pixels
+    /// A vertex function writes `[[point_size]]`, or a mesh function that outputs points
+    /// `set_point_size` (a line or triangle mesh's size draws nothing, and records no note), on a
+    /// device whose `pointSizeRange` ends below Metal's largest point, 511 pixels
     /// ([`Limits::max_point_size`](crate::device::Limits::max_point_size): 255 on ANV, 256 on
     /// lavapipe). The module stores a size past 511 as 511, as Metal draws it, and the device
     /// clamps a size past its own bound to that bound, so a point between the device's bound and

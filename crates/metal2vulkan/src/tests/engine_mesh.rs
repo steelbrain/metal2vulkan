@@ -597,6 +597,58 @@ fn a_mesh_point_size_past_metals_largest_point_is_stored_as_it() {
     }
 }
 
+/// A mesh function's `set_point_size` records `PrecisionNote::DevicePointSize` only where the mesh
+/// outputs points: the rasterizer reads a vertex's size for points alone, so a line or triangle
+/// mesh's size draws nothing, whatever the device's largest point. Apple's compiler refuses
+/// `[[point_size]]` in a triangle mesh's vertex, so the triangle mesh is `mesh_outputs_points`
+/// with its type's topology (`air.mesh_type_info`) made `air.triangle`, every other word of the
+/// module kept. On every profile with mesh shading, its largest point set below Metal's, both
+/// functions store the size and only the point mesh records the note.
+#[test]
+fn a_mesh_point_size_is_noted_only_where_the_mesh_outputs_points() {
+    use crate::device::{Device, DeviceDescription, DevicePolicy};
+    use crate::pipeline::artifact::PrecisionNote;
+    let text = std::fs::read_to_string(engine_dir().join("mesh_outputs.ll")).expect("fixture");
+    let point = "!\"air.point\"}";
+    assert_eq!(text.matches(point).count(), 1, "one point mesh type");
+    let mut modules = Vec::new();
+    for (topology, text) in [
+        ("points", text.clone()),
+        ("triangles", text.replace(point, "!\"air.triangle\"}")),
+    ] {
+        match crate::pipeline::testing::llvm_assemble_text(&text) {
+            Ok(bitcode) => modules.push((topology, bitcode)),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {topology}: {why}"),
+        }
+    }
+    for (stem, _) in &mesh_profiles() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
+        let text = std::fs::read_to_string(path).expect("profile");
+        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+        desc.limits.max_point_size = 64;
+        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        for (topology, bitcode) in &modules {
+            let a = compile(bitcode, "mesh_outputs_points", dev.profile())
+                .unwrap_or_else(|e| panic!("{stem} {topology}: {e}"));
+            let stores = super::engine_stage_io::point_size_stores(&a.module.words);
+            assert!(
+                stores.contains(&Some(true)),
+                "{stem} {topology}: the written size is stored: {stores:?}"
+            );
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::DevicePointSize),
+                *topology == "points",
+                "{stem} {topology}: the device's largest point is noted for points alone"
+            );
+        }
+    }
+}
+
 /// A device of committed profile `stem`.
 pub(super) fn device(stem: &str) -> crate::device::Device {
     use crate::device::{Device, DeviceDescription, DevicePolicy};
