@@ -18,8 +18,14 @@
 //!   a pass) in the top half's scissor, and stores color 4 and the depth by late store actions:
 //!   the second group's twin is loaded by its copy.
 //! - **fetch**: `cg_fetch_sparse` in a pass of colors 0 and 5, reading color 5's clear.
+//! - **dead read**: `dfk_dead_group`'s `dfg_branch` and `dfg_gated` specialized with their read of
+//!   color 4 dead (function constant 0 false) in a pass of colors 0 to 4: each writes `tint`
+//!   swizzled to colors 0 to 3 and `tint` to color 4, and reads nothing, so on the restricted device
+//!   it draws in two groups as `cg_five` does. Specialized live, `dfg_branch` reads color 4 from
+//!   group 0's variant, the pipeline's limit refusal there.
 //!
-//! Metal's answers (a probe on the Apple M3 Max, macOS 27.0.1, of these scenes): every texel of
+//! Metal's answers (a probe on the Apple M3 Max, macOS 27.0.1, of these scenes but the dead read,
+//! which writes `tint` and its swizzles only): every texel of
 //! every color, depth and stencil is the closed form the checks compute ([`tint`] at each pixel
 //! center), and the visibility counts are 32 and 22. Where the driver counts each sample once per
 //! color its fragment shader writes (ANV: `RuntimeDriverDefect::OcclusionCountPerColorOutput`),
@@ -40,10 +46,11 @@ use crate::gpu::TEST_DEVICE;
 use crate::observation::PROFILES_LAYER;
 use metal2vulkan::device::VkLimit;
 use metal2vulkan::error::{Capability, Feature, RuntimeDriverDefect, Unsupported};
+use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::{
-    BlendFactor, CompareFunction, PixelFormat, PrimitiveType, RenderStages, StencilOperation,
-    TextureUsage,
+    BlendFactor, CompareFunction, DataType, PixelFormat, PrimitiveType, RenderStages,
+    StencilOperation, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -75,6 +82,7 @@ struct Lane {
     queue: CommandQueue,
     groups: Library,
     fetch: Library,
+    dead: Library,
     width: Width,
 }
 
@@ -176,6 +184,7 @@ fn lane(width: Width, validated: bool) -> Option<(Messages, ScratchCache, Scratc
         queue: device.new_command_queue().unwrap(),
         groups: library("color_groups"),
         fetch: library("color_groups_fetch"),
+        dead: library("dfk_dead_group"),
         width,
         device,
     };
@@ -472,6 +481,7 @@ fn scenes(width: Width) {
     });
     depth_scene(&lane, &five);
     load_scene(&lane, &five);
+    dead_scene(&lane, &five);
     // A device without a fetch form refuses the fetching pipelines, typed ([`fetches`]).
     let fetching = fetches(&lane.device);
     if fetching {
@@ -734,6 +744,84 @@ fn fetch_scene(lane: &Lane) {
             }
         }
     });
+}
+
+/// The pipeline of `cg_cover` and `fragment` of `dfk_dead_group` drawing `RGBA16Float` at
+/// `colors`, the fragment function specialized with its `bool` function constant 0 `reads`.
+fn dead_pipeline(
+    lane: &Lane,
+    fragment: &str,
+    colors: &[usize],
+    reads: bool,
+) -> Result<RenderPipelineState, Error> {
+    let constants = FunctionConstantValues::defaults().with_index(
+        0,
+        FunctionConstantValue::new(DataType::Bool, [u8::from(reads)]),
+    );
+    let vertex = lane.groups.new_function_with_name("cg_cover").unwrap();
+    let fragment = lane
+        .dead
+        .new_function_with_name_constant_values(fragment, &constants)
+        .unwrap();
+    let mut descriptor =
+        RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
+    descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+    for &index in colors {
+        descriptor.color_attachments[index] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+    }
+    lane.device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+}
+
+/// The dead read scene (the module docs).
+fn dead_scene(lane: &Lane, five: &[usize]) {
+    let name = lane.device.name().to_owned();
+    for fragment in ["dfg_branch", "dfg_gated"] {
+        let pipeline = dead_pipeline(lane, fragment, five, false)
+            .unwrap_or_else(|e| panic!("{fragment} dead on {name}: {e}"));
+        let targets: Vec<Texture> = five
+            .iter()
+            .map(|_| lane.texture(PixelFormat::RGBA16Float))
+            .collect();
+        let (passes, twins) = group_counts(lane, || {
+            lane.run(&cleared_pass(&targets, five), |encoder| {
+                encoder.set_render_pipeline_state(&pipeline).unwrap();
+                encoder
+                    .draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+                    .unwrap();
+            });
+        });
+        let groups = u64::from(lane.splits(five.len()));
+        assert_eq!((passes, twins), (groups, 0), "{fragment} dead on {name}");
+        let got: Vec<_> = (five.iter().copied())
+            .zip(targets.iter().map(|t| lane.colors(t)))
+            .collect();
+        check_colors(fragment, lane, &got, |index, x, y| {
+            let t = tint(x, y);
+            match index {
+                4 => t,
+                _ => seven(t)[index],
+            }
+        });
+        eprintln!(
+            "COLOR-GROUPS {fragment} dead on {name} ({:?}): Metal's colors, {passes} group passes \
+             past the first",
+            lane.width
+        );
+    }
+    if lane.width == Width::Four {
+        let limit = Error::Unsupported(Unsupported::needs(
+            Feature::InterfaceComponents,
+            Capability::Limit {
+                limit: VkLimit::MaxColorAttachments,
+                required: 5,
+                available: 4,
+            },
+        ));
+        let live = dead_pipeline(lane, "dfg_branch", five, true);
+        assert_eq!(live.unwrap_err(), limit, "dfg_branch live on {name}");
+    }
 }
 
 /// What the restricted device refuses, and the device as it is draws (the module docs); on a
