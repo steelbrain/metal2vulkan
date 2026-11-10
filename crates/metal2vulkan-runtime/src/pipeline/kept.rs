@@ -16,7 +16,12 @@
 //!   evicted) waits for them under its instance, as a pipeline released first does.
 //! - **Bounded.** At most [`KEPT`] instances, the least recently released going first; an
 //!   evicted instance's objects and pipelines are destroyed then. An instance keeps at most what
-//!   its variant's memo of `VkPipeline`s held.
+//!   its variant's memo of `VkPipeline`s held. A guest's CoreAnimation process (RenderBox) made a
+//!   render state's key again after 51 other keys at the median and fewer than 256 at most, over
+//!   a cold boot of 8455 repeats; 16 instances held 157 of them. A kept instance's immutable
+//!   samplers count against the device's limit (`SamplerLimit`) while it is kept: a sampler the
+//!   device refuses there evicts the least recently released instance that holds any first
+//!   ([`Kept::evict_for_samplers`]), in a program's call, and is made again.
 //! - **On the guest's threads, in a fixed order** (the owner's HITCH rule 1). A last release can
 //!   happen on any thread: a handler thread when a command buffer lets its objects go, a pool
 //!   thread whose making evicts a memo's entry, or a program's thread. A release only queues there
@@ -44,8 +49,9 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
-/// The most released variant instances kept.
-pub(crate) const KEPT: usize = 16;
+/// The most released variant instances kept: a guest's working set of render states (the
+/// module docs).
+pub(crate) const KEPT: usize = 256;
 
 /// The compiled pipeline a variant is of: the device memo's key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -357,6 +363,23 @@ impl Kept {
             objects: entry.objects?,
             pipelines: entry.pipelines,
         })
+    }
+
+    /// Make room for a sampler the device refused at its limit: the least recently released
+    /// instance whose objects hold immutable samplers goes, once the queued releases are applied,
+    /// and with it its share of those samplers. Whether one went. On the program's thread, as
+    /// [`take`](Self::take) is; the device's sampler sets nothing holds then go at their settle.
+    pub(crate) fn evict_for_samplers(&mut self, shared: &DeviceShared) -> bool {
+        self.settle(shared);
+        let entries = &mut self.entries.0;
+        let at = entries.iter().position(|e| {
+            (e.objects.as_ref()).is_some_and(|objects| objects.samplers.holds_samplers())
+        });
+        let Some(entry) = at.and_then(|at| entries.remove(at)) else {
+            return false;
+        };
+        entry.destroy(shared);
+        true
     }
 
     /// Destroy everything kept, and every release queued: the device's teardown.

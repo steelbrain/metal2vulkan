@@ -74,6 +74,13 @@ pub(crate) struct SamplerSet {
     samplers: Vec<vk::Sampler>,
 }
 
+impl SamplerSet {
+    /// Whether it holds any sampler: a layout that bakes none takes an empty set.
+    pub(crate) fn holds_samplers(&self) -> bool {
+        !self.samplers.is_empty()
+    }
+}
+
 impl Owned<DeviceShared> for SamplerSet {
     fn destroy(&self, shared: &DeviceShared) {
         self.release(shared);
@@ -130,7 +137,6 @@ pub(crate) fn sampler_set(
     if crate::warm::warming() {
         return Err(crate::warm::translation_only());
     }
-    let shared = device.shared();
     // The device's Y′CbCr conversion of each sampler of a planes image (`texture/ycbcr_planes.rs`),
     // the one its view is made with, so the two are identically defined: made before the sets'
     // lock, as it takes the owned kernels' own.
@@ -148,14 +154,32 @@ pub(crate) fn sampler_set(
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let program = program_call();
+    loop {
+        match make_sampler_set(device, &descs, &conversions, program) {
+            // The device's samplers at its limit: a released variant's kept instance that holds
+            // samplers goes first (`kept.rs`), and the set is made again.
+            Err(Error::SamplerLimit(_)) if evict_kept_for_samplers(device) => {}
+            made => return made,
+        }
+    }
+}
+
+/// [`sampler_set`]'s making of the set of `descs`, each with its conversion, once.
+fn make_sampler_set(
+    device: &Device,
+    descs: &[metal2vulkan::vk::SamplerDesc],
+    conversions: &[Option<vk::SamplerYcbcrConversion>],
+    program: bool,
+) -> Result<(Arc<SamplerSet>, bool), Error> {
+    let shared = device.shared();
     // The lock is held across the creation, so two of the program's calls never make two sets of
     // the same samplers.
     let mut sets = lock(&shared.sampler_sets);
-    let made = sets.get_or_make(descs.clone(), program, || {
+    let made = sets.get_or_make(descs.to_vec(), program, || {
         let mut set = SamplerSet {
             samplers: Vec::with_capacity(descs.len()),
         };
-        for (desc, conversion) in descs.iter().zip(&conversions) {
+        for (desc, conversion) in descs.iter().zip(conversions) {
             let mut chained = vk::SamplerYcbcrConversionInfo::default();
             let mut reduction = vk::SamplerReductionModeCreateInfo::default();
             let mut border = vk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
@@ -188,6 +212,33 @@ pub(crate) fn sampler_set(
         false => shared.counts.sampler_set_shared(),
     }
     Ok((set, made))
+}
+
+/// Make room for a sampler the device refused at its limit (`Error::SamplerLimit`): the least
+/// recently released kept instance that holds immutable samplers goes (`Kept::evict_for_samplers`),
+/// and the device's maps let go of what nothing holds then, its samplers among it where no live
+/// variant shares them. Whether an instance went: a caller tries its sampler again while one does.
+/// In a program's call only, where the kept variants apply their queue; elsewhere none goes.
+pub(crate) fn evict_kept_for_samplers(device: &Device) -> bool {
+    if !program_call() {
+        return false;
+    }
+    let shared = device.shared();
+    if !lock(&shared.kept).evict_for_samplers(shared) {
+        return false;
+    }
+    settle_device_maps(device);
+    true
+}
+
+/// Let go of the device's modules, pipeline layouts, sampler sets and graphics pipeline libraries
+/// nothing holds now, in that order (each later one may be what an earlier one was made with), in
+/// the program's order: after the kept variants applied their queue.
+fn settle_device_maps(device: &Device) {
+    settle_modules(device);
+    settle_layouts(device);
+    settle_sampler_sets(device);
+    settle_libraries(device);
 }
 
 /// Let go of the device's sampler sets no variant holds any more (`content_keyed.rs`): in a
@@ -708,15 +759,10 @@ impl VariantObjects {
             true => None,
             false => lock(&shared.kept).take(shared, compiled),
         };
-        // The kept variants' queue applied (an evicted instance's modules let go): the device's
-        // modules nothing holds now go, in the program's order.
-        settle_modules(device);
-        // And the device's pipeline layouts nothing holds now, then the sampler sets nothing
-        // holds now, the evicted instances' layouts gone.
-        settle_layouts(device);
-        settle_sampler_sets(device);
-        // And the device's graphics pipeline libraries nothing holds now.
-        settle_libraries(device);
+        // The kept variants' queue applied (an evicted instance's objects let go): the device's
+        // modules, layouts, sampler sets and libraries nothing holds now go, in the program's
+        // order.
+        settle_device_maps(device);
         let Some(back) = back else {
             let mut objects = VariantObjects::create(device, layout, stages, pipeline, digests)?;
             objects.keep = (!warming).then(|| Instance::new(compiled));

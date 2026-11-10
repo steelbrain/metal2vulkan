@@ -915,8 +915,9 @@ impl SamplerState {
     /// one the state keeps, else a new one, kept once the cache has room for it ([`KeptSamplers`],
     /// at most [`KEPT`] and at most as many as the device allows live). Where the device already
     /// holds as many samplers as it allows, one this state keeps that no command buffer holds goes
-    /// to make room; `Error::SamplerLimit` is the answer only where every one it keeps is held
-    /// ([`SamplerCount`]).
+    /// to make room, else a released variant's kept instance that holds immutable samplers
+    /// (`pipeline/kept.rs`); `Error::SamplerLimit` is the answer only where every one it keeps is
+    /// held and no kept instance holds one ([`SamplerCount`]).
     pub(super) fn vk_sampler(
         &self,
         desc: &metal2vulkan::vk::SamplerDesc,
@@ -938,7 +939,14 @@ impl SamplerState {
             // (`metal::sampler::opaque_black_border`).
             match unsafe { device.shared().create_sampler(&info) } {
                 Ok(raw) => break raw,
-                Err(limit @ Error::SamplerLimit(_)) if !kept.forget_spare() => return Err(limit),
+                // Room is made by one this state keeps that no command buffer holds, else by a
+                // released variant's kept instance that holds immutable samplers (`kept.rs`).
+                Err(limit @ Error::SamplerLimit(_))
+                    if !kept.forget_spare()
+                        && !crate::pipeline::objects::evict_kept_for_samplers(device) =>
+                {
+                    return Err(limit)
+                }
                 Err(Error::SamplerLimit(_)) => {}
                 Err(error) => return Err(error),
             }
