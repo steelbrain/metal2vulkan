@@ -10,8 +10,9 @@
 //! slowest, the begins', the frees' and the trims'), and the process's memory before the makings,
 //! once they were made, and after the frees and trims: where its DRM file reports it
 //! (`/proc/self/fdinfo`, `drm-total-*` and `drm-resident-*`, summed over the device files the
-//! process holds), and on macOS its physical footprint (`proc_pid_rusage`'s `ri_phys_footprint`,
-//! which counts the GPU memory the process owns). Ignored: run it alone, by name, under
+//! process holds), its resident set where `/proc/self/status` reports it (`VmRSS`), and on macOS
+//! its physical footprint (`proc_pid_rusage`'s `ri_phys_footprint`, which counts the GPU memory
+//! the process owns). Ignored: run it alone, by name, under
 //! `--cfg m2v_gpu` (or `m2v_cpu_icd`):
 //! `cargo nextest run -p metal2vulkan-runtime --lib --run-ignored all spares_bench --no-capture`.
 
@@ -31,10 +32,18 @@ const KEPT: usize = 4;
 const ROUNDS: usize = 6;
 
 /// The process's memory by key, in KiB: its DRM memory (`drm-total-gtt`, `drm-resident-system0`,
-/// ...) summed over its DRM files, and on macOS its physical footprint (`phys-footprint`); empty
-/// where neither is reported.
-fn process_memory() -> BTreeMap<String, u64> {
+/// ...) summed over its DRM files, its resident set where `/proc/self/status` reports it
+/// (`vm-rss`), and on macOS its physical footprint (`phys-footprint`); empty where none is
+/// reported.
+pub(super) fn process_memory() -> BTreeMap<String, u64> {
     let mut memory = BTreeMap::new();
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        let rss = status.lines().find_map(|line| line.strip_prefix("VmRSS:"));
+        let kib = rss.and_then(|rest| rest.split_whitespace().next()?.parse::<u64>().ok());
+        if let Some(kib) = kib {
+            memory.insert("vm-rss".to_owned(), kib);
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         let mut info = std::mem::MaybeUninit::<libc::rusage_info_v4>::zeroed();
