@@ -159,9 +159,9 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .extended_range_colors
             .get(&color)
             .map(|e| e.form)
-            .filter(|f| !f.padded() && !f.bfloat())
+            .filter(|f| !f.bfloat())
         else {
-            // A padded or bfloat attachment's blend is not built (`extended_color`).
+            // A bfloat attachment's blend is refused (`fetch::plan`).
             continue;
         };
         // Compiled under the state of a pipeline for another function.

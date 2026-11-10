@@ -194,13 +194,17 @@ pub fn decode(
 
 /// The tile value of raw texel `raw` of a color attachment of `form` (a framebuffer fetch's
 /// read, a `float` and a `half` read alike): a `vec4` of `f32`, red first, each lane a `half`
-/// value. Metal's tile holds no color code above 1022: a linear form's code and
+/// value. Metal's tile holds no extended-range color code above 1022: a linear form's code and
 /// `BGRA10_XR_sRGB`'s are clamped to 1022 and decoded ([`decode`]), `BGR10_XR_sRGB`'s and the
 /// two-plane twin's decoded and then clamped to the linear values of codes 0 and 1022,
-/// `[-384 / 510, 638 / 510]`; each lane is the device's narrowing of that value to `half`.
-/// Alpha is [`decode`]'s.
+/// `[-384 / 510, 638 / 510]`; a padded form's every code is decoded as it is (code 1023 is one);
+/// each lane is the device's narrowing of that value to `half`. Alpha is [`decode`]'s.
 pub fn tile_value(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, raw: Value) -> BResult<Value> {
     let c = codes(fb, form, raw)?;
+    if form.padded() {
+        let v = value_of_codes(fb, form, c, false)?;
+        return narrow::round(fb, halves(), v);
+    }
     let by_code = !form.srgb() || matches!(form, ExtendedRange::Bgra10 { .. });
     let c = match by_code {
         true => {
@@ -248,9 +252,11 @@ pub fn tile_read(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, held: Value)
 pub(crate) use blend_color::{SOURCE_RANGE, SRGB_SOURCE_RANGE};
 
 /// The range Metal clamps a blend's `half` source color to before blending into an attachment
-/// of `form` ([`SOURCE_RANGE`], [`SRGB_SOURCE_RANGE`]).
+/// of `form` ([`SOURCE_RANGE`], [`SRGB_SOURCE_RANGE`]; a padded form's `[0, 1]`, its codes'
+/// range).
 fn source_range(form: ExtendedRange) -> (f32, f32) {
     match form {
+        _ if form.padded() => (0.0, 1.0),
         ExtendedRange::Bgra10 { srgb: true } => SRGB_SOURCE_RANGE,
         _ => SOURCE_RANGE,
     }
@@ -353,22 +359,10 @@ fn value_of_codes(
 /// The raw texel (the raw format's `uvec4`) a write of `v` (a `vec4` of `f32`, red first) to a
 /// slot bound in `form` stores (the module docs).
 pub fn encode(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, v: Value) -> BResult<Value> {
-    // A padded format's code in its word's top 10 bits, the low 6 bits zero.
-    if form.padded() {
-        let u = words();
-        let k = padded_codes(fb, form, v)?;
-        if form == ExtendedRange::Rgb10A2Srgb {
-            return pack(fb, form, k);
-        }
-        let six = splat(fb, u, 6)?;
-        let w = fb.binary(BinOp::ShiftLeftLogical, k, six)?;
-        let z = splat(fb, u, 0)?;
-        return fb.vector_shuffle(w, z, padded_lanes(form));
-    }
     if form.bfloat() {
         return bfloat_texel(fb, form, v);
     }
-    let code = linear_codes(fb, form, v)?;
+    let code = write_codes(fb, form, v)?;
     pack(fb, form, code)
 }
 
@@ -531,20 +525,20 @@ pub(crate) fn bfloat_stored(
     fb.vector_shuffle(code, zero, bfloat_lanes(form))
 }
 
-/// [`encode`] of `v` into a texel of a linear or `_sRGB` form that keeps the channels `kept`
-/// (red, green, blue, alpha) of `old`, the raw texel the write overwrites, as Metal's blended
-/// write under a write mask keeps them (every masked configuration, each texel): each kept
+/// [`encode`] of `v` into a texel of a form other than a bfloat one that keeps the channels
+/// `kept` (red, green, blue, alpha) of `old`, the raw texel the write overwrites, as Metal's
+/// blended write under a write mask keeps them (every masked configuration, each texel): each kept
 /// channel's code as [`decode`] reads it (a color code as it is, 1023 too; `BGRA10_XR`'s alpha
-/// clamped to `[384, 894]`; a two-plane texel's alpha byte), packed as a write packs it: plane 0's
-/// and `BGR10_XR`'s top two bits as the write sets them (zeros and ones), `BGRA10_XR`'s six low
-/// bits zero.
+/// clamped to `[384, 894]`; a two-plane texel's alpha byte; a padded word's top 10 bits), packed
+/// as a write packs it: plane 0's and `BGR10_XR`'s top two bits as the write sets them (zeros and
+/// ones), `BGRA10_XR`'s and a padded word's six low bits zero.
 pub fn encode_keeping(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
     v: Value,
     (old, kept): (Value, [bool; 4]),
 ) -> BResult<Value> {
-    let new = linear_codes(fb, form, v)?;
+    let new = write_codes(fb, form, v)?;
     let old = codes(fb, form, old)?;
     let lanes: Vec<u32> = kept
         .iter()
@@ -595,7 +589,7 @@ fn linear_codes(fb: &mut FunctionBuilder<'_>, form: ExtendedRange, v: Value) -> 
 }
 
 /// The raw texel (the raw format's `uvec4`) of the codes `code` (red first; a two-plane form's
-/// alpha its byte) of a linear or `_sRGB` form, or of `RGB10A2Unorm_sRGB`.
+/// alpha its byte) of a form other than a bfloat one.
 pub(crate) fn pack(
     fb: &mut FunctionBuilder<'_>,
     form: ExtendedRange,
@@ -647,16 +641,20 @@ pub(crate) fn pack(
             let z = fb.module().const_value(z)?;
             fb.composite_construct(ut, &[w, z, z, z])
         }
-        // Another padded form's words are [`encode`]'s own, and a bfloat form's.
+        // Another padded form's words: each code in its word's top 10 bits, the low 6 bits zero.
         ExtendedRange::R10X6
         | ExtendedRange::Rg10X12
         | ExtendedRange::R10X6Srgb
-        | ExtendedRange::Rg10X12Srgb
-        | ExtendedRange::R16Bfloat
-        | ExtendedRange::Rg16Bfloat
-        | ExtendedRange::Rgba16Bfloat => Err(crate::spirv::error::BuildError::Type(
-            crate::spirv::error::TypeRule::FunctionSignature,
-        )),
+        | ExtendedRange::Rg10X12Srgb => {
+            let six = splat(fb, u, 6)?;
+            let w = fb.binary(BinOp::ShiftLeftLogical, code, six)?;
+            let z = splat(fb, u, 0)?;
+            fb.vector_shuffle(w, z, padded_lanes(form))
+        }
+        // A bfloat form's words are [`encode`]'s own.
+        ExtendedRange::R16Bfloat | ExtendedRange::Rg16Bfloat | ExtendedRange::Rgba16Bfloat => Err(
+            crate::spirv::error::BuildError::Type(crate::spirv::error::TypeRule::FunctionSignature),
+        ),
     }
 }
 

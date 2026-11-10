@@ -81,7 +81,6 @@ pub(super) fn plan(
     // device that orders fetch in neither form: refused naming the two orderings.
     let unordered = blended
         && index == 0
-        && !e.form.padded()
         && !e.form.bfloat()
         && crate::lower::fragment::fetch::fetch_unordered(cx.profile);
     if unordered {

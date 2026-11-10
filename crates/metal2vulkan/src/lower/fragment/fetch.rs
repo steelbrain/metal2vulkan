@@ -1112,7 +1112,7 @@ pub(crate) fn storage_form(
         && word.is_none()
         && !(half_blend || unorm8_blend);
     let blend = attachment.equation.filter(|_| {
-        (extended.is_some_and(|e| !e.padded())
+        (extended.is_some()
             || half_blend
             || unorm8_blend
             || word_blend
@@ -1146,10 +1146,8 @@ pub(crate) fn storage_form(
     // An `ARGB8Unorm` attachment is read and written through its `R8G8B8A8_UNORM` image, the
     // function rotating Metal's channels into and out of the image's.
     let rotated = emulation == FormatEmulation::RotatedView;
-    // An unblended write of every channel stores Metal's write of the output. A padded 10-bit
-    // attachment's tile value and blends are not measured: no storage form.
+    // An unblended write of every channel stores Metal's write of the output.
     let not_modelled = inputs.amplified
-        || extended.is_some_and(ExtendedRange::padded)
         || (emulation != FormatEmulation::Direct && extended.is_none() && !alpha_in_red && !rotated)
         || (extended.is_some() && stores && !shader_blends && attachment.blending_enabled)
         || (srgb && uint_view.is_none())
@@ -1996,6 +1994,12 @@ pub(super) fn select_read(cx: &mut SelectCx<'_>, c: ColorInput) -> Result<(), Er
         Some(WordAttachment::Srgb8 { .. } | WordAttachment::Rgb9e5)
     ) {
         let refused = Unsupported::not_implemented(Feature::Format);
+        return Err(refused.at_attachment(Attachment::Color(c.color)).into());
+    }
+    // What a fetch reads of a padded 10-bit attachment's tile is not measured (its blend's
+    // destination is, [`blended`]).
+    if sc.view.extended.is_some_and(ExtendedRange::padded) {
+        let refused = Unsupported::not_implemented(Feature::FramebufferFetch);
         return Err(refused.at_attachment(Attachment::Color(c.color)).into());
     }
     class_of(c.form, sc.view.read_class(), c.color, false)?;

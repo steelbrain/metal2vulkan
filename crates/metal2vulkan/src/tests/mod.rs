@@ -106,6 +106,7 @@ mod engine_nonwritable;
 mod engine_not_mipmapped_anisotropic;
 mod engine_offset_arms;
 mod engine_opencl_mode;
+mod engine_padded_blends;
 mod engine_places;
 mod engine_pointer_cells;
 mod engine_pointer_memory;
