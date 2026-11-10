@@ -291,7 +291,7 @@ pub(crate) fn fit(shape: &TextureShape, class: &ImageHandleClass) -> Fit {
 
 /// Whether a member of facts `shape` is a texture a heap reads by its raw texels: an unswizzled,
 /// not sparse texture of one sample, of a form of `ExtendedRange::HEAP_READ`.
-fn raw_held(shape: &TextureShape) -> bool {
+pub(crate) fn raw_held(shape: &TextureShape) -> bool {
     match *shape {
         TextureShape::Texture {
             pixel_format,

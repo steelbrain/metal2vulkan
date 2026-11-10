@@ -3156,14 +3156,7 @@ fn select_read_as(
                 && texel.lanes == 4
                 && matches!(texel.conv, TexelConv::F32 | TexelConv::F16) =>
         {
-            if let Some(h) = cx.families.texture.heap.get_mut(&group) {
-                h.reads_raw = true;
-            }
-            cx.families
-                .texture
-                .heap_raw
-                .insert(texel.conv == TexelConv::F16);
-            cx.families.access.heap_class_index = true;
+            heap_raw::plan(cx, group, &[texel.conv == TexelConv::F16], m)?;
             true
         }
         _ => false,

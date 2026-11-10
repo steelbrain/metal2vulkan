@@ -1774,9 +1774,9 @@ fn finish(
 /// `UnmeasuredTexels` boolean, or the class of the format bound at a texture slot, which no
 /// constant carries (`SpecKey::BoundTexelFormat`), or the whole word of the sampler bound at a
 /// sampler slot, which none carries either (`SpecKey::BoundSamplerWord`), or whether a texture a
-/// stage's handles can name is two-plane YCbCr (`SpecKey::HeapYCbCrTextures`), or whether a sampler
-/// state an argument buffer can name filters (`SpecKey::FilteringArgumentSampler`), which the plan
-/// gives.
+/// stage's handles can name is two-plane YCbCr (`SpecKey::HeapYCbCrTextures`) or held by its raw
+/// texels alone (`SpecKey::HeapRawTextures`), or whether a sampler state an argument buffer can
+/// name filters (`SpecKey::FilteringArgumentSampler`), which the plan gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum NoteOn {
     Sampler(u32),
@@ -1784,7 +1784,8 @@ pub(crate) enum NoteOn {
     Unmeasured(u32),
     Bound(u32),
     BoundSampler(u32),
-    HeapTextures(Stage),
+    HeapYCbCr(Stage),
+    HeapRaw(Stage),
     ArgumentSamplers,
 }
 
@@ -1857,7 +1858,8 @@ fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
             SpecKey::BoundSamplerWord(families.sampler.slots.get(&index)?.slot)
         }
         // Given by the plan from what the command's handles can name, never a constant.
-        NoteOn::HeapTextures(stage) => SpecKey::HeapYCbCrTextures(stage),
+        NoteOn::HeapYCbCr(stage) => SpecKey::HeapYCbCrTextures(stage),
+        NoteOn::HeapRaw(stage) => SpecKey::HeapRawTextures(stage),
         NoteOn::ArgumentSamplers => SpecKey::FilteringArgumentSampler,
         NoteOn::Sampler(index) => {
             let r = families.sampler.slots.get(&index)?;

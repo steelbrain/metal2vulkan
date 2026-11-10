@@ -16,6 +16,10 @@
 //!   runtime sampler's sample declare them and state the fact; a mip-filtered sampler's sample
 //!   states it alone. The same lane compares such samples and gathers through an argument buffer
 //!   with the slot's, and checks the bind refusal of the others.
+//! - Each such decode records `PrecisionNote::DevicePackConversion` under one clause, a texture the
+//!   stage's handles can name held raw (`SpecKey::HeapRawTextures`), which a plan gives from the
+//!   textures its command makes resident; a query, a `uint` read and a sample the function does
+//!   not emulate record none.
 
 use super::*;
 use crate::error::{Error, Unsupported};
@@ -377,13 +381,22 @@ fn heap_samples_reach_a_raw_member_through_the_unsigned_twin() {
 /// A heap access that decodes a texture the heap holds by its raw texels alone
 /// (`texture::heap_raw`: a `float` or `half` read, and a sample or gather the function emulates,
 /// `sampler::heap_raw`) records `PrecisionNote::DevicePackConversion`, as a slot's decode of the
-/// same texel does, on every committed profile with a sampled heap. A heap access that reaches no
-/// such texture records none: a width query alone, a `uint` read, and a sample through a
-/// mip-filtered sampler, which the function does not emulate (`RuntimeFact::HeapRawSamples`).
+/// same texel does, on every committed profile with a sampled heap: specialized on a texture the
+/// stage's handles can name being such a texture (`SpecKey::HeapRawTextures`), its one clause. A
+/// heap access that reaches no such texture records none: a width query alone, a `uint` read, and
+/// a sample through a mip-filtered sampler, which the function does not emulate
+/// (`RuntimeFact::HeapRawSamples`).
 #[test]
 fn heap_decodes_record_the_device_pack_conversion() {
-    use crate::pipeline::PrecisionNote;
+    use crate::pipeline::{PrecisionNote, SpecClause, SpecTest};
     let note = PrecisionNote::DevicePackConversion;
+    let raw = SpecClause {
+        all: vec![SpecTest::equal(
+            SpecKey::HeapRawTextures(Stage::Kernel),
+            1,
+            1,
+        )],
+    };
     let consts = FunctionConstantValues::defaults();
     let entry = EntryRef::Name("k");
     let inputs = LowerInputs::new();
@@ -438,6 +451,15 @@ fn heap_decodes_record_the_device_pack_conversion() {
                 "{what}: {:?}",
                 a.precision
             );
+            let when: Vec<&SpecClause> = (a.specialized.iter())
+                .filter(|s| s.note == note)
+                .flat_map(|s| &s.when)
+                .collect();
+            let want: Vec<&SpecClause> = match decodes {
+                true => vec![&raw],
+                false => Vec::new(),
+            };
+            assert_eq!(when, want, "{what}");
             compiled += 1;
         }
         assert!(
@@ -445,6 +467,80 @@ fn heap_decodes_record_the_device_pack_conversion() {
             "{name}: no committed profile has the sampled heap"
         );
     }
+}
+
+/// A heap `float` read's `DevicePackConversion` holds where its command can name a texture the heap
+/// holds by its raw texels alone: on every committed profile with a sampled heap, a plan of its
+/// pipeline gives `SpecKey::HeapRawTextures` 1 exactly where a texture the command makes resident
+/// is such a texture (`BGRA10_XR`, `RGBA16Bfloat`, beside an `RGBA8Unorm` one too), and 0 where it
+/// makes none or only `RGBA8Unorm` or `RGBA16Float` ones resident; the stage's note holds under the
+/// plan's values exactly where the key is 1 (`StageModule::precision_notes_bound`), and under no
+/// known value (a reading of the module alone).
+#[test]
+fn a_heap_decode_s_note_holds_where_its_command_can_name_a_raw_texture() {
+    use crate::bind::{ResourceClass, UsedResource};
+    use crate::cache::SpecializationKey;
+    use crate::pipeline::PrecisionNote;
+    let note = PrecisionNote::DevicePackConversion;
+    let key = SpecKey::HeapRawTextures(Stage::Kernel);
+    let Some(bc) = assemble("heap_note_plan", &kernel(Use::Float)) else {
+        return;
+    };
+    // A command making `formats` resident, at IDs of their own.
+    let state = |formats: &[PixelFormat]| BindState {
+        used_resources: (formats.iter().zip(1u32..))
+            .map(|(&pf, token)| {
+                let mut facts = TextureFacts::new(TextureType::Type2D, pf);
+                facts.usage = metal::TextureUsage::SHADER_READ;
+                let mut u = UsedResource::new(ResourceClass::Texture(facts), token);
+                u.resource_id = Some(0x0000_0001_0000_0000 | u64::from(token) << 4);
+                u
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let cases: [(&[PixelFormat], bool); 6] = [
+        (&[PixelFormat::BGRA10XR], true),
+        (&[PixelFormat::RGBA16Bfloat], true),
+        (&[PixelFormat::RGBA8Unorm, PixelFormat::BGRA10XR], true),
+        (&[], false),
+        (&[PixelFormat::RGBA8Unorm], false),
+        (&[PixelFormat::RGBA16Float], false),
+    ];
+    let mut planned = 0;
+    for (stem, dev) in devices() {
+        let lib = Library::from_air(&bc).expect("library");
+        let f = lib.function("k").expect("function");
+        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+        let p = match dev.compile_compute_pipeline(&d, &Budget::standard()) {
+            Ok(p) => p,
+            Err(crate::error::Error::Unsupported(Unsupported {
+                feature: Feature::ArgumentBufferTextures,
+                ..
+            })) => continue,
+            Err(e) => panic!("{stem}: {e}"),
+        };
+        assert!(
+            (p.stage)
+                .precision_notes_under(&SpecializationKey::new())
+                .contains(&note),
+            "{stem}: {:?}",
+            p.stage.precision_notes
+        );
+        for (formats, raw) in cases {
+            let what = format!("{formats:?} on {stem}");
+            let plan = p
+                .plan(&dev, &state(formats).shape())
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(plan.specialized_value(key), Some(u64::from(raw)), "{what}");
+            let held = (p.stage)
+                .precision_notes_bound(&plan.specialization, &|k| plan.specialized_value(k))
+                .contains(&note);
+            assert_eq!(held, raw, "{what}");
+            planned += 1;
+        }
+    }
+    assert!(planned > 0, "no committed profile has the sampled heap");
 }
 
 /// A `half` read, nearest sample or gather of a texture an argument buffer holds rounds its texel

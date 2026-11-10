@@ -51,7 +51,7 @@
 //! records no `PrecisionNote::NativeHalfConversion`, which it does not where the profile takes
 //! `DriverDeviation::MetalHalfConversion` ([`heap_half_reads_of_every_code_round_their_float`]).
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::{on_device, on_device_with};
 use super::half_conversions;
 use super::host_memory::{not_importable, Mapping, GUEST_PAGE};
 use super::Messages;
@@ -72,8 +72,9 @@ use metal2vulkan::pipeline::{
 use metal2vulkan::Budget;
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
-    CommandBufferStatus, ComputePipelineState, Degradation, Device, Error, HostMemory,
-    PipelineOptions, Region, ResourceOptions, SamplerState, Size, Texture, TextureDescriptor,
+    CommandBufferStatus, ComputePipelineState, Degradation, Device, DeviceOptions, Error,
+    HostMemory, PipelineOptions, Region, ResourceOptions, SamplerState, Size, Texture,
+    TextureDescriptor,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -840,9 +841,11 @@ fn the_heap_set_holds_the_forms_a_heap_reads_unannounced() {
 
 /// A command that binds a heap set holding a texture a heap holds by its raw texels alone
 /// announces `device-pack-conversion`, naming the texture: its function's `float` read decodes the
-/// raw texels by the device's arithmetic, which the stage's notes cannot state, as only the set
-/// knows which textures it holds. The same command over an `RGBA8Unorm` texture, with no such
-/// texture live, announces no `device-pack-conversion`.
+/// raw texels by the device's arithmetic, whichever texture the set holds that the function's
+/// handles name. The same command over an `RGBA8Unorm` texture, with no such texture live,
+/// announces no `device-pack-conversion`, nor does the pipeline's making: the stage records the
+/// note only where its command can name such a texture
+/// ([`a_heap_decode_s_stage_note_is_announced_where_its_command_can_name_a_raw_texture`]).
 #[test]
 fn a_heap_set_holding_a_raw_texture_announces_its_decode() {
     on_device(|device, messages| {
@@ -872,6 +875,54 @@ fn a_heap_set_holding_a_raw_texture_announces_its_decode() {
             raw.gpu_resource_id().0
         );
         assert!(held.contains(&(pack, object)), "{held:?}");
+    });
+}
+
+/// A heap pipeline whose `float` read decodes a texture a heap holds by its raw texels alone
+/// records `PrecisionNote::DevicePackConversion` as a specialized note, holding where its command
+/// can name such a texture (`SpecKey::HeapRawTextures`), and the runtime announces it there: on a
+/// device whose options ask for `device-pack-conversion` at every occurrence, a dispatch that makes
+/// a `BGRA10XR` texture resident announces the stage's note (its object the kernel) beside the
+/// heap set's notice naming the texture, while the pipeline's making and a dispatch that makes an
+/// `RGBA8Unorm` texture alone resident, with no such texture live, announce neither.
+#[test]
+fn a_heap_decode_s_stage_note_is_announced_where_its_command_can_name_a_raw_texture() {
+    let pack = Degradation::DevicePackConversion;
+    let each = |options: &mut DeviceOptions| {
+        options.announce_each = [pack].into_iter().collect();
+    };
+    on_device_with(each, |device, messages| {
+        let stage = stage_notes(device, true, Texel::Float);
+        let heap = pipeline(device, true, Texel::Float);
+        let made_with = notices(messages);
+        let plain = made(device, PixelFormat::RGBA8Unorm, 4).unwrap();
+        dispatch(device, (&heap, true), &plain).unwrap();
+        let alone = notices(messages);
+        let raw = made(device, PixelFormat::BGRA10XR, 8).unwrap();
+        dispatch(device, (&heap, true), &raw).unwrap();
+        let held = notices(messages);
+        println!(
+            "HEAP-RAW-STAGE-NOTE {}: stage notes {stage:?}; making {made_with:?}; RGBA8Unorm alone \
+             {alone:?}; BGRA10XR held {held:?}",
+            device.name()
+        );
+        assert!(
+            stage.contains(&PrecisionNote::DevicePackConversion),
+            "{stage:?}"
+        );
+        assert!(
+            ![&made_with, &alone]
+                .iter()
+                .any(|n| n.iter().any(|(k, _)| *k == pack)),
+            "announced before a raw texture lived"
+        );
+        let kernel = "the kernel of a compute pipeline state".to_owned();
+        assert!(held.contains(&(pack, kernel)), "{held:?}");
+        let texture = format!(
+            "BGRA10XR texture at resource ID {}",
+            raw.gpu_resource_id().0
+        );
+        assert!(held.contains(&(pack, texture)), "{held:?}");
     });
 }
 

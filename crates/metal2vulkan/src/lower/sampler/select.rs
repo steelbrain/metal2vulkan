@@ -467,7 +467,7 @@ pub fn select_heap_sampling(
     };
     let image = ImageRef::Heap { group, handle };
     let mut x = select_one(cx, call, image, s, None, m)?;
-    x.heap_raw = select_heap_raw(cx, call, (group, handle), s)?;
+    x.heap_raw = select_heap_raw(cx, call, (group, handle), s, m)?;
     Ok(TextureStrategy::Sampling(Box::new(x)))
 }
 
@@ -485,6 +485,7 @@ fn select_heap_raw(
     call: Call<'_>,
     (group, handle): (u32, ValueId),
     sampler: SamplerArg,
+    m: &mut Meter,
 ) -> Result<Option<super::heap_raw::HeapRaw>, Error> {
     let shape = call.t.image;
     let float = match call.t.texel {
@@ -500,7 +501,7 @@ fn select_heap_raw(
     if shape.ms || shape.depth || shape.dim == ImageDim::Buffer || !float {
         return Ok(None);
     }
-    let raw = heap_raw_sample(cx, call, (group, handle), sampler)?;
+    let raw = heap_raw_sample(cx, call, (group, handle), sampler, m)?;
     // The neutral wherever such a texture is reached, or where the runtime sampler slot's bound
     // sampler states what the emulation does not answer.
     let reads_neutral = match &raw {
@@ -529,12 +530,14 @@ fn select_heap_raw(
 /// word the emulation tests. `None` for every other call, an argument buffer's sampler's
 /// among them (whose listed states the plan does not check against its textures). It
 /// plans the group's unsigned integer class (`HeapPlan::reads_raw`), the heap's decode routines,
-/// the handle's class index, and the exact routine where it may filter.
+/// the handle's class index and the decode's note (`texture::heap_raw::plan`), and the exact
+/// routine where it may filter.
 fn heap_raw_sample(
     cx: &mut SelectCx<'_>,
     call: Call<'_>,
     (group, handle): (u32, ValueId),
     sampler: SamplerArg,
+    m: &mut Meter,
 ) -> Result<Option<super::heap_raw::HeapRaw>, Error> {
     use super::bicubic::TapAddress;
     use super::heap_raw::{HeapRaw, State};
@@ -639,14 +642,8 @@ fn heap_raw_sample(
     if moved.iter().enumerate().any(|(a, k)| *k != 0 && wraps(a)) {
         cx.precision.insert(PrecisionNote::ViewBaseTexelOffset);
     }
-    if let Some(h) = cx.families.texture.heap.get_mut(&group) {
-        h.reads_raw = true;
-    }
-    cx.families.texture.heap_raw.insert(false);
-    if half {
-        cx.families.texture.heap_raw.insert(true);
-    }
-    cx.families.access.heap_class_index = true;
+    // Every sample takes the `float` routine, a `half` one the `half` routine too.
+    crate::lower::texture::heap_raw::plan(cx, group, &[false, half], m)?;
     // A linear filter's sum of the decoded taps is the device's arithmetic (`extended::filtered`).
     if gather.is_none() && !matches!(state, State::Constant { linear: false, .. }) {
         cx.precision.insert(PrecisionNote::BicubicFilterArithmetic);

@@ -2637,9 +2637,11 @@ degradations! {
         /// Vulkan format holds them): a linear value within one `f32` ulp of Metal's, an encoded
         /// code within one (`R10Unorm_X6_sRGB`'s and `RGB10A2Unorm_sRGB`'s colour within two
         /// below `0.0031308`), a `half` result within one `half` ulp. A texture a heap holds
-        /// by its raw texels alone, which a function's `float` read through an argument buffer
-        /// decodes so, is announced naming the texture, at the first command that binds a heap
-        /// set holding it, whether or not its function reads it.
+        /// by its raw texels alone, which a function's `float` read, sample or gather through an
+        /// argument buffer decodes so, is announced naming the texture, at the first command that
+        /// binds a heap set holding it, whether or not its function reads it; and by the stage
+        /// that decodes it, at a draw or dispatch whose command makes such a texture resident or
+        /// binds one (`SpecKey::HeapRawTextures`).
         DevicePackConversion = "device-pack-conversion";
         /// A render pipeline whose color attachments the device draws in more than one group:
         /// each draw runs once per group, each group's variant over its own copy of the pass's
@@ -4043,8 +4045,9 @@ impl Device {
     /// texture's format class, `SpecKey::BoundSamplerWord`) and holds where the draw's plan gives
     /// the values `bound` gives (`BindingPlan::specialized_value`;
     /// `StageModule::note_clauses_bound`; and what the command's handles can name,
-    /// `SpecKey::HeapYCbCrTextures` and `SpecKey::FilteringArgumentSampler`, which the plan gives
-    /// too: a filter note's heap texture), the class of the format `formats` binds at each
+    /// `SpecKey::HeapYCbCrTextures`, `SpecKey::HeapRawTextures` and
+    /// `SpecKey::FilteringArgumentSampler`, which the plan gives too: a filter note's heap
+    /// texture, a heap decode's raw one), the class of the format `formats` binds at each
     /// texture slot such a clause also tests (`SpecKey::BoundTexelFormat`: a filter note's
     /// two-plane YCbCr format under a runtime sampler's filtering word). A clause testing a slot
     /// bound to nothing does not hold, as [`degrade_bound_formats`](Self::degrade_bound_formats)

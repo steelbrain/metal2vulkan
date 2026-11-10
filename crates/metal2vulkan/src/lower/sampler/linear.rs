@@ -158,7 +158,7 @@ pub(super) fn metal_filtered_ycbcr(cx: &SelectCx<'_>, image: ImageRef) -> Option
             ]
             .map(|p| NoteTest::equal(NoteOn::Bound(index), TexelFormat::PACKED_MASK, p.class().0)),
         ),
-        ImageRef::Heap { .. } => any_of([NoteTest::equal(NoteOn::HeapTextures(cx.stage), 1, 1)]),
+        ImageRef::Heap { .. } => any_of([NoteTest::equal(NoteOn::HeapYCbCr(cx.stage), 1, 1)]),
     })
 }
 

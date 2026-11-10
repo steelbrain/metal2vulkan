@@ -457,7 +457,8 @@ impl SpecClause {
     /// (`BindingPlan::specialized_value`): one the function reads as data
     /// (`SpecKey::read_as_data`), the word of the sampler bound at a slot
     /// (`SpecKey::BoundSamplerWord`), or what the stage's handles can name
-    /// (`SpecKey::HeapYCbCrTextures`, `SpecKey::FilteringArgumentSampler`). A runtime reads such
+    /// (`SpecKey::HeapYCbCrTextures`, `SpecKey::HeapRawTextures`,
+    /// `SpecKey::FilteringArgumentSampler`). A runtime reads such
     /// a clause at each draw or dispatch, from the values its plan gives
     /// ([`StageModule::note_clauses_bound`]).
     pub fn tests_bound_values(&self) -> bool {
@@ -467,6 +468,7 @@ impl SpecClause {
                     t.key,
                     SpecKey::BoundSamplerWord(_)
                         | SpecKey::HeapYCbCrTextures(_)
+                        | SpecKey::HeapRawTextures(_)
                         | SpecKey::FilteringArgumentSampler
                 )
         })
@@ -2040,7 +2042,12 @@ pub enum PrecisionNote {
     /// `2^-13` before its table, a step there spanning 1.6 codes), an sRGB twin's decoded value
     /// within half a `2^-13` step of Metal's table (`R10Unorm_X6_sRGB`'s and
     /// `RGB10A2Unorm_sRGB`'s colour within 1.64 steps) beyond the `Pow`'s bound, a `half` result
-    /// within one `half` ulp. Validation derives no tolerance from it.
+    /// within one `half` ulp. A `float` or `half` read, sample or gather through an argument
+    /// buffer that decodes a texture the heap holds by its raw texels alone
+    /// (`lower::texture::heap_raw`) records it as a specialized note: it holds where a texture
+    /// the stage's handles can name is one (`SpecKey::HeapRawTextures`, which a plan gives),
+    /// unless the stage records it outright for another conversion. Validation derives no
+    /// tolerance from it.
     DevicePackConversion,
     /// A render pipeline whose color attachments the device draws in more than one group
     /// (`GraphicsState::color_group`, the module docs of `pipeline::compile::color_group`): a

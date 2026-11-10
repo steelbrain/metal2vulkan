@@ -4234,10 +4234,13 @@ bound.
   `half` result within one `half` ulp. A texture a heap holds by its raw texels alone
   (`BGR10_XR`, `BGRA10_XR`, `R10Unorm_X6`, `RG10Unorm_X12` and the bfloat formats:
   `bind::heap_raw_form`), whose `float` read, sample or gather through an argument buffer the
-  function decodes the same way, is announced by the runtime instead of by the stage, naming the
-  texture, at the first command that binds a heap set holding it (whether or not its function
-  reads it) or as it is placed in a set a command buffer that bound the set and has not completed
-  may read through.
+  function decodes the same way: such a stage records the note as a specialized note, holding
+  where a texture its handles can name is one (`SpecKey::HeapRawTextures`, which the binding plan
+  gives from the textures the command makes resident or binds), so a reading of the module alone
+  holds it and a draw or dispatch whose command can name one announces it. The runtime also
+  announces it naming the texture, at the first command that binds a heap set holding it (whether
+  or not its function reads it) or as it is placed in a set a command buffer that bound the set
+  and has not completed may read through.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and

@@ -843,6 +843,14 @@ pub enum SpecKey {
     /// test holds. A texture the command neither names nor makes resident, which a handle loaded
     /// from memory may still reach and whose read Metal leaves undefined, is not counted.
     HeapYCbCrTextures(Stage),
+    /// Boolean: a texture the stage's handles can name is one a heap holds by its raw texels alone
+    /// (`bind::heap::heap_raw_form`: an unswizzled, not sparse texture of one sample of a form of
+    /// `ExtendedRange::HEAP_READ`, whose texels the function's `float` read, sample or gather
+    /// decodes by the device's arithmetic, `PrecisionNote::DevicePackConversion`): a heap member
+    /// of the command reaching the stage, as for
+    /// [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), and read by a specialized note's test alone,
+    /// given by a plan, as that is.
+    HeapRawTextures(Stage),
     /// Boolean: a sampler state an argument buffer's sampler handle can name filters: one of the
     /// bind state's argument samplers (`BindState::argument_samplers`, every live state, its
     /// shape in `BindShape`) has a linear minification, magnification or mip filter, anisotropy,

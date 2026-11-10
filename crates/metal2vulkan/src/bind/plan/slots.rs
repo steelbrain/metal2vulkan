@@ -269,9 +269,10 @@ pub(crate) fn record_specialized(
 
 /// Record in `resources`' template the value of each key a specialized note of `stages` tests that
 /// no constant and no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`),
-/// or what the command's handles can name (`SpecKey::HeapYCbCrTextures`, through `reach`, the
-/// stages a used resource's render stages reach, as for the heap's members;
-/// `SpecKey::FilteringArgumentSampler`), which `BindingPlan::specialized_value` gives the runtime at
+/// or what the command's handles can name (`SpecKey::HeapYCbCrTextures` and
+/// `SpecKey::HeapRawTextures`, through `reach`, the stages a used resource's render stages reach,
+/// as for the heap's members; `SpecKey::FilteringArgumentSampler`), which
+/// `BindingPlan::specialized_value` gives the runtime at
 /// each draw or dispatch, where it reads such a note (`StageModule::note_clauses_bound`). Nothing
 /// pushes it: instantiation writes only the keys its push fields name.
 pub(crate) fn record_noted<'a>(
@@ -291,6 +292,7 @@ pub(crate) fn record_noted<'a>(
                 key,
                 SpecKey::BoundSamplerWord(_)
                     | SpecKey::HeapYCbCrTextures(_)
+                    | SpecKey::HeapRawTextures(_)
                     | SpecKey::FilteringArgumentSampler
             )
         })
@@ -306,6 +308,7 @@ pub(crate) fn record_noted<'a>(
         }
         let value = match key {
             SpecKey::HeapYCbCrTextures(stage) => u64::from(heap_ycbcr(shape, stage, reach)),
+            SpecKey::HeapRawTextures(stage) => u64::from(heap_raw(shape, stage, reach)),
             // A sampler state of any listed shape may be the one an argument buffer names.
             SpecKey::FilteringArgumentSampler => u64::from(
                 (shape.argument_samplers.shapes.iter())
@@ -338,6 +341,19 @@ fn heap_ycbcr(
             }
             _ => false,
         })
+}
+
+/// Whether a heap member of `shape` that reaches `stage` (as for [`heap_ycbcr`]) is a texture a
+/// heap holds by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float`
+/// read, sample or gather decodes by the device's arithmetic.
+fn heap_raw(
+    shape: &BindShape,
+    stage: Stage,
+    reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
+) -> bool {
+    crate::bind::heap::members(shape, &[stage], reach)
+        .iter()
+        .any(|m| crate::bind::heap::raw_held(&m.shape))
 }
 
 /// Whether `shape` binds anything at `slot`.

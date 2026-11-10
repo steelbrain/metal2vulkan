@@ -13,8 +13,19 @@
 //! module's routine, which decodes it as a slot's read does (`extended_range::decode`, its `half`
 //! rounding included) and selects Metal's out-of-bounds texel outside the texture: zero, alpha 1
 //! for a form without alpha.
+//!
+//! That decode is the device's arithmetic, as a slot's is (`ArithPlan::converts`), so a function
+//! that plans it ([`plan`]) records `PrecisionNote::DevicePackConversion`, specialized on a
+//! texture the stage's handles can name being held by its raw texels alone
+//! (`SpecKey::HeapRawTextures`, which a plan gives from the command's heap members): the note is
+//! in the module's notes, and a runtime announces it at a draw or dispatch whose command can name
+//! such a texture.
 
+use crate::budget::Meter;
+use crate::error::Error;
+use crate::lower::select::{any_of, NoteOn, NoteTest, SelectCx};
 use crate::metal::format::ExtendedRange;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::spirv::builder::ModuleBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::FuncId;
@@ -36,6 +47,27 @@ pub const READ_WORDS: u32 = 256;
 /// The words a query adds: the class index's test, the branch and its merge, and the unsigned
 /// element's access chain, load and query.
 pub const QUERY_WORDS: u32 = 128;
+
+/// Plan a `float` or `half` read, sample or gather of heap group `group` that decodes a member of a
+/// form a heap reads where its handle's class index names one, with the decode routine of each
+/// result type of `halves` (`false` a `float` one, `true` a `half` one): the group's unsigned
+/// integer class ([`HeapPlan::reads_raw`](super::slot::HeapPlan)), the routines, the handle's
+/// class index, and the decode's `PrecisionNote::DevicePackConversion` where a texture the stage's
+/// handles can name is held by its raw texels alone (`SpecKey::HeapRawTextures`).
+pub(crate) fn plan(
+    cx: &mut SelectCx<'_>,
+    group: u32,
+    halves: &[bool],
+    m: &mut Meter,
+) -> Result<(), Error> {
+    if let Some(h) = cx.families.texture.heap.get_mut(&group) {
+        h.reads_raw = true;
+    }
+    cx.families.texture.heap_raw.extend(halves.iter().copied());
+    cx.families.access.heap_class_index = true;
+    let raw = NoteTest::equal(NoteOn::HeapRaw(cx.stage), 1, 1);
+    cx.note_when(PrecisionNote::DevicePackConversion, any_of([raw]), m)
+}
 
 /// Define the routine decoding raw texel `raw` (a `uvec4`, the raw format's lanes) of the form at
 /// index `form` (a `u32`) of `ExtendedRange::HEAP_READ`, inside the texture where `inb` (a
