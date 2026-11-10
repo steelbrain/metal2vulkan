@@ -38,6 +38,7 @@ mod engine_compute_limits;
 mod engine_copy;
 mod engine_coverage_loop;
 mod engine_cross_class;
+mod engine_dead_fetch;
 mod engine_debug_info;
 mod engine_declared_varyings;
 mod engine_depth_range;
