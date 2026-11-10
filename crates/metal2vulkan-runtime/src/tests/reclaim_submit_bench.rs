@@ -868,10 +868,11 @@ fn phase(
 }
 
 /// Print the runtime's block makings of the phase `name` of `arm` (`memory/making_parts.rs`):
-/// each part's time summed and the slowest, and the [`SLOWEST`] makings by their
-/// `vkAllocateMemory`, each with the submissions begun while it ran and the longest of their
-/// `commit_and_submit` and turnaround. `clock` is an `Instant` and its `CLOCK_MONOTONIC` seconds, to place the makings
-/// among the submissions.
+/// each part's time summed and the slowest, the submissions begun while an exportable fill ran
+/// (its allocation and its free, before the block's own) and the longest of their turnarounds,
+/// and the [`SLOWEST`] makings by their `vkAllocateMemory`, each with the submissions begun while
+/// it ran and the longest of their `commit_and_submit` and turnaround. `clock` is an `Instant`
+/// and its `CLOCK_MONOTONIC` seconds, to place the makings among the submissions.
 fn print_makings(
     (arm, name): (&str, &str),
     makings: &[crate::memory::making_parts::MakingParts],
@@ -905,10 +906,33 @@ fn print_makings(
         bind.0,
         bind.1,
     );
+    let at = |making: &crate::memory::making_parts::MakingParts| {
+        clock.1 + making.allocating.duration_since(clock.0).as_secs_f64()
+    };
+    let filling: Vec<(f64, f64)> = (makings.iter())
+        .filter(|making| !making.took[1].is_zero())
+        .map(|making| (at(making) - making.took[1].as_secs_f64(), at(making)))
+        .collect();
+    let in_fills: Vec<f64> = (turnarounds.iter())
+        .filter(|&&(_, began)| {
+            filling
+                .iter()
+                .any(|&(from, to)| began >= from && began < to)
+        })
+        .map(|&(took, _)| ms(took))
+        .collect();
+    eprintln!(
+        "RECLAIM-SUBMIT {arm}, {name}: within the {} exportable fills, {} submissions begun, {} \
+         of them turning around in 8 ms or more, the longest {:.2} ms",
+        filling.len(),
+        in_fills.len(),
+        in_fills.iter().filter(|&&took| took >= 8.0).count(),
+        in_fills.iter().copied().fold(0.0, f64::max),
+    );
     let mut slowest: Vec<_> = makings.iter().collect();
     slowest.sort_by_key(|making| std::cmp::Reverse(making.took[2]));
     for making in slowest.into_iter().take(SLOWEST) {
-        let began = clock.1 + making.allocating.duration_since(clock.0).as_secs_f64();
+        let began = at(making);
         let ended = began + making.took[2].as_secs_f64();
         let within = |times: &[(Duration, f64)]| {
             let inside = (times.iter()).filter(|&&(_, at)| at >= began && at < ended);
