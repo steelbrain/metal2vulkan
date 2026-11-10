@@ -530,6 +530,13 @@ impl Drop for InUse<'_> {
     }
 }
 
+/// A creation call that needs a block whose making still waits for a burst of the device's
+/// submissions to end cuts that wait short and waits for the block's allocation alone. Each attempt
+/// starts once every making ended, so that the pool's next making is a new one, which waits for
+/// quiet: a pool's thread makes the blocks queued while it runs one after another with no wait of
+/// their own, and on an RTX 5080 (its blocks made of 16 MiB after a slow making, two of the
+/// test's buffers to a block) creation calls back to back beside the runtime suite's first half
+/// kept its one thread making through up to 235 calls, and through [`MOST`] beside both halves.
 #[test]
 fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allocation_alone() {
     let scratch = Scratch::new("hurried");
@@ -557,20 +564,31 @@ fn a_creation_that_needs_a_block_whose_making_waits_for_quiet_waits_for_its_allo
     while grown(&start, &device.work_counts()) == 0 {
         new_buffer(&mut held);
     }
-    // Back to back until a creation call cut a making's wait for quiet short. Nothing else ends
-    // that wait but its bound, which only a host slower than `QUIET_MOST` over a few creation
-    // calls reaches; the next making is started as the pool grows again.
+    // Each attempt: every making ended, the use let go meanwhile so that a wait for quiet under
+    // way ends at the pause rather than at its bound; then, the use held open again, back to back
+    // until a creation call cut the next making's wait for quiet short. Nothing else ends that
+    // wait but its bound, which only a host slower than `QUIET_MOST` over a few creation calls
+    // reaches: then the next attempt.
     let before = device.work_counts();
     let past = |counts: &WorkCounts| {
         counts.blocks_ahead_past_quiet_wait - before.blocks_ahead_past_quiet_wait
     };
+    let hurries = |counts: &WorkCounts| counts.blocks_ahead_hurried - before.blocks_ahead_hurried;
     let mut longest = Duration::ZERO;
-    loop {
-        let counts = device.work_counts();
-        if counts.blocks_ahead_hurried > before.blocks_ahead_hurried || past(&counts) == ATTEMPTS {
-            break;
+    let mut in_use = Some(in_use);
+    let mut counts = before;
+    while hurries(&counts) == 0 && past(&counts) < ATTEMPTS {
+        drop(in_use.take());
+        makings_ended(&device);
+        in_use = Some(InUse::new(&shared.queue_quiet));
+        let attempt = past(&device.work_counts());
+        loop {
+            counts = device.work_counts();
+            if hurries(&counts) > 0 || past(&counts) > attempt {
+                break;
+            }
+            longest = longest.max(new_buffer(&mut held));
         }
-        longest = longest.max(new_buffer(&mut held));
     }
     let after = device.work_counts();
     drop(in_use);
