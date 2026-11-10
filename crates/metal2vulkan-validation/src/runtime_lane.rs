@@ -42,7 +42,7 @@ use metal2vulkan::pipeline::LinkedFunctions;
 use metal2vulkan_devtools::{llvm_assemble, AssembleError};
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputePipelineState, DebugMessage, Degradation, Device, DeviceOptions,
-    Execution, Function, LayerSetting, LayerSettingValue, PipelineOptions,
+    Execution, Function, LayerSetting, LayerSettingValue, PipelineOptions, QueueLimits,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -1292,13 +1292,31 @@ fn metal_cache_kept(device: &Device) -> bool {
 }
 
 /// The options of a lane device: the validation layer reporting to `messages`, its shader cache in
-/// `cache` (`runtime_case::validated_options`, the executor's too), and the checks the lane's
-/// switch enables ([`LaneChecks`]).
+/// `cache` (`runtime_case::validated_options`, the executor's too), the checks the lane's switch
+/// enables ([`LaneChecks`]), and the lane's queue limits ([`LANE_QUEUE_LIMITS`]).
 pub fn validated_options(messages: &Messages, cache: &Path) -> DeviceOptions {
     let mut options = crate::candidate::runtime_case::validated_options(messages, cache);
     LaneChecks::switched().apply(&mut options);
+    options.queue_limits = Some(LANE_QUEUE_LIMITS);
     options
 }
+
+/// The queue limits of a lane device (`DeviceOptions::queue_limits`): one `VkQueue` for the round
+/// robin its command queues share and none reserved for presenting queues, beside the staging
+/// queue. A device's `VkQueue`s are made and dropped with it, and on an RTX 5080 Laptop GPU a
+/// device of its plan's 17 took 445 ms to make and 110 ms to drop, one of these 2 queues 145 ms
+/// and 44 ms, the driver making one device at a time across processes: the lane, which makes
+/// thousands, ran in 18 minutes where it took 51. On a device whose families have no queue to
+/// spare the limits leave its plan as it is. Where they change a placement from what the plan
+/// gives, the device says so (`metal2vulkan-queue-limits-reached`), which fails the run
+/// ([`QUEUE_LIMITS_REACHED`](crate::candidate::runtime_case::QUEUE_LIMITS_REACHED)): a test whose
+/// work places a second command queue, a presenting, unshared, reserved or extra one, or reads the
+/// device's queue sharing, makes its device with the plan through its own `adjust`
+/// (`options.queue_limits = None`).
+pub const LANE_QUEUE_LIMITS: QueueLimits = QueueLimits {
+    round_robin: 1,
+    presenting: 0,
+};
 
 /// Whether the runtime makes an untessellated vertex pipeline's topology and restart dynamic on
 /// `device`: the profile's test (`pipeline::link::graphics`), both extended dynamic states, which

@@ -300,6 +300,11 @@ impl Drop for Reported {
     }
 }
 
+/// The id name of the informational message a device sends where its queue limits
+/// (`DeviceOptions::queue_limits`) changed a placement from what its queue plan gives, which fails
+/// a run ([`Messages::sink`]).
+pub const QUEUE_LIMITS_REACHED: &str = "metal2vulkan-queue-limits-reached";
+
 /// The `specVersion` of the validation layer the runtime's loader offers, read once.
 static LAYER_VERSION: OnceLock<Option<u32>> = OnceLock::new();
 
@@ -493,6 +498,21 @@ impl Messages {
             if layer_claim::loader_layer_message(&message.id_name, &message.text)
                 && reported.layers.hold(message)
             {
+                return;
+            }
+            // A device placed a queue otherwise than its queue plan gives, under the queue limits
+            // the lane makes its devices with (`DeviceOptions::queue_limits`,
+            // `runtime_lane::LANE_QUEUE_LIMITS`): the work depends on the plan's queues, so it
+            // fails as the layer's errors do, and the test makes its device with the plan.
+            if message.id_name == QUEUE_LIMITS_REACHED {
+                eprintln!(
+                    "QUEUE-LIMITS-REACHED {}: {}",
+                    reported.test,
+                    message.text.replace('\n', " ")
+                );
+                if reported.failing.len() < Self::MAX {
+                    reported.failing.push(message.clone());
+                }
                 return;
             }
             if !fails {
