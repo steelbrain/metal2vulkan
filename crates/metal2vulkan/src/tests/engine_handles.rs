@@ -1776,8 +1776,10 @@ declare void @air.write_texture_2d.{elem}(ptr addrspace(1), <2 x i32>, {ty}, i32
 /// packed small float texture, whose stored NaN is the device's; but for a `float` texel on a
 /// profile whose stores of a `float` NaN into the half-float and the packed small float formats
 /// are measured to be Metal's (`DriverDeviation::MetalHalfStorageNans` and
-/// `DriverDeviation::MetalSmallFloatNans`: MoltenVK on the M3 Max's identity), which then
-/// requires `VkProperty::MetalSmallFloatNans`.
+/// `DriverDeviation::MetalSmallFloatNans`: MoltenVK on the M3 Max's identity). A `half` texel's
+/// note holds under the families the heap can name (`SpecKey::HeapNanFamilies`, held in
+/// `tests::engine_extended_range::heap`). Either texel requires `VkProperty::MetalSmallFloatNans`
+/// where the profile takes `DriverDeviation::MetalSmallFloatNans`.
 #[test]
 fn a_heap_texel_write_is_the_devices_write() {
     for float in [false, true] {
@@ -1815,7 +1817,7 @@ fn a_heap_texel_write_is_the_devices_write() {
                 a.requirements
                     .properties
                     .contains(&crate::device::requirements::VkProperty::MetalSmallFloatNans),
-                float && small,
+                small,
                 "{what}"
             );
             compiled += 1;
