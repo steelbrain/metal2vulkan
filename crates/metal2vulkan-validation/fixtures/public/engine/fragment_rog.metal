@@ -40,14 +40,15 @@ fragment Ordered rog_output(float4 position [[position]]) {
     return out;
 }
 
-// A discard in a group (demote semantics): demote, or predication recorded in the body and killed
-// by the entry after the critical section.
+// A discard in a group (demote semantics) before a read of the group's buffer: demote, or
+// predication recorded in the body and killed by the entry after the critical section. (A group
+// on a buffer the body never reads orders nothing, and would not interlock the function.)
 fragment float4 rog_discard(Surface in [[stage_in]],
                             device float *acc [[buffer(0), raster_order_group(0)]]) {
     if (in.color.a < 0.5) {
         discard_fragment();
     }
-    return in.color;
+    return in.color * acc[0];
 }
 
 // A loop in a group: the execution bound's forced exit returns from the body, and the entry ends
