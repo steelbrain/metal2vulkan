@@ -1069,12 +1069,6 @@ fn heap_extended_samples_are_the_slot_s() {
             let at_heap = pipeline_of(device, &heap_kernel);
             announced.extend(notices(messages).into_iter().map(|(kind, _)| kind));
             let noted = notes_of(device, &heap_kernel);
-            // The device's narrowing of a `half` result, and its blend of a linear sample's taps,
-            // each announced.
-            let narrows = *half && recorded(&noted, &announced, NATIVE_HALF);
-            let filtered = matches!(op, Op::Sample)
-                && (name.contains("linear") || matches!(through, Through::Slot))
-                && recorded(&noted, &announced, FILTER_ARITHMETIC);
             let sampler = matches!(through, Through::Slot).then_some(&runtime);
             for &(format, bytes) in &RAW_HELD {
                 let texture = made(device, format, bytes).unwrap();
@@ -1082,6 +1076,16 @@ fn heap_extended_samples_are_the_slot_s() {
                     .unwrap_or_else(|e| panic!("{format:?} {name} {op:?} at a slot: {e}"));
                 let held = dispatch_with(device, (&at_heap, true), (&texture, sampler), &lanes)
                     .unwrap_or_else(|e| panic!("{format:?} {name} {op:?} through a heap: {e}"));
+                // What the dispatch announced: the filter's note holds where the command's heap
+                // can name a texture the function filters (`SpecKey::HeapRawTextures`), so it is
+                // announced at the dispatch that binds one, not as the pipeline is made.
+                announced.extend(notices(messages).into_iter().map(|(kind, _)| kind));
+                // The device's narrowing of a `half` result, and its blend of a linear sample's
+                // taps, each announced.
+                let narrows = *half && recorded(&noted, &announced, NATIVE_HALF);
+                let filtered = matches!(op, Op::Sample)
+                    && (name.contains("linear") || matches!(through, Through::Slot))
+                    && recorded(&noted, &announced, FILTER_ARITHMETIC);
                 checked += lanes.len();
                 let wrong: Vec<usize> = (0..lanes.len()).filter(|&i| held[i] != slot[i]).collect();
                 let blended =
