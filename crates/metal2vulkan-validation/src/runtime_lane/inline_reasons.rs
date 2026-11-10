@@ -14,9 +14,15 @@
 //! color splits before it (`WorkCounts::inline_memoryless_write_splits`) into an instance that
 //! records inline too (`WorkCounts::inline_split_instances`), each storing what plain Metal
 //! stores.
+//!
+//! And a pass beside a depth/stencil attachment: one of the texture's own image cleared or loaded
+//! and stored records inline, beside a color or alone, and so does one of a combined texture whose
+//! depth alone it names; a depth loaded or stored `DontCare` counts its actions, a memoryless one
+//! its memoryless, a depth and a stencil of separate textures its attachments. A pass recorded
+//! inline beside its depth tests and writes it as Metal does.
 
 use super::memoryless::memoryless;
-use super::resolves::{color_pass, lane, quiet, Lane, Shape, FULL, ONE, SIZE, WHITE};
+use super::resolves::{color_pass, lane, quiet, Lane, Shape, FULL, ONE, SAMPLES, SIZE, WHITE};
 use metal2vulkan::metal::{ColorWriteMask, PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
@@ -304,5 +310,185 @@ fn a_memoryless_color_records_inline_until_a_draw_writes_it() {
         "the stored color, cleared"
     );
     drop((stored, scratch));
+    quiet(lane, &messages);
+}
+
+/// What `descriptor`'s pass, white drawn over it at 0.5 through a pipeline of its color (where it
+/// has one) and of `formats` for its depth and stencil, added to [`inline_counts`]. A pass of no
+/// color draws through a pipeline of no fragment function.
+fn drawn_beside(
+    lane: &Lane,
+    descriptor: &RenderPassDescriptor,
+    formats: (Option<PixelFormat>, Option<PixelFormat>),
+) -> [u64; 11] {
+    let pipeline = match descriptor.color_attachments[0].texture.is_some() {
+        true => lane.pipeline((FULL, WHITE), &[RGBA8], formats, 1),
+        false => {
+            let function = lane.library.new_function_with_name(FULL).unwrap();
+            let mut d = RenderPipelineDescriptor::new(StageSource::Function(
+                function.function_descriptor(),
+            ));
+            (d.depth_format, d.stencil_format) = formats;
+            lane.device
+                .new_render_pipeline_state(&d, &PipelineOptions::default())
+                .unwrap()
+        }
+    };
+    let before = inline_counts(&lane.device.work_counts());
+    lane.run(descriptor, |l, e, h| l.draw(e, h, &pipeline, 0.5))
+        .unwrap();
+    let after = inline_counts(&lane.device.work_counts());
+    std::array::from_fn(|at| after[at] - before[at])
+}
+
+/// A pass beside a depth/stencil attachment records its first instance inline where nothing the
+/// pass's end decides changes that attachment there (the runtime's `render/inline_first.rs`): a
+/// single-sampled `Depth32Float` cleared or loaded and stored, beside a color or alone, and a
+/// `Depth32Float_Stencil8` whose depth alone the pass names, its stencil kept; and where it does
+/// not, the first check that ruled it out is counted: a depth loaded `DontCare` (its actions), one
+/// stored `DontCare` (its actions), a memoryless one (memoryless), a depth and a stencil of
+/// separate textures, rendered through a scratch image (its attachments). Under the validation
+/// layer, which reports nothing.
+#[test]
+fn a_pass_beside_a_depth_or_stencil_records_inline_where_its_attachment_allows() {
+    let (messages, _cache, lane) = lane();
+    let (depth32, combined) = (PixelFormat::Depth32Float, PixelFormat::Depth32FloatStencil8);
+    let color = lane.single(RGBA8);
+    let depth = lane.single(depth32);
+    let both = lane.single(combined);
+    let stencil = lane.single(PixelFormat::Stencil8);
+    let beside = |texture: &metal2vulkan_runtime::Texture, load, store| {
+        let mut descriptor = color_pass(&color, None, StoreAction::Store, (0, 0));
+        let attachment = &mut descriptor.depth_attachment;
+        attachment.texture = Some(texture.clone());
+        attachment.load_action = load;
+        attachment.store_action = store;
+        descriptor
+    };
+    let with_depth = (Some(depth32), None);
+    let cleared = beside(&depth, LoadAction::Clear, StoreAction::Store);
+    let inline = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    assert_eq!(
+        drawn_beside(&lane, &cleared, with_depth),
+        inline,
+        "a depth cleared and stored"
+    );
+    let loaded = beside(&depth, LoadAction::Load, StoreAction::Store);
+    assert_eq!(
+        drawn_beside(&lane, &loaded, with_depth),
+        inline,
+        "a depth loaded and stored"
+    );
+    let mut alone = cleared.clone();
+    alone.color_attachments[0].texture = None;
+    assert_eq!(
+        drawn_beside(&lane, &alone, with_depth),
+        inline,
+        "a depth cleared and stored, no color"
+    );
+    let named_depth = beside(&both, LoadAction::Clear, StoreAction::Store);
+    assert_eq!(
+        drawn_beside(&lane, &named_depth, (Some(combined), None)),
+        inline,
+        "the depth of a depth and stencil texture, its stencil kept"
+    );
+    let actions = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    let undefined = beside(&depth, LoadAction::DontCare, StoreAction::Store);
+    let before = actions_counts(&lane.device.work_counts());
+    assert_eq!(
+        drawn_beside(&lane, &undefined, with_depth),
+        actions,
+        "a depth loaded DontCare"
+    );
+    let discarded = beside(&depth, LoadAction::Clear, StoreAction::DontCare);
+    assert_eq!(
+        drawn_beside(&lane, &discarded, with_depth),
+        actions,
+        "a depth stored DontCare"
+    );
+    let after = actions_counts(&lane.device.work_counts());
+    assert_eq!(
+        std::array::from_fn::<u64, 5, _>(|at| after[at] - before[at]),
+        [2, 1, 0, 0, 1],
+        "the depth's actions ruled out: a DontCare load, a store"
+    );
+    let scratch = memoryless(
+        &lane,
+        TextureType::Type2D,
+        depth32,
+        ONE,
+        TextureUsage::RENDER_TARGET,
+    )
+    .unwrap();
+    let transient = beside(&scratch, LoadAction::Clear, StoreAction::DontCare);
+    assert_eq!(
+        drawn_beside(&lane, &transient, with_depth),
+        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        "a memoryless depth"
+    );
+    let mut apart = cleared.clone();
+    let attachment = &mut apart.stencil_attachment;
+    attachment.texture = Some(stencil.clone());
+    attachment.load_action = LoadAction::Clear;
+    attachment.store_action = StoreAction::Store;
+    assert_eq!(
+        drawn_beside(&lane, &apart, (Some(depth32), Some(PixelFormat::Stencil8))),
+        [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+        "a depth and a stencil of separate textures"
+    );
+    drop((color, depth, both, stencil, scratch));
+    quiet(lane, &messages);
+}
+
+/// A pass whose first instance records inline beside its depth tests and writes the depth as
+/// Metal does: over a color cleared to zero and a `Depth32Float` cleared to 0.5, under `Less`
+/// with writes, white at 0.75 draws nothing, the sample color at 0.25 draws everywhere (red 0,
+/// green 0, blue a half, alpha 1, one sample), and white at 0.4 nothing; the depth is left at
+/// 0.25 and the color at the sample color's.
+#[test]
+fn a_pass_recorded_inline_beside_its_depth_tests_and_writes_it() {
+    let (messages, _cache, lane) = lane();
+    let depth32 = PixelFormat::Depth32Float;
+    let color = lane.single(RGBA8);
+    let depth = lane.single(depth32);
+    let mut descriptor = color_pass(&color, None, StoreAction::Store, (0, 0));
+    let attachment = &mut descriptor.depth_attachment;
+    attachment.texture = Some(depth.clone());
+    attachment.load_action = LoadAction::Clear;
+    attachment.store_action = StoreAction::Store;
+    attachment.clear_depth = 0.5;
+    let white = lane.pipeline((FULL, WHITE), &[RGBA8], (Some(depth32), None), 1);
+    let colored = lane.pipeline((FULL, SAMPLES), &[RGBA8], (Some(depth32), None), 1);
+    let mut less = metal2vulkan::metal::state::DepthStencilDescriptor::default();
+    less.depth_compare_function = metal2vulkan::metal::CompareFunction::Less;
+    less.depth_write_enabled = true;
+    let less = lane.device.new_depth_stencil_state(&less).unwrap();
+    let before = lane.device.work_counts().inline_passes;
+    lane.run(&descriptor, |l, e, h| {
+        e.set_depth_stencil_state(&less).unwrap();
+        l.draw(e, h, &white, 0.75);
+        l.draw(e, h, &colored, 0.25);
+        l.draw(e, h, &white, 0.4);
+    })
+    .unwrap();
+    assert_eq!(
+        lane.device.work_counts().inline_passes - before,
+        1,
+        "the pass recorded inline"
+    );
+    let texels = lane.read(&color, (0, 0), 4, BlitOption::None);
+    for texel in texels.chunks(4) {
+        assert!(
+            texel[0] == 0 && texel[1] == 0 && (127..=128).contains(&texel[2]) && texel[3] == 255,
+            "the color {texel:?}, not the sample color's"
+        );
+    }
+    let depths = lane.read(&depth, (0, 0), 4, BlitOption::None);
+    assert_eq!(
+        depths,
+        0.25f32.to_le_bytes().repeat((SIZE * SIZE) as usize),
+        "the depth, not 0.25"
+    );
+    drop((color, depth));
     quiet(lane, &messages);
 }
