@@ -205,13 +205,14 @@ pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 const FILL_SAVED_BELOW: Duration = Duration::from_millis(1);
 
 /// The fills whose outcomes a device keeps ([`Fills`]), and how many of them that missed (their
-/// block's own allocation took [`FILL_SAVED_BELOW`] or longer) stop its fills: a lone miss is a
-/// race, the block's allocation running before the fill's pages were back in the kernel's pool
-/// (on a quiet host, a fill whose free left its pages to the kernel's deferred delete, or another
-/// block's making taking them), where misses that come together are the host's state: the pool
-/// emptied by reclaim, or the block's allocation compacting and reclaiming for high orders again.
+/// block's own allocation took [`FILL_SAVED_BELOW`] or longer) stop its fills: a miss alone or in
+/// a pair is a race, the block's allocation running before the fill's pages were back in the
+/// kernel's pool (on a quiet host, a fill whose free left its pages to the kernel's deferred
+/// delete, or another block's making taking them), where misses that come in runs are the host's
+/// state: the pool emptied by reclaim, or the block's allocation compacting and reclaiming for high
+/// orders again.
 const FILL_RECENT: u32 = 4;
-const FILL_STOP_MISSES: u32 = 2;
+const FILL_STOP_MISSES: u32 = 3;
 
 /// The makings a device leaves unfilled once its fills stopped ([`FILL_STOP_MISSES`]), before the
 /// next is filled, a probe: doubled for each probe that missed, up to [`FILL_BACKOFF_MOST`]
