@@ -28,6 +28,7 @@
 
 use super::blit_holds::{exact_waits_device, Scratch};
 use super::spares_bench::process_memory;
+use super::uniform_bind_offsets::idle;
 use crate::pipeline::kept::KEPT;
 use crate::sampler::SamplerCount;
 use crate::{Device, Function, Library, PipelineOptions, WorkCounts};
@@ -69,7 +70,8 @@ fn descriptor(library: &Library, vertex: &Function, n: usize) -> RenderPipelineD
     descriptor
 }
 
-/// Make and release a state of each descriptor in turn: each creation's time.
+/// Make and release a state of each descriptor in turn, each released whole before the next is
+/// made (its pool's makings, which hold its variant, done): each creation's time.
 fn round(device: &Device, descriptors: &[RenderPipelineDescriptor]) -> Vec<Duration> {
     let options = PipelineOptions::default();
     descriptors
@@ -81,6 +83,7 @@ fn round(device: &Device, descriptors: &[RenderPipelineDescriptor]) -> Vec<Durat
                 .unwrap();
             let took = start.elapsed();
             drop(state);
+            idle(device);
             took
         })
         .collect()
@@ -261,11 +264,14 @@ fn a_sampler_past_the_limit_evicts_a_kept_instance_first() {
     let options = PipelineOptions::default();
     let count = &device.shared().sampler_count;
     let live = count.live();
+    // Released whole: a making its creation handed to the pool (`pipeline/predicted.rs`) holds
+    // the variant until it is made.
     drop(
         device
             .new_render_pipeline_state(&nearest, &options)
             .unwrap(),
     );
+    idle(&device);
     assert_eq!(
         count.live(),
         live + 1,
@@ -283,6 +289,7 @@ fn a_sampler_past_the_limit_evicts_a_kept_instance_first() {
         made.err()
     );
     drop(made);
+    idle(&device);
     let again = device.new_render_pipeline_state(&nearest, &options);
     assert!(
         again.is_ok(),
