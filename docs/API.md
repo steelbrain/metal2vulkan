@@ -4791,6 +4791,17 @@ each item named states the rule in full.
   function's `function_constants_dictionary`), and the runtime refuses such a state as Metal does
   (`Invalid` with `Problem::UnspecializedFunction`). A linked function keeps its own rule (section
   3, "Linked functions: names and constants").
+- **A fast-math float operation of a NaN function constant and a value the run computes stores
+  that NaN.** An `fadd`, `fsub`, `fmul` or `fdiv` that carries `nnan` (Metal's default fast math)
+  and whose operand is a function constant bound to a NaN is `poison` in the AIR once the
+  constants are bound, so any value is a correct answer for it. The translation answers the NaN
+  operand, its bits unchanged, as it does for the same operation without fast math, where that NaN
+  is Metal's answer. Metal answers a NaN for a fragment function's output of it on an Apple M3 Max,
+  an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 under macOS 27.0.1. On the M3 Max a
+  kernel's store of it writes nothing, `float` and `half` alike, and the memory keeps what it
+  held, while the same kernel's store of the run value is written (the fixture
+  `sfold_fast_poison`, case `2d9a7e3091e1f9d9`, job m3-max-12877; the case stays out of the
+  corpus, whose comparisons are exact). The runtime on MoltenVK writes the NaN there.
 - **A linked function's constant without a value reads as zero too**, where the function was made
   specialized (section 3, "Linked functions: names and constants"). Metal makes that pipeline,
   and its read is undefined: a kernel storing `x * scale + 1` of such a function stored nothing on
