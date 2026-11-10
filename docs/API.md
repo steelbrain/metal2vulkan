@@ -4165,7 +4165,8 @@ bound.
   Metal's canonical one on a device measured to answer that, MoltenVK on an Apple GPU): a `float`
   `fneg` and `fabs`, which keep a NaN operand's payload on Metal, a `half` `fract`, which returns
   it, and a precise `float` `pow` of a NaN base to the exponent one, which returns the base, among
-  them. Also
+  them. A `float` `ldexp`, which the module computes on the bits, returns a NaN operand itself as
+  Metal does, on every device, and records nothing. Also
   recorded wherever a `half` is read from its bits, on every device, since the read is the
   device's widening (its conversion with `shaderFloat16`, `UnpackHalf2x16` without): a NaN's bits
   the device's, where Metal widens every `half` NaN to `0x7fc00000` and moves one it does not

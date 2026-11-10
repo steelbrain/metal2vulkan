@@ -1945,10 +1945,12 @@ pub enum PrecisionNote {
     /// Metal answers a NaN the device answers a NaN (the module keeps
     /// `SignedZeroInfNanPreserve` where Metal's entry keeps NaNs), its sign and payload the
     /// device's own (llvmpipe: `0xffc00000`), where Metal answers its canonical `0x7fc00000`
-    /// (`0x7e00` as `half`), an operand's bits (`round`, `ldexp`, `fast::tan`, and precise `pow`
+    /// (`0x7e00` as `half`), an operand's bits (`round`, `fast::tan`, and precise `pow`
     /// of a NaN base to the exponent one), or the canonical
     /// NaN with an operand's sign (`asin`, `atan`, `asinh`, `atanh`); a `float` `fneg` and `fabs`
-    /// keep a NaN operand's payload on Metal, and a `half` `fract` returns it. Every non-NaN result
+    /// keep a NaN operand's payload on Metal, and a `half` `fract` returns it. Not recorded for a
+    /// `float` `ldexp`, which the module computes on the bits and so answers a NaN operand itself,
+    /// as Metal does, on every device. Every non-NaN result
     /// is as without it. Also recorded by every module that reads a `half` from its bits (a load, a
     /// reinterpretation, a texel's bits), on every device: the read is the device's widening (an
     /// `OpFConvert` of the bits read as a 16-bit float with `shaderFloat16`, `UnpackHalf2x16`

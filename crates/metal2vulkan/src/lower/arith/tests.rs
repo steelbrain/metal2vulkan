@@ -2525,6 +2525,59 @@ const KHR_FACTS: super::FloatFacts = super::FloatFacts {
     nan_moves: false,
 };
 
+/// `ldexp` on `float` is lowered on the bits ([`math::ldexp_bits`]), which answer a NaN operand
+/// itself, bit for bit, as Metal does (`NanAnswer::Operand`): no NaN of the device's reaches the
+/// result, so the call records no `NativeNanEncoding` and leaves no NaN answer to the device, on a
+/// device of either NaN encoding. A `half` `ldexp` multiplies, so its NaN is the device's product's
+/// where Metal answers its canonical `half` NaN, and stays noted on a device not measured to answer
+/// that.
+#[test]
+fn float_ldexp_answers_metals_nan_itself() {
+    use super::nan::NanAnswer as A;
+    use crate::air::ir::FastMath;
+    use crate::device::profile::NanEncoding;
+    use crate::pipeline::artifact::PrecisionNote;
+    let form = |fmt| Form {
+        held: Held::Float(fmt),
+        lanes: 1,
+    };
+    assert!(FloatFn::Ldexp.metal_nans(FloatFmt::F32));
+    assert!(!FloatFn::Ldexp.metal_nans(FloatFmt::Half));
+    let every = FastMath::ALL
+        .iter()
+        .fold(FastMath::NONE, |a, (b, _)| a.union(*b));
+    for nans in [NanEncoding::Native, NanEncoding::MetalCanonical] {
+        let facts = super::FloatFacts { nans, ..KHR_FACTS };
+        for fmf in [FastMath::NONE, every] {
+            let call = super::float_call(FloatFn::Ldexp, false, fmf, form(FloatFmt::F32), facts)
+                .expect("float ldexp");
+            assert_eq!(call.nan, None, "{nans:?} {fmf:?}");
+            let noted = (call.notes.always.iter())
+                .chain(&call.notes.unless_metal_fast)
+                .any(|n| matches!(n, PrecisionNote::NativeNanEncoding));
+            assert!(!noted, "{nans:?} {fmf:?}: {:?}", call.notes);
+        }
+        let half = super::float_call(
+            FloatFn::Ldexp,
+            false,
+            FastMath::NONE,
+            form(FloatFmt::Half),
+            facts,
+        )
+        .expect("half ldexp");
+        assert_eq!(half.nan, Some(A::Canonical), "{nans:?}");
+        if nans == NanEncoding::Native {
+            assert!(
+                half.notes
+                    .always
+                    .contains(&PrecisionNote::NativeNanEncoding),
+                "{:?}",
+                half.notes
+            );
+        }
+    }
+}
+
 /// Precise `pow` on `float` leaves its NaNs to the device (the device's `Pow`, and the device's sum
 /// of NaN operands), where Metal's NaN is measured: the canonical NaN, but a NaN base to the
 /// exponent one, which is the base itself. It records `NativeNanEncoding` as fast `pow` and `atan2`
