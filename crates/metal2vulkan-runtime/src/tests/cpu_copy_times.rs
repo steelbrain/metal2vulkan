@@ -1,0 +1,211 @@
+//! The times of a `Shared` texture's CPU copies, `get_bytes` and `replace_region`, of
+//! `BGRA8Unorm` textures of three sizes ([`SIZES`]: 256 x 256, 1920 x 1080 and 4096 x 4096), and
+//! of a read through the GPU beside them: a blit of the texture into a `Shared` buffer, waited
+//! for, then the host's copy out of that buffer's memory. Printed per size as a `CPU-COPY-TIMES`
+//! line: the path the texture's copies take (on the host, from memory the host caches or not; on
+//! the staging queue, `device/staging.rs`; through submissions), the best and median time of
+//! each call, the blit's time from its commit to its completion and the host copy's.
+//!
+//! Each read is checked texel for texel against what the GPU or the host wrote. Times are a
+//! release build's where the run is one.
+//!
+//! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
+//! of device the cfg selects.
+
+use crate::{
+    BlitOption, Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, Origin, Region,
+    ResourceOptions, Size, Texture, TextureDescriptor,
+};
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use std::time::{Duration, Instant};
+
+/// The textures' sizes, and the times each call is made at that size.
+const SIZES: [(u64, u64, usize); 3] = [(256, 256, 20), (1920, 1080, 5), (4096, 4096, 3)];
+
+/// The longest a command buffer here may take.
+const WAIT: Duration = Duration::from_secs(60);
+
+/// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
+fn device() -> Device {
+    let options = DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Discrete,
+                DeviceKind::Integrated,
+                DeviceKind::Virtual,
+            ],
+        },
+        ..DeviceOptions::default()
+    };
+    Device::system_default_with(&options).unwrap()
+}
+
+/// `len` bytes of a pattern of `salt`.
+fn pattern(len: usize, salt: usize) -> Vec<u8> {
+    (0..len).map(|i| ((i * 7 + salt) % 251) as u8).collect()
+}
+
+/// A `Shared` buffer of `len` bytes, `bytes` at its start where given.
+fn shared_buffer(device: &Device, len: usize, bytes: Option<&[u8]>) -> Buffer {
+    let buffer = device
+        .new_buffer(len as u64, ResourceOptions::shared())
+        .unwrap();
+    if let Some(bytes) = bytes {
+        let contents = buffer.contents().unwrap();
+        // SAFETY: the buffer's `len` bytes, which no command uses yet.
+        let into = unsafe { std::slice::from_raw_parts_mut(contents.as_ptr(), len) };
+        into.copy_from_slice(bytes);
+    }
+    buffer
+}
+
+/// Each time in `times`, in milliseconds: the best and the median.
+fn best_and_median(times: &mut [f64]) -> (f64, f64) {
+    times.sort_by(f64::total_cmp);
+    (times[0], times[times.len() / 2])
+}
+
+/// The time `f` took, in milliseconds.
+fn millis(f: impl FnOnce()) -> f64 {
+    let at = Instant::now();
+    f();
+    at.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Commit a blit of `texture`'s level 0 into `buffer` (rows `row` bytes apart), or of `buffer`
+/// into `texture` where `into_texture`, on `queue`, and wait for it.
+fn blit(queue: &CommandQueue, texture: &Texture, buffer: &Buffer, row: u64, into_texture: bool) {
+    let size = Size::new(texture.width(), texture.height(), 1);
+    let origin = Origin::new(0, 0, 0);
+    let image = row * texture.height();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    match into_texture {
+        true => encoder.copy_from_buffer_to_texture(
+            buffer,
+            0,
+            row,
+            image,
+            size,
+            texture,
+            0,
+            0,
+            origin,
+            BlitOption::None,
+        ),
+        false => encoder.copy_from_texture_to_buffer(
+            texture,
+            0,
+            0,
+            origin,
+            size,
+            buffer,
+            0,
+            row,
+            image,
+            BlitOption::None,
+        ),
+    }
+    .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// Every size of [`SIZES`]: a `Shared` `BGRA8Unorm` texture a render pass may draw into, as a
+/// frame target is, written by a blit and read by `get_bytes`, read again through a blit into a
+/// `Shared` buffer and the host's copy out of it, then written by `replace_region` and read by
+/// `get_bytes`. Prints the `CPU-COPY-TIMES` lines (the module docs).
+#[test]
+fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
+    let device = device();
+    let name = device.name().to_owned();
+    let queue = device.new_command_queue().unwrap();
+    for (width, height, calls) in SIZES {
+        let row = 4 * width;
+        let len = (row * height) as usize;
+        let mut descriptor =
+            TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        descriptor.resource_options = ResourceOptions::shared();
+        let before = device.work_counts();
+        let texture = device.new_texture(&descriptor).unwrap();
+        let made = device.work_counts();
+        let hosted = made.images_started_on_the_host > before.images_started_on_the_host;
+        let staged = made.staging_moves_queued > before.staging_moves_queued;
+        let uncached = made.uncached_host_images > before.uncached_host_images;
+        let path = match (hosted, staged) {
+            (true, _) if uncached => "copied on the host from uncached memory",
+            (true, _) => "copied on the host",
+            (false, true) => "copied on the staging queue",
+            (false, false) => "copied through submissions",
+        };
+        let region = Region::new_2d(0, 0, width, height);
+        // The GPU writes it, and `get_bytes` reads that.
+        let drawn = pattern(len, 11);
+        let source = shared_buffer(&device, len, Some(&drawn));
+        blit(&queue, &texture, &source, row, true);
+        let mut read = vec![0xee; len];
+        let mut reads: Vec<f64> = (0..calls)
+            .map(|_| {
+                read.fill(0xee);
+                let took = millis(|| {
+                    (texture.get_bytes(&mut read, row, 0, region, 0, 0)).unwrap();
+                });
+                assert!(
+                    read == drawn,
+                    "{name} {width}x{height}: get_bytes reads the blit's texels"
+                );
+                took
+            })
+            .collect();
+        // The same texels through the GPU: a blit into a `Shared` buffer, waited for, then the
+        // host's copy out of its memory.
+        let out = shared_buffer(&device, len, None);
+        let mut blits = Vec::with_capacity(calls);
+        let mut copies = Vec::with_capacity(calls);
+        for _ in 0..calls {
+            blits.push(millis(|| blit(&queue, &texture, &out, row, false)));
+            let contents = out.contents().unwrap();
+            read.fill(0xee);
+            copies.push(millis(|| {
+                // SAFETY: the buffer's `len` bytes; the blit that wrote them completed, and no
+                // command uses them now.
+                let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), len) };
+                read.copy_from_slice(bytes);
+            }));
+            assert!(
+                read == drawn,
+                "{name} {width}x{height}: the blit into a buffer copies the texture's texels"
+            );
+        }
+        // The host writes it, and `get_bytes` reads that.
+        let written = pattern(len, 12);
+        let mut writes: Vec<f64> = (0..calls)
+            .map(|_| {
+                millis(|| {
+                    (texture.replace_region(region, 0, 0, &written, row, 0)).unwrap();
+                })
+            })
+            .collect();
+        read.fill(0xee);
+        (texture.get_bytes(&mut read, row, 0, region, 0, 0)).unwrap();
+        assert!(
+            read == written,
+            "{name} {width}x{height}: get_bytes reads replace_region's texels"
+        );
+        let (read_best, read_median) = best_and_median(&mut reads);
+        let (blit_best, _) = best_and_median(&mut blits);
+        let (copy_best, _) = best_and_median(&mut copies);
+        let (write_best, write_median) = best_and_median(&mut writes);
+        eprintln!(
+            "CPU-COPY-TIMES {name} {width}x{height} BGRA8Unorm Shared, {path}: get_bytes best \
+             {read_best:.2} ms, median {read_median:.2} ms of {calls}; through a blit into a \
+             Shared buffer: the blit {blit_best:.2} ms, the host's copy {copy_best:.2} ms (best \
+             of {calls}); replace_region best {write_best:.2} ms, median {write_median:.2} ms of \
+             {calls}"
+        );
+    }
+}
