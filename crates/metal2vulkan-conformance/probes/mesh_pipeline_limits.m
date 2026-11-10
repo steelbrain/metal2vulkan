@@ -11,10 +11,13 @@
 //
 // `mesh_pipeline_limits CASE [SALT]` makes one pipeline, rasterization disabled, of the library
 // below compiled from source, and prints `made` and the state's answers, or `refused` and the
-// error's domain, code and description. A SALT is appended to the source as a comment, so a salt
-// never used before compiles a source the compiler has never seen (a first compile), and the same
-// salt again compiles one it has. `mesh_pipeline_limits --cases` lists the cases. Run one case a
-// process: a stop of Metal's ends only its own.
+// error's domain, code and description. A SALT's 32-bit FNV-1a hash is the source's `SALT`, which
+// every function compares a thread's index with, so it is in each function's AIR: a salt never
+// used before compiles functions the compiler has never seen (a first compile), and the same salt
+// again compiles ones it has. (A comment would not do: Metal's compiler keys what it keeps, across
+// processes, on the AIR, which a comment leaves as it is.) Without a salt `SALT` is 0 and each
+// comparison folds away. `mesh_pipeline_limits --cases` lists the cases. Run one case a process: a
+// stop of Metal's ends only its own.
 //
 // Measured on an M3 Max under macOS 27.0.1, plain and with `MTL_DEBUG_LAYER=1`, which agree:
 // - Made, answering (object threads, mesh threads, object width, mesh width, mesh grid):
@@ -70,19 +73,19 @@ static NSString *const SOURCE = @"#include <metal_stdlib>\n"
                                  "using M = metal::mesh<V, void, 3, 1, topology::triangle>;\n"
                                  "[[object]] void obj(object_data P& p [[payload]], mesh_grid_properties g,\n"
                                  "                    uint t [[thread_index_in_threadgroup]]) {\n"
-                                 "  if (t == 0) { p.v[0] = 1; g.set_threadgroups_per_grid(uint3(1, 1, 1)); }\n"
+                                 "  if (t == 0 || t == SALT) { p.v[0] = 1; g.set_threadgroups_per_grid(uint3(1, 1, 1)); }\n"
                                  "}\n"
                                  "[[object, max_total_threads_per_threadgroup(64)]]\n"
                                  "void obj64(object_data P& p [[payload]], mesh_grid_properties g,\n"
                                  "           uint t [[thread_index_in_threadgroup]]) {\n"
-                                 "  if (t == 0) { p.v[0] = 1; g.set_threadgroups_per_grid(uint3(1, 1, 1)); }\n"
+                                 "  if (t == 0 || t == SALT) { p.v[0] = 1; g.set_threadgroups_per_grid(uint3(1, 1, 1)); }\n"
                                  "}\n"
                                  "[[mesh]] void msh(M out, const object_data P& p [[payload]],\n"
                                  "                  uint t [[thread_index_in_threadgroup]]) {\n"
-                                 "  if (t == 0) { out.set_primitive_count(p.v[0] - 1); }\n"
+                                 "  if (t == 0 || t == SALT) { out.set_primitive_count(p.v[0] - 1); }\n"
                                  "}\n"
                                  "[[mesh]] void alone(M out, uint t [[thread_index_in_threadgroup]]) {\n"
-                                 "  if (t == 0) { out.set_primitive_count(0); }\n"
+                                 "  if (t == 0 || t == SALT) { out.set_primitive_count(0); }\n"
                                  "}\n";
 
 // The functions of further attributes, compiled with `SOURCE` for the cases that name them alone,
@@ -91,12 +94,12 @@ static NSString *const ATTRIBUTES =
     @"[[mesh, max_total_threads_per_threadgroup(64)]]\n"
      "void msh64(M out, const object_data P& p [[payload]],\n"
      "           uint t [[thread_index_in_threadgroup]]) {\n"
-     "  if (t == 0) { out.set_primitive_count(p.v[0] - 1); }\n"
+     "  if (t == 0 || t == SALT) { out.set_primitive_count(p.v[0] - 1); }\n"
      "}\n"
      "[[object, max_total_threadgroups_per_mesh_grid(4)]]\n"
      "void objgrid4(object_data P& p [[payload]], mesh_grid_properties g,\n"
      "              uint t [[thread_index_in_threadgroup]]) {\n"
-     "  if (t == 0) { p.v[0] = 1; g.set_threadgroups_per_grid(uint3(1, 1, 1)); }\n"
+     "  if (t == 0 || t == SALT) { p.v[0] = 1; g.set_threadgroups_per_grid(uint3(1, 1, 1)); }\n"
      "}\n";
 
 // A case: the object function (NULL for none), the mesh function, and the descriptor's fields.
@@ -182,9 +185,15 @@ int main(int argc, const char **argv) {
         BOOL attributes = (c->object != NULL && strcmp(c->object, "objgrid4") == 0) ||
                           strcmp(c->mesh, "msh64") == 0;
         NSString *source = attributes ? [SOURCE stringByAppendingString:ATTRIBUTES] : SOURCE;
+        uint32_t salt = 0;
         if (argc == 3) {
-            source = [source stringByAppendingFormat:@"// %s\n", argv[2]];
+            salt = 2166136261u;
+            for (const char *at = argv[2]; *at != '\0'; at++) {
+                salt = (salt ^ (uint8_t)*at) * 16777619u;
+            }
         }
+        source = [[NSString stringWithFormat:@"#define SALT %uu\n", salt]
+            stringByAppendingString:source];
         id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
         if (library == nil) {
             printf("library %s\n", error.localizedDescription.UTF8String);
