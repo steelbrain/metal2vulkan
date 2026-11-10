@@ -6,6 +6,7 @@ use super::profiles::{
     self, ActiveTool, ProfileRestriction, ProfilesLayer, ProfilesSettings, RestrictionError,
     PROFILES_LAYER,
 };
+use crate::candidate::runtime_case::IgnoredDrivers;
 use crate::coverage::{ExecutionClass, Leg};
 use crate::gpu::wait::{self, SubmissionBackend};
 use crate::gpu::DeviceType;
@@ -457,7 +458,10 @@ pub fn echo_validation_messages() {
 }
 
 /// What the validation layer reported that fails a row: every `ERROR` message, and every
-/// `WARNING` of the validation type. Bounded so a flood cannot grow without limit.
+/// `WARNING` of the validation type. Bounded so a flood cannot grow without limit. The loader's
+/// own reports, at `vkCreateInstance`, of the driver manifests it ignored are the host's listing
+/// of its drivers, not the run's work: they pass as the runtime lane's `Messages` passes them
+/// ([`MessageSink::take`]).
 ///
 /// But for one message about the driver: on a context whose opened profile takes
 /// `DriverDeviation::MetalVertexSimdgroups` ([`MessageSink::unadvertised_vertex`]), the layer's
@@ -469,7 +473,7 @@ pub fn echo_validation_messages() {
 /// ([`MessageSink::unsupported_sets`]), the layer's report of such a layout
 /// (`candidate/unsupported_set.rs`).
 pub(super) struct MessageSink {
-    messages: Mutex<Vec<String>>,
+    messages: Mutex<Vec<Recorded>>,
     /// Whether the context's opened profile takes `DriverDeviation::MetalVertexSimdgroups`, set
     /// once it is derived.
     unadvertised_vertex: AtomicBool,
@@ -487,25 +491,81 @@ pub(super) struct MessageSink {
     unsupported_sets: AtomicBool,
 }
 
+/// One message the sink kept: its id name and text, which tell the loader's reports apart
+/// ([`MessageSink::take`]), and the line a row reports.
+struct Recorded {
+    id_name: String,
+    text: String,
+    line: String,
+}
+
 impl MessageSink {
     /// The most messages kept between two drains; one more entry says the rest were dropped.
     const MAX_MESSAGES: usize = 64;
     /// The longest message text kept.
     const MAX_MESSAGE_BYTES: usize = 2048;
 
-    fn record(&self, message: String) {
+    /// Keep the message of `level` (`error` or `warning`), `id_name` and `text`, echoed where
+    /// [`echo_validation_messages`] asked.
+    fn record(&self, level: &str, id_name: String, text: String) {
+        let line = truncated(format!("{level} {id_name}: {text}"));
+        if ECHO_MESSAGES.load(Ordering::Relaxed) {
+            echo(&line);
+        }
         let mut messages = self.messages.lock().unwrap_or_else(|p| p.into_inner());
         if messages.len() < Self::MAX_MESSAGES {
-            messages.push(message);
+            messages.push(Recorded {
+                id_name,
+                text: truncated(text),
+                line,
+            });
         } else if messages.len() == Self::MAX_MESSAGES {
-            messages.push("further validation messages were dropped".into());
+            let dropped = "further validation messages were dropped";
+            messages.push(Recorded {
+                id_name: String::new(),
+                text: dropped.into(),
+                line: dropped.into(),
+            });
         }
     }
 
+    /// The lines kept since the last call, removed: all but the loader's own reports of the
+    /// driver manifests it ignored (`IgnoredDrivers`), each printed as a line of its own
+    /// (`LOADER-DRIVER`), as the runtime lane's `Messages` passes them.
     fn take(&self) -> Vec<String> {
-        let mut messages = self.messages.lock().unwrap_or_else(|p| p.into_inner());
-        messages.drain(..).collect()
+        let recorded: Vec<Recorded> = {
+            let mut messages = self.messages.lock().unwrap_or_else(|p| p.into_inner());
+            messages.drain(..).collect()
+        };
+        let ignored = IgnoredDrivers::of(
+            (recorded.iter()).map(|message| (message.id_name.as_str(), message.text.as_str())),
+        );
+        (recorded.into_iter())
+            .filter_map(|message| {
+                if ignored.explains(&message.id_name, &message.text) {
+                    eprintln!(
+                        "LOADER-DRIVER: passed, the loader's own report of a driver manifest it \
+                         ignored: {}",
+                        message.text.replace('\n', " ")
+                    );
+                    return None;
+                }
+                Some(message.line)
+            })
+            .collect()
     }
+}
+
+/// `message`, cut to [`MessageSink::MAX_MESSAGE_BYTES`] at a character boundary.
+fn truncated(mut message: String) -> String {
+    if message.len() > MessageSink::MAX_MESSAGE_BYTES {
+        let mut end = MessageSink::MAX_MESSAGE_BYTES;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+    }
+    message
 }
 
 /// Whether the validation layer's message of `severity` and `types` fails the row.
@@ -577,22 +637,7 @@ unsafe extern "system" fn record_validation_message(
     } else {
         "warning"
     };
-    let mut message = format!(
-        "{level} {}: {}",
-        text(data.p_message_id_name),
-        text(data.p_message)
-    );
-    if message.len() > MessageSink::MAX_MESSAGE_BYTES {
-        let mut end = MessageSink::MAX_MESSAGE_BYTES;
-        while !message.is_char_boundary(end) {
-            end -= 1;
-        }
-        message.truncate(end);
-    }
-    if ECHO_MESSAGES.load(Ordering::Relaxed) {
-        echo(&message);
-    }
-    sink.record(message);
+    sink.record(level, text(data.p_message_id_name), text(data.p_message));
     vk::FALSE
 }
 
@@ -702,12 +747,39 @@ fn only_errors_and_validation_warnings_fail_a_row() {
         unsupported_sets: AtomicBool::new(false),
     };
     for n in 0..100 {
-        sink.record(format!("m{n}"));
+        sink.record("error", "VUID-test".into(), format!("m{n}"));
     }
     let kept = sink.take();
     assert_eq!(kept.len(), MessageSink::MAX_MESSAGES + 1);
-    assert_eq!(kept[0], "m0");
+    assert_eq!(kept[0], "error VUID-test: m0");
     assert!(sink.take().is_empty());
+}
+
+/// The sink passes the loader's own reports of a driver manifest it ignored, as the runtime
+/// lane's `Messages` does, and nothing wider: the same text under another id name, or the
+/// loader's report about a library it did not say it ignored, still fails the row.
+#[test]
+fn the_loaders_reports_of_ignored_drivers_fail_no_row() {
+    let sink = MessageSink {
+        messages: Mutex::new(Vec::new()),
+        unadvertised_vertex: AtomicBool::new(false),
+        making: OnceLock::new(),
+        unsupported_sets: AtomicBool::new(false),
+    };
+    let loader = "Loader Message";
+    let no_create = "loader_scanned_icd_add: Could not get 'vkCreateInstance' via \
+                     'vk_icdGetInstanceProcAddr' for ICD libdriver.so.0";
+    let ignored = "loader_icd_scan: Failed loading library associated with ICD JSON \
+                   libdriver.so.0. Ignoring this JSON";
+    sink.record("error", loader.into(), no_create.into());
+    sink.record("error", loader.into(), ignored.into());
+    assert_eq!(sink.take(), Vec::<String>::new());
+    sink.record("error", loader.into(), no_create.into());
+    assert_eq!(sink.take().len(), 1, "no manifest said ignored");
+    sink.record("error", "VUID-test".into(), ignored.into());
+    sink.record("error", loader.into(), ignored.into());
+    let kept = sink.take();
+    assert_eq!(kept, [format!("error VUID-test: {ignored}")]);
 }
 
 /// The executor's callback withholds a diagnostic the executing driver is measured to report

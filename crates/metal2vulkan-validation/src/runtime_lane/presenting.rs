@@ -84,14 +84,39 @@ impl std::fmt::Display for PresentGap {
 }
 
 /// What the validation layer reported on the test's own instance: every error, and every warning
-/// of the validation type (`Messages`' rule). Bounded.
+/// of the validation type (`Messages`' rule), each its id name and text. Bounded.
 #[derive(Default)]
-struct Reported(Mutex<Vec<String>>);
+struct Reported(Mutex<Vec<(String, String)>>);
 
 impl Reported {
+    /// The texts reported, removed: all but the loader's own reports of the driver manifests it
+    /// ignored at `vkCreateInstance`, the host's listing of its drivers, each printed as a line
+    /// of its own as `Messages` passes them (`layer_claim`).
     fn take(&self) -> Vec<String> {
-        let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
-        reported.drain(..).collect()
+        let reported: Vec<(String, String)> = {
+            let mut reported = self.0.lock().unwrap_or_else(|p| p.into_inner());
+            reported.drain(..).collect()
+        };
+        let ignored = crate::candidate::runtime_case::IgnoredDrivers::of(
+            (reported.iter()).map(|(id_name, text)| (id_name.as_str(), text.as_str())),
+        );
+        let test = std::thread::current()
+            .name()
+            .unwrap_or("an unnamed thread")
+            .to_owned();
+        (reported.into_iter())
+            .filter_map(|(id_name, text)| {
+                if ignored.explains(&id_name, &text) {
+                    eprintln!(
+                        "LANE-LOADER-DRIVER {test}: passed, the loader's own report of a driver \
+                         manifest it ignored: {}",
+                        text.replace('\n', " ")
+                    );
+                    return None;
+                }
+                Some(text)
+            })
+            .collect()
     }
 }
 
@@ -108,9 +133,13 @@ unsafe extern "system" fn report(
     if fails && !data.is_null() && !user.is_null() {
         // SAFETY: the instance's messenger was made with a `Reported` that outlives it, and the
         // layer passes a valid callback data structure.
-        let (reported, text) = unsafe {
+        let (reported, id_name, text) = unsafe {
             (
                 &*user.cast::<Reported>().cast_const(),
+                (*data)
+                    .message_id_name_as_c_str()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
                 (*data)
                     .message_as_c_str()
                     .map(|text| text.to_string_lossy().into_owned())
@@ -119,7 +148,7 @@ unsafe extern "system" fn report(
         };
         let mut reported = reported.0.lock().unwrap_or_else(|p| p.into_inner());
         if reported.len() < 64 {
-            reported.push(text);
+            reported.push((id_name, text));
         }
     }
     vk::FALSE

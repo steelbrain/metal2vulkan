@@ -89,7 +89,7 @@ impl IgnoredDrivers {
     }
 
     /// The libraries the loader said it ignored, among `messages`, each its id name and text.
-    fn of<'a>(messages: impl IntoIterator<Item = (&'a str, &'a str)>) -> IgnoredDrivers {
+    pub(crate) fn of<'a>(messages: impl IntoIterator<Item = (&'a str, &'a str)>) -> IgnoredDrivers {
         let libraries = (messages.into_iter())
             .filter(|&(id_name, _)| id_name == LOADER_MESSAGE)
             .filter_map(|(_, text)| {
