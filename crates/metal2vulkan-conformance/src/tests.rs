@@ -6343,6 +6343,72 @@ fn a_count_whose_ceiling_is_the_lone_run_is_gated_there() {
     assert_eq!(record.gated(), 0);
 }
 
+/// A ceiling is the lone run's reading, taken again at each lone measurement: one the tree no
+/// longer reaches comes down, with the bound it set.
+///
+/// The bless writes the whole set first, which carries the earlier lone run's ceiling into the
+/// bound (`carrying_the_contrast_of`: the set cannot read a ceiling), then the cases alone, which
+/// is the only measurement that can lower it. Before, the lone fold only ever raised a ceiling, so
+/// `render-then-sample-magnified-nearest` kept `creation_pipelines_made` at 3 after its creation
+/// stopped making the pipeline no draw took: the set read 2, the bound stayed the old ceiling of 3,
+/// and the lone run's 2 was written to `composed` as though the shapes disagreed. Here both shapes
+/// read 2 after an earlier lone run read 3: the bound and the ceiling come down to 2, nothing is
+/// `composed`, and the gate bites at 3.
+#[test]
+fn a_lone_run_reading_below_a_held_ceiling_lowers_it() {
+    let count = "creation_pipelines_made";
+    let reading = |made: u64| {
+        let text = format!("WorkCounts {{\n    {count}: {made},\n}}");
+        crate::cost::CaseCost {
+            states: 2,
+            case: "a case".to_owned(),
+            counts: crate::cost::Counts::read(&text).expect("the shape reads"),
+            least: crate::cost::Counts::read(&text).expect("the shape reads"),
+            runs: 8,
+            stopped: None,
+            degraded: Vec::new(),
+            nanos: 1_000,
+        }
+    };
+    let words = || "eight runs".to_owned();
+    // The record before the change: the set read 2, the lone run 3.
+    let set_before = reading(2).record("a venue", words());
+    let before = reading(3).fold_alone_into(&set_before, words());
+    assert_eq!(before.bounds.get(count), Some(&3));
+    assert_eq!(before.ceilings.get(count), Some(&3));
+    // After it, the whole set reads 2 and carries the old ceiling into its bound ...
+    let set_after = reading(2)
+        .record("a venue", words())
+        .carrying_the_contrast_of(&before);
+    assert_eq!(set_after.bounds.get(count), Some(&3));
+    // ... and the lone run, reading 2 too, takes the ceiling again.
+    let after = reading(2).fold_alone_into(&set_after, words());
+    assert_eq!(after.bounds.get(count), Some(&2), "{after:?}");
+    assert_eq!(after.ceilings.get(count), Some(&2), "{after:?}");
+    assert!(after.composed.is_empty(), "{after:?}");
+    assert!(reading(2).apart_from(&set_after).is_empty());
+    assert_eq!(after.gated(), 1);
+    let judged = |made: u64| {
+        crate::cost::judge(
+            std::slice::from_ref(&after),
+            "a venue",
+            true,
+            &reading(made).counts,
+            2,
+            None,
+            &[],
+        )
+        .is_within()
+    };
+    assert!(judged(2));
+    assert!(!judged(3), "the bound bites at the old ceiling");
+    // A lone run reading above the held ceiling still raises it.
+    let raised = reading(4).fold_alone_into(&set_after, words());
+    assert_eq!(raised.bounds.get(count), Some(&4));
+    assert_eq!(raised.ceilings.get(count), Some(&4));
+    assert!(raised.composed.is_empty());
+}
+
 /// A case that translates a function again, where the measurement translated it once, is **over**.
 ///
 /// This is the half of the function counts that is not decoration. `functions_translated` is a

@@ -2025,12 +2025,32 @@ impl CaseCost {
         for (count, _, apart) in self.apart_from(held) {
             folded.composed.insert(count.to_owned(), apart);
         }
+        // A ceiling is this lone run's reading, taken again at each lone measurement: the one
+        // `held` carries was an earlier lone run's, and the whole-set write raised the bound to it
+        // (`carrying_the_contrast_of`) without reading the case alone. A lone run that now reads
+        // lower (a making the tree no longer does) lowers the ceiling and the bound it set, down to
+        // what the gate's own shape read; kept, the stale ceiling held the bound at the old reading
+        // for good, and the set's lower reading went to `composed` as a disagreement. Measured: the
+        // re-bless at 24ae90feb3 kept `render-then-sample-magnified-nearest`'s
+        // `creation_pipelines_made` at a ceiling of 3, both shapes reading 2.
+        for count in held.ceilings.keys() {
+            if monotone(count).is_some() && racy(count).is_none() {
+                let apart = self.counts.get(count);
+                let inside = set_reading(held, count, apart);
+                folded.ceilings.remove(count);
+                if let Some(bound) = folded.bounds.get_mut(count) {
+                    *bound = inside.max(apart);
+                }
+            }
+        }
         // And the counts this run read *above* the gate's own shape for the one reason that is a
         // ceiling rather than a disagreement. They stay gated, at this reading, and it is written
-        // down so a later measurement of the gate's own shape cannot drop it.
+        // down so a later measurement of the gate's own shape cannot drop it. One that held a
+        // ceiling keeps it at this reading, where the set's own did not exceed it.
         for (count, apart) in self.counts.iter() {
-            let inside = held.bounds.get(count).copied().unwrap_or(0);
-            if monotone(count).is_some() && apart > inside {
+            let inside = set_reading(held, count, apart);
+            let held_one = held.ceilings.contains_key(count);
+            if monotone(count).is_some() && (apart > inside || (held_one && apart == inside)) {
                 folded.ceilings.insert(count.to_owned(), apart);
             }
         }
@@ -2065,10 +2085,8 @@ impl CaseCost {
         names
             .into_iter()
             .filter_map(|count| {
-                let (inside, apart) = (
-                    held.bounds.get(count).copied().unwrap_or(0),
-                    self.counts.get(count),
-                );
+                let apart = self.counts.get(count);
+                let inside = set_reading(held, count, apart);
                 let its_ceiling = monotone(count).is_some() && apart > inside;
                 (inside != apart && !its_ceiling && racy(count).is_none())
                     .then_some((count, inside, apart))
@@ -2097,6 +2115,21 @@ impl CaseCost {
                 (least < most && racy(count).is_some()).then_some((count, least, most))
             })
             .collect()
+    }
+}
+
+/// What the gate's own shape read of `count`, as `held` says, beside a lone run's reading `apart`.
+///
+/// `held`'s bound, but where it holds a ceiling of the count that its bound does not exceed: the
+/// whole-set write raised the bound to that ceiling (`CostRecord::carrying_the_contrast_of`), so
+/// the set read at most it, and by the direction its `MONOTONE` row rests on, at most a lone run's
+/// reading. So the smaller of the bound and `apart`: a stale ceiling is neither a disagreement nor
+/// the set's own reading.
+fn set_reading(held: &CostRecord, count: &str, apart: u64) -> u64 {
+    let bound = held.bounds.get(count).copied().unwrap_or(0);
+    match held.ceilings.get(count) {
+        Some(&ceiling) if monotone(count).is_some() && bound <= ceiling => bound.min(apart),
+        _ => bound,
     }
 }
 
