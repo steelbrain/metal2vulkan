@@ -1712,6 +1712,8 @@ fn give_back_untaken(device: WeakDevice) {
         return;
     };
     let shared = device.shared();
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    std::thread::sleep(shared.allocations.allocations.give_backs_held());
     let gone: Vec<Arc<RamChunk>> = (shared.host_ram.used().iter())
         .flat_map(|ram| ram.untaken())
         .collect();

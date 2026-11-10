@@ -54,6 +54,10 @@ pub(crate) struct Allocations {
     /// The allocations and frees in progress on threads not the device's checks', which those
     /// step aside for (`step_aside.rs`).
     activity: Activity,
+    /// How long each give-back's thread waits as it starts: the tests' stand-in for a loaded host
+    /// that leaves it unscheduled ([`Allocations::hold_give_backs`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    give_backs_held: Mutex<std::time::Duration>,
 }
 
 impl Allocations {
@@ -66,6 +70,8 @@ impl Allocations {
             give_back: OnceLock::new(),
             frees: OnceLock::new(),
             activity: Activity::new(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            give_backs_held: Mutex::default(),
         }
     }
 
@@ -173,6 +179,18 @@ impl Allocations {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn limit_to(&self, limit: u32) {
         self.limit.store(limit, Ordering::Relaxed);
+    }
+
+    /// Hold each give-back's thread `held` as it starts, from now on.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn hold_give_backs(&self, held: std::time::Duration) {
+        *self.give_backs_held.lock().unwrap() = held;
+    }
+
+    /// How long each give-back's thread is held as it starts ([`Allocations::hold_give_backs`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn give_backs_held(&self) -> std::time::Duration {
+        *self.give_backs_held.lock().unwrap()
     }
 }
 
