@@ -9,7 +9,8 @@
 // Each shape makes one pipeline and draws nothing: a render pipeline of a full-screen-triangle
 // vertex function and the fragment function `f` its shape names, or a tile pipeline of its tile
 // function `t`, over the color attachments it names (RGBA8Unorm unless it says otherwise). `-fetch`
-// shapes' functions also read the attachment they write (`[[color(0)]]` input).
+// shapes' functions also read the attachment they write (`[[color(0)]]` input, of the output's
+// type: MSL refuses a read and a write of one attachment of different types).
 //
 //   bfloat-blend[-bare|-fetch]  RGBA16Bfloat, blending on, a `float4` output (none: no fragment
 //                               function).
@@ -19,17 +20,18 @@
 //   dual-second-only            the same blend, a function writing `[[color(0), index(1)]]` alone.
 //   dual-both                   the same blend, a function writing both (the control).
 //   half-into-uint              a `half4` output into RGBA8Uint.
-//   float-into-uint[-fetch]     a `float4` output into RGBA8Uint (fetch: reading it `uint4`).
-//   uint-into-float             a `uint4` output into RGBA8Unorm.
+//   float-into-uint             a `float4` output into RGBA8Uint.
+//   uint-into-float[-fetch]     a `uint4` output into RGBA8Unorm.
 //   int-into-uint               an `int4` output into RGBA8Uint.
 //   uint-into-sint              a `uint4` output into RGBA8Sint.
-//   fewer-components[-fetch]    a `float2` output into RGBA8Unorm.
+//   fewer-components[-fetch]    a `float2` output into RGBA8Unorm (fetch: reading it `float2`).
 //   float-into-float            a `float4` output (the control).
 //   format-no-output            attachments 0 and 1, a function writing 0 alone.
 //   a2c-uint[-no-raster]        alpha to coverage over RGBA8Uint written by a `uint4` output
 //                               (rasterization off).
 //   input-unattached            a function reading `[[color(1)]]`, no attachment 1.
-//   input-uint-of-float         a function reading `uint4 [[color(0)]]` of RGBA8Unorm.
+//   input-uint-of-float         a function reading `uint4 [[color(0)]]` of RGBA8Unorm (and
+//                               writing attachment 1).
 //   input-uint-of-xr            the same read of BGR10_XR.
 //   input-uint-of-a8            the same read of A8Unorm.
 //   tile-unformatted            a tile function whose implicit imageblock's member is
@@ -78,6 +80,11 @@ typedef struct {
 #define UINT MTLPixelFormatRGBA8Uint
 #define FLOAT4 "fragment float4 f(V in [[stage_in]]) { return float4(0.25, 0.5, 0.75, 1.0); }"
 #define UINT4 "fragment uint4 f(V in [[stage_in]]) { return uint4(1, 2, 3, 4); }"
+// Reads attachment 0 as `uint4`, writes attachment 1 (MSL refuses a read and a write of one
+// attachment of different types).
+#define READ_UINT_C0                                                                            \
+    "struct O { float4 o [[color(1)]]; };\n"                                                   \
+    "fragment O f(V in [[stage_in]], uint4 c0 [[color(0)]]) { return O{ float4(c0) / 255.0 }; }"
 #define TILE(member, body)                                                                      \
     "struct B { " member " };\n"                                                               \
     "kernel void t(imageblock<B, imageblock_layout_implicit> ib,\n"                            \
@@ -114,14 +121,14 @@ static const Shape kShapes[] = {
      .function = "fragment int4 f(V in [[stage_in]]) { return int4(1, 2, 3, 4); }",
      .formats = {UINT, NONE}},
     {.name = "uint-into-sint", .function = UINT4, .formats = {MTLPixelFormatRGBA8Sint, NONE}},
-    {.name = "float-into-uint-fetch",
-     .function = "fragment float4 f(V in [[stage_in]], uint4 c0 [[color(0)]]) { return float4(c0); }",
-     .formats = {UINT, NONE}},
+    {.name = "uint-into-float-fetch",
+     .function = "fragment uint4 f(V in [[stage_in]], uint4 c0 [[color(0)]]) { return c0 + 1u; }",
+     .formats = {UNORM, NONE}},
     {.name = "fewer-components",
      .function = "fragment float2 f(V in [[stage_in]]) { return float2(0.25, 0.5); }",
      .formats = {UNORM, NONE}},
     {.name = "fewer-components-fetch",
-     .function = "fragment float2 f(V in [[stage_in]], float4 c0 [[color(0)]]) { return c0.xy; }",
+     .function = "fragment float2 f(V in [[stage_in]], float2 c0 [[color(0)]]) { return c0 * 0.5; }",
      .formats = {UNORM, NONE}},
     {.name = "float-into-float", .function = FLOAT4, .formats = {UNORM, NONE}},
     {.name = "format-no-output", .function = FLOAT4, .formats = {UNORM, UNORM}},
@@ -131,15 +138,11 @@ static const Shape kShapes[] = {
     {.name = "input-unattached",
      .function = "fragment float4 f(V in [[stage_in]], float4 c1 [[color(1)]]) { return c1; }",
      .formats = {UNORM, NONE}},
-    {.name = "input-uint-of-float",
-     .function = "fragment float4 f(V in [[stage_in]], uint4 c0 [[color(0)]]) { return float4(c0) / 255.0; }",
-     .formats = {UNORM, NONE}},
-    {.name = "input-uint-of-xr",
-     .function = "fragment float4 f(V in [[stage_in]], uint4 c0 [[color(0)]]) { return float4(c0) / 255.0; }",
-     .formats = {MTLPixelFormatBGR10_XR, NONE}},
-    {.name = "input-uint-of-a8",
-     .function = "fragment float4 f(V in [[stage_in]], uint4 c0 [[color(0)]]) { return float4(c0) / 255.0; }",
-     .formats = {MTLPixelFormatA8Unorm, NONE}},
+    {.name = "input-uint-of-float", .function = READ_UINT_C0, .formats = {UNORM, UNORM}},
+    {.name = "input-uint-of-xr", .function = READ_UINT_C0,
+     .formats = {MTLPixelFormatBGR10_XR, UNORM}},
+    {.name = "input-uint-of-a8", .function = READ_UINT_C0,
+     .formats = {MTLPixelFormatA8Unorm, UNORM}},
     {.name = "tile-unformatted", .function = TILE("half4 c1 [[color(1)]];", "b.c1 += 1.0h;"),
      .tile = YES, .formats = {UNORM, NONE}},
     {.name = "tile-uint-of-float", .function = TILE("uint4 c0 [[color(0)]];", "b.c0 += 1u;"),
