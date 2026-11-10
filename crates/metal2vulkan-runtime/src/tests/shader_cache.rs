@@ -441,9 +441,22 @@ fn the_sweep_removes_other_builds_unused_for_thirty_days() {
 
 /// Set the directory `path`'s times to `when`.
 fn set_dir_times(path: &Path, when: SystemTime) {
+    #[cfg(unix)]
     let dir = fs::File::open(path).unwrap();
-    // A directory opened for reading takes new times from its owner.
-    let _ = dir.set_times(fs::FileTimes::new().set_accessed(when).set_modified(when));
+    #[cfg(windows)]
+    let dir = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Windows directory handles require backup semantics; changing their
+        // times requires FILE_WRITE_ATTRIBUTES rather than ordinary file reads.
+        fs::File::options()
+            .access_mode(0x0100)
+            .custom_flags(0x0200_0000)
+            .open(path)
+            .expect("directory handle with write-attributes access")
+    };
+    // These times drive the unused-build sweep; a failed update must fail the test.
+    dir.set_times(fs::FileTimes::new().set_accessed(when).set_modified(when))
+        .expect("set the test directory's timestamps");
 }
 
 /// A directory that cannot be made is a typed error naming it; so is a zero cap, on the

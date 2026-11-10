@@ -72,9 +72,9 @@ mod derived;
 mod descriptor_arena;
 mod detach;
 mod device;
-#[cfg(unix)]
 mod dirty_pages;
 mod dispatch_execute;
+#[cfg(unix)]
 mod dma_buf;
 mod draw_source;
 mod driver_defects;
@@ -222,6 +222,8 @@ mod versioned;
 mod view_plan;
 mod visibility;
 mod warm;
+#[cfg(windows)]
+mod windows_memory;
 mod word_fill;
 mod work_counts;
 mod wrapped_buffer;

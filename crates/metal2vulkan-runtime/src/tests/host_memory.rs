@@ -206,14 +206,14 @@ fn imported_memory_is_host_visible_and_coherent_of_the_storage_mode_s_class() {
     assert!(candidates(&types, 0b10000, MemoryClass::Shared, false).is_empty());
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
-fn the_host_page_is_known_on_unix() {
+fn the_host_page_is_known_on_supported_hosts() {
     let page = host_page().unwrap();
     assert!(page.is_power_of_two() && page >= 4096, "{page}");
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[test]
 fn the_host_page_is_unknown_elsewhere() {
     assert_eq!(host_page(), None);

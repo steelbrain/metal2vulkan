@@ -50,6 +50,7 @@ pub(crate) unsafe fn image(
 ///
 /// As `vkCreateImage`'s: `device` is live, and `info` and its chain are valid for it.
 #[track_caller]
+#[cfg(unix)]
 pub(crate) unsafe fn image_or_refusal(
     device: &ash::Device,
     info: &vk::ImageCreateInfo<'_>,

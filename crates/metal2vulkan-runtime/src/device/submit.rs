@@ -285,6 +285,7 @@ impl Device {
     /// and return without waiting for it: every submission made after it, on every `VkQueue`,
     /// waits for it until the host saw it complete ([`Device::binding_wait`]). The timeline and
     /// the value it signals, which the buffer's release waits for.
+    #[cfg(unix)]
     pub(crate) fn bind_sparse_buffer(
         &self,
         buffer: vk::Buffer,

@@ -119,11 +119,10 @@ fn tool_bin(cmd: &str) -> PathBuf {
     PathBuf::from(cmd)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn tool_runner_reports_output_exit_and_signal_without_retrying() {
         let (stdout, stderr) =

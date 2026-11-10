@@ -548,7 +548,7 @@ impl Device {
     ///
     /// The memory is imported here, as a no-copy buffer's is (`host_memory.rs`): by its pointer, or
     /// where the device refuses that and `memory` carries a dma-buf source
-    /// ([`HostMemory::with_dma_buf`]), by the dma-bufs it makes of the pages. A buffer placed in
+    /// (`HostMemory::with_dma_buf`), by the dma-bufs it makes of the pages. A buffer placed in
     /// the heap is its bytes; a texture is an image bound to them where the device binds such an
     /// image to imported host memory (its optimal image, else a linear one; over dma-bufs, an
     /// image over a dma-buf of its own pages), else an image of its own whose texels the encoders copy from
@@ -577,7 +577,7 @@ impl Device {
     /// # Safety
     ///
     /// `memory` meets the contract of the [`HostMemory`] constructor that made it
-    /// ([`HostMemory::new`], [`HostMemory::with_dma_buf`]) for the heap's [`size`](Heap::size).
+    /// ([`HostMemory::new`], `HostMemory::with_dma_buf`) for the heap's [`size`](Heap::size).
     pub unsafe fn new_heap_with_bytes_no_copy(
         &self,
         memory: HostMemory,

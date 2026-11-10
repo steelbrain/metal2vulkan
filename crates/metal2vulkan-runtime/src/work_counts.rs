@@ -1904,7 +1904,7 @@ impl Counters {
     /// The kernel was asked about `mappings` of the process's mappings, for their write
     /// permission, before an import of host pages (`host_memory.rs`'s `refuse_unwritable`, which
     /// asks only on Linux).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub(crate) fn host_mappings_queried(&self, mappings: u64) {
         if mappings > 0 {
             self.host_mappings_queried
@@ -1914,6 +1914,7 @@ impl Counters {
 
     /// `chunks` chunks of host pages a caller's source made were imported as dma-buf memory, and
     /// a buffer bound in them, where the device refused the pages' pointer (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_imported(&self, chunks: usize) {
         self.dma_buf_imports
             .fetch_add(chunks as u64, Ordering::Relaxed);
@@ -1921,16 +1922,19 @@ impl Counters {
 
     /// A `VkDeviceMemory` was imported from a dma-buf of a caller's source and is held: an
     /// image's dedicated import where `of_image`, else a chunk of a buffer's pages (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_memory_imported(&self, of_image: bool) {
         self.dma_buf_live(of_image).fetch_add(1, Ordering::Relaxed);
     }
 
     /// `count` such imports were freed.
+    #[cfg(unix)]
     pub(crate) fn dma_buf_memories_freed(&self, of_image: bool, count: usize) {
         (self.dma_buf_live(of_image)).fetch_sub(count as u64, Ordering::Relaxed);
     }
 
     /// The live gauge of dma-buf imports of images where `of_image`, else of buffers' chunks.
+    #[cfg(unix)]
     fn dma_buf_live(&self, of_image: bool) -> &AtomicU64 {
         match of_image {
             true => &self.dma_buf_image_memories_live,
@@ -1939,16 +1943,19 @@ impl Counters {
     }
 
     /// A releasable import was released while idle (`host_residency.rs`).
+    #[cfg(unix)]
     pub(crate) fn host_import_released(&self) {
         self.host_imports_released.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A released import was imported again.
+    #[cfg(unix)]
     pub(crate) fn host_import_reimported(&self) {
         self.host_imports_reimported.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A releasable import holds its memory from now on (`resident`), or no longer.
+    #[cfg(unix)]
     pub(crate) fn host_import_resident(&self, resident: bool) {
         match resident {
             true => self.host_imports_resident.fetch_add(1, Ordering::Relaxed),
@@ -2114,12 +2121,14 @@ impl Counters {
 
     /// A read found a released import that the device could not import again: the device is
     /// lost.
+    #[cfg(unix)]
     pub(crate) fn host_import_lost(&self) {
         self.host_imports_lost.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Keep `count` more descriptors of dma-bufs for imports the device may release, where the
     /// kept ones stay within `limit`: whether they do (counted then).
+    #[cfg(unix)]
     pub(crate) fn host_import_fds_keep(&self, count: u64, limit: u64) -> bool {
         let kept = &self.host_import_fds_kept;
         let fits = |held: u64| held.checked_add(count).filter(|after| *after <= limit);
@@ -2128,6 +2137,7 @@ impl Counters {
     }
 
     /// `count` such descriptors were closed.
+    #[cfg(unix)]
     pub(crate) fn host_import_fds_closed(&self, count: u64) {
         self.host_import_fds_kept
             .fetch_sub(count, Ordering::Relaxed);
@@ -2135,6 +2145,7 @@ impl Counters {
 
     /// A no-copy buffer's own import of dma-bufs is kept imported from now on, as the
     /// descriptors to import it again did not fit (`kept`), or such an import went.
+    #[cfg(unix)]
     pub(crate) fn host_import_kept_for_fds(&self, kept: bool) {
         match kept {
             true => self
@@ -2148,18 +2159,21 @@ impl Counters {
 
     /// A no-copy buffer's (or heap's, or rebind's) `VkBuffer` was assembled from several chunks'
     /// imports as a sparse buffer (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_sparse_buffer_made(&self) {
         self.dma_buf_sparse_buffers.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture's image over dma-buf pages was made and bound to a dedicated import of a dma-buf
     /// of its own pages (`dma_buf.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_image_made(&self) {
         self.dma_buf_images.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture placed in a heap over dma-buf pages that such an image would alias is a shadow of
     /// the heap's bytes instead: the device made no such image of it (`texture/heap.rs`).
+    #[cfg(unix)]
     pub(crate) fn dma_buf_image_fell_back(&self) {
         self.dma_buf_image_fallbacks.fetch_add(1, Ordering::Relaxed);
     }

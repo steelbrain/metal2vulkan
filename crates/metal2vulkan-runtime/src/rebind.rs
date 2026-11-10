@@ -734,9 +734,9 @@ pub(super) enum ImportHold {
 impl ImportHold {
     /// Held weakly from now on.
     fn wait(&mut self) {
-        match self {
+        match *self {
             #[cfg(unix)]
-            ImportHold::Held(held) => *self = ImportHold::Waiting(Arc::downgrade(held)),
+            ImportHold::Held(ref held) => *self = ImportHold::Waiting(Arc::downgrade(held)),
             #[cfg(unix)]
             ImportHold::Waiting(_) => {}
         }
@@ -926,7 +926,7 @@ impl Buffer {
     /// # Safety
     ///
     /// `memory` meets the contract of the [`HostMemory`] constructor that made it
-    /// ([`HostMemory::new`], [`HostMemory::with_dma_buf`]) for the buffer's length. The old memory
+    /// ([`HostMemory::new`], `HostMemory::with_dma_buf`) for the buffer's length. The old memory
     /// stays mapped until its keep-alive is dropped, else until its deallocator runs, or with
     /// neither until every command buffer first submitted before the call completed. No command
     /// that uses the buffer is encoded, and no command buffer that uses it committed, on another

@@ -6,6 +6,9 @@ use crate::{Degradation, DegradationCategory, MessageSeverity};
 use metal2vulkan::pipeline::PrecisionNote;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(windows)]
+mod windows;
+
 #[test]
 fn each_kind_is_announced_once() {
     let announced = Announced::default();
@@ -190,48 +193,55 @@ fn a_kind_at_every_occurrence_is_announced_in_the_program_s_call_or_a_host_step(
 /// An announcement inside a pipeline pool's piece ends the process with its named line in a build
 /// with debug assertions, and is answered as misplaced in another (the notice thread then delivers
 /// it, `misplaced_notices.rs`), as is one of a kind asked for at every occurrence on a runtime
-/// thread by itself. A forked child announcing inside a piece ends on `SIGABRT` where debug
-/// assertions are on, and exits otherwise; the parent then checks the rule's answers in a joined
+/// thread by itself. A child announcing inside a piece aborts where debug assertions are on,
+/// and exits otherwise; Unix forks it and Windows starts a dedicated test process. The parent
+/// then checks the rule's answers in a joined
 /// set's pieces (the caller's own and a pool thread's), on a runtime thread, and on the program's
 /// thread.
 #[test]
 fn an_announcement_inside_a_pipeline_pool_piece_ends_the_process_where_debug_assertions_are_on() {
-    use crate::degradation::{announcement_breach, check_announcement, Degradation, NoticePlace};
+    use crate::degradation::{announcement_breach, NoticePlace};
     use crate::exit_guard::spawn;
     use crate::pipeline::pool::{Joined, Pool};
-    // First, before this process starts a thread: a child whose one piece, run on its own
-    // thread as the joined set's first, announces.
-    // SAFETY: the child runs a piece on its only thread (the joined set's first piece runs on
-    // the caller's), writes a line and aborts, or exits at once.
-    let child = unsafe { libc::fork() };
-    if child == 0 {
-        let pieces: Vec<Joined<()>> = vec![Box::new(|| {
-            let place = check_announcement(Degradation::EncodedUseRebound, false);
-            if place != Some(NoticePlace::PipelinePoolPiece) {
-                // SAFETY: ends the child at once, telling the parent the answer was wrong.
-                unsafe { libc::_exit(3) };
-            }
-        })];
-        drop(Pool::default().join_all(pieces, true, |_, _| {}));
-        // SAFETY: ends the child at once; the check did not end it.
-        unsafe { libc::_exit(0) };
-    }
-    assert!(child > 0, "fork");
-    let mut status = 0;
-    // SAFETY: `child` is this process's child.
-    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
-    assert_eq!(reaped, child);
-    if cfg!(debug_assertions) {
-        assert!(
-            libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGABRT,
-            "the child announcing inside a piece was not aborted: {status}"
-        );
-    } else {
-        assert!(
+    #[cfg(unix)]
+    {
+        use crate::degradation::{check_announcement, Degradation};
+        // First, before this process starts a thread: a child whose one piece, run on its own
+        // thread as the joined set's first, announces.
+        // SAFETY: the child runs a piece on its only thread (the joined set's first piece runs on
+        // the caller's), writes a line and aborts, or exits at once.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            let pieces: Vec<Joined<()>> = vec![Box::new(|| {
+                let place = check_announcement(Degradation::EncodedUseRebound, false);
+                if place != Some(NoticePlace::PipelinePoolPiece) {
+                    // SAFETY: ends the child at once, telling the parent the answer was wrong.
+                    unsafe { libc::_exit(3) };
+                }
+            })];
+            drop(Pool::default().join_all(pieces, true, |_, _| {}));
+            // SAFETY: ends the child at once; the check did not end it.
+            unsafe { libc::_exit(0) };
+        }
+        assert!(child > 0, "fork");
+        let mut status = 0;
+        // SAFETY: `child` is this process's child.
+        let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+        assert_eq!(reaped, child);
+        if cfg!(debug_assertions) {
+            assert!(
+                libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGABRT,
+                "the child announcing inside a piece was not aborted: {status}"
+            );
+        } else {
+            assert!(
             libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
             "the child announcing inside a piece did not go on, answered as misplaced: {status}"
         );
+        }
     }
+    #[cfg(windows)]
+    windows::assert_pool_piece_child();
     // The program's thread keeps the rule.
     assert_eq!(
         (announcement_breach(false), announcement_breach(true)),

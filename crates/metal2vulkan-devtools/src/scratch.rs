@@ -50,6 +50,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::same_file;
+
 /// The directory under the OS temp directory that holds every scratch directory of this project,
 /// so a sweep reads one directory it owns rather than the whole temp directory.
 const ROOT: &str = "metal2vulkan-scratch";
@@ -166,6 +171,7 @@ impl Owned {
 /// Whether the open file `held` is still the file `path` names, by the one identity a file system
 /// gives a file: its device and inode. A rename or an unlink of `path` makes this false, and
 /// `held` keeps working on a file with no name.
+#[cfg(unix)]
 fn same_file(held: &File, path: &Path) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
     let held = held.metadata()?;

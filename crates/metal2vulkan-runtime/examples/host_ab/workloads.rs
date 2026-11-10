@@ -49,6 +49,7 @@ fn ms(d: Duration) -> f64 {
 }
 
 /// The process's CPU time so far (user and system, every thread).
+#[cfg(unix)]
 pub fn process_cpu() -> Duration {
     // SAFETY: `getrusage` writes the struct it is given.
     let usage = unsafe {
@@ -61,6 +62,7 @@ pub fn process_cpu() -> Duration {
 }
 
 /// The calling thread's CPU time so far.
+#[cfg(unix)]
 pub fn thread_cpu() -> Duration {
     // SAFETY: `clock_gettime` writes the struct it is given.
     let spec = unsafe {
@@ -73,6 +75,9 @@ pub fn thread_cpu() -> Duration {
     };
     Duration::new(spec.tv_sec as u64, spec.tv_nsec as u32)
 }
+
+#[cfg(windows)]
+pub use super::windows::{process_cpu, thread_cpu};
 
 /// The rectangles' buffers: [`RECTS`] rectangles each, one every [`RECT_STRIDE`] bytes.
 const RECT_BUFFERS: usize = 4;
@@ -1120,24 +1125,13 @@ pub fn memory<G: Gpu>(g: &G, sizes: &Sizes, variants: &[String]) {
         let mut times = vec![];
         let mut maps = vec![];
         for _ in 0..repeats(length) {
-            // SAFETY: an anonymous private mapping of `length` bytes, unmapped below once every
-            // buffer over it is gone.
-            let pointer = unsafe {
-                libc::mmap(
-                    std::ptr::null_mut(),
-                    length,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_ANON | libc::MAP_PRIVATE,
-                    -1,
-                    0,
-                )
-            };
-            assert_ne!(pointer, libc::MAP_FAILED);
+            // SAFETY: anonymous pages, retained until all GPU users finish below.
+            let pointer = unsafe { host_pages(length) };
             // SAFETY: the pages are mapped read-write; touch them as a program's own data is.
-            unsafe { std::ptr::write_bytes(pointer as *mut u8, 0x11, length) };
+            unsafe { std::ptr::write_bytes(pointer, 0x11, length) };
             let t = Instant::now();
             // SAFETY: page-aligned read-write memory that outlives the buffer (unmapped below).
-            let buffer = unsafe { g.buffer_no_copy(pointer as *mut u8, length) };
+            let buffer = unsafe { g.buffer_no_copy(pointer, length) };
             times.push(us(t.elapsed()));
             drop(buffer);
             maps.push(pointer);
@@ -1155,7 +1149,15 @@ pub fn memory<G: Gpu>(g: &G, sizes: &Sizes, variants: &[String]) {
         std::thread::sleep(Duration::from_millis(50));
         for pointer in maps {
             // SAFETY: mapped above, no buffer over it remains.
-            unsafe { libc::munmap(pointer, length) };
+            #[cfg(unix)]
+            unsafe {
+                assert_eq!(libc::munmap(pointer.cast(), length), 0)
+            };
+            // SAFETY: the same lifetime constraint applies to VirtualFree.
+            #[cfg(windows)]
+            unsafe {
+                super::windows::release(pointer)
+            };
         }
     }
     // Buffers held, as a program that grows its memory makes them: each takes memory no buffer
@@ -1326,19 +1328,9 @@ pub fn frame<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes) {
     run("frame", &g.heap(size));
     // SAFETY: an anonymous private mapping of `size` bytes, never unmapped: the process's to its
     // end, past the heap and every texture placed in it.
-    let pointer = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_ANON | libc::MAP_PRIVATE,
-            -1,
-            0,
-        )
-    };
-    assert_ne!(pointer, libc::MAP_FAILED);
+    let pointer = unsafe { host_pages(size) };
     // SAFETY: page-aligned read-write memory of `size` bytes that outlives the heap.
-    if let Some(heap) = unsafe { g.heap_no_copy(pointer as *mut u8, size) } {
+    if let Some(heap) = unsafe { g.heap_no_copy(pointer, size) } {
         run("frame_no_copy", &heap);
     }
 }
@@ -1477,7 +1469,9 @@ pub fn drag<G: Gpu>(g: &G, s: &Scene<G>, sizes: &Sizes) {
 ///
 /// # Safety
 ///
-/// Never unmapped: the caller keeps it for the process's life.
+/// The caller must retain the pages until every GPU user is gone; most workloads
+/// retain them for the process's life. Release with the matching OS allocator.
+#[cfg(unix)]
 pub unsafe fn host_pages(size: usize) -> *mut u8 {
     // SAFETY: a new anonymous mapping, which nothing else holds.
     let pointer = unsafe {
@@ -1492,6 +1486,15 @@ pub unsafe fn host_pages(size: usize) -> *mut u8 {
     };
     assert_ne!(pointer, libc::MAP_FAILED);
     pointer as *mut u8
+}
+
+/// Windows equivalent of the anonymous page mapping used by the Unix workloads.
+///
+/// # Safety
+/// The caller must retain these pages until every GPU user has finished.
+#[cfg(windows)]
+pub unsafe fn host_pages(size: usize) -> *mut u8 {
+    super::windows::allocate(size)
 }
 
 /// The many-draws workload's target (1080p `BGRA8Unorm`, with a `Depth32Float` attachment), its

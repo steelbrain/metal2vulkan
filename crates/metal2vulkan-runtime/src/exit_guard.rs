@@ -161,28 +161,33 @@ use super::loaded;
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::{Duration, Instant};
+#[cfg(any(unix, test))]
+use std::sync::Arc;
+use std::sync::{Mutex, PoisonError, Weak};
+use std::time::Duration;
+#[cfg(any(unix, test))]
+use std::time::Instant;
 
 /// The longest the hook waits for the sections in progress, and then for a CPU device's
 /// submitted work ([`InProcess`]), where it learns no exit status (macOS). A section is one
 /// submission, one poll (at most 100 ms), one counter read, one save's read, or one object's
 /// release (a device's: its threads' stops, `vkDeviceWaitIdle`, its destruction); it outlasts this
 /// only when a driver or a message sink blocks.
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+#[cfg(all(unix, not(all(target_os = "linux", target_env = "gnu"))))]
 pub(crate) const BOUND: Duration = Duration::from_secs(2);
 
 /// The longest the hook waits, where it learns no exit status (macOS), while a driver's making of
 /// a `VkPipeline` is in progress in a section ([`driver_making`]), for the sections in progress: a
 /// making takes 20 to 50 s on NVIDIA (`pipeline/piece_holds.rs`), and Metal's process waited for
 /// all of it at the state's creation, before its exit.
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+#[cfg(all(unix, not(all(target_os = "linux", target_env = "gnu"))))]
 pub(crate) const MAKING_BOUND: Duration = Duration::from_secs(60);
 
 /// The longest a blocked wait goes without looking at the guard.
 pub(crate) const WAKE: Duration = Duration::from_millis(50);
 
 /// How often the hook looks at the sections in progress.
+#[cfg(any(unix, test))]
 const POLL: Duration = Duration::from_millis(1);
 
 /// The sections in progress, and whether the guard closed. The process has one ([`GUARD`]).
@@ -205,6 +210,7 @@ pub(crate) trait InProcess: Send + Sync {
     /// Wait until the work submitted to its queues completed, at most until `deadline` (`None`:
     /// no deadline): whether
     /// it did. Called by the hook once the sections ended, so nothing is submitted meanwhile.
+    #[cfg(any(unix, test))]
     fn drain(&self, deadline: Option<Instant>) -> bool;
 }
 
@@ -231,6 +237,7 @@ impl InProcessDevices {
 
     /// Take the devices made in process `pid` off the list: the live ones. A second call finds
     /// none.
+    #[cfg(any(unix, test))]
     pub(crate) fn take(&self, pid: u32) -> Vec<Arc<dyn InProcess>> {
         self.devices
             .lock()
@@ -243,6 +250,7 @@ impl InProcessDevices {
 
 /// Wait for the submitted work of each of `devices`, at most until `deadline`: whether every one
 /// completed.
+#[cfg(any(unix, test))]
 fn drain(devices: &[Arc<dyn InProcess>], deadline: Option<Instant>) -> bool {
     // Every device is waited for, whatever an earlier one answered.
     let mut drained = true;
@@ -289,7 +297,7 @@ impl CalledWord {
     }
 
     /// The bits set.
-    #[cfg(test)]
+    #[cfg(all(test, any(unix, m2v_gpu, m2v_cpu_icd)))]
     fn load(&self) -> u128 {
         let low = self.0[0].load(Ordering::Relaxed);
         let high = self.0[1].load(Ordering::Relaxed);
@@ -749,6 +757,7 @@ impl Guard {
     /// The wait gives up only on a count read after the makings', which a section's end lowers
     /// before its making's ([`Busy`]'s drop): a making that ended is never taken for a section
     /// still in progress.
+    #[cfg(any(unix, test))]
     pub(crate) fn close(&self, own: usize, bound: Duration, making: Duration) -> bool {
         self.closed.store(true, Ordering::SeqCst);
         let start = Instant::now();
@@ -1400,7 +1409,8 @@ fn install() {
     unsafe { libc::atexit(exit_handler) };
 }
 
-/// Nothing to register: the runtime is built for unix hosts, whose exit order the hook relies on.
+/// No process-exit hook is registered off Unix. Keep the guard's state-machine
+/// tests available there, without implying that an OS exit handler exists.
 #[cfg(not(unix))]
 fn install() {}
 
@@ -1493,6 +1503,7 @@ fn end_at_once(status: std::ffi::c_int) -> ! {
 /// `making`, [`Guard::close`]), the work's wait gets `bound` from there. `None` (nothing done) in
 /// another process than the one registered; else whether the other sections ended and the work
 /// completed.
+#[cfg(any(unix, test))]
 pub(crate) fn hook(
     guard: &Guard,
     in_process: &InProcessDevices,
@@ -1526,13 +1537,13 @@ pub(crate) fn own() -> usize {
 }
 
 /// The sections of the process's guard that ended.
-#[cfg(test)]
+#[cfg(all(test, any(unix, m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn sections() -> u64 {
     SECTIONS.load(Ordering::Relaxed)
 }
 
 /// Whether a section that ended called `call`.
-#[cfg(test)]
+#[cfg(all(test, any(unix, m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn was_called(call: Call) -> bool {
     CALLED.load() & call.bit() != 0
 }

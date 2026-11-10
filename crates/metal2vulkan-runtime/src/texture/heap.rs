@@ -2634,6 +2634,7 @@ impl Device {
     /// pages imported as dma-buf memory, of which no image over a dma-buf of its own pages is made
     /// for `why` (`dma_buf.rs`): counted (`WorkCounts::dma_buf_image_fallbacks`) and announced
     /// once per device (`shadowed-texture`).
+    #[cfg(unix)]
     fn dma_buf_heap_shadow(
         &self,
         linear: ImagePlan,

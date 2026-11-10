@@ -56,6 +56,7 @@ impl<T> ProgramObject<T> {
     }
 
     /// The value, to call or clone where it stays held.
+    #[cfg(unix)]
     pub(crate) fn get(&self) -> &T {
         &self.value
     }
