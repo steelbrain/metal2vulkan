@@ -9,9 +9,11 @@
 //   clang -fobjc-arc -O1 -fmodules -o mesh_pipeline_limits mesh_pipeline_limits.m \
 //     -framework Foundation -framework Metal
 //
-// `mesh_pipeline_limits CASE` makes one pipeline, rasterization disabled, of the library below
-// compiled from source, and prints `made` and the state's answers, or `refused` and the error's
-// domain, code and description. `mesh_pipeline_limits --cases` lists the cases. Run one case a
+// `mesh_pipeline_limits CASE [SALT]` makes one pipeline, rasterization disabled, of the library
+// below compiled from source, and prints `made` and the state's answers, or `refused` and the
+// error's domain, code and description. A SALT is appended to the source as a comment, so a salt
+// never used before compiles a source the compiler has never seen (a first compile), and the same
+// salt again compiles one it has. `mesh_pipeline_limits --cases` lists the cases. Run one case a
 // process: a stop of Metal's ends only its own.
 //
 // Measured on an M3 Max under macOS 27.0.1, plain and with `MTL_DEBUG_LAYER=1`, which agree:
@@ -166,13 +168,13 @@ int main(int argc, const char **argv) {
             return 0;
         }
         const Case *c = NULL;
-        for (size_t i = 0; argc == 2 && i < n; i++) {
+        for (size_t i = 0; (argc == 2 || argc == 3) && i < n; i++) {
             if (strcmp(argv[1], CASES[i].name) == 0) {
                 c = &CASES[i];
             }
         }
         if (c == NULL) {
-            fprintf(stderr, "usage: mesh_pipeline_limits CASE | --cases\n");
+            fprintf(stderr, "usage: mesh_pipeline_limits CASE [SALT] | --cases\n");
             return 2;
         }
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -180,6 +182,9 @@ int main(int argc, const char **argv) {
         BOOL attributes = (c->object != NULL && strcmp(c->object, "objgrid4") == 0) ||
                           strcmp(c->mesh, "msh64") == 0;
         NSString *source = attributes ? [SOURCE stringByAppendingString:ATTRIBUTES] : SOURCE;
+        if (argc == 3) {
+            source = [source stringByAppendingFormat:@"// %s\n", argv[2]];
+        }
         id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
         if (library == nil) {
             printf("library %s\n", error.localizedDescription.UTF8String);
