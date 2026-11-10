@@ -51,7 +51,7 @@ const ROWS_PER_THREAD: usize = 16;
 pub(super) const ROWS_PER_PART: u32 = 64;
 
 /// The most bytes of written blocks the jobs queued hold.
-pub(super) const QUEUED_BYTES: u64 = 256 << 20;
+pub(crate) const QUEUED_BYTES: u64 = 256 << 20;
 
 /// How long the thread sleeps at most without looking for a job or a stop.
 const WAIT_SLICE: Duration = Duration::from_millis(100);

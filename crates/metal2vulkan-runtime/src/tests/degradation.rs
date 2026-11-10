@@ -21,6 +21,16 @@ fn each_kind_is_announced_once() {
     assert!(other.now(Degradation::CopiedDrawBytes));
 }
 
+/// `CpuBlockDecode`'s cost says what `replace_region` waits for: no GPU work, only room under the
+/// decode queue's bound (`texture/twin_decode.rs`), which it states as the queue holds it.
+#[test]
+fn the_cpu_block_decode_cost_states_the_calls_only_wait() {
+    let cost = Degradation::CpuBlockDecode.cost();
+    let bound = crate::texture::twin_decode::QUEUED_BYTES >> 20;
+    let wait = format!("the call waits only for room, while {bound} MiB of written blocks wait");
+    assert!(cost.contains(&wait), "{cost}");
+}
+
 /// A kind the device's options ask for at each occurrence is announced at every one; every other
 /// kind once, as without them.
 #[test]

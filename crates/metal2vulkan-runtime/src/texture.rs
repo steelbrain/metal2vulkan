@@ -180,7 +180,7 @@ pub(super) mod stand_in;
 pub(super) mod storage_form;
 pub(super) mod surface_depth;
 pub(super) mod surface_two_planes;
-mod twin_decode;
+pub(crate) mod twin_decode;
 mod usage_shadow;
 mod view_shadow;
 pub(super) mod wrapped;

@@ -1868,15 +1868,15 @@ degradations! {
         /// A CPU copy into a texture with a decoded twin (`replace_region`) whose CPU copies go
         /// on the host or the staging queue: its region is decoded on the CPU, on the device's
         /// decode thread, and copied into the twin; the first command buffer that may read the
-        /// texture waits at its submission for that, and the call itself where a command buffer
-        /// that may read it is submitted and not yet complete (which then reads the copied
-        /// texels, as Metal's does) or the texture is untracked (`texture/twin_decode.rs`).
+        /// texture waits at its submission for that (every command buffer, where the texture is
+        /// untracked). The call itself waits for no GPU work, as Metal's does not: only for room,
+        /// while 256 MiB of written blocks wait for the thread (`texture/twin_decode.rs`).
         CpuBlockDecode = "cpu-block-decode", Performance,
             "the written blocks decoded on the CPU, on the device's decode thread split over up \
              to 8 threads, and their texels copied into the decoded twin on the host or the \
              staging queue: the first command buffer that may read the texture waits at its \
-             submission for that, and the call waits for it where a command buffer that may read \
-             the texture is submitted and not yet complete, or the texture is untracked";
+             submission for that (every command buffer, where the texture is untracked), and the \
+             call waits only for room, while 256 MiB of written blocks wait for the thread";
         /// A texture of an ASTC LDR format (`ASTC_4x4_LDR` to `ASTC_12x12_LDR`, the sRGB forms
         /// too) made on a device without that ASTC format (`textureCompressionASTC_LDR`), of an
         /// ASTC HDR format (`ASTC_4x4_HDR` to `ASTC_12x12_HDR`) on a device without its `SFLOAT`
