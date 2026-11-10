@@ -23,8 +23,9 @@
 //! Metal's `0x7fc00000` on a device with `VkProperty::MetalNanMoves`, and a packed small float one
 //! Metal's on a device with `VkProperty::MetalSmallFloatNans`; elsewhere the NaN is the device's,
 //! and a pipeline whose stores differ announces `device-nan-encoding`. On a device with those
-//! properties a texture slot's write into such a texture announces neither `device-nan-encoding`
-//! nor `native-nan-encoding` (a heap element's, which may be any format, announces the first).
+//! properties a write into such a texture, through a texture slot or an argument buffer whose
+//! command makes no texture of another family resident (`SpecKey::HeapNanFamilies`), announces
+//! neither `device-nan-encoding` nor `native-nan-encoding`.
 
 use super::degrade_notices::{counts, on_device_with};
 use super::{at_plan, buffer_with, layer_reported_nothing, read_buffer, WAIT};
@@ -337,11 +338,13 @@ fn stored(
 /// Each format's stored words through `write`, `read_write` and `held`, printed with the lanes
 /// that differ from Metal's (the module docs): none in a 16-bit float channel on a device with
 /// `VkProperty::MetalHalfTexelWrites` whose pipeline records no `native-nan-encoding`, nor,
-/// through a texture slot, announced or differing in a 32-bit float channel on a device with
+/// through a texture slot or the argument buffer (whose dispatch makes that texture alone
+/// resident), announced or differing in a 32-bit float channel on a device with
 /// `VkProperty::MetalNanMoves` or a packed small float one on a device with
 /// `VkProperty::MetalSmallFloatNans`; a pipeline whose stores differ announces
 /// `device-nan-encoding` (at its making, or at the dispatch that binds such a texture to a slot of
-/// no declared format), or `native-nan-encoding` where each lane that differs is a NaN stored as
+/// no declared format or makes one of such a family resident), or `native-nan-encoding` where each
+/// lane that differs is a NaN stored as
 /// a NaN.
 #[test]
 fn half_writes_store_their_nans_as_metal_or_announce() {
@@ -365,19 +368,17 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
                         let announced = counts(&messages.take_notices());
                         let properties = &device.compile_device().profile().enabled().properties;
                         let keeps = properties.contains(&VkProperty::MetalHalfTexelWrites);
-                        // The NaN a texture slot's write stores, Metal's on the device's measured
-                        // deviation: a 32-bit float channel's where the widening is Metal's, a
-                        // packed small float one's where its store is.
-                        let measured = access != "held"
-                            && match f.format {
-                                PixelFormat::RG11B10Float => {
-                                    properties.contains(&VkProperty::MetalSmallFloatNans)
-                                }
-                                _ => {
-                                    f.word_bytes == 4
-                                        && properties.contains(&VkProperty::MetalNanMoves)
-                                }
-                            };
+                        // The NaN a write stores, through a slot or the argument buffer, Metal's on
+                        // the device's measured deviation: a 32-bit float channel's where the
+                        // widening is Metal's, a packed small float one's where its store is.
+                        let measured = match f.format {
+                            PixelFormat::RG11B10Float => {
+                                properties.contains(&VkProperty::MetalSmallFloatNans)
+                            }
+                            _ => {
+                                f.word_bytes == 4 && properties.contains(&VkProperty::MetalNanMoves)
+                            }
+                        };
                         let mut differ = Vec::new();
                         // Whether every lane that differs is a NaN stored as a NaN.
                         let mut nans_only = true;

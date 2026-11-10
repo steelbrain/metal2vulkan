@@ -722,6 +722,178 @@ fn a_heap_sample_s_filter_note_holds_where_its_command_can_name_a_filtered_raw_t
     assert!(planned > 0, "no committed profile has the sampled heap");
 }
 
+/// Synthetic AIR written for this test: kernel `k` writes buffer 0's `half4` at lane `gid` (its
+/// bits) to texel `(gid, 0)` of the `texture2d<half, write>` its argument buffer (buffer 2) holds.
+const HALF_WRITE: &str = r#"define void @k(ptr addrspace(1) %v, ptr addrspace(2) %held, i32 %gid) {
+entry:
+  %i = zext i32 %gid to i64
+  %p = getelementptr <4 x i16>, ptr addrspace(1) %v, i64 %i
+  %w = load <4 x i16>, ptr addrspace(1) %p, align 8
+  %h = bitcast <4 x i16> %w to <4 x half>
+  %at = insertelement <2 x i32> zeroinitializer, i32 %gid, i64 0
+  %t = load ptr addrspace(1), ptr addrspace(2) %held, align 8
+  tail call void @air.write_texture_2d.v4f16(ptr addrspace(1) %t, <2 x i32> %at, <4 x half> %h, i32 0, i32 2)
+  ret void
+}
+
+declare void @air.write_texture_2d.v4f16(ptr addrspace(1), <2 x i32>, <4 x half>, i32, i32)
+
+!air.kernel = !{!0}
+!air.version = !{!20}
+!air.language_version = !{!21}
+!0 = !{ptr @k, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"ushort4", !"air.arg_name", !"v"}
+!4 = !{i32 1, !"air.indirect_buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !6, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"Held", !"air.arg_name", !"held"}
+!5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}
+!6 = !{i32 0, i32 8, i32 0, !"texture2d<half, write>", !"t", !"air.indirect_argument", !7}
+!7 = !{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.write", !"air.arg_type_name", !"texture2d<half, write>", !"air.arg_name", !"t"}
+!20 = !{i32 2, i32 8, i32 0}
+!21 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// A `half` write through an argument buffer records `PrecisionNote::DeviceNanEncoding` under the
+/// families of the textures its handles can name (`SpecKey::HeapNanFamilies`): on every committed
+/// profile with a heap, one clause for each family whose stored NaN is the device's there (a
+/// 16-bit float format without `DriverDeviation::MetalHalfTexelWrites`, a 32-bit one without
+/// `DriverDeviation::MetalNanMoves`, a packed small float one without
+/// `DriverDeviation::MetalSmallFloatNans`, and a float format of none of those), each family the
+/// profile takes requiring its property. A plan gives the key from the command's resident textures
+/// (`R16Float` 1, `RGBA32Float` 2, `RG11B10Float` 4, `RGBA8Unorm` and `R32Uint` 0), and the note
+/// holds under the plan's values exactly where a resident texture is of a family of a clause:
+/// on `moltenvk-m3`, which takes the 32-bit and small float deviations, an `RGBA32Float` or
+/// `RG11B10Float` texture alone holds none.
+#[test]
+fn a_heap_half_write_s_nan_note_follows_the_families_its_command_can_name() {
+    use crate::bind::{ResourceClass, UsedResource};
+    use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation as D;
+    use crate::pipeline::{PrecisionNote, SpecClause};
+    let note = PrecisionNote::DeviceNanEncoding;
+    let key = SpecKey::HeapNanFamilies(Stage::Kernel);
+    let Some(bc) = assemble("heap_half_write", HALF_WRITE) else {
+        return;
+    };
+    // Each family's bit, and the deviation and property under which its stored NaN is Metal's.
+    let families = [
+        (
+            1,
+            Some((D::MetalHalfTexelWrites, VkProperty::MetalHalfTexelWrites)),
+        ),
+        (2, Some((D::MetalNanMoves, VkProperty::MetalNanMoves))),
+        (
+            4,
+            Some((D::MetalSmallFloatNans, VkProperty::MetalSmallFloatNans)),
+        ),
+        (8, None),
+    ];
+    // The families of the note's clauses: each a test of the key's own bit.
+    let noted = |specialized: &[crate::pipeline::SpecializedNote]| -> u32 {
+        let when: Vec<&SpecClause> = specialized
+            .iter()
+            .filter(|n| n.note == note)
+            .flat_map(|n| &n.when)
+            .collect();
+        when.iter().fold(0, |bits, c| match &c.all[..] {
+            [t] if t.key == key && t.mask == t.bits && t.equal => bits | t.bits,
+            _ => panic!("a clause past the families: {c:?}"),
+        })
+    };
+    let consts = FunctionConstantValues::defaults();
+    let entry = EntryRef::Name("k");
+    let mut compiled = 0;
+    let mut quiet = 0;
+    for (stem, p) in committed_profiles().expect("profiles") {
+        let a = match compile_bitcode(
+            &bc,
+            entry,
+            &consts,
+            &p,
+            &LowerInputs::new(),
+            &mut meter(),
+            SPIRV_WORDS,
+        ) {
+            Ok(a) => a,
+            Err(Error::Unsupported(Unsupported {
+                feature: Feature::ArgumentBufferTextures,
+                ..
+            })) => continue,
+            Err(e) => panic!("{stem}: {e}"),
+        };
+        let bits = noted(&a.specialized);
+        for (bit, measured) in families {
+            let takes = measured.is_some_and(|(d, _)| p.takes_driver_deviation(d));
+            assert_eq!(bits & bit != 0, !takes, "{stem}: family {bit}: {bits}");
+            if let Some((_, property)) = measured {
+                assert_eq!(
+                    a.requirements.properties.contains(&property),
+                    takes,
+                    "{stem}: {property:?}"
+                );
+            }
+        }
+        assert_eq!(a.precision.contains(&note), bits != 0, "{stem}");
+        quiet += usize::from(bits & 6 == 0);
+        compiled += 1;
+    }
+    assert!(compiled > 0, "no committed profile has the heap");
+    assert!(
+        quiet > 0,
+        "no committed profile stores a 32-bit or small float NaN as Metal does"
+    );
+    // A command making `formats` resident, at IDs of their own.
+    let state = |formats: &[PixelFormat]| BindState {
+        used_resources: (formats.iter().zip(1u32..))
+            .map(|(&pf, token)| {
+                let mut facts = TextureFacts::new(TextureType::Type2D, pf);
+                facts.usage = metal::TextureUsage::SHADER_READ;
+                let mut u = UsedResource::new(ResourceClass::Texture(facts), token);
+                u.resource_id = Some(0x0000_0001_0000_0000 | u64::from(token) << 4);
+                u
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let cases: [(&[PixelFormat], u64); 7] = [
+        (&[PixelFormat::R16Float], 1),
+        (&[PixelFormat::RGBA32Float], 2),
+        (&[PixelFormat::RG11B10Float], 4),
+        (&[PixelFormat::RGBA8Unorm], 0),
+        (&[PixelFormat::R32Uint], 0),
+        (&[PixelFormat::RGBA32Float, PixelFormat::RGBA8Unorm], 2),
+        (&[], 0),
+    ];
+    let mut planned = 0;
+    for (stem, dev) in devices() {
+        let lib = Library::from_air(&bc).expect("library");
+        let f = lib.function("k").expect("function");
+        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+        let p = match dev.compile_compute_pipeline(&d, &Budget::standard()) {
+            Ok(p) => p,
+            Err(crate::error::Error::Unsupported(Unsupported {
+                feature: Feature::ArgumentBufferTextures,
+                ..
+            })) => continue,
+            Err(e) => panic!("{stem}: {e}"),
+        };
+        let bits = u64::from(noted(&p.stage.specialized_notes));
+        for (formats, value) in cases {
+            let what = format!("{formats:?} on {stem}");
+            let plan = p
+                .plan(&dev, &state(formats).shape())
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(plan.specialized_value(key), Some(value), "{what}");
+            let held = (p.stage)
+                .precision_notes_bound(&plan.specialization, &|k| plan.specialized_value(k))
+                .contains(&note);
+            assert_eq!(held, value & bits != 0, "{what}: noted families {bits}");
+            planned += 1;
+        }
+    }
+    assert!(planned > 0, "no profile has the heap");
+}
+
 /// A `half` read, nearest sample or gather of a texture an argument buffer holds rounds its texel
 /// through the device's conversion of the texel's `f32` value (`narrow::round_texel`): the
 /// fetched texel's, merged with the decode routine's texel of a form a heap reads. On

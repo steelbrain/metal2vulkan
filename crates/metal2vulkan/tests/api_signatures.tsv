@@ -14517,6 +14517,7 @@ variant	metal2vulkan::pipeline::SpecKey::BoundTexelFormat	BoundTexelFormat(SlotR
 variant	metal2vulkan::pipeline::SpecKey::ConstantLanes	ConstantLanes(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::FilteringArgumentSampler	FilteringArgumentSampler
 variant	metal2vulkan::pipeline::SpecKey::FlatLocalSize	FlatLocalSize
+variant	metal2vulkan::pipeline::SpecKey::HeapNanFamilies	HeapNanFamilies(Stage)
 variant	metal2vulkan::pipeline::SpecKey::HeapRawTextures	HeapRawTextures(Stage)
 variant	metal2vulkan::pipeline::SpecKey::HeapYCbCrTextures	HeapYCbCrTextures(Stage)
 variant	metal2vulkan::pipeline::SpecKey::ImageblockHeight	ImageblockHeight

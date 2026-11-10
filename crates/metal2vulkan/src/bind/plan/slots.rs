@@ -272,8 +272,8 @@ pub(crate) fn record_specialized(
 
 /// Record in `resources`' template the value of each key a specialized note of `stages` tests that
 /// no constant and no push carries but the bound resources decide (`SpecKey::BoundSamplerWord`),
-/// or what the command's handles can name (`SpecKey::HeapYCbCrTextures` and
-/// `SpecKey::HeapRawTextures`, through `reach`, the stages a used resource's render stages reach,
+/// or what the command's handles can name (`SpecKey::HeapYCbCrTextures`,
+/// `SpecKey::HeapRawTextures` and `SpecKey::HeapNanFamilies`, through `reach`, the stages a used resource's render stages reach,
 /// as for the heap's members; `SpecKey::FilteringArgumentSampler`), which
 /// `BindingPlan::specialized_value` gives the runtime at
 /// each draw or dispatch, where it reads such a note (`StageModule::note_clauses_bound`). Nothing
@@ -296,6 +296,7 @@ pub(crate) fn record_noted<'a>(
                 SpecKey::BoundSamplerWord(_)
                     | SpecKey::HeapYCbCrTextures(_)
                     | SpecKey::HeapRawTextures(_)
+                    | SpecKey::HeapNanFamilies(_)
                     | SpecKey::FilteringArgumentSampler
             )
         })
@@ -312,6 +313,7 @@ pub(crate) fn record_noted<'a>(
         let value = match key {
             SpecKey::HeapYCbCrTextures(stage) => u64::from(heap_ycbcr(shape, stage, reach)),
             SpecKey::HeapRawTextures(stage) => u64::from(heap_raw(shape, stage, reach)),
+            SpecKey::HeapNanFamilies(stage) => u64::from(heap_nan_families(shape, stage, reach)),
             // A sampler state of any listed shape may be the one an argument buffer names.
             SpecKey::FilteringArgumentSampler => u64::from(
                 (shape.argument_samplers.shapes.iter())
@@ -371,6 +373,25 @@ fn heap_raw(
         }
     }
     bits
+}
+
+/// The `SpecKey::HeapNanFamilies` of `stage` for `shape`: the bit of each family
+/// (`lower::texture::nan_family`) of the heap members of `shape` that reach `stage` (as for
+/// [`heap_ycbcr`]), whose texels a stage's `half` write may store a NaN in.
+fn heap_nan_families(
+    shape: &BindShape,
+    stage: Stage,
+    reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
+) -> u32 {
+    crate::bind::heap::members(shape, &[stage], reach)
+        .iter()
+        .map(|m| match m.shape {
+            TextureShape::Texture { pixel_format, .. } => {
+                crate::lower::texture::nan_family(pixel_format)
+            }
+            TextureShape::Buffer { .. } => 0,
+        })
+        .fold(0, |bits, family| bits | family)
 }
 
 /// Whether `shape` binds anything at `slot`.

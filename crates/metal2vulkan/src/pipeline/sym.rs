@@ -853,6 +853,14 @@ pub enum SpecKey {
     /// stage, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), and read by a specialized
     /// note's test alone, given by a plan, as that is.
     HeapRawTextures(Stage),
+    /// Four bits: the families of the float textures the stage's handles can name whose texel may
+    /// hold a NaN a `half` write stores (`lower::texture::half_write_nans`), each a bit of
+    /// `lower::texture::nan_family`: 1 a 16-bit float format, 2 a 32-bit float one, 4 a packed
+    /// small float one (`RG11B10Float`, `RGB9E5Float`), 8 a float format of none of those and
+    /// none whose texels hold no NaN (normalized, sRGB, extended-range); of the heap members of
+    /// the command reaching the stage, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), and
+    /// read by a specialized note's test alone, given by a plan, as that is.
+    HeapNanFamilies(Stage),
     /// Boolean: a sampler state an argument buffer's sampler handle can name filters: one of the
     /// bind state's argument samplers (`BindState::argument_samplers`, every live state, its
     /// shape in `BindShape`) has a linear minification, magnification or mip filter, anisotropy,

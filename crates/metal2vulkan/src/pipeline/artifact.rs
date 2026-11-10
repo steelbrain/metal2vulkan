@@ -457,7 +457,7 @@ impl SpecClause {
     /// (`BindingPlan::specialized_value`): one the function reads as data
     /// (`SpecKey::read_as_data`), the word of the sampler bound at a slot
     /// (`SpecKey::BoundSamplerWord`), or what the stage's handles can name
-    /// (`SpecKey::HeapYCbCrTextures`, `SpecKey::HeapRawTextures`,
+    /// (`SpecKey::HeapYCbCrTextures`, `SpecKey::HeapRawTextures`, `SpecKey::HeapNanFamilies`,
     /// `SpecKey::FilteringArgumentSampler`). A runtime reads such
     /// a clause at each draw or dispatch, from the values its plan gives
     /// ([`StageModule::note_clauses_bound`]).
@@ -469,6 +469,7 @@ impl SpecClause {
                     SpecKey::BoundSamplerWord(_)
                         | SpecKey::HeapYCbCrTextures(_)
                         | SpecKey::HeapRawTextures(_)
+                        | SpecKey::HeapNanFamilies(_)
                         | SpecKey::FilteringArgumentSampler
                 )
         })
@@ -942,7 +943,10 @@ pub enum PrecisionNote {
     /// (lavapipe stores `0xffc00000` as `0xfe00`, ANV every NaN). Where the write's texture slot is
     /// declared without a format, the note is recorded under the format bound there (a
     /// [`SpecializedNote`] of `SpecKey::BoundTexelFormat`), which the runtime announces at a draw
-    /// or dispatch that binds such a texture.
+    /// or dispatch that binds such a texture; a `half` write to a heap element, under the families
+    /// of the textures the stage's handles can name (`SpecKey::HeapNanFamilies`), which the runtime
+    /// announces at a draw or dispatch whose command can name one of a family whose stored NaN is
+    /// the device's on that profile.
     /// Also recorded on a render pipeline's vertex stage where its vertex descriptor gives a float
     /// format narrower than 32 bits (a `half` format, `FloatRG11B10`) to an attribute that
     /// fixed-function vertex input fetches and the function reads as `float`

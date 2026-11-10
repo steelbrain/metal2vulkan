@@ -2286,6 +2286,73 @@ fn stored_where(
     )
 }
 
+/// The bit of `SpecKey::HeapNanFamilies` of a 16-bit float format: its written `half` NaN is
+/// Metal's on a device of `DriverDeviation::MetalHalfTexelWrites`.
+pub(crate) const NAN_SIXTEEN: u32 = 1;
+
+/// The bit of `SpecKey::HeapNanFamilies` of a 32-bit float format: its written `half` NaN is
+/// Metal's on a device of `DriverDeviation::MetalNanMoves`.
+pub(crate) const NAN_WIDE: u32 = 2;
+
+/// The bit of `SpecKey::HeapNanFamilies` of a packed small float format (`RG11B10Float`,
+/// `RGB9E5Float`): its written NaN is Metal's on a device of `DriverDeviation::MetalSmallFloatNans`.
+pub(crate) const NAN_SMALL: u32 = 4;
+
+/// The bit of `SpecKey::HeapNanFamilies` of a float format of none of those families whose texels
+/// may hold a NaN: its written NaN is the device's.
+pub(crate) const NAN_OTHER: u32 = 8;
+
+/// Each family a written texture may be of, by its bit of `SpecKey::HeapNanFamilies`, with the
+/// deviation and property under which its stored NaN is Metal's (none for [`NAN_OTHER`]).
+const NAN_FAMILIES: [(
+    u32,
+    Option<(DriverDeviation, crate::device::requirements::VkProperty)>,
+); 4] = {
+    use crate::device::requirements::VkProperty;
+    [
+        (
+            NAN_SIXTEEN,
+            Some((
+                DriverDeviation::MetalHalfTexelWrites,
+                VkProperty::MetalHalfTexelWrites,
+            )),
+        ),
+        (
+            NAN_WIDE,
+            Some((DriverDeviation::MetalNanMoves, VkProperty::MetalNanMoves)),
+        ),
+        (
+            NAN_SMALL,
+            Some((
+                DriverDeviation::MetalSmallFloatNans,
+                VkProperty::MetalSmallFloatNans,
+            )),
+        ),
+        (NAN_OTHER, None),
+    ]
+};
+
+/// The bit of `SpecKey::HeapNanFamilies` of a texture of pixel format `pf`: its class's family
+/// (`metal::texel_format::TexelFormat`, as [`half_write_nans`] tests a bound texture's), or 0 for
+/// a format whose texels hold no NaN (normalized, sRGB, extended-range, another packed one) or
+/// that a float texture does not view (integer, stencil).
+pub(crate) fn nan_family(pf: crate::metal::PixelFormat) -> u32 {
+    use crate::metal::bicubic::BicubicTexels as B;
+    use crate::metal::texel_format::{PackedTexels, TexelFormat};
+    if crate::metal::format::sampled_type(pf) != Some(SampledType::Float) {
+        return 0;
+    }
+    let class = crate::metal::format::bound_texel_format(pf);
+    let family = class & (B::LINEAR | B::HALF | TexelFormat::NAN_FREE);
+    match class & TexelFormat::PACKED_MASK {
+        p if p == PackedTexels::SmallFloat.class().0 => NAN_SMALL,
+        0 if family == B::HALF => NAN_SIXTEEN,
+        0 if family == B::LINEAR => NAN_WIDE,
+        0 if family == 0 => NAN_OTHER,
+        _ => 0,
+    }
+}
+
 /// What a `half` texel's write to texture `image` records of its NaN. Metal stores a written
 /// half's NaN as the half's own bits in a 16-bit float channel and as its conversion of the
 /// canonical `0x7fc00000` in any other (the M3 Max under macOS 26.7, measured by the consumer; the
@@ -2302,11 +2369,12 @@ fn stored_where(
 /// The write records `PrecisionNote::DeviceNanEncoding` where the stored NaN stays the device's:
 /// a 16-bit float channel's on a profile without `DriverDeviation::MetalHalfTexelWrites`, a 32-bit
 /// one's without `DriverDeviation::MetalNanMoves`, a packed small float one's without
-/// `DriverDeviation::MetalSmallFloatNans`, and a heap element's, which may be any of them. A slot
-/// whose choice declares no format (or a variant that states none) records it under the format
-/// bound there (`m` charged for the clauses), which the runtime announces at a draw or dispatch
-/// that binds such a texture: where the bound class is one of those three families on a profile
-/// without its deviation, or of no family the classes name (a format that may hold a NaN). A
+/// `DriverDeviation::MetalSmallFloatNans`, and a float channel's of none of those families (a
+/// format that may hold a NaN). A slot whose choice declares no format (or a variant that states
+/// none) records it under the format bound there (`m` charged for the clauses), and a heap
+/// element's under the families of the textures the stage's handles can name
+/// (`SpecKey::HeapNanFamilies`, [`nan_family`]), which the runtime announces at a draw or dispatch
+/// that binds or makes resident such a texture of a family whose stored NaN is the device's. A
 /// normalized or integer channel stores no NaN.
 pub(super) fn half_write_nans(
     cx: &mut SelectCx<'_>,
@@ -2341,8 +2409,23 @@ pub(super) fn half_write_nans(
             _ => Stored::Exact,
         }
     };
+    let takes = |d| cx.profile.takes_driver_deviation(d);
     let stored = match image {
-        ImageRef::Heap { .. } => Stored::Device,
+        // An element of any family the stage's handles can name: the note holds where they can
+        // name one whose deviation the profile lacks (`SpecKey::HeapNanFamilies`).
+        ImageRef::Heap { .. } => {
+            let mut when: Vec<NoteClause> = Vec::new();
+            for (family, measured) in NAN_FAMILIES {
+                match measured {
+                    Some((deviation, property)) if takes(deviation) => {
+                        cx.families.texture.storage_properties.insert(property);
+                    }
+                    _ => when
+                        .push([NoteTest::equal(NoteOn::HeapNan(cx.stage), family, family)].into()),
+                }
+            }
+            return cx.note_when(PrecisionNote::DeviceNanEncoding, when, m);
+        }
         ImageRef::Slot(index) => {
             let slot = slot_of(cx, index)?.slot;
             match cx.inputs.storage_images.get(&slot) {
@@ -2357,7 +2440,6 @@ pub(super) fn half_write_nans(
             }
         }
     };
-    let takes = |d| cx.profile.takes_driver_deviation(d);
     if let Stored::Bound(index) = stored {
         use crate::metal::bicubic::BicubicTexels as B;
         use crate::metal::texel_format::{PackedTexels, TexelFormat};
