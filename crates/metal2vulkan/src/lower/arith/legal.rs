@@ -131,9 +131,13 @@ impl FloatFmt {
         }
     }
 
-    /// The container bits of this format's bits `b` (exact: the same value).
+    /// The container bits of this format's bits `b` (exact: the same value, and a NaN its sign
+    /// and payload, a signalling one not quieted).
     pub fn widen_bits(self, b: u64) -> u64 {
         match self {
+            FloatFmt::Half if b & 0x7C00 == 0x7C00 && b & 0x3FF != 0 => {
+                ((b & 0x8000) << 16) | 0x7F80_0000 | ((b & 0x3FF) << 13)
+            }
             FloatFmt::Half => u64::from((f16_to_f64(b as u16) as f32).to_bits()),
             FloatFmt::BFloat => (b & 0xFFFF) << 16,
             _ => b,

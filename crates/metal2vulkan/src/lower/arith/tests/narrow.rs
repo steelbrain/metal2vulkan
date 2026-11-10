@@ -2467,3 +2467,16 @@ fn a_half_decode_is_the_devices_widening_in_every_form() {
         }
     }
 }
+
+/// A `half` constant held widened keeps every NaN's sign and payload, a signalling one not
+/// quieted (the host's float conversions would quiet it), so its store narrows to its own bits.
+#[test]
+fn a_half_nan_constant_widens_with_its_bits() {
+    assert_eq!(FloatFmt::Half.widen_bits(0xfd21), 0xffa4_2000);
+    assert_eq!(FloatFmt::Half.widen_bits(0x7e00), 0x7fc0_0000);
+    for b in (0x7c01..=0x7fffu64).chain(0xfc01..=0xffff) {
+        let w = FloatFmt::Half.widen_bits(b);
+        assert!(f32::from_bits(w as u32).is_nan(), "{b:#06x}");
+        assert_eq!(FloatFmt::Half.narrow_bits(w), b, "{b:#06x}");
+    }
+}
