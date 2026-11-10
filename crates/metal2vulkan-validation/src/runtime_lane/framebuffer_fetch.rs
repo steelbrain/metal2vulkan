@@ -113,6 +113,10 @@
 //!   one minus the source alpha, fetched by `fbl_fetch_blend16`'s functions, which return a loaded
 //!   `half4` or `float4`: Metal's blend in every channel. In the pixel interlock
 //!   the function computes it, no Vulkan blend applying to the storage write.
+//! - **A read the constants make dead** (`dead_reads.rs`): `dfk_dead_fetch`'s functions,
+//!   specialized so their read of a blended `BGRA8Unorm` target folds away, draw as plain
+//!   pipelines on every device (no storage form, no input attachment, no fetch notice, the device's
+//!   blend: Metal's texels within one code); specialized live, they take the device's fetch form.
 //! - **A BGRA-order target** (`bgra.rs`): a `BGRA8Unorm` target (and `RGBA8Unorm` beside it)
 //!   whose channels take every byte, halved by `fetch_ordered` one to three times in a pass,
 //!   single-sampled and at 4x, under a mask of every channel and of red and alpha, beside an
@@ -142,6 +146,7 @@ mod bgra;
 mod blend16;
 mod blend8;
 mod coverage_chain;
+mod dead_reads;
 mod generic_blend;
 mod planes;
 mod returned_depth;
