@@ -446,6 +446,8 @@ struct Isolation {
     /// Each queue's changes of `VkQueue` or long mark (`CommandQueue::vk_queue_sharing`) over the
     /// run, in words.
     moves: String,
+    /// The device's queues marked long by the run's end (`WorkCounts::queues_gone_long`).
+    gone_long: u64,
 }
 
 impl Isolation {
@@ -636,7 +638,11 @@ fn isolation(
         "{} compositor samples",
         latencies.len()
     );
-    Isolation { latencies, moves }
+    Isolation {
+        latencies,
+        moves,
+        gone_long: counts.queues_gone_long,
+    }
 }
 
 /// A queue's changes of `VkQueue` or long mark, each at its command buffer's count and the
@@ -725,8 +731,9 @@ fn an_unshared_compositor_beside_a_long_queue_never_stalls() {
 /// A compositor beside a queue whose command buffers each wait on the GPU for the end of another
 /// queue's long command buffer: a wait the long mark must see, as it sees a long command buffer of
 /// the queue's own, since the compositor's work behind it on a shared `VkQueue` waits as long.
-/// Once the application's queue went long, the compositor's 99th percentile over 2 s stays under
-/// 5 ms with at most one stall over 10 ms, as beside the long queue alone.
+/// The waiting queue goes long as well as the application's, and once the application's did,
+/// the compositor's 99th percentile over 2 s stays under 5 ms with at most one stall over 10 ms,
+/// as beside the long queue alone.
 #[test]
 fn a_compositor_beside_a_queue_waiting_on_the_gpu_for_long_work_keeps_its_latency() {
     each_policy("isolation-gpu-wait", |device, shares| {
@@ -742,6 +749,11 @@ fn a_compositor_beside_a_queue_waiting_on_the_gpu_for_long_work_keeps_its_latenc
             run.stalls(),
             run.latencies.len(),
             run.moves
+        );
+        assert!(
+            run.gone_long >= 2,
+            "{} queue(s) went long: the waiting one did not",
+            run.gone_long
         );
         assert!(run.p99() < 5.0, "p99 {:.2} ms", run.p99());
         assert!(run.stalls() <= 1, "{} stalls", run.stalls());

@@ -429,6 +429,12 @@ impl EventShared {
         lock(&self.state).timeline.landing(value)
     }
 
+    /// Whether a batch submitted now on `VkQueue` `queue` that waits for `value` waits on the GPU
+    /// for another `VkQueue`'s signal (`EventTimeline::waits_across`).
+    pub(super) fn waits_across(&self, value: u64, queue: usize) -> bool {
+        lock(&self.state).timeline.waits_across(value, queue)
+    }
+
     /// Whether a wait for `value` is held on the host where a Vulkan wait for a submitted GPU
     /// signal's index would have served (`event_timeline.rs`).
     pub(super) fn held_for_the_host(&self, value: u64) -> bool {

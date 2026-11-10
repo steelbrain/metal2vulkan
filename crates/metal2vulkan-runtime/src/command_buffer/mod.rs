@@ -4904,12 +4904,15 @@ impl CommandBufferShared {
     /// the host, its kernel end (or its queue's latest end) and its completion. Every one moves
     /// its queue's latest GPU end: its own, or its completion where it has none (an upper bound
     /// of its GPU end). One whose timestamps say its GPU work ran for over
-    /// `queue_share::LONG_HEAD` marks its queue long, before the turn finishes it
-    /// (`queue_share.rs`).
+    /// `queue_share::LONG_HEAD`, or whose `VkQueue` held it for longer from the submission of a
+    /// batch of it that waited on the GPU for another `VkQueue`'s work to its GPU end, marks its
+    /// queue long, before the turn finishes it (`queue_share.rs`).
     pub(super) fn place_gpu_times(&self) {
         let shared = self.device.shared();
         let mut state = lock(&self.state);
         let times = &mut state.times;
+        // Its GPU end in the host's time, where its timestamps were read and placed.
+        let mut gpu_end = None;
         // The device's calibration pair, taken now, where the GPU that ran the work is awake
         // (`gpu_time.rs`).
         if let Stamped::Read(Some(_)) = times.stamped {
@@ -4937,6 +4940,7 @@ impl CommandBufferShared {
                         if let Placement::Disagreed { .. } = placement {
                             shared.counts.calibration_disagreed();
                         }
+                        gpu_end = Some(end);
                         end
                     }
                     None => completed,
@@ -4949,6 +4953,9 @@ impl CommandBufferShared {
         let long = match (state.times.stamped, shared.timing.clock()) {
             (Stamped::Read(Some((start, end))), Some(clock)) => {
                 clock.duration(start, end) > crate::queue_share::LONG_HEAD
+                    || (state.times.waited_across.zip(gpu_end)).is_some_and(|(from, end)| {
+                        end.saturating_sub(from) > crate::queue_share::LONG_HEAD
+                    })
             }
             _ => false,
         };

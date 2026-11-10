@@ -278,6 +278,19 @@ impl<Q: Copy + Eq, S: Clone> EventTimeline<Q, S> {
         None
     }
 
+    /// Whether a batch submitted now on `queue` that waits for `value` hands its `VkQueue` a wait
+    /// for a signal of another `VkQueue`'s, or of one of the caller's submissions: one
+    /// [`EventTimeline::wait`] answers with an index, whose signal is pending elsewhere, so the
+    /// `VkQueue` holds the batch on the GPU until that other work ends (`queue_share.rs`).
+    pub(super) fn waits_across(&self, value: u64, queue: Q) -> bool {
+        if self.settable || value <= self.value() {
+            return false;
+        }
+        (self.pending.iter())
+            .find(|pending| pending.value >= value)
+            .is_some_and(|pending| pending.queue != Some(queue))
+    }
+
     /// Whether a wait for `value` is held on the host where a Vulkan wait for a submitted GPU
     /// signal's index would have served: the host may set the value, it is not reached, and a
     /// signal submitted before the waiting batch reaches it. Exactly the waits that chained on

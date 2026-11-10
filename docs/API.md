@@ -3064,9 +3064,9 @@ bound.
   `Device::new_command_queue_unshared`, which never move and which no queue joins. Cost: its
   command buffers run in one `VkQueue`'s order with those of the command queues that share it,
   where Metal's queues wait for each other only inside one command: the first command buffer of
-  each such queue whose GPU work runs over 2 ms holds the command buffers the others committed
-  behind it for its whole length, and its later ones while its queue holds work,
-  until that queue moves at its next idle point; a command buffer's GPU start time includes the
+  each such queue whose GPU work, or whose wait on the GPU for another `VkQueue`'s work, runs
+  over 2 ms holds the command buffers the others committed behind it for its whole length, and
+  its later ones while its queue holds work, until that queue moves at its next idle point; a command buffer's GPU start time includes the
   other queues' work before it; QueueSharingPolicy::PerQueue keeps each command queue on the
   `VkQueue` it took at its creation.
 - `metal2vulkan-degrade-heap-texture-larger-than-metal` (precision). `HeapTextureLargerThanMetal`: A

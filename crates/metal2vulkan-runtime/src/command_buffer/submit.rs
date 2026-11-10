@@ -599,6 +599,12 @@ impl CommandBufferShared {
         let (start, end) = (range.start, range.end);
         let binary_waits = batches[index].binary_waits.clone();
         let binary_signals = batches[index].binary_signals.clone();
+        // Whether its `VkQueue` waits on the GPU for work of another `VkQueue`'s the host had not
+        // seen complete: an event's signal pending there (below, the tracker's and the first
+        // work's waits too), which holds the `VkQueue` until that work ends (`queue_share.rs`).
+        let mut across = !event_waits.is_empty()
+            && (batches[index].waits.iter())
+                .any(|(event, value)| event.waits_across(*value, queue));
         let mut kept = Vec::new();
         let mut order_waits = Vec::new();
         for (event, value) in &batches[index].signals {
@@ -860,6 +866,7 @@ impl CommandBufferShared {
             }
         }
         for wait in plan.waits() {
+            across |= wait.at.queue != queue;
             wait_semaphores.push(shared.queues[wait.at.queue].timeline);
             wait_values.push(wait.at.value);
             wait_stages.push(wait.legacy_stages());
@@ -868,6 +875,7 @@ impl CommandBufferShared {
         // completed: any command may reach those resources unnamed.
         let completed = |point: Point| shared.queues[point.queue].completed_value() >= point.value;
         for point in firsts.waits(queue, completed) {
+            across |= point.queue != queue;
             wait_semaphores.push(shared.queues[point.queue].timeline);
             wait_values.push(point.value);
             wait_stages.push(vk::PipelineStageFlags::ALL_COMMANDS);
@@ -1134,6 +1142,11 @@ impl CommandBufferShared {
                 return Err(error);
             }
             called = submitted.ok();
+        }
+        // From the first batch whose `VkQueue` waits on the GPU for another's work, its `VkQueue`
+        // holds it: its long mark counts from that batch's submission (`place_gpu_times`).
+        if across && state.times.waited_across.is_none() {
+            state.times.waited_across = Some(called.unwrap_or_else(gpu_time::host_nanos));
         }
         // It makes its command buffer `Scheduled` where it ends it, unless a hang's thread makes
         // it (`hang.rs`): the command buffer's own hang's, once this batch, the one before the

@@ -39,8 +39,16 @@
 //!   the GPU to start it and the waiter's lateness to see it complete, which marked a queue of
 //!   one-draw command buffers long on the RTX 5080 Laptop GPU beside another process's 30 ms ones
 //!   (draws of 11 and 16 us of GPU time seen 2.0 and 2.3 ms after they became their `VkQueue`'s
-//!   oldest, 1.8 and 2.1 ms of it before they started). A device whose command buffers write no
-//!   timestamps the host can read
+//!   oldest, 1.8 and 2.1 ms of it before they started). One exception: a command buffer one of
+//!   whose batches waits on the GPU for work of another `VkQueue`'s that the host had not seen
+//!   complete as it was submitted (an `MTLEvent`'s signal pending there, the tracker's wait for
+//!   another `VkQueue`'s writes, or new resources' first work there) also marks its queue long
+//!   where more than [`LONG_HEAD`] ran from that batch's submission to its own GPU end
+//!   (`Times::waited_across`). Its timestamps start only once the wait was met, while its
+//!   `VkQueue` held the wait, and every command buffer committed behind it there, for as long as
+//!   the other work ran: a queue whose short command buffers each wait for another queue's long
+//!   one would otherwise share for good, holding its `VkQueue`'s other queues behind each wait. A
+//!   device whose command buffers write no timestamps the host can read
 //!   (`gpu_times_from_host`, a driver whose timestamps wait for every queue's, or no calibrated
 //!   timestamps) does not share ([`Verdict::Unchecked`],
 //!   `WorkCounts::queue_sharing_untimed`). A long queue moves once more, at its next such make: to an

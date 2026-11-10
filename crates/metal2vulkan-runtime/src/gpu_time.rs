@@ -1017,6 +1017,10 @@ pub(crate) struct Times {
     /// Its GPU start and end where it wrote no timestamps: placed among its queue's command
     /// buffers by the completion turn as it completed.
     pub(crate) placed: Option<(u64, u64)>,
+    /// When the submission was called of its first batch whose `VkQueue` waits on the GPU for
+    /// work of another `VkQueue`'s the host had not seen complete: from then on its `VkQueue`
+    /// holds it, so its long mark counts from then (`queue_share.rs`).
+    pub(crate) waited_across: Option<u64>,
 }
 
 /// What a command buffer's timestamps gave.
