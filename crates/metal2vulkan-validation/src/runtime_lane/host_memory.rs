@@ -1931,6 +1931,13 @@ fn a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on() {
             "runtime GPU fault, resume {resume:?}: {failed:?}; committed beside it: \
              {beside_status:?} {beside_error:?}"
         );
+        // What the runtime announced of the failure: a recovery names the command buffer it
+        // failed as the hang.
+        let notices = messages.take_notices();
+        for notice in &notices {
+            eprintln!("runtime GPU fault, resume {resume:?}: {}", notice.text);
+        }
+        messages.restore_notices(notices);
         assert_eq!(faulting.status(), CommandBufferStatus::Error, "{resume:?}");
         if resume.is_none() {
             assert_eq!(committed, Ok(()));
