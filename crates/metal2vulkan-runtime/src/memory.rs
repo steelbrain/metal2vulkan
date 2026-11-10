@@ -857,6 +857,11 @@ pub(super) struct Pool<T> {
     /// The pooled blocks added and freed so far ([`Pool::turnover`]).
     made: u64,
     freed: u64,
+    /// Their bytes, for the crate's device tests ([`Pool::turnover_bytes`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    made_bytes: u64,
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    freed_bytes: u64,
     /// The bytes of its live blocks with nothing placed in them: the empty blocks it keeps
     /// ([`Pool::kept_bytes`]).
     kept_bytes: u64,
@@ -912,6 +917,10 @@ impl<T> Default for Pool<T> {
             visited: 0,
             made: 0,
             freed: 0,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            made_bytes: 0,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            freed_bytes: 0,
             kept_bytes: 0,
             grew: None,
             large: None,
@@ -1041,6 +1050,10 @@ impl<T> Pool<T> {
             placed_to: used,
         });
         self.made += u64::from(!dedicated);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            self.made_bytes += if dedicated { 0 } else { size };
+        }
         if used == 0 {
             self.kept_bytes += size;
         }
@@ -1236,6 +1249,10 @@ impl<T> Pool<T> {
     fn take(&mut self, index: usize) -> Option<T> {
         let block = self.blocks.get_mut(index)?.take()?;
         self.freed += u64::from(!block.dedicated);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            self.freed_bytes += if block.dedicated { 0 } else { block.size };
+        }
         if block.empty() {
             self.kept_bytes -= block.size;
         }
@@ -1246,6 +1263,12 @@ impl<T> Pool<T> {
     /// The pooled blocks added and freed so far.
     pub(super) fn turnover(&self) -> (u64, u64) {
         (self.made, self.freed)
+    }
+
+    /// The bytes of the pooled blocks added and freed so far, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn turnover_bytes(&self) -> (u64, u64) {
+        (self.made_bytes, self.freed_bytes)
     }
 
     /// When it last grew: a pooled block was added to it while it held another, at `now` where
@@ -2002,6 +2025,9 @@ pub(super) struct Memory {
     /// bytes, since a test last cleared it ([`AheadBlocks::made_in_place`]).
     #[cfg(test)]
     pub(crate) in_place_bytes: std::collections::BTreeMap<u64, u64>,
+    /// The bytes of the blocks made ahead and freed unused ([`AheadBlocks::unused`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    unused_bytes: u64,
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
     zero_images: bool,
@@ -2191,6 +2217,8 @@ impl Memory {
             longest_making: Duration::ZERO,
             #[cfg(test)]
             in_place_bytes: std::collections::BTreeMap::new(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            unused_bytes: 0,
         }
     }
 
@@ -3315,6 +3343,10 @@ impl Memory {
             }
             for block in self.readying.swap_remove(at).stop() {
                 self.ahead.unused += 1;
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                {
+                    self.unused_bytes += block.size;
+                }
                 // SAFETY: nothing was placed in the block, and no command reads it.
                 drop(unsafe { self.let_go(device, block, FreeCause::KeptStale, None) });
             }
@@ -3354,6 +3386,18 @@ impl Memory {
         (self.pools.iter().map(Pool::turnover)).fold((unused, unused), |(made, freed), (m, f)| {
             (made + m, freed + f)
         })
+    }
+
+    /// The bytes of [`Memory::turnover`]'s blocks, and of those of them made ahead and freed
+    /// unused, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn turnover_bytes(&self) -> (u64, u64, u64) {
+        let unused = self.unused_bytes;
+        let (made, freed) = (self.pools.iter().map(Pool::turnover_bytes))
+            .fold((unused, unused), |(made, freed), (m, f)| {
+                (made + m, freed + f)
+            });
+        (made, freed, unused)
     }
 
     /// Free `block`, or where the device parks freed memory (`freed_memory.rs`), destroy its

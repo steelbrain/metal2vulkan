@@ -595,11 +595,12 @@ fn phase(
     (length, making): (Duration, Making),
     made: &mut Made,
 ) {
-    {
+    let bytes_before = {
         let mut memory = crate::device::lock(&device.shared().memory);
         memory.longest_making = Duration::ZERO;
         memory.in_place_bytes.clear();
-    }
+        memory.turnover_bytes()
+    };
     let before = (vmstat(), device.work_counts());
     let stop = AtomicBool::new(false);
     let (submits, turnarounds, makes) = std::thread::scope(|scope| {
@@ -619,12 +620,16 @@ fn phase(
         (submits, turnarounds, maker.join().unwrap())
     });
     let after = (vmstat(), device.work_counts());
-    let (longest, in_place) = {
+    let (longest, in_place, bytes_after) = {
         let memory = crate::device::lock(&device.shared().memory);
         let sizes: Vec<String> = (memory.in_place_bytes.iter())
             .map(|(bytes, count)| format!("{count} of {} MiB", bytes >> 20))
             .collect();
-        (memory.longest_making, sizes.join(", "))
+        (
+            memory.longest_making,
+            sizes.join(", "),
+            memory.turnover_bytes(),
+        )
     };
     let over = |times: &[(Duration, f64)], bound: f64| {
         (times.iter())
@@ -681,6 +686,21 @@ fn phase(
         counts.memory_blocks_live,
         counts.empty_memory_blocks_live,
         meminfo("MemAvailable") >> 20,
+    );
+    let (frees, earlier_frees) = (&counts.memory_frees, &earlier.memory_frees);
+    eprintln!(
+        "RECLAIM-SUBMIT {arm}, {name}: churn: pooled blocks made {} ({} MiB), freed {} ({} MiB); \
+         of them made ahead and freed unused {} ({} MiB); pooled frees emptied {}, stale {}, \
+         for room {}",
+        counts.pooled_memory_blocks_made - earlier.pooled_memory_blocks_made,
+        (bytes_after.0 - bytes_before.0) >> 20,
+        counts.pooled_memory_blocks_freed - earlier.pooled_memory_blocks_freed,
+        (bytes_after.1 - bytes_before.1) >> 20,
+        counts.blocks_ahead_unused - earlier.blocks_ahead_unused,
+        (bytes_after.2 - bytes_before.2) >> 20,
+        frees.pooled_emptied - earlier_frees.pooled_emptied,
+        frees.kept_stale - earlier_frees.kept_stale,
+        frees.kept_for_room - earlier_frees.kept_for_room,
     );
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest submissions {slow}");
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest turnarounds {slow_turns}");
