@@ -269,6 +269,12 @@ Both shapes, as two commands, because a bound is written from both or it is not 
 A case's cost record lives in its own recording file, beside the Metal answers, so a host with no
 Metal reads it with the rest of the case.
 
+**A record names the venue and the build.** The committed records are measured by the debug binary
+(`target/debug/conformance`), whose debug assertions take paths of their own (a kept draw rebound
+again takes the whole check at its first and every second hit), so a release build's counts are not
+its counts: a release build's runs name their venue `<device>, release build`, are `unmeasured`
+against the debug records, and its `--write` keeps a record of its own beside them.
+
 **Counts are ours, never Metal's.** Metal has no counterpart for any of them and a host with no
 Metal can have no answer, so a count never enters the comparison with Metal and never produces a
 correctness verdict. The cost half has its own four verdicts — `within`, `over`, `under`,

@@ -6343,6 +6343,59 @@ fn a_count_whose_ceiling_is_the_lone_run_is_gated_there() {
     assert_eq!(record.gated(), 0);
 }
 
+/// A release build's cost runs name their venue apart from the debug binary's, which measured every
+/// committed record: a debug build's assertions take paths of their own (a kept draw rebound again
+/// takes the whole check at its first and every second hit), so the two builds' counts differ, and
+/// a release run held to a debug record read `point-viewport-coverage`'s 3 rebinds against the
+/// debug build's 1. Held to no record of its own profile, the release run is unmeasured.
+#[test]
+fn a_release_build_s_cost_runs_name_their_venue_apart() {
+    let (debug, release) = (
+        crate::cost::venue_of("A device", true),
+        crate::cost::venue_of("A device", false),
+    );
+    assert_eq!(debug, "A device");
+    assert_ne!(debug, release);
+    assert_eq!(
+        crate::cost::venue("A device"),
+        crate::cost::venue_of("A device", cfg!(debug_assertions))
+    );
+    let counts =
+        crate::cost::Counts::read("WorkCounts {\n    render_passes_made: 3,\n}").expect("it reads");
+    let record = crate::cost::CaseCost {
+        states: 0,
+        case: "a case".to_owned(),
+        counts: crate::cost::Counts::read("WorkCounts {\n    render_passes_made: 1,\n}")
+            .expect("it reads"),
+        least: crate::cost::Counts::read("WorkCounts {\n    render_passes_made: 1,\n}")
+            .expect("it reads"),
+        runs: 8,
+        stopped: None,
+        degraded: Vec::new(),
+        nanos: 1_000,
+    }
+    .record(&debug, "eight runs".to_owned());
+    let judged = |venue: &str| {
+        crate::cost::judge(
+            std::slice::from_ref(&record),
+            venue,
+            true,
+            &counts,
+            0,
+            None,
+            &[],
+        )
+    };
+    assert!(matches!(
+        judged(&debug),
+        crate::cost::CostVerdict::Over { .. }
+    ));
+    assert!(matches!(
+        judged(&release),
+        crate::cost::CostVerdict::Unmeasured { .. }
+    ));
+}
+
 /// A ceiling is the lone run's reading, taken again at each lone measurement: one the tree no
 /// longer reaches comes down, with the bound it set.
 ///

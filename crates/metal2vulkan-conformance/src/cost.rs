@@ -1738,6 +1738,29 @@ impl std::fmt::Display for CostVerdict {
     }
 }
 
+/// The venue a cost run on `device` names, and so the record it is held to or writes: the device's
+/// name, and the build's profile where the build is not the one the suite measures in.
+///
+/// A count is the build's as much as the device's. A build with debug assertions takes paths of
+/// its own: a kept draw rebound again takes the whole check at its first and every second hit
+/// (the runtime's `render/draw_again.rs` and `render/draw_again/rebound.rs`), so
+/// `point-viewport-coverage`'s rebinds read 1 there where a release build of the same tree read 3
+/// (the M3 Max, 11-07). Every committed record was measured by the suite's debug binary (the
+/// bless runs `cost --write` from `target/debug`), and a release build's runs name their venue
+/// apart: held to no record of the other profile, they are [`CostVerdict::Unmeasured`], and a
+/// release build's `--write` keeps a record of its own beside the debug one.
+pub fn venue(device: &str) -> String {
+    venue_of(device, cfg!(debug_assertions))
+}
+
+/// [`venue`]'s name for a build with debug assertions where `debug`, else a release build's.
+pub(crate) fn venue_of(device: &str, debug: bool) -> String {
+    match debug {
+        true => device.to_owned(),
+        false => format!("{device}, release build"),
+    }
+}
+
 /// Hold `observed` to the bounds `records` holds for `venue`.
 ///
 /// `whole_set` says whether the run was of the whole case set, which is the measurement's own

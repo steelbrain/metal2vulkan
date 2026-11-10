@@ -72,7 +72,7 @@ fn one_replay_pass(
     // because the two readings must be of the same run, and it is cheap: two reads of
     // `WorkCounts` a case. Nothing here enters a correctness verdict.
     let whole_set = cases.len() == crate::cases::all().len();
-    let venue_label = device.name().to_owned();
+    let venue_label = cost::venue(device.name());
     for case in cases {
         let before = read_counts(device);
         // The Metal pipeline states the case creates: the denominator of the ratio bound
@@ -251,7 +251,7 @@ pub fn cost_on_under(
         let device = device::open_counted(venues, policy, &notices, &cache, device::SLOT_WAIT)?;
         // The device's own notices, read off so no case's scope ever holds them.
         notices.venue();
-        venue = device.name().to_owned();
+        venue = cost::venue(device.name());
         for (index, case) in cases.iter().enumerate() {
             let before = read_counts(&device)?;
             let states_before = crate::states::made();
