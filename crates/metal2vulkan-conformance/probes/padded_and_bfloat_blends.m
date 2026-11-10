@@ -245,7 +245,7 @@ static id<MTLTexture> target(const Format *f) {
     td.width = W;
     td.height = H;
     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-    td.storageMode = MTLStorageModeShared;
+    td.storageMode = MTLStorageModePrivate;
     return [gDevice newTextureWithDescriptor:td];
 }
 
@@ -317,8 +317,10 @@ static BOOL draw(const Format *f, id<MTLRenderPipelineState> p, const State *s, 
     return YES;
 }
 
-// The control that the blits move the texels: `dst` up and straight back.
-static BOOL roundTrip(const Format *f, const uint8_t *dst) {
+// The control that the blits move the texels: `dst` up and straight back, as the count of texels
+// whose codes came back other (a 16-bit word's low 6 bits, which no padded or `BGRA10_XR` field
+// reads, aside).
+static int roundTrip(const Format *f, const uint8_t *dst) {
     id<MTLTexture> t = target(f);
     id<MTLBuffer> in = [gDevice newBufferWithBytes:dst length:(NSUInteger)N * f->bytes options:0];
     id<MTLBuffer> back = [gDevice newBufferWithLength:(NSUInteger)N * f->bytes options:0];
@@ -327,7 +329,25 @@ static BOOL roundTrip(const Format *f, const uint8_t *dst) {
     download(cb, t, f, back);
     [cb commit];
     [cb waitUntilCompleted];
-    return memcmp(back.contents, dst, (size_t)N * f->bytes) == 0;
+    BOOL fields = (f->kind == kPadded && f->format != 586) || f->format == 552;
+    const uint8_t *got = back.contents;
+    int other = 0;
+    for (int i = 0; i < N; i++) {
+        const uint8_t *a = got + (size_t)i * f->bytes, *b = dst + (size_t)i * f->bytes;
+        BOOL same = YES;
+        for (uint32_t k = 0; k < f->bytes; k += fields ? 2 : 1) {
+            if (fields) {
+                uint16_t x, y;
+                memcpy(&x, a + k, 2);
+                memcpy(&y, b + k, 2);
+                same &= (x & 0xFFC0) == (y & 0xFFC0);
+            } else {
+                same &= a[k] == b[k];
+            }
+        }
+        other += !same;
+    }
+    return other;
 }
 
 // `create` without a fragment function: the blend is the descriptor's alone.
@@ -408,7 +428,7 @@ static int sweep(int argc, char **argv) {
         for (int i = 0; i < N; i++) destinationTexel(f, dst + (size_t)i * f->bytes);
         writeFile([NSString stringWithFormat:@"out/%s-dst.bin", f->name], dst,
                   (size_t)N * f->bytes);
-        printf("ROUND-TRIP %s %s\n", f->name, roundTrip(f, dst) ? "exact" : "DIFFERS");
+        printf("ROUND-TRIP %s %d texels differ\n", f->name, roundTrip(f, dst));
         for (size_t k = 0; k < sizeof kStates / sizeof kStates[0]; k++) {
             const State *s = &kStates[k];
             // The extended-range forms answer the second output alone.
