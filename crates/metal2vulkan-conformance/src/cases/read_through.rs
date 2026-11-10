@@ -775,8 +775,8 @@ impl Case for ReadThrough {
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
         // A read through an argument buffer's sampler or texture takes the handle heap, whose set
         // MoltenVK's layout query refuses though it runs it: measured on the M3 Max through
-        // MoltenVK, where all four plane cases announced `set-past-layout-support` and nothing
-        // else.
+        // MoltenVK, where every plane case that reads one, the two argument-buffer texture cases
+        // among them, announced `set-past-layout-support` and nothing else.
         let heap = self.reads.iter().any(|read| {
             matches!(
                 read.through,
