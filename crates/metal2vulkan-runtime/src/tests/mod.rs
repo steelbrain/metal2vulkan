@@ -441,6 +441,8 @@ mod sampler_sets;
 mod scheduler;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod scheduler_wakes;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod scroll_bos;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod self_read_storage;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

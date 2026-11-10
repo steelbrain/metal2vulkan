@@ -32,7 +32,7 @@ fn plain_blocks_are_filled_exportable_first_where_their_making_holds_submissions
     std::fs::create_dir_all(&scratch).unwrap();
     // Every making of the process is printed, from the device's creation on.
     #[cfg(all(m2v_gpu, target_os = "linux"))]
-    let base = Instant::now();
+    let base = (Instant::now(), crate::memory::making_parts::monotonic());
     let device = device(&scratch);
     let holds = device
         .properties()

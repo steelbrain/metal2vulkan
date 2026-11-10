@@ -103,14 +103,29 @@ pub(super) fn take_fill(cpu: i32) -> Option<FillParts> {
     })
 }
 
-/// A line of `making`: when its `vkAllocateMemory` began, from `base`, and how long it took (on a
-/// CPU, waiting for one), and, where it was filled first, whether the fill saved, when it began,
-/// the exportable allocation's and its free's times (on a CPU) and [`FillParts::cpus`].
-pub(crate) fn making_line(making: &MakingParts, base: Instant) -> String {
+/// `CLOCK_MONOTONIC` now, in seconds: what a kernel trace's `mono` clock reads.
+pub(crate) fn monotonic() -> f64 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: a valid clock and a timespec to write.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    now.tv_sec as f64 + now.tv_nsec as f64 * 1e-9
+}
+
+/// A line of `making`: when its `vkAllocateMemory` began, in `CLOCK_MONOTONIC` seconds from
+/// `base` (an `Instant` and its [`monotonic`] reading), and how long it took (on a CPU, waiting
+/// for one), and, where it was filled first, whether the fill saved, when it began, the
+/// exportable allocation's and its free's times (on a CPU) and [`FillParts::cpus`].
+pub(crate) fn making_line(making: &MakingParts, base: (Instant, f64)) -> String {
     let ms = |took: Duration| took.as_secs_f64() * 1e3;
-    let at = |instant: Instant| ms(instant.saturating_duration_since(base));
+    let at = |instant: Instant| {
+        base.1 + instant.saturating_duration_since(base.0).as_secs_f64()
+            - base.0.saturating_duration_since(instant).as_secs_f64()
+    };
     let own = format!(
-        "{} MiB {} at {:.1} ms: vkAllocateMemory {:.2} ms (on a CPU {:.2}, waiting for one {:.2})",
+        "{} MiB {} at {:.4}: vkAllocateMemory {:.2} ms (on a CPU {:.2}, waiting for one {:.2})",
         making.bytes >> 20,
         if making.ahead { "ahead" } else { "in place" },
         at(making.allocating),
@@ -122,7 +137,7 @@ pub(crate) fn making_line(making: &MakingParts, base: Instant) -> String {
         return format!("{own}, not filled first");
     };
     format!(
-        "{own}, {}; filled first from {:.1} ms: allocated {:.2} ms (on a CPU {:.2}), freed {:.2} \
+        "{own}, {}; filled first from {:.4}: allocated {:.2} ms (on a CPU {:.2}), freed {:.2} \
          ms (on a CPU {:.2}); CPUs {:?}",
         if making.took[2] < super::FILL_SAVED_BELOW {
             "saved"

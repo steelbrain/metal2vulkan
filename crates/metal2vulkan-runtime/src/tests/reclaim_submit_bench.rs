@@ -148,6 +148,7 @@
 //! reclaim_submit_bench --no-capture`.
 
 use super::host_residency::{device, Scratch};
+use crate::memory::making_parts::monotonic;
 use crate::{
     Buffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions, HostMemory,
     ResourceOptions, ShaderCacheOptions, Texture, TextureDescriptor,
@@ -481,20 +482,6 @@ fn submit(
     let completed = began.elapsed();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
     (submitted, completed)
-}
-
-/// `CLOCK_MONOTONIC` now, in seconds.
-fn monotonic() -> f64 {
-    let mut now = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: a valid clock and a timespec to write.
-    assert_eq!(
-        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) },
-        0
-    );
-    now.tv_sec as f64 + now.tv_nsec as f64 * 1e-9
 }
 
 /// What an arm makes beside its submissions, in each phase.
@@ -930,7 +917,7 @@ fn print_makings(
         in_fills.iter().copied().fold(0.0, f64::max),
     );
     for making in makings {
-        let line = crate::memory::making_parts::making_line(making, clock.0);
+        let line = crate::memory::making_parts::making_line(making, clock);
         eprintln!("RECLAIM-SUBMIT {arm}, {name}: making of {line}");
     }
     let mut slowest: Vec<_> = makings.iter().collect();
