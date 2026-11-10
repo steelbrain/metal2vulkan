@@ -280,6 +280,40 @@ fn states() -> Vec<(&'static str, SamplerSpec)> {
     ]
 }
 
+/// Runtime samplers that tell a texture buffer's axes apart: one axis's mode changed from
+/// `clamp_to_edge` at a time, and pairs of them, every border opaque white. A texture buffer's
+/// index is its `s` coordinate, so these ask which of the sampler's modes Metal's read past its end
+/// answers by.
+fn axis_states() -> Vec<(&'static str, SamplerSpec)> {
+    use SamplerAddressMode::{
+        ClampToBorderColor as B, ClampToEdge as E, ClampToZero as Z, MirrorRepeat as M, Repeat as R,
+    };
+    let state = |s, t, r| {
+        let mut spec = SamplerSpec::new();
+        spec.s_address_mode = s;
+        spec.t_address_mode = t;
+        spec.r_address_mode = r;
+        spec.border_color = SamplerBorderColor::OpaqueWhite;
+        spec
+    };
+    vec![
+        ("s-border", state(B, E, E)),
+        ("t-border", state(E, B, E)),
+        ("r-border", state(E, E, B)),
+        ("st-border", state(B, B, E)),
+        ("sr-border", state(B, E, B)),
+        ("tr-border", state(E, B, B)),
+        ("s-zero", state(Z, E, E)),
+        ("t-zero", state(E, Z, E)),
+        ("s-repeat", state(R, E, E)),
+        ("t-repeat", state(E, R, E)),
+        ("r-repeat", state(E, E, R)),
+        ("s-mirrored", state(M, E, E)),
+        ("s-border-t-repeat", state(B, R, R)),
+        ("s-border-t-mirrored", state(B, M, E)),
+    ]
+}
+
 /// The reads of a `texture2d<float>`: every constexpr state, every runtime state through the slot
 /// and through an argument buffer, and the argument buffer's texture through `clamp_to_zero`.
 fn plane_reads() -> Vec<Read> {
@@ -377,6 +411,11 @@ pub fn all() -> Vec<ReadThrough> {
         own("rt_buffer_ow", Out::Float4),
     ];
     buffer.extend(slot("rt_arg_buffer"));
+    buffer.extend(axis_states().into_iter().map(|(state, spec)| Read {
+        entry: "rt_arg_buffer",
+        through: Through::Slot(state, spec),
+        out: Out::Float4,
+    }));
     vec![
         case(
             "read-through-r32f",
@@ -731,6 +770,28 @@ impl Case for ReadThrough {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // A read through an argument buffer's sampler or texture takes the handle heap, whose set
+        // MoltenVK's layout query refuses though it runs it: measured on the M3 Max through
+        // MoltenVK, where all four plane cases announced `set-past-layout-support` and nothing
+        // else, every value exact but the swizzled case's argument-buffer texture. A case whose
+        // read is refused stops at its pipeline and announces nothing.
+        let heap = self.reads.iter().any(|read| {
+            matches!(
+                read.through,
+                Through::Table(..) | Through::HeapTexture | Through::HeapTextureSlot(..)
+            )
+        });
+        let refused = self
+            .reads
+            .iter()
+            .any(|read| matches!(read.entry, "rt_heap_ow" | "rt_heap_arg"));
+        match heap && !refused {
+            true => vec![crate::replay::set_past_layout_notice()],
+            false => Vec::new(),
+        }
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

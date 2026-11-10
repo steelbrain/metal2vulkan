@@ -726,6 +726,12 @@ fn every_read_through_a_sampler_validates_or_is_refused_typed() {
                     validated += 1;
                 }
                 Err(Error::NeedsInput(_)) => {}
+                // A device without the descriptor-indexing features a handle heap needs refuses
+                // an argument buffer's texture whatever reads it.
+                Err(Error::Unsupported(u))
+                    if entry == "rt_heap_zero"
+                        && u.feature == Feature::ArgumentBufferTextures
+                        && u.needs != want.needs => {}
                 Err(e) => panic!("{stem}: {entry}: {e}"),
             }
         }

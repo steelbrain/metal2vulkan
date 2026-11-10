@@ -1,0 +1,3611 @@
+{
+  "format": 1,
+  "case": "read-through-rgba8",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_repeat",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_repeat",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_mirrored_offset",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_mirrored_offset",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_zero",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_zero",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_border_ob",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_border_ob",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_border_ow",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_border_ow",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_mixed",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_mixed",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_mip",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_mip",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_mip_zero",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_mip_zero",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_filtered",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_filtered",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_alpha",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_alpha",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_arg",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_arg",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_table",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_table",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    },
+    {
+      "fixture": "kernel_read_through.ll",
+      "entry": "rt_heap_zero",
+      "source_sha256": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+    },
+    {
+      "fixture": "kernel_read_through.air.ll",
+      "entry": "rt_heap_zero",
+      "source_sha256": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f29d49c694f95c3f9526afe54972b0f20d810595c240ecdf8856dc64a4c8f703"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fc8da31ebb4f219ee7c614d0a8edd2d2298df053c8aefe22cf65aaa80d88d0c6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:positions",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c6ab989db16fc34589cbe52aa296a8dc3ab84a6f51aeb0e48508721577a4fa8b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer:blank",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "087d80f7f182dd44f184aa86ca34488853ebcc04f0c60d5294919a466b463831"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3929cd9a437c9a7853dab4c6a343d51c76caf8bccd355406e7dbdd8b2c88fb52"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "20eb15788e0fe462c20092b5566a908628ad1cfc9a3edff99b7b43e96f9a6437"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_mirrored_offset",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c97143a569645e78be1620778e27a210d0a48cb6b7c6bfdc2c379568730744d4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "59cf9238a75ff9538d4c9977114e1f2af2244d00108e296e89a830942db57dfe"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_border_ob",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "2ada09a7f434b14b881648a005d119dc3c3b30ae0bfcefc82b630423c8580b40"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_border_ow",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d85ec357b1e07862de437288d38791142ff169ddc00839fd3b7dd6b9adf5d6c2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_mixed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9c6d98902a5479f682699bf46bea7220f96ab01d5922b1558ba4cbb874c23c00"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_mip",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7f50b9d998e6471fb65cf44216a60a2fc5c9155f4c3e65a3e11a25a714a87040"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_mip_zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cba3dfa94b5c1cccbfd2c1514c7f21c392adf9c86c527793eb96581b485926e6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_filtered",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "02055a92b0200dce09d41820982e7eafaeb5a0f126e5c4d3e0709b78f84d03d5"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_alpha",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c164f532308d1b42a441cead5b5e60707fd881a61b8a9e9b24b25205591cd632"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/edge",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b946deb60c4a07dff970b9eaeacf1ec55ba8b7de4d410af541ab07cbc4a7a9e0"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "237b06e1c44f97cc2714b7154464e8d7ab806b8dab103c976ced8e546fde7f1e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/mirrored-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "aa8e40a64a0e2d91a94402715158ca0f418d844c4ac12fd3c18bf423a511817a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/mirror-clamp",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "6e463189e4a90df542b3a01dabbee068900a3e86330f65a99b6f590ed9ae5abc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "ac46857b1c66919dcf006e14718689f63dcda2ac4808fd5b7bf513df28f25575"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/zero-white",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e6ae3ce7b9a0727292b7e19bb04f95812f53bd47603eafd40affbc723b1a8425"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/border-black",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "85105af84cb863cf38888f09a1300b2b0a651cca1f456b7d8b702488f5c39d55"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/border-white",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f298a8d2b8c88891d0ac566053ff76a8dc58332e31f27cda81d06f22a5540203"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/mixed-mip",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bf76216944e4598a18bffd600ad6ffd0eedb86ab4fbb6408fb2bcdcbb2767cfd"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/linear-mip",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "5880fee8a7b39bafce2b2457d184ff77311049d6cc4f0d3c3f69214a8dc106de"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_arg/border-mip",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "808a2e9d5d2ac81066634da27f6cf98fedd1a66e50afbea9d97c8a0e0d21ff5c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/edge",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "620f3839c39378335df319b6f59bb7757bcaaaf404ae36f94d7a2af489ff24e4"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "90dae6a00947c9c824a9954a9fcda5c5a5caa47d8312fa777240ae059772bc7b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/mirrored-repeat",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9bb60ac23fe7b9349b707253cb65013d378a8d5ee5a1e1ee717b63b4a0c8e70a"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/mirror-clamp",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9f414b6b0e576d7c2311d2eeecc0743c97a9ae5e0e5892fa2c4fb331365ff914"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "30d2580b37e4c3d62796126a677f047b5c9df2af88d121b36ea6dc5362772902"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/zero-white",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1466a0193a39e9795826d58ded864c75b29ade97120f38d08612c6b5413bca2b"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/border-black",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "dee196a5efcfe53a025c4f04d845ffefb895f74f8e7e99c5fd723b552443d9ff"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/border-white",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d6620a7068b262533a26cfda1b02bf854ba02ff0ee4fb3eb608e9caf1c8515f3"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/mixed-mip",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "609e8461bb0b5d85ee2cc0568e972aa704e50ba56b1710a09415a07804d41fbe"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/linear-mip",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "cc97175b2c892b1c744f680276a6f4dae493c0f48501a5c96638bcbccb9714be"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_table/border-mip",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "915b6912e139f18a36505791659921531038a590d992fcd956f46ff0495d6183"
+                        }
+                      }
+                    },
+                    {
+                      "name": "read:rt_heap_zero",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "483603bbbce840a90519f272d6930d4cb4bb73fd41e9aece0c537528dd9de297"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer/positions",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_repeat",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_mirrored_offset",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_border_ob",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_border_ow",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_mixed",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_mip",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_mip_zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_filtered",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_alpha",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_arg",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_table",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/rt_heap_zero",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mirrored_offset/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mirrored_offset/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mirrored_offset/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mirrored_offset/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_zero/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_zero/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_zero/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_zero/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ob/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ob/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ob/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ob/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ow/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ow/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ow/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_border_ow/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mixed/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mixed/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mixed/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mixed/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip_zero/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip_zero/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip_zero/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_mip_zero/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_filtered/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_filtered/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_filtered/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_filtered/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_alpha/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_alpha/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_alpha/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_alpha/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/edge/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/edge/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/edge/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/edge/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/edge/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirrored-repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirrored-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirrored-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirrored-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirrored-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirror-clamp/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirror-clamp/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirror-clamp/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirror-clamp/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mirror-clamp/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero-white/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero-white/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero-white/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero-white/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/zero-white/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-black/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-black/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-black/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-black/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-black/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-white/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-white/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-white/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-white/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-white/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mixed-mip/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mixed-mip/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mixed-mip/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mixed-mip/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/mixed-mip/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/linear-mip/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/linear-mip/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/linear-mip/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/linear-mip/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/linear-mip/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-mip/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-mip/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-mip/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-mip/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_arg/border-mip/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/edge/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/edge/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/edge/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/edge/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/edge/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/edge/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/repeat/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirrored-repeat/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirrored-repeat/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirrored-repeat/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirrored-repeat/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirrored-repeat/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirrored-repeat/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirror-clamp/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirror-clamp/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirror-clamp/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirror-clamp/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirror-clamp/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mirror-clamp/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero-white/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero-white/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero-white/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero-white/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero-white/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/zero-white/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-black/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-black/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-black/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-black/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-black/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-black/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-white/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-white/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-white/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-white/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-white/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-white/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mixed-mip/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mixed-mip/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mixed-mip/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mixed-mip/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mixed-mip/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/mixed-mip/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/linear-mip/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/linear-mip/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/linear-mip/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/linear-mip/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/linear-mip/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/linear-mip/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-mip/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-mip/sampler",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-mip/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-mip/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-mip/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_table/border-mip/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_heap_zero/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_heap_zero/argument-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_heap_zero/dispatch",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_heap_zero/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "rt_heap_zero/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "words",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "rt_repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_mirrored_offset",
+                      "observed": {
+                        "value": {
+                          "bytes": "0dBQPZuamj6OjQ0/zs1NP+HgYD2dnJw+j44OP8/OTj+hoKA8i4qKPoaFBT/GxUU/sbAwPZeWlj6Miws/zMtLP8HAQD2ZmJg+jYwMP83MTD+BgIA9oaCgPpGQED/R0FA/kZAQPZOSkj6KiQk/yslJP9HQUD2bmpo+jo0NP87NTT+hoKA8i4qKPoaFBT/GxUU/0dBQPZuamj6OjQ0/zs1NP9HQUD2bmpo+jo0NP87NTT+BgIA7g4KCPoKBAT/CwUE/gYCAO4OCgj6CgQE/wsFBP/HwcD2fnp4+kI8PP9DPTz+RkBA9k5KSPoqJCT/KyUk/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+hoKA8i4qKPoaFBT/GxUU/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAAAAAAAAAAAAAAAAAAACBgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_border_ob",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAAAAAAAAAAAAAAAAAgD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_border_ow",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAgD8AAIA/AACAPwAAgD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_mixed",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAgD8AAIA/AACAPwAAgD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_mip",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD+xsLA9raysPpeWFj/X1lY/kZCQPaWkpD6TkhI/09JSP6moqD2rqqo+lpUVP9bVVT+FhAQ+w8LCPqKhIT/i4WE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_mip_zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACxsLA9raysPpeWFj/X1lY/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACFhAQ+w8LCPqKhIT/i4WE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_filtered",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_alpha",
+                      "observed": {
+                        "value": {
+                          "bytes": "y8pKP9HQUD/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADHxkY/xMNDPwAAAADCwUE/AAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 80
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 1,
+                            "row_pitch": 4,
+                            "rows": 20,
+                            "image_pitch": 80,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/edge",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHP8HAQD2ZmJg+jYwMP83MTD+BgAA8hYSEPoOCAj/DwkI/gYCAPImIiD6FhAQ/xcREP4GAgDyJiIg+hYQEP8XERD+BgAA9kZCQPomICD/JyEg/gYCAO4OCgj6CgQE/wsFBP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/8fBwPZ+enj6Qjw8/0M9PP4GAgD2hoKA+kZAQP9HQUD+BgIA8iYiIPoWEBD/FxEQ/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwEA8h4aGPoSDAz/Ew0M/gYCAPImIiD6FhAQ/xcREP4GAgDuDgoI+goEBP8LBQT+BgAA8hYSEPoOCAj/DwkI/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHP8HAQD2ZmJg+jYwMP83MTD+BgAA8hYSEPoOCAj/DwkI/gYCAPImIiD6FhAQ/xcREP4GAgDyJiIg+hYQEP8XERD+BgAA9kZCQPomICD/JyEg/gYCAO4OCgj6CgQE/wsFBP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/8fBwPZ+enj6Qjw8/0M9PP4GAgD2hoKA+kZAQP9HQUD+BgIA8iYiIPoWEBD/FxEQ/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwEA8h4aGPoSDAz/Ew0M/gYCAPImIiD6FhAQ/xcREP4GAgDuDgoI+goEBP8LBQT+BgAA8hYSEPoOCAj/DwkI/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/mirrored-repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHP8HAQD2ZmJg+jYwMP83MTD+BgAA8hYSEPoOCAj/DwkI/gYCAPImIiD6FhAQ/xcREP4GAgDyJiIg+hYQEP8XERD+BgAA9kZCQPomICD/JyEg/gYCAO4OCgj6CgQE/wsFBP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/8fBwPZ+enj6Qjw8/0M9PP4GAgD2hoKA+kZAQP9HQUD+BgIA8iYiIPoWEBD/FxEQ/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwEA8h4aGPoSDAz/Ew0M/gYCAPImIiD6FhAQ/xcREP4GAgDuDgoI+goEBP8LBQT+BgAA8hYSEPoOCAj/DwkI/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/mirror-clamp",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHP8HAQD2ZmJg+jYwMP83MTD+BgAA8hYSEPoOCAj/DwkI/gYCAPImIiD6FhAQ/xcREP4GAgDyJiIg+hYQEP8XERD+BgAA9kZCQPomICD/JyEg/gYCAO4OCgj6CgQE/wsFBP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/8fBwPZ+enj6Qjw8/0M9PP4GAgD2hoKA+kZAQP9HQUD+BgIA8iYiIPoWEBD/FxEQ/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwEA8h4aGPoSDAz/Ew0M/gYCAPImIiD6FhAQ/xcREP4GAgDuDgoI+goEBP8LBQT+BgAA8hYSEPoOCAj/DwkI/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgYCAO4OCgj6CgQE/wsFBPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8fBwPZ+enj6Qjw8/0M9PPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBwEA8h4aGPoSDAz/Ew0M/AAAAAAAAAAAAAAAAAAAAAIGAgDuDgoI+goEBP8LBQT8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/zero-white",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/gYCAO4OCgj6CgQE/wsFBPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/8fBwPZ+enj6Qjw8/0M9PPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD/BwEA8h4aGPoSDAz/Ew0M/AACAPwAAgD8AAIA/AACAP4GAgDuDgoI+goEBP8LBQT8AAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/border-black",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/gYCAO4OCgj6CgQE/wsFBPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/8fBwPZ+enj6Qjw8/0M9PPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD/BwEA8h4aGPoSDAz/Ew0M/AAAAAAAAAAAAAAAAAACAP4GAgDuDgoI+goEBP8LBQT8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/border-white",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/gYCAO4OCgj6CgQE/wsFBPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/8fBwPZ+enj6Qjw8/0M9PPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD/BwEA8h4aGPoSDAz/Ew0M/AACAPwAAgD8AAIA/AACAP4GAgDuDgoI+goEBP8LBQT8AAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/mixed-mip",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHPwAAgD8AAIA/AACAPwAAgD+BgAA8hYSEPoOCAj/DwkI/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/gYCAO4OCgj6CgQE/wsFBPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/8fBwPZ+enj6Qjw8/0M9PP4GAgD2hoKA+kZAQP9HQUD+BgIA8iYiIPoWEBD/FxEQ/gYCAO4OCgj6CgQE/wsFBPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAP4mIiD2joqI+kpERP9LRUT8AAIA/AACAPwAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/linear-mip",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHP8HAQD2ZmJg+jYwMP83MTD+BgAA8hYSEPoOCAj/DwkI/gYCAPImIiD6FhAQ/xcREP4GAgDyJiIg+hYQEP8XERD+BgAA9kZCQPomICD/JyEg/gYCAO4OCgj6CgQE/wsFBP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/8fBwPZ+enj6Qjw8/0M9PP4GAgD2hoKA+kZAQP9HQUD+BgIA8iYiIPoWEBD/FxEQ/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD+RkJA9paSkPpOSEj/T0lI/kZCQPaWkpD6TkhI/09JSP4mIiD2joqI+kpERP9LRUT+FhAQ+w8LCPqKhIT/i4WE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_arg/border-mip",
+                      "observed": {
+                        "value": {
+                          "bytes": "4eDgPI+Ojj6Ihwc/yMdHPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgYCAO4OCgj6CgQE/wsFBPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8fBwPZ+enj6Qjw8/0M9PPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAImIiD2joqI+kpERP9LRUT8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/edge",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/mirrored-repeat",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/mirror-clamp",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDP6GgoDyLioo+hoUFP8bFRT+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAAAAAAAAAAAAAAAAAAACBgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/zero-white",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAgD8AAIA/AACAPwAAgD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/border-black",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAAAAAAAAAAAAAAAAAgD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/border-white",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD/BwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAgD8AAIA/AACAPwAAgD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/mixed-mip",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD+xsLA9raysPpeWFj/X1lY/AACAPwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD+FhAQ+w8LCPqKhIT/i4WE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/linear-mip",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/gYAAPZGQkD6JiAg/ychIP4GAAD2RkJA+iYgIP8nISD/BwEA9mZiYPo2MDD/NzEw/oaCgPIuKij6GhQU/xsVFP5GQED2TkpI+iokJP8rJST+BgIA7g4KCPoKBAT/CwUE/4eBgPZ2cnD6Pjg4/z85OP/HwcD2fnp4+kI8PP9DPTz/BwEA8h4aGPoSDAz/Ew0M/gYCAO4OCgj6CgQE/wsFBP4GAgD2hoKA+kZAQP9HQUD+xsLA9raysPpeWFj/X1lY/kZCQPaWkpD6TkhI/09JSP6moqD2rqqo+lpUVP9bVVT+FhAQ+w8LCPqKhIT/i4WE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_table/border-mip",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACxsLA9raysPpeWFj/X1lY/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACFhAQ+w8LCPqKhIT/i4WE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "rt_heap_zero",
+                      "observed": {
+                        "value": {
+                          "bytes": "oaAgPZWUlD6Ligo/y8pKP4GAgD2hoKA+kZAQP9HQUD+BgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBwMA8jYyMPoeGBj/HxkY/wcBAPIeGhj6EgwM/xMNDPwAAAAAAAAAAAAAAAAAAAACBgIA7g4KCPoKBAT/CwUE/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 320
+                              }
+                            },
+                            "element": "u32",
+                            "row_offset": 0,
+                            "row_elements": 4,
+                            "row_pitch": 16,
+                            "rows": 20,
+                            "image_pitch": 320,
+                            "images": 1,
+                            "gaps": "ignored"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}
