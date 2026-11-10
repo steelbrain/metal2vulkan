@@ -98,8 +98,8 @@ impl Cases {
         Cases {
             reserved: count("the queues reserved for the caller are"),
             extra: count("the extra queues are at"),
-            command: count(", a command queue took VkQueue"),
-            unshared: count(", an unshared command queue took VkQueue"),
+            command: count(", a command queue, the program's command queue"),
+            unshared: count(", an unshared command queue, the program's command queue"),
             presenting: count("shares a VkQueue, the device's queue limits reserving"),
             read: count("its queue sharing was read"),
         }

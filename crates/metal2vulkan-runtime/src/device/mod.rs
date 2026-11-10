@@ -281,6 +281,9 @@ pub(super) struct DeviceShared {
     /// The presenting queues made so far, on a reserved `VkQueue` or not, counted only where
     /// `planned` is.
     presenting_asked: AtomicU64,
+    /// The program's command queues made round robin so far, unshared ones that took the round
+    /// robin's next among them, counted only where `planned` is: the runtime's own are not.
+    program_queues_made: AtomicU64,
     /// Whether its command queues share `VkQueue`s, and its check's verdict
     /// (`queue_share.rs`). Shared with the check's thread, which holds no device handle
     /// (`queue_switch_check.rs`).
@@ -1594,10 +1597,11 @@ impl Device {
     /// Past the round robin's queues it gives one an earlier logical queue took, whose
     /// submissions this queue's then wait behind where Metal's queues would not
     /// (`device/create.rs`'s `ROUND_ROBIN_CEILING`): counted,
-    /// `WorkCounts::queues_sharing_a_vk_queue`. Where the device's queue limits gave it the
-    /// `VkQueue` another took and the queue plan gives it one of its own, the device says so
-    /// (`DeviceOptions::queue_limits`), `noted` naming the queue; never for `None`, a presenting
-    /// queue's, which `Device::next_presenting_queue` notes.
+    /// `WorkCounts::queues_sharing_a_vk_queue`. Where the device's queue limits changed its round
+    /// robin (`DeviceOptions::queue_limits`) and this is a queue the program made, `noted` naming
+    /// it (`None` for the runtime's own and for a presenting queue's, which
+    /// `Device::next_presenting_queue` notes), the device says so where the program's queues
+    /// made so far reach past the limits' `VkQueue`s and the plan gives this one its own.
     pub(super) fn next_queue(&self, noted: Option<&str>) -> (u64, usize) {
         let id = self.shared().contexts.fresh();
         let made = self
@@ -1609,12 +1613,13 @@ impl Device {
         }
         let vk_queue = (made % self.shared().round_robin as u64) as usize;
         if let (Some(queue), Some((planned, _))) = (noted, self.shared().planned) {
-            if create::shares_past_limit(made, self.shared().round_robin, planned) {
+            let program = (self.shared().program_queues_made).fetch_add(1, Ordering::Relaxed);
+            if create::shares_past_limit(program, self.shared().round_robin, planned) {
                 let what = format!(
-                    "{queue} took VkQueue {vk_queue}, which another took, as the round robin's \
-                     queue {} of its {} VkQueue(s), where the plan's {planned} give it one of its \
-                     own",
-                    made + 1,
+                    "{queue}, the program's command queue {} on a round robin of {} VkQueue(s), \
+                     took VkQueue {vk_queue}, which another took, where the plan's {planned} give \
+                     it one of its own",
+                    program + 1,
                     self.shared().round_robin
                 );
                 self.inform(
@@ -2629,6 +2634,7 @@ impl Device {
             presenting_made: AtomicU64::new(0),
             planned,
             presenting_asked: AtomicU64::new(0),
+            program_queues_made: AtomicU64::new(0),
             queue_switch: Arc::new(crate::queue_share::QueueSwitch::new(
                 invariant.compile.policy().queue_sharing,
             )),

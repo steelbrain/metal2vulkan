@@ -321,8 +321,9 @@ pub struct DeviceOptions {
     /// queues take the queues the limits leave. Wherever the limits change a placement from what
     /// the plan gives, the device says so in an informational message
     /// (`metal2vulkan-queue-limits-reached`, through [`messages`](Self::messages) or on stderr):
-    /// a command queue, unshared or not, that takes a `VkQueue` another took where the plan gives
-    /// it one of its own; a presenting queue past the limit's where the plan reserves it one;
+    /// a command queue the program makes, unshared or not, that takes a `VkQueue` another took
+    /// where the plan gives it one of its own (counted among the program's queues: the runtime's
+    /// own, its in-place check's, shares as it does on a device of one queue); a presenting queue past the limit's where the plan reserves it one;
     /// reserved or extra queues placed otherwise than the plan places them (as the device is
     /// made); and each read of the device's queue sharing (`Device::settle_queue_switch_check`,
     /// `Device::queue_switch_check_report`) on a device whose queues the limits changed. No Metal
