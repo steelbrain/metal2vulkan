@@ -641,19 +641,27 @@ pub(super) unsafe extern "system" fn deliver(
     vk::FALSE
 }
 
-/// Whether `entry`'s loader lists `VK_KHR_portability_enumeration`.
-pub(super) fn lists_portability(entry: &ash::Entry) -> Result<bool, Error> {
-    lists_instance_extension(entry, ash::khr::portability_enumeration::NAME)
-}
+/// The instance extensions a loader lists, read with one `vkEnumerateInstanceExtensionProperties`:
+/// the loader scans its driver and layer manifests again at each such call, and asks each driver
+/// it finds, so the making of an instance reads the list once and answers every question of it
+/// from this.
+pub(crate) struct ListedExtensions(Vec<vk::ExtensionProperties>);
 
-/// Whether the loader lists the instance extension `name`.
-fn lists_instance_extension(entry: &ash::Entry, name: &CStr) -> Result<bool, Error> {
-    // SAFETY: a global command of a loaded entry.
-    let available =
-        unsafe { entry.enumerate_instance_extension_properties(None) }.map_err(vulkan)?;
-    Ok(available
-        .iter()
-        .any(|extension| extension.extension_name_as_c_str() == Ok(name)))
+impl ListedExtensions {
+    /// The instance extensions `entry`'s loader lists.
+    pub(crate) fn of(entry: &ash::Entry) -> Result<ListedExtensions, Error> {
+        // SAFETY: a global command of a loaded entry.
+        let listed =
+            unsafe { entry.enumerate_instance_extension_properties(None) }.map_err(vulkan)?;
+        Ok(ListedExtensions(listed))
+    }
+
+    /// Whether the loader listed the instance extension `name`.
+    pub(crate) fn lists(&self, name: &CStr) -> bool {
+        self.0
+            .iter()
+            .any(|extension| extension.extension_name_as_c_str() == Ok(name))
+    }
 }
 
 /// The instance API version `requested` asks for (`DeviceOptions::instance_api_version`):
@@ -742,22 +750,31 @@ pub(super) unsafe fn new_instance(
 
 /// The instance of `options`.
 fn create_instance(options: &DeviceOptions) -> Result<Arc<InstanceShared>, Error> {
-    let entry = open_loader(options.loader.as_deref())?;
-    let portability = lists_portability(&entry)?;
+    instance_of(open_loader(options.loader.as_deref())?, options)
+}
+
+/// The instance of `options` from the loader `entry`, which lists its instance extensions once
+/// ([`ListedExtensions`]).
+pub(crate) fn instance_of(
+    entry: ash::Entry,
+    options: &DeviceOptions,
+) -> Result<Arc<InstanceShared>, Error> {
+    let listed = ListedExtensions::of(&entry)?;
+    let portability = listed.lists(ash::khr::portability_enumeration::NAME);
     let mut extensions: Vec<&CStr> = Vec::new();
     if portability {
         extensions.push(ash::khr::portability_enumeration::NAME);
     }
     // The relay of a driver's command-buffer failures needs a messenger of its own
     // (`relay.rs`): debug utils wherever the instance lists them.
-    let relays = lists_instance_extension(&entry, ash::ext::debug_utils::NAME)?;
+    let relays = listed.lists(ash::ext::debug_utils::NAME);
     if options.messages.is_some() || relays {
         extensions.push(ash::ext::debug_utils::NAME);
     }
     // MoltenVK's Metal argument buffers, asked for where the instance can take layer settings,
     // ahead of the consumer's own, which win (`argument_buffers.rs`); and, where the relay hears
     // its failures, that it keep a device after a command buffer fails (`relay.rs`).
-    let asks = lists_instance_extension(&entry, ash::ext::layer_settings::NAME)?;
+    let asks = listed.lists(ash::ext::layer_settings::NAME);
     let chained_settings: Vec<LayerSetting> = asks
         .then(super::argument_buffers::setting)
         .into_iter()
@@ -2194,7 +2211,7 @@ impl Device {
         for physical in ranked(&instance, options)? {
             match device_of(&mut made[at], &instance, physical, options, &cache) {
                 Ok(device) => {
-                    keep_drivers_loaded(&instance.entry);
+                    keep_drivers_loaded(&instance);
                     return Ok(device);
                 }
                 Err(error) => {
@@ -2298,7 +2315,7 @@ impl Device {
             return Err(Error::NoDevice);
         };
         let device = device_of(&mut made[at], &instance, physical, options, &cache)?;
-        keep_drivers_loaded(&instance.entry);
+        keep_drivers_loaded(&instance);
         Ok(device)
     }
 
@@ -2327,7 +2344,7 @@ impl Device {
             }
         }
         if !devices.is_empty() {
-            keep_drivers_loaded(&instance.entry);
+            keep_drivers_loaded(&instance);
         }
         Ok(devices)
     }

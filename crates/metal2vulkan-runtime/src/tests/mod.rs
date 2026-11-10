@@ -291,6 +291,7 @@ mod linear_plan;
 mod linear_runs;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod linked_pipelines_shared;
+mod listed_extensions;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod mac_class;
 mod making;
