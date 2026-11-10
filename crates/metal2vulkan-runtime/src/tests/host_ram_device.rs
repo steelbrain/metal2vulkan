@@ -795,10 +795,20 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     let (made, refused) = dedicated_until_refused(&device, limit, at.page);
     let took = begun.elapsed();
     let full = device.work_counts();
-    // The runtime's pooled blocks live at the refusal that were not before the object.
-    let pooled =
-        |counts: &crate::WorkCounts| counts.memory_blocks_live + counts.empty_memory_blocks_live;
-    let own = pooled(&full).saturating_sub(pooled(&start));
+    // The pooled blocks made from just before the object on and not freed since (one
+    // `vkAllocateMemory` each), less one for each buffer made that lies in a pool rather than in
+    // a dedicated block (lavapipe's pools take these buffers): at most the runtime's own blocks
+    // live at the refusal, never one of the buffers'.
+    let pooled = |counts: &crate::WorkCounts| {
+        counts.pooled_memory_blocks_made - counts.pooled_memory_blocks_freed
+    };
+    let dedicated = full
+        .dedicated_memory_blocks_live
+        .saturating_sub(start.dedicated_memory_blocks_live);
+    let in_pools = (made.len() as u64).saturating_sub(dedicated);
+    let own = pooled(&full)
+        .saturating_sub(pooled(&start))
+        .saturating_sub(in_pools);
     eprintln!(
         "HOST-RAM: a limit of {limit}: the give-back held {GIVE_BACK_HELD:?}; {} buffers of \
          blocks of their own made at once of a room of {room} in {took:?}, beside {own} block(s) \
