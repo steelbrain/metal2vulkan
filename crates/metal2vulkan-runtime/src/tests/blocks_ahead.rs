@@ -248,12 +248,13 @@ fn a_growing_pool_of_exportable_buffers_gets_its_new_blocks_made_ahead() {
     );
 }
 
-/// A pool's first block is made alone: a pool that takes one block and stays within it keeps no
-/// block ahead (`Memory::growing`). The rest of a block's worth of small blocks once queued behind
-/// each such pool's first block (three of 16 MiB) waited unused and went after `KEPT_EMPTY_FOR`:
-/// on a Radeon 780M, nine blocks of 16 MiB a device in `tests::reclaim_submit_bench`'s small-blocks
-/// arms, made and freed for nothing. The pool host copies place in keeps its own blocks ahead
-/// from the device's first creation call, by design, and is left out.
+/// A pool's first block is made alone: a pool keeps blocks ahead only while it grows or is near
+/// its next block (`Memory::growing`), and a pool that takes one block and stays within it does
+/// neither. The rest of a block's worth of small blocks once queued behind each pool's first
+/// block (three of 16 MiB) waited unused and went after `KEPT_EMPTY_FOR`: on a Radeon 780M, nine
+/// blocks of 16 MiB a device in `tests::reclaim_submit_bench`'s small-blocks arms, made and freed
+/// for nothing. The pool host copies place in keeps its own blocks ahead from the device's first
+/// creation call, by design, and is left out.
 #[test]
 fn a_pool_s_first_block_is_made_alone() {
     let scratch = Scratch::new("first-alone");
@@ -262,22 +263,23 @@ fn a_pool_s_first_block_is_made_alone() {
     let mut held: Vec<Texture> = Vec::new();
     texture(&device, (256, 256), &mut held);
     makings_ended(&device);
-    let memory = crate::device::lock(&device.shared().memory);
+    let mut memory = crate::device::lock(&device.shared().memory);
     let host_copies = memory.host_copies_pool();
-    let all = memory.ahead_by_pool();
+    let all: Vec<_> = (memory.ahead_by_pool().into_iter())
+        .map(|(pool, bytes)| (pool, bytes, memory.grows(pool)))
+        .collect();
     drop(memory);
     println!(
-        "BLOCKS-AHEAD {}: after a 64 KiB buffer and a 256 KiB texture, kept ahead by pool {:?} \
-         bytes; host copies' pool {host_copies:?}",
+        "BLOCKS-AHEAD {}: after a 64 KiB buffer and a 256 KiB texture, kept ahead by pool, with \
+         whether it grows {all:?}; host copies' pool {host_copies:?}",
         device.name(),
-        all,
     );
-    let kept: Vec<_> = (all.into_iter())
-        .filter(|&(pool, bytes)| bytes > 0 && Some(pool) != host_copies)
+    let idle: Vec<_> = (all.into_iter())
+        .filter(|&(pool, bytes, grows)| bytes > 0 && !grows && Some(pool) != host_copies)
         .collect();
     assert!(
-        kept.is_empty(),
-        "pools that took one block kept blocks ahead: {kept:?} bytes"
+        idle.is_empty(),
+        "pools that neither grow nor near their next block kept blocks ahead: {idle:?}"
     );
     drop(buffer.unwrap());
 }

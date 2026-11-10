@@ -857,10 +857,10 @@ pub(super) struct Pool<T> {
     /// The pooled blocks added and freed so far ([`Pool::turnover`]).
     made: u64,
     freed: u64,
-    /// Their bytes, for the crate's device tests ([`Pool::turnover_bytes`]).
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    /// Their bytes, for the reclaim bench ([`Pool::turnover_bytes`]).
+    #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     made_bytes: u64,
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     freed_bytes: u64,
     /// The bytes of its live blocks with nothing placed in them: the empty blocks it keeps
     /// ([`Pool::kept_bytes`]).
@@ -917,9 +917,9 @@ impl<T> Default for Pool<T> {
             visited: 0,
             made: 0,
             freed: 0,
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            #[cfg(all(test, m2v_gpu, target_os = "linux"))]
             made_bytes: 0,
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            #[cfg(all(test, m2v_gpu, target_os = "linux"))]
             freed_bytes: 0,
             kept_bytes: 0,
             grew: None,
@@ -1050,7 +1050,7 @@ impl<T> Pool<T> {
             placed_to: used,
         });
         self.made += u64::from(!dedicated);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         {
             self.made_bytes += if dedicated { 0 } else { size };
         }
@@ -1249,7 +1249,7 @@ impl<T> Pool<T> {
     fn take(&mut self, index: usize) -> Option<T> {
         let block = self.blocks.get_mut(index)?.take()?;
         self.freed += u64::from(!block.dedicated);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
         {
             self.freed_bytes += if block.dedicated { 0 } else { block.size };
         }
@@ -1265,8 +1265,8 @@ impl<T> Pool<T> {
         (self.made, self.freed)
     }
 
-    /// The bytes of the pooled blocks added and freed so far, for the crate's device tests.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    /// The bytes of the pooled blocks added and freed so far, for the reclaim bench.
+    #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     pub(super) fn turnover_bytes(&self) -> (u64, u64) {
         (self.made_bytes, self.freed_bytes)
     }
@@ -2026,7 +2026,7 @@ pub(super) struct Memory {
     #[cfg(test)]
     pub(crate) in_place_bytes: std::collections::BTreeMap<u64, u64>,
     /// The bytes of the blocks made ahead and freed unused ([`AheadBlocks::unused`]).
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     unused_bytes: u64,
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
@@ -2217,7 +2217,7 @@ impl Memory {
             longest_making: Duration::ZERO,
             #[cfg(test)]
             in_place_bytes: std::collections::BTreeMap::new(),
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            #[cfg(all(test, m2v_gpu, target_os = "linux"))]
             unused_bytes: 0,
         }
     }
@@ -3051,6 +3051,13 @@ impl Memory {
             .collect()
     }
 
+    /// Whether `pool` keeps blocks made ahead now ([`Memory::growing`]), for the crate's device
+    /// tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn grows(&mut self, pool: (Holds, u32)) -> bool {
+        self.growing(pool)
+    }
+
     /// The pool host copies place in, where it was found and the device copies color textures on
     /// the host ([`Memory::host_copy_pool`]), for the crate's device tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -3361,7 +3368,7 @@ impl Memory {
             }
             for block in self.readying.swap_remove(at).stop() {
                 self.ahead.unused += 1;
-                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                #[cfg(all(test, m2v_gpu, target_os = "linux"))]
                 {
                     self.unused_bytes += block.size;
                 }
@@ -3407,8 +3414,8 @@ impl Memory {
     }
 
     /// The bytes of [`Memory::turnover`]'s blocks, and of those of them made ahead and freed
-    /// unused, for the crate's device tests.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    /// unused, for the reclaim bench (`tests::reclaim_submit_bench`).
+    #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     pub(crate) fn turnover_bytes(&self) -> (u64, u64, u64) {
         let unused = self.unused_bytes;
         let (made, freed) = (self.pools.iter().map(Pool::turnover_bytes))
