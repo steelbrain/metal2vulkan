@@ -314,7 +314,7 @@ impl Drop for TableBinder {
 /// A variant's first command binding the sampler table of `capacity` elements that maps cubic
 /// states where `cubic` (`tests/sampler_table_binders.rs`): the device's table of the kind made,
 /// its binder taken ([`DeviceHeaps::bind_kind`]) and its notes announced.
-#[cfg(test)]
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn bind_kind_for_tests(
     device: &Device,
     capacity: u32,
