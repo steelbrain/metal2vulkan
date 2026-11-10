@@ -1430,9 +1430,12 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
     let seen = {
         // The default completion, its merge check held, so every run holds the group, as in
         // [`behind_another_queue_s_handler`].
+        // Its two queues take the device's queue plan (`at_plan`): one `VkQueue` where the device
+        // has one.
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Grouped;
             options.assume_submissions_merge = true;
+            at_plan(options)
         })
         .unwrap();
         let merging = merges(&device);
@@ -1562,8 +1565,9 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
 /// completes with its own fill. `Y` holds its wait on the host (a shared event's,
 /// `event_timeline.rs`), so it neither sends the group nor waits past that turn; a group kept
 /// past it would still be held when `B` completed. `A` and `B` are made longer until `A` outlasts
-/// `Y`'s take-in, as [`behind_while_a_runs`] does. On a device whose queues take two `VkQueue`s
-/// no group holds `X` behind work of `Y`'s `VkQueue`, and only the completions are checked.
+/// `Y`'s take-in, as [`behind_while_a_runs`] does. The queues take the device's queue plan: on a
+/// device whose queues take two `VkQueue`s no group holds `X` behind work of `Y`'s `VkQueue`, and
+/// only the completions are checked.
 #[test]
 fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_turn() {
     let mut stretch = 1;
@@ -1579,6 +1583,10 @@ fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_tur
         stretch *= 2;
         eprintln!("GROUPED-KEPT-SIGNAL: A ended before Y was taken in: A {stretch} times as long");
     };
+    assert!(
+        seen.y_after_x.is_some(),
+        "Y completed before X, whose signal it waits for: {seen:?}"
+    );
     if seen.shared {
         assert!(
             seen.a_ran,
@@ -1590,5 +1598,7 @@ fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_tur
             Some(true),
             "X's group was not sent at A's completion turn, while B ran: {seen:?}"
         );
+        // `group_ends`' second count: a group a waiting head sent.
+        assert_eq!(seen.ends[1], 0, "Y's wait sent X's group: {seen:?}");
     }
 }

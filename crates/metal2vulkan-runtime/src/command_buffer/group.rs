@@ -64,19 +64,23 @@
 //!   less (30 a frame against 24, at 67 command buffers a frame committed 1 ms apart behind 1.3 ms
 //!   of GPU work each) and left the GPU as idle (0.62 ms a frame with either).
 //!   It goes then, or once it fills, a batch that cannot join sends it, a head waits for the GPU
-//!   (at a gate, or for a signal to land, which may be the group's), or a thread waits for one of
-//!   its command buffers' completion (`CommandBuffer::wait_until_completed` marks it and wakes the
-//!   scheduler: [`CommandBufferShared::waits_for_completion`]). Nor is it kept where the thread
-//!   runs, once the pass ends, the submission handlers of a command buffer of another logical
-//!   queue (a batch held, or one submitted: `scheduler::holds_back_another_queue`): it goes
-//!   first, so no handler that waits for another queue's work holds that work back, as Metal
-//!   schedules one queue's command buffers whatever another queue's handler does (probe
+//!   (at a gate, or its checks for a signal to land, which may be the group's), or a thread waits
+//!   for one of its command buffers' completion (`CommandBuffer::wait_until_completed` marks it
+//!   and wakes the scheduler: [`CommandBufferShared::waits_for_completion`]). Nor is it kept
+//!   where the thread runs, once the pass ends, the submission handlers of a command buffer of
+//!   another logical queue (a batch held, or one submitted: `scheduler::holds_back_another_queue`):
+//!   it goes first, so no handler that waits for another queue's work holds that work back, as
+//!   Metal schedules one queue's command buffers whatever another queue's handler does (probe
 //!   `cross_queue_handler_waits`). The handlers of the batches' own queue keep it held: Metal
 //!   runs one queue's handlers one at a time, so a handler there that waits for a completed
 //!   handler of its own queue never sees it either (the probe's `scheduled-one-queue`). A group
 //!   whose batch ends a command buffer with a switch of storage forms riding on it is never kept:
 //!   the switch settles by the submission's outcome, before the command buffer is `Scheduled`.
-//!   A kept batch is seen
+//!   A head of another queue whose wait is for a value only a batch the group holds signals
+//!   (`HeldFor::EventValue`: no submitted signal reaches it yet) does not send it: it is held
+//!   until the group goes, at the completion turn that leaves one submission in flight at the
+//!   latest, and is then submitted with its wait on the `VkQueue`
+//!   (`runtime_lane::grouped_submissions`). A kept batch is seen
 //!   complete late by its group's later batches' GPU time, as any member, and where the one
 //!   submission left in flight ends before the group reaches the GPU, by that gap besides: at most
 //!   a completion turn's reaction and the group's `vkQueueSubmit`. Counted:
