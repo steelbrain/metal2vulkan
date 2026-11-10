@@ -262,9 +262,10 @@ fn a_pool_s_first_block_is_made_alone() {
 /// The textures of a pool of images pack as many to a block as their texels' bytes fill: four
 /// `RGBA8Unorm` textures of 2048 x 2048 (16 MiB of texels each, a quarter of `memory::BLOCK_BYTES`)
 /// to a block, whatever metadata the driver's image carries past its texels within the block's
-/// sixteenth besides (`memory::IMAGE_BLOCK_SLACK`). The run makes [`PACKED`] of them, one at a
-/// time, and counts the pool's blocks of images, printing each image's bytes and alignment as the
-/// driver asked them.
+/// sixteenth besides (`memory::IMAGE_BLOCK_SLACK`): RADV on a Radeon 780M and Iris Xe's driver
+/// take 16 MiB and 64 KiB for each at an alignment of 64 KiB, three to a block of 64 MiB. The run
+/// makes [`PACKED`] of them, one at a time, and counts the pool's blocks of images, printing each
+/// image's bytes and alignment as the driver asked them.
 #[test]
 fn a_block_of_images_holds_four_textures_of_a_quarter_block_each() {
     let scratch = Scratch::new("pack");

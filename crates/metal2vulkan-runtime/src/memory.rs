@@ -200,8 +200,10 @@ const FILL_SAVED_BELOW: Duration = Duration::from_millis(1);
 /// What a pooled block of images holds past [`BLOCK_BYTES`], as a fraction of it: a sixteenth
 /// ([`Memory::pooled_bytes`]). A driver's image takes more than its texels: RADV on a Radeon 780M
 /// and Iris Xe's driver place a `Private` `RGBA8Unorm` texture of 1024 x 1024 (4 MiB of texels)
-/// in 4 MiB and 16 KiB, at an alignment of 64 KiB. With a sixteenth besides, a block holds four
-/// images of a quarter of a block whose metadata and alignment take up to 1 MiB each.
+/// in 4 MiB and 16 KiB, and one of 2048 x 2048 (16 MiB) in 16 MiB and 64 KiB, at an alignment of
+/// 64 KiB, so that a block of 64 MiB held three of the latter, not four. With a sixteenth
+/// besides, a block holds four images of a quarter of a block whose metadata and alignment take
+/// up to 1 MiB each.
 pub(super) const IMAGE_BLOCK_SLACK: u64 = 16;
 
 /// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget

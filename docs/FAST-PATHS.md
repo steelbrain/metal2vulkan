@@ -1078,8 +1078,10 @@ driver's. Each is open work.
   row above), unless the next row's fill left those pages at hand. Pooled blocks are 64 MiB on
   every device, and a block of images 68 MiB: a sixteenth besides (`IMAGE_BLOCK_SLACK`), since a
   driver's image takes more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a
-  `Private` `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, at an alignment of 64 KiB), so
-  that four images of a quarter of a block fit in one. On a Radeon 780M (RADV PHOENIX, Mesa
+  `Private` `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, and one of 2048x2048 in 16 MiB
+  and 64 KiB, at an alignment of 64 KiB), so that four images of a quarter of a block fit in one:
+  a block of 64 MiB held three such 2048x2048 textures on both, one of 68 MiB holds four
+  (`tests::blocks_ahead`). On a Radeon 780M (RADV PHOENIX, Mesa
   26.2.6), the kernel's page pools emptied before each run (through debugfs, the measurement's
   method alone: with freed pages in them a block of 16 to 64 MiB took 0.1 to 0.3 ms), a `Private`
   texture made every 16.7 ms beside a command buffer committed about every millisecond
@@ -1133,8 +1135,9 @@ driver's. Each is open work.
   block's own, so that a block's making took 45 to 74% longer on the quiet host (about 13.7 ms
   against 9.3 ms) and 33 to 96% longer on the fragmented one. The plain making it replaces ran
   90 to 96% on a CPU; how much of the fill's time is on a CPU was not measured apart. Every other
-  device makes its plain blocks with no fill: lavapipe, ANV on an Iris Xe and NVIDIA's driver
-  have no such fact. No switch: no answer of Metal's changes. Not announced.
+  device makes its plain blocks with no fill, its driver identity without the fact
+  (`tests::block_fills`: lavapipe and ANV on an Iris Xe fill none). No switch: no answer of
+  Metal's changes. Not announced.
 
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
