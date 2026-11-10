@@ -455,6 +455,7 @@ assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIN_LINEAR	pub const MIN_
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER	pub const MIP_FILTER: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER_SHIFT	pub const MIP_FILTER_SHIFT: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::PIXEL_COORDINATES	pub const PIXEL_COORDINATES: u32
+assoc-const	metal2vulkan::metal::sampler::SamplerWord::READ_STATE	pub const READ_STATE: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::REDUCTION	pub const REDUCTION: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::REDUCTION_SHIFT	pub const REDUCTION_SHIFT: u32
 assoc-const	metal2vulkan::pipeline::AccessSet::READ	pub const READ: AccessSet
@@ -935,6 +936,7 @@ assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIN_LINEAR	1 <<1
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER	0b11 <<Self::MIP_FILTER_SHIFT
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER_SHIFT	3
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::PIXEL_COORDINATES	1 <<0
+assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::READ_STATE	Self::MIP_FILTER | Self::ADDRESS[0] | Self::ADDRESS[1] | Self::ADDRESS[2] | Self::BORDER
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::REDUCTION	0b11 <<Self::REDUCTION_SHIFT
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::REDUCTION_SHIFT	19
 assoc-const-value	metal2vulkan::pipeline::AccessSet::READ	AccessSet
@@ -14381,6 +14383,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::AmplificationDraws	AmplificationDra
 variant	metal2vulkan::pipeline::RuntimeFact::AnisotropicSampler	AnisotropicSampler { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::BaseVertexInstance	BaseVertexInstance
 variant	metal2vulkan::pipeline::RuntimeFact::BicubicTexels	BicubicTexels { slot: SlotRef }
+variant	metal2vulkan::pipeline::RuntimeFact::BorderTexels	BorderTexels { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::BufferRangeLimit	BufferRangeLimit { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::CallStackDepth	CallStackDepth { depth: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::ConstantLanes	ConstantLanes { slot: SlotRef }
@@ -14502,6 +14505,7 @@ variant	metal2vulkan::pipeline::SnapshotRefusal::UndefinedOperand	UndefinedOpera
 variant	metal2vulkan::pipeline::SnapshotRefusal::WritesMemory	WritesMemory
 variant	metal2vulkan::pipeline::SpecKey::AmplificationCount	AmplificationCount
 variant	metal2vulkan::pipeline::SpecKey::BicubicTexels	BicubicTexels(SlotRef)
+variant	metal2vulkan::pipeline::SpecKey::BorderTexels	BorderTexels(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::BoundSamplerWord	BoundSamplerWord(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::BoundTexelFormat	BoundTexelFormat(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::ConstantLanes	ConstantLanes(SlotRef)
