@@ -494,7 +494,7 @@ fn rgbx_passes_and_mipmaps_are_refused() {
 /// `half-texel-conversion`.
 #[test]
 fn rgbx_half_samples_are_metals() {
-    use metal2vulkan::device::DriverDeviation;
+    use metal2vulkan::error::DriverDeviation;
     use metal2vulkan::metal::{
         SamplerAddressMode as Mode, SamplerBorderColor, SamplerMinMagFilter,
     };
