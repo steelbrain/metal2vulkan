@@ -8,16 +8,16 @@ target triple = "air64_v28-apple-macosx26.0.0"
 define <4 x float> @rog_buffer(<4 x float> noundef %0, ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
   %4 = extractelement <4 x float> %0, i64 1
   %5 = tail call i32 @air.convert.u.i32.f.f32(float %4) #11
-  %6 = load i32, ptr addrspace(2) %2, align 4, !tbaa !43, !alias.scope !47, !noalias !50
+  %6 = load i32, ptr addrspace(2) %2, align 4, !tbaa !42, !alias.scope !46, !noalias !49
   %7 = mul i32 %6, %5
   %8 = extractelement <4 x float> %0, i64 0
   %9 = tail call i32 @air.convert.u.i32.f.f32(float %8) #11
   %10 = add i32 %7, %9
   %11 = zext i32 %10 to i64
   %12 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %11
-  %13 = load float, ptr addrspace(1) %12, align 4, !tbaa !52, !alias.scope !50, !noalias !47
+  %13 = load float, ptr addrspace(1) %12, align 4, !tbaa !51, !alias.scope !49, !noalias !46
   %14 = fadd fast float %13, 1.000000e+00
-  store float %14, ptr addrspace(1) %12, align 4, !tbaa !52, !alias.scope !50, !noalias !47
+  store float %14, ptr addrspace(1) %12, align 4, !tbaa !51, !alias.scope !49, !noalias !46
   %15 = insertelement <4 x float> <float poison, float 0.000000e+00, float 0.000000e+00, float 1.000000e+00>, float %14, i64 0
   ret <4 x float> %15
 }
@@ -33,7 +33,7 @@ define <4 x float> @rog_texture(<4 x float> noundef %0, ptr addrspace(1) %1) loc
   %6 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) %5, <2 x i32> %4, <2 x i32> zeroinitializer, i32 0, i32 3) #13
   %7 = extractvalue { <4 x float>, i8 } %6, 0
   %8 = fadd fast <4 x float> %7, splat (float 2.500000e-01)
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %4, <4 x float> %8, i32 0, i32 3) #14, !alias.scope !54
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %4, <4 x float> %8, i32 0, i32 3) #14, !alias.scope !53
   ret <4 x float> %8
 }
 
@@ -48,7 +48,7 @@ define <{ <4 x float> }> @rog_output(<4 x float> noundef %0) local_unnamed_addr 
 }
 
 ; Function Attrs: mustprogress nounwind willreturn
-define <4 x float> @rog_discard(<4 x float> %0, <4 x float> returned %1, ptr addrspace(1) noundef readnone captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #2 {
+define <4 x float> @rog_discard(<4 x float> %0, <4 x float> %1, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #2 {
   %4 = extractelement <4 x float> %1, i64 3
   %5 = fcmp fast olt float %4, 5.000000e-01
   br i1 %5, label %6, label %7
@@ -58,7 +58,11 @@ define <4 x float> @rog_discard(<4 x float> %0, <4 x float> returned %1, ptr add
   br label %7
 
 7:                                                ; preds = %6, %3
-  ret <4 x float> %1
+  %8 = load float, ptr addrspace(1) %2, align 4, !tbaa !51, !alias.scope !56
+  %9 = insertelement <4 x float> poison, float %8, i64 0
+  %10 = shufflevector <4 x float> %9, <4 x float> poison, <4 x i32> zeroinitializer
+  %11 = fmul fast <4 x float> %10, %1
+  ret <4 x float> %11
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind memory(argmem: readwrite)
@@ -67,14 +71,14 @@ define <4 x float> @rog_loop(<4 x float> noundef %0, ptr addrspace(1) noundef ca
   %5 = tail call i32 @air.convert.u.i32.f.f32(float %4) #11
   %6 = zext i32 %5 to i64
   %7 = getelementptr inbounds float, ptr addrspace(1) %1, i64 %6
-  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !52, !alias.scope !57, !noalias !60
-  %9 = load i32, ptr addrspace(2) %2, align 4, !tbaa !43, !alias.scope !60, !noalias !57
+  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !51, !alias.scope !59, !noalias !62
+  %9 = load i32, ptr addrspace(2) %2, align 4, !tbaa !42, !alias.scope !62, !noalias !59
   %10 = icmp eq i32 %9, 0
   br i1 %10, label %11, label %15
 
 11:                                               ; preds = %15, %3
   %12 = phi float [ %8, %3 ], [ %19, %15 ]
-  store float %12, ptr addrspace(1) %7, align 4, !tbaa !52, !alias.scope !57, !noalias !60
+  store float %12, ptr addrspace(1) %7, align 4, !tbaa !51, !alias.scope !59, !noalias !62
   %13 = insertelement <4 x float> poison, float %12, i64 0
   %14 = shufflevector <4 x float> %13, <4 x float> poison, <4 x i32> zeroinitializer
   ret <4 x float> %14
@@ -86,7 +90,7 @@ define <4 x float> @rog_loop(<4 x float> noundef %0, ptr addrspace(1) noundef ca
   %19 = fadd fast float %18, 1.000000e+00
   %20 = add nuw i32 %16, 1
   %21 = icmp eq i32 %20, %9
-  br i1 %21, label %11, label %15, !llvm.loop !62
+  br i1 %21, label %11, label %15, !llvm.loop !64
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(argmem: readwrite)
@@ -97,9 +101,9 @@ define <4 x float> @rog_sample(<4 x float> noundef %0, i32 noundef %1, ptr addrs
   %7 = add i32 %6, %1
   %8 = zext i32 %7 to i64
   %9 = getelementptr inbounds float, ptr addrspace(1) %2, i64 %8
-  %10 = load float, ptr addrspace(1) %9, align 4, !tbaa !52, !alias.scope !64
+  %10 = load float, ptr addrspace(1) %9, align 4, !tbaa !51, !alias.scope !66
   %11 = fadd fast float %10, 1.000000e+00
-  store float %11, ptr addrspace(1) %9, align 4, !tbaa !52, !alias.scope !64
+  store float %11, ptr addrspace(1) %9, align 4, !tbaa !51, !alias.scope !66
   %12 = insertelement <4 x float> poison, float %11, i64 0
   %13 = shufflevector <4 x float> %12, <4 x float> poison, <4 x i32> zeroinitializer
   ret <4 x float> %13
@@ -157,13 +161,13 @@ attributes #15 = { nounwind willreturn }
 attributes #16 = { convergent nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.fragment = !{!9, !16, !19, !23, !28, !31, !35}
-!air.compile_options = !{!37, !38, !39}
-!llvm.ident = !{!40}
-!air.version = !{!41}
-!air.language_version = !{!42}
+!air.fragment = !{!9, !16, !19, !23, !28, !31, !34}
+!air.compile_options = !{!36, !37, !38}
+!llvm.ident = !{!39}
+!air.version = !{!40}
+!air.language_version = !{!41}
 
-!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 26, i32 5]}
+!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
 !2 = !{i32 7, !"frame-pointer", i32 2}
 !3 = !{i32 7, !"air.max_device_buffers", i32 31}
@@ -190,43 +194,45 @@ attributes #16 = { convergent nounwind willreturn }
 !24 = !{!25, !26, !27}
 !25 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"position", !"air.arg_unused"}
 !26 = !{i32 1, !"air.fragment_input", !"generated(5colorDv4_f)", !"air.center", !"air.perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
-!27 = !{i32 2, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.raster_order_group", i32 0, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"acc", !"air.arg_unused"}
+!27 = !{i32 2, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.raster_order_group", i32 0, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"acc"}
 !28 = !{ptr @rog_loop, !10, !29}
 !29 = !{!13, !14, !30}
 !30 = !{i32 2, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"n"}
 !31 = !{ptr @rog_sample, !10, !32}
-!32 = !{!13, !33, !34}
+!32 = !{!13, !33, !27}
 !33 = !{i32 1, !"air.sample_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"sample"}
-!34 = !{i32 2, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.raster_order_group", i32 0, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"acc"}
-!35 = !{ptr @discard_then_simd, !10, !36}
-!36 = !{!25, !26}
-!37 = !{!"air.compile.denorms_disable"}
-!38 = !{!"air.compile.fast_math_enable"}
-!39 = !{!"air.compile.framebuffer_fetch_enable"}
-!40 = !{!"Apple metal version 32023.883 (metalfe-32023.883)"}
-!41 = !{i32 2, i32 8, i32 0}
-!42 = !{!"Metal", i32 4, i32 0, i32 0}
-!43 = !{!44, !44, i64 0}
-!44 = !{!"int", !45, i64 0}
-!45 = !{!"omnipotent char", !46, i64 0}
-!46 = !{!"Simple C++ TBAA"}
-!47 = !{!48}
-!48 = distinct !{!48, !49, !"air-alias-scope-arg(2)"}
-!49 = distinct !{!49, !"air-alias-scopes(rog_buffer)"}
-!50 = !{!51}
-!51 = distinct !{!51, !49, !"air-alias-scope-arg(1)"}
-!52 = !{!53, !53, i64 0}
-!53 = !{!"float", !45, i64 0}
-!54 = !{!55}
-!55 = distinct !{!55, !56, !"air-alias-scope-textures"}
-!56 = distinct !{!56, !"air-alias-scopes(rog_texture)"}
-!57 = !{!58}
-!58 = distinct !{!58, !59, !"air-alias-scope-arg(1)"}
-!59 = distinct !{!59, !"air-alias-scopes(rog_loop)"}
-!60 = !{!61}
-!61 = distinct !{!61, !59, !"air-alias-scope-arg(2)"}
-!62 = distinct !{!62, !63}
-!63 = !{!"llvm.loop.mustprogress"}
-!64 = !{!65}
-!65 = distinct !{!65, !66, !"air-alias-scope-arg(2)"}
-!66 = distinct !{!66, !"air-alias-scopes(rog_sample)"}
+!34 = !{ptr @discard_then_simd, !10, !35}
+!35 = !{!25, !26}
+!36 = !{!"air.compile.denorms_disable"}
+!37 = !{!"air.compile.fast_math_enable"}
+!38 = !{!"air.compile.framebuffer_fetch_enable"}
+!39 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!40 = !{i32 2, i32 8, i32 0}
+!41 = !{!"Metal", i32 4, i32 0, i32 0}
+!42 = !{!43, !43, i64 0}
+!43 = !{!"int", !44, i64 0}
+!44 = !{!"omnipotent char", !45, i64 0}
+!45 = !{!"Simple C++ TBAA"}
+!46 = !{!47}
+!47 = distinct !{!47, !48, !"air-alias-scope-arg(2)"}
+!48 = distinct !{!48, !"air-alias-scopes(rog_buffer)"}
+!49 = !{!50}
+!50 = distinct !{!50, !48, !"air-alias-scope-arg(1)"}
+!51 = !{!52, !52, i64 0}
+!52 = !{!"float", !44, i64 0}
+!53 = !{!54}
+!54 = distinct !{!54, !55, !"air-alias-scope-textures"}
+!55 = distinct !{!55, !"air-alias-scopes(rog_texture)"}
+!56 = !{!57}
+!57 = distinct !{!57, !58, !"air-alias-scope-arg(2)"}
+!58 = distinct !{!58, !"air-alias-scopes(rog_discard)"}
+!59 = !{!60}
+!60 = distinct !{!60, !61, !"air-alias-scope-arg(1)"}
+!61 = distinct !{!61, !"air-alias-scopes(rog_loop)"}
+!62 = !{!63}
+!63 = distinct !{!63, !61, !"air-alias-scope-arg(2)"}
+!64 = distinct !{!64, !65}
+!65 = !{!"llvm.loop.mustprogress"}
+!66 = !{!67}
+!67 = distinct !{!67, !68, !"air-alias-scope-arg(2)"}
+!68 = distinct !{!68, !"air-alias-scopes(rog_sample)"}
