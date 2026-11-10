@@ -1,7 +1,7 @@
-// Owned fixture, written for this project: `sfold_fast` compiled without fast math, so no float
-// operation carries a fast-math flag. A product by a zero keeps the sign IEEE arithmetic gives it,
-// and a NaN operand's answer is what Metal makes of the same operations with no flag to license
-// a rewrite.
+// Owned fixture, written for this project: `sfold_fast`'s rows compiled without fast math, so no
+// float operation carries a flag, with the additions, subtractions, products and quotients of a
+// NaN constant and a value only the run knows in either place. A product by a zero keeps the sign
+// IEEE arithmetic gives it.
 // metal-fast-math: off
 #include <metal_stdlib>
 using namespace metal;
@@ -15,7 +15,7 @@ constant half h_negzero [[function_constant(5)]];
 constant half h_nan [[function_constant(6)]];
 
 struct Rows {
-	float4 f[15];
+	float4 f[18];
 	half4 h[7];
 };
 
@@ -23,6 +23,7 @@ kernel void sfold(device const float4 *in [[buffer(0)]],
                   device Rows *out [[buffer(1)]],
                   uint gid [[thread_position_in_grid]]) {
 	float4 x = in[gid];
+	half4 y = half4(x);
 	device Rows &o = out[gid];
 	o.f[0] = x * k_zero;
 	o.f[1] = k_negzero * x;
@@ -39,12 +40,14 @@ kernel void sfold(device const float4 *in [[buffer(0)]],
 	o.f[12] = float4(k_qnan) + float4(k_snan);
 	o.f[13] = float4(k_snan) * float4(k_qnan);
 	o.f[14] = float4(k_qnan) * float4(k_zero);
-	half4 y = half4(x);
+	o.f[15] = float4(k_snan) - float4(k_qnan);
+	o.f[16] = float4(k_qnan) / float4(k_snan);
+	o.f[17] = fma(float4(k_snan), float4(k_qnan), float4(k_qnan));
 	o.h[0] = y * h_zero;
 	o.h[1] = h_negzero * y;
 	o.h[2] = y + h_nan;
 	o.h[3] = h_nan - y;
 	o.h[4] = h_nan / y;
-	o.h[5] = fma(y, y, half4(h_nan));
-	o.h[6] = y * h_nan;
+	o.h[5] = y * h_nan;
+	o.h[6] = fma(y, y, half4(h_nan));
 }
