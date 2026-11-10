@@ -1396,3 +1396,199 @@ fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
         );
     }
 }
+
+/// What [`behind_a_kept_signal`] saw.
+#[derive(Debug)]
+struct KeptSignalWait {
+    /// The device's name.
+    device: String,
+    merging: bool,
+    /// Whether the two queues submit to one `VkQueue`.
+    shared: bool,
+    /// The groups kept from `X`'s commit to its scheduling.
+    kept: u64,
+    /// Whether `A` still ran once `Y` was taken in.
+    a_ran: bool,
+    /// Whether `X`'s group went while `B` still ran (at `A`'s completion turn); `None` where no
+    /// group went before `B` completed and the wait gave up.
+    sent_while_b_ran: Option<bool>,
+    /// From `X`'s completed handler to `Y`'s.
+    y_after_x: Option<std::time::Duration>,
+    /// The groups from `Y`'s take-in by what sent them ([`group_ends`]).
+    ends: [u64; 7],
+}
+
+/// Two long command buffers `A` then `B` on one queue, of `stretch` times the fills the
+/// calibration takes; `X` behind them on that queue, which fills a buffer and signals a shared
+/// event to 1; then `Y` on another queue, unchecked, which waits for that value and fills
+/// another. Where the queues share one `VkQueue` on a driver that merges, `X` is held and kept
+/// while `A` and `B` run, and `Y`, waiting on the host for a signal the kept group carries
+/// (`event_timeline.rs`), sends no group.
+fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let seen = {
+        // The default completion, its merge check held, so every run holds the group, as in
+        // [`behind_another_queue_s_handler`].
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.completion = CompletionPolicy::Grouped;
+            options.assume_submissions_merge = true;
+        })
+        .unwrap();
+        let merging = merges(&device);
+        let (first, second) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let large = device
+            .new_buffer(RUNNING_FILL, ResourceOptions::private())
+            .unwrap();
+        let buffers: Vec<Buffer> = (0..2)
+            .map(|_| device.new_buffer(BYTES, ResourceOptions::shared()).unwrap())
+            .collect();
+        let event = device.new_shared_event().unwrap();
+        // The second queue's first command buffer, and the device's first work, before `A`.
+        let warm = second.command_buffer().unwrap();
+        let mut blit = warm.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffers[1], 0..BYTES, 0).unwrap();
+        blit.end_encoding().unwrap();
+        warm.commit().unwrap();
+        warm.wait_until_completed_for(WAIT).unwrap();
+        let fills = running_fills(&first, &large, std::time::Duration::from_millis(100)) * stretch;
+        let long = || {
+            let command_buffer = first.command_buffer().unwrap();
+            let mut blit = command_buffer.blit_command_encoder().unwrap();
+            for at in 0..fills {
+                blit.fill_buffer(&large, 0..RUNNING_FILL, at as u8).unwrap();
+            }
+            blit.end_encoding().unwrap();
+            command_buffer
+        };
+        let completed_at = |command_buffer: &CommandBuffer| {
+            let at = Arc::new(Mutex::new(None));
+            let seen = Arc::clone(&at);
+            command_buffer
+                .add_completed_handler(Box::new(move |_: &CommandBuffer| {
+                    *seen.lock().unwrap() = Some(std::time::Instant::now());
+                }))
+                .unwrap();
+            at
+        };
+        // `A`, then `B` behind it, each submitted as it is taken in: two submissions in flight.
+        let running = long();
+        running.commit().unwrap();
+        taken_in(&device);
+        let behind = long();
+        behind.commit().unwrap();
+        taken_in(&device);
+        behind.wait_until_scheduled().unwrap();
+        // `X`, held behind `A` and `B` where the driver merges.
+        let before_x = device.work_counts();
+        let x = first.command_buffer().unwrap();
+        let mut blit = x.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffers[0], 0..BYTES, 1).unwrap();
+        blit.end_encoding().unwrap();
+        x.encode_signal_event(EventRef::from(&event), 1).unwrap();
+        let x_completed = completed_at(&x);
+        x.commit().unwrap();
+        taken_in(&device);
+        x.wait_until_scheduled().unwrap();
+        let kept = device.work_counts().groups_kept_pending - before_x.groups_kept_pending;
+        // `Y`, on the other queue, unchecked, waiting for `X`'s signal.
+        let y = second.command_buffer().unwrap();
+        y.encode_wait_for_event(EventRef::from(&event), 1).unwrap();
+        let mut blit = y.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffers[1], 0..BYTES, 2).unwrap();
+        blit.end_encoding().unwrap();
+        let y_completed = completed_at(&y);
+        y.commit().unwrap();
+        taken_in(&device);
+        let taken = device.work_counts();
+        let a_ran = running.status() != CommandBufferStatus::Completed;
+        let shared = first.vk_queue_sharing().0 == second.vk_queue_sharing().0;
+        // The first group to go after `Y`'s take-in is `X`'s: read whether `B` still ran once it
+        // had gone (the counts read first, then `B`'s status).
+        let gone = |counts: &WorkCounts| group_ends(&taken, counts).iter().sum::<u64>() > 0;
+        let deadline = std::time::Instant::now() + WAIT;
+        let sent_while_b_ran = loop {
+            let counts = device.work_counts();
+            let b_done = behind.status() == CommandBufferStatus::Completed;
+            if gone(&counts) {
+                break Some(!b_done);
+            }
+            if b_done || std::time::Instant::now() >= deadline {
+                break gone(&device.work_counts()).then_some(false);
+            }
+            std::thread::yield_now();
+        };
+        for (name, command_buffer) in [("A", &running), ("B", &behind), ("X", &x), ("Y", &y)] {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(
+                command_buffer.status(),
+                CommandBufferStatus::Completed,
+                "{name}"
+            );
+        }
+        for (at, buffer) in buffers.iter().enumerate() {
+            let wrong = (bytes_of(buffer).iter())
+                .filter(|&&byte| byte != at as u8 + 1)
+                .count();
+            assert_eq!(wrong, 0, "buffer {at}: bytes off its fill");
+        }
+        let y_after_x = (*y_completed.lock().unwrap())
+            .zip(*x_completed.lock().unwrap())
+            .and_then(|(y, x)| y.checked_duration_since(x));
+        KeptSignalWait {
+            device: device.name().to_owned(),
+            merging,
+            shared,
+            kept,
+            a_ran,
+            sent_while_b_ran,
+            y_after_x,
+            ends: group_ends(&taken, &device.work_counts()),
+        }
+    };
+    layer_reported_nothing_at_all(&messages);
+    eprintln!("GROUPED-KEPT-SIGNAL on {}: {seen:?}", seen.device);
+    seen
+}
+
+/// An unchecked command buffer `Y` of one queue that waits for a shared event's value a group
+/// kept on the other queue's `VkQueue` carries (`X`'s, behind `A` and `B`) delays that group no
+/// longer than any kept group: it goes at the completion turn that leaves one submission in
+/// flight (`A`'s, `B` still running), `Y` goes once `X`'s signal landed, and every command buffer
+/// completes with its own fill. `Y` holds its wait on the host (a shared event's,
+/// `event_timeline.rs`), so it neither sends the group nor waits past that turn; a group kept
+/// past it would still be held when `B` completed. `A` and `B` are made longer until `A` outlasts
+/// `Y`'s take-in, as [`behind_while_a_runs`] does. On a device whose queues take two `VkQueue`s
+/// no group holds `X` behind work of `Y`'s `VkQueue`, and only the completions are checked.
+#[test]
+fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_turn() {
+    let mut stretch = 1;
+    let seen = loop {
+        let seen = behind_a_kept_signal(stretch);
+        assert!(
+            seen.merging,
+            "the merge check did not hold as assumed: {seen:?}"
+        );
+        if !seen.shared || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
+            break seen;
+        }
+        stretch *= 2;
+        eprintln!("GROUPED-KEPT-SIGNAL: A ended before Y was taken in: A {stretch} times as long");
+    };
+    if seen.shared {
+        assert!(
+            seen.a_ran,
+            "A ended before Y was taken in, at every run: {seen:?}"
+        );
+        assert_eq!(seen.kept, 1, "X was not kept behind A and B: {seen:?}");
+        assert_eq!(
+            seen.sent_while_b_ran,
+            Some(true),
+            "X's group was not sent at A's completion turn, while B ran: {seen:?}"
+        );
+    }
+}
