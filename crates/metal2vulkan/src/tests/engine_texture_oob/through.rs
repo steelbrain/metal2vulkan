@@ -510,6 +510,34 @@ fn reads_through_runtime_samplers_address_by_their_word() {
             word([ZERO; 3], TB, 0),
             vec![([8, 0, 0, 0], Want::Border(TB))],
         ),
+        // A texture buffer's border follows `t`'s mode, and `s`'s `clamp_to_edge` clamps first:
+        // the M3's per-axis answers (the conformance case `read-through-buffer`).
+        buffer(
+            word([BORDER, EDGE, EDGE], OW, 0),
+            vec![
+                ([8, 0, 0, 0], at(0, [0, 0, 0])),
+                ([int(-1), 0, 0, 0], at(0, [0, 0, 0])),
+            ],
+        ),
+        buffer(
+            word([BORDER, BORDER, EDGE], OW, 0),
+            vec![([9, 0, 0, 0], Want::Border(OW))],
+        ),
+        buffer(
+            word([REPEAT, ZERO, REPEAT], OW, 0),
+            vec![([int(-1), 0, 0, 0], Want::Border(OW))],
+        ),
+        buffer(
+            word([EDGE, BORDER, BORDER], OW, 0),
+            vec![
+                ([8, 0, 0, 0], at(0, [7, 0, 0])),
+                ([int(-1), 0, 0, 0], at(0, [0, 0, 0])),
+            ],
+        ),
+        buffer(
+            word([BORDER, REPEAT, BORDER], OW, 0),
+            vec![([100, 0, 0, 0], at(0, [0, 0, 0]))],
+        ),
     ];
     for case in &buffers {
         let ran = case.check(&bc);
