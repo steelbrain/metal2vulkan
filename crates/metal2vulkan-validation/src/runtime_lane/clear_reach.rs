@@ -10,7 +10,8 @@
 //! depth 0.25; its fragment function writes (1/255, 0, 0, 1)): a triangle over the whole
 //! target, one wholly outside it, or none. Metal's clear reaches past the render area to whole
 //! 32x32 tiles in a pass that draws or of more layers than one, and over the whole attachment in
-//! a pass of one layer that does not; a `DontCare` load keeps the texels in a pass that does not
+//! a pass of one layer that does not (of a texture Metal keeps compressed, as every one here is:
+//! `fresh_clear_reach` holds an uncompressed one's tiles); a `DontCare` load keeps the texels in a pass that does not
 //! draw and clears to zero (a color) or the clear value (depth, stencil) in one that does, which
 //! is Metal's answer in each tile a draw touches and a near-equivalent elsewhere, announced once
 //! ([`DONT_CARE_LOADS`]). A pass without a draw call that clears and resolves nothing records

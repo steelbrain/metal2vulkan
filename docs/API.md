@@ -4629,12 +4629,21 @@ each item named states the rule in full.
     `ExtendedRangeBlitPolicy::Canonical`, and a clear of any texture takes the route of Metal's
     uncompressed one, through `half`, so a `half` NaN clear keeps no sign and an extended-range
     or bfloat clear rounds as through `half`. Expected, not measured on such a Mac.
+  - a `Clear` load in a pass of one layer without a draw call clears the attachment's whole level
+    and slice past the render area, whatever its texture, the answer an Apple silicon Mac gives a
+    texture it keeps compressed. Unmeasured on such a Mac: the runtime's answer before the Apple
+    silicon rule below was measured, kept.
 
   Metal leaves a new texture's contents undefined, and zero and a released texture's texels are
   both what such a Mac reads, so this trades no accuracy and no `DevicePolicy` switch fills the
   texture. A device that presents an Apple silicon Mac (`lossless_compression` true) answers as
   one, on any GPU: the runtime writes the pattern and the zeros of a new `Private` texture, a
-  pattern no clear or copy writes exactly reading zero (`fresh-pattern-zeroed`). Under a declared
+  pattern no clear or copy writes exactly reading zero (`fresh-pattern-zeroed`), and a `Clear`
+  load in a pass of one layer without a draw call clears a texture Metal keeps compressed over its
+  whole level and slice past the render area and any other texture over the render area rounded
+  up to 32x32 tiles, as a pass with a draw call clears every texture (our probes on the M3 Max
+  under macOS 27.0.1: every color format, depth and stencil format, sample count, level, slice and
+  usage measured, and a texture over a buffer). Under a declared
   class other than the GPU's, the blit encodings and NaN signs above are the runtime's own
   handling, except that MoltenVK's copies of an image Metal compresses on an Apple GPU still write
   the canonical `RG11B10Float` and `RGB9E5Float` encodings

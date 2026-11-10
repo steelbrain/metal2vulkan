@@ -249,8 +249,9 @@ pub(crate) fn working_set_buffer_bound(working_set: u64) -> u64 {
 
 /// The class of Mac a device presents, whose GPU decides answers Metal gives without a property
 /// of its own: what a new `Private` texture reads before anything writes it, the encoding a GPU
-/// blit through a compressed texture writes, and a `half` NaN clear's sign (docs/API.md, the
-/// accepted differences). Every Mac's Metal answers one class's way, by the GPU it has (Apple
+/// blit through a compressed texture writes, a `half` NaN clear's sign, and how far a `Clear`
+/// load reaches past the render area of a pass without a draw call (docs/API.md, the accepted
+/// differences). Every Mac's Metal answers one class's way, by the GPU it has (Apple
 /// silicon, or an Intel or AMD GPU); the runtime answers the class the consumer declares
 /// ([`DeviceOptions::mac_class`](crate::DeviceOptions::mac_class)), else the one of the device's
 /// GPU ([`MacClass::of_vendor`]), and states it as
@@ -263,8 +264,11 @@ pub enum MacClass {
     /// colour format of neither `ShaderWrite` nor `PixelFormatView` usage): a new `Private` such
     /// texture reads Metal's fixed pattern over its first levels and zero elsewhere, blits
     /// through it write three formats' canonical encodings, and a `half` NaN clear keeps its
-    /// sign. The runtime writes the pattern and the zeros (a pattern no clear or copy writes
-    /// exactly reads zero, announced as `fresh-pattern-zeroed`).
+    /// sign. A `Clear` load in a pass of one layer without a draw call clears such a texture's
+    /// whole level and slice past the render area, and any other texture's render area rounded
+    /// up to 32x32 tiles, as a pass with a draw call clears every texture (our probes on the M3
+    /// Max). The runtime writes the pattern and the zeros (a pattern no clear or copy writes
+    /// exactly reads zero, announced as `fresh-pattern-zeroed`), and clears so.
     AppleSilicon,
     /// A Mac with an Intel or AMD GPU, which keeps no texture compressed: a new `Private`
     /// texture holds what its memory held (zero, or a released texture's texels: an Intel UHD
@@ -272,7 +276,9 @@ pub enum MacClass {
     /// through `half`. On a GPU that keeps no texture compressed the runtime writes nothing into
     /// a new `Private` texture (`WorkCounts::private_textures_unfilled`); on an Apple GPU, whose
     /// own compressed texture would read Apple's pattern, it fills it with zeros
-    /// (`WorkCounts::private_textures_zero_filled`).
+    /// (`WorkCounts::private_textures_zero_filled`). A `Clear` load in a pass of one layer
+    /// without a draw call clears the whole level and slice past the render area, the answer an
+    /// Apple silicon Mac gives a compressed texture: unmeasured on such a Mac.
     IntelOrAmd,
 }
 
