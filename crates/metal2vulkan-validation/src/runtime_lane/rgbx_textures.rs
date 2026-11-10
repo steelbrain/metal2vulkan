@@ -482,3 +482,179 @@ fn rgbx_passes_and_mipmaps_are_refused() {
         }
     });
 }
+
+/// A `half` sample of a 32-bit float RGBX texture and its twin, shared and private, through the
+/// runtime sampler at slot 0 (`rgbx_sample_half`, a sample's `half4`), nearest and linear, clamped
+/// to the edge and to an opaque white border, each lane at its own texel's center, where a linear
+/// filter weighs that texel alone: each lane against Metal's answer, the texel's `float` channel
+/// rounded to nearest even (finite channels within `half`'s range; `DriverDeviation::MetalHalfConversion`
+/// measures a read, sample and gather of every `float` word of `RGBA32Float`), with an RGBX alpha
+/// of 1 (`HALF-SAMPLE` lines name the notices). On a profile that takes that deviation, where the
+/// device samples through Metal's own texture unit, the dispatch announces no
+/// `half-texel-conversion`.
+#[test]
+fn rgbx_half_samples_are_metals() {
+    use metal2vulkan::device::DriverDeviation;
+    use metal2vulkan::metal::{
+        SamplerAddressMode as Mode, SamplerBorderColor, SamplerMinMagFilter,
+    };
+    use PixelFormat as P;
+    let mut differ = Vec::new();
+    for (i, pf) in [P::RGBX32Float, P::RGBA32Float].into_iter().enumerate() {
+        for options in [ResourceOptions::shared(), ResourceOptions::private()] {
+            on_device_with(at_plan, |device, messages| {
+                let mut rng = Rng(0x5a3c_e11f ^ i as u64);
+                let texels: Vec<[f32; 4]> = (0..TEXELS)
+                    .map(|_| {
+                        std::array::from_fn(|_| {
+                            (rng.next() >> 40) as f32 / (1u64 << 24) as f32 * 120_000.0 - 60_000.0
+                        })
+                    })
+                    .collect();
+                let data: Vec<u8> = texels
+                    .iter()
+                    .flat_map(|t| t.iter().flat_map(|v| v.to_le_bytes()))
+                    .collect();
+                let mut d = TextureDescriptor::texture_2d(pf, SIDE, SIDE, false);
+                d.usage = TextureUsage::SHADER_READ;
+                d.resource_options = options;
+                let texture = device.new_texture(&d).unwrap();
+                let source = buffer_with(device, &data).unwrap();
+                let queue = device.new_command_queue().unwrap();
+                let fill = queue.command_buffer().unwrap();
+                let mut blit = fill.blit_command_encoder().unwrap();
+                blit.copy_from_buffer_to_texture(
+                    &source,
+                    0,
+                    SIDE * 16,
+                    0,
+                    Size::new(SIDE, SIDE, 1),
+                    &texture,
+                    0,
+                    0,
+                    metal2vulkan_runtime::Origin::new(0, 0, 0),
+                    metal2vulkan_runtime::BlitOption::None,
+                )
+                .unwrap();
+                blit.end_encoding().unwrap();
+                fill.commit().unwrap();
+                fill.wait_until_completed_for(WAIT).unwrap();
+                messages.take_notices();
+                let bitcode = llvm_assemble(&engine_dir().join("rgbx_sample_half.ll")).unwrap();
+                let library = device.new_library_with_air(&bitcode).unwrap();
+                let function = library.new_function_with_name("rgbx_sample_half").unwrap();
+                let state = device
+                    .new_compute_pipeline_state(
+                        &ComputePipelineDescriptor::new(StageSource::Function(
+                            function.function_descriptor(),
+                        )),
+                        &PipelineOptions::default(),
+                    )
+                    .unwrap();
+                let centers: Vec<u8> = (0..TEXELS as u64)
+                    .flat_map(|t| {
+                        let side = SIDE as f32;
+                        [
+                            ((t % SIDE) as f32 + 0.5) / side,
+                            ((t / SIDE) as f32 + 0.5) / side,
+                        ]
+                        .into_iter()
+                        .flat_map(f32::to_le_bytes)
+                    })
+                    .collect();
+                let centers = buffer_with(device, &centers).unwrap();
+                let want = |t: usize, c: usize| match (c, pf) {
+                    (3, P::RGBX32Float) => 1.0,
+                    _ => super::extended_range_targets::half_value(
+                        super::extended_range_targets::half_bits(texels[t][c]),
+                    ),
+                };
+                let mut announced = std::collections::BTreeMap::new();
+                for filter in [SamplerMinMagFilter::Nearest, SamplerMinMagFilter::Linear] {
+                    for mode in [Mode::ClampToEdge, Mode::ClampToBorderColor] {
+                        let mut s = SamplerDescriptor::new();
+                        (s.min_filter, s.mag_filter) = (filter, filter);
+                        (s.s_address_mode, s.t_address_mode) = (mode, mode);
+                        s.border_color = SamplerBorderColor::OpaqueWhite;
+                        let sampler = device.new_sampler_state(&s).unwrap();
+                        let out = buffer_with(device, &vec![0u8; TEXELS * 8]).unwrap();
+                        let command_buffer = queue.command_buffer().unwrap();
+                        let mut encoder = command_buffer.compute_command_encoder().unwrap();
+                        encoder.set_compute_pipeline_state(&state).unwrap();
+                        encoder.set_texture(Some(&texture), 0).unwrap();
+                        encoder.set_sampler_state(Some(&sampler), 0).unwrap();
+                        encoder.set_buffer(Some(&out), 0, 0).unwrap();
+                        encoder.set_buffer(Some(&centers), 0, 1).unwrap();
+                        encoder
+                            .dispatch_threads(Size::new(SIDE, SIDE, 1), Size::new(SIDE, SIDE, 1))
+                            .unwrap();
+                        encoder.end_encoding().unwrap();
+                        command_buffer.commit().unwrap();
+                        command_buffer.wait_until_completed_for(WAIT).unwrap();
+                        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+                        let notices = messages.take_notices();
+                        for notice in &notices {
+                            eprintln!(
+                                "HALF-SAMPLE {pf:?} {:#x} {filter:?} {mode:?} notice: {}",
+                                options.raw(),
+                                notice.text
+                            );
+                        }
+                        announced.extend(counts(&notices));
+                        let got = read_buffer(&out, 0, (TEXELS * 8) as u64).unwrap();
+                        let mut wrong = 0;
+                        for t in 0..TEXELS {
+                            let lanes: [f32; 4] = std::array::from_fn(|c| {
+                                let at = 8 * t + 2 * c;
+                                super::extended_range_targets::half_value(u16::from_le_bytes([
+                                    got[at],
+                                    got[at + 1],
+                                ]))
+                            });
+                            if (0..4).any(|c| lanes[c].to_bits() != want(t, c).to_bits()) {
+                                if wrong < 4 {
+                                    eprintln!(
+                                        "HALF-SAMPLE {pf:?} {:#x} {filter:?} {mode:?} texel {t}: \
+                                         {lanes:?}, Metal's {:?}",
+                                        options.raw(),
+                                        [want(t, 0), want(t, 1), want(t, 2), want(t, 3)]
+                                    );
+                                }
+                                wrong += 1;
+                            }
+                        }
+                        eprintln!(
+                            "HALF-SAMPLE {pf:?} options {:#x} {filter:?} {mode:?} on {}: {wrong} \
+                             of {TEXELS} lanes differ",
+                            options.raw(),
+                            device.name()
+                        );
+                        if wrong > 0 {
+                            differ.push(format!(
+                                "{pf:?} {:#x} {filter:?} {mode:?}: {wrong}",
+                                options.raw()
+                            ));
+                        }
+                    }
+                }
+                let profile = device.compile_device().profile();
+                let metals = profile.takes_driver_deviation(DriverDeviation::MetalSampler)
+                    && profile.takes_driver_deviation(DriverDeviation::MetalHalfConversion);
+                let conversion =
+                    Degradation::from_precision_note(PrecisionNote::HalfTexelConversion);
+                eprintln!(
+                    "HALF-SAMPLE {pf:?} options {:#x} on {}: the dispatches announced {announced:?}",
+                    options.raw(),
+                    device.name()
+                );
+                if metals && announced.contains_key(&conversion) {
+                    differ.push(format!(
+                        "{pf:?} {:#x}: announced {conversion:?}",
+                        options.raw()
+                    ));
+                }
+            });
+        }
+    }
+    assert!(differ.is_empty(), "half samples not Metal's: {differ:#?}");
+}
