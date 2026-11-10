@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1274 |
 | distinct SDK items the Metal leg reaches, of any status | 821 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3512 |
+| ledger rows (a case whose gap is recorded) | 3555 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5751,4 +5751,47 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `padded-blend-rgb10a2-srgb-dual-half` | A `half4` output and second output blended into `RGB10A2Unorm_sRGB` (the second source over its complement, color and alpha alike): the function blends in the s… |
 | `padded-blend-rg10x12-premul-red-half` | A `half4` fill blended into `RG10Unorm_X12` under a red-only write mask (premultiplied over: one over one minus the source alpha, added): the function blends in… |
 | `padded-blend-rgb10a2-srgb-premul-rgb-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` under a write mask of red, green and blue (premultiplied over: one over one minus the source alpha, added): the … |
+| `padded-fetch-r10x6-clear-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachment clea… |
+| `padded-fetch-r10x6-draw-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earlier dr… |
+| `padded-fetch-r10x6-srgb-load-float` | A fragment function reads `R10Unorm_X6_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-rgb10a2-srgb-clear-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachmen… |
+| `padded-fetch-rgb10a2-srgb-draw-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earl… |
+| `padded-fetch-rgb10a2-srgb-load-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every co… |
+| `padded-fetch-rgb10a2-srgb-load-half` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-r10x6-clear-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachment clea… |
+| `padded-fetch-r10x6-draw-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earlier dr… |
+| `padded-fetch-r10x6-load-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every code of … |
+| `padded-fetch-r10x6-load-half` | A fragment function reads `R10Unorm_X6` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every code of t… |
+| `padded-fetch-r10x6-srgb-load-float` | A fragment function reads `R10Unorm_X6_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-rg10x12-load-float` | A fragment function reads `RG10Unorm_X12` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every code o… |
+| `padded-fetch-rg10x12-srgb-load-float` | A fragment function reads `RG10Unorm_X12_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every c… |
+| `padded-fetch-rgb10a2-srgb-clear-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachmen… |
+| `padded-fetch-rgb10a2-srgb-draw-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earl… |
+| `padded-fetch-rgb10a2-srgb-load-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every co… |
+| `padded-fetch-rgb10a2-srgb-load-half` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-r10x6-clear-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachment clea… |
+| `padded-fetch-r10x6-draw-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earlier dr… |
+| `padded-fetch-r10x6-srgb-load-float` | A fragment function reads `R10Unorm_X6_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-rgb10a2-srgb-clear-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachmen… |
+| `padded-fetch-rgb10a2-srgb-draw-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earl… |
+| `padded-fetch-rgb10a2-srgb-load-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every co… |
+| `padded-fetch-rgb10a2-srgb-load-half` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-r10x6-clear-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachment clea… |
+| `padded-fetch-r10x6-draw-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earlier dr… |
+| `padded-fetch-r10x6-load-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every code of … |
+| `padded-fetch-r10x6-load-half` | A fragment function reads `R10Unorm_X6` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every code of t… |
+| `padded-fetch-r10x6-srgb-load-float` | A fragment function reads `R10Unorm_X6_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-rg10x12-load-float` | A fragment function reads `RG10Unorm_X12` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every code o… |
+| `padded-fetch-rg10x12-srgb-load-float` | A fragment function reads `RG10Unorm_X12_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every c… |
+| `padded-fetch-rgb10a2-srgb-clear-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachmen… |
+| `padded-fetch-rgb10a2-srgb-draw-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earl… |
+| `padded-fetch-rgb10a2-srgb-load-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every co… |
+| `padded-fetch-rgb10a2-srgb-load-half` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-r10x6-clear-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachment clea… |
+| `padded-fetch-r10x6-draw-float` | A fragment function reads `R10Unorm_X6` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earlier dr… |
+| `padded-fetch-r10x6-srgb-load-float` | A fragment function reads `R10Unorm_X6_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
+| `padded-fetch-rgb10a2-srgb-clear-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, the attachmen… |
+| `padded-fetch-rgb10a2-srgb-draw-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, after an earl… |
+| `padded-fetch-rgb10a2-srgb-load-float` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `float4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every co… |
+| `padded-fetch-rgb10a2-srgb-load-half` | A fragment function reads `RGB10A2Unorm_sRGB` color 0 through a `half4` `[[color(0)]]` input and writes what it read to an `RGBA32Float` color 1, over every cod… |
 
