@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1263 |
 | distinct SDK items the Metal leg reaches, of any status | 821 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3461 |
+| ledger rows (a case whose gap is recorded) | 3495 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5648,54 +5648,88 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-through-a8` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-a8` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
 | `read-through-a8` | A read of an 8-bit unorm texel through the device's own conversion: llvmpipe's value of an 8-bit code is one f32 ulp high of Metal's (0x3ec2c2c4 where Metal rea… |
-| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the pixel … |
-| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device's ari… |
-| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader,… |
-| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the p… |
-| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device'… |
+| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered re… |
+| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pixe… |
+| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader … |
+| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an order… |
+| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the… |
 | `padded-blend-r10x6-srgb-dual-half` | A `half4` output and second output blended into `R10Unorm_X6_sRGB` (the second source over its complement, color and alpha alike): the function blends in the sh… |
-| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the pixe… |
-| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device's a… |
+| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered … |
+| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pi… |
 | `padded-blend-rg10x12-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12` (the second source over its complement, color and alpha alike): the function blends in the shade… |
-| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the… |
-| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the devic… |
+| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ord… |
+| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (t… |
 | `padded-blend-rg10x12-srgb-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12_sRGB` (the second source over its complement, color and alpha alike): the function blends in the … |
-| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the … |
-| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device… |
+| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an orde… |
+| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (th… |
 | `padded-blend-rgb10a2-srgb-dual-half` | A `half4` output and second output blended into `RGB10A2Unorm_sRGB` (the second source over its complement, color and alpha alike): the function blends in the s… |
 | `padded-blend-rg10x12-premul-red-half` | A `half4` fill blended into `RG10Unorm_X12` under a red-only write mask (premultiplied over: one over one minus the source alpha, added): the function blends in… |
 | `padded-blend-rgb10a2-srgb-premul-rgb-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` under a write mask of red, green and blue (premultiplied over: one over one minus the source alpha, added): the … |
-| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the pixel … |
-| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device's ari… |
-| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader,… |
-| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the p… |
-| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device'… |
+| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered re… |
+| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pixe… |
+| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader … |
+| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an order… |
+| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the… |
 | `padded-blend-r10x6-srgb-dual-half` | A `half4` output and second output blended into `R10Unorm_X6_sRGB` (the second source over its complement, color and alpha alike): the function blends in the sh… |
-| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the pixe… |
-| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device's a… |
+| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered … |
+| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pi… |
 | `padded-blend-rg10x12-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12` (the second source over its complement, color and alpha alike): the function blends in the shade… |
-| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the… |
-| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the devic… |
+| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ord… |
+| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (t… |
 | `padded-blend-rg10x12-srgb-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12_sRGB` (the second source over its complement, color and alpha alike): the function blends in the … |
-| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the … |
-| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device… |
+| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an orde… |
+| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (th… |
 | `padded-blend-rgb10a2-srgb-dual-half` | A `half4` output and second output blended into `RGB10A2Unorm_sRGB` (the second source over its complement, color and alpha alike): the function blends in the s… |
 | `padded-blend-rg10x12-premul-red-half` | A `half4` fill blended into `RG10Unorm_X12` under a red-only write mask (premultiplied over: one over one minus the source alpha, added): the function blends in… |
 | `padded-blend-rgb10a2-srgb-premul-rgb-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` under a write mask of red, green and blue (premultiplied over: one over one minus the source alpha, added): the … |
-| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the pixel … |
-| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device's ari… |
-| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader,… |
-| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the p… |
-| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device'… |
+| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered re… |
+| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pixe… |
+| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader … |
+| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an order… |
+| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the… |
 | `padded-blend-r10x6-srgb-dual-half` | A `half4` output and second output blended into `R10Unorm_X6_sRGB` (the second source over its complement, color and alpha alike): the function blends in the sh… |
-| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the pixe… |
-| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device's a… |
+| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered … |
+| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pi… |
 | `padded-blend-rg10x12-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12` (the second source over its complement, color and alpha alike): the function blends in the shade… |
-| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the… |
-| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the devic… |
+| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ord… |
+| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (t… |
 | `padded-blend-rg10x12-srgb-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12_sRGB` (the second source over its complement, color and alpha alike): the function blends in the … |
-| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader, inside the … |
-| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader, inside the pixel interlock, in the device… |
+| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an orde… |
+| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (th… |
+| `padded-blend-rgb10a2-srgb-dual-half` | A `half4` output and second output blended into `RGB10A2Unorm_sRGB` (the second source over its complement, color and alpha alike): the function blends in the s… |
+| `padded-blend-rg10x12-premul-red-half` | A `half4` fill blended into `RG10Unorm_X12` under a red-only write mask (premultiplied over: one over one minus the source alpha, added): the function blends in… |
+| `padded-blend-rgb10a2-srgb-premul-rgb-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` under a write mask of red, green and blue (premultiplied over: one over one minus the source alpha, added): the … |
+| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered re… |
+| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pixe… |
+| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader … |
+| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an order… |
+| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the… |
+| `padded-blend-r10x6-srgb-dual-half` | A `half4` output and second output blended into `R10Unorm_X6_sRGB` (the second source over its complement, color and alpha alike): the function blends in the sh… |
+| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered … |
+| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pi… |
+| `padded-blend-rg10x12-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12` (the second source over its complement, color and alpha alike): the function blends in the shade… |
+| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ord… |
+| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (t… |
+| `padded-blend-rg10x12-srgb-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12_sRGB` (the second source over its complement, color and alpha alike): the function blends in the … |
+| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an orde… |
+| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (th… |
+| `padded-blend-rgb10a2-srgb-dual-half` | A `half4` output and second output blended into `RGB10A2Unorm_sRGB` (the second source over its complement, color and alpha alike): the function blends in the s… |
+| `padded-blend-rg10x12-premul-red-half` | A `half4` fill blended into `RG10Unorm_X12` under a red-only write mask (premultiplied over: one over one minus the source alpha, added): the function blends in… |
+| `padded-blend-rgb10a2-srgb-premul-rgb-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` under a write mask of red, green and blue (premultiplied over: one over one minus the source alpha, added): the … |
+| `padded-blend-r10x6-premul-half` | A `half4` fill blended into `R10Unorm_X6` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered re… |
+| `padded-blend-r10x6-add-float` | A `float4` fill blended into `R10Unorm_X6` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pixe… |
+| `padded-blend-r10x6-dual-half` | A `half4` output and second output blended into `R10Unorm_X6` (the second source over its complement, color and alpha alike): the function blends in the shader … |
+| `padded-blend-r10x6-srgb-premul-half` | A `half4` fill blended into `R10Unorm_X6_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an order… |
+| `padded-blend-r10x6-srgb-add-float` | A `float4` fill blended into `R10Unorm_X6_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the… |
+| `padded-blend-r10x6-srgb-dual-half` | A `half4` output and second output blended into `R10Unorm_X6_sRGB` (the second source over its complement, color and alpha alike): the function blends in the sh… |
+| `padded-blend-rg10x12-premul-half` | A `half4` fill blended into `RG10Unorm_X12` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ordered … |
+| `padded-blend-rg10x12-add-float` | A `float4` fill blended into `RG10Unorm_X12` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (the pi… |
+| `padded-blend-rg10x12-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12` (the second source over its complement, color and alpha alike): the function blends in the shade… |
+| `padded-blend-rg10x12-srgb-premul-half` | A `half4` fill blended into `RG10Unorm_X12_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an ord… |
+| `padded-blend-rg10x12-srgb-add-float` | A `float4` fill blended into `RG10Unorm_X12_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (t… |
+| `padded-blend-rg10x12-srgb-dual-half` | A `half4` output and second output blended into `RG10Unorm_X12_sRGB` (the second source over its complement, color and alpha alike): the function blends in the … |
+| `padded-blend-rgb10a2-srgb-premul-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` (premultiplied over: one over one minus the source alpha, added): the function blends in the shader over an orde… |
+| `padded-blend-rgb10a2-srgb-add-float` | A `float4` fill blended into `RGB10A2Unorm_sRGB` (one over the destination, added): the function blends in the shader over an ordered read of the attachment (th… |
 | `padded-blend-rgb10a2-srgb-dual-half` | A `half4` output and second output blended into `RGB10A2Unorm_sRGB` (the second source over its complement, color and alpha alike): the function blends in the s… |
 | `padded-blend-rg10x12-premul-red-half` | A `half4` fill blended into `RG10Unorm_X12` under a red-only write mask (premultiplied over: one over one minus the source alpha, added): the function blends in… |
 | `padded-blend-rgb10a2-srgb-premul-rgb-half` | A `half4` fill blended into `RGB10A2Unorm_sRGB` under a write mask of red, green and blue (premultiplied over: one over one minus the source alpha, added): the … |

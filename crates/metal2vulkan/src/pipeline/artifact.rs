@@ -1461,9 +1461,15 @@ pub enum PrecisionNote {
     /// in the shader (`lower::arith::extended_range::blend::native`), in the device's arithmetic: a
     /// blend unit's `S·Fs op D·Fd` in `float`, in the blend equation's order, the source, the
     /// second source and the blend color clamped to the format's range first (a padded format's
-    /// not clamped, as Metal clamps none there). Metal's compiler folds the
-    /// blend into the function and fuses, regroups and rounds each step to `half` instead, so a
-    /// blended channel may store another code than Metal's; the bound is not measured. Recorded
+    /// not clamped, as Metal clamps none there). The device's compiler may contract a product into
+    /// its sum and may regroup the blend: MoltenVK on the M3 Max and NVIDIA's driver on an RTX 5080
+    /// compute a second source's blend `S·F + D·(1 - F)` as `D + F·(S - D)`. Metal's compiler
+    /// folds the blend into the function and fuses, regroups and rounds each step to `half`
+    /// instead, so a blended channel may store another code than Metal's: within two codes on a
+    /// linear format and within six on an sRGB twin near zero, where its transfer is steepest, in
+    /// the conformance suite's extended-range and padded blend cases (its known gaps' rows); and
+    /// where the device's compiler regroups a padded format's blend, an infinite second source
+    /// stores the end code its sign picks where Metal's sum is NaN, stored as code 0. Recorded
     /// for every blended output that stores a channel, under either math. A `float` output
     /// records [`PrecisionNote::ExtendedRangeFloatBlendSource`] instead, so a function of both
     /// records both.
@@ -1508,9 +1514,10 @@ pub enum PrecisionNote {
     /// [`DriverWorkaround::DiscardDropsSimdgroupStores`]: crate::device::DriverWorkaround::DiscardDropsSimdgroupStores
     HelperBranchDropsSimdgroupStores,
     /// [`PrecisionNote::ExtendedRangeBlendSource`] for a `float` color output (a scalar or vector
-    /// of AIR's `float`): blended into an extended-range attachment in the shader in the device's
-    /// arithmetic, where Metal's compiler rounds the output and each step of the blend to `half`.
-    /// A blended channel may store another code than Metal's; the bound is not measured. Its own
+    /// of AIR's `float`): blended into an extended-range or padded 10-bit attachment in the shader
+    /// in the device's arithmetic, which the device's compiler may contract and regroup, where
+    /// Metal's compiler rounds the output and each step of the blend to `half`. A blended channel
+    /// may store another code than Metal's, within `ExtendedRangeBlendSource`'s bound. Its own
     /// note, apart from the `half` output's, so a consumer can tell the two apart.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a

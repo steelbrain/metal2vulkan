@@ -335,3 +335,108 @@ fn a_blend_into_a_bfloat_attachment_is_metals_pipeline_error() {
     }
     assert!(refused > 0 && unblended > 0, "{refused} {unblended}");
 }
+
+/// A fetch of a padded 10-bit attachment reads the tile value of its codes
+/// (`extended_range::tile_value`), as Metal's fetch does: each loaded code's value rounded to
+/// `half`, a `float4` input's too (the M3 Max under macOS 27.0.1, `probes/padded_fetch.m` of the
+/// conformance crate). `pfx_fetch`'s `float4` and `half4` reads of color 0 (mask none), stored into
+/// an `RGBA32Float` color 1, make the whole pipeline on every committed profile that orders fetch:
+/// through the pixel interlock with color 0 a storage attachment of the raw format the function
+/// does not write, or through rasterization-order input attachments with color 0 an attachment of
+/// the raw format read as an unsigned input attachment. On one that orders it in neither form the
+/// pipeline is refused naming what the device lacks. Before the read was built each was refused
+/// `NotImplemented(FramebufferFetch)`. The negative control: a fetch of a bfloat attachment, whose
+/// read Metal answers unmeasured, stays `NotImplemented(Format)` on every profile.
+#[test]
+fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
+    use crate::error::Feature;
+    use crate::lower::fragment::{inputs_order, interlock_orders};
+    use crate::metal::format::ExtendedRange;
+    let Some(bc) = assembled("pfx_fetch") else {
+        return;
+    };
+    let made = |dev: &Device, fragment: &str, pf: PixelFormat| {
+        let function = |name: &str| {
+            FunctionDescriptor::new(
+                Library::from_air(&bc)
+                    .expect("library")
+                    .function(name)
+                    .expect("function"),
+            )
+        };
+        let mut d =
+            RenderPipelineDescriptor::new(StageSource::Function(function("pfx_fetch_vertex")));
+        d.fragment = Some(StageSource::Function(function(fragment)));
+        let mut read = ColorAttachmentDescriptor::new(pf);
+        read.write_mask = ColorWriteMask::NONE;
+        d.color_attachments[0] = Some(read);
+        d.color_attachments[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Float));
+        dev.compile_render_pipeline(&d, &Budget::standard())
+    };
+    let (mut interlocked, mut inputs, mut unordered, mut bfloat) = (0, 0, 0, 0);
+    for (stem, p) in committed_profiles().expect("profiles") {
+        let dev = device(&stem);
+        for fragment in ["pfx_fetch_read", "pfx_fetch_read_half"] {
+            for pf in PADDED {
+                let what = format!("{stem} {pf:?} {fragment}");
+                let raw = ExtendedRange::of(pf).expect("padded").raw_format();
+                let made = made(&dev, fragment, pf);
+                if interlock_orders(&p) {
+                    let a = match made {
+                        Ok(a) => a,
+                        Err(e) if device_gap(&e) => {
+                            eprintln!("{what}: {e}");
+                            continue;
+                        }
+                        Err(e) => panic!("{what}: {e}"),
+                    };
+                    let uses: Vec<(u32, vk::Format, bool)> = a
+                        .graphics
+                        .storage_attachments
+                        .iter()
+                        .map(|s| (s.color_index, s.format, s.writes))
+                        .collect();
+                    assert_eq!(uses, [(0, raw, false)], "{what}");
+                    interlocked += 1;
+                } else if inputs_order(&p) {
+                    let a = made.unwrap_or_else(|e| panic!("{what}: {e}"));
+                    let state0 = a.graphics.color_attachments[0].expect("color 0");
+                    assert_eq!(state0.format, raw, "{what}");
+                    let read: Vec<u32> = a
+                        .graphics
+                        .input_attachments
+                        .iter()
+                        .map(|i| i.color_index)
+                        .collect();
+                    assert_eq!(read, [0], "{what}");
+                    inputs += 1;
+                } else {
+                    let e = made.map(drop).expect_err(&what);
+                    assert!(
+                        matches!(&e, Error::Unsupported(u)
+                            if u.feature == Feature::FramebufferFetch
+                                && u.needs != Needs::NotImplemented),
+                        "{what}: {e}"
+                    );
+                    unordered += 1;
+                }
+            }
+            for pf in BFLOAT {
+                let what = format!("{stem} {pf:?} {fragment}");
+                match made(&dev, fragment, pf).map(drop) {
+                    Err(Error::Unsupported(u))
+                        if u.feature == Feature::Format && u.needs == Needs::NotImplemented =>
+                    {
+                        bfloat += 1
+                    }
+                    Err(e) if device_gap(&e) => eprintln!("{what}: {e}"),
+                    other => panic!("{what}: {other:?}"),
+                }
+            }
+        }
+    }
+    assert!(interlocked > 0, "no profile reads in the storage form");
+    assert!(inputs > 0, "no profile reads through the input attachment");
+    assert!(unordered > 0, "no profile orders fetch in neither form");
+    assert!(bfloat > 0, "no bfloat fetch was refused");
+}

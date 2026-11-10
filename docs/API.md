@@ -3954,9 +3954,14 @@ bound.
   their `_sRGB` twins, `RGB10A2Unorm_sRGB`), whose raw codes no device's blend unit reads, so the
   function blends in the shader in the device's arithmetic: `S·Fs op D·Fd` in `float`, in the blend
   equation's order, the source, second source and blend color clamped to the format's range first
-  (a padded format's not clamped, as Metal clamps none there).
-  Metal's compiler rounds each step to `half`, so a blended channel may store another code than
-  Metal's.
+  (a padded format's not clamped, as Metal clamps none there). The device's compiler may contract a
+  product into its sum and may regroup the blend: MoltenVK on the M3 Max and NVIDIA's driver on an
+  RTX 5080 compute a second source's blend `S·F + D·(1 - F)` as `D + F·(S - D)`. Metal's compiler
+  rounds each step to `half`, so a blended channel may store another code than Metal's: within two
+  codes on a linear format and within six on an sRGB twin near zero, where its transfer is
+  steepest, in the conformance suite's extended-range and padded blend cases; and where the
+  device's compiler regroups a padded format's blend, an infinite second source stores the end code
+  its sign picks where Metal's sum is NaN, stored as code 0.
 - `metal2vulkan-degrade-discard-drops-simdgroup-stores` (precision).
   `PrecisionNote::DiscardDropsSimdgroupStores`: A fragment function meets the store-dropping defect
   of `DriverWorkaround::DiscardDropsSimdgroupStores` (MoltenVK on an Apple GPU: Apple's compiler
@@ -3976,9 +3981,10 @@ bound.
   whose helper invocations may iterate alone.
 - `metal2vulkan-degrade-extended-range-float-blend-source` (precision).
   `PrecisionNote::ExtendedRangeFloatBlendSource`: `PrecisionNote::ExtendedRangeBlendSource` for a
-  `float` color output (a scalar or vector of AIR's `float`): blended into an extended-range
-  attachment in the shader in the device's arithmetic, where Metal's compiler rounds the output and
-  each step of the blend to `half`.
+  `float` color output (a scalar or vector of AIR's `float`): blended into an extended-range or
+  padded 10-bit attachment in the shader in the device's arithmetic, which the device's compiler
+  may contract and regroup, where Metal's compiler rounds the output and each step of the blend to
+  `half`; a blended channel within `ExtendedRangeBlendSource`'s bound of Metal's.
 - `metal2vulkan-degrade-anisotropic-filter` (precision). `PrecisionNote::AnisotropicFilter`: The
   module samples a texture through an anisotropic sampler with Metal's anisotropic filter emulated
   by the device's samples at explicit levels (`lower::sampler::anisotropic`), on a device without
