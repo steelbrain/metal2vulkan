@@ -61,7 +61,9 @@
 //! where that is the lesser): a vertex or fragment stage that writes memory, stores or atomics
 //! (`StageInterface::writes_memory`, link); a tessellation pipeline (link); alpha to coverage,
 //! which reads color 0's alpha in every group ([`group`]); a `[[color(n)]]` input of another
-//! group, imageblock data and raster order groups ([`entry`]). Imageblocks are refused under any
+//! group that the function reads, imageblock data and raster order groups ([`entry`]). A color
+//! input of another group that the specialized body never uses (its read folded away by the
+//! function's constants) reads nothing there, and is not refused. Imageblocks are refused under any
 //! renumbering: an implicit imageblock's members name the attachments they alias by index. A mesh
 //! render pipeline and a tile pipeline take no groups and keep the limit refusals.
 
@@ -124,7 +126,7 @@ pub(crate) fn descriptor(d: &RenderPipelineDescriptor, g: &ColorGroup) -> Render
 /// The specialized fragment entry `spec` as group `g`'s variant compiles it: each color index its
 /// outputs and `[[color(n)]]` inputs name renumbered by [`ColorGroup::location`]. Imageblock data
 /// is the limit refusal on `p`, and so, where the pipeline takes more than one group, is a color
-/// input of another group and a raster order group. Any other entry as it is.
+/// input of another group that the body uses and a raster order group. Any other entry as it is.
 pub(crate) fn entry(
     mut spec: air::Entry,
     g: &ColorGroup,
@@ -135,7 +137,10 @@ pub(crate) fn entry(
     }
     let split = g.groups() > 1;
     let refused = || refusal(g, p);
+    // A color input the specialized body never uses reads no attachment, of whichever group.
+    let used = super::params_used(&spec);
     for b in &mut spec.ep.params {
+        let read = used.contains(&b.param);
         match &mut b.role {
             ParamRole::Imageblock(_) => return Err(refused()),
             ParamRole::ColorInput {
@@ -146,7 +151,7 @@ pub(crate) fn entry(
                     return Err(refused());
                 }
                 if let AbiInt::Const(color) = *index {
-                    if split && !g.colors().contains(&color) {
+                    if split && read && !g.colors().contains(&color) {
                         return Err(refused());
                     }
                     *index = AbiInt::Const(g.location(color));
