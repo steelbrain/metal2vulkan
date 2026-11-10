@@ -488,10 +488,12 @@ fn long(queue: &CommandQueue, target: &Buffer, fills: usize) -> CommandBuffer {
 /// waited for: the compositor's latencies over 2 s from [`SETTLING`] after `ready` answers
 /// (bounded), so that what queued behind a long command buffer before then has completed.
 ///
-/// Where `waiting`, each long command buffer signals a shared event's next value at its end, and
-/// a third queue commits, once each long one is committed, a command buffer of one small fill
-/// that waits for that value, each waited for: a wait the scheduler submits once its signal is
-/// submitted (`scheduler/mod.rs`), so it waits on the GPU, its own GPU work short.
+/// Where `waiting`, each long command buffer signals an event's next value at its end, and a
+/// third queue commits, once each long one is committed, a command buffer of one small fill that
+/// waits for that value, each waited for. A plain event (`MTLEvent`), not a shared one: no host
+/// call sets its value, so the scheduler submits its wait once the signal is submitted, chained
+/// on the waiter's `VkQueue` (`event_timeline.rs`), so it waits on the GPU, its own GPU work
+/// short, where a shared event's wait is held on the host until the value is reached.
 fn isolation(
     device: &Device,
     compositor: CommandQueue,
@@ -506,7 +508,7 @@ fn isolation(
     let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let began = Instant::now();
-    let event = device.new_shared_event().unwrap();
+    let event = device.new_event().unwrap();
     // The last value a committed long command buffer signals.
     let signalled = Arc::new(AtomicU64::new(0));
     let application = {
