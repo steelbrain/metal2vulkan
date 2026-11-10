@@ -246,20 +246,50 @@ static id<MTLTexture> target(const Format *f) {
     return [gDevice newTextureWithDescriptor:td];
 }
 
+// A blit of `bytes` into the whole of `t` (a host copy is a silent no-op where Metal keeps a padded
+// texture in its compressed layout, so every texel goes in and out by a blit).
+static void upload(id<MTLCommandBuffer> cb, id<MTLTexture> t, const Format *f, id<MTLBuffer> bytes) {
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit copyFromBuffer:bytes
+               sourceOffset:0
+          sourceBytesPerRow:W * f->bytes
+        sourceBytesPerImage:(NSUInteger)N * f->bytes
+                 sourceSize:MTLSizeMake(W, H, 1)
+                  toTexture:t
+           destinationSlice:0
+           destinationLevel:0
+          destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+}
+
+// A blit of the whole of `t` into `bytes`.
+static void download(id<MTLCommandBuffer> cb, id<MTLTexture> t, const Format *f, id<MTLBuffer> bytes) {
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit copyFromTexture:t
+                     sourceSlice:0
+                     sourceLevel:0
+                    sourceOrigin:MTLOriginMake(0, 0, 0)
+                      sourceSize:MTLSizeMake(W, H, 1)
+                        toBuffer:bytes
+               destinationOffset:0
+          destinationBytesPerRow:W * f->bytes
+        destinationBytesPerImage:(NSUInteger)N * f->bytes];
+    [blit endEncoding];
+}
+
 // One draw of `values` (and `seconds`) under `p` over the texels `dst`; the stored texels into
 // `out`. NO and the reason where the draw did not complete.
 static BOOL draw(const Format *f, id<MTLRenderPipelineState> p, const State *s, id<MTLBuffer> values,
                  id<MTLBuffer> seconds, const uint8_t *dst, uint8_t *out) {
     id<MTLTexture> t = target(f);
-    [t replaceRegion:MTLRegionMake2D(0, 0, W, H)
-         mipmapLevel:0
-           withBytes:dst
-         bytesPerRow:W * f->bytes];
+    id<MTLBuffer> in = [gDevice newBufferWithBytes:dst length:(NSUInteger)N * f->bytes options:0];
+    id<MTLBuffer> back = [gDevice newBufferWithLength:(NSUInteger)N * f->bytes options:0];
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = t;
     pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLCommandBuffer> cb = [gQueue commandBuffer];
+    upload(cb, t, f, in);
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
     uint32_t width = W;
     [enc setRenderPipelineState:p];
@@ -272,6 +302,7 @@ static BOOL draw(const Format *f, id<MTLRenderPipelineState> p, const State *s, 
     if (s->dual) [enc setFragmentBuffer:seconds offset:0 atIndex:2];
     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [enc endEncoding];
+    download(cb, t, f, back);
     [cb commit];
     [cb waitUntilCompleted];
     if (cb.status != MTLCommandBufferStatusCompleted) {
@@ -279,8 +310,21 @@ static BOOL draw(const Format *f, id<MTLRenderPipelineState> p, const State *s, 
                cb.error.localizedDescription.UTF8String);
         return NO;
     }
-    [t getBytes:out bytesPerRow:W * f->bytes fromRegion:MTLRegionMake2D(0, 0, W, H) mipmapLevel:0];
+    memcpy(out, back.contents, (size_t)N * f->bytes);
     return YES;
+}
+
+// The control that the blits move the texels: `dst` up and straight back.
+static BOOL roundTrip(const Format *f, const uint8_t *dst) {
+    id<MTLTexture> t = target(f);
+    id<MTLBuffer> in = [gDevice newBufferWithBytes:dst length:(NSUInteger)N * f->bytes options:0];
+    id<MTLBuffer> back = [gDevice newBufferWithLength:(NSUInteger)N * f->bytes options:0];
+    id<MTLCommandBuffer> cb = [gQueue commandBuffer];
+    upload(cb, t, f, in);
+    download(cb, t, f, back);
+    [cb commit];
+    [cb waitUntilCompleted];
+    return memcmp(back.contents, dst, (size_t)N * f->bytes) == 0;
 }
 
 static int create(const char *fname, const char *sname) {
@@ -336,6 +380,7 @@ static int sweep(int argc, char **argv) {
         for (int i = 0; i < N; i++) destinationTexel(f, dst + (size_t)i * f->bytes);
         writeFile([NSString stringWithFormat:@"out/%s-dst.bin", f->name], dst,
                   (size_t)N * f->bytes);
+        printf("ROUND-TRIP %s %s\n", f->name, roundTrip(f, dst) ? "exact" : "DIFFERS");
         for (size_t k = 0; k < sizeof kStates / sizeof kStates[0]; k++) {
             const State *s = &kStates[k];
             // The extended-range forms answer the second output alone.
@@ -351,6 +396,7 @@ static int sweep(int argc, char **argv) {
                                why.UTF8String);
                         continue;
                     }
+                    memset(out, 0xA5, (size_t)N * f->bytes);
                     if (!draw(f, p, s, halfOut ? vh : vf, halfOut ? sh : sf, dst, out)) continue;
                     writeFile([NSString stringWithFormat:@"out/%s-%s-%s-%s.bin", f->name,
                                                          s->name, type, mode],
@@ -399,12 +445,9 @@ static int tile(int argc, char **argv) {
         }
         for (int leg = 0; leg < 2; leg++) {
             id<MTLTexture> t = target(f);
-            uint8_t *zero = calloc(N, f->bytes);
-            [t replaceRegion:MTLRegionMake2D(0, 0, W, H)
-                 mipmapLevel:0
-                   withBytes:zero
-                 bytesPerRow:W * f->bytes];
-            free(zero);
+            id<MTLBuffer> zero = [gDevice newBufferWithLength:(NSUInteger)N * f->bytes options:0];
+            memset(zero.contents, 0, (size_t)N * f->bytes);
+            id<MTLBuffer> back = [gDevice newBufferWithLength:(NSUInteger)N * f->bytes options:0];
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             pass.colorAttachments[0].texture = t;
             pass.colorAttachments[0].loadAction = leg == 0 ? MTLLoadActionClear : MTLLoadActionLoad;
@@ -412,6 +455,7 @@ static int tile(int argc, char **argv) {
                 MTLClearColorMake(kClear[0], kClear[1], kClear[2], kClear[3]);
             pass.colorAttachments[0].storeAction = MTLStoreActionStore;
             id<MTLCommandBuffer> cb = [gQueue commandBuffer];
+            upload(cb, t, f, zero);
             id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
             uint32_t width = W;
             [enc setFragmentBytes:&width length:sizeof width atIndex:1];
@@ -424,21 +468,16 @@ static int tile(int argc, char **argv) {
             [enc setFragmentBuffer:half offset:0 atIndex:0];
             [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
             [enc endEncoding];
+            download(cb, t, f, back);
             [cb commit];
             [cb waitUntilCompleted];
             if (cb.status != MTLCommandBufferStatusCompleted) {
                 printf("DRAW-FAILED %s tile %d\n", f->name, leg);
                 continue;
             }
-            uint8_t *out = malloc((size_t)N * f->bytes);
-            [t getBytes:out
-                bytesPerRow:W * f->bytes
-                 fromRegion:MTLRegionMake2D(0, 0, W, H)
-                mipmapLevel:0];
             writeFile([NSString stringWithFormat:@"out/%s-tile-%s.bin", f->name,
                                                  leg == 0 ? "clear" : "draw"],
-                      out, (size_t)N * f->bytes);
-            free(out);
+                      back.contents, (size_t)N * f->bytes);
             printf("TILE %s %s\n", f->name, leg == 0 ? "clear" : "draw");
         }
         fflush(stdout);
