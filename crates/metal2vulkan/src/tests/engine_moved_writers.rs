@@ -17,8 +17,9 @@
 //! itself (a fixed point, which the runtime requires of every variant it compiles), or both refuse
 //! the draw. A writer whose write mask covers none of the color's channels stores nothing, so no
 //! test bears on its write: its plan selects no tests under any draw tests, and its variant states
-//! no store before them. So does a writer that declares the color as an input it never reads (the
-//! owned fixture `smw_unread`), which takes the storage form as compiled. No GPU is used.
+//! no store before them. A writer that declares the color as an input it never reads (the owned
+//! fixture `smw_unread`) reads nothing there, so it takes no storage form as compiled and every draw
+//! that moves no color runs it so. No GPU is used.
 
 use std::path::Path;
 
@@ -376,14 +377,14 @@ fn a_moved_writer_that_stores_nothing_selects_no_tests() {
     );
 }
 
-/// A writer that declares color 0 as an input it never reads (`smw_unread`, which discards) takes
-/// the storage form there as compiled, so it stores before the tests where its write mask stores
-/// something (`TestedStorageWrites` with the early-tests variant). Under a write mask that covers
-/// none of the color's channels it stores nothing: it states no store before the tests, and every
-/// draw, one whose tests may count what they keep (`Any`) included, runs it as compiled. The
-/// misses are counted by kind before the test fails.
+/// A writer that declares color 0 as an input it never reads (`smw_unread`, which discards) reads
+/// nothing there, so it takes no storage form as compiled, under a write mask that stores and one
+/// that covers none of the color's channels: color 0 is a color attachment of the pipeline, the
+/// pipeline states no store before the tests, and every draw that moves no color, one whose tests
+/// may count what they keep (`Any`) included, runs it as compiled. The misses are counted by kind
+/// before the test fails.
 #[test]
-fn an_unread_color_input_that_stores_nothing_selects_no_tests() {
+fn an_unread_color_input_takes_no_storage_form() {
     let (Some(writers), Some(unread)) = (
         fixture_library("smw_writers"),
         fixture_library("smw_unread"),
@@ -394,7 +395,7 @@ fn an_unread_color_input_that_stores_nothing_selects_no_tests() {
     let mut misses = std::collections::BTreeMap::<&str, Vec<String>>::new();
     let mut states = 0usize;
     for (stem, dev) in &devices {
-        for (mask, stores) in [(ColorWriteMask::ALL, true), (ColorWriteMask::NONE, false)] {
+        for mask in [ColorWriteMask::ALL, ColorWriteMask::NONE] {
             let mut d = RenderPipelineDescriptor::new(stage(&writers, "smw_full"));
             d.fragment = Some(stage(&unread, "smw_unread"));
             let mut color = ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float);
@@ -406,10 +407,17 @@ fn an_unread_color_input_that_stores_nothing_selects_no_tests() {
             let base = dev
                 .compile_render_pipeline(&d, &Budget::standard())
                 .unwrap_or_else(|e| panic!("{what}: refused as compiled: {e}"));
-            assert!(storage_write(&base).is_some(), "{what}: the storage form");
-            if stores {
-                assert_eq!(stored_before_tests(&base), Some(true), "{what}");
-                continue;
+            if !base.graphics.storage_attachments.is_empty() {
+                misses
+                    .entry("it takes the storage form")
+                    .or_default()
+                    .push(what.clone());
+            }
+            if base.graphics.color_attachments[0].is_none() {
+                misses
+                    .entry("color 0 is no color attachment")
+                    .or_default()
+                    .push(what.clone());
             }
             if stored_before_tests(&base).is_some() {
                 misses
@@ -430,7 +438,7 @@ fn an_unread_color_input_that_stores_nothing_selects_no_tests() {
         }
     }
     eprintln!(
-        "unread color input storing nothing: {states} draws on {} profiles",
+        "unread color input: {states} draws on {} profiles",
         devices.len()
     );
     for (kind, whats) in &misses {

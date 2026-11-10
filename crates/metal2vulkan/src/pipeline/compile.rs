@@ -1969,6 +1969,23 @@ pub(crate) fn spec_request(
     })
 }
 
+/// The parameters of the specialized entry `spec` an instruction of its body uses, as the lowering
+/// reads a use (`lower::select`: an argument any instruction names, a call's operand included). A
+/// parameter the function's constants leave unread (its reads folded away by specialization and
+/// deleted with what nothing observes) is not among them.
+fn params_used(spec: &air::Entry) -> BTreeSet<u32> {
+    let mut used = BTreeSet::new();
+    let body = spec.module.func(spec.func).and_then(|f| f.body.as_ref());
+    for inst in body.into_iter().flat_map(|b| b.insts.values()) {
+        inst.kind.for_each_value(|v| {
+            if let Value::Arg(a) = v {
+                used.insert(a.raw());
+            }
+        });
+    }
+    used
+}
+
 /// The Metal attribute indices the specialized vertex entry `spec` reads: its `[[attribute(n)]]`
 /// parameters that survived function-constant specialization and that an instruction uses (the
 /// parameters `lower::stage_io` plans), each with the numeric class it is declared with. Empty for
@@ -1984,17 +2001,7 @@ pub(crate) fn declared_attributes(
     let Some(func) = spec.module.func(spec.func) else {
         return out;
     };
-    let Some(body) = func.body.as_ref() else {
-        return out;
-    };
-    let mut used = BTreeSet::new();
-    for inst in body.insts.values() {
-        inst.kind.for_each_value(|v| {
-            if let Value::Arg(a) = v {
-                used.insert(a.raw());
-            }
-        });
-    }
+    let used = params_used(spec);
     for b in &spec.ep.params {
         if let ParamRole::VertexInput { location } = &b.role {
             if let AbiInt::Const(index) = location.index {
@@ -2034,20 +2041,7 @@ pub(crate) fn declared_attributes(
 /// narrower reading of it. Empty for any other stage, which declares no such parameter.
 pub(crate) fn stage_in_attributes(spec: &air::Entry) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
-    let Some(func) = spec.module.func(spec.func) else {
-        return out;
-    };
-    let Some(body) = func.body.as_ref() else {
-        return out;
-    };
-    let mut used = BTreeSet::new();
-    for inst in body.insts.values() {
-        inst.kind.for_each_value(|v| {
-            if let Value::Arg(a) = v {
-                used.insert(a.raw());
-            }
-        });
-    }
+    let used = params_used(spec);
     for b in &spec.ep.params {
         if let ParamRole::StageIn { location } = &b.role {
             if let AbiInt::Const(index) = location.index {
@@ -2148,8 +2142,10 @@ pub(crate) fn unattached_colors_written(
 
 /// The framebuffer-fetch state of pass `d` for the specialized fragment entry `spec` on `p`
 /// (`LoweringInputs::framebuffer_fetch`): on a device that orders fetch only through the pixel
-/// interlock, the state of every attachment the entry declares a `[[color(n)]]` input of a constant
-/// index for, of every extended-range attachment it writes that the pass blends (whose blend the
+/// interlock, the state of every attachment the entry reads through a `[[color(n)]]` input of a
+/// constant index (one an instruction of its specialized body uses: an input the function's
+/// constants leave unread reads nothing), of every extended-range attachment it writes that the
+/// pass blends (whose blend the
 /// function computes from the texel it reads) or writes unblended under a mask of some of the codes
 /// one word holds (`color_writes::merged_extended`), of every attachment held with its channels
 /// rotated whose blend the function computes (`color_writes::shader_rotated_blend`, in either form
@@ -2229,10 +2225,15 @@ pub(crate) fn fetch_inputs(
             .flatten()
             .is_some_and(|c| crate::pipeline::color_writes::shader_rotated_blend(&c, p))
     };
+    // A color input counts only where the specialized body reads it, as the lowering plans only
+    // a used parameter: a read the function's constants make dead reads nothing, so it takes
+    // neither the storage form nor its blend in the shader.
+    let used = params_used(spec);
     let read: BTreeSet<u32> = spec
         .ep
         .params
         .iter()
+        .filter(|b| used.contains(&b.param))
         .filter_map(|b| match b.role {
             ParamRole::ColorInput {
                 index: AbiInt::Const(color),

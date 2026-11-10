@@ -1,9 +1,8 @@
 // Owned fixture: a writer of color 0 that declares color 0 as an input it never reads, and whose
-// discard alone keeps it from early fragment tests. On a device that orders fetch through the
-// pixel interlock, the declared input puts color 0 in the interlocked storage form though the
-// function reads nothing there; the write it returns to color 0 is then a storage write made
-// before the depth and stencil tests, and one under a write mask that covers no channel stores
-// nothing. It returns `tint` (buffer 0) and discards the fragments of every fourth column (`x` in
+// discard alone keeps it from early fragment tests. The function reads nothing of the attachment,
+// so on a device that orders fetch through the pixel interlock its pipeline takes no storage form:
+// the write it returns to color 0 is an ordinary color write, after the depth and stencil tests.
+// It returns `tint` (buffer 0) and discards the fragments of every fourth column (`x` in
 // `[4k, 4k + 1)`), as `smw_writers`' `smw_discard` does. Loop-free.
 // metal-fast-math: off
 // metal-macos-min: 27.0
