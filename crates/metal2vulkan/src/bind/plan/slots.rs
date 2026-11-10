@@ -346,17 +346,32 @@ fn heap_ycbcr(
         })
 }
 
-/// Whether a heap member of `shape` that reaches `stage` (as for [`heap_ycbcr`]) is a texture a
-/// heap holds by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float`
-/// read, sample or gather decodes by the device's arithmetic.
+/// The `SpecKey::HeapRawTextures` of `stage` for `shape`: of the heap members of `shape` that reach
+/// `stage` (as for [`heap_ycbcr`]), the bit `lower::texture::heap_raw::HELD` where one is a texture
+/// a heap holds by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's `float`
+/// read, sample or gather decodes by the device's arithmetic, and the bit
+/// `lower::texture::heap_raw::FILTERED` where one such is of a form whose sample the function
+/// filters (not a bfloat one).
 fn heap_raw(
     shape: &BindShape,
     stage: Stage,
     reach: &dyn Fn(metal::RenderStages) -> Vec<Stage>,
-) -> bool {
-    crate::bind::heap::members(shape, &[stage], reach)
-        .iter()
-        .any(|m| crate::bind::heap::raw_held(&m.shape))
+) -> u32 {
+    use crate::lower::texture::heap_raw::{FILTERED, HELD};
+    let mut bits = 0;
+    for m in crate::bind::heap::members(shape, &[stage], reach) {
+        let TextureShape::Texture { pixel_format, .. } = m.shape else {
+            continue;
+        };
+        if !crate::bind::heap::raw_held(&m.shape) {
+            continue;
+        }
+        bits |= HELD;
+        if crate::metal::format::ExtendedRange::of(pixel_format).is_some_and(|f| !f.bfloat()) {
+            bits |= FILTERED;
+        }
+    }
+    bits
 }
 
 /// Whether `shape` binds anything at `slot`.

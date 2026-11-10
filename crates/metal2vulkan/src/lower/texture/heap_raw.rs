@@ -48,12 +48,21 @@ pub const READ_WORDS: u32 = 256;
 /// element's access chain, load and query.
 pub const QUERY_WORDS: u32 = 128;
 
+/// The bit of `SpecKey::HeapRawTextures`' value that a texture the stage's handles can name is held
+/// by its raw texels alone, whose decode the function's `float` read, sample or gather takes.
+pub(crate) const HELD: u32 = 1;
+
+/// The bit of `SpecKey::HeapRawTextures`' value that such a texture is of a form whose sample the
+/// function filters (`sampler::heap_raw`): every form of `ExtendedRange::HEAP_READ` but a bfloat
+/// one, whose sample reads the nearest texel under either filter.
+pub(crate) const FILTERED: u32 = 2;
+
 /// Plan a `float` or `half` read, sample or gather of heap group `group` that decodes a member of a
 /// form a heap reads where its handle's class index names one, with the decode routine of each
 /// result type of `halves` (`false` a `float` one, `true` a `half` one): the group's unsigned
 /// integer class ([`HeapPlan::reads_raw`](super::slot::HeapPlan)), the routines, the handle's
 /// class index, and the decode's `PrecisionNote::DevicePackConversion` where a texture the stage's
-/// handles can name is held by its raw texels alone (`SpecKey::HeapRawTextures`).
+/// handles can name is held by its raw texels alone (`SpecKey::HeapRawTextures`' [`HELD`] bit).
 pub(crate) fn plan(
     cx: &mut SelectCx<'_>,
     group: u32,
@@ -65,7 +74,7 @@ pub(crate) fn plan(
     }
     cx.families.texture.heap_raw.extend(halves.iter().copied());
     cx.families.access.heap_class_index = true;
-    let raw = NoteTest::equal(NoteOn::HeapRaw(cx.stage), 1, 1);
+    let raw = NoteTest::equal(NoteOn::HeapRaw(cx.stage), HELD, HELD);
     cx.note_when(PrecisionNote::DevicePackConversion, any_of([raw]), m)
 }
 

@@ -470,13 +470,15 @@ fn heap_decodes_record_the_device_pack_conversion() {
 }
 
 /// A heap sample the function emulates (`sampler::heap_raw`) records the filter's note
-/// (`PrecisionNote::BicubicFilterArithmetic`, the device's sum of the decoded taps) as a slot's
-/// sample does, on every committed profile with a sampled heap: through a runtime sampler slot
-/// only where the word of the sampler bound there filters (`SpecKey::BoundSamplerWord`: its
-/// clauses hold for a linear word and not for a nearest one); through a constexpr linear sampler
-/// whatever is bound; and through a constexpr nearest sampler, or as a gather, not at all.
+/// (`PrecisionNote::BicubicFilterArithmetic`, the device's sum of the decoded taps) as a
+/// specialized note, on every committed profile with a sampled heap: each clause holds only where a
+/// texture the stage's handles can name is held by its raw texels in a form the function filters
+/// (`SpecKey::HeapRawTextures` 2, not a bfloat form's 1 alone, nor 0), and through a runtime
+/// sampler slot only where the word of the sampler bound there filters too
+/// (`SpecKey::BoundSamplerWord`: a linear word, not a nearest one); through a constexpr linear
+/// sampler whatever is bound; through a constexpr nearest sampler, or as a gather, not at all.
 #[test]
-fn a_heap_sample_s_filter_note_follows_the_bound_sampler_word() {
+fn a_heap_sample_s_filter_note_follows_the_raw_texture_and_the_bound_sampler_word() {
     use crate::bind::SamplerDescriptor;
     use crate::metal::sampler::SamplerWord;
     use crate::metal::SamplerMinMagFilter as F;
@@ -487,15 +489,25 @@ fn a_heap_sample_s_filter_note_follows_the_bound_sampler_word() {
         class: SlotClass::Sampler,
         index: 0,
     };
+    let raw = SpecKey::HeapRawTextures(Stage::Kernel);
     let word = |filter| {
         let mut d = SamplerDescriptor::new();
         (d.min_filter, d.mag_filter) = (filter, filter);
         SamplerWord::of(&d).0
     };
-    let holds = |clause: &SpecClause, word: u32| {
+    // Whether `clause` holds where the key reads `held` and the bound word is `bound`.
+    let holds = |clause: &SpecClause, held: u32, bound: u32| {
+        assert!(
+            clause.all.iter().any(|t| t.key == raw),
+            "a clause past the raw texture: {clause:?}"
+        );
         clause.all.iter().all(|t| {
-            assert_eq!(t.key, SpecKey::BoundSamplerWord(sampler), "{clause:?}");
-            ((word & t.mask) == t.bits) == t.equal
+            let v = match t.key {
+                k if k == raw => held,
+                SpecKey::BoundSamplerWord(s) if s == sampler => bound,
+                k => panic!("{k:?} in {clause:?}"),
+            };
+            ((v & t.mask) == t.bits) == t.equal
         })
     };
     let consts = FunctionConstantValues::defaults();
@@ -542,16 +554,17 @@ fn a_heap_sample_s_filter_note_follows_the_bound_sampler_word() {
                 .filter(|s| s.note == note)
                 .flat_map(|s| &s.when)
                 .collect();
-            assert_eq!(!when.is_empty(), bound, "{what}: {when:?}");
-            if bound {
+            assert_eq!(!when.is_empty(), recorded, "{what}: {when:?}");
+            let any = |held, bound| when.iter().any(|c| holds(c, held, bound));
+            let (linear, nearest) = (word(F::Linear), word(F::Nearest));
+            if recorded {
                 assert!(
-                    when.iter().any(|c| holds(c, word(F::Linear))),
-                    "{what}: a linear word"
+                    any(3, linear),
+                    "{what}: a filtered raw texture, a linear word"
                 );
-                assert!(
-                    !when.iter().any(|c| holds(c, word(F::Nearest))),
-                    "{what}: a nearest word"
-                );
+                assert!(!any(1, linear), "{what}: a bfloat raw texture alone");
+                assert!(!any(0, linear), "{what}: no raw texture");
+                assert_eq!(any(3, nearest), !bound, "{what}: a nearest word");
             }
             compiled += 1;
         }
@@ -564,10 +577,11 @@ fn a_heap_sample_s_filter_note_follows_the_bound_sampler_word() {
 
 /// A heap `float` read's `DevicePackConversion` holds where its command can name a texture the heap
 /// holds by its raw texels alone: on every committed profile with a sampled heap, a plan of its
-/// pipeline gives `SpecKey::HeapRawTextures` 1 exactly where a texture the command makes resident
-/// is such a texture (`BGRA10_XR`, `RGBA16Bfloat`, beside an `RGBA8Unorm` one too), and 0 where it
+/// pipeline gives `SpecKey::HeapRawTextures` bit 1 exactly where a texture the command makes
+/// resident is such a texture (`BGRA10_XR`, `RGBA16Bfloat`, beside an `RGBA8Unorm` one too), bit 2
+/// where it is of a form the function filters (`BGRA10_XR`, not `RGBA16Bfloat`), and 0 where it
 /// makes none or only `RGBA8Unorm` or `RGBA16Float` ones resident; the stage's note holds under the
-/// plan's values exactly where the key is 1 (`StageModule::precision_notes_bound`), and under no
+/// plan's values exactly where bit 1 is set (`StageModule::precision_notes_bound`), and under no
 /// known value (a reading of the module alone).
 #[test]
 fn a_heap_decode_s_note_holds_where_its_command_can_name_a_raw_texture() {
@@ -592,13 +606,14 @@ fn a_heap_decode_s_note_holds_where_its_command_can_name_a_raw_texture() {
             .collect(),
         ..Default::default()
     };
-    let cases: [(&[PixelFormat], bool); 6] = [
-        (&[PixelFormat::BGRA10XR], true),
-        (&[PixelFormat::RGBA16Bfloat], true),
-        (&[PixelFormat::RGBA8Unorm, PixelFormat::BGRA10XR], true),
-        (&[], false),
-        (&[PixelFormat::RGBA8Unorm], false),
-        (&[PixelFormat::RGBA16Float], false),
+    // The formats, and the key's value: 1 a raw texture, 2 one of a form the function filters.
+    let cases: [(&[PixelFormat], u64); 6] = [
+        (&[PixelFormat::BGRA10XR], 3),
+        (&[PixelFormat::RGBA16Bfloat], 1),
+        (&[PixelFormat::RGBA8Unorm, PixelFormat::BGRA10XR], 3),
+        (&[], 0),
+        (&[PixelFormat::RGBA8Unorm], 0),
+        (&[PixelFormat::RGBA16Float], 0),
     ];
     let mut planned = 0;
     for (stem, dev) in devices() {
@@ -620,16 +635,87 @@ fn a_heap_decode_s_note_holds_where_its_command_can_name_a_raw_texture() {
             "{stem}: {:?}",
             p.stage.precision_notes
         );
-        for (formats, raw) in cases {
+        for (formats, value) in cases {
             let what = format!("{formats:?} on {stem}");
             let plan = p
                 .plan(&dev, &state(formats).shape())
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert_eq!(plan.specialized_value(key), Some(u64::from(raw)), "{what}");
+            assert_eq!(plan.specialized_value(key), Some(value), "{what}");
             let held = (p.stage)
                 .precision_notes_bound(&plan.specialization, &|k| plan.specialized_value(k))
                 .contains(&note);
-            assert_eq!(held, raw, "{what}");
+            assert_eq!(held, value & 1 == 1, "{what}");
+            planned += 1;
+        }
+    }
+    assert!(planned > 0, "no committed profile has the sampled heap");
+}
+
+/// A heap linear sample's `BicubicFilterArithmetic` holds where its command can name a texture the
+/// heap holds by its raw texels in a form the function filters: on every committed profile with a
+/// sampled heap, under the plan's values (`StageModule::precision_notes_bound`) of a constexpr
+/// linear sample's pipeline, it holds where the command makes a `BGRA10_XR` texture resident
+/// (`SpecKey::HeapRawTextures` 3, beside an `RGBA8Unorm` one too), and not where it makes an
+/// `RGBA16Bfloat` one alone resident (1: its sample reads the nearest texel), nor where it makes
+/// none or an `RGBA8Unorm` one alone resident (0: the device's own sample); the stage's decode note
+/// holds wherever a raw texture is resident.
+#[test]
+fn a_heap_sample_s_filter_note_holds_where_its_command_can_name_a_filtered_raw_texture() {
+    use crate::bind::{ResourceClass, UsedResource};
+    use crate::pipeline::PrecisionNote;
+    let filter = PrecisionNote::BicubicFilterArithmetic;
+    let pack = PrecisionNote::DevicePackConversion;
+    let key = SpecKey::HeapRawTextures(Stage::Kernel);
+    let Some(bc) = assemble(
+        "heap_filter_plan",
+        &sampling_kernel(Sampling::Sample(words(true, false))),
+    ) else {
+        return;
+    };
+    // A command making `formats` resident, at IDs of their own.
+    let state = |formats: &[PixelFormat]| BindState {
+        used_resources: (formats.iter().zip(1u32..))
+            .map(|(&pf, token)| {
+                let mut facts = TextureFacts::new(TextureType::Type2D, pf);
+                facts.usage = metal::TextureUsage::SHADER_READ;
+                let mut u = UsedResource::new(ResourceClass::Texture(facts), token);
+                u.resource_id = Some(0x0000_0001_0000_0000 | u64::from(token) << 4);
+                u
+            })
+            .collect(),
+        ..Default::default()
+    };
+    // The formats, the key's value, and whether the filter's note holds.
+    let cases: [(&[PixelFormat], u64, bool); 5] = [
+        (&[PixelFormat::BGRA10XR], 3, true),
+        (&[PixelFormat::RGBA8Unorm, PixelFormat::BGRA10XR], 3, true),
+        (&[PixelFormat::RGBA16Bfloat], 1, false),
+        (&[PixelFormat::RGBA8Unorm], 0, false),
+        (&[], 0, false),
+    ];
+    let mut planned = 0;
+    for (stem, dev) in devices() {
+        let lib = Library::from_air(&bc).expect("library");
+        let f = lib.function("k").expect("function");
+        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+        let p = match dev.compile_compute_pipeline(&d, &Budget::standard()) {
+            Ok(p) => p,
+            Err(crate::error::Error::Unsupported(Unsupported {
+                feature: Feature::ArgumentBufferTextures,
+                ..
+            })) => continue,
+            Err(e) => panic!("{stem}: {e}"),
+        };
+        for (formats, value, filtered) in cases {
+            let what = format!("{formats:?} on {stem}");
+            let plan = p
+                .plan(&dev, &state(formats).shape())
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(plan.specialized_value(key), Some(value), "{what}");
+            let notes = (p.stage)
+                .precision_notes_bound(&plan.specialization, &|k| plan.specialized_value(k));
+            assert_eq!(notes.contains(&filter), filtered, "{what}: {notes:?}");
+            assert_eq!(notes.contains(&pack), value != 0, "{what}: {notes:?}");
             planned += 1;
         }
     }

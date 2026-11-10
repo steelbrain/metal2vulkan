@@ -3666,7 +3666,9 @@ bound.
   and by up to `1/64` of the two levels' difference under a linear mip filter. Through a runtime
   sampler slot it is announced at a draw or dispatch only where the bound sampler filters (a linear
   minification or magnification filter, anisotropy, a cubic filter or a linear mip filter): a
-  nearest sampler's sample is the decoded texel at Metal's position.
+  nearest sampler's sample is the decoded texel at Metal's position. Through an argument buffer it
+  is announced only at a draw or dispatch whose command can name a texture held by its raw texels in
+  a form the function filters (`BGR10_XR`, `BGRA10_XR`, the padded forms; not a bfloat one).
 - `metal2vulkan-degrade-sparse-residency` (precision). `PrecisionNote::SparseResidency`: A stage
   samples or gathers a texture whose residency it observes (`sparse_color::resident()`) through the
   slot's sparse form, which the module has where the profile enables `shaderResourceResidency`:

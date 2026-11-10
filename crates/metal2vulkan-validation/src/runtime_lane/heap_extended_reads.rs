@@ -927,6 +927,81 @@ fn a_heap_decode_s_stage_note_is_announced_where_its_command_can_name_a_raw_text
     });
 }
 
+/// A heap linear sample the function filters (`sampler::heap_raw`) records
+/// `PrecisionNote::BicubicFilterArithmetic` as a specialized note, holding where its command can
+/// name a texture the heap holds by its raw texels in a form the function filters
+/// (`SpecKey::HeapRawTextures`), and through a runtime sampler where the bound word filters too;
+/// the runtime announces it there alone: on a device whose options ask for
+/// `bicubic-filter-arithmetic` at every occurrence, a constexpr linear sample's dispatch that makes
+/// an `RGBA8Unorm` texture alone resident (the device's own sample) or an `RGBA16Bfloat` one (whose
+/// sample reads the nearest texel) announces nothing of it, and one that makes a `BGRA10XR` one
+/// resident announces it for the kernel; through the runtime sampler over `BGRA10XR`, a bound
+/// nearest sampler announces nothing of it, and a bound linear one announces it.
+#[test]
+fn a_heap_sample_s_filter_note_is_announced_where_its_command_can_name_a_filtered_raw_texture() {
+    let filter = Degradation::BicubicFilterArithmetic;
+    let each = |options: &mut DeviceOptions| {
+        options.announce_each = [filter].into_iter().collect();
+        at_plan(options);
+    };
+    on_device_with(each, |device, messages| {
+        let lanes = sample_lanes();
+        let linear = SAMPLERS[1].1;
+        let constexpr = sample_kernel(true, Through::Constexpr(linear), Op::Sample, false);
+        let stage = notes_of(device, &constexpr);
+        let heap = pipeline_of(device, &constexpr);
+        let slot = pipeline_of(
+            device,
+            &sample_kernel(true, Through::Slot, Op::Sample, false),
+        );
+        let made_with = notices(messages);
+        let sampler = |f| {
+            let mut d = SamplerDescriptor::new();
+            (d.min_filter, d.mag_filter) = (f, f);
+            d.s_address_mode = SamplerAddressMode::ClampToEdge;
+            d.t_address_mode = SamplerAddressMode::ClampToEdge;
+            device.new_sampler_state(&d).unwrap()
+        };
+        let (nearest, linear) = (
+            sampler(SamplerMinMagFilter::Nearest),
+            sampler(SamplerMinMagFilter::Linear),
+        );
+        let plain = made(device, PixelFormat::RGBA8Unorm, 4).unwrap();
+        let bfloat = made(device, PixelFormat::RGBA16Bfloat, 8).unwrap();
+        let raw = made(device, PixelFormat::BGRA10XR, 8).unwrap();
+        let mut seen = Vec::new();
+        for (name, pipeline, texture, bound) in [
+            ("RGBA8Unorm, constexpr linear", &heap, &plain, None),
+            ("RGBA16Bfloat, constexpr linear", &heap, &bfloat, None),
+            ("BGRA10XR, bound nearest", &slot, &raw, Some(&nearest)),
+            ("BGRA10XR, constexpr linear", &heap, &raw, None),
+            ("BGRA10XR, bound linear", &slot, &raw, Some(&linear)),
+        ] {
+            dispatch_with(device, (pipeline, true), (texture, bound), &lanes).unwrap();
+            let announced = notices(messages)
+                .into_iter()
+                .filter(|(k, _)| *k == filter)
+                .map(|(_, object)| object)
+                .collect::<Vec<_>>();
+            seen.push((name, announced));
+        }
+        println!(
+            "HEAP-FILTER-NOTE {}: stage notes {stage:?}; making {made_with:?}; {seen:?}",
+            device.name()
+        );
+        assert!(stage.contains(&FILTER_ARITHMETIC), "{stage:?}");
+        assert!(
+            !made_with.iter().any(|(k, _)| *k == filter),
+            "announced as it was made"
+        );
+        let kernel = "the kernel of a compute pipeline state".to_owned();
+        for (name, announced) in &seen {
+            let want = name.starts_with("BGRA10XR") && !name.ends_with("nearest");
+            assert_eq!(announced.contains(&kernel), want, "{name}: {announced:?}");
+        }
+    });
+}
+
 /// The kinds among `messages`' notices delivered so far, each with its notice's object.
 fn notices(messages: &Messages) -> Vec<(Degradation, String)> {
     messages

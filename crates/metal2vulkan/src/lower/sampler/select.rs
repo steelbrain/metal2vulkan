@@ -646,19 +646,23 @@ fn heap_raw_sample(
     crate::lower::texture::heap_raw::plan(cx, group, &[false, half], m)?;
     // A linear filter's sum of the decoded taps is the device's arithmetic (`extended::filtered`):
     // a constexpr sampler's that filters, and a runtime sampler slot's where the word bound there
-    // filters (`linear::filtering_word`), as a word that reads one texel takes that texel alone.
+    // filters (`linear::filtering_word`), as a word that reads one texel takes that texel alone;
+    // each where a texture the stage's handles can name is held by its raw texels in a form the
+    // function filters (`SpecKey::HeapRawTextures`' `FILTERED` bit), as a bfloat form's sample
+    // reads the nearest texel and any other member's is the device's own sample.
     if gather.is_none() {
+        use crate::lower::texture::heap_raw::FILTERED;
         let note = PrecisionNote::BicubicFilterArithmetic;
-        match state {
-            State::Constant { linear: false, .. } => {}
-            State::Constant { .. } => {
-                cx.precision.insert(note);
-            }
-            State::Slot { sampler: n } => {
-                let when = any_of(super::linear::filtering_word(n));
-                cx.note_when(note, when, m)?;
-            }
-        }
+        let raw = NoteTest::equal(NoteOn::HeapRaw(cx.stage), FILTERED, FILTERED);
+        let when: Vec<crate::lower::select::NoteClause> = match state {
+            State::Constant { linear: false, .. } => Vec::new(),
+            State::Constant { .. } => vec![[raw].into()],
+            State::Slot { sampler: n } => super::linear::filtering_word(n)
+                .into_iter()
+                .map(|word| [raw, word].into())
+                .collect(),
+        };
+        cx.note_when(note, when, m)?;
     }
     Ok(Some(HeapRaw {
         state,

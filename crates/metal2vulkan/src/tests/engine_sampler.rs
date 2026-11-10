@@ -500,7 +500,8 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
 /// announces only while a pixel state lives, records its centre's reading. The depth comparison
 /// records `RestrictedDepthRange`, as MoltenVK exposes no `VK_EXT_depth_range_unrestricted`. An
 /// argument buffer's raw texture sampled through the runtime slot holds its filter's
-/// `BicubicFilterArithmetic` only under the bound sampler's word (`SpecKey::BoundSamplerWord`).
+/// `BicubicFilterArithmetic` only under the bound sampler's word (`SpecKey::BoundSamplerWord`)
+/// where its handles can name a raw texture (`SpecKey::HeapRawTextures`).
 #[test]
 fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
     use crate::pipeline::sym::SpecKey;
@@ -621,16 +622,19 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
                 "{what}: {n:?}"
             );
         }
-        // An emulated filter's note through the runtime slot: under the bound sampler's word.
+        // An emulated filter's note through the runtime slot: under the bound sampler's word and,
+        // an argument buffer's, a raw texture its handles can name.
+        let raw = SpecKey::HeapRawTextures(Stage::Kernel);
         for n in a
             .specialized
             .iter()
             .filter(|n| n.note == N::BicubicFilterArithmetic)
         {
             assert!(
-                n.when
-                    .iter()
-                    .all(|c| c.all.iter().all(|t| t.key == SpecKey::BoundSamplerWord(s))),
+                n.when.iter().all(|c| {
+                    let keys: BTreeSet<SpecKey> = c.all.iter().map(|t| t.key).collect();
+                    keys == [SpecKey::BoundSamplerWord(s), raw].into()
+                }),
                 "{what}: {n:?}"
             );
         }

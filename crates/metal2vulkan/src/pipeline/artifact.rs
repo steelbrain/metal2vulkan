@@ -882,7 +882,10 @@ pub enum PrecisionNote {
     /// (`SpecKey::BoundSamplerWord`, which the runtime reads at each draw or dispatch): it holds
     /// where that word filters (a linear minification or magnification filter, anisotropy, a cubic
     /// filter or a linear mip filter), and a nearest word's sample, the decoded texel at Metal's
-    /// position, holds none.
+    /// position, holds none. Through an argument buffer it holds where a texture the stage's
+    /// handles can name is held by its raw texels in a form whose sample the function filters
+    /// (`SpecKey::HeapRawTextures`, which a plan gives): a command whose heap holds no such
+    /// texture samples through the device's own sampler, or reads a bfloat form's nearest texel.
     ///
     /// Inferences, taken by family: the signed clamp's lower bound, the treatment of the formats
     /// no case reads (`RG8UnormSRGB`, `RG8Unorm`, `RG8Snorm`, `RG16Unorm`, `BGRA8Unorm`,
