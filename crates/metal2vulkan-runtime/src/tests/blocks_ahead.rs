@@ -341,6 +341,44 @@ fn a_pool_of_small_blocks_keeps_a_block_s_bytes_ahead_and_no_creation_call_makes
     );
 }
 
+/// The textures of a pool of small blocks pack as many to a block as their texels' bytes fill:
+/// four `RGBA8Unorm` textures of 1024 x 1024 (4 MiB of texels each, a quarter of a 16 MiB block)
+/// to a block, whatever metadata the driver's image carries past its texels. The run makes
+/// [`PACKED`] of them, one at a time, and counts the pool's blocks of images, printing each
+/// image's bytes and alignment as the driver asked them.
+#[test]
+fn small_blocks_hold_four_textures_of_a_quarter_block_each() {
+    let scratch = Scratch::new("pack");
+    let device = small_blocks_device(&scratch);
+    let start = device.work_counts();
+    let mut held: Vec<Texture> = Vec::new();
+    for _ in 0..PACKED {
+        texture(&device, (TEXTURE_SIDE, TEXTURE_SIDE), &mut held);
+    }
+    let counts = device.work_counts();
+    let made = (counts.image_blocks_made_ahead + counts.image_blocks_made_in_place)
+        - (start.image_blocks_made_ahead + start.image_blocks_made_in_place);
+    let memory = crate::device::lock(&device.shared().memory);
+    let used = memory.pooled_blocks_in_use(Holds::Images);
+    let sizes = memory.pooled_block_sizes(Holds::Images);
+    let placements = memory.image_placements.clone();
+    drop(memory);
+    println!(
+        "BLOCKS-AHEAD {}: {PACKED} textures of 1024 x 1024 in pooled blocks of {sizes:?} bytes, \
+         {made} added since the first texture: {used} hold a texture; images placed by bytes and \
+         alignment {placements:?}",
+        device.name(),
+    );
+    assert!(
+        used <= PACKED / 4,
+        "{PACKED} textures of a quarter of a small block lie in {used} blocks, not {}",
+        PACKED / 4
+    );
+}
+
+/// The textures `small_blocks_hold_four_textures_of_a_quarter_block_each` makes.
+const PACKED: usize = 16;
+
 /// A pool of small blocks whose placements larger than its blocks, each taking a block of its
 /// own size (`memory::pooled_block_bytes`), are recent keeps a block of that size made ahead
 /// too, which the calls that need one of the pool's own blocks leave to them: the first such

@@ -599,6 +599,7 @@ fn phase(
         let mut memory = crate::device::lock(&device.shared().memory);
         memory.longest_making = Duration::ZERO;
         memory.in_place_bytes.clear();
+        memory.image_placements.clear();
         memory.turnover_bytes()
     };
     let before = (vmstat(), device.work_counts());
@@ -631,6 +632,11 @@ fn phase(
             memory.turnover_bytes(),
         )
     };
+    let placements: Vec<String> = (crate::device::lock(&device.shared().memory)
+        .image_placements
+        .iter())
+    .map(|(&(bytes, align), count)| format!("{count} of {bytes} bytes at {align}"))
+    .collect();
     let over = |times: &[(Duration, f64)], bound: f64| {
         (times.iter())
             .filter(|&&(took, _)| took.as_secs_f64() * 1e3 >= bound)
@@ -701,6 +707,10 @@ fn phase(
         frees.pooled_emptied - earlier_frees.pooled_emptied,
         frees.kept_stale - earlier_frees.kept_stale,
         frees.kept_for_room - earlier_frees.kept_for_room,
+    );
+    eprintln!(
+        "RECLAIM-SUBMIT {arm}, {name}: images placed by bytes and alignment [{}]",
+        placements.join(", ")
     );
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest submissions {slow}");
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest turnarounds {slow_turns}");

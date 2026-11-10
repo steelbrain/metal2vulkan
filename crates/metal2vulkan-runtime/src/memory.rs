@@ -2028,6 +2028,10 @@ pub(super) struct Memory {
     /// The bytes of the blocks made ahead and freed unused ([`AheadBlocks::unused`]).
     #[cfg(all(test, m2v_gpu, target_os = "linux"))]
     unused_bytes: u64,
+    /// The images placed ([`place`]), by their bytes and alignment as the driver asked them, since
+    /// a test last cleared it.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) image_placements: std::collections::BTreeMap<(u64, u64), u64>,
     /// Blocks of images are allocated with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`
     /// ([`Memory::zero_image_blocks`]).
     zero_images: bool,
@@ -2219,6 +2223,8 @@ impl Memory {
             in_place_bytes: std::collections::BTreeMap::new(),
             #[cfg(all(test, m2v_gpu, target_os = "linux"))]
             unused_bytes: 0,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            image_placements: std::collections::BTreeMap::new(),
         }
     }
 
@@ -3016,17 +3022,26 @@ impl Memory {
     /// crate's device tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(super) fn pooled_block_sizes(&self, holds: Holds) -> Vec<u64> {
+        self.pooled_blocks(holds).map(|block| block.size).collect()
+    }
+
+    /// How many live pooled blocks that hold `holds`, of every memory type, hold a placement, for
+    /// the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn pooled_blocks_in_use(&self, holds: Holds) -> usize {
+        self.pooled_blocks(holds)
+            .filter(|block| !block.empty())
+            .count()
+    }
+
+    /// The live pooled blocks that hold `holds`, of every memory type.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    fn pooled_blocks(&self, holds: Holds) -> impl Iterator<Item = &PoolBlock<Block>> {
         let count = self.types.len() as u32;
-        (0..count)
-            .flat_map(|type_index| {
-                let pool = self.pool_ref(holds, type_index);
-                pool.blocks
-                    .iter()
-                    .flatten()
-                    .filter(|block| !block.dedicated)
-            })
-            .map(|block| block.size)
-            .collect()
+        (0..count).flat_map(move |type_index| {
+            let pool = self.pool_ref(holds, type_index);
+            (pool.blocks.iter().flatten()).filter(|block| !block.dedicated)
+        })
     }
 
     /// For each pool of `holds` that keeps blocks made ahead, its memory type's index and the bytes
@@ -4667,6 +4682,10 @@ fn place(
 ) -> Result<Placement, Error> {
     let size = requirements.size.max(1);
     let align = requirements.alignment.max(1);
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    if holds == Holds::Images {
+        *(lock(memory).image_placements.entry((size, align))).or_default() += 1;
+    }
     let (candidates, overflow, maker) = {
         let memory = lock(memory);
         let bits = requirements.memory_type_bits;
