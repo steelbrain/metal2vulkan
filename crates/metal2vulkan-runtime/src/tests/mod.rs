@@ -300,6 +300,8 @@ mod listed_extensions;
 mod mac_class;
 mod making;
 mod managed;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod many_passes;
 mod memo;
 mod memory;
 #[cfg(m2v_gpu)]
