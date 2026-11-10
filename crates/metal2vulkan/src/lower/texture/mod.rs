@@ -1003,7 +1003,8 @@ pub struct TexturePlan {
     /// conversion because it stores Metal's half (`MetalHalfStorageWrites`) and its NaN
     /// (`MetalHalfStorageNans`), a write that may reach a normalized format, because it stores
     /// Metal's codes (`MetalNormStorageWrites`), and a `half` texel's NaN to a 16-bit float format
-    /// (`MetalHalfTexelWrites`). The module requires them.
+    /// (`MetalHalfTexelWrites`); and a `half` read's NaN of a 32-bit float or packed small float
+    /// texel (`MetalHalfConversion`, `half_texel_nans`). The module requires them.
     pub storage_properties: BTreeSet<crate::device::requirements::VkProperty>,
 }
 
@@ -1671,8 +1672,11 @@ pub(crate) fn half_texels(
 /// only where the class of the format bound there may hold a NaN (none of `TexelFormat::NAN_FREE`'s
 /// families): a test of `SpecKey::BoundTexelFormat`, which the runtime reads from the bound texture
 /// and no pipeline's key carries. A normalized, sRGB or extended-range texel decodes to no NaN, so
-/// the device's encoding of one cannot show. Of a heap's element or a depth texture, wherever it
-/// reads.
+/// the device's encoding of one cannot show. On a profile that takes
+/// `DriverDeviation::MetalHalfConversion` (the module then requires its property), not where the
+/// class is a 32-bit float or packed small float one either: the `half` the device makes of such a
+/// texel is measured to be Metal's, its NaN `0x7e00` (`device::driver_facts`). Of a heap's element
+/// or a depth texture, wherever it reads.
 pub(crate) fn half_texel_nans(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
@@ -1681,8 +1685,27 @@ pub(crate) fn half_texel_nans(
 ) -> Result<(), Error> {
     match image {
         ImageRef::Slot(index) if !shape.depth => {
-            let free = crate::metal::texel_format::TexelFormat::NAN_FREE;
-            let when = vec![[NoteTest::equal(NoteOn::Bound(index), free, 0)].into()];
+            use crate::metal::bicubic::BicubicTexels as B;
+            use crate::metal::texel_format::TexelFormat;
+            let bound = |mask, bits| NoteTest::equal(NoteOn::Bound(index), mask, bits);
+            let when = match cx
+                .profile
+                .takes_driver_deviation(DriverDeviation::MetalHalfConversion)
+            {
+                // A half-float class, and a class of no family.
+                true => {
+                    cx.families
+                        .texture
+                        .storage_properties
+                        .insert(crate::device::requirements::VkProperty::MetalHalfConversion);
+                    let family = B::LINEAR | B::HALF | TexelFormat::NAN_FREE;
+                    vec![
+                        [bound(family, B::HALF), bound(TexelFormat::PACKED_MASK, 0)].into(),
+                        [bound(family, 0)].into(),
+                    ]
+                }
+                false => vec![[bound(TexelFormat::NAN_FREE, 0)].into()],
+            };
             cx.note_when(PrecisionNote::DeviceNanEncoding, when, m)
         }
         _ => {

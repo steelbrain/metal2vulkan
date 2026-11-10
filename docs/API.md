@@ -3693,7 +3693,11 @@ bound.
   write to a packed small float one (`RG11B10Float`) on a profile that takes
   `DriverDeviation::MetalSmallFloatNans`, MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27
   identity, measured byte for byte against plain Metal over every `half` and 33,792 `float` words,
-  16,446 NaNs among them (the module requires `VkProperty::MetalSmallFloatNans`).
+  16,446 NaNs among them (the module requires `VkProperty::MetalSmallFloatNans`); and a `half`
+  read, sample or gather of a texture slot bound to a 32-bit float or packed small float format
+  (`RG11B10Float`, `RGB9E5Float`) on a profile that takes `DriverDeviation::MetalHalfConversion`,
+  the same identity, whose `half` of such a texel is Metal's, its NaN `0x7e00` (the module
+  requires `VkProperty::MetalHalfConversion`).
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
   enabled (MoltenVK on the M3 Max, ANV on the Iris Xe, RADV), where Vulkan gives a depth image no

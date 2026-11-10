@@ -919,7 +919,11 @@ pub enum PrecisionNote {
     /// pixel fetch of a `half` texel: Metal hands back the texel's own NaN, sign and payload, and
     /// Vulkan states no encoding for a 16-bit float texel's decode (MoltenVK answers the canonical
     /// NaN for every one); on a device that rounds a `half` through its conversion under the float
-    /// controls (ANV, RADV), the NaN that conversion makes of the device's decode. Also recorded
+    /// controls (ANV, RADV), the NaN that conversion makes of the device's decode. Not by such an
+    /// access at a texture slot bound to a 32-bit float or packed small float format on a profile
+    /// that takes [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion),
+    /// whose `half` of such a texel is measured to be Metal's (`0x7e00` for its NaN); the module
+    /// then requires `VkProperty::MetalHalfConversion`. Also recorded
     /// by a `half` texel's write to a storage texture that may hold a float format, a slot whose
     /// storage choice declares none or a heap element: Metal stores a 16-bit float texel's NaN as
     /// the half's own bits and a 32-bit or packed small float one's as its canonical NaN, and the

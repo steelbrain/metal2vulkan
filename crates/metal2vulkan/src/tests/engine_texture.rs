@@ -350,23 +350,26 @@ fn a_half_texel_read_records_the_device_nan_encoding() {
 
 /// A `half` read of a color texture slot records `DeviceNanEncoding` only where the format bound
 /// there may hold a NaN: `short_texels`' read of texture 2, its one `half` source, which no
-/// arithmetic follows, specializes the note on one clause, a test of the class of the format
-/// bound at that slot (`SpecKey::BoundTexelFormat`) against `TexelFormat::NAN_FREE`, which no
-/// pipeline's key carries. It holds of a half-float, 32-bit float, small-float or unknown format
-/// (an Apple M4 hands back their NaNs), and not of a normalized or sRGB one, whose
+/// arithmetic follows, specializes the note on tests of the class of the format bound at that
+/// slot (`SpecKey::BoundTexelFormat`), which no pipeline's key carries. It holds of a half-float or
+/// unknown format, and of a 32-bit float or small-float one (an Apple M4 hands back their NaNs)
+/// but on a profile that takes `DriverDeviation::MetalHalfConversion`, whose `half` of such a
+/// texel is Metal's and which the module then requires; and not of a normalized or sRGB one, whose
 /// texels decode to no NaN.
 #[test]
 fn a_half_texel_read_notes_the_device_nan_encoding_where_the_bound_format_may_hold_one() {
+    use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation;
     use crate::metal::format::bound_texel_format;
-    use crate::metal::texel_format::TexelFormat;
     let Some(bc) = fixture("texture_ops") else {
         return;
     };
-    let mut half = 0;
+    let (mut half, mut measured) = (0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
         if !p.fields().images.storage_write_without_format {
             continue;
         }
+        let takes = p.takes_driver_deviation(DriverDeviation::MetalHalfConversion);
         let h = ok(compile(&bc, "short_texels", &p), &p, &stem);
         let entries: Vec<_> = h
             .specialized
@@ -374,33 +377,34 @@ fn a_half_texel_read_notes_the_device_nan_encoding_where_the_bound_format_may_ho
             .filter(|s| s.note == PrecisionNote::DeviceNanEncoding)
             .collect();
         assert_eq!(entries.len(), 1, "{stem}: {:?}", h.specialized);
-        let [clause] = entries[0].when.as_slice() else {
-            panic!("{stem}: {:?}", entries[0].when);
-        };
-        assert!(clause.tests_bound_formats(), "{stem}: {clause:?}");
-        let [test] = clause.all.as_slice() else {
-            panic!("{stem}: {clause:?}");
-        };
-        assert_eq!(test.key, SpecKey::BoundTexelFormat(texture_slot(2)));
-        assert_eq!(
-            (test.mask, test.bits, test.equal),
-            (TexelFormat::NAN_FREE, 0, true)
-        );
+        let when = &entries[0].when;
+        assert_eq!(when.len(), if takes { 2 } else { 1 }, "{stem}: {when:?}");
+        for clause in when {
+            assert!(clause.tests_bound_formats(), "{stem}: {clause:?}");
+            for test in &clause.all {
+                assert_eq!(test.key, SpecKey::BoundTexelFormat(texture_slot(2)));
+            }
+        }
         let holds = |pf: Option<PixelFormat>| {
-            clause.holds_of_bound(&|slot| {
-                assert_eq!(slot, texture_slot(2));
-                pf.map(bound_texel_format)
+            when.iter().any(|clause| {
+                clause.holds_of_bound(&|slot| {
+                    assert_eq!(slot, texture_slot(2));
+                    pf.map(bound_texel_format)
+                })
             })
         };
-        for pf in [
-            PixelFormat::RGBA16Float,
-            PixelFormat::R16Float,
-            PixelFormat::RGBA32Float,
-            PixelFormat::RG11B10Float,
-        ] {
+        for pf in [PixelFormat::RGBA16Float, PixelFormat::R16Float] {
             assert!(holds(Some(pf)), "{stem}: {pf:?}");
         }
         assert!(holds(None), "{stem}: no format known");
+        for pf in [
+            PixelFormat::RGBA32Float,
+            PixelFormat::R32Float,
+            PixelFormat::RG11B10Float,
+            PixelFormat::RGB9E5Float,
+        ] {
+            assert_eq!(holds(Some(pf)), !takes, "{stem}: {pf:?}");
+        }
         for pf in [
             PixelFormat::RGBA8Unorm,
             PixelFormat::R16Unorm,
@@ -409,11 +413,25 @@ fn a_half_texel_read_notes_the_device_nan_encoding_where_the_bound_format_may_ho
         ] {
             assert!(!holds(Some(pf)), "{stem}: {pf:?}");
         }
+        if takes {
+            assert!(
+                h.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfConversion),
+                "{stem}: {:?}",
+                h.requirements.properties
+            );
+            measured += 1;
+        }
         half += 1;
     }
     assert!(
         half > 0,
         "no committed profile compiles short_texels without inputs"
+    );
+    assert!(
+        measured > 0,
+        "no committed profile that takes MetalHalfConversion compiles short_texels"
     );
 }
 
