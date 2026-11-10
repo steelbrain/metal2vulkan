@@ -916,10 +916,11 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   `PrecisionNote::ColorAttachmentGroups`. What each group's draw would run again or read from
   another group is the pipeline's limit refusal (`InterfaceComponents` at `MaxColorAttachments`):
   a vertex or fragment function that writes memory, alpha to coverage, a tessellation pipeline, a
-  `[[color(n)]]` input of another group, imageblocks and raster order groups. Mesh and tile
-  pipelines take no groups. The runtime draws such a pass group by group, each group's colors in
-  a pass of its own over a twin of the depth and stencil (the runtime's `render/color_groups.rs`;
-  what it refuses there is `RuntimeGap::ColorAttachmentGroups`).
+  `[[color(n)]]` input of another group that the specialized function reads (one whose read its
+  function constants fold away reads nothing and is not refused), imageblocks and raster order
+  groups. Mesh and tile pipelines take no groups. The runtime draws such a pass group by group,
+  each group's colors in a pass of its own over a twin of the depth and stencil (the runtime's
+  `render/color_groups.rs`; what it refuses there is `RuntimeGap::ColorAttachmentGroups`).
 - A pipeline's band variant (`VariantKey::line_band`, of a `BandPrimitive`) draws each line, or
   each edge of a triangle in fill mode `Lines`, as the parallelogram Metal draws for a line under
   Apple's `setLineWidth:` at a width the device's own lines do not draw (the runtime chooses
