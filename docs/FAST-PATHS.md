@@ -1128,16 +1128,23 @@ driver's. Each is open work.
   | Mixed sizes, fragmented | 13 and 14, 3 and 5, 32.1 ms, 184 to 201 ms | 1 and 2, 0, 9.8 ms, 11.8 to 20.9 ms |
   | Scrolled, quiet | 2 and 3, 0, 11.6 ms, 36 to 38 ms | 0 and 0, 0, 1.3 ms, 0.7 ms |
 
-  The turnarounds of 8 ms or more left with the fill are its misses: 1 or 2 makings of a
-  fragmented phase's 13 or 14 whose block filled its own pages (8.6 to 14.0 ms). The cost is the
-  making thread's (the ready thread, off every submission's way): the exportable allocation (10
-  to 13 ms for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the pool) besides the
-  block's own, so that a block's making took 45 to 74% longer on the quiet host (about 13.7 ms
-  against 9.3 ms) and 33 to 96% longer on the fragmented one. The plain making it replaces ran
-  90 to 96% on a CPU; how much of the fill's time is on a CPU was not measured apart. Every other
-  device makes its plain blocks with no fill, its driver identity without the fact
-  (`tests::block_fills`: lavapipe and ANV on an Iris Xe fill none). No switch: no answer of
-  Metal's changes. Not announced.
+  The turnarounds of 8 ms or more left with the fill are mostly its misses: 1 or 2 makings of a
+  fragmented phase's 13 or 14 whose block filled its own pages (8.6 to 14.0 ms). With blocks of
+  images of 68 MiB, as made now (the same arms, three runs), a quiet phase had 0 or 1 such
+  turnarounds, no fill missed and the makings' `vkAllocateMemory` 1.2 to 2.0 ms in all; a fragmented
+  one 1 to 4 (the slowest 33.1 ms, behind a missed block whose allocation took 29.4 ms), 1 or 2
+  fills of its 12 or 13 missed; of 957 submissions begun while a fill ran (one run), 1 turned around
+  in 8 ms or more (14.0 ms, fragmented), and in another run a 24.0 ms one began within a 32 ms fill
+  on the fragmented host. In a process that submits nothing the fill mostly misses
+  (`tests::block_fills` on the 780M: of 5 fills, 1 saved and 4 missed); why was not measured. The
+  cost is the making thread's (the ready thread, off every submission's way): the exportable
+  allocation (10 to 13 ms for 64 MiB) and its free (3.6 to 5.9 ms, clearing the pages for the pool;
+  the two about 16 ms a 68 MiB block on the quiet host, at most 17.3 ms) besides the block's own, so
+  that a block's making took 45 to 74% longer on the quiet host (about 13.7 ms against 9.3 ms) and
+  33 to 96% longer on the fragmented one. The plain making it replaces ran 90 to 96% on a CPU; how
+  much of the fill's time is on a CPU was not measured apart. Every other device makes its plain
+  blocks with no fill, its driver identity without the fact (`tests::block_fills`: lavapipe and ANV
+  on an Iris Xe fill none). No switch: no answer of Metal's changes. Not announced.
 
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
   `new_event` and `new_shared_event` each make one timeline semaphore (`vkCreateSemaphore`,
