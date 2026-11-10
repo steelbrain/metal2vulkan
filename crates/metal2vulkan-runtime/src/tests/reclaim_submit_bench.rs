@@ -62,7 +62,7 @@
 //! - **Images, small blocks**, **Images of mixed sizes, small blocks** and **Images in bursts,
 //!   small blocks**: those three arms on a device told first of a slow making
 //!   (`Memory::plain_block_made`, as `tests::plain_blocks` tells it), so that its pooled blocks of
-//!   plain memory are 16 MiB from the start, as a host whose makings were slow made them (a
+//!   plain memory are 17 MiB from the start, as a host whose makings were slow made them (a
 //!   consumer's guest on a fragmented Radeon 780M). A liberty: the device made no such making;
 //!   the arms ask what the runtime does once its blocks are that small, whatever the host.
 //! - **System heap, 64 MiB**, **System heap, 16 MiB** and **System heap, 4 MiB**: allocations of
@@ -166,8 +166,8 @@ const SCROLL_EVERY: Duration = Duration::from_millis(30);
 const IMAGE_SIDE: u64 = 1024;
 const IMAGE_EVERY: Duration = Duration::from_micros(16_667);
 const IMAGE_TEXTURES: usize = 192;
-/// The burst arm's textures back to back (64 MiB, four blocks of 16 MiB), and the gap between
-/// bursts.
+/// The burst arm's textures back to back (64 MiB of texels, four blocks of 17 MiB), and the gap
+/// between bursts.
 const BURST: usize = 16;
 const BURST_EVERY: Duration = Duration::from_millis(500);
 /// The mixed images arm's textures, in turn, one a frame at 60 Hz, at most [`MIXED_TEXTURES`] a

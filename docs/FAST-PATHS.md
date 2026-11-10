@@ -990,7 +990,8 @@ driver's. Each is open work.
   `vkAllocateMemory` holds every submission. A pool that grew, and one near its next block (it
   holds a pooled block and lacks room for three quarters of one, its first growth among them), gets
   a block's worth of bytes made ahead (`memory/ready.rs`; the pools of exportable buffers, which
-  hold the pictures, among them): as many of its blocks as one 64 MiB block holds, and while its
+  hold the pictures, among them): as many of its blocks as come to one 64 MiB block or more
+  (four of 17 MiB in a plain pool of smaller blocks), and while its
   placements larger than a plain pool's smaller blocks are recent, one block of their size
   besides, one `vkAllocateMemory` each, right after a burst of the device's submissions ended.
   Its own blocks are counted in bytes with its free room: they are made again once those made
@@ -999,8 +1000,8 @@ driver's. Each is open work.
   creation call that needs one while its making still waits for that end makes it at once and
   waits for it, as for a block made in place, and one that finds none of its size made waits for
   the ready thread to make it first. A pool near its next block keeps those blocks at rest for as
-  long as it stays so: 64 MiB a pool at most, and one block of its large placements' size more
-  (32 MiB) while those are recent, counted against the kept empty blocks' budget. Metal's command buffers wait for no allocation. Not
+  long as it stays so: 64 MiB a pool at most (68 MiB of 17 MiB blocks), and one block of its
+  large placements' size more (34 MiB) while those are recent, counted against the kept empty blocks' budget. Metal's command buffers wait for no allocation. Not
   announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
@@ -1074,7 +1075,7 @@ driver's. Each is open work.
   before, in plain blocks. No switch: no answer of Metal's changes. Not announced.
 - **On RADV, a command buffer submitted while the runtime makes a block of plain memory waits for
   that making; a device whose making of such a block took longer than 8 ms makes its later
-  pooled ones smaller, down to 16 MiB.** A block allocated with no export (`memory.rs`: the
+  pooled ones smaller, down to 17 MiB.** A block allocated with no export (`memory.rs`: the
   blocks of images, of heaps, of buffers that declare their padding unobserved, and of every
   buffer where the device's buffers lie in plain blocks; not the runtime's own pages, which it
   imports) shares the reservation of the process's buffer objects on RADV, and its
@@ -1082,9 +1083,10 @@ driver's. Each is open work.
   row above). Where such a making (`vkAllocateMemory`, its mapping and its buffer of addresses)
   takes longer than `MAKING_BOUND` (8 ms, half a frame at 60 Hz), the device's later pooled
   blocks of plain memory are made of the largest power of two that making's rate makes within
-  it, at least `MIN_PLAIN_BLOCK_BYTES` (16 MiB; `Memory::plain_block_made`), and a placement
-  larger than such a block, up to 32 MiB, takes a pooled block of the power of two that holds
-  it; past 32 MiB it takes a block of its own where no pooled block has room, as before, which
+  it with a sixteenth of it besides (`PLAIN_BLOCK_SLACK`), the power of two at least
+  `MIN_PLAIN_BLOCK_BYTES` (16 MiB, so 17 MiB blocks; `Memory::plain_block_made`), and a
+  placement larger than such a block, up to 32 MiB, takes a pooled block of the least power of
+  two so made that holds it (34 MiB); past 32 MiB it takes a block of its own where no pooled block has room, as before, which
   smaller blocks have less often. The size is never made larger again, after a single slow
   making too (a host's passing load): the rule follows each device's own makings, on every
   driver. On a Radeon 780M (RADV PHOENIX, Mesa 26.2.6), the kernel's page pools emptied before
@@ -1107,8 +1109,8 @@ driver's. Each is open work.
   ms against 26.2 and 26.1 ms. The 16 MiB makings that still took 8 ms or more are the host's
   fragmentation at the least size. The trade: more allocations, 26 a phase on the quiet host and
   60 on the fragmented one where the base made 13, each a `VkDeviceMemory` the device's
-  `maxMemoryAllocationCount` counts (Vulkan's least is 4096, 64 GiB of 16 MiB blocks), and a
-  texture between 16 and 32 MiB takes a block of the power of two that holds it. On the 780M
+  `maxMemoryAllocationCount` counts (Vulkan's least is 4096, 68 GiB of 17 MiB blocks), and a
+  texture between 17 and 34 MiB takes a block of 34 MiB. On the 780M
   `vkQueueSubmit` took 0.121 to 0.136 ms each with the rule's 26 to 60 blocks a phase, and 0.119
   to 0.140 ms with the base's 13 (the 1024x1024 arm's phases). Whether a driver that names every
   allocation in each submission pays for more blocks is unaudited: ANV and NVIDIA were not

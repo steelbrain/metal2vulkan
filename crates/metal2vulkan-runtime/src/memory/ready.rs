@@ -42,9 +42,9 @@
 //!   scroll on a Radeon 780M made its buffers' pool's first growth in place, on the guest's
 //!   thread (`tests::reclaim_submit_bench`'s scroll arm: of each phase's 8 blocks, the first was
 //!   made in place in three runs out of three, quiet and fragmented, and none is now). A pool
-//!   keeps a block's worth of bytes ahead: as many of its blocks as one block of
-//!   `memory::BLOCK_BYTES` holds (one of 64 MiB; four where its blocks of plain memory are made of
-//!   16 MiB after a slow making, `Memory::plain_block_made`); and, while its placements larger
+//!   keeps a block's worth of bytes ahead: as many of its blocks as come to one block of
+//!   `memory::BLOCK_BYTES` or more (one of 64 MiB; four where its blocks of plain memory are made
+//!   of 17 MiB after a slow making, `Memory::plain_block_made`); and, while its placements larger
 //!   than its blocks are recent (the last within `KEPT_EMPTY_FOR`), each of which takes a block of
 //!   its own size (`memory::pooled_block_bytes`), one block of the largest such size besides
 //!   them, which a call that needs one of the pool's own blocks leaves to those placements, so

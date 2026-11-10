@@ -8,12 +8,13 @@
 //!   on many devices) stays out of reach. A request larger than half a block takes a dedicated
 //!   block of its own size. Where a block of plain memory (allocated with no export) took longer
 //!   than [`MAKING_BOUND`] to make, the device's later pooled blocks of plain memory are made of
-//!   the largest power of two its rate makes within the bound, at least [`MIN_PLAIN_BLOCK_BYTES`]
-//!   ([`Memory::plain_block_made`]), a placement larger than such a block taking one of the power
-//!   of two that holds it: on RADV such a block shares the reservation of the process's buffer
-//!   objects, and its making holds every submission of the process for as long as it runs (a
-//!   Radeon 780M whose free memory lay in single pages took 9 to 27 ms at the median for 64 MiB;
-//!   `docs/FAST-PATHS.md`'s known gaps).
+//!   the largest power of two its rate makes within the bound with a sixteenth of it besides
+//!   ([`PLAIN_BLOCK_SLACK`]), the power of two at least [`MIN_PLAIN_BLOCK_BYTES`]
+//!   ([`Memory::plain_block_made`]), a placement larger than such a block taking one of the
+//!   least power of two so made that holds it: on RADV such a block shares the reservation of
+//!   the process's buffer objects, and its making holds every submission of the process for as
+//!   long as it runs (a Radeon 780M whose free memory lay in single pages took 9 to 27 ms at the
+//!   median for 64 MiB; `docs/FAST-PATHS.md`'s known gaps).
 //!   The blocks of exportable buffers keep their size: each is a buffer object of its own
 //!   reservation, whose making holds no submission.
 //! - **Kept for reuse.** A block that empties is kept for the next placements rather than freed:
@@ -183,8 +184,20 @@ pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 /// docs), so a frame submitted meanwhile is late by what is left of it.
 pub(super) const MAKING_BOUND: Duration = Duration::from_millis(8);
 
-/// The smallest a pooled block of plain memory is made ([`Memory::plain_block_made`]).
+/// The smallest power of two a pooled block of plain memory is made of
+/// ([`Memory::plain_block_made`]), its [`PLAIN_BLOCK_SLACK`] besides.
 pub(super) const MIN_PLAIN_BLOCK_BYTES: u64 = 16 << 20;
+
+/// What a pooled block of plain memory made smaller than [`Memory::block_bytes`] holds past the
+/// power of two it is made of, as a fraction of that power: a sixteenth ([`pooled_block_bytes`]).
+/// A driver's image takes more than its texels: RADV places a `Private` `RGBA8Unorm` texture of
+/// 1024 x 1024 (4 MiB of texels) in 4 MiB and 16 KiB on a Radeon 780M and 4 MiB and 16,408 bytes
+/// on an RX 550, each at an alignment of 64 KiB, so a block of 16 MiB held three of them, not
+/// four, and the textures of a guest's scroll took a third more blocks than their texels fill.
+/// With a sixteenth besides, a block holds four images of a quarter of its power of two whose
+/// metadata and alignment take up to 256 KiB each, two of a half up to 512 KiB, and one of the
+/// whole up to 1 MiB.
+pub(super) const PLAIN_BLOCK_SLACK: u64 = 16;
 
 /// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget
 /// ([`Pool::release`], [`Memory::kept_budget`]). In a pool the encodings place in, one of them is
@@ -1938,9 +1951,10 @@ pub(super) struct Memory {
     /// The buffers' pools by memory type, then the images' ([`Memory::pool`]).
     pools: Vec<Pool<Block>>,
     block_bytes: u64,
-    /// The bytes a pooled block of plain memory is made of now: [`Memory::block_bytes`], made
-    /// smaller at each making that took longer than [`MAKING_BOUND`], down to
-    /// [`MIN_PLAIN_BLOCK_BYTES`] ([`Memory::plain_block_made`]).
+    /// The power of two a pooled block of plain memory is made of now, its [`PLAIN_BLOCK_SLACK`]
+    /// besides ([`pooled_block_bytes`]): [`Memory::block_bytes`], made smaller at each making
+    /// that took longer than [`MAKING_BOUND`], down to [`MIN_PLAIN_BLOCK_BYTES`]
+    /// ([`Memory::plain_block_made`]).
     plain_block_bytes: u64,
     /// Blocks are allocated with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`: the device enabled
     /// `bufferDeviceAddress`, so buffers carry device addresses.
@@ -2680,15 +2694,16 @@ impl Memory {
     }
 
     /// The blocks `pool` keeps made ahead (`memory/ready.rs`), its blocks of `bytes`: as many of
-    /// `bytes` as one block of [`Memory::block_bytes`] holds, at least one, so that a pool whose
-    /// blocks of plain memory are made smaller ([`Memory::plain_block_made`]) keeps the bytes
-    /// ahead it kept before; and one of the bytes of the largest block its placements larger than
-    /// its blocks took lately ([`Pool::large`]), where they did.
+    /// `bytes` as come to one block of [`Memory::block_bytes`] or more, at least one, so that a
+    /// pool whose blocks of plain memory are made smaller ([`Memory::plain_block_made`]) keeps
+    /// at least the bytes ahead it kept before (four of 17 MiB for one of 64 MiB); and one of the
+    /// bytes of the largest block its placements larger than its blocks took lately
+    /// ([`Pool::large`]), where they did.
     fn ahead_sizes(&mut self, pool: (Holds, u32), bytes: u64) -> (Option<u64>, u64) {
         let bytes = bytes.max(1);
         let large =
             (self.pool(pool.0, pool.1).large(Instant::now())).filter(|&large| large > bytes);
-        (large, (self.block_bytes / bytes).max(1))
+        (large, self.block_bytes.div_ceil(bytes).max(1))
     }
 
     /// The blocks made ahead for `pool` a call that needs a block of `least` bytes or more takes
@@ -3100,18 +3115,21 @@ impl Memory {
     /// A block of plain memory of `size` bytes was made in `took` (`vkAllocateMemory`, its
     /// mapping and its buffer of addresses): where that is longer than [`MAKING_BOUND`], the later
     /// pooled blocks of plain memory are made of the largest power of two that the making's rate
-    /// (`size` in `took`) makes within the bound, where that is smaller than those made now, at
-    /// least [`MIN_PLAIN_BLOCK_BYTES`]. A block that took that long held every submission of the
-    /// process on RADV as long, and a block's making there takes about as much longer as the block
-    /// is larger. Never made larger again: the host's state that made it slow (its free memory in
-    /// single pages, no freed pages at hand in the kernel's pools) comes back.
+    /// (`size` in `took`) makes within the bound with its [`PLAIN_BLOCK_SLACK`] besides, where
+    /// that is smaller than the one they are made of now, at least [`MIN_PLAIN_BLOCK_BYTES`]. A
+    /// block that took that long held every submission of the process on RADV as long, and a
+    /// block's making there takes about as much longer as the block is larger. Never made larger
+    /// again: the host's state that made it slow (its free memory in single pages, no freed pages
+    /// at hand in the kernel's pools) comes back.
     pub(super) fn plain_block_made(&mut self, size: u64, took: Duration) {
         if took <= MAKING_BOUND {
             return;
         }
         let within = u128::from(size) * MAKING_BOUND.as_nanos() / took.as_nanos();
-        let fits = match u64::try_from(within).unwrap_or(u64::MAX).checked_ilog2() {
-            Some(log) => 1 << log,
+        let within = u64::try_from(within).unwrap_or(u64::MAX);
+        let fits = match within.checked_ilog2() {
+            Some(log) if with_slack(1 << log) <= within => 1 << log,
+            Some(log) => 1 << log >> 1,
             None => 0,
         };
         self.plain_block_bytes = self.plain_block_bytes.min(fits.max(MIN_PLAIN_BLOCK_BYTES));
@@ -3749,14 +3767,26 @@ fn plain((holds, type_index): (Holds, u32), fd_types: u32, page_types: u32) -> b
 
 /// The bytes of a pooled block that holds a placement of `size` bytes, at most half of
 /// `block_bytes` ([`place`]): `block_bytes` where its blocks are allocated exportable (`plain`
-/// `None`); else the bytes `plain` says a pooled block of plain memory is made of now
-/// ([`Memory::plain_block_made`]), or the power of two that holds the placement where that is
-/// larger.
+/// `None`) or those of plain memory are made of `block_bytes`; else the power of two `plain`
+/// says a pooled block of plain memory is made of now ([`Memory::plain_block_made`]), or the
+/// least power of two larger that holds the placement, each with its [`PLAIN_BLOCK_SLACK`]
+/// besides ([`with_slack`]), at most `block_bytes`.
 pub(super) fn pooled_block_bytes(block_bytes: u64, plain: Option<u64>, size: u64) -> u64 {
     match plain {
-        None => block_bytes,
-        Some(plain) => (plain.max(size.next_power_of_two())).min(block_bytes),
+        Some(plain) if plain < block_bytes => {
+            let holds = std::iter::successors(Some(plain), |base| base.checked_mul(2))
+                .map(with_slack)
+                .find(|&bytes| bytes >= size);
+            holds.unwrap_or(block_bytes).min(block_bytes)
+        }
+        _ => block_bytes,
     }
+}
+
+/// A pooled block of plain memory made of the power of two `base`, with its [`PLAIN_BLOCK_SLACK`]
+/// besides.
+fn with_slack(base: u64) -> u64 {
+    base + base / PLAIN_BLOCK_SLACK
 }
 
 /// What making a block of the runtime's memory takes ([`Memory::maker`]): a copy of the memory's

@@ -46,12 +46,14 @@ const MOST: usize = 400;
 /// The creation calls that place nothing in the host copies' pool once its making ended.
 const CREATIONS: usize = 20;
 
-/// The side of the small-blocks runs' `RGBA8Unorm` textures: 4 MiB, four to a block of 16 MiB.
+/// The side of the small-blocks runs' `RGBA8Unorm` textures: 4 MiB, four to a block of 16 MiB
+/// and a sixteenth.
 const TEXTURE_SIDE: u64 = 1024;
 
-/// The large-blocks run's textures larger than a block of 16 MiB: 20 MiB, each in a block of
-/// 32 MiB ([`LARGE_EVERY`] textures one of them), and how many it makes; then the textures of
-/// [`TEXTURE_SIDE`] it makes back to back, 96 MiB, more than its own blocks made ahead hold.
+/// The large-blocks run's textures larger than a block of 16 MiB and a sixteenth: 20 MiB, each in
+/// a block of 32 MiB and a sixteenth ([`LARGE_EVERY`] textures one of them), and how many it
+/// makes; then the textures of [`TEXTURE_SIDE`] it makes back to back, 96 MiB, more than its own
+/// blocks made ahead hold.
 const LARGE_SIDES: (u64, u64) = (2560, 2048);
 const BURST: usize = 24;
 const LARGE_EVERY: usize = 4;
@@ -59,6 +61,10 @@ const LARGE_TEXTURES: usize = 4;
 
 /// The most textures the small-blocks run makes, well past what `GROWTH` blocks hold.
 const MOST_TEXTURES: usize = 64;
+
+/// A pooled block of plain memory of the least size (`memory::PLAIN_BLOCK_SLACK`): 16 MiB and a
+/// sixteenth.
+const SMALL_BLOCK: u64 = MIN_PLAIN_BLOCK_BYTES + MIN_PLAIN_BLOCK_BYTES / 16;
 
 /// A scratch directory for a device's shader cache, removed when dropped.
 struct Scratch(std::path::PathBuf);
@@ -285,12 +291,13 @@ fn a_pool_s_first_block_is_made_alone() {
 }
 
 /// A pool whose blocks of plain memory are made small after a slow making
-/// (`Memory::plain_block_made`) keeps as many of them made ahead as one block of
-/// `memory::BLOCK_BYTES` holds, the bytes it kept ahead before they were made small, and no
-/// creation call makes a block of the pool itself while one can be made ahead: where none is
-/// made or under way, the call starts the pool's making and waits for its first block, the pool's
-/// first block among them. With one small block ahead at a time, a guest's creation calls on a
-/// Radeon 780M whose blocks were made of 16 MiB made 82 to 114 blocks of images themselves.
+/// (`Memory::plain_block_made`) keeps as many of them made ahead as come to one block of
+/// `memory::BLOCK_BYTES` or more, at least the bytes it kept ahead before they were made small
+/// (four of 17 MiB), and no creation call makes a block of the pool itself while one can be made
+/// ahead: where none is made or under way, the call starts the pool's making and waits for its
+/// first block, the pool's first block among them. With one small block ahead at a time, a
+/// guest's creation calls on a Radeon 780M whose blocks were made of 16 MiB made 82 to 114 blocks
+/// of images themselves.
 #[test]
 fn a_pool_of_small_blocks_keeps_a_block_s_bytes_ahead_and_no_creation_call_makes_one() {
     let scratch = Scratch::new("small-blocks");
@@ -321,31 +328,35 @@ fn a_pool_of_small_blocks_keeps_a_block_s_bytes_ahead_and_no_creation_call_makes
     let in_place = counts.image_blocks_made_in_place - start.image_blocks_made_in_place;
     let ahead = counts.image_blocks_made_ahead - start.image_blocks_made_ahead;
     println!(
-        "BLOCKS-AHEAD {}: {} textures of 4 MiB in blocks of {} MiB; of the images' pool's {} \
+        "BLOCKS-AHEAD {}: {} textures of 4 MiB in blocks of {} KiB; of the images' pool's {} \
          blocks, {ahead} made ahead, {in_place} in place, {} waited for; most kept ahead by \
-         memory type {:?} MiB; host copies' pool {host_copies:?}",
+         memory type {:?} KiB; host copies' pool {host_copies:?}",
         device.name(),
         held.len(),
-        MIN_PLAIN_BLOCK_BYTES >> 20,
+        SMALL_BLOCK >> 10,
         blocks(&counts),
         counts.blocks_ahead_waited_for - start.blocks_ahead_waited_for,
         (most_ahead.iter())
-            .map(|(&type_index, &bytes)| (type_index, bytes >> 20))
+            .map(|(&type_index, &bytes)| (type_index, bytes >> 10))
             .collect::<Vec<_>>(),
     );
     assert_eq!(in_place, 0, "a creation call made a block of images itself");
+    // Four blocks of 17 MiB: the fewest that come to 64 MiB or more.
+    let worth = 4 * SMALL_BLOCK;
     assert!(
-        !most_ahead.is_empty() && most_ahead.values().all(|&most| most == BLOCK_BYTES),
+        !most_ahead.is_empty() && most_ahead.values().all(|&most| most == worth),
         "a pool of images kept other than a block's worth ahead: {most_ahead:?} bytes by memory \
          type"
     );
 }
 
 /// The textures of a pool of small blocks pack as many to a block as their texels' bytes fill:
-/// four `RGBA8Unorm` textures of 1024 x 1024 (4 MiB of texels each, a quarter of a 16 MiB block)
-/// to a block, whatever metadata the driver's image carries past its texels. The run makes
-/// [`PACKED`] of them, one at a time, and counts the pool's blocks of images, printing each
-/// image's bytes and alignment as the driver asked them.
+/// four `RGBA8Unorm` textures of 1024 x 1024 (4 MiB of texels each, a quarter of the 16 MiB a
+/// small block is made of, `memory::PLAIN_BLOCK_SLACK`) to a block, whatever metadata the
+/// driver's image carries past its texels: RADV's take about 4 MiB and 16 KiB at an alignment of
+/// 64 KiB, three to a block of 16 MiB. The run makes [`PACKED`] of them, one at a time, and counts
+/// the pool's blocks of images, printing each image's bytes and alignment as the driver asked
+/// them.
 #[test]
 fn small_blocks_hold_four_textures_of_a_quarter_block_each() {
     let scratch = Scratch::new("pack");
@@ -391,7 +402,7 @@ fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead()
     let scratch = Scratch::new("large-blocks");
     let device = small_blocks_device(&scratch);
     let shared = device.shared();
-    let large_block = 2 * MIN_PLAIN_BLOCK_BYTES;
+    let large_block = 2 * SMALL_BLOCK;
     let made = || crate::device::lock(&shared.memory).ahead_made(Holds::Images);
     let start = device.work_counts();
     let mut held: Vec<Texture> = Vec::new();
@@ -411,7 +422,7 @@ fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead()
     let before_burst = made();
     // Back to back with a use of the queues held open, so that a making of the pool's own blocks
     // waits for a pause the use never leaves unless a call hurries it: the calls that find none of
-    // them made leave the block of 32 MiB made.
+    // them made leave the block of 34 MiB made.
     let after_burst = {
         let _in_use = InUse::new(&shared.queue_quiet);
         for _ in 0..BURST {
@@ -434,12 +445,12 @@ fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead()
     let mib = |sizes: &[u64]| sizes.iter().map(|size| size >> 20).collect::<Vec<_>>();
     println!(
         "BLOCKS-AHEAD {}: {} textures, one of 20 MiB every {LARGE_EVERY} then {BURST} back to \
-         back, in blocks of {} MiB; blocks of images made ahead {}, in place {in_place}; the 20 \
-         MiB textures after the first found no block of 32 MiB made at {missed:?}; made ahead \
+         back, in blocks of {} KiB; blocks of images made ahead {}, in place {in_place}; the 20 \
+         MiB textures after the first found no block of 34 MiB made at {missed:?}; made ahead \
          before the burst {:?} MiB, after it {:?} MiB; the pool's blocks {:?} MiB",
         device.name(),
         held.len(),
-        MIN_PLAIN_BLOCK_BYTES >> 20,
+        SMALL_BLOCK >> 10,
         counts.image_blocks_made_ahead - start.image_blocks_made_ahead,
         mib(&before_burst),
         mib(&after_burst),
@@ -449,15 +460,15 @@ fn placements_past_a_pool_s_small_blocks_find_a_block_of_their_size_made_ahead()
     assert_eq!(
         sizes.iter().filter(|&&size| size == large_block).count(),
         LARGE_TEXTURES,
-        "the 20 MiB textures did not each take a block of 32 MiB"
+        "the 20 MiB textures did not each take a block of 34 MiB"
     );
     assert!(
         missed.is_empty(),
-        "20 MiB textures found no block of 32 MiB made ahead at {missed:?}"
+        "20 MiB textures found no block of 34 MiB made ahead at {missed:?}"
     );
     assert!(
         after_burst.contains(&large_block),
-        "the burst's calls took the block of 32 MiB made ahead: {:?} MiB",
+        "the burst's calls took the block of 34 MiB made ahead: {:?} MiB",
         mib(&after_burst)
     );
 }

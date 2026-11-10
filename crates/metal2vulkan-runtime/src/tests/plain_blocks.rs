@@ -1,9 +1,10 @@
 //! A device whose making of a block of plain memory took longer than `memory::MAKING_BOUND` makes
 //! its later pooled blocks of plain memory of the largest power of two that making's rate makes
-//! within the bound, down to `memory::MIN_PLAIN_BLOCK_BYTES` (`Memory::plain_block_made`): on RADV
-//! such a making holds every submission of the process for as long as it runs. A placement larger
-//! than such a block, up to half of `memory::BLOCK_BYTES`, takes a block of the power of two that
-//! holds it, and the blocks of exportable buffers keep their size.
+//! within the bound with a sixteenth of it besides (`memory::PLAIN_BLOCK_SLACK`), the power of
+//! two down to `memory::MIN_PLAIN_BLOCK_BYTES` (`Memory::plain_block_made`): on RADV such a
+//! making holds every submission of the process for as long as it runs. A placement larger than
+//! such a block, up to half of `memory::BLOCK_BYTES`, takes a block of the least power of two so
+//! made that holds it, and the blocks of exportable buffers keep their size.
 //!
 //! The first two tests are of the memory's bookkeeping alone. The third makes textures on a device
 //! told of a slow making and reads the sizes of the blocks of images it made: device tests compile
@@ -53,7 +54,7 @@ fn a_making_past_the_bound_makes_the_later_plain_blocks_of_what_its_rate_makes_w
     memory.plain_block_made(BLOCK_BYTES, MAKING_BOUND);
     assert_eq!(memory.plain_block_bytes(), BLOCK_BYTES);
     // 64 MiB in 9.6 ms (a Radeon 780M's slowest on a quiet host, the kernel's page pools empty)
-    // makes 53 MiB in the bound: 32 MiB blocks.
+    // makes 53 MiB in the bound: blocks of 32 MiB and 2 MiB.
     memory.plain_block_made(BLOCK_BYTES, ms(9_600));
     assert_eq!(memory.plain_block_bytes(), 32 * MIB);
     // A fast making never makes them larger again, nor a slow one whose rate makes more.
@@ -64,6 +65,11 @@ fn a_making_past_the_bound_makes_the_later_plain_blocks_of_what_its_rate_makes_w
     // A dedicated block of an odd size: 48 MiB in twice the bound makes 24 MiB in it.
     memory.plain_block_made(48 * MIB, MAKING_BOUND * 2);
     assert_eq!(memory.plain_block_bytes(), 16 * MIB);
+    // A power of two the rate makes within the bound whose sixteenth besides it does not: 64 MiB
+    // in twice the bound makes 32 MiB in it, and a block of 32 MiB and 2 MiB would pass it.
+    let mut edge = memory_of(u64::MAX);
+    edge.plain_block_made(BLOCK_BYTES, MAKING_BOUND * 2);
+    assert_eq!(edge.plain_block_bytes(), 16 * MIB);
     // Never below the least.
     memory.plain_block_made(MIN_PLAIN_BLOCK_BYTES, MAKING_BOUND * 100);
     assert_eq!(memory.plain_block_bytes(), MIN_PLAIN_BLOCK_BYTES);
@@ -81,21 +87,30 @@ fn a_making_past_the_bound_makes_the_later_plain_blocks_of_what_its_rate_makes_w
 #[test]
 fn a_pooled_block_holds_its_placement_and_exportable_blocks_keep_their_size() {
     let plain = Some(16 * MIB);
-    assert_eq!(pooled_block_bytes(BLOCK_BYTES, plain, MIB), 16 * MIB);
-    assert_eq!(pooled_block_bytes(BLOCK_BYTES, plain, 16 * MIB), 16 * MIB);
+    // Blocks of 16 MiB and a sixteenth: four images of 4 MiB of texels and up to 256 KiB of
+    // metadata and alignment each.
+    assert_eq!(pooled_block_bytes(BLOCK_BYTES, plain, 0), 17 * MIB);
+    assert_eq!(pooled_block_bytes(BLOCK_BYTES, plain, MIB), 17 * MIB);
+    assert_eq!(pooled_block_bytes(BLOCK_BYTES, plain, 17 * MIB), 17 * MIB);
     assert_eq!(
-        pooled_block_bytes(BLOCK_BYTES, plain, 16 * MIB + 1),
-        32 * MIB
+        pooled_block_bytes(BLOCK_BYTES, plain, 17 * MIB + 1),
+        34 * MIB
     );
     assert_eq!(
         pooled_block_bytes(BLOCK_BYTES, plain, BLOCK_BYTES / 2),
-        BLOCK_BYTES / 2
+        34 * MIB
     );
     // A largest allocation that is no power of two bounds the block.
-    assert_eq!(pooled_block_bytes(48 * MIB, plain, 20 * MIB), 32 * MIB);
+    assert_eq!(pooled_block_bytes(48 * MIB, plain, 20 * MIB), 34 * MIB);
+    assert_eq!(pooled_block_bytes(33 * MIB, plain, 20 * MIB), 33 * MIB);
     assert_eq!(
         pooled_block_bytes(48 * MIB, Some(48 * MIB), 20 * MIB),
         48 * MIB
+    );
+    // Blocks of plain memory not made smaller keep the block's size, with no sixteenth besides.
+    assert_eq!(
+        pooled_block_bytes(BLOCK_BYTES, Some(BLOCK_BYTES), MIB),
+        BLOCK_BYTES
     );
     // The blocks of exportable buffers.
     assert_eq!(pooled_block_bytes(BLOCK_BYTES, None, MIB), BLOCK_BYTES);
@@ -111,6 +126,9 @@ mod device {
 
     /// The textures each run makes at most before the image pool makes the block it waits for.
     const MOST: usize = 256;
+
+    /// A pooled block of plain memory of the least size: 16 MiB and a sixteenth.
+    const SMALL_BLOCK: u64 = MIN_PLAIN_BLOCK_BYTES + MIN_PLAIN_BLOCK_BYTES / 16;
 
     /// A `Private` `RGBA8Unorm` texture of `width` by `height`, sampled and rendered to.
     fn texture(device: &Device, width: u64, height: u64) -> Texture {
@@ -175,10 +193,10 @@ mod device {
             assert_eq!(memory.plain_block_bytes(), MIN_PLAIN_BLOCK_BYTES);
         }
         let mut held = Vec::new();
-        // 1 MiB textures: blocks of the least size.
+        // 1 MiB textures: blocks of the least size, 16 MiB and a sixteenth.
         let small = until_a_block(&device, (512, 512), 0, &mut held);
-        // 20 MiB ones: past that size, a block of 32 MiB each.
-        let large = until_a_block(&device, (2560, 2048), MIN_PLAIN_BLOCK_BYTES, &mut held);
+        // 20 MiB ones: past that size, a block of 32 MiB and a sixteenth each.
+        let large = until_a_block(&device, (2560, 2048), SMALL_BLOCK, &mut held);
         println!(
             "PLAIN-BLOCKS {}: after a slow making, 1 MiB textures made blocks of images of {:?} \
              MiB, 20 MiB ones {:?} MiB",
@@ -187,11 +205,11 @@ mod device {
             large.iter().map(|size| size / MIB).collect::<Vec<_>>(),
         );
         assert!(
-            small.iter().all(|&size| size == MIN_PLAIN_BLOCK_BYTES),
+            small.iter().all(|&size| size == SMALL_BLOCK),
             "1 MiB textures made blocks of {small:?} bytes"
         );
         assert!(
-            large.contains(&(32 * MIB)) && large.iter().all(|&size| size <= 32 * MIB),
+            large.contains(&(34 * MIB)) && large.iter().all(|&size| size <= 34 * MIB),
             "20 MiB textures made blocks of {large:?} bytes"
         );
         drop(held);
