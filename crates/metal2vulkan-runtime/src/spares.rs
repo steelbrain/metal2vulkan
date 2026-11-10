@@ -44,7 +44,11 @@
 //!   holding up to 9,771 command buffers of earlier frames before a frame of 1,413 passes, and
 //!   failed so in 6 of 79 runs beside the runtime suite, each where they held 9,716 to 9,771
 //!   (2,786 to 7,747 in the runs that passed). [`HELD`] leaves three quarters of that pool to
-//!   the command buffers committed and in recording.
+//!   the command buffers committed and in recording. What it costs there, that test alone, five
+//!   runs each way (debug): its spares held 4,096 at most against 7,787 to 7,793; its pools'
+//!   frees ran 220 times on the free thread against 14 to 17; it allocated 12,559 command buffers
+//!   in four runs and 9,864 in the fifth against 10,193 in each; and it took 13.6 to 14.0 s
+//!   against 13.6 to 13.9 s. Beside the runtime suite it failed in none of 76 runs.
 //! - **Freed on the device's free thread** ([`PoolFrees`], `free_thread.rs`), not on the thread
 //!   giving the pool back, which for a command buffer that completed is its queue's completion
 //!   thread before its completed handlers run and its waiters return: [`FREED_AT_ONCE`] command
