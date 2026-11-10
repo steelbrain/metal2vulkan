@@ -25,13 +25,20 @@
 //!   while fewer than a quarter of the limit are left, so the objects and their imports have
 //!   those. Once the
 //!   device's allocations reach that quarter, it gives back the chunks it imported ahead that no
-//!   object took ([`Allocations::made`]), so they are gone before they could take the last.
+//!   object took ([`Allocations::made`]), on a thread of the device's, so they are gone before
+//!   they could take the last. Objects that allocate faster than that thread runs (a loaded host
+//!   may leave it unscheduled) reach the limit first: an allocation that finds the limit reached
+//!   starts the give-back where one is due and waits for those under way
+//!   ([`GiveBack`]), then for the frees posted, then asks again, before it is refused. The
+//!   give-back's thread takes the RAMs' and their chunks' locks and the memory's lock, none of
+//!   which an allocation is made under (`memory.rs` makes its blocks and imports with its lock
+//!   released, `host_ram.rs` its chunks' with theirs), and allocates nothing, so the wait ends.
 
 use crate::free_thread::FreeThread;
 use crate::step_aside::Activity;
 use ash::vk;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 
 /// The registered devices' counts, by handle: a few at most, so a list.
 static DEVICES: Mutex<Vec<(vk::Device, Arc<Allocations>)>> = Mutex::new(Vec::new());
@@ -46,8 +53,11 @@ pub(crate) struct Allocations {
     /// Something the runtime allocated ahead may be given back: set by each such allocation,
     /// taken by the first allocation that leaves the device within the margin.
     ahead: AtomicBool,
-    /// What gives the allocations made ahead back, set once the device is made.
-    give_back: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// What gives the allocations made ahead back, set once the device is made: handed the
+    /// give-back's [`GiveBack`], which it drops once it gave back what it found.
+    give_back: OnceLock<Box<dyn Fn(GiveBack) + Send + Sync>>,
+    /// The give-backs under way, which an allocation at the limit waits for.
+    giving_back: Arc<GivingBack>,
     /// The device's free thread, whose posted frees an allocation at the limit waits for, set
     /// once the device is made.
     frees: OnceLock<Arc<FreeThread>>,
@@ -68,6 +78,7 @@ impl Allocations {
             refused: AtomicU32::new(0),
             ahead: AtomicBool::new(false),
             give_back: OnceLock::new(),
+            giving_back: Arc::default(),
             frees: OnceLock::new(),
             activity: Activity::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -87,15 +98,25 @@ impl Allocations {
         (limit / 4).max(1)
     }
 
-    /// Count one more live allocation, or refuse it where the limit is reached, once the frees
-    /// posted to the device's free thread completed (the module docs).
+    /// Count one more live allocation, or refuse it where the limit is reached, once what was
+    /// allocated ahead was given back and the frees posted to the device's free thread completed
+    /// (the module docs).
     fn take(&self) -> bool {
-        let taken = self.try_take()
-            || self.frees.get().is_some_and(|frees| frees.wait()) && self.try_take();
+        let taken = self.try_take() || self.room_made() && self.try_take();
         if !taken {
             self.refused.fetch_add(1, Ordering::Relaxed);
         }
         taken
+    }
+
+    /// At the limit: what was allocated ahead given back (started where it is due, and every
+    /// give-back under way waited for), then the frees posted waited for. Whether either was
+    /// waited for, so the count may have room again.
+    fn room_made(&self) -> bool {
+        self.give_back_ahead();
+        let given = self.giving_back.wait();
+        let freed = self.frees.get().is_some_and(|frees| frees.wait());
+        given || freed
     }
 
     /// Count one more live allocation where the limit leaves room for it.
@@ -122,19 +143,25 @@ impl Allocations {
         });
     }
 
-    /// An allocation was made: where it leaves the device fewer than the margin and something
-    /// was allocated ahead since the last give-back, give that back (on a thread of the
-    /// device's, with no lock of the caller's held).
+    /// An allocation was made: where it leaves the device fewer than the margin, give back what
+    /// was allocated ahead since the last give-back ([`Allocations::give_back_ahead`]).
     fn made(&self) {
         let limit = self.limit.load(Ordering::Relaxed);
         let live = self.live.load(Ordering::Acquire);
         if live.saturating_add(Self::margin(limit)) <= limit {
             return;
         }
-        if self.ahead.swap(false, Ordering::AcqRel) {
-            if let Some(give_back) = self.give_back.get() {
-                give_back();
-            }
+        self.give_back_ahead();
+    }
+
+    /// Where something was allocated ahead since the last give-back, give that back: on a thread
+    /// of the device's, with no lock of the caller's held, counted under way until it ends.
+    fn give_back_ahead(&self) {
+        if !self.ahead.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(give_back) = self.give_back.get() {
+            give_back(self.giving_back.begin());
         }
     }
 
@@ -154,7 +181,7 @@ impl Allocations {
     }
 
     /// Give back what was allocated ahead with `give_back` from now on.
-    pub(crate) fn give_back_with(&self, give_back: Box<dyn Fn() + Send + Sync>) {
+    pub(crate) fn give_back_with(&self, give_back: Box<dyn Fn(GiveBack) + Send + Sync>) {
         let _ = self.give_back.set(give_back);
     }
 
@@ -192,6 +219,65 @@ impl Allocations {
     pub(crate) fn give_backs_held(&self) -> std::time::Duration {
         *self.give_backs_held.lock().unwrap()
     }
+
+    /// The allocations at the limit that waited for a give-back under way so far.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn give_back_waits(&self) -> u64 {
+        self.giving_back.waits.load(Ordering::Relaxed)
+    }
+}
+
+/// The give-backs of what the runtime allocated ahead under way ([`Allocations::give_back_ahead`]),
+/// which an allocation at the limit waits for.
+#[derive(Default)]
+struct GivingBack {
+    /// How many are under way.
+    under_way: Mutex<u32>,
+    /// The last one under way ended.
+    ended: Condvar,
+    /// The waits for one.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    waits: std::sync::atomic::AtomicU64,
+}
+
+impl GivingBack {
+    /// One more give-back under way, until its [`GiveBack`] drops.
+    fn begin(self: &Arc<Self>) -> GiveBack {
+        *lock_count(&self.under_way) += 1;
+        GiveBack(Arc::clone(self))
+    }
+
+    /// Wait until no give-back is under way: whether one was.
+    fn wait(&self) -> bool {
+        let mut under_way = lock_count(&self.under_way);
+        if *under_way == 0 {
+            return false;
+        }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.waits.fetch_add(1, Ordering::Relaxed);
+        while *under_way > 0 {
+            under_way = (self.ended.wait(under_way)).unwrap_or_else(PoisonError::into_inner);
+        }
+        true
+    }
+}
+
+/// One give-back under way ([`GivingBack`]): it ends as this drops, on its thread once that gave
+/// back what it found, or where its thread never started.
+pub(crate) struct GiveBack(Arc<GivingBack>);
+
+impl Drop for GiveBack {
+    fn drop(&mut self) {
+        let mut under_way = lock_count(&self.0.under_way);
+        *under_way -= 1;
+        if *under_way == 0 {
+            self.0.ended.notify_all();
+        }
+    }
+}
+
+fn lock_count(count: &Mutex<u32>) -> std::sync::MutexGuard<'_, u32> {
+    count.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// A device's registration ([`register`]), let go of with the device.
@@ -314,7 +400,7 @@ mod tests {
         let count = Allocations::new(8);
         let given = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&given);
-        count.give_back_with(Box::new(move || {
+        count.give_back_with(Box::new(move |_| {
             seen.fetch_add(1, Ordering::Relaxed);
         }));
         // A margin of 2 of 8: room ahead while one more leaves 2.
@@ -337,6 +423,35 @@ mod tests {
         assert!(count.take());
         count.made();
         assert_eq!(given.load(Ordering::Relaxed), 1, "once per work ahead");
+    }
+
+    #[test]
+    fn an_allocation_at_the_limit_waits_for_the_give_back_under_way() {
+        let count = Arc::new(Allocations::new(8));
+        let weak = Arc::downgrade(&count);
+        // A give-back slow to run, as on a loaded host: it frees the two allocated ahead.
+        count.give_back_with(Box::new(move |giving| {
+            let count = weak.upgrade().unwrap();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                count.give();
+                count.give();
+                drop(giving);
+            });
+        }));
+        for _ in 0..2 {
+            assert!(count.take());
+            count.made_ahead();
+        }
+        // The objects' allocations to the limit: the one that comes within the margin starts
+        // the give-back, and the one past the limit waits for it rather than being refused.
+        while count.live() < 8 {
+            assert!(count.take());
+            count.made();
+        }
+        assert!(count.take(), "refused while the give-back was under way");
+        assert_eq!((count.live(), count.refused()), (7, 0));
+        assert!(count.take() && !count.take(), "the limit holds after it");
     }
 
     #[test]

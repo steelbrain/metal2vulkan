@@ -169,6 +169,7 @@ use super::host_residency::Again;
 use super::memory::{ImportFailure, Mapped, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
 use super::Device;
+use crate::allocations::GiveBack;
 use crate::device::WeakDevice;
 use crate::dma_buf::{DmaBufRunsSource, DmaBufSource};
 use crate::release;
@@ -1691,15 +1692,20 @@ impl Device {
     /// Give the chunks the device's thread imported ahead and no object took back once the
     /// device's allocations come within a quarter of its limit (`allocations.rs`): on a thread of
     /// its own, started then, which frees them with no lock of the allocating caller held, so
-    /// that they are gone before they could take the last allocations. An object over one later
-    /// imports it as it is made. Counted: `WorkCounts::host_ram_chunks_given_back`.
+    /// that they are gone before they could take the last allocations; an allocation that finds
+    /// the limit reached first waits for that thread. An object over one later imports it as it
+    /// is made. Counted: `WorkCounts::host_ram_chunks_given_back`.
     pub(crate) fn give_back_ahead_near_the_limit(&self) {
         let weak = self.downgrade();
-        let give_back = move || {
+        let give_back = move |giving: GiveBack| {
             let device = weak.clone();
             let builder = std::thread::Builder::new().name("m2v-host-ram".to_owned());
-            // A thread the system cannot start leaves the chunks imported.
-            let _ = exit_guard::spawn(builder, move || give_back_untaken(device));
+            // A thread the system cannot start leaves the chunks imported, and its give-back
+            // ends as the closure goes.
+            let _ = exit_guard::spawn(builder, move || {
+                give_back_untaken(device);
+                drop(giving);
+            });
         };
         (self.shared().allocations.allocations).give_back_with(Box::new(give_back));
     }

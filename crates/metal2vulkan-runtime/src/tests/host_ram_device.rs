@@ -776,6 +776,7 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     let at = at_the_margin(&device);
     let limit = at.limit;
     allocations.hold_give_backs(GIVE_BACK_HELD);
+    let waits = allocations.give_back_waits();
     let begun = Instant::now();
     let object = at.object_past(&device);
     // At once: the room the margin left, and the untaken chunks' once they went back.
@@ -787,10 +788,11 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     eprintln!(
         "HOST-RAM: a limit of {limit}: the give-back held {GIVE_BACK_HELD:?}; {} buffers of \
          blocks of their own made at once of a room of {room} in {took:?}, the next refused \
-         ({refused:?}); {} chunks given back, {} live then",
+         ({refused:?}); {} chunks given back, {} live then; {} waits for the give-back",
         made.len(),
         at.given(&full),
         at.chunks_live(&full),
+        allocations.give_back_waits() - waits,
     );
     assert_eq!(
         at.chunks_live(&full),
@@ -801,6 +803,10 @@ fn an_allocation_at_the_limit_waits_for_the_untaken_chunks_to_go_back() {
     assert!(
         made.len() >= room as usize,
         "the objects lacked part of the rest of the limit ({refused:?})"
+    );
+    assert!(
+        allocations.give_back_waits() > waits,
+        "no allocation found the limit while the give-back was under way: the test showed nothing"
     );
     assert!(
         full.memory_allocations_refused_at_limit > at.before.memory_allocations_refused_at_limit,
