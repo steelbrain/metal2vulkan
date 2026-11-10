@@ -1141,6 +1141,10 @@ fn a_mesh_state_answers_metals_queries_and_refuses_what_metal_refuses() {
             state.required_threads_per_object_threadgroup(),
             size([32, 2, 1])
         );
+        assert_eq!(
+            state.required_threads_per_mesh_threadgroup(),
+            size([32, 1, 1])
+        );
         // A required size alone gives its stage its threads.
         let mut required = plain.clone();
         required.required_threads_per_object_threadgroup = Some([32, 2, 1]);
@@ -1150,10 +1154,6 @@ fn a_mesh_state_answers_metals_queries_and_refuses_what_metal_refuses() {
             answers(&state),
             [object.min(64), mesh.min(1024), 32, 32, total.min(1 << 20)],
             "required on {name}"
-        );
-        assert_eq!(
-            state.required_threads_per_mesh_threadgroup(),
-            size([32, 1, 1])
         );
         let alone = lane.descriptor(None, "mesh_draws_grid");
         let state = make(&alone).unwrap_or_else(|e| panic!("alone on {name}: {e}"));
