@@ -134,16 +134,20 @@ pub(super) fn cleared(layout: &PassLayout, target: &Target, called: bool) -> [u3
 /// Mac's compression (`Device::metal_compresses_textures`), where Metal keeps the attachment's
 /// texture (a view's first texture) losslessly compressed (`heap_tiled::metal_compresses_layout`
 /// of its type, level 0, samples, usage and `allowGPUOptimizedContents`; never one over a
-/// buffer): our probe `clearreach2` on the M3 Max (macOS 27.0.1), a new `Private` attachment
-/// against an untouched twin, cleared whole where the texture was compressed and over the render
-/// area's tiles where it was not, at every one of 15 color formats (1 to 16 bytes a texel, float,
-/// unorm and integer; `R8Unorm` uncompressed alone, its clear writing its pattern's texel),
-/// `Depth32Float`, `Depth16Unorm`, `Stencil8` and `Depth32Float_Stencil8`
-/// (each aspect), 1, 2 and 4 samples, a level past the first (one under 16 texels a side
-/// included), a slice past the first, `ShaderWrite` and `PixelFormatView` usage, a level 0
-/// under and at 16 texels a side, and a texture over a buffer, the property on and off. On a
-/// device that presents a Mac keeping no texture compressed, as a Mac with an Intel or AMD GPU
-/// does, always: unmeasured there, the answer of the Apple GPUs' compressed textures kept.
+/// buffer): our probes `clearreach2` and `clearreach3` on the M3 Max (macOS 27.0.1), a new
+/// `Private` attachment against an untouched twin, cleared whole where the texture was
+/// compressed and over the render area's tiles where it was not, at every one of 16 color
+/// formats (1 to 16 bytes a texel, float, unorm and integer), `Depth32Float`, `Depth16Unorm`,
+/// `Stencil8` and `Depth32Float_Stencil8` (each aspect), 1, 2 and 4 samples, a level past the
+/// first (one under 16 texels a side included), a slice past the first, a cube's face, a 3D
+/// texture's plane, a view of the same format, of one level, and of another format,
+/// `ShaderWrite` and `PixelFormatView` usage, a level 0 under and at 16 texels a side, and a
+/// texture over a buffer, the property on and off; the consumer's probe alike (`tileclear2`,
+/// jobs m3-max-12716 and m3-max-12735). On a device that presents a Mac keeping no texture
+/// compressed, as a Mac with an Intel or AMD GPU does, always: those Macs disagree (an AMD
+/// Radeon Pro 5300M clears the whole level, an Intel UHD 630 anything from the render area to
+/// the whole texture: jobs m3-max-12736 and m3-max-12737), and the runtime gives the 5300M's
+/// answer.
 pub(super) fn clears_whole(target: &Target) -> bool {
     let device = target.texture.device();
     if !device.metal_compresses_textures() {
