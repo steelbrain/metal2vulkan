@@ -56,6 +56,8 @@ use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::committed_profiles;
 use crate::vk;
 
+mod through;
+
 /// The kernels, compiled with `xcrun metal -O2` (Metal 4.0, AIR 2.8) from this MSL, written for
 /// this test, with the debug and type metadata the decoder does not read removed:
 ///
@@ -2304,15 +2306,14 @@ fn edge_reads_short() -> String {
     format!("{head}{DECLARE}{tail}")
 }
 
-/// Metal 4.1's `read(sampler s, coord)` addresses through `s` (MSL 4.1 §6.13). Only a constexpr
-/// `address::clamp_to_edge` sampler of default state, read at `int` coordinates, is modelled: a
-/// read through an argument sampler, a repeating one, or a clamp-to-edge one with another field
-/// (linear filtering) or 16-bit coordinates is refused on every profile, never read as out of
-/// bounds, and so is a cube's read through the clamp-to-edge sampler, which the M3 reads unclamped
-/// (zero past the face at the read's level, the base level's texel within it) and which is not
-/// built; the clamp-to-edge one translates.
+/// Metal 4.1's `read(sampler s, coord)` addresses through `s` (MSL 4.1 §6.13), whatever its state:
+/// a read through a runtime sampler, a repeating one, or a filtered one translates on every
+/// profile. A cube's read through a sampler, which the M3 reads unclamped (zero past the face at
+/// the read's level, the base level's texel within it) and which is not built, is refused on every
+/// profile, never read as out of bounds, and so is one at 16-bit coordinates, which no Metal 4.1
+/// overload takes.
 #[test]
-fn a_read_through_a_sampler_other_than_clamp_to_edge_is_refused() {
+fn a_cube_s_or_a_narrow_read_through_a_sampler_is_refused() {
     let Some(sampled) = assemble_text("sampled_reads", SAMPLED_READS) else {
         return;
     };
@@ -2323,13 +2324,7 @@ fn a_read_through_a_sampler_other_than_clamp_to_edge_is_refused() {
         return;
     };
     for (stem, p) in profiles() {
-        for (bc, entry) in [
-            (&sampled, "read_arg_sampler"),
-            (&edge, "read_repeat"),
-            (&edge, "read_linear"),
-            (&edge, "edge_cube"),
-            (&short, "edge_2d"),
-        ] {
+        for (bc, entry) in [(&edge, "edge_cube"), (&short, "edge_2d")] {
             match typed_module(bc, entry, &p) {
                 Err(Error::Unsupported(u)) => assert_eq!(
                     u.feature,
@@ -2340,8 +2335,14 @@ fn a_read_through_a_sampler_other_than_clamp_to_edge_is_refused() {
                 Err(e) => panic!("{stem}: {entry}: {e}"),
             }
         }
-        typed_module(&sampled, "read_clamped", &p)
-            .unwrap_or_else(|e| panic!("{stem}: read_clamped: {e}"));
+        for (bc, entry) in [
+            (&sampled, "read_arg_sampler"),
+            (&sampled, "read_clamped"),
+            (&edge, "read_repeat"),
+            (&edge, "read_linear"),
+        ] {
+            typed_module(bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {entry}: {e}"));
+        }
     }
 }
 
@@ -2374,161 +2375,6 @@ fn a_sparse_read_through_a_clamp_to_edge_sampler_is_refused() {
 /// `x` as the bits of an `int` lane.
 fn int(x: i32) -> u32 {
     x as u32
-}
-
-/// A read through a constexpr clamp-to-edge sampler (MSL 4.1 §6.13) reads a coordinate past the
-/// texture, negative or past its extent, at its edge: the coordinate (plus the offset) is clamped
-/// into the base level, lane by lane, as a signed `int`, and the base level is read wherever the
-/// read's level is one of the texture's (the sampler has no mip filter). A level, layer, face, or
-/// sample index out of range is out of bounds as in a plain read, zero with the format's alpha.
-/// Measured on the M3 Max (macOS 27.0.1, Apple metal 32023.922) over 2D, 2D array, 3D, and
-/// `read_write` 2D textures of two levels.
-#[test]
-fn a_clamp_to_edge_read_clamps_its_coordinate_into_the_texture() {
-    let Some(bc) = assemble_text("edge_reads", EDGE_READS) else {
-        return;
-    };
-    let cases = [
-        ReadCase {
-            entry: "edge_2d",
-            texel: Texel::Float,
-            shape: ([4, 4, 1], 1, 2, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([1, 2, 0, 0], Some((0, 0, 0, [1, 2, 0]))),
-                ([int(-1), 2, 0, 0], Some((0, 0, 0, [0, 2, 0]))),
-                ([5, int(-3), 0, 0], Some((0, 0, 0, [3, 0, 0]))),
-                ([MAX, 0, 0, 0], Some((0, 0, 0, [0, 0, 0]))),
-                ([int(i32::MIN), 7, 0, 0], Some((0, 0, 0, [0, 3, 0]))),
-                ([int(i32::MAX), 1, 0, 0], Some((0, 0, 0, [3, 1, 0]))),
-                ([5, 5, 1, 0], Some((0, 0, 0, [3, 3, 0]))),
-                ([int(-5), 9, 1, 0], Some((0, 0, 0, [0, 3, 0]))),
-                ([0, 0, 2, 0], None),
-                ([1, 1, MAX, 0], None),
-            ],
-        },
-        ReadCase {
-            entry: "edge_2d_offset",
-            texel: Texel::Int,
-            shape: ([4, 4, 1], 1, 1, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([2, 0, 0, 0], Some((0, 0, 0, [0, 3, 0]))),
-                ([5, 0, 0, 0], Some((0, 0, 0, [3, 3, 0]))),
-                ([1, int(-3), 0, 0], Some((0, 0, 0, [0, 0, 0]))),
-                ([3, int(-1), 0, 0], Some((0, 0, 0, [1, 2, 0]))),
-                ([MAX, 2, 0, 0], Some((0, 0, 0, [0, 3, 0]))),
-            ],
-        },
-        ReadCase {
-            entry: "edge_dynamic_offset",
-            texel: Texel::Float,
-            shape: ([4, 4, 1], 1, 1, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([1, 1, int(-2), 1], Some((0, 0, 0, [0, 2, 0]))),
-                ([3, 0, 7, int(-8)], Some((0, 0, 0, [3, 0, 0]))),
-                ([0, 3, 0, 0], Some((0, 0, 0, [0, 3, 0]))),
-            ],
-        },
-        ReadCase {
-            entry: "edge_2d_array",
-            texel: Texel::Int,
-            shape: ([4, 4, 1], 3, 2, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([int(-1), 5, 1, 0], Some((0, 1, 0, [0, 3, 0]))),
-                ([2, 2, 3, 0], None),
-                ([9, int(-9), 2, 1], Some((0, 2, 0, [3, 0, 0]))),
-                ([0, 0, 0, 2], None),
-                ([1, 1, MAX, 0], None),
-            ],
-        },
-        ReadCase {
-            entry: "edge_3d",
-            texel: Texel::Float,
-            shape: ([4, 4, 4], 1, 2, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([int(-1), 4, 2, 0], Some((0, 0, 0, [0, 3, 2]))),
-                ([7, 7, 7, 1], Some((0, 0, 0, [3, 3, 3]))),
-                ([0, 0, 0, 2], None),
-            ],
-        },
-        ReadCase {
-            entry: "edge_ms",
-            texel: Texel::Float,
-            shape: ([4, 4, 1], 1, 1, 4),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([int(-2), 1, 3, 0], Some((0, 0, 3, [0, 1, 0]))),
-                ([9, 9, 0, 0], Some((0, 0, 0, [3, 3, 0]))),
-                ([1, 1, 4, 0], None),
-            ],
-        },
-        ReadCase {
-            entry: "edge_rw",
-            texel: Texel::Int,
-            shape: ([4, 4, 1], 1, 1, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([int(-1), int(-1), 0, 0], Some((0, 0, 0, [0, 0, 0]))),
-                ([4, 4, 0, 0], Some((0, 0, 0, [3, 3, 0]))),
-                ([2, 1, 0, 0], Some((0, 0, 0, [2, 1, 0]))),
-            ],
-        },
-        ReadCase {
-            entry: "edge_1d",
-            texel: Texel::Float,
-            shape: ([8, 1, 1], 1, 1, 1),
-            buffer: false,
-            out: Out::Vec4,
-            rows: vec![
-                ([int(-3), 0, 0, 0], Some((0, 0, 0, [0, 0, 0]))),
-                ([100, 0, 0, 0], Some((0, 0, 0, [7, 0, 0]))),
-                ([5, 0, 0, 0], Some((0, 0, 0, [5, 0, 0]))),
-            ],
-        },
-    ];
-    for case in &cases {
-        assert_eq!(case.check(&bc), ALL, "{}", case.entry);
-    }
-    // Every kernel links and passes `spirv-val` where it translates.
-    let mut validated = 0;
-    for (stem, p) in profiles() {
-        for entry in cases.iter().map(|c| c.entry).chain(["edge_buffer"]) {
-            match compile(&bc, entry, &p) {
-                Ok(a) => {
-                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {entry}: {e}"));
-                    validated += 1;
-                }
-                Err(Error::NeedsInput(_)) => {}
-                Err(e) => panic!("{stem}: {entry}: {e}"),
-            }
-        }
-    }
-    assert!(validated > 0);
-    let buffer = ReadCase {
-        entry: "edge_buffer",
-        texel: Texel::Float,
-        shape: ([8, 1, 1], 1, 1, 1),
-        buffer: true,
-        out: Out::Vec4,
-        rows: vec![
-            ([3, 0, 0, 0], Some((0, 0, 0, [3, 0, 0]))),
-            ([int(-1), 0, 0, 0], Some((0, 0, 0, [0, 0, 0]))),
-            ([8, 0, 0, 0], Some((0, 0, 0, [7, 0, 0]))),
-            ([int(i32::MIN), 0, 0, 0], Some((0, 0, 0, [0, 0, 0]))),
-        ],
-    };
-    assert_eq!(buffer.check(&bc), [Class::Device, Class::Shader]);
 }
 
 /// The owned fixture `engine/kernel_block_read`'s module (Metal 4.1's block reads), assembled.
