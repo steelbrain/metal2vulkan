@@ -1,7 +1,26 @@
 //! Who reads each instruction of an AIR body, as a table indexed by instruction: the selection's
-//! and the regroupings' users, read by instruction number where a sorted map was searched for each.
+//! and the regroupings' users, read by instruction number where a sorted map was searched for each;
+//! and which of the entry's parameters the body reads ([`params_used`]).
+
+use std::collections::BTreeSet;
 
 use crate::air::ir::{Body, Idx, InstId, Value};
+
+/// The parameters `body` uses: each argument an instruction names, a call's operand included. A
+/// parameter of a specialized entry whose reads its constants fold away (deleted with what nothing
+/// observes) is not among them. This is the lowering's reading of a used parameter: what it plans,
+/// and what the compile decides an input's attachment state, ordering and refusals from.
+pub(crate) fn params_used(body: &Body) -> BTreeSet<u32> {
+    let mut used = BTreeSet::new();
+    for inst in body.insts.values() {
+        inst.kind.for_each_value(|v| {
+            if let Value::Arg(a) = v {
+                used.insert(a.raw());
+            }
+        });
+    }
+    used
+}
 
 /// The users of each instruction of a body: `list[start[i]..start[i + 1]]` are instruction `i`'s,
 /// each listed once per operand naming it, in the body's instruction order (the order a sorted

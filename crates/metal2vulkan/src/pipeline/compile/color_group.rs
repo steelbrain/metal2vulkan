@@ -63,7 +63,9 @@
 //! which reads color 0's alpha in every group ([`group`]); a `[[color(n)]]` input of another
 //! group that the function reads, imageblock data and raster order groups ([`entry`]). A color
 //! input of another group that the specialized body never uses (its read folded away by the
-//! function's constants) reads nothing there, and is not refused. Imageblocks are refused under any
+//! function's constants) reads nothing there, and is not refused; nor is a raster order group on a
+//! parameter the body never uses, which orders nothing (plain Metal makes and draws such a
+//! function, `metal2vulkan-conformance/probes/dead_ordered_and_unattached_reads.m`). Imageblocks are refused under any
 //! renumbering: an implicit imageblock's members name the attachments they alias by index. A mesh
 //! render pipeline and a tile pipeline take no groups and keep the limit refusals.
 
@@ -126,7 +128,8 @@ pub(crate) fn descriptor(d: &RenderPipelineDescriptor, g: &ColorGroup) -> Render
 /// The specialized fragment entry `spec` as group `g`'s variant compiles it: each color index its
 /// outputs and `[[color(n)]]` inputs name renumbered by [`ColorGroup::location`]. Imageblock data
 /// is the limit refusal on `p`, and so, where the pipeline takes more than one group, is a color
-/// input of another group that the body uses and a raster order group. Any other entry as it is.
+/// input of another group that the body uses and a raster order group on a color output or on a
+/// parameter the body uses. Any other entry as it is.
 pub(crate) fn entry(
     mut spec: air::Entry,
     g: &ColorGroup,
@@ -137,7 +140,8 @@ pub(crate) fn entry(
     }
     let split = g.groups() > 1;
     let refused = || refusal(g, p);
-    // A color input the specialized body never uses reads no attachment, of whichever group.
+    // A parameter the specialized body never uses reads nothing: a color input of whichever group
+    // reads no attachment, and a raster order group on it orders no access.
     let used = super::params_used(&spec);
     for b in &mut spec.ep.params {
         let read = used.contains(&b.param);
@@ -147,7 +151,7 @@ pub(crate) fn entry(
                 index,
                 raster_order_group,
             } => {
-                if split && raster_order_group.is_some() {
+                if split && read && raster_order_group.is_some() {
                     return Err(refused());
                 }
                 if let AbiInt::Const(color) = *index {
@@ -158,11 +162,11 @@ pub(crate) fn entry(
                 }
             }
             ParamRole::Buffer(a) | ParamRole::ArgumentBuffer(a) | ParamRole::Threadgroup(a)
-                if split && a.raster_order_group.is_some() =>
+                if split && read && a.raster_order_group.is_some() =>
             {
                 return Err(refused());
             }
-            ParamRole::Texture(t) if split && t.raster_order_group.is_some() => {
+            ParamRole::Texture(t) if split && read && t.raster_order_group.is_some() => {
                 return Err(refused());
             }
             _ => {}

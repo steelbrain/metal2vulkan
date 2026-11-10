@@ -1071,8 +1071,10 @@ enum AmplifiedIndex {
 /// attachment a write of every channel. Zero is every format's zero code, so no lane rounds; the
 /// map of the attachment's color writes is recorded as a written attachment's is. What the
 /// function writes to `color` itself is stored nowhere: plain Metal stores the zero there all the
-/// same (a Metal probe). A function that reads `color` is not lowered (what Metal reads there is
-/// unmeasured).
+/// same (a Metal probe). A function that declares a color input at `color`, read or not, is no
+/// pipeline's: plain Metal refuses its pipeline whether or not the body reads the input
+/// (`pipeline::compile`'s `color_inputs_attached`), so compiled alone under such inputs it is not
+/// lowered.
 fn zeroed_output(
     cx: &mut SelectCx<'_>,
     color: u32,

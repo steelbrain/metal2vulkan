@@ -368,12 +368,11 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
         return Err(Unsupported::not_implemented(Feature::FramebufferFetch).into());
     }
     let storage = !cx.families.fragment.fetch.is_empty() || shadow || input_shadows;
-    let interlock =
-        if rog::declared(cx.entry) || cx.families.fragment.imageblock.is_some() || storage {
-            Some(rog::mode(cx)?)
-        } else {
-            None
-        };
+    let interlock = if rog::declared(cx) || cx.families.fragment.imageblock.is_some() || storage {
+        Some(rog::mode(cx)?)
+    } else {
+        None
+    };
     let snapshot = snapshot::finish(cx, interlock.is_some(), looped)?;
     let sites: Vec<InstId> = cx.families.fragment.discards.keys().copied().collect();
     let discard::DiscardPlan {

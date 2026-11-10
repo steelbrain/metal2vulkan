@@ -4742,9 +4742,10 @@ fn check_interlocked(m: &TypedModule, mode: ExecMode, what: &str) -> FuncId {
     body
 }
 
-/// A function that names a raster order group on a buffer, a texture, or an unused buffer runs its
-/// body inside `PixelInterlockOrderedEXT` where the device has pixel interlock, and passes L3
-/// there; elsewhere it is refused.
+/// A function that names a raster order group on a buffer or a texture it uses runs its body inside
+/// `PixelInterlockOrderedEXT` where the device has pixel interlock, and passes L3 there; elsewhere
+/// it is refused. (A group on a parameter the body never uses interlocks nothing:
+/// `tests::engine_dead_reads`.)
 #[test]
 fn raster_order_groups_run_the_body_inside_the_interlock() {
     let Some(bc) = fixture("fragment_rog") else {

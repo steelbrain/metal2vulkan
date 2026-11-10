@@ -28,7 +28,6 @@ use std::sync::Arc;
 
 use crate::air::abi::{AbiInt, AirAbi, OutputRole, ParamRole, Stage as AbiStage};
 use crate::air::container::{self, LibraryFunction};
-use crate::air::ir::Value;
 use crate::air::{self, ConstValue, LinkedCode, LinkedModule, LinkedName, SpecRequest};
 use crate::bind::argument_buffer::{self, EntryLayout};
 use crate::bind::{ArgumentBufferLayout, ArgumentLayoutError};
@@ -245,17 +244,54 @@ impl<'a> InputsFrom<'a> {
     }
 }
 
-/// The specialized entry `spec` as a compile under `inputs` lowers it on `p`: renumbered for its
-/// color group (`color_group::entry`) where it compiles for one.
+/// The specialized entry `spec` as a compile under `inputs` lowers it on `p`: a fragment entry of
+/// a render pipeline checked for an attachment at each color input ([`color_inputs_attached`]),
+/// then renumbered for its color group (`color_group::entry`) where it compiles for one.
 fn grouped_entry(
     spec: air::Entry,
     inputs: InputsFrom<'_>,
     p: &DeviceProfile,
 ) -> Result<air::Entry, Error> {
+    if let InputsFrom::Fragment(pass, ..) = inputs {
+        color_inputs_attached(&spec, &pass)?;
+    }
     match inputs.color_group() {
         Some(g) => color_group::entry(spec, g, p),
         None => Ok(spec),
     }
+}
+
+/// Each `[[color(n)]]` input the specialized fragment entry `spec` declares has an attachment with
+/// a pixel format in its render pipeline (`pass`'s attachments, or its color group's
+/// `ColorGroup::present`, the pipeline's own), whether or not the body reads it: plain Metal
+/// refuses the pipeline otherwise, with the read dead after specialization as with it live
+/// ("Shaders reads from a color attachment whose pixel format is MTLPixelFormatInvalid",
+/// `metal2vulkan-conformance/probes/dead_ordered_and_unattached_reads.m`, an M3 Max under macOS
+/// 27.0.1). `InvalidDescriptor(ColorAttachment)` at the first index without one. An input its
+/// constants gate is no parameter of the specialized entry.
+fn color_inputs_attached(spec: &air::Entry, pass: &FragmentPass<'_>) -> Result<(), Error> {
+    for b in &spec.ep.params {
+        let ParamRole::ColorInput {
+            index: AbiInt::Const(color),
+            ..
+        } = b.role
+        else {
+            continue;
+        };
+        let attached = match pass.color_group {
+            Some(g) => g.present.contains(&color),
+            None => pass
+                .color_attachments
+                .get(color as usize)
+                .is_some_and(Option::is_some),
+        };
+        if !attached {
+            return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                index: color,
+            }));
+        }
+    }
+    Ok(())
 }
 
 /// The lowering input of a `maxCallStackDepth` `depth`: `None` at Metal's default, 1 (or 0).
@@ -1974,16 +2010,9 @@ pub(crate) fn spec_request(
 /// parameter the function's constants leave unread (its reads folded away by specialization and
 /// deleted with what nothing observes) is not among them.
 fn params_used(spec: &air::Entry) -> BTreeSet<u32> {
-    let mut used = BTreeSet::new();
     let body = spec.module.func(spec.func).and_then(|f| f.body.as_ref());
-    for inst in body.into_iter().flat_map(|b| b.insts.values()) {
-        inst.kind.for_each_value(|v| {
-            if let Value::Arg(a) = v {
-                used.insert(a.raw());
-            }
-        });
-    }
-    used
+    body.map(crate::lower::users::params_used)
+        .unwrap_or_default()
 }
 
 /// The Metal attribute indices the specialized vertex entry `spec` reads: its `[[attribute(n)]]`

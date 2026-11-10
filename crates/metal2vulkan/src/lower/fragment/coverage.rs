@@ -222,7 +222,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         && p.workarounds
             .contains(&DriverWorkaround::MemoryWritingFragmentsRunPerSample)
         && !((sample_id || sample_varying) && position);
-    let attachments = super::rog::declared(e)
+    let attachments = super::rog::declared(cx)
         || used(&|r| matches!(r, ParamRole::ColorInput { .. } | ParamRole::Imageblock(_)));
     let refusal = if matches!(
         e.ep.stage,

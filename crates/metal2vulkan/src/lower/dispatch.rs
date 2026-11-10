@@ -113,8 +113,6 @@
 //! [`emit_entry`], which derives each one the body reads once in the function's first block); and
 //! the workgroup size, specialization constants, and builtin variables ([`declare`]).
 
-use std::collections::BTreeSet;
-
 use crate::air::abi::{Builtin, ParamBinding, ParamRole};
 use crate::air::ir::{ArgIdx, Value};
 use crate::device::subgroup::{self, SimdClass, Tier};
@@ -447,19 +445,6 @@ pub struct Declared {
     pub kernel: Option<KernelDecl>,
 }
 
-/// The parameter indices the entry's body reads.
-fn used_params(cx: &SelectCx<'_>) -> BTreeSet<u32> {
-    let mut used = BTreeSet::new();
-    for inst in cx.body.insts.values() {
-        inst.kind.for_each_value(|v| {
-            if let Value::Arg(a) = v {
-                used.insert(a.raw());
-            }
-        });
-    }
-    used
-}
-
 /// The builtin and projection of builtin parameter `b`, or its refusal: a builtin outside the
 /// kernel set, or a parameter type whose lowered representation no projection produces.
 fn plan_param(cx: &SelectCx<'_>, b: &ParamBinding) -> Result<PlannedParam, Error> {
@@ -508,7 +493,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
     if local_size == LocalSizeForm::Flat && cx.families.barrier.compute_derivatives {
         return Err(Unsupported::not_representable(Feature::ComputeDerivativesWithSimd).into());
     }
-    let used = used_params(cx);
+    let used = crate::lower::users::params_used(cx.body);
     let mut builtins = BuiltinSet::default();
     let mut params = Vec::new();
     for b in &cx.entry.ep.params {
