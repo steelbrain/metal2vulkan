@@ -3,9 +3,9 @@
 //! runtime writes into the texture's handle-table entry (`heap_sets.rs`, `handle_entry_flags`):
 //! an `R32Float` texture reads `(1, 0, 0, 1)` through clamp-to-border opaque white and
 //! `(0, 0, 0, 1)` through clamp-to-zero, and an `RGBA8Unorm` texture swizzled `(G, R, 1, 0)` reads
-//! `(0, 0, 1, 0)` through clamp-to-zero, where an entry without them would read a four-channel
-//! format's `(1, 1, 1, 1)` and `(0, 0, 0, 0)`. Each kernel names the texture by its resource ID in
-//! the argument buffer, as Metal's `gpuResourceID` does.
+//! `(0, 0, 1, 0)` through clamp-to-zero, where an entry whose border texels are clear reads
+//! `(0, 0, 0, 0)` past every edge. Each kernel names the texture by its resource ID in the argument
+//! buffer, as Metal's `gpuResourceID` does.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernels are
