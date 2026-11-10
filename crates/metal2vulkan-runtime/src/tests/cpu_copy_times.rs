@@ -6,6 +6,10 @@
 //! the staging queue, `device/staging.rs`; through submissions), the best and median time of
 //! each call, the blit's time from its commit to its completion and the host copy's.
 //!
+//! At 1920 x 1080, `get_bytes` is timed again while about [`BUSY`] of fills of a `Private`
+//! buffer run on the GPU, committed on the program's command queue before the reads: each read
+//! that returned while they ran is in the line's distribution under load.
+//!
 //! Each read is checked texel for texel against what the GPU or the host wrote. Times are a
 //! release build's where the run is one.
 //!
@@ -13,8 +17,8 @@
 //! of device the cfg selects.
 
 use crate::{
-    BlitOption, Buffer, CommandQueue, Device, DeviceKind, DeviceOptions, Origin, Region,
-    ResourceOptions, Size, Texture, TextureDescriptor,
+    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind,
+    DeviceOptions, Origin, Region, ResourceOptions, Size, Texture, TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
@@ -24,6 +28,19 @@ const SIZES: [(u64, u64, usize); 3] = [(256, 256, 20), (1920, 1080, 5), (4096, 4
 
 /// The longest a command buffer here may take.
 const WAIT: Duration = Duration::from_secs(60);
+
+/// How long the GPU work the loaded reads run beside lasts, about.
+const BUSY: Duration = Duration::from_millis(1500);
+
+/// The bytes of the `Private` buffer the busy work fills.
+const TARGET: u64 = 256 << 20;
+
+/// The fills timed alone to size the busy work, and the most it makes.
+const TIMED: u32 = 4;
+const MOST_FILLS: u32 = 4096;
+
+/// The most reads made while the busy work runs.
+const LOADED_READS: usize = 20;
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU.
 fn device() -> Device {
@@ -73,6 +90,58 @@ fn millis(f: impl FnOnce()) -> f64 {
     at.elapsed().as_secs_f64() * 1000.0
 }
 
+/// A command buffer of `queue`'s of `fills` fills of `target`, committed.
+fn fills(queue: &CommandQueue, target: &Buffer, fills: u32) -> CommandBuffer {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    for value in 0..fills {
+        blit.fill_buffer(target, 0..TARGET, value as u8).unwrap();
+    }
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer
+}
+
+/// `texture`'s `region` read by `get_bytes` (rows `row` bytes apart) while about [`BUSY`] of
+/// fills run on `queue`, each read checked against `expected`, until the fills completed or
+/// [`LOADED_READS`] were made: the times of those that returned while the fills ran, in
+/// milliseconds, and how many reads were made.
+fn loaded_reads(
+    device: &Device,
+    queue: &CommandQueue,
+    texture: &Texture,
+    region: Region,
+    row: u64,
+    expected: &[u8],
+) -> (Vec<f64>, usize) {
+    let target = device
+        .new_buffer(TARGET, ResourceOptions::private())
+        .unwrap();
+    let timed = fills(queue, &target, TIMED);
+    let at = Instant::now();
+    timed.wait_until_completed_for(WAIT).unwrap();
+    let each = at.elapsed() / TIMED;
+    let count = (BUSY.as_secs_f64() / each.as_secs_f64().max(1e-6)).ceil() as u32;
+    let busy = fills(queue, &target, count.clamp(TIMED, MOST_FILLS));
+    let mut read = vec![0xee; expected.len()];
+    let mut times = Vec::new();
+    let mut made = 0;
+    while made < LOADED_READS && busy.status() != CommandBufferStatus::Completed {
+        read.fill(0xee);
+        let took = millis(|| {
+            (texture.get_bytes(&mut read, row, 0, region, 0, 0)).unwrap();
+        });
+        made += 1;
+        assert!(read == expected, "get_bytes under load reads the texels");
+        if busy.status() != CommandBufferStatus::Completed {
+            times.push(took);
+        }
+    }
+    busy.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(busy.error(), None);
+    (times, made)
+}
+
 /// Commit a blit of `texture`'s level 0 into `buffer` (rows `row` bytes apart), or of `buffer`
 /// into `texture` where `into_texture`, on `queue`, and wait for it.
 fn blit(queue: &CommandQueue, texture: &Texture, buffer: &Buffer, row: u64, into_texture: bool) {
@@ -117,7 +186,8 @@ fn blit(queue: &CommandQueue, texture: &Texture, buffer: &Buffer, row: u64, into
 /// Every size of [`SIZES`]: a `Shared` `BGRA8Unorm` texture a render pass may draw into, as a
 /// frame target is, written by a blit and read by `get_bytes`, read again through a blit into a
 /// `Shared` buffer and the host's copy out of it, then written by `replace_region` and read by
-/// `get_bytes`. Prints the `CPU-COPY-TIMES` lines (the module docs).
+/// `get_bytes`, at 1920 x 1080 also while GPU work runs. Prints the `CPU-COPY-TIMES` lines (the
+/// module docs).
 #[test]
 fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
     let device = device();
@@ -196,6 +266,29 @@ fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
             read == written,
             "{name} {width}x{height}: get_bytes reads replace_region's texels"
         );
+        let under_load = match width == 1920 {
+            true => {
+                let (mut times, made) =
+                    loaded_reads(&device, &queue, &texture, region, row, &written);
+                match times.is_empty() {
+                    true => format!(
+                        "; with {BUSY:?} of fills running, none of {made} reads returned while \
+                         they ran"
+                    ),
+                    false => {
+                        let returned = times.len();
+                        let (best, median) = best_and_median(&mut times);
+                        let worst = times[returned - 1];
+                        format!(
+                            "; with {BUSY:?} of fills running, get_bytes best {best:.2} ms, \
+                             median {median:.2} ms, worst {worst:.2} ms of the {returned} of \
+                             {made} reads that returned while they ran"
+                        )
+                    }
+                }
+            }
+            false => String::new(),
+        };
         let (read_best, read_median) = best_and_median(&mut reads);
         let (blit_best, _) = best_and_median(&mut blits);
         let (copy_best, _) = best_and_median(&mut copies);
@@ -205,7 +298,7 @@ fn a_shared_texture_s_cpu_copies_take_the_times_printed() {
              {read_best:.2} ms, median {read_median:.2} ms of {calls}; through a blit into a \
              Shared buffer: the blit {blit_best:.2} ms, the host's copy {copy_best:.2} ms (best \
              of {calls}); replace_region best {write_best:.2} ms, median {write_median:.2} ms of \
-             {calls}"
+             {calls}{under_load}"
         );
     }
 }
