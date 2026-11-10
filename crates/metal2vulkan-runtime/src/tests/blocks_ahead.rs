@@ -248,6 +248,40 @@ fn a_growing_pool_of_exportable_buffers_gets_its_new_blocks_made_ahead() {
     );
 }
 
+/// A pool's first block is made alone: a pool that takes one block and stays within it keeps no
+/// block ahead (`Memory::growing`). The rest of a block's worth of small blocks once queued behind
+/// each such pool's first block (three of 16 MiB) waited unused and went after `KEPT_EMPTY_FOR`:
+/// on a Radeon 780M, nine blocks of 16 MiB a device in `tests::reclaim_submit_bench`'s small-blocks
+/// arms, made and freed for nothing. The pool host copies place in keeps its own blocks ahead
+/// from the device's first creation call, by design, and is left out.
+#[test]
+fn a_pool_s_first_block_is_made_alone() {
+    let scratch = Scratch::new("first-alone");
+    let device = small_blocks_device(&scratch);
+    let buffer = device.new_buffer(64 << 10, ResourceOptions::private());
+    let mut held: Vec<Texture> = Vec::new();
+    texture(&device, (256, 256), &mut held);
+    makings_ended(&device);
+    let memory = crate::device::lock(&device.shared().memory);
+    let host_copies = memory.host_copies_pool();
+    let all = memory.ahead_by_pool();
+    drop(memory);
+    println!(
+        "BLOCKS-AHEAD {}: after a 64 KiB buffer and a 256 KiB texture, kept ahead by pool {:?} \
+         bytes; host copies' pool {host_copies:?}",
+        device.name(),
+        all,
+    );
+    let kept: Vec<_> = (all.into_iter())
+        .filter(|&(pool, bytes)| bytes > 0 && Some(pool) != host_copies)
+        .collect();
+    assert!(
+        kept.is_empty(),
+        "pools that took one block kept blocks ahead: {kept:?} bytes"
+    );
+    drop(buffer.unwrap());
+}
+
 /// A pool whose blocks of plain memory are made small after a slow making
 /// (`Memory::plain_block_made`) keeps as many of them made ahead as one block of
 /// `memory::BLOCK_BYTES` holds, the bytes it kept ahead before they were made small, and no

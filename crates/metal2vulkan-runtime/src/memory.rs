@@ -2659,16 +2659,18 @@ impl Memory {
         let pools = (0..types).flat_map(|type_index| {
             [Holds::Exports, Holds::DmaBufs].map(|holds| (holds, type_index))
         });
-        pools
-            .filter(|&(holds, type_index)| {
-                let bytes = self.pooled_bytes((holds, type_index));
-                let pool = self.pool(holds, type_index);
-                let grew = pool
-                    .grew(None)
-                    .is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
-                grew || pool.near_next(bytes)
-            })
-            .collect()
+        pools.filter(|&pool| self.growing(pool)).collect()
+    }
+
+    /// Whether `pool` keeps blocks made ahead now (`memory/ready.rs`): it grew within
+    /// [`KEPT_EMPTY_FOR`] (a pooled block was added while it held another), or, grown or not, is
+    /// near its next block ([`Pool::near_next`]). A pool's first block is no growth: a pool that
+    /// takes one block and stays within it keeps none ahead.
+    fn growing(&mut self, pool: (Holds, u32)) -> bool {
+        let bytes = self.pooled_bytes(pool);
+        let pool = self.pool(pool.0, pool.1);
+        let grew = (pool.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
+        grew || pool.near_next(bytes)
     }
 
     /// The blocks `pool` keeps made ahead (`memory/ready.rs`), its blocks of `bytes`: as many of
@@ -2764,9 +2766,13 @@ impl Memory {
 
     /// A call's wait for a block of `least` bytes or more made ahead for `pool`, its blocks of
     /// `bytes` (`memory/ready.rs`; within [`need`](Self::need)), where none is made: the block
-    /// being made or still to make, or
-    /// else one queued first for the call, its thread started where it has none, the rest of the
-    /// pool's blocks kept ahead after it. `None` where the pool host copies place in reads a
+    /// being made or still to make, or else one queued first for the call, its thread started
+    /// where it has none, the rest of the pool's blocks kept ahead after it where the pool keeps
+    /// them ([`growing`](Self::growing)). A pool's first block is made alone: the rest of a
+    /// block's worth of small blocks behind it (three of 16 MiB) waited unused for a pool that
+    /// stayed within that block, and went after [`KEPT_EMPTY_FOR`], to be made again
+    /// (`tests::reclaim_submit_bench`'s small-blocks arms on a Radeon 780M: nine such blocks a
+    /// device). `None` where the pool host copies place in reads a
     /// block's pages now, as a page's first touch may wait behind the program's GPU work, before
     /// [`keep_room`] gave the makings what they are made through, or where no thread starts.
     fn wait_for(&mut self, pool: (Holds, u32), bytes: u64, least: u64) -> Option<ready::Waiter> {
@@ -2783,7 +2789,10 @@ impl Memory {
                 }
             }
             None => {
-                let rest = self.lacking(pool, bytes, &[least]);
+                let rest = match self.growing(pool) {
+                    true => self.lacking(pool, bytes, &[least]),
+                    false => Vec::new(),
+                };
                 let sizes = std::iter::once(least).chain(rest).collect();
                 let (readying, waiter) = ready::Readying::start(making, pool, sizes, Some(need))?;
                 self.readying.push(readying);
@@ -3030,6 +3039,15 @@ impl Memory {
         (self.readying.iter())
             .filter(|ready| ready.pool().0 == holds)
             .map(|ready| (ready.pool().1, ready.outstanding_bytes()))
+            .collect()
+    }
+
+    /// Every pool that keeps blocks made ahead, with the bytes of its blocks made ahead and not
+    /// yet added and of those still to make (`memory/ready.rs`), for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn ahead_by_pool(&self) -> Vec<((Holds, u32), u64)> {
+        (self.readying.iter())
+            .map(|ready| (ready.pool(), ready.outstanding_bytes()))
             .collect()
     }
 
@@ -4911,13 +4929,10 @@ pub(super) fn ahead_room(bytes: u64) -> u64 {
 /// ([`Pool::near_next`]): those it lacks, its own blocks counted in bytes with its room
 /// ([`Memory::lacking`]).
 fn ready_if_growing(memory: &mut Memory, pool: (Holds, u32)) {
-    let bytes = memory.pooled_bytes(pool);
-    let pool_of = memory.pool(pool.0, pool.1);
-    let grew = (pool_of.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
-    if !grew && !pool_of.near_next(bytes) {
-        return;
+    if memory.growing(pool) {
+        let bytes = memory.pooled_bytes(pool);
+        memory.keep_ahead(pool, bytes);
     }
-    memory.keep_ahead(pool, bytes);
 }
 
 /// After a placement of `size` bytes in `pool`'s blocks ([`place`]): where the pool's blocks are

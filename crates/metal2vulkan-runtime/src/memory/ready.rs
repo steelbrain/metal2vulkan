@@ -77,7 +77,9 @@
 //!   add the pool's smallest block made ahead of the size they need. Where none is made they wait
 //!   for the one being made or still to make, or else for one the pool's thread makes first for
 //!   them, the thread started where the pool has none, the rest of its block's worth made after
-//!   it: no two threads make blocks for the same pool, none is made only to be freed, and a call
+//!   it where the pool grows (`Memory::growing`; a pool's first block is made alone, as the rest
+//!   behind it waited unused where the pool stayed within it): no two threads make blocks for the
+//!   same pool, none is made only to be freed, and a call
 //!   makes no block of a pool whose blocks are made ahead where a making can serve it. A making
 //!   still waiting for a burst's end when a call comes allocates at once, so that the call waits
 //!   for the allocation alone, never for the program's own submissions to pause; while a call
