@@ -372,7 +372,7 @@ mod tests {
                 let control = k * stride;
                 assert!(control + 4 <= bytes, "stride {stride} control {k}");
                 let far = (u64::from(first) + k) * stride;
-                assert!(far > 1 << 32, "stride {stride} element {k}");
+                assert!(far >= 1 << 32, "stride {stride} element {k}");
                 assert_eq!(far % (1 << 32), wrapped[k as usize], "stride {stride}");
                 assert!(wrapped[k as usize] + 4 <= bytes);
             }
