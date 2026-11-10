@@ -1574,19 +1574,22 @@ impl Split {
 pub(crate) enum NotInline {
     /// The encoder encodes an ended encoder's calls again, or the pass has several color groups.
     Encoders,
-    /// The pass's layout: no color attachment, or more than one layer or sample, a depth or
-    /// stencil attachment, a visibility buffer, custom sample positions, a rasterization-rate map,
-    /// or extended-range shadows that keep its draws.
+    /// The pass's layout: no attachment, or more than one layer or sample, a visibility buffer,
+    /// custom sample positions, a rasterization-rate map, extended-range shadows that keep its
+    /// draws, or a depth/stencil attachment held out of `GENERAL`.
     Layouts,
-    /// A memoryless color attachment not loaded and stored `DontCare`, or resolved.
+    /// A memoryless color attachment not loaded and stored `DontCare`, or resolved; or a
+    /// memoryless depth or stencil.
     Memoryless,
-    /// A color attachment's actions, the first ruled out ([`ActionsRefused`]).
+    /// A color attachment's or depth/stencil aspect's actions, the first ruled out
+    /// ([`ActionsRefused`]).
     Actions(ActionsRefused),
     /// A color attachment that is a texture over a buffer the pass does not render through an
     /// image over the buffer's bytes.
     BufferTextures,
     /// Another color attachment kind: a stand-in, planes, a clear made apart, an extended-range
-    /// format, or a bound linear image.
+    /// format, or a bound linear image; or another depth/stencil attachment kind: separate depth
+    /// and stencil textures' scratch, a stand-in, or a NaN depth clear written apart.
     Attachments,
     /// The pass's layout allowed it, and its first draw that records reads or writes a color
     /// attachment as storage (a fetch in the pixel interlock leaves it out of the subpass).
@@ -1624,16 +1627,17 @@ impl NotInline {
     }
 }
 
-/// The color attachment action that kept a render pass's first instance from recording inline
-/// ([`NotInline::Actions`]): the first ruled out, color by color in index order, and of one color
-/// in this order. Counted (`WorkCounts::passes_not_inline_actions_dont_care_load` and kin).
+/// The color attachment or depth/stencil aspect action that kept a render pass's first instance
+/// from recording inline ([`NotInline::Actions`]): the first ruled out, color by color in index
+/// order, then the depth and the stencil, and of one in this order. Counted
+/// (`WorkCounts::passes_not_inline_actions_dont_care_load` and kin).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ActionsRefused {
     /// Loaded `DontCare`.
     DontCareLoad,
     /// Reaching past the render area as another attachment does not: cleared where Metal's clear
-    /// of whole tiles (`clear_reach.rs`) reaches another extent than another color's, or loaded,
-    /// or a memoryless color smaller, where another's clear reaches past the render area.
+    /// of whole tiles (`clear_reach.rs`) reaches another extent than another attachment's, or
+    /// loaded, or a memoryless color smaller, where another's clear reaches past the render area.
     UnequalReach,
     /// Resolved, into a resolve attachment or by a copy after the pass.
     Resolve,
@@ -5983,22 +5987,22 @@ pub struct WorkCounts {
     /// opens or at its first draw that records: here, the encoder encodes an ended encoder's calls
     /// again, or the pass has several color groups.
     pub passes_not_inline_encoders: u64,
-    /// Of them, those of a layout of no color attachment, or of more than one layer or sample, a
-    /// depth or stencil attachment, a visibility buffer, custom sample positions, a
-    /// rasterization-rate map, or extended-range shadows that keep their draws.
+    /// Of them, those of a layout of no attachment, or of more than one layer or sample, a
+    /// visibility buffer, custom sample positions, a rasterization-rate map, extended-range
+    /// shadows that keep their draws, or a depth/stencil attachment held out of `GENERAL`.
     pub passes_not_inline_layouts: u64,
     /// Of them, those with a memoryless color attachment not loaded and stored `DontCare`, or
-    /// resolved.
+    /// resolved, or a memoryless depth or stencil.
     pub passes_not_inline_memoryless: u64,
-    /// Of them, those with a color attachment loaded `DontCare`, reaching past the render area as
-    /// another attachment does not, cleared to a NaN the device clears apart, resolved, or stored
-    /// other than `Store` or late; each counted once more below, by the first such action, color
-    /// by color in index order.
+    /// Of them, those with a color attachment or depth/stencil aspect loaded `DontCare`, reaching
+    /// past the render area as another attachment does not, cleared to a NaN the device clears
+    /// apart, resolved, or stored other than `Store` or late; each counted once more below, by
+    /// the first such action, color by color in index order, then the depth and the stencil.
     pub passes_not_inline_actions: u64,
     /// Of those, the ones where that action is a `DontCare` load.
     pub passes_not_inline_actions_dont_care_load: u64,
     /// Of those, the ones where it is a reach past the render area that the pass's attachments do
-    /// not share: Metal's clear of whole 32-pixel tiles reaches past the render area on one color
+    /// not share: Metal's clear of whole 32-pixel tiles reaches past the render area on one
     /// attachment, and another is loaded, cleared to another extent (a smaller texture's), or a
     /// smaller memoryless texture. A pass whose attachments share the reach records its first
     /// instance inline over it.
@@ -6012,7 +6016,9 @@ pub struct WorkCounts {
     /// through an image over the buffer's bytes.
     pub passes_not_inline_buffer_textures: u64,
     /// Of them, those with a color attachment of another kind: a stand-in, planes, a clear made
-    /// apart, an extended-range format, or a bound linear image (`linear_attachment.rs`).
+    /// apart, an extended-range format, or a bound linear image (`linear_attachment.rs`); or a
+    /// depth/stencil attachment of another kind: separate depth and stencil textures' scratch, a
+    /// stand-in, or a NaN depth clear written apart.
     pub passes_not_inline_attachments: u64,
     /// Of them, those whose layout allowed it and whose first draw that records reads or writes a
     /// color attachment as storage: a fetch in the pixel interlock, which leaves it out of the

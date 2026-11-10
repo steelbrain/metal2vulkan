@@ -5363,8 +5363,8 @@ impl RenderLowering {
         let clears = Clears::plan(clears)?;
         let bounded = tiles.as_ref().map(|tiles| (&dont_care, tiles));
         // Where the first instance recorded inline, its own clears reached as far as Metal's (it
-        // rendered over their reach), and it had no other clear to make before it: no depth or
-        // stencil, storage color or `DontCare` load but a memoryless color's
+        // rendered over their reach, its depth and stencil's too), and it had no other clear to
+        // make before it: no storage color or `DontCare` load but a memoryless color's
         // (`render/inline_first.rs`).
         let reach_clears = match inline {
             true => None,
