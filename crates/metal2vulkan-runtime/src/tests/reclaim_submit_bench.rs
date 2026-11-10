@@ -74,6 +74,9 @@
 //!   cached (where a unified-memory device's `Private` blocks lie, `memory.rs`, `candidates`), of
 //!   64 MiB every [`RAW_EVERY`], or of 16 or 4 MiB as much more often as they are smaller,
 //!   [`RAW_BYTES`] a phase.
+//! - **System heap, 64 MiB, remade**: the system heap's 64 MiB allocations, each freed at once
+//!   and allocated again, the first making, the free and the second making timed apart: what a
+//!   making costs whose pages the kernel kept from the free, against one whose pages it fills.
 //! - **System heap, 64 MiB, exportable**, **System heap, 64 MiB, opaque fd** and **System heap,
 //!   64 MiB, both**: the system heap's 64 MiB allocations, each exportable
 //!   (`VkExportMemoryAllocateInfo`) as a dma-buf, as an opaque file descriptor, or as both.
@@ -131,7 +134,12 @@
 //! those it isolated, allocation stalls, pages swapped out), the time some and all of the host's
 //! tasks stalled on memory (`/proc/pressure/memory`), the time every block added took to make
 //! summed, the memory the runtime allocated and the process's resident memory (`VmRSS`) at the
-//! phase's end; the memory the fragmenting took, the host's free memory
+//! phase's end; the runtime's block makings (`memory/making_parts.rs`), each part's time summed
+//! and the slowest (the buffer of addresses, `vkAllocateMemory` with the time its thread ran on a
+//! CPU and waited for one, the mapping and the binding), and the slowest by `vkAllocateMemory`,
+//! each with the submissions begun while it ran and the longest of their `commit_and_submit` and
+//! turnaround; the remade arm's three times;
+//! the memory the fragmenting took, the host's free memory
 //! and the cgroup's room it was sized from; the free blocks of each order before and after the
 //! fragmenting and after the phase (`/proc/buddyinfo`); and the slowest submissions', turnarounds'
 //! and makings' `CLOCK_MONOTONIC` times, to line up with a kernel trace taken beside the run.
@@ -511,6 +519,12 @@ enum Making {
         bytes: u64,
         export: Option<Handle>,
     },
+    /// Allocations of `bytes` of the memory type `index`, [`RAW_BYTES`] a phase, each freed at
+    /// once and allocated again.
+    Remade {
+        index: u32,
+        bytes: u64,
+    },
     Nothing,
 }
 
@@ -520,6 +534,9 @@ struct Made {
     buffers: Vec<Buffer>,
     textures: Vec<Texture>,
     raw: Vec<vk::DeviceMemory>,
+    /// Of each allocation made again, how long its first making, its free and its second making
+    /// took.
+    remade: Vec<[Duration; 3]>,
 }
 
 /// Make as `making` says until `stop`: each making's time and `CLOCK_MONOTONIC` start.
@@ -536,7 +553,7 @@ fn make(
         Making::Images => (IMAGE_EVERY, IMAGE_TEXTURES),
         Making::ImagesMixed => (IMAGE_EVERY, MIXED_TEXTURES),
         Making::ImagesBursts | Making::ImagesScrolled => (BURST_EVERY, IMAGE_TEXTURES),
-        Making::Raw { bytes, .. } => (
+        Making::Raw { bytes, .. } | Making::Remade { bytes, .. } => (
             RAW_EVERY.mul_f64(bytes as f64 / (64 * MIB) as f64),
             (RAW_BYTES / bytes) as usize,
         ),
@@ -583,6 +600,16 @@ fn make(
                 bytes,
                 export,
             } => made.raw.push(allocate(device, index, bytes, export)),
+            Making::Remade { index, bytes } => {
+                let first = allocate(device, index, bytes, None);
+                let freeing = Instant::now();
+                // SAFETY: nothing uses the memory.
+                unsafe { crate::release::object(device.shared().vk(), first) };
+                let again = Instant::now();
+                made.raw.push(allocate(device, index, bytes, None));
+                made.remade
+                    .push([freeing - began, again - freeing, again.elapsed()]);
+            }
             Making::Nothing => unreachable!(),
         }
         times.push((began.elapsed(), at));
@@ -645,12 +672,14 @@ fn phase(
         let mut memory = crate::device::lock(&device.shared().memory);
         memory.longest_making = Duration::ZERO;
         memory.makings_took = Duration::ZERO;
+        crate::memory::making_parts::MAKINGS.lock().unwrap().clear();
         memory.in_place_bytes.clear();
         memory.image_placements.clear();
         let unused = memory.unused_frees.len();
         (memory.turnover_bytes(), unused, Instant::now())
     };
     let before = (vmstat(), device.work_counts(), memory_pressure());
+    let (remade_before, clock) = (made.remade.len(), (Instant::now(), monotonic()));
     let stop = AtomicBool::new(false);
     let (submits, turnarounds, makes) = std::thread::scope(|scope| {
         let maker = (std::thread::Builder::new().name("reclaim-make".to_owned()))
@@ -793,9 +822,99 @@ fn phase(
         allocated >> 20,
         status("VmRSS") >> 20,
     );
+    let makings: Vec<_> = (crate::memory::making_parts::MAKINGS.lock().unwrap())
+        .drain(..)
+        .collect();
+    print_makings((arm, name), &makings, clock, (&submits, &turnarounds));
+    if made.remade.len() > remade_before {
+        let ms = |at: usize| -> Vec<(Duration, f64)> {
+            (made.remade[remade_before..].iter())
+                .map(|parts| (parts[at], 0.0))
+                .collect()
+        };
+        let [first, free, again] = [0, 1, 2].map(|at| spread(&ms(at), 0));
+        eprintln!(
+            "RECLAIM-SUBMIT {arm}, {name}: remade {}: first making ms median {:.2}, slowest \
+             {:.2}; its free median {:.2}, slowest {:.2}; the second making median {:.2}, \
+             slowest {:.2}",
+            made.remade.len() - remade_before,
+            first.0,
+            first.2,
+            free.0,
+            free.2,
+            again.0,
+            again.2,
+        );
+    }
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest submissions {slow}");
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest turnarounds {slow_turns}");
     eprintln!("RECLAIM-SUBMIT {arm}, {name}: slowest makings {slow_makes}");
+}
+
+/// Print the runtime's block makings of the phase `name` of `arm` (`memory/making_parts.rs`):
+/// each part's time summed and the slowest, and the [`SLOWEST`] makings by their
+/// `vkAllocateMemory`, each with the submissions begun while it ran and the longest of their
+/// `commit_and_submit` and turnaround. `clock` is an `Instant` and its `CLOCK_MONOTONIC` seconds, to place the makings
+/// among the submissions.
+fn print_makings(
+    (arm, name): (&str, &str),
+    makings: &[crate::memory::making_parts::MakingParts],
+    clock: (Instant, f64),
+    (submits, turnarounds): (&[(Duration, f64)], &[(Duration, f64)]),
+) {
+    let ms = |took: Duration| took.as_secs_f64() * 1e3;
+    let part = |at: usize| {
+        let all = makings.iter().map(|making| making.took[at]);
+        (ms(all.clone().sum()), ms(all.max().unwrap_or_default()))
+    };
+    let [addresses, allocate, map, bind] = [0, 1, 2, 3].map(part);
+    let on_cpu: Duration = makings.iter().map(|making| making.on_cpu).sum();
+    let runnable: Duration = makings.iter().map(|making| making.runnable).sum();
+    let ahead = makings.iter().filter(|making| making.ahead).count();
+    eprintln!(
+        "RECLAIM-SUBMIT {arm}, {name}: makings {} ({ahead} ahead), ms summed and slowest: buffer \
+         of addresses {:.1}, {:.2}; vkAllocateMemory {:.1}, {:.2} (on a CPU {:.1}, waiting for one \
+         {:.1}); mapping {:.2}, {:.2}; binding {:.2}, {:.2}",
+        makings.len(),
+        addresses.0,
+        addresses.1,
+        allocate.0,
+        allocate.1,
+        ms(on_cpu),
+        ms(runnable),
+        map.0,
+        map.1,
+        bind.0,
+        bind.1,
+    );
+    let mut slowest: Vec<_> = makings.iter().collect();
+    slowest.sort_by_key(|making| std::cmp::Reverse(making.took[1]));
+    for making in slowest.into_iter().take(SLOWEST) {
+        let began = clock.1 + making.allocating.duration_since(clock.0).as_secs_f64();
+        let ended = began + making.took[1].as_secs_f64();
+        let within = |times: &[(Duration, f64)]| {
+            let inside = (times.iter()).filter(|&&(_, at)| at >= began && at < ended);
+            (
+                inside.clone().count(),
+                inside.map(|&(took, _)| ms(took)).fold(0.0, f64::max),
+            )
+        };
+        let ((count, submit), (_, turnaround)) = (within(submits), within(turnarounds));
+        eprintln!(
+            "RECLAIM-SUBMIT {arm}, {name}: making of {} MiB {} at {began:.3}: vkAllocateMemory \
+             {:.2} ms (on a CPU {:.2}, waiting for one {:.2}), mapping {:.2}, buffer of addresses \
+             {:.2} and its binding {:.2}; submissions begun within it {count}, the longest \
+             commit_and_submit {submit:.2} ms, turnaround {turnaround:.2} ms",
+            making.bytes >> 20,
+            if making.ahead { "ahead" } else { "in place" },
+            ms(making.took[1]),
+            ms(making.on_cpu),
+            ms(making.runnable),
+            ms(making.took[2]),
+            ms(making.took[0]),
+            ms(making.took[3]),
+        );
+    }
 }
 
 /// The first memory type of `device` whose flags hold `with` and none of `without`.
@@ -835,6 +954,10 @@ enum Arm {
     SystemHeap {
         bytes: u64,
         export: Option<Handle>,
+    },
+    /// The system heap's allocations of `bytes`, each freed at once and allocated again.
+    SystemHeapRemade {
+        bytes: u64,
     },
     CarveOut,
     MadeBefore,
@@ -896,6 +1019,10 @@ fn arm_with(label: &str, arm: Arm, small: bool) {
             index: system_heap(),
             bytes,
             export,
+        },
+        Arm::SystemHeapRemade { bytes } => Making::Remade {
+            index: system_heap(),
+            bytes,
         },
         Arm::CarveOut => Making::Raw {
             index: memory_type(
@@ -1461,6 +1588,15 @@ fn reclaim_submit_bench_system_heap_64mib() {
             bytes: 64 * MIB,
             export: None,
         },
+    );
+}
+
+#[test]
+#[ignore = "a measurement that presses the host's memory: run alone on its host by name"]
+fn reclaim_submit_bench_system_heap_64mib_remade() {
+    arm(
+        "system heap, 64 MiB, remade",
+        Arm::SystemHeapRemade { bytes: 64 * MIB },
     );
 }
 

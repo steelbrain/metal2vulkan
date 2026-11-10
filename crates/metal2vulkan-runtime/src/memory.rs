@@ -173,6 +173,8 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+#[cfg(all(test, m2v_gpu, target_os = "linux"))]
+pub(crate) mod making_parts;
 mod ready;
 
 /// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
@@ -4031,6 +4033,8 @@ impl BlockMaker {
         if dedicated_to != vk::Buffer::null() {
             info = info.push_next(&mut dedicated);
         }
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        let (allocating, before) = (Instant::now(), making_parts::thread_times());
         // SAFETY: `info` and its chain live for the call; the type index is the device's; an
         // export's handle type and dedicated buffer are the caller's ([`allocate_exported`]).
         let memory = match unsafe { crate::creation::allocate_memory(device, &info) } {
@@ -4040,6 +4044,8 @@ impl BlockMaker {
                 return Err(vulkan(error));
             }
         };
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        let (allocated, after) = (Instant::now(), making_parts::thread_times());
         let host_visible = self.host_visible & 1 << type_index != 0;
         let mapped = if host_visible {
             // SAFETY: the memory is host-visible, unmapped, and mapped whole once.
@@ -4057,6 +4063,8 @@ impl BlockMaker {
         } else {
             None
         };
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        let mapped_at = Instant::now();
         let addresses = match addresses {
             // SAFETY: the memory was just allocated with the device-address flag, of a type the
             // buffer takes (`allocate_addressed`), and as long as it requires.
@@ -4075,6 +4083,23 @@ impl BlockMaker {
             },
             None => None,
         };
+        #[cfg(all(test, m2v_gpu, target_os = "linux"))]
+        making_parts::MAKINGS
+            .lock()
+            .unwrap()
+            .push(making_parts::MakingParts {
+                bytes: size,
+                ahead: std::thread::current().name() == Some(ready::THREAD_NAME),
+                allocating,
+                took: [
+                    allocating - began,
+                    allocated - allocating,
+                    mapped_at - allocated,
+                    mapped_at.elapsed(),
+                ],
+                on_cpu: after.0.saturating_sub(before.0),
+                runnable: after.1.saturating_sub(before.1),
+            });
         Ok(Block {
             memory,
             size,

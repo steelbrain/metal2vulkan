@@ -129,6 +129,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+/// The name of a pool's thread that makes its blocks ahead, so that a kernel trace tells it apart.
+pub(super) const THREAD_NAME: &str = "metal2vulkan-ready";
+
 /// The stride of the reads that touch a block's pages: the smallest page any host maps, so a
 /// host with larger pages reads each of its pages more than once.
 const PAGE: usize = 4096;
@@ -460,7 +463,7 @@ fn spawn(
     shared: &Arc<Shared>,
     pool: (Holds, u32),
 ) -> std::io::Result<JoinHandle<()>> {
-    let builder = std::thread::Builder::new().name("metal2vulkan-ready".into());
+    let builder = std::thread::Builder::new().name(THREAD_NAME.into());
     let shared = Arc::clone(shared);
     exit_guard::spawn(builder, move || {
         let MadeWith {
