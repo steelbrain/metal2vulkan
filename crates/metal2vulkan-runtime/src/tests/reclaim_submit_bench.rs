@@ -500,7 +500,7 @@ impl Pinning {
             meminfo("MemAvailable") >> 20,
         );
         Pinning {
-            device: device.shared().vk().clone(),
+            device: ash::Device::clone(device.shared().vk()),
             pieces,
         }
     }
