@@ -3733,8 +3733,9 @@ bound.
   rounded to nearest even on every device: within one `half` ulp of Metal's, but a 32-bit float
   texel's sample past `±65504`, the infinity where Metal saturates. On MoltenVK, whose `float`
   texel is Metal's, announced at a draw or dispatch that binds a texture of a class whose Metal
-  `half` differs from it (a 32-bit float texel's sample, a 16-bit normalized texel, a format not
-  measured) and a two-plane YCbCr texture on the grid `8192` at a slot sampled through a runtime
+  `half` differs from it (a 32-bit float texel's sample, but where the profile takes
+  `DriverDeviation::MetalHalfConversion`, measured on the Apple M3 Max to answer Metal's `half` of
+  every `float` word; a 16-bit normalized texel; a format not measured) and a two-plane YCbCr texture on the grid `8192` at a slot sampled through a runtime
   sampler (a sample of one texel is the device's rounding of its step: toward zero on MoltenVK
   1.4.2 over the Apple M3 Max, within one `half` ulp of Metal's ties-away rounding, measured over
   8,409 channels; unmeasured on other Apple GPUs); a heap element or a depth texture wherever it

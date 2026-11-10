@@ -1630,7 +1630,10 @@ pub enum OneTexel {
 /// none of the families (the slot's `UnmeasuredTexels` specialization), a 16-bit normalized grid
 /// (`BicubicTexels::WIDE16`: three steps of each round twice), and a sample of a 32-bit float
 /// texel (`BicubicTexels::LINEAR`: Metal rounds toward zero, saturating), tests of the bound
-/// format the runtime announces at a draw or dispatch binding such a texture. A heap color
+/// format the runtime announces at a draw or dispatch binding such a texture. Not a sample's of a
+/// 32-bit float texel on a profile that takes `DriverDeviation::MetalHalfConversion` (the module
+/// then requires its property): there the device's `half` of every `float` word a read, sample or
+/// gather hands back is measured to be Metal's (`device::driver_facts`). A heap color
 /// texture's and a depth texture's access records it outright.
 pub(crate) fn half_texels(
     cx: &mut SelectCx<'_>,
@@ -1657,8 +1660,22 @@ pub(crate) fn half_texels(
         [NoteTest::equal(NoteOn::Unmeasured(index), 1, 1)].into(),
         [NoteTest::differ(NoteOn::Bound(index), B::WIDE16, 0)].into(),
     ];
+    // A sample of a 32-bit float texel, but on a profile that takes
+    // `DriverDeviation::MetalHalfConversion`, whose `half` of every `float` word a read, sample or
+    // gather hands back is measured to be Metal's (the module then requires its property).
     if sample {
-        when.push([NoteTest::differ(NoteOn::Bound(index), B::LINEAR, 0)].into());
+        match cx
+            .profile
+            .takes_driver_deviation(DriverDeviation::MetalHalfConversion)
+        {
+            true => {
+                cx.families
+                    .texture
+                    .storage_properties
+                    .insert(crate::device::requirements::VkProperty::MetalHalfConversion);
+            }
+            false => when.push([NoteTest::differ(NoteOn::Bound(index), B::LINEAR, 0)].into()),
+        }
     }
     cx.note_when(PrecisionNote::HalfTexelConversion, when, m)?;
     let slot = slot_of(cx, index)?.slot;

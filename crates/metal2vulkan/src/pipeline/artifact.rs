@@ -1046,7 +1046,10 @@ pub enum PrecisionNote {
     /// result, and its nearest even `half` is Metal's `half` but for the classes the note is
     /// recorded under, by the slot's bound format (`SpecKey::TexelFormat`): a 32-bit float
     /// texel's sample, which Metal rounds toward zero (within one `half` ulp, but past `±65504` the
-    /// infinity of its sign where Metal saturates to `±65504`); a 16-bit normalized texel, whose
+    /// infinity of its sign where Metal saturates to `±65504`), but on a profile that takes
+    /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion),
+    /// whose `half` of every `float` word a read, sample or gather hands back is measured to be
+    /// Metal's (the module then requires `VkProperty::MetalHalfConversion`); a 16-bit normalized texel, whose
     /// `float` steps `65455 / 65535`, `65519 / 65535` and `32759 / 32767` round twice (one `half`
     /// ulp); and a format whose conversion is not measured (unbounded). A heap element and a depth
     /// texture record it wherever they are accessed. A two-plane YCbCr texture on the grid `8192`
