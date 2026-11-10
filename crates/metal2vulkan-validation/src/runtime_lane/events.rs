@@ -24,7 +24,7 @@ use metal2vulkan_runtime::{
 };
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The longest a command buffer or an event of these tests may take.
 const WAIT: Duration = Duration::from_secs(60);
@@ -979,21 +979,29 @@ fn a_scheduled_signal_sets_its_value_as_the_command_buffer_is_scheduled() {
 /// Printed: `WAIT-AFTER-HANDLER`, how long after the last command buffer's completed handler ran
 /// (or after the wait was asked, if later) its wait returned, each round and as the rounds' median
 /// and longest. Metal's wait for a command buffer's completion returns after its completed handlers
-/// ended, 10 us after at the median and 23 us at p99 on the M3 Max.
+/// ended, 10 us after at the median and 23 us at p99 on the M3 Max. And `DEVICE-MAKE-DROP`, each
+/// round's wall time in each of its steps: the first device's making, its case run, its drop, the
+/// next device's making and its drop.
 #[test]
 fn a_device_dropped_after_a_wait_is_gone_when_the_drop_returns() {
     let case = public_case(CASE).unwrap();
     let mut after_handler = Vec::new();
+    let ms = |since: Instant| since.elapsed().as_secs_f64() * 1e3;
     for round in 0..16 {
         let cache = ScratchCache::new().unwrap();
         let messages = Messages::default();
-        let first = {
+        let making = Instant::now();
+        // The block's last value is taken before its handles drop: `dropping` starts the drop.
+        let (first, made, ran, dropping) = {
             let device =
                 validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
+            let made = ms(making);
+            let running = Instant::now();
             {
                 let pipeline = pipeline_state(&device, &case).unwrap();
                 run_with(&device, &case, &pipeline).unwrap();
             }
+            let ran = ms(running);
             let first = device.shader_cache_statistics();
             let queue = device.new_command_queue().unwrap();
             let last = queue.command_buffer().unwrap();
@@ -1018,8 +1026,9 @@ fn a_device_dropped_after_a_wait_is_gone_when_the_drop_returns() {
             let us = (returned - handled.max(asked)) * 1e6;
             eprintln!("WAIT-AFTER-HANDLER round {round}: {us:.1} us");
             after_handler.push(us);
-            first
+            (first, made, ran, Instant::now())
         };
+        let dropped = ms(dropping);
         assert_eq!(
             messages.holders(),
             1,
@@ -1034,8 +1043,16 @@ fn a_device_dropped_after_a_wait_is_gone_when_the_drop_returns() {
             // The driver's data ends inside its own header: nothing was kept.
             assert_eq!(first.driver_saves, 0, "round {round}: {first:?}");
         }
+        let making_next = Instant::now();
         let next = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
+        let made_next = ms(making_next);
+        let dropping_next = Instant::now();
         drop(next);
+        eprintln!(
+            "DEVICE-MAKE-DROP round {round}: made {made:.0} ms, ran {ran:.0} ms, dropped \
+             {dropped:.0} ms; next made {made_next:.0} ms, dropped {:.0} ms",
+            ms(dropping_next)
+        );
         layer_reported_nothing_at_all(&messages);
     }
     after_handler.sort_by(f64::total_cmp);
