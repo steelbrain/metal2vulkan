@@ -1448,7 +1448,9 @@ pub(super) struct Block {
     /// ([`place_carried`]): the buffers carried from one block of the lost generation lie in it at
     /// their offsets, and nothing else is placed in it, so it goes once they do.
     carried: bool,
-    /// How long its making took ([`BlockMaker::make`]): zero for an import.
+    /// How long its making took ([`BlockMaker::make`]): zero for an import. Read by the crate's
+    /// tests alone.
+    #[cfg(test)]
     took: Duration,
     /// Where its pages were filled through an exportable allocation first (the module docs,
     /// "Blocks filled exportable first"), whether its own allocation then took less than
@@ -3856,6 +3858,7 @@ impl BlockMaker {
             zeroed: false,
             pooled_pages: true,
             carried: false,
+            #[cfg(test)]
             took: Duration::ZERO,
             filled: None,
         }))
@@ -3874,6 +3877,7 @@ impl BlockMaker {
         export: Exportable,
         zeroed: bool,
     ) -> Result<Block, Error> {
+        #[cfg(test)]
         let began = Instant::now();
         let addresses = if addressed.is_some() && self.device_address {
             let sharing = Sharing::new(&self.families);
@@ -4011,6 +4015,7 @@ impl BlockMaker {
             zeroed,
             pooled_pages: false,
             carried: false,
+            #[cfg(test)]
             took: began.elapsed(),
             filled: filled.then(|| allocated - allocating < FILL_SAVED_BELOW),
         })
@@ -4284,6 +4289,7 @@ pub(super) unsafe fn import_host(
         zeroed: false,
         pooled_pages: false,
         carried: false,
+        #[cfg(test)]
         took: Duration::ZERO,
         filled: None,
     };
@@ -4325,6 +4331,7 @@ pub(super) fn import_own_pages(
         zeroed: false,
         pooled_pages: false,
         carried: false,
+        #[cfg(test)]
         took: Duration::ZERO,
         filled: None,
     };
@@ -4389,6 +4396,7 @@ pub(super) fn place_carried(
                 zeroed: false,
                 pooled_pages: true,
                 carried: true,
+                #[cfg(test)]
                 took: Duration::ZERO,
                 filled: None,
             };

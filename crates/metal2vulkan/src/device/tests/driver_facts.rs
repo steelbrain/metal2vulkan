@@ -698,7 +698,8 @@ fn nvidia_s_every_1024th_signalling_submit_stall_holds_on_the_gpu_measured() {
 /// RADV on a GPU no row names takes RADV's driver-wide fact alone: the Radeon 780M's own
 /// description presented under a `deviceID` no table names (0x1114) reads zero past a bound index
 /// range, as RADV does on every GPU, and takes no answer measured on the 780M alone (its block
-/// decodes, `DONT_CARE` stores, interlocked split, sampled fetch), at another release too. Under
+/// decodes, `DONT_CARE` stores, interlocked split, sampled fetch, plain allocations that hold its
+/// submissions), at another release too. Under
 /// the RX 7900 XTX's (0x744c) it takes the one answer measured there too, BC1 to BC3's block
 /// decode, and none of the 780M's others; under the RX 550's (0x699f) the one answer measured
 /// there, a cleared depth at the standard positions. Whether its submissions merge and whether
@@ -711,7 +712,15 @@ fn a_radv_gpu_no_row_names_takes_radv_s_driver_wide_fact_alone() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
     let text = std::fs::read_to_string(dir.join("amd-780m-radv.json")).expect("amd-780m-radv");
     let phoenix = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
-    let answers = BTreeSet::from([FETCH, SPLIT, COLOR_BLOCKS, BC6H, BC7, ONE_OF_METALS]);
+    let answers = BTreeSet::from([
+        FETCH,
+        SPLIT,
+        COLOR_BLOCKS,
+        BC6H,
+        BC7,
+        ONE_OF_METALS,
+        PLAIN_HOLDS,
+    ]);
     let measured = BTreeSet::from([DriverFact::RobustIndexFetchReadsZero]);
     assert_eq!(
         phoenix.driver_facts(),
