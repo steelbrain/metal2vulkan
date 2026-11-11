@@ -43,6 +43,11 @@
 //!   its host step needs. Work a host step recorded again since (with the barriers between its
 //!   commands, `gpu_execute::Rerecord`, or as a route outgrew it, `DeferredPass::outgrown`)
 //!   keeps that step's recording.
+//! - **Copies taken at use.** A tiled texture's copy of its bytes taken at use (`shadow.rs`) is
+//!   taken by the first use encoded after its mark was set, which clears it. An encoder encoded
+//!   again takes it where the use in its place in its first encoding took it, whose recording is
+//!   never submitted, and leaves the mark as it finds it: set by a `did_modify_data` since, it is
+//!   the next use's to take (`shadow::Takes`).
 //! - **Runs of passes.** An encoder encoded again that was a pass of a run of passes merged once
 //!   (a shadowed texture's or a linear attachment's, `pass_runs.rs`) leaves the run once it is
 //!   put in place: the merge of the run's pass before it, which it took over, records after all,
@@ -161,10 +166,17 @@ impl CommandBufferShared {
                     })
                     .collect();
                 state.replaying_keeps = runs.iter().filter_map(|run| run.keep_after()).collect();
+                // Its first encoding's takes of copies taken at use, taken again where they were:
+                // that encoding's recording is never submitted (`shadow::Takes`).
+                state.replaying_takes = state.ended[at].takes.clone();
                 (state.residency_before(at, replay.kind()), runs)
             };
             let run = replay.run(&handle, residency);
-            lock(&self.state).replaying_keeps.clear();
+            {
+                let mut state = lock(&self.state);
+                state.replaying_keeps.clear();
+                state.replaying_takes.clear();
+            }
             // Its steps' gates listed as the commit lists the first encoding's.
             let run = {
                 let mut state = lock(&self.state);

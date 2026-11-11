@@ -5,8 +5,9 @@ use super::super::host_aliases::{self, Alias};
 use super::super::key_hash::KeyMap;
 use super::super::resource::ResourceKey;
 use super::super::shadow::{
-    self, Backing, CopyCause, ImageTruth, KeptArea, Lost, ShadowBuffer, ShadowCarry, ShadowCopies,
-    ShadowCopy, ShadowSource, ShadowSync, ShadowTarget, ShadowUse, Step, Within,
+    self, Backing, CopyCause, ImageTruth, KeptArea, LaterLevels, LevelsCopy, Lost, ShadowBuffer,
+    ShadowCarry, ShadowCopies, ShadowCopy, ShadowSource, ShadowSync, ShadowTarget, ShadowUse, Step,
+    Within,
 };
 use super::super::shadow_merge::ScratchSpares;
 use super::super::tracker::{Access, Use, UseRange};
@@ -2403,4 +2404,47 @@ fn a_pass_storing_its_loaded_area_merges_in_whole_blocks() {
     shadow::join(&mut joined, &through(&t, false).0);
     assert!(joined[0].tile_stores);
     assert_eq!(made_for(&joined, &used), [(true, Some(area))]);
+}
+
+/// A shadowed texture over `bytes` of the buffer `buffer` whose shadow is a copy taken at use (a
+/// tiled texture's of more than one level), its later levels kept.
+fn taken_at_use(buffer: ResourceKey, bytes: Range<u64>) -> Arc<ShadowCopies> {
+    let mut copies = Arc::into_inner(shadow(buffer, bytes)).expect("one holder");
+    let aspects = vk::ImageAspectFlags::COLOR;
+    copies.levels = Some(LevelsCopy::new(LaterLevels::Kept, aspects));
+    Arc::new(copies)
+}
+
+/// A copy taken at use is taken by the first use encoded after its mark, which clears it. An
+/// encoding of an encoder again (`command_buffer/reencode.rs`) takes it where its first encoding
+/// took it and not where it did not, whatever the mark, which it leaves as it finds it: a
+/// `did_modify_data` after the first encoding is the next use's to take.
+#[test]
+fn an_encoding_again_takes_a_copy_taken_at_use_where_its_first_encoding_took_it() {
+    let t = taken_at_use(ResourceKey::new(), 0..4096);
+    let k = t.shadow_key;
+    let levels = t.levels.as_ref().expect("a copy taken at use");
+    let first_use = |sync: &mut ShadowSync<u32>| moved(&planned(sync, &mut 0, &[(&t, false)], &[]));
+    // The first encoding takes it at its first use alone.
+    let mut first = ShadowSync::default();
+    assert_eq!(first_use(&mut first), [Moved::Into(k)]);
+    assert_eq!(first_use(&mut first), []);
+    let took = first.into_takes();
+    // A later encoder takes nothing.
+    let mut later = ShadowSync::default();
+    assert_eq!(first_use(&mut later), []);
+    let took_none = later.into_takes();
+    // Encoded again, the first takes it again, and the mark stays clear.
+    let mut again = ShadowSync::again(took.clone());
+    assert_eq!(first_use(&mut again), [Moved::Into(k)]);
+    assert_eq!(first_use(&mut again), []);
+    assert_eq!(again.into_takes(), Default::default());
+    assert_eq!(first_use(&mut ShadowSync::default()), []);
+    // After a `did_modify_data`, the later one encoded again takes nothing and the first takes it,
+    // as each did; the mark stays for the next use encoded.
+    levels.mark_stale();
+    assert_eq!(first_use(&mut ShadowSync::again(took_none)), []);
+    assert_eq!(first_use(&mut ShadowSync::again(took)), [Moved::Into(k)]);
+    assert_eq!(first_use(&mut ShadowSync::default()), [Moved::Into(k)]);
+    assert_eq!(first_use(&mut ShadowSync::default()), []);
 }

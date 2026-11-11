@@ -115,6 +115,9 @@ pub(super) struct EncoderRecord {
     /// encodes it again from them. Kept, with what they hold, until the command buffer's release
     /// (`CommandBufferShared::complete`); `None` where it cannot be encoded again, or need not.
     pub(super) replay: Option<std::sync::Arc<Replay>>,
+    /// What its first uses of copies taken at use decided as the program encoded it, where its
+    /// log is kept: an encoding of it again takes each as they did (`shadow::Takes`).
+    pub(super) takes: crate::shadow::Takes,
     /// Its executions' place among the command buffer's (`State::executions`).
     pub(super) executions: std::ops::Range<usize>,
     /// The images it holds in their attachment layout (`texture/held_depth.rs`): the scheduler

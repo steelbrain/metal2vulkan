@@ -726,6 +726,10 @@ impl EncoderCore {
     ) -> Result<EncoderCore, Error> {
         let mut core = EncoderCore::segment_raw(command_buffer, ordered)?;
         core.replaying = true;
+        // Its first uses of copies taken at use take them where its first encoding's did, whose
+        // recording is never submitted (`shadow::Takes`, `command_buffer/reencode.rs`).
+        let first = command_buffer.state().replaying_takes.clone();
+        core.shadows = ShadowSync::again(first);
         Ok(core)
     }
 
@@ -2789,6 +2793,9 @@ impl EncoderCore {
         }
         // What the encoder leaves the command buffer's later encoders (`shadow::ShadowCarry`).
         state.shadows_carried(shadows.ended());
+        // What its first uses of copies taken at use decided, for an encoding of it again
+        // (`shadow::Takes`).
+        let takes = shadows.into_takes();
         if !first_copies.is_empty() {
             let again = state.shadows_copied_in(&first_copies);
             if again > 0 {
@@ -2820,7 +2827,8 @@ impl EncoderCore {
         let base = state.executions.len();
         // One part, its executions these: a log not kept comes back, to go without the lock.
         let logged = replay.as_ref().map(Replay::bytes);
-        let unkept = state.keep_replay(encoder, replay, base..base + executions.len());
+        let executed = base..base + executions.len();
+        let unkept = state.keep_replay(encoder, replay, takes, executed);
         if let (Some(bytes), None) = (logged, &unkept) {
             open.command_buffer
                 .device()

@@ -243,7 +243,10 @@
 //!   they are when the command buffer runs, after its commit. Every other use copies nothing in,
 //!   whatever wrote the bytes, and nothing written through the image is copied back or merged: it
 //!   stays in the image, as a Mac's texture's own memory keeps it. A use whose encoding is left
-//!   out of its command buffer's work ([`ShadowSync::forget`]) leaves the copy to the next use.
+//!   out of its command buffer's work ([`ShadowSync::forget`]) leaves the copy to the next use. An
+//!   encoder a rebind encodes again (`command_buffer/reencode.rs`), whose first recording is never
+//!   submitted, takes the copy where its first encoding took it and leaves the mark as it finds it
+//!   ([`Takes`]).
 //!   For a format `generate_mipmaps` leaves as it is or refuses, the copy in moves the first level
 //!   alone and the later levels keep what they hold (docs/FAST-PATHS.md, known gaps).
 
@@ -3110,15 +3113,58 @@ pub(super) struct ShadowSync<M = Arc<ShadowMerge>> {
     /// How the encoder's first copies in so far stood against their images' last standing, which
     /// [`tally`](Self::tally) hands to the counters.
     tally: CarryTally,
+    /// How its first uses of a copy taken at use decide whether they take it ([`TakeBy`]).
+    takes: TakeBy,
 }
 
 impl<M> Default for ShadowSync<M> {
     /// No texture used yet, and nothing carried: every texture copies in at its first use.
     fn default() -> Self {
-        ShadowSync {
-            entries: Vec::new(),
-            carry: ShadowCarry::default(),
-            tally: CarryTally::default(),
+        ShadowSync::carrying(ShadowCarry::default())
+    }
+}
+
+/// What an encoder's first uses of textures whose shadows are copies taken at use
+/// ([`ShadowCopies::levels`]) decided, in the order it met them: each texture's shadow key, and
+/// whether that use took the copy. A texture's first use in an encoder decides, and so does its
+/// first use after work the encoder records apart ([`ShadowSync::leave`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Takes(Vec<(ResourceKey, bool)>);
+
+impl Takes {
+    /// None decided: an encoder that met no copy taken at use.
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+/// How an encoder's first uses of a copy taken at use decide whether they take it.
+enum TakeBy {
+    /// As the program encodes it: where the texture's mark asks ([`LevelsCopy::take`], which
+    /// clears it), each decision noted.
+    Mark(Takes),
+    /// Encoded again (`command_buffer/reencode.rs`): as the use in its place in the first
+    /// encoding decided, the first encoding's decisions not met yet held here. The first
+    /// recording is never submitted, so its take is this one's; the mark is left as it is found,
+    /// for the next use encoded after a later `Texture::did_modify_data`.
+    Again(Takes),
+}
+
+impl TakeBy {
+    /// Whether this first use in the encoder of the texture whose shadow key is `key` and whose
+    /// copy is `levels` takes the copy.
+    fn take(&mut self, key: ResourceKey, levels: &LevelsCopy) -> bool {
+        match self {
+            TakeBy::Mark(noted) => {
+                let took = levels.take();
+                noted.0.push((key, took));
+                took
+            }
+            // A use the first encoding did not meet takes nothing, as it did not.
+            TakeBy::Again(first) => match first.0.iter().position(|(met, _)| *met == key) {
+                Some(at) => first.0.remove(at).1,
+                None => false,
+            },
         }
     }
 }
@@ -3132,6 +3178,27 @@ impl<M> ShadowSync<M> {
             entries: Vec::new(),
             carry,
             tally: CarryTally::default(),
+            takes: TakeBy::Mark(Takes::default()),
+        }
+    }
+
+    /// An encoder encoded again (`command_buffer/reencode.rs`), whose first encoding decided
+    /// `first` of its copies taken at use ([`Takes`]): each of its first uses of such a texture
+    /// takes the copy where the use in its place there took it, the texture's mark untouched.
+    /// Nothing is carried: every other texture copies in at its first use.
+    pub(super) fn again(first: Takes) -> ShadowSync<M> {
+        ShadowSync {
+            takes: TakeBy::Again(first),
+            ..ShadowSync::default()
+        }
+    }
+
+    /// What its first uses of copies taken at use decided, as the program encoded them, for an
+    /// encoding of the encoder again ([`again`](Self::again)); none for an encoding again.
+    pub(super) fn into_takes(self) -> Takes {
+        match self.takes {
+            TakeBy::Mark(noted) => noted,
+            TakeBy::Again(_) => Takes::default(),
         }
     }
 
@@ -3392,8 +3459,10 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     None => (Standing::Unread, None, None),
                 };
                 // A copy taken at use is copied in at the first use after its making or its
-                // `did_modify_data`, wherever it is; else its image holds what it took.
-                let took = copies.levels.as_ref().is_some_and(LevelsCopy::take);
+                // `did_modify_data`, wherever it is; else its image holds what it took. Encoded
+                // again, where its first encoding took it ([`TakeBy`]).
+                let took = (copies.levels.as_ref())
+                    .is_some_and(|levels| self.takes.take(copies.shadow_key, levels));
                 let (standing, held, stale) = match &copies.levels {
                     Some(_) if took => (Standing::Unread, None, None),
                     Some(_) => (Standing::Current, None, None),
@@ -3923,8 +3992,10 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
     /// copy in there moved, and nothing written through one there ran. A later command copies in
     /// again.
     pub(super) fn forget(&mut self) {
-        // A copy taken at use whose copy in is left out is taken at the next use instead.
-        for entry in self.entries.iter().filter(|entry| entry.took) {
+        // A copy taken at use whose copy in is left out is taken at the next use instead. An
+        // encoding again took none by the mark, and gives none back to it.
+        let marked = matches!(self.takes, TakeBy::Mark(_));
+        for entry in (self.entries.iter()).filter(|entry| marked && entry.took) {
             if let Some(levels) = &entry.copies.levels {
                 levels.mark_stale();
             }

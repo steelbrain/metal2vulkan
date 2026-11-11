@@ -453,7 +453,10 @@ after its making, or after `Texture::did_modify_data` (Metal's private `didModif
 level, then every later level made from the first as `generate_mipmaps` makes them for the format:
 the device's blit chain or the compute filter (`device-filtered-mipmaps`), or an integer format's
 texel picks. The copy is taken as that command is encoded and runs in its command buffer's order on
-the GPU, so it reads the bytes as they are when the command buffer runs. Between takes no write of
+the GPU, so it reads the bytes as they are when the command buffer runs. A rebind that encodes the
+encoder again before its command buffer's first submission (`Buffer::rebind_bytes_no_copy`) takes
+the copy in the encoding again where the first encoding took it, and a `did_modify_data` made since
+is left to the next use encoded. Between takes no write of
 the bytes reaches a level, and nothing the GPU writes into a level reaches the bytes or the other
 levels. `get_bytes` and `replace_region` of the first level read and write the buffer's bytes, as
 the Macs' do, and of a later level the image (an accepted difference, section 10). While the

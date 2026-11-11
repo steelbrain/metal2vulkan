@@ -98,7 +98,7 @@ use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
 use super::scheduler::{BatchSync, Hand, StepWaits};
-use super::shadow::ShadowCarry;
+use super::shadow::{ShadowCarry, Takes};
 use super::spares::CommandPool;
 use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
@@ -851,6 +851,10 @@ pub(super) struct State {
     /// The keeps the encoder being encoded again records after itself, where it leaves a run of
     /// passes another pass went on in (`pass_runs.rs`, `command_buffer/reencode.rs`).
     pub(super) replaying_keeps: Vec<RunKeep>,
+    /// What the first encoding of the encoder being encoded again decided of its copies taken at
+    /// use, which its encoding again takes as they did (`shadow::Takes`,
+    /// `command_buffer/reencode.rs`).
+    pub(super) replaying_takes: Takes,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -1068,6 +1072,7 @@ impl State {
             residency,
             taken,
             replay: None,
+            takes: Takes::default(),
             executions: 0..0,
             held: Vec::new(),
             unlogged: None,
@@ -1105,12 +1110,15 @@ impl State {
     }
 
     /// Keep `replay`, the log of ended encoder `encoder`, whose executions take `executions`
-    /// among the command buffer's. One of no such encoder comes back, for the caller to let go
-    /// of without this lock (what it holds may be the last hold of a no-copy buffer).
+    /// among the command buffer's, with `takes`, what its first uses of copies taken at use
+    /// decided, which an encoding of it again takes as they did. One of no such encoder comes
+    /// back, for the caller to let go of without this lock (what it holds may be the last hold of
+    /// a no-copy buffer).
     pub(super) fn keep_replay(
         &mut self,
         encoder: usize,
         replay: Option<Replay>,
+        takes: Takes,
         executions: Range<usize>,
     ) -> Option<Replay> {
         let replay = replay?;
@@ -1118,6 +1126,7 @@ impl State {
             return Some(replay);
         };
         record.replay = Some(Arc::new(replay));
+        record.takes = takes;
         record.executions = executions;
         None
     }
@@ -2190,6 +2199,7 @@ impl CommandBuffer {
                 carry_batches: 1,
                 pass_runs: PassRuns::default(),
                 replaying_keeps: Vec::new(),
+                replaying_takes: Takes::default(),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,
