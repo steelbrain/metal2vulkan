@@ -43,20 +43,21 @@
 //!   `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Inside a block that differs, a
 //!   comparison compares bytes 16 at a time (8 off x86-64) with the bytes the pages and the copy
 //!   agreed on, and stores only those that changed and that the other side did not change since:
-//!   all 16 in one store where every one of them is to be written, else each run of 8, 4 or 2 that
-//!   is in one (of 8 alone off x86-64), and the rest one at a time (`merge_block`), so no byte one
-//!   side did not change is ever written, and a byte the other side writes meanwhile is stored over
-//!   only where the first side changed it too, in the window between the comparison's read of it
-//!   and its store. So a CPU write to the pages made before the completion reads its block is
-//!   always kept; one made while the merge runs is kept but for a byte the GPU also changed, which
-//!   then keeps the CPU's or the GPU's. Only a program that writes a byte of the buffer from the
-//!   CPU that a command buffer still running writes too meets that window, a race Metal leaves to
-//!   the later write. Each batch ends with a barrier that makes its writes visible to the host
-//!   (`tracker::Barrier::to_host`). Where the pages' memory came with a log of the writes to them
-//!   (`HostMemory::with_dirty_pages`, or its guest RAM's, `HostRam::with_dirty_pages`), each merge
-//!   back reports the blocks of 4 KiB it wrote to the log as the copy's own writes, in one call
-//!   (`DirtyPages::wrote_runs_as`, a writer of the copy's own) before it returns: the log sees no
-//!   write the runtime makes, and every other copy and shadow of the pages takes them.
+//!   all 16 in one store where every one of them is to be written, else those alone in one masked
+//!   store on an x86-64 host with AVX-512BW, and elsewhere in the fewest stores of 8, 4, 2 and 1
+//!   bytes (of 8 and 1 off x86-64; `merge_block`), so no byte one side did not change is ever
+//!   written, and a byte the other side writes meanwhile is stored over only where the first side
+//!   changed it too, in the window between the comparison's read of it and its store. So a CPU
+//!   write to the pages made before the completion reads its block is always kept; one made while
+//!   the merge runs is kept but for a byte the GPU also changed, which then keeps the CPU's or the
+//!   GPU's. Only a program that writes a byte of the buffer from the CPU that a command buffer
+//!   still running writes too meets that window, a race Metal leaves to the later write. Each batch
+//!   ends with a barrier that makes its writes visible to the host (`tracker::Barrier::to_host`).
+//!   Where the pages' memory came with a log of the writes to them (`HostMemory::with_dirty_pages`,
+//!   or its guest RAM's, `HostRam::with_dirty_pages`), each merge back reports the blocks of 4 KiB
+//!   it wrote to the log as the copy's own writes, in one call (`DirtyPages::wrote_runs_as`, a
+//!   writer of the copy's own) before it returns: the log sees no write the runtime makes, and
+//!   every other copy and shadow of the pages takes them.
 //! - **The copy is the base until the GPU may write it.** Only copies in write a copy until a
 //!   command buffer that may write it is committed, so until then it holds the bytes its pages
 //!   and it agree on, and a copy in compares the pages with the copy itself, a page (4 KiB) at a
@@ -449,8 +450,9 @@ pub(crate) fn tag_portable(block: &[u8; TAG_BLOCK]) -> Tag {
 pub(crate) mod x86 {
     use super::{Tag, KEY_WORDS, TAG_BLOCK};
     use std::arch::x86_64::{
-        __m128i, _mm_add_epi32, _mm_add_epi64, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8,
-        _mm_mul_epu32, _mm_setzero_si128, _mm_srli_epi64, _mm_storeu_si128,
+        __m128i, _mm_add_epi32, _mm_add_epi64, _mm_cmpeq_epi8, _mm_loadu_si128,
+        _mm_mask_storeu_epi8, _mm_movemask_epi8, _mm_mul_epu32, _mm_setzero_si128, _mm_srli_epi64,
+        _mm_storeu_si128,
     };
 
     /// [`tag`] of the [`TAG_BLOCK`] bytes at `block` under `key`, read with plain loads.
@@ -510,9 +512,10 @@ pub(crate) mod x86 {
 
     /// [`merge_block`](super::merge_block) 16 bytes at a time: the bytes that differ from `was`
     /// as a mask (`_mm_cmpeq_epi8`, `_mm_movemask_epi8`), and where `keep_to` those of `to` that
-    /// still hold `was`'s; 16 in one store where every byte is to be written, else each run of 8,
-    /// 4 or 2 that is in one, and the rest one at a time ([`store_masked`]); `was` takes all 16 of
-    /// `now` (the bytes that did not change are the same). The rest past the last 16, 8 at a time
+    /// still hold `was`'s; 16 in one store where every byte is to be written, else those the mask
+    /// sets in one masked store where the host has one ([`store_masked_avx512`]), else in the
+    /// fewest stores of 8, 4, 2 and 1 bytes ([`store_masked`]); `was` takes all 16 of `now` (the
+    /// bytes that did not change are the same). The rest past the last 16, 8 at a time
     /// ([`merge_words`](super::merge_words)). The bytes written.
     ///
     /// # Safety
@@ -522,6 +525,7 @@ pub(crate) mod x86 {
     pub(super) unsafe fn merge_sse2(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) -> u64 {
         let whole = now.len() / 16 * 16;
         let mut written = 0u64;
+        let masked = masked_stores();
         for at in (0..whole).step_by(16) {
             // SAFETY: 16 bytes at `at` of `now` and of `was` (as long), and of `to` (the
             // caller's).
@@ -542,9 +546,13 @@ pub(crate) mod x86 {
                 stores &= _mm_movemask_epi8(_mm_cmpeq_epi8(there, agreed)) as u32;
             }
             written += u64::from(stores.count_ones());
-            // SAFETY: as above.
+            // SAFETY: as above; `masked` where the host has AVX-512BW and AVX-512VL.
             unsafe {
-                store_masked(&now[at..at + 16], to.add(at), stores);
+                match (stores, masked) {
+                    (0xFFFF, _) => _mm_storeu_si128(to.add(at).cast(), fresh),
+                    (_, true) => store_masked_avx512(fresh, to.add(at), stores),
+                    (_, false) => store_masked(&now[at..at + 16], to.add(at), stores),
+                }
                 _mm_storeu_si128(was.as_mut_ptr().add(at).cast(), fresh);
             }
         }
@@ -555,38 +563,84 @@ pub(crate) mod x86 {
             }
     }
 
-    /// Store the bytes of `now` (16) at `to` whose bits `stores` sets, and no other byte of `to`:
-    /// all 16 in one store, else each run of 8, 4 or 2 whose bytes are all set (from a multiple of
-    /// its length) in one, the widest first, and the rest one at a time.
+    /// Whether the host stores the bytes a mask selects of 16 in one store (AVX-512BW and
+    /// AVX-512VL, [`store_masked_avx512`]), unless a test turned it off.
+    fn masked_stores() -> bool {
+        #[cfg(test)]
+        if MASKED_STORES_OFF.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        std::is_x86_feature_detected!("avx512bw") && std::is_x86_feature_detected!("avx512vl")
+    }
+
+    /// A test's switch that turns [`masked_stores`] off, so a benchmark measures the stores of
+    /// a host without them on one that has them.
+    #[cfg(test)]
+    pub(crate) static MASKED_STORES_OFF: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Store the bytes of `fresh` at `to` whose bits `stores` sets, and no other byte of `to`, in
+    /// one masked store (`VMOVDQU8`).
+    ///
+    /// # Safety
+    ///
+    /// `to` is 16 bytes of mapped memory; the host has AVX-512BW and AVX-512VL.
+    #[target_feature(enable = "avx512bw,avx512vl")]
+    unsafe fn store_masked_avx512(fresh: __m128i, to: *mut u8, stores: u32) {
+        // SAFETY: the caller's; the mask's bits past 16 are clear.
+        unsafe { _mm_mask_storeu_epi8(to.cast(), stores as u16, fresh) };
+    }
+
+    /// Store the bytes of `now` (16) at `to` whose bits `stores` sets (not all 16), and no other
+    /// byte of `to`: each 8 whose bytes are all set in one store, and of the others each 4 bytes
+    /// in the fewest stores of 4, 2 and 1 bytes that write those set alone.
     ///
     /// # Safety
     ///
     /// `to` is 16 bytes of mapped memory.
     #[target_feature(enable = "sse2")]
     unsafe fn store_masked(now: &[u8], to: *mut u8, stores: u32) {
-        if stores == 0xFFFF {
-            // SAFETY: 16 bytes of `to` (the caller's).
-            unsafe { _mm_storeu_si128(to.cast(), _mm_loadu_si128(now.as_ptr().cast())) };
-            return;
-        }
-        let mut bits = stores;
-        while bits != 0 {
-            let at = bits.trailing_zeros() as usize;
-            let whole = |length: usize| {
-                let run = (1u32 << length) - 1;
-                at % length == 0 && (bits >> at) & run == run
-            };
-            let length = [8, 4, 2].into_iter().find(|&length| whole(length));
-            // SAFETY: bytes of `to` from `at`, as many as of the 16 lie past it.
-            unsafe {
-                match length {
-                    Some(8) => store_run::<8>(now, to, at),
-                    Some(4) => store_run::<4>(now, to, at),
-                    Some(2) => store_run::<2>(now, to, at),
-                    _ => to.add(at).write_volatile(now[at]),
+        let byte = |at: usize| {
+            // SAFETY: a byte of `to` (the caller's).
+            unsafe { to.add(at).write_volatile(now[at]) }
+        };
+        for half in [0, 8] {
+            if (stores >> half) & 0xFF == 0xFF {
+                // SAFETY: 8 bytes of `to` from `half`.
+                unsafe { store_run::<8>(now, to, half) };
+                continue;
+            }
+            for at in [half, half + 4] {
+                // SAFETY: bytes of `to` from `at`, of the 4 there.
+                unsafe {
+                    match (stores >> at) & 0xF {
+                        0 => {}
+                        0xF => store_run::<4>(now, to, at),
+                        0x3 => store_run::<2>(now, to, at),
+                        0x6 => store_run::<2>(now, to, at + 1),
+                        0xC => store_run::<2>(now, to, at + 2),
+                        0x7 => {
+                            store_run::<2>(now, to, at);
+                            byte(at + 2);
+                        }
+                        0xB => {
+                            store_run::<2>(now, to, at);
+                            byte(at + 3);
+                        }
+                        0xD => {
+                            byte(at);
+                            store_run::<2>(now, to, at + 2);
+                        }
+                        0xE => {
+                            byte(at + 1);
+                            store_run::<2>(now, to, at + 2);
+                        }
+                        bits => (0..4)
+                            .filter(|b| (bits >> b) & 1 == 1)
+                            .for_each(|b| byte(at + b)),
+                    }
                 }
             }
-            bits &= !(((1u32 << length.unwrap_or(1)) - 1) << at);
         }
     }
 

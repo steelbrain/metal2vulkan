@@ -487,12 +487,21 @@ fn bytes_no_log_keeps_are_compared_at_every_copy_in() {
     drop(copied);
 }
 
-/// A CPU thread writing one byte of the pages over and over, which the GPU never writes, while
-/// copies in and merges back run, the GPU writing the bytes around it: the byte ends holding the
-/// CPU's last write in the pages, and in the copy after the next copy in, both with the CPU's
-/// writes told to a log and with no log.
+/// A CPU thread writing bytes of the pages over and over, which the GPU never writes, while copies
+/// in and merges back run, the GPU writing the bytes between them inside the same 16 (in one 16 the
+/// CPU writes the even bytes and the GPU the odd ones; in another the CPU one byte and the GPU the
+/// other 15): each of the CPU's bytes ends holding its last write in the pages, and in the copy
+/// after the next copy in, and the GPU's reach the pages, both with the CPU's writes told to a log
+/// and with no log.
 #[test]
 fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
+    // Two 16s of block 1, from a multiple of 16: the CPU's bytes and the GPU's.
+    let (even, most) = (BLOCK as usize + 96, BLOCK as usize + 128);
+    let cpu: Vec<usize> = (even..even + 16).step_by(2).chain([most + 5]).collect();
+    let gpu: Vec<usize> = (even + 1..even + 16)
+        .step_by(2)
+        .chain((most..most + 16).filter(|&at| at != most + 5))
+        .collect();
     for logged in [false, true] {
         let mut pair = Pair::new(2);
         let pointer = pair.pages.as_ptr() as u64;
@@ -503,18 +512,19 @@ fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
         let (counts, tally) = (Counters::default(), DirtyTally::default());
         let copied = pair.copied(&buffers, logged.then_some(&log));
         copy_in_all(&buffers, &counts, &tally);
-        let cpu_byte = BLOCK as usize + 100;
         let stop = Arc::new(AtomicBool::new(false));
         let pages = pair.pages.as_mut_ptr() as usize;
         let writer = {
-            let (stop, own) = (Arc::clone(&stop), Arc::clone(&own));
+            let (stop, own, cpu) = (Arc::clone(&stop), Arc::clone(&own), cpu.clone());
             std::thread::spawn(move || {
                 let mut value = 0u8;
                 while !stop.load(Ordering::SeqCst) {
                     value = value.wrapping_add(1) | 1;
-                    // SAFETY: a byte of the test's pages, which outlive the thread (joined
-                    // below); the runtime's reads of it race as the CPU's and the GPU's do.
-                    unsafe { std::ptr::write_volatile((pages as *mut u8).add(cpu_byte), value) };
+                    for &at in &cpu {
+                        // SAFETY: a byte of the test's pages, which outlive the thread (joined
+                        // below); the runtime's reads of it race as the CPU's and the GPU's do.
+                        unsafe { std::ptr::write_volatile((pages as *mut u8).add(at), value) };
+                    }
                     own.told(BLOCK..2 * BLOCK, 0);
                     // Each write told is kept, and every copy in reads them all: unpaced, the
                     // log grew as fast as this thread ran and the rounds slowed with it.
@@ -526,7 +536,7 @@ fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
         let copy = pair.copy.as_mut_ptr();
         for round in 0..2000_usize {
             // The GPU writes the bytes beside the CPU's (in the copy), and never the CPU's.
-            for at in [cpu_byte - 1, cpu_byte + 1, round % (BLOCK as usize)] {
+            for &at in gpu.iter().chain([&(round % (BLOCK as usize))]) {
                 // SAFETY: bytes of the test's copy.
                 unsafe { *copy.add(at) = (*copy.add(at)).wrapping_add(1) };
             }
@@ -536,25 +546,22 @@ fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
         stop.store(true, Ordering::SeqCst);
         let last = writer.join().unwrap();
         copy_in_all(&buffers, &counts, &tally);
-        assert_eq!(
-            pair.pages[cpu_byte], last,
-            "logged {logged}: the pages keep the CPU's"
-        );
-        assert_eq!(
-            pair.copy[cpu_byte], last,
-            "logged {logged}: the copy takes the CPU's"
-        );
-        // The GPU's bytes beside it reached the pages.
-        assert_eq!(
-            pair.pages[cpu_byte - 1],
-            pair.copy[cpu_byte - 1],
-            "logged {logged}"
-        );
-        assert_eq!(
-            pair.pages[cpu_byte + 1],
-            pair.copy[cpu_byte + 1],
-            "logged {logged}"
-        );
+        for &at in &cpu {
+            assert_eq!(
+                pair.pages[at], last,
+                "logged {logged}: the pages keep the CPU's byte {at}"
+            );
+            assert_eq!(
+                pair.copy[at], last,
+                "logged {logged}: the copy takes the CPU's byte {at}"
+            );
+        }
+        for &at in &gpu {
+            assert_eq!(
+                pair.pages[at], pair.copy[at],
+                "logged {logged}: the GPU's byte {at} reached the pages"
+            );
+        }
         drop(copied);
     }
 }
@@ -607,6 +614,8 @@ fn a_comparison_split_across_threads_answers_as_one_thread_does() {
                 want[cpu] = pages[cpu];
             }
         }
+        // The CPU's writes, told to the log, which the next copy in compares.
+        own.told(0..length as u64, 0);
         let before = counts.copied_tallies();
         buffers.merge_back(&counts, &CopiesReached::all());
         let after = counts.copied_tallies();

@@ -367,8 +367,8 @@ fn copied_256_bench() {
 /// its pages, the same block, both before the merge back, which reads those blocks' base; (e)
 /// every float of the copy rewritten by the GPU as `copied_pass_bench`'s kernel rewrites it
 /// (`x + i`: some bytes of each float change), the pages unchanged; (f) as (e), and the CPU's
-/// write of a byte of every 1 KiB block of the pages before the merge back, which merges every
-/// block byte by byte, reading its base.
+/// write of a byte of every 1 KiB block of the pages before the merge back, which reads every
+/// block's base. On an x86-64 host with AVX-512BW, (e) and (f) again without its masked stores.
 pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseBytes>) {
     const LENGTH: usize = 256 << 20;
     let buffers = Arc::new(CopiedBuffers::default());
@@ -470,35 +470,43 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
             }
         },
     );
-    report(
+    // As `copied_pass_bench`'s kernel writes it: `x + i` for float `i`, which changes some bytes
+    // of each float and leaves others.
+    let rewrite = |copy: &mut [u8]| {
+        let floats = copy.as_chunks_mut::<4>().0.iter_mut();
+        for (index, float) in floats.enumerate() {
+            *float = (f32::from_le_bytes(*float) + index as f32).to_le_bytes();
+        }
+    };
+    let mut gpu_rewrites = |pair: &mut Pair, cpu: bool| {
+        if !cpu {
+            rewrite(&mut pair.copy);
+        }
+    };
+    let mut both_write = |pair: &mut Pair, cpu: bool| {
+        if !cpu {
+            for block in pair.pages.as_chunks_mut::<1024>().0 {
+                block[1] = block[1].wrapping_add(1);
+            }
+            rewrite(&mut pair.copy);
+        }
+    };
+    let (rewrites, both) = (
         "(e) every float rewritten by the GPU",
-        &mut pair,
-        &mut |pair, cpu| {
-            // As `copied_pass_bench`'s kernel writes it: `x + i` for float `i`, which changes
-            // some bytes of each float and leaves others.
-            if !cpu {
-                let floats = pair.copy.as_chunks_mut::<4>().0.iter_mut();
-                for (index, float) in floats.enumerate() {
-                    *float = (f32::from_le_bytes(*float) + index as f32).to_le_bytes();
-                }
-            }
-        },
-    );
-    report(
         "(f) every float rewritten by the GPU, a byte of every block by the CPU",
-        &mut pair,
-        &mut |pair, cpu| {
-            if !cpu {
-                for block in pair.pages.as_chunks_mut::<1024>().0 {
-                    block[1] = block[1].wrapping_add(1);
-                }
-                let floats = pair.copy.as_chunks_mut::<4>().0.iter_mut();
-                for (index, float) in floats.enumerate() {
-                    *float = (f32::from_le_bytes(*float) + index as f32).to_le_bytes();
-                }
-            }
-        },
     );
+    report(rewrites, &mut pair, &mut gpu_rewrites);
+    report(both, &mut pair, &mut both_write);
+    // Where the host stores a masked 16 bytes in one store, (e) and (f) again without.
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx512bw") && std::is_x86_feature_detected!("avx512vl") {
+        use crate::copied::x86::MASKED_STORES_OFF;
+        MASKED_STORES_OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+        let without = |case: &str| format!("{case}, without masked stores");
+        report(&without(rewrites), &mut pair, &mut gpu_rewrites);
+        report(&without(both), &mut pair, &mut both_write);
+        MASKED_STORES_OFF.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
     drop(copied);
 }
 

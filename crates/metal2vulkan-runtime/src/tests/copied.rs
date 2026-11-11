@@ -263,27 +263,32 @@ fn a_cpu_write_made_before_the_completion_survives_a_block_the_gpu_rewrote() {
     drop(copied);
 }
 
-/// A merge of 16 bytes writes each byte one side changed and the other did not, in one store or
-/// in runs of 8, 4 and 2 or alone, and no other byte: for each of the 65,536 sets of bytes
-/// changed, every byte outside the set holds a value of the other side's, which a wider store
-/// would have written over.
+/// A merge of 16 bytes writes each byte one side changed and the other did not, and no other byte:
+/// for each of the 65,536 sets of bytes changed, every byte outside the set holds a value of the
+/// other side's, which a wider store would have written over. On an x86-64 host both with the
+/// host's masked stores (AVX-512BW, where it has them) and without.
 #[test]
 fn a_merge_stores_each_byte_it_writes_and_no_other() {
-    for changed in 0..=0xFFFF_u32 {
-        let set = |byte: usize| (changed >> byte) & 1 == 1;
-        let now: Vec<u8> = (0..16).map(|byte| u8::from(set(byte))).collect();
-        let mut was = [0u8; 16];
-        let mut to: Vec<u8> = (0..16)
-            .map(|byte| if set(byte) { 0 } else { 0x77 })
-            .collect();
-        // SAFETY: `to` is the test's 16 bytes.
-        let written = unsafe { merge_block(&now, to.as_mut_ptr(), &mut was, true) };
-        assert_eq!(written, u64::from(changed.count_ones()), "{changed:016b}");
-        for byte in 0..16 {
-            let want = if set(byte) { 1 } else { 0x77 };
-            assert_eq!(to[byte], want, "{changed:016b}: byte {byte}");
+    for masked in [true, false] {
+        #[cfg(target_arch = "x86_64")]
+        crate::copied::x86::MASKED_STORES_OFF.store(!masked, std::sync::atomic::Ordering::Relaxed);
+        for changed in 0..=0xFFFF_u32 {
+            let set = |byte: usize| (changed >> byte) & 1 == 1;
+            let now: Vec<u8> = (0..16).map(|byte| u8::from(set(byte))).collect();
+            let mut was = [0u8; 16];
+            let mut to: Vec<u8> = (0..16)
+                .map(|byte| if set(byte) { 0 } else { 0x77 })
+                .collect();
+            // SAFETY: `to` is the test's 16 bytes.
+            let written = unsafe { merge_block(&now, to.as_mut_ptr(), &mut was, true) };
+            let named = format!("masked {masked}: {changed:016b}");
+            assert_eq!(written, u64::from(changed.count_ones()), "{named}");
+            for (byte, &got) in to.iter().enumerate() {
+                let want = if set(byte) { 1 } else { 0x77 };
+                assert_eq!(got, want, "{named}: byte {byte}");
+            }
+            assert_eq!(&was[..], &now[..], "{named}: `was` takes `now`");
         }
-        assert_eq!(&was[..], &now[..], "{changed:016b}: `was` takes `now`");
     }
 }
 
