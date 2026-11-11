@@ -21,6 +21,9 @@
 //!   the Radeon Pro 5300M and the UHD Graphics 630 store every form as `vstore_half_rte`, word for
 //!   word, and the M3 Max rounds as each names; the crate stores every form as the device converts
 //!   (the device's own rounding to nearest even, checked on the values whose `half` is normal).
+//! - **vsh_round** of NaNs: each form stores a `half` NaN, its bits the device's conversion's,
+//!   and the pipeline announces `native-nan-encoding` (but where the device's narrowing is
+//!   measured to move a NaN as Metal's).
 //! - **npowr**: `native_powr` of `float4`s: each device answers within a few ulps of the others
 //!   (`powr(100, 0.5)` is `0x1.400002p+3` on the M3 Max, `0x1.4p+3` on the Radeon Pro 5300M); the
 //!   crate's answers are within `2^-12` of the M3 Max's, relatively (the device's own `powr`).
@@ -29,11 +32,14 @@
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The modules are LLVM text written here
 //! (`llvm-as`).
 
-use super::blit_holds::{device, Scratch};
+use super::blit_holds::{device, options, Scratch};
 use super::opencl_mode::{
     floats, floats_buffer, kernel_list, line, run, state, whole, words, words_buffer,
 };
-use crate::{Buffer, Device, ResourceOptions};
+use crate::{Buffer, Degradation, DegradeNotice, Device, MessageSink, ResourceOptions};
+use metal2vulkan::error::DriverDeviation;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 /// The node of argument `n`, a buffer at `index` of `size`-byte elements of `ty`, `access` one of
 /// `read`, `read_write`.
@@ -369,6 +375,117 @@ fn opencl_mode_vstore_half_stores_every_rounding_as_the_device_converts() {
             assert_eq!(got, rte, "{i}: {x:e}");
         }
     }
+}
+
+/// What the device's sink heard of `native-nan-encoding`.
+type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
+
+/// The device the cfg selects, its shader cache in `cache`, announcing `native-nan-encoding` at
+/// every occurrence into `heard`, so a note an earlier pipeline announced does not hide this one's.
+fn noting_device(cache: &Path, heard: &Heard) -> Device {
+    let heard = Arc::clone(heard);
+    let mut options = options(cache);
+    options.messages = Some(MessageSink::new(move |message| {
+        if let Some(notice) = &message.degradation {
+            if notice.degradation == Degradation::NativeNanEncoding {
+                heard.lock().unwrap().push(notice.clone());
+            }
+        }
+    }));
+    options.announce_each = [Degradation::NativeNanEncoding].into_iter().collect();
+    Device::system_default_with(&options).unwrap()
+}
+
+/// A NaN `vstore_half` narrows (each rounding's form) is the device's conversion's NaN, whose bits
+/// are its own (NVIDIA's `0x7fff` where Metal stores `0x7e00`): the compute pipeline of OpenCL
+/// mode announces `native-nan-encoding` for it, but where the device's narrowing is measured to
+/// move a NaN as Metal's (`DriverDeviation::MetalNanMoves`).
+#[test]
+fn opencl_mode_vstore_half_of_a_nan_announces_the_devices_nan_encoding() {
+    let scratch = Scratch::new("opencl-data-vstore-half-nan");
+    let heard = Heard::default();
+    let device = noting_device(&scratch.0, &heard);
+    let s = state(&device, &vsh_round(), "__entry_vsh_round");
+    let nans = [0x7fc0_0000u32, 0x7fff_ffff, 0xffc0_0000, 0x7f80_0001];
+    let inputs: Vec<f32> = (0..32)
+        .map(|i| nans.get(i).map_or(1.0, |&b| f32::from_bits(b)))
+        .collect();
+    let f = floats_buffer(&device, &inputs);
+    let h = halves_buffer(&device, &[0xeeee; 160]);
+    run(&device, &s, line(32, 1), ONE, &[whole(&f), whole(&h)], None);
+    for (k, form) in halves(&h).chunks(32).enumerate() {
+        let (nan, one) = form.split_at(nans.len());
+        for (i, &got) in nan.iter().enumerate() {
+            assert!(
+                got & 0x7c00 == 0x7c00 && got & 0x3ff != 0,
+                "form {k}, NaN {i}: {got:#06x}"
+            );
+        }
+        assert!(one.iter().all(|&g| g == 0x3c00), "form {k}: {one:x?}");
+    }
+    let moves = device
+        .compile_device()
+        .profile()
+        .takes_driver_deviation(DriverDeviation::MetalNanMoves);
+    let heard = heard.lock().unwrap();
+    assert!(
+        moves
+            || heard
+                .iter()
+                .any(|n| n.degradation == Degradation::NativeNanEncoding),
+        "{heard:?}"
+    );
+}
+
+/// What a line of the pipeline creation log starts with.
+const LOG_LINE: &str = "metal2vulkan: pipeline creation: compute pipeline __entry_vsh_round: ";
+
+/// With `METAL2VULKAN_LOG_PIPELINES` set, the compute `VkPipeline` a dispatch of `vsh_round`
+/// makes has its line in the pipeline creation log (`pipeline/creation_log.rs`), naming the
+/// kernel, its module, its specialization and its precision notes: `NativeNanEncoding` among
+/// them, but where the device's narrowing is measured to move a NaN as Metal's. A child process
+/// of this test binary ([`compute_log_child`]) dispatches it with the log on.
+#[test]
+fn the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes() {
+    let scratch = Scratch::new("opencl-data-compute-log");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::opencl_data::compute_log_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .current_dir(&scratch.0)
+        .env("METAL2VULKAN_LOG_PIPELINES", "1")
+        .env_remove("METAL2VULKAN_DUMP_PIPELINES")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "the child failed: {stderr}");
+    let logged = stderr
+        .lines()
+        .find(|l| l.starts_with(LOG_LINE))
+        .unwrap_or_else(|| panic!("no compute pipeline's line: {stderr}"));
+    assert!(logged.contains(" words), specialization ["), "{logged}");
+    let moves = device(&scratch.0)
+        .compile_device()
+        .profile()
+        .takes_driver_deviation(DriverDeviation::MetalNanMoves);
+    assert!(moves || logged.contains("NativeNanEncoding"), "{logged}");
+}
+
+/// The child of [`the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes`], run as its
+/// own process: one dispatch of `vsh_round`.
+#[test]
+#[ignore = "a child process of the_pipeline_creation_log_names_a_compute_pipeline_and_its_notes"]
+fn compute_log_child() {
+    let scratch = Scratch::new("opencl-data-compute-log-child");
+    let device = device(&scratch.0);
+    let s = state(&device, &vsh_round(), "__entry_vsh_round");
+    let f = floats_buffer(&device, &[1.0; 32]);
+    let h = halves_buffer(&device, &[0xeeee; 160]);
+    run(&device, &s, line(32, 1), ONE, &[whole(&f), whole(&h)], None);
 }
 
 #[test]

@@ -535,3 +535,103 @@ fn an_opencl_mode_kernel_binds_its_1d_images_as_2d_textures() {
         other => panic!("{other:?}"),
     }
 }
+
+/// `__kernel void vsh(__global const float *a, __global half *o)`: `vstore_half_rtz(a[i], i, o)`,
+/// and `__kernel void trunc(__global const float *a, __global half *o)`: `o[i] = (half)a[i]`, for
+/// `i = get_global_id(0)`, in the shape the OpenCL compiler writes them.
+const HALF_STORES: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v29-apple-macosx27.0.0\"\n\
+define void @__entry_vsh(ptr addrspace(1) %0, ptr addrspace(1) %1) #0 {\n\
+entry:\n\
+  tail call fastcc void @vsh(ptr addrspace(1) %0, ptr addrspace(1) %1)\n\
+  ret void\n}\n\
+define internal fastcc void @vsh(ptr addrspace(1) %a, ptr addrspace(1) %o) #1 {\n\
+entry:\n\
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %pa = getelementptr inbounds float, ptr addrspace(1) %a, i64 %i\n\
+  %x = load float, ptr addrspace(1) %pa, align 4\n\
+  tail call void @air.vstore_half.global.rtz.f32(float %x, i64 %i, ptr addrspace(1) %o) #4\n\
+  ret void\n}\n\
+define void @__entry_trunc(ptr addrspace(1) %0, ptr addrspace(1) %1) #0 {\n\
+entry:\n\
+  tail call fastcc void @trunc(ptr addrspace(1) %0, ptr addrspace(1) %1)\n\
+  ret void\n}\n\
+define internal fastcc void @trunc(ptr addrspace(1) %a, ptr addrspace(1) %o) #1 {\n\
+entry:\n\
+  %i = tail call fastcc i64 @_Z13get_global_idj(i32 0)\n\
+  %pa = getelementptr inbounds float, ptr addrspace(1) %a, i64 %i\n\
+  %x = load float, ptr addrspace(1) %pa, align 4\n\
+  %h = fptrunc float %x to half\n\
+  %po = getelementptr inbounds half, ptr addrspace(1) %o, i64 %i\n\
+  store half %h, ptr addrspace(1) %po, align 2\n\
+  ret void\n}\n\
+define internal fastcc i64 @_Z13get_global_idj(i32 %0) #2 {\n\
+  %2 = tail call i32 @air.get_global_id.i32(i32 %0) #3\n\
+  %3 = zext i32 %2 to i64\n\
+  ret i64 %3\n}\n\
+declare i32 @air.get_global_id.i32(i32) #3\n\
+declare void @air.vstore_half.global.rtz.f32(float, i64, ptr addrspace(1)) #4\n\
+attributes #0 = { nounwind }\n\
+attributes #1 = { nounwind }\n\
+attributes #2 = { nounwind optsize }\n\
+attributes #3 = { nounwind readnone willreturn }\n\
+attributes #4 = { nounwind willreturn memory(argmem: write) }\n\
+!air.kernel = !{!0, !5}\n\
+!0 = !{ptr @__entry_vsh, !1, !2}\n\
+!1 = !{}\n\
+!2 = !{!3, !4}\n\
+!3 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"a\"}\n\
+!4 = !{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 2, !\"air.arg_type_align_size\", i32 2, !\"air.arg_type_name\", !\"half\", !\"air.arg_name\", !\"o\"}\n\
+!5 = !{ptr @__entry_trunc, !1, !2}\n\
+!air.version = !{!7}\n\
+!air.language_version = !{!8}\n\
+!7 = !{i32 2, i32 9, i32 0}\n\
+!8 = !{!\"Metal\", i32 1, i32 1, i32 0}\n";
+
+/// A `float` narrowed to a stored `half` (`vstore_half_rtz`, and a plain `fptrunc` stored) is the
+/// device's conversion, whose NaN's bits are its own (NVIDIA's 0x7fff where Metal stores 0x7e00):
+/// on every committed profile the kernel's module records `NativeNanEncoding`, which the runtime
+/// announces as `native-nan-encoding`, but where the device's narrowing is measured to move a NaN
+/// as Metal's (`DriverDeviation::MetalNanMoves`), which the module then requires.
+#[test]
+fn an_opencl_mode_half_store_records_the_devices_nan_encoding() {
+    use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation;
+    use crate::pipeline::PrecisionNote;
+    let b = Budget::standard();
+    let mut checked = 0;
+    for entry in ["__entry_vsh", "__entry_trunc"] {
+        let Some(k) = function(HALF_STORES, entry) else {
+            return;
+        };
+        for (stem, dev) in crate::metal::format::tests::committed_devices() {
+            let what = format!("{entry} on {stem}");
+            let p = match dev
+                .compile_compute_pipeline(&descriptor(StageSource::Function(k.clone()), true), &b)
+            {
+                Ok(p) => p,
+                Err(Error::NeedsInput(_) | Error::Unsupported(_)) => continue,
+                Err(e) => panic!("{what}: {e}"),
+            };
+            let notes = &p.stage.precision_notes;
+            match dev
+                .profile()
+                .takes_driver_deviation(DriverDeviation::MetalNanMoves)
+            {
+                true => assert!(
+                    notes.contains(&PrecisionNote::NativeNanEncoding)
+                        || p.requirements
+                            .properties
+                            .contains(&VkProperty::MetalNanMoves),
+                    "{what}: {notes:?}"
+                ),
+                false => assert!(
+                    notes.contains(&PrecisionNote::NativeNanEncoding),
+                    "{what}: {notes:?}"
+                ),
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0);
+}
