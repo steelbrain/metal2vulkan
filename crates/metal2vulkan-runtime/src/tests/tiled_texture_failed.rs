@@ -12,6 +12,8 @@
 //! - **Failed at its submission**: the encoder that takes the copy wrote a no-copy buffer
 //!   detached before its command buffer was first submitted (behind an event wait), so the
 //!   submission runs nothing (`DetachedBacking`); the next use takes the copy.
+//! - **Never committed**: the command buffer whose encoder takes the copy is dropped without a
+//!   commit, so nothing of it runs (`CommandBufferShared`'s drop); the next use takes the copy.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TILED-FAILED`): each leg's
@@ -32,7 +34,7 @@ use std::sync::Arc;
 
 /// A tiled texture of the guest's first shape over a new zeroed buffer, the grey written into
 /// its bytes after the making, before any use.
-fn grey_texture(rig: &Rig) -> (Buffer, Texture) {
+pub(super) fn grey_texture(rig: &Rig) -> (Buffer, Texture) {
     let ((width, height), _) = SHAPE;
     let target = zeroed(&rig.device, LENGTH);
     let texture = target
@@ -78,6 +80,18 @@ fn a_take_in_a_command_buffer_committed_as_failed_is_taken_at_the_next_use() {
     blit_levels(&command_buffer, &texture, &out, SHAPE);
     fail(&command_buffer, CommitFailure::new(5));
     next_use_takes(&rig, &texture, "committed as failed");
+}
+
+#[test]
+fn a_take_in_a_command_buffer_dropped_uncommitted_is_taken_at_the_next_use() {
+    let scratch = Scratch::new("tiled-failed-dropped");
+    let rig = rig(&scratch);
+    let (_target, texture) = grey_texture(&rig);
+    let out = levels_out(&rig);
+    let command_buffer = rig.queue.command_buffer().unwrap();
+    blit_levels(&command_buffer, &texture, &out, SHAPE);
+    drop(command_buffer);
+    next_use_takes(&rig, &texture, "dropped uncommitted");
 }
 
 #[test]

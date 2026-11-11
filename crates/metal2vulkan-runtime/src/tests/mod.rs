@@ -565,6 +565,8 @@ mod tiled_texture_failed;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tiled_texture_reencode;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod tiled_texture_step;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod told_once;
 mod tracker;
 mod trails;
