@@ -51,6 +51,9 @@
 //! neutral bound for a texture of another numeric class in `cross_class_reads` ([`CROSS_CLASS`]),
 //! passes that
 //! draw over an attachment loaded with `DontCare` in `clear_reach` ([`DONT_CARE_LOADS`]), passes
+//! that draw and read an attachment loaded with `DontCare` and not stored, under the default
+//! policy on a driver not measured to clear it no slower, in `dont_care_unstored`
+//! ([`UNSTORED_LOADS`]), passes
 //! that draw and load a rotated texture of rotation 4 in `rotated_textures` ([`ROTATED_LOADS`]),
 //! draws over a rate map of no layers made after a map of layers was released in
 //! `rate_mapped_passes` ([`ZERO_LAYER_AFTER_RELEASE`]), and passes over a map reset after they took
@@ -175,6 +178,7 @@ use super::cross_class_reads::CROSS_CLASS;
 use super::depth_denormals::{DEPTH_DENORMALS, SIGNED_DEPTH_TESTS};
 use super::detach_textures::DETACHED_REACHES;
 use super::device_recovery::RECOVERED;
+use super::dont_care_unstored::UNSTORED_LOADS;
 use super::extended_range_blends::{EXTENDED_RANGE_BITS, STORED_CODES};
 use super::extended_range_resolve::XR_RESOLVE;
 use super::extended_range_two_planes::HEAP_PLANES;
@@ -531,6 +535,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &UNORDERED_DRAWS,
         &ABSENT_READS,
         &DONT_CARE_LOADS,
+        &UNSTORED_LOADS,
         &ROTATED_LOADS,
         &NARROW_ROWS,
         &COLLIDING_ROWS,

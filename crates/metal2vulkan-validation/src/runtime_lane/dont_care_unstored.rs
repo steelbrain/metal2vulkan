@@ -53,6 +53,10 @@ use metal2vulkan_runtime::{
 };
 use std::collections::BTreeMap;
 
+/// The kind a pass takes that draws and reads an attachment loaded `DontCare` and not stored, left
+/// to the driver's `DONT_CARE` load.
+pub(super) const UNSTORED_LOADS: [Degradation; 1] = [Degradation::DontCareUnstoredLoad];
+
 /// `dcs_mark`'s rectangle (left, top, right, bottom, in pixels): of the target's 32x32 tiles,
 /// those of columns 0 to 2 and rows 0 and 1.
 const MARK: [f32; 4] = [0.0, 0.0, 80.0, 56.0];
@@ -393,7 +397,7 @@ fn dont_care_loads_the_pass_does_not_store_read_the_policy_s_answer() {
             "{policy}: `dont-care-load-tiles` named an attachment the pass does not store"
         );
         assert_eq!(
-            announced(Degradation::DontCareUnstoredLoad),
+            announced(UNSTORED_LOADS[0]),
             !cleared,
             "{policy} on {}: `dont-care-unstored-load` announced where the runtime cleared, or \
              not where it left the load to the driver",
