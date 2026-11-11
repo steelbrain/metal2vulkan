@@ -1090,54 +1090,40 @@ impl OwnedSets {
         })
     }
 
-    /// One set of `kernel` (of storage buffers only) per entry of `ranges`, each binding `i`
-    /// written with the `i`-th `(buffer, offset, range)`: the sets' buffer infos and their writes
-    /// each in one list, and the kernel's needs taken once.
-    pub(super) fn write<R: AsRef<[(vk::Buffer, u64, u64)]>>(
+    /// One set of `kernel` (of its `N` storage buffers only) per entry of `ranges`, each binding
+    /// `i` written with the `i`-th `(buffer, offset, range)`: each set's buffer infos and writes
+    /// on the stack, and the kernel's needs taken once.
+    pub(super) fn write<const N: usize>(
         device: &Device,
         kernel: &OwnedKernel,
-        ranges: &[R],
+        ranges: &[[(vk::Buffer, u64, u64); N]],
     ) -> Result<OwnedSets, Error> {
-        let each = kernel.buffers as usize;
-        if kernel.images > 0
-            || kernel.storage_images > 0
-            || ranges.iter().any(|set| set.as_ref().len() != each)
-        {
+        if kernel.images > 0 || kernel.storage_images > 0 || kernel.buffers as usize != N {
             return Err(internal("owned sets that do not match their kernel"));
         }
         let mut owned = OwnedSets::opened(device, ranges.len(), kernel.pushed)?;
         let needs = kernel.set_needs();
-        for _ in ranges {
-            let set = (owned.arena).allocate(device, kernel.set_layout, &needs)?;
-            owned.sets.push(set);
+        let raw = device.shared().vk();
+        for set in ranges {
+            let made = (owned.arena).allocate(device, kernel.set_layout, &needs)?;
+            owned.sets.push(made);
+            let infos = set.map(|(buffer, offset, range)| {
+                vk::DescriptorBufferInfo::default()
+                    .buffer(buffer)
+                    .offset(offset)
+                    .range(range)
+            });
+            let writes: [vk::WriteDescriptorSet; N] = std::array::from_fn(|binding| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(made)
+                    .dst_binding(binding as u32)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(&infos[binding]))
+            });
+            // SAFETY: the set was just allocated and no command uses it; every buffer written is
+            // live (the caller's command retains them).
+            unsafe { raw.update_descriptor_sets(&writes, &[]) };
         }
-        let mut infos = Vec::with_capacity(ranges.len() * each);
-        infos.extend(
-            ranges
-                .iter()
-                .flat_map(|set| set.as_ref())
-                .map(|&(buffer, offset, range)| {
-                    vk::DescriptorBufferInfo::default()
-                        .buffer(buffer)
-                        .offset(offset)
-                        .range(range)
-                }),
-        );
-        let mut writes = Vec::with_capacity(infos.len());
-        for (set, infos) in owned.sets.iter().zip(infos.chunks(each.max(1))) {
-            for (binding, info) in (0u32..).zip(infos) {
-                writes.push(
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(*set)
-                        .dst_binding(binding)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .buffer_info(std::slice::from_ref(info)),
-                );
-            }
-        }
-        // SAFETY: the sets were just allocated and no command uses them; every buffer written is
-        // live (the caller's command retains them).
-        unsafe { device.shared().vk().update_descriptor_sets(&writes, &[]) };
         Ok(owned)
     }
 

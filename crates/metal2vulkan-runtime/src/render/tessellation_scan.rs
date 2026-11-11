@@ -203,7 +203,7 @@ impl TessellationSteps {
             (None, Some(zeros)) => (zeros.raw(), zeros.offset(), zeros.len()),
             (None, None) => return Err(internal("a tessellation scan without its factors")),
         };
-        let owned = OwnedSets::write(&device, &kernel, &[set.to_vec()])?;
+        let owned = OwnedSets::write(&device, &kernel, &[set])?;
         let sets = owned.sets.clone();
         core.retain(owned);
         let copy = arguments.map(|(raw, offset)| {

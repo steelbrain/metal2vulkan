@@ -154,8 +154,8 @@ impl BoundsPass {
             return Err(internal("an index bounds pass binding without a buffer"));
         }
         let sets = [
-            OwnedSets::write(&device, &plan, &[plan_set.to_vec()])?,
-            OwnedSets::write(&device, &fill, &[fill_set.to_vec()])?,
+            OwnedSets::write(&device, &plan, &[plan_set])?,
+            OwnedSets::write(&device, &fill, &[fill_set])?,
         ];
         let past_length = past_length(index);
         Ok(BoundsPass {
@@ -616,8 +616,8 @@ pub(super) fn join(
         None => words_range,
     };
     fill_set[IndexBoundsFillModule::POOL_BINDING as usize] = (pool.block, 0, pool.bytes);
-    let plan_sets = OwnedSets::write(device, &plan, &[plan_set.to_vec()])?;
-    let fill_sets = OwnedSets::write(device, &fill, &[fill_set.to_vec()])?;
+    let plan_sets = OwnedSets::write(device, &plan, &[plan_set])?;
+    let fill_sets = OwnedSets::write(device, &fill, &[fill_set])?;
     let run = BoundsRun {
         run,
         key,

@@ -1359,10 +1359,10 @@ impl Image {
         let (kernel, sets) = match &decoded.pairs {
             None => {
                 let kernel = device.owned_kernel(OwnedModule::TwinDecode(decode))?;
-                let ranges: Vec<Vec<(vk::Buffer, u64, u64)>> = (layouts.iter())
+                let ranges: Vec<[(vk::Buffer, u64, u64); 3]> = (layouts.iter())
                     .zip(0u64..)
                     .map(|(&(blocks, texels_at, texels), at)| {
-                        vec![
+                        [
                             (raw_shapes, shapes_base + at * slot, shape_bytes),
                             (raw_scratch, base, blocks),
                             (raw_scratch, base + texels_at, texels),

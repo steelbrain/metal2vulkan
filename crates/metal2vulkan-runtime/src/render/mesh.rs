@@ -1033,7 +1033,7 @@ impl Scan {
             None => status,
         };
         set[MeshScanModule::RECORDS_BINDING as usize] = work.records;
-        let owned = OwnedSets::write(&device, &kernel, &[set.to_vec()])?;
+        let owned = OwnedSets::write(&device, &kernel, &[set])?;
         let sets = owned.sets.clone();
         core.retain(owned);
         Ok(Scan { kernel, sets })

@@ -1025,13 +1025,13 @@ fn combine(
     )
     .ok_or_else(|| internal("visibility continuations the combine cannot bind"))?;
     let kernel = device.owned_kernel(OwnedModule::VisibilityCombine)?;
-    let mut ranges: Vec<Vec<(vk::Buffer, u64, u64)>> = Vec::with_capacity(combines.len());
+    let mut ranges: Vec<[(vk::Buffer, u64, u64); 3]> = Vec::with_capacity(combines.len());
     {
         let mut state = core.command_buffer().state();
         for c in &combines {
             let bytes = c.table_bytes();
             let table = state.uploads.upload(&device, &bytes, bytes.len() as u64)?;
-            ranges.push(vec![
+            ranges.push([
                 (table.raw(), table.offset(), bytes.len() as u64),
                 (landing.raw, c.dest_range.offset, c.dest_range.range),
                 (sources.raw(), sources.offset(), words),

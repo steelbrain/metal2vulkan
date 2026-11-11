@@ -305,11 +305,11 @@ impl RewritePass {
         }
         // The three's set layouts are defined alike: one set for all, or one for the write.
         let sets = (
-            OwnedSets::write(&device, &kernels[0], &[set.to_vec()])?,
+            OwnedSets::write(&device, &kernels[0], &[set])?,
             match write_range {
                 Some(range) => {
                     set[IndexRewriteModule::OUTPUT_BINDING as usize] = range;
-                    Some(OwnedSets::write(&device, &kernels[2], &[set.to_vec()])?)
+                    Some(OwnedSets::write(&device, &kernels[2], &[set])?)
                 }
                 None => None,
             },
@@ -1090,7 +1090,7 @@ impl GatherRuns {
         set[IndexGatherPlanModule::STATUS_BINDING as usize] =
             (status.raw(), status.offset(), ExecutionStatus::BYTES as u64);
         set[IndexGatherPlanModule::DRAWS_BINDING as usize] = region(&commands);
-        let plan_sets = OwnedSets::write(device, &plan_kernel, &[set.to_vec()])?;
+        let plan_sets = OwnedSets::write(device, &plan_kernel, &[set])?;
         let run = GatherRun {
             gather,
             key,
@@ -1218,7 +1218,7 @@ impl GatherRuns {
         set[IndexRewriteModule::OUTPUT_BINDING as usize] = (output_raw, output_at, output_bytes);
         set[IndexRewriteModule::STATUS_BINDING as usize] =
             region(status, ExecutionStatus::BYTES as u64);
-        let sets = OwnedSets::write(device, &kernel, &[set.to_vec()])?;
+        let sets = OwnedSets::write(device, &kernel, &[set])?;
         let run = RewriteRun {
             run,
             key,
@@ -1306,7 +1306,7 @@ fn gather_sets(
         None => region(table),
     };
     set[IndexGatherModule::OUTPUT_BINDING as usize] = output;
-    OwnedSets::write(device, kernel, &[set.to_vec()])
+    OwnedSets::write(device, kernel, &[set])
 }
 
 impl GatherRun {

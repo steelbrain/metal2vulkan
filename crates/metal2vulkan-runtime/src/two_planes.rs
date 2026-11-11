@@ -386,7 +386,7 @@ impl BlitCommandEncoder {
         for (i, band) in bands.iter().enumerate() {
             let count = width * u64::from(band.rows);
             let shape_at = at + texels + slot * i as u64;
-            ranges.push(vec![
+            ranges.push([
                 (raw_scratch, at, TEXEL_BYTES * count),
                 (
                     raw_buffer,
@@ -793,7 +793,7 @@ impl BlitCommandEncoder {
         let mut steps = Vec::with_capacity(batches as usize);
         for batch in 0..batches {
             let shape_at = at + shapes_at + slot * u64::from(batch);
-            ranges.push(vec![
+            ranges.push([
                 (raw_scratch, at, source_bytes),
                 (raw_scratch, at + destination_at, destination_bytes),
                 (raw_scratch, shape_at, shape_bytes),

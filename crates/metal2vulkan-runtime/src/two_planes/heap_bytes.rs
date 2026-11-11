@@ -368,7 +368,7 @@ impl BlitCommandEncoder {
         let mut steps = Vec::new();
         for batch in 0..batches {
             let shape_at = scratch_at + shapes_at + slot * batch;
-            ranges.push(vec![
+            ranges.push([
                 (raw_scratch, scratch_at, source_bytes),
                 (raw_bytes, bind_at, bind_size),
                 (raw_scratch, shape_at, shape_bytes),

@@ -92,7 +92,7 @@ impl ArgumentsPass {
             (scratch.raw(), scratch.offset(), scratch.len());
         set[MeshArgumentsModule::STATUS_BINDING as usize] =
             (status.raw(), status.offset(), ExecutionStatus::BYTES as u64);
-        let sets = OwnedSets::write(&device, &kernel, &[set.to_vec()])?;
+        let sets = OwnedSets::write(&device, &kernel, &[set])?;
         Ok(ArgumentsPass {
             scratch,
             form,

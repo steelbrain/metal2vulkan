@@ -388,7 +388,7 @@ impl HeapPlaneCopies {
             &moves
                 .iter()
                 .map(|step| {
-                    vec![
+                    [
                         (tight_raw, tight_at, tight_bytes),
                         (staging_raw, staging_at, staged_bytes),
                         (shapes_raw, step.at, shape_bytes),

@@ -247,12 +247,12 @@ impl RotatedCopies {
             device,
             &kernel,
             &[
-                vec![
+                [
                     (staging_raw, staging_at, staged_bytes),
                     (tight_raw, tight_at, tight_bytes),
                     (shapes_raw, moves[0].at, shape_bytes),
                 ],
-                vec![
+                [
                     (tight_raw, tight_at, tight_bytes),
                     (staging_raw, staging_at, staged_bytes),
                     (shapes_raw, moves[1].at, shape_bytes),
