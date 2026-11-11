@@ -350,6 +350,63 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
     );
 }
 
+/// The check's note of a shape it made no image of in place says why in words: the placement's
+/// answer, then the making's refusal (`in_place_check.rs`'s `unmade`, `Error::NotInPlace`), with
+/// no internal error and no value's debug form in it; and its verdict and whether its cause lasts
+/// are as before. On a driver that renders an explicit plane's rows past its height
+/// (`RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`, lavapipe), the dma-buf class's reads of
+/// rows that end inside lines, of which the device makes no image at the pitch (no shape of the
+/// check whose rows end inside lines has a height that is a multiple of 4): unchecked, for a
+/// cause that lasts, which the note names. Printed (`IN-PLACE-NOTE`): each such note.
+#[test]
+fn the_in_place_checks_notes_say_in_words_why_it_made_no_image() {
+    let scratch = Scratch::new("in-place-check-notes");
+    let device = device(&scratch.0);
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    let mut report = device.in_place_check_report();
+    let notes = report.split_off(crate::in_place::VERDICTS);
+    let unmade: Vec<&String> = (notes.iter())
+        .filter(|note| note.contains(" image of ") && note.contains(" bytes apart: "))
+        .collect();
+    for note in &unmade {
+        eprintln!("IN-PLACE-NOTE on {}: {note}", device.name());
+    }
+    eprintln!(
+        "IN-PLACE-NOTES on {}: {} of shapes made no image of",
+        device.name(),
+        unmade.len()
+    );
+    for note in &unmade {
+        for debug in ["Internal", "compile failed", "Shadow(", "Refused(", " { "] {
+            assert!(
+                !note.contains(debug),
+                "a note in words, no {debug:?}: {note}"
+            );
+        }
+    }
+    let past_height = (device.properties().driver_defects)
+        .contains(&metal2vulkan::error::RuntimeDriverDefect::ExplicitPlaneRowsPastHeight);
+    if past_height {
+        let verdict = device.in_place_verdict(PagesClass::DmaBuf, Access::Reads, RowEnds::InLines);
+        assert_eq!(
+            verdict,
+            InPlaceVerdict::Unchecked,
+            "the dma-buf class's reads of rows inside lines: {notes:#?}"
+        );
+        let pitch = "no image the device makes lays the rows at their pitch";
+        let named = (unmade.iter()).any(|note| {
+            note.starts_with("DmaBuf reads: no ")
+                && note.contains(pitch)
+                && note.ends_with("(a cause that lasts, kept)")
+        });
+        assert!(
+            named,
+            "the dma-buf class's reads of rows inside lines noted unmade for the pitch, a cause \
+             that lasts: {notes:#?}"
+        );
+    }
+}
+
 /// A private 4x4 `RGBA8Unorm` texture of the program's, at a plain ID.
 fn texture(device: &Device) -> Texture {
     let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
