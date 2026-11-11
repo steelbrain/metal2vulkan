@@ -97,6 +97,8 @@ fn slot(index: u32) -> ResourceSlot {
 }
 
 /// `threads` threads along x (`local` the workgroup's shape), and buffer `i` holding `bufs[i]`.
+/// Zero push bytes: each buffer is bound at its start, and a dispatch region (a kernel that reads
+/// its grid position) is one region at the grid's origin.
 fn resources(plan: &Plan, local: (u64, u64), bufs: &[Vec<u32>]) -> Resources {
     let mut s = BTreeMap::new();
     s.insert(SpecKey::LocalSize(Axis::X), local.0);
@@ -109,6 +111,7 @@ fn resources(plan: &Plan, local: (u64, u64), bufs: &[Vec<u32>]) -> Resources {
             (PushField::SlotBindOffset(_), PushLoc::Push { offset }) => {
                 push[offset as usize..offset as usize + 4].fill(0)
             }
+            (PushField::DispatchRegion, PushLoc::Push { .. }) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }
