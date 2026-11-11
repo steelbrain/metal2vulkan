@@ -20,6 +20,10 @@
 //!   `VkQueue`, so a wait there for a held signal follows the group's submission too. A batch
 //!   that waits for anything not seen complete (an event, another `VkQueue`'s work, first work)
 //!   leads a group and never joins one: it goes after a group held, in a submission of its own.
+//!   An unshared queue's batch on a `VkQueue` other queues' work is held back from
+//!   (`unshared_hold.rs`) never waits either: held, it would go with the next batch of theirs and
+//!   be seen complete at that batch's end, however long, and kept, behind the batch the hold let
+//!   go meanwhile.
 //!   A group goes at once when it holds [`GROUP_BATCHES`], so no submission holds more.
 //! - **Checked ahead.** A batch with submission checks is ready only once they ran
 //!   (`checks.rs`), which the scheduler does for each line's head; here it runs those of the
@@ -76,6 +80,10 @@
 //!   handler of its own queue never sees it either (the probe's `scheduled-one-queue`). A group
 //!   whose batch ends a command buffer with a switch of storage forms riding on it is never kept:
 //!   the switch settles by the submission's outcome, before the command buffer is `Scheduled`.
+//!   Nor is one on a `VkQueue` other queues' work is held back from for an unshared queue
+//!   (`unshared_hold.rs`): the hold bounds the work ahead there by its expected GPU time, and a
+//!   group kept past the point the hold let its batches go would leave the GPU idle once the
+//!   work ahead ended.
 //!   A head of another queue whose wait is for a value only a batch the group holds signals
 //!   (`HeldFor::EventValue`: no submitted signal reaches it yet) does not send it: it is held
 //!   until the group goes, at the completion turn that leaves one submission in flight at the
@@ -127,9 +135,12 @@ pub(crate) fn groups(device: &Device, queue: usize) -> bool {
 }
 
 impl CommandBufferShared {
-    /// Whether its batches may wait in a group ([`groups`]).
+    /// Whether its batches may wait in a group ([`groups`]): never an unshared queue's on a
+    /// `VkQueue` other queues' work is held back from (the module docs).
     pub(crate) fn groups(&self) -> bool {
-        groups(&self.device, self.queue.vk_queue())
+        let queue = self.queue.vk_queue();
+        groups(&self.device, queue)
+            && !(self.queue.unshared() && self.device.holds_back_for_unshared(queue))
     }
 
     /// Whether a committing thread submits a batch of it that may wait in a group
@@ -404,6 +415,7 @@ impl Group {
         if self.full()
             || device.is_lost()
             || (self.members.iter()).any(|member| member.submission.rides_forms())
+            || device.holds_back_for_unshared(self.queue)
         {
             return None;
         }

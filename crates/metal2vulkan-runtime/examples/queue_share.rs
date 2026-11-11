@@ -558,8 +558,14 @@ fn frames(kit: &Arc<Kit>, options: &Options) {
         - before.unshared_command_buffers_behind_other_queues_over_16ms;
     let per_16 = |sum: u64| sum as f64 / unshared_16.max(1) as f64;
     let (app_busy, gpu_idle) = busy_shares(&times.lock().unwrap());
+    let app_spans: Vec<f64> = (times.lock().unwrap().iter())
+        .filter(|(queue, _, _)| *queue == 0)
+        .map(|(_, start, end)| end - start)
+        .collect();
+    let app_mean = app_spans.iter().sum::<f64>() / app_spans.len().max(1) as f64;
+    let submissions = c.queue_submissions - before.queue_submissions;
     println!(
-        "frames (policy {:?}, isolation {:?}, compositor {} every {:?}, application {} in flight of {:.1} ms): compositor {}, {over_16} over 16 ms; application {:.2} long command buffers/s, GPU-busy {:.1}%; GPU idle {:.2}%; {} looks held a head for isolation",
+        "frames (policy {:?}, isolation {:?}, compositor {} every {:?}, application {} in flight of {:.1} ms): compositor {}, {over_16} over 16 ms; application {:.2} long command buffers/s ({:.2} ms of GPU time each), GPU-busy {:.1}%; GPU idle {:.2}%; {:.0} kernel submissions/s; {} looks held a head for isolation",
         options.policy,
         options.isolation,
         if options.unshared { "unshared" } else { "shared" },
@@ -568,8 +574,10 @@ fn frames(kit: &Arc<Kit>, options: &Options) {
         kit.long_time.as_secs_f64() * 1e3,
         summary(&mut samples),
         longs as f64 / elapsed,
+        app_mean * 1e3,
         app_busy * 100.0,
         gpu_idle * 100.0,
+        submissions as f64 / elapsed,
         c.heads_held_for_unshared_isolation - before.heads_held_for_unshared_isolation,
     );
     println!(

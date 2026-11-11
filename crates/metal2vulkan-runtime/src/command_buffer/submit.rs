@@ -202,7 +202,7 @@
 use super::completion::{Submitted, Waited};
 use super::follow::{Follow, Release};
 use super::gate::Hold;
-use super::group::{self, After, GroupEnd, InfoParts};
+use super::group::{After, GroupEnd, InfoParts};
 use super::hang;
 use super::kept_barriers::{KeptBarriers, SlotStamps};
 use super::{lock, recording_error, submission_error, CommandBufferShared, State};
@@ -441,7 +441,7 @@ impl CommandBufferShared {
         let joins = {
             let sync = &state.batches.all()[index];
             !alone
-                && group::groups(device, queue)
+                && self.groups()
                 && !(last && super::fences::ends_at_fence(device, queue))
                 && !met
                 && sync.binary_waits.is_empty()
