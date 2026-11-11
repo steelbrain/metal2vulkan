@@ -52,7 +52,7 @@ bb0:
   %i4 = load <4 x float>, %i3, align 16
   %i5 = shufflevector <2 x float> %i2, <4 x float> poison, <0, 1>
   %i6 = extractelement %i2, i64 2
-  %i7 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i2)
+  %i7 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i8 = extractelement %i2, i64 3
   %i9 = fptrunc %i8 to half
   %i10 = insertvalue %t6 undef %i4, 0

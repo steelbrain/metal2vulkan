@@ -60,7 +60,7 @@ bb0:
   %i0 = getelementptr inbounds %t18, %a1, i64 0, i32 0
   %i1 = tail call i32 @f8 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i0, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
   %i2 = extractelement %a0, i64 0
-  %i3 = tail call i32 @f5 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i2)
+  %i3 = tail call i32 @f5 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = icmp eq %i3, i32 0
   br %i4, bb1, bb2
 bb1:

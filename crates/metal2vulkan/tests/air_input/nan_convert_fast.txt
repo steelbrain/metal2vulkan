@@ -24,7 +24,7 @@ bb0:
   %i11 = extractelement %i8, i64 1
   %i12 = bitcast %i11 to <2 x half>
   %i13 = shufflevector <4 x half> %i10, %i12, <0, 1, 2, 3>
-  %i14 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i4)
+  %i14 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i4)
   %i15 = bitcast %i14 to <4 x i16>
   %i16 = extractelement %i15, i64 0
   %i17 = zext %i16 to i32
@@ -57,7 +57,7 @@ bb0:
   %i44 = insertelement %i40, %i43, i64 3
   %i45 = getelementptr inbounds <4 x i32>, %a1, %i1
   store %i44, %i45, align 16
-  %i47 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i13)
+  %i47 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i13)
   %i48 = getelementptr inbounds <4 x i32>, %a1, %i6
   %i49 = bitcast %i48 to ptr addrspace(1)
   store %i47, %i49, align 16

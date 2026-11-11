@@ -59,7 +59,7 @@ bb1:
   br bb2
 bb2:
   %i10 = fmul reassoc nnan ninf nsz arcp contract afn <4 x float> %i4, <4 x float> c53
-  %i11 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i11 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i12 = extractelement %i11, i64 1
   %i13 = shl i32 %i12, i32 6
   %i14 = extractelement %i11, i64 0
@@ -86,7 +86,7 @@ bb1:
 bb2:
   %i10 = getelementptr inbounds %t32, %a3, i64 0, i32 0
   %i11 = tail call i32 @f12 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i10, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
-  %i12 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i12 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i13 = extractelement %i12, i64 1
   %i14 = shl i32 %i13, i32 6
   %i15 = extractelement %i12, i64 0
@@ -121,7 +121,7 @@ bb4:
   ret %i4
 bb5:
   %i16 = phi i32 [i32 0, bb3], [%i22, bb5]
-  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i16)
+  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i16)
   %i18 = fmul reassoc nnan ninf nsz arcp contract afn float %i17, %i13
   %i19 = zext %i16 to i64
   %i20 = getelementptr inbounds float, %a3, %i19
@@ -148,7 +148,7 @@ bb1:
   br bb2
 bb2:
   %i10 = fmul reassoc nnan ninf nsz arcp contract afn <4 x float> %i4, <4 x float> c56
-  %i11 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i11 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   tail call void @f13 [air Texture(Texture { op: Write, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Write), states_access: true })](%a3, %i11, %i10, i32 0, i32 2) arg0( nocapture )
   ret %i4
 }
@@ -171,10 +171,10 @@ bb1:
 bb2:
   %i10 = extractelement %i4, i64 0
   %i11 = fmul reassoc nnan ninf nsz arcp contract afn float %i10, float 0x40800000
-  %i12 = tail call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i11)
+  %i12 = tail call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i11)
   %i13 = zext %i12 to i64
   %i14 = getelementptr inbounds %t33, %a4, %i13
-  %i15 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i15 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i16 = extractelement %i15, i64 1
   %i17 = shl i32 %i16, i32 6
   %i18 = extractelement %i15, i64 0
@@ -206,7 +206,7 @@ bb2:
   %i10 = extractelement %i4, i64 0
   %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f14 [air Group(Group { scope: Simdgroup, op: Sum, ty: Some(NumTy { elem: F32, lanes: 1 }), sign: None })](%i10) convergent
   %i12 = extractelement %a0, i64 0
-  %i13 = tail call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i12)
+  %i13 = tail call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i12)
   %i14 = and i32 %i13, i32 63
   %i15 = zext %i14 to i64
   %i16 = getelementptr inbounds float, %a3, %i15

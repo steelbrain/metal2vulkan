@@ -29,7 +29,7 @@ bb0:
 define %t7 @f1 "pdc_after" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = tail call i32 @f4 [air Math(Math { f: Popcount, precision: Precise, ty: NumTy { elem: I32, lanes: 1 } })](%a0)
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = fmul reassoc nnan ninf nsz arcp contract afn float %i1, float 0x3E800000
   %i3 = insertelement <4 x float> c27, %i2, i64 0
   ret %i3

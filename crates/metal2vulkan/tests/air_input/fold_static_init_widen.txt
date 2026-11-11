@@ -38,7 +38,7 @@ define internal %t12 @f2 "_GLOBAL__sub_I__" "approx-func-fp-math"="true" "frame-
 bb0:
   %i0 = load <4 x i8>, ptr addrspace(2) @g0, align 4
   %i1 = load i8, ptr addrspace(2) @g1, align 1
-  %i2 = tail call <4 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i2 = tail call <4 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i0)
   store %i2, ptr addrspace(2) @g2, align 16
   %i4 = zext %i1 to i32
   store %i4, ptr addrspace(2) @g3, align 4

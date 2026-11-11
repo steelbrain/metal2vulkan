@@ -17,8 +17,8 @@ c29 = ptr addrspace(3) getelementptr inbounds (%t3, @g0, 0, 1535)
 
 define %t9 @f0 "ttg_compute_simd_scratch" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a2)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a2)
   %i2 = insertelement <4 x float> c25, %i0, i64 0
   %i3 = insertelement %i2, %i1, i64 1
   %i4 = zext %a1 to i64
@@ -36,7 +36,7 @@ bb2:
   %i14 = zext %i13 to i64
   %i15 = getelementptr inbounds %t3, ptr addrspace(3) @g0, i64 0, %i14
   %i16 = load <4 x float>, %i15, align 16
-  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a4)
+  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a4)
   %i18 = insertelement <4 x float> poison, %i17, i64 0
   %i19 = shufflevector <4 x float> %i18, <4 x float> poison, <0, 0, 0, 0>
   %i20 = freeze <4 x float> %i16

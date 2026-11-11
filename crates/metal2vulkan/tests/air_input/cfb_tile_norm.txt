@@ -202,7 +202,7 @@ bb0:
 define %t9 @f9 "cfb_tn_hread2" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x half> @f24 [air Imageblock(Load(NumTy { elem: F16, lanes: 2 }))](i32 0, %a2, i32 0, i16 0)
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = shufflevector <4 x float> %i1, <2 x float> poison, <0, 1, poison, poison>
   %i3 = shufflevector <4 x float> %i2, <4 x float> c50, <0, 1, 6, 7>
   %i4 = extractelement %a3, i64 1
@@ -244,7 +244,7 @@ bb0:
 define %t9 @f12 "cfb_tn_hread4" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = tail call reassoc nnan ninf nsz arcp contract afn <4 x half> @f26 [air Imageblock(Load(NumTy { elem: F16, lanes: 4 }))](i32 0, %a2, i32 0, i16 0)
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f13 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f13 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %a3, i64 1
   %i3 = shl i32 %i2, i32 4
   %i4 = extractelement %a2, i64 1

@@ -23,7 +23,7 @@ bb0:
   %i5 = zext %i4 to i32
   %i6 = shl nuw nsw i32 %i5, i32 3
   %i7 = add nuw nsw i32 %i3, %i6
-  %i8 = tail call reassoc nnan ninf nsz arcp contract afn half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i7)
+  %i8 = tail call reassoc nnan ninf nsz arcp contract afn half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%i7)
   %i9 = fmul reassoc nnan ninf nsz arcp contract afn half %i8, half 0x2400
   %i10 = bitcast %i0 to ptr addrspace(4)
   store %i9, %i10, align 2
@@ -51,7 +51,7 @@ bb0:
   %i5 = zext %i4 to i32
   %i6 = shl nuw nsw i32 %i5, i32 3
   %i7 = add nuw nsw i32 %i3, %i6
-  %i8 = tail call reassoc nnan ninf nsz arcp contract afn half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i7)
+  %i8 = tail call reassoc nnan ninf nsz arcp contract afn half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%i7)
   %i9 = fmul reassoc nnan ninf nsz arcp contract afn half %i8, half 0x2400
   %i10 = bitcast %i0 to ptr addrspace(4)
   store %i9, %i10, align 2

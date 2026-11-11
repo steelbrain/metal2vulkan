@@ -14,7 +14,7 @@ bb0:
   %i0 = and i32 %a2, i32 1
   %i1 = icmp eq %i0, i32 0
   %i2 = select ptr addrspace(1) %i1, %a1, %a0
-  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a2)
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a2)
   %i4 = insertelement <4 x float> c19, %i3, i64 0
   %i5 = lshr i32 %a2, i32 1
   %i6 = insertelement <2 x i32> c22, %i5, i64 0

@@ -36,7 +36,7 @@ bb0:
   %i0 = tail call ptr addrspace(2) @f6 [air Sampler(GetReadSampler)]()
   %i1 = tail call %t19 @f8 [air Texture(Texture { op: Read, image: ImageShape { dim: Buffer, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a0, %i0, %a2, i32 1) arg0( Ref nocapture )
   %i2 = extractvalue <4 x half> %i1, 0
-  %i3 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i2)
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = zext %a2 to i64
   %i5 = getelementptr inbounds <4 x float>, %a1, %i4
   store %i3, %i5, align 16

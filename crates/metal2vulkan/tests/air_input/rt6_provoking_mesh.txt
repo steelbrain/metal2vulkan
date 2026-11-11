@@ -47,7 +47,7 @@ bb0:
   br %i0, bb1, bb2
 bb1:
   %i2 = and i32 %a1, i32 3
-  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2)
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = fmul reassoc nnan ninf nsz arcp contract afn float %i3, float 0x3E99999A
   %i5 = fadd reassoc nnan ninf nsz arcp contract afn float %i4, float 0x3F800000
   %i6 = zext %a1 to i64
@@ -59,7 +59,7 @@ bb1:
   %i12 = shufflevector <4 x float> %i11, <2 x float> poison, <0, 1, poison, poison>
   %i13 = insertelement %i12, float 0x3F000000, i64 2
   %i14 = insertelement %i13, %i5, i64 3
-  %i15 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i15 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   tail call void @f6 [air Mesh(Position)](%a0, %a1, %i14) arg0( nocapture )
   tail call void @f7 [air Mesh(VertexData(NumTy { elem: F32, lanes: 1 }))](%a0, i32 0, %a1, %i15) arg0( nocapture )
   tail call void @f8 [air Mesh(VertexData(NumTy { elem: I32, lanes: 1 }))](%a0, i32 1, %a1, %a1) arg0( nocapture )
@@ -83,7 +83,7 @@ bb0:
   br %i0, bb1, bb2
 bb1:
   %i2 = and i32 %a1, i32 3
-  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2)
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = fmul reassoc nnan ninf nsz arcp contract afn float %i3, float 0x3E99999A
   %i5 = fadd reassoc nnan ninf nsz arcp contract afn float %i4, float 0x3F800000
   %i6 = zext %a1 to i64
@@ -95,7 +95,7 @@ bb1:
   %i12 = shufflevector <4 x float> %i11, <2 x float> poison, <0, 1, poison, poison>
   %i13 = insertelement %i12, float 0x3F000000, i64 2
   %i14 = insertelement %i13, %i5, i64 3
-  %i15 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i15 = tail call reassoc nnan ninf nsz arcp contract afn float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   tail call void @f6 [air Mesh(Position)](%a0, %a1, %i14) arg0( nocapture )
   tail call void @f7 [air Mesh(VertexData(NumTy { elem: F32, lanes: 1 }))](%a0, i32 0, %a1, %i15) arg0( nocapture )
   tail call void @f8 [air Mesh(VertexData(NumTy { elem: I32, lanes: 1 }))](%a0, i32 1, %a1, %a1) arg0( nocapture )

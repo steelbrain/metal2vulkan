@@ -20,9 +20,9 @@ bb0:
   %i7 = fmul float %i6, %i5
   %i8 = tail call float @f3 [air Math(Math { f: Rint, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i7)
   %i9 = tail call float @f2 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i8, float 0x0, float 0x42800000)
-  %i10 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i9)
+  %i10 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i9)
   %i11 = mul i32 %i10, i32 65
-  %i12 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i4)
+  %i12 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i4)
   %i13 = add i32 %i11, %i12
   %i14 = zext %i13 to i64
   %i15 = getelementptr inbounds i32, %a2, %i14

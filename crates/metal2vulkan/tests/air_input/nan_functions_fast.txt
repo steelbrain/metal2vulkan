@@ -124,7 +124,7 @@ bb0:
   %i105 = tail call reassoc nnan ninf nsz arcp contract afn float @f31 [air Math(Math { f: Mix, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i4, %i5, %i6)
   %i106 = insertelement %i104, %i105, i64 2
   %i107 = fcmp reassoc nnan ninf nsz arcp contract afn oge %i5, %i4
-  %i108 = tail call reassoc nnan ninf nsz arcp contract afn float @f32 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i107)
+  %i108 = tail call reassoc nnan ninf nsz arcp contract afn float @f32 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i107)
   %i109 = insertelement %i106, %i108, i64 3
   %i110 = add i32 %i15, i32 7
   %i111 = zext %i110 to i64

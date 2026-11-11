@@ -18,9 +18,9 @@ c22 = <2 x float> [0x3F000000, 0x3F000000]
 define %t8 @f0 "smp_constexpr_array" convergent memory(Ref, Ref, Ref) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref byval(%t10) nocapture ) {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %a0, i64 1
-  %i3 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i2)
+  %i3 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = shl i32 %i3, i32 3
   %i5 = add i32 %i4, %i1
   %i6 = and i32 %i5, i32 31

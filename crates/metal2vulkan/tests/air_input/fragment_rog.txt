@@ -29,11 +29,11 @@ c46 = <4 x i32> [0, 5, 6, 3]
 define %t5 @f0 "rog_buffer" memory(ModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( nocapture "air-buffer-no-alias"="" ) %a2( align 4 dereferenceable(4) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 1
-  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = load i32, %a2, align 4
   %i3 = mul i32 %i2, %i1
   %i4 = extractelement %a0, i64 0
-  %i5 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i4)
+  %i5 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i4)
   %i6 = add i32 %i3, %i5
   %i7 = zext %i6 to i64
   %i8 = getelementptr inbounds float, %a1, %i7
@@ -49,7 +49,7 @@ declare %t7 @f1 "air.convert.u.i32.f.f32" memory(NoModRef, NoModRef, NoModRef)
 define %t8 @f2 "rog_texture" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = tail call ptr addrspace(2) @f10 [air Sampler(GetReadSampler)]()
   %i3 = tail call %t21 @f11 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(ReadWrite), states_access: true })](%a1, %i2, %i1, <2 x i32> zeroinitializer, i32 0, i32 3) arg0( Ref nocapture )
   %i4 = extractvalue <4 x float> %i3, 0
@@ -86,7 +86,7 @@ bb2:
 define %t5 @f6 "rog_loop" memory(ModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( nocapture "air-buffer-no-alias"="" ) %a2( align 4 dereferenceable(4) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = zext %i1 to i64
   %i3 = getelementptr inbounds float, %a1, %i2
   %i4 = load float, %i3, align 4
@@ -112,7 +112,7 @@ bb2:
 define %t15 @f7 "rog_sample" memory(ModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a2( nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = shl i32 %i1, i32 2
   %i3 = add i32 %i2, %a1
   %i4 = zext %i3 to i64

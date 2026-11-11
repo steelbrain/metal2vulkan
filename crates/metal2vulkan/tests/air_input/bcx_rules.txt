@@ -56,22 +56,22 @@ bb0:
   store %i34, %i35, align 16
   %i37 = tail call %t19 @f3 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a8, ptr addrspace(2) @g0, %i2, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i38 = extractvalue <4 x half> %i37, 0
-  %i39 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i38)
+  %i39 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i38)
   %i40 = getelementptr inbounds <4 x float>, %i5, i64 8
   store %i39, %i40, align 16
   %i42 = tail call %t19 @f3 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a9, ptr addrspace(2) @g0, %i2, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i43 = extractvalue <4 x half> %i42, 0
-  %i44 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i43)
+  %i44 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i43)
   %i45 = getelementptr inbounds <4 x float>, %i5, i64 9
   store %i44, %i45, align 16
   %i47 = tail call %t19 @f3 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a10, ptr addrspace(2) @g0, %i2, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i48 = extractvalue <4 x half> %i47, 0
-  %i49 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i48)
+  %i49 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i48)
   %i50 = getelementptr inbounds <4 x float>, %i5, i64 10
   store %i49, %i50, align 16
   %i52 = tail call %t19 @f3 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a11, ptr addrspace(2) @g0, %i2, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i53 = extractvalue <4 x half> %i52, 0
-  %i54 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i53)
+  %i54 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i53)
   %i55 = getelementptr inbounds <4 x float>, %i5, i64 11
   store %i54, %i55, align 16
   %i57 = extractelement %i2, i64 0
@@ -89,7 +89,7 @@ bb0:
   store %i67, %i68, align 16
   %i70 = tail call %t19 @f5 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: false }, image: ImageShape { dim: D1, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a15, ptr addrspace(2) @g0, %i57, i1 0, i32 0, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i71 = extractvalue <4 x half> %i70, 0
-  %i72 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i71)
+  %i72 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i71)
   %i73 = getelementptr inbounds <4 x float>, %i5, i64 15
   store %i72, %i73, align 16
   ret void

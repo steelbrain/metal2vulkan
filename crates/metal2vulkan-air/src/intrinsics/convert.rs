@@ -2,12 +2,10 @@
 //! `air.{pack,unpack}.<format>.<type>`.
 //!
 //! The rounding (`rte`, `rtz`, `rtp`, `rtn`) and `.sat` are the suffixes Apple's OpenCL compiler
-//! spells on every `convert_<type>[_sat][_<mode>]` it emits. Metal does not answer them alike:
-//! Apple's compilers for a Radeon Pro 5300M and a UHD Graphics 630 (macOS 26.7.1) answer every
-//! integer source as the conversion without the suffix (the 630 refuses most float sources), and
-//! the M3 Max's (macOS 27.0.1) rounds a float to an integer to even and narrows to `half` toward
-//! zero where named but creates no pipeline for most of the other forms. What no Mac guarantees
-//! is no part of the conversion, so a suffixed name is the conversion its types name.
+//! spells on every `convert_<type>[_sat][_<mode>]` it emits ([`Convert::rounding`],
+//! [`Convert::saturate`]). Whether a conversion honors them is the lowering's: Metal honors them
+//! in a compute pipeline of OpenCL mode and answers most of them as the conversion without the
+//! suffix elsewhere.
 
 use super::sig::{Operand, Signature};
 use super::ty::{Elem, NumTy};
@@ -80,6 +78,31 @@ impl Fp8 {
     }
 }
 
+/// The rounding a conversion's name spells after its types (`.rte`, `.rtz`, `.rtp`, `.rtn`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Rounding {
+    /// `rte`: to nearest, ties to even.
+    Even,
+    /// `rtz`: toward zero.
+    Zero,
+    /// `rtp`: toward positive infinity.
+    Up,
+    /// `rtn`: toward negative infinity.
+    Down,
+}
+
+impl Rounding {
+    fn parse(token: &str) -> Option<Rounding> {
+        Some(match token {
+            "rte" => Rounding::Even,
+            "rtz" => Rounding::Zero,
+            "rtp" => Rounding::Up,
+            "rtn" => Rounding::Down,
+            _ => return None,
+        })
+    }
+}
+
 /// A numeric conversion between equal lane counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Convert {
@@ -95,6 +118,10 @@ pub struct Convert {
     /// or to an integer other than `i1`. An 8-bit float destination does not decode
     /// ([`super::UNDECODED`]).
     pub src_fp8: Option<Fp8>,
+    /// The rounding spelled after the types, between numbers (no `bool`, no 8-bit float).
+    pub rounding: Option<Rounding>,
+    /// `.sat` after the rounding: to an integer, out-of-range values take the destination's bound.
+    pub saturate: bool,
 }
 
 impl Convert {
@@ -102,12 +129,11 @@ impl Convert {
     pub(super) fn parse(rest: &str) -> Option<Convert> {
         let mut t = rest.split('.');
         let (dk, dt, sk, st) = (t.next()?, t.next()?, t.next()?, t.next()?);
-        let rounded = match t.next() {
-            Some("rte" | "rtz" | "rtp" | "rtn") => true,
-            Some(_) => return None,
-            None => false,
+        let rounding = match t.next() {
+            Some(token) => Some(Rounding::parse(token)?),
+            None => None,
         };
-        let saturated = match t.next() {
+        let saturate = match t.next() {
             Some("sat") => true,
             Some(_) => return None,
             None => false,
@@ -133,6 +159,8 @@ impl Convert {
             src_kind: NumKind::parse(sk)?,
             src,
             src_fp8,
+            rounding,
+            saturate,
         };
         let src_ok = match src_fp8 {
             Some(_) => c.dst.elem != Elem::I1,
@@ -141,7 +169,7 @@ impl Convert {
         // A rounding is spelled between numbers (no `bool`, no 8-bit float), and `.sat` only after
         // one, to an integer: the forms Apple's OpenCL runtime declares.
         let numbers = c.dst.elem != Elem::I1 && c.src.elem != Elem::I1 && src_fp8.is_none();
-        let suffix_ok = match (rounded, saturated) {
+        let suffix_ok = match (rounding.is_some(), saturate) {
             (false, false) => true,
             (true, false) => numbers,
             (true, true) => numbers && c.dst_kind != NumKind::Float,

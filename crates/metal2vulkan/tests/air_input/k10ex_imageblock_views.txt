@@ -15,15 +15,15 @@ define %t11 @f0 "k10ex_imageblock_views" memory(NoModRef, NoModRef, NoModRef) "f
 bb0:
   %i0 = extractvalue half %a0, 0
   %i1 = extractvalue i16 %a0, 1
-  %i2 = tail call half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1)
+  %i2 = tail call half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1)
   %i3 = insertelement <4 x half> c20, %i0, i64 0
   %i4 = insertelement %i3, %i2, i64 1
   %i5 = fadd half %i0, half 0x3C00
   %i6 = extractelement %a1, i64 0
-  %i7 = tail call i8 @f2 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i6)
+  %i7 = tail call i8 @f2 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i6)
   %i8 = insertelement <4 x i8> undef, %i7, i64 0
   %i9 = extractelement %a1, i64 1
-  %i10 = tail call i8 @f2 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i9)
+  %i10 = tail call i8 @f2 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i9)
   %i11 = insertelement %i8, %i10, i64 1
   %i12 = trunc %i1 to i8
   %i13 = insertelement %i11, %i12, i64 2

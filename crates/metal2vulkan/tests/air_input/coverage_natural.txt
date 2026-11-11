@@ -43,7 +43,7 @@ bb0:
   %i9 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
   %i10 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i9, <2 x float> c26
   %i11 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i10, <2 x float> c27
-  %i12 = tail call <2 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i11)
+  %i12 = tail call <2 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i11)
   %i13 = extractelement %i12, i64 0
   %i14 = and i32 %i13, i32 255
   %i15 = extractelement %i12, i64 1
@@ -75,7 +75,7 @@ define %t12 @f4 "nat_varying" "approx-func-fp-math"="true" "frame-pointer"="all"
 bb0:
   %i0 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %a0, <2 x float> c33
   %i1 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i0, <2 x float> c27
-  %i2 = tail call <2 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i1)
+  %i2 = tail call <2 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i1)
   %i3 = extractelement %i2, i64 0
   %i4 = and i32 %i3, i32 15
   %i5 = zext %i4 to i64

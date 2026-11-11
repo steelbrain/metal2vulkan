@@ -48,13 +48,13 @@ bb0:
   %i8 = extractelement %i5, i64 2
   %i9 = extractelement %i5, i64 0
   %i10 = select i32 %i7, %i9, %i8
-  %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i10)
+  %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i10)
   %i12 = and i32 %i2, i32 2
   %i13 = icmp eq %i12, i32 0
   %i14 = extractelement %i5, i64 3
   %i15 = extractelement %i5, i64 1
   %i16 = select i32 %i13, %i15, %i14
-  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i16)
+  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i16)
   %i18 = fmul reassoc nnan ninf nsz arcp contract afn float %i11, float 0x3E800000
   %i19 = fadd reassoc nnan ninf nsz arcp contract afn float %i18, float 0xBF800000
   %i20 = fmul reassoc nnan ninf nsz arcp contract afn float %i17, float 0x3E800000

@@ -142,10 +142,10 @@ bb0:
   %i1 = getelementptr inbounds <2 x float>, %a1, %i0
   %i2 = load <2 x float>, %i1, align 8
   %i3 = tail call i32 @f15 [air Texture(Texture { op: Query(Width), image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0, i32 0) arg0( Ref nocapture )
-  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3)
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3)
   %i5 = insertelement <2 x float> undef, %i4, i64 0
   %i6 = tail call i32 @f16 [air Texture(Texture { op: Query(Height), image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0, i32 0) arg0( Ref nocapture )
-  %i7 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i6)
+  %i7 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i6)
   %i8 = insertelement %i5, %i7, i64 1
   %i9 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i8, %i2
   %i10 = tail call %t13 @f13 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, ptr addrspace(2) @g6, %i9, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )

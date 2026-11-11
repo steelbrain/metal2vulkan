@@ -186,7 +186,7 @@ bb0:
   %i19 = zext %i18 to i64
   %i20 = getelementptr inbounds i32, %a1, %i19
   store %i17, %i20, align 4
-  %i22 = tail call reassoc nnan ninf nsz arcp contract afn half @f3 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i9)
+  %i22 = tail call reassoc nnan ninf nsz arcp contract afn half @f3 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%i9)
   %i23 = freeze half %i22
   %i24 = tail call reassoc nnan ninf nsz arcp contract afn half @f27 [air Group(Group { scope: Quad, op: ShuffleAndFillUp, ty: Some(NumTy { elem: F16, lanes: 1 }), sign: None })](%i23, half 0xBC00, i16 2, i16 4) convergent
   %i25 = insertelement <2 x half> undef, %i24, i64 0
@@ -575,12 +575,12 @@ bb0:
 define %t14 @f12 "fragment_quad_fills" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %i1, i64 0
   %i3 = extractelement %i1, i64 1
   %i4 = shl i32 %i3, i32 6
   %i5 = add i32 %i4, %i2
-  %i6 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i5)
+  %i6 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i5)
   %i7 = fadd reassoc nnan ninf nsz arcp contract afn float %i6, float 0x461C4000
   %i8 = freeze float %i6
   %i9 = tail call reassoc nnan ninf nsz arcp contract afn float @f21 [air Group(Group { scope: Quad, op: ShuffleAndFillUp, ty: Some(NumTy { elem: F32, lanes: 1 }), sign: None })](%i8, %i7, i16 1, i16 4) convergent
@@ -597,12 +597,12 @@ bb0:
 define %t14 @f13 "fragment_quad_fills_and_rotations" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %i1, i64 0
   %i3 = extractelement %i1, i64 1
   %i4 = shl i32 %i3, i32 6
   %i5 = add i32 %i4, %i2
-  %i6 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i5)
+  %i6 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i5)
   %i7 = fadd reassoc nnan ninf nsz arcp contract afn float %i6, float 0x461C4000
   %i8 = freeze float %i6
   %i9 = tail call reassoc nnan ninf nsz arcp contract afn float @f21 [air Group(Group { scope: Quad, op: ShuffleAndFillUp, ty: Some(NumTy { elem: F32, lanes: 1 }), sign: None })](%i8, %i7, i16 3, i16 4) convergent
@@ -619,7 +619,7 @@ bb0:
 define %t14 @f14 "fragment_quad_scans" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %i1, i64 0
   %i3 = mul i32 %i2, i32 3
   %i4 = extractelement %i1, i64 1
@@ -642,7 +642,7 @@ bb0:
   %i21 = insertelement %i19, %i20, i64 2
   %i22 = shl i32 %i4, i32 6
   %i23 = add i32 %i22, %i2
-  %i24 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i23)
+  %i24 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i23)
   %i25 = freeze float %i24
   %i26 = tail call reassoc nnan ninf nsz arcp contract afn float @f42 [air Group(Group { scope: Quad, op: BroadcastFirst, ty: Some(NumTy { elem: F32, lanes: 1 }), sign: None })](%i25) convergent
   %i27 = insertelement %i21, %i26, i64 3
@@ -652,7 +652,7 @@ bb0:
 define %t16 @f15 "fragment_quad_bitwise" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %i1, i64 0
   %i3 = mul i32 %i2, i32 7
   %i4 = extractelement %i1, i64 1
@@ -674,7 +674,7 @@ bb0:
 define %t14 @f16 "fragment_quad_ops_divergent" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %i1, i64 0
   %i3 = extractelement %i1, i64 1
   %i4 = shl i32 %i3, i32 1
@@ -715,7 +715,7 @@ bb2:
 define %t14 @f17 "fragment_quad_first_in_a_speculated_arm" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %i1, i64 0
   %i3 = extractelement %i1, i64 1
   %i4 = shl i32 %i3, i32 1
@@ -726,7 +726,7 @@ bb0:
 bb1:
   %i9 = shl i32 %i3, i32 6
   %i10 = add i32 %i9, %i2
-  %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i10)
+  %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i10)
   %i12 = freeze float %i11
   %i13 = tail call reassoc nnan ninf nsz arcp contract afn float @f42 [air Group(Group { scope: Quad, op: BroadcastFirst, ty: Some(NumTy { elem: F32, lanes: 1 }), sign: None })](%i12) convergent
   br bb2
@@ -739,12 +739,12 @@ bb2:
 define %t14 @f18 "fragment_simd_fills" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f20 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %i1, i64 0
   %i3 = extractelement %i1, i64 1
   %i4 = shl i32 %i3, i32 6
   %i5 = add i32 %i4, %i2
-  %i6 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i5)
+  %i6 = tail call reassoc nnan ninf nsz arcp contract afn float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i5)
   %i7 = fadd reassoc nnan ninf nsz arcp contract afn float %i6, float 0x461C4000
   %i8 = freeze float %i6
   %i9 = tail call i16 @f60 [air SimdgroupSize(SimdgroupSize { ty: I16 })]()

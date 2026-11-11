@@ -10,7 +10,7 @@ c6 = %t10 [26, 5]
 define %t4 @f0 "rog_terminate" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a2( nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = zext %i1 to i64
   %i3 = getelementptr inbounds float, %a2, %i2
   %i4 = load float, %i3, align 4

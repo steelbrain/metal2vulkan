@@ -1281,7 +1281,7 @@ bb97:
 bb98:
   %i916 = phi <4 x half> [<4 x half> zeroinitializer, bb96], [%i973, bb98]
   %i917 = phi i32 [i32 0, bb96], [%i974, bb98]
-  %i918 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i917)
+  %i918 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i917)
   %i919 = fadd reassoc nnan ninf nsz arcp contract afn float %i918, float 0x3F000000
   %i920 = insertelement <2 x float> undef, %i919, i64 0
   %i921 = insertelement %i920, float 0x0, i64 1
@@ -1424,7 +1424,7 @@ bb99:
 bb100:
   %i1057 = phi <4 x half> [<4 x half> zeroinitializer, bb93], [%i1114, bb100]
   %i1058 = phi i32 [i32 0, bb93], [%i1115, bb100]
-  %i1059 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1058)
+  %i1059 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1058)
   %i1060 = fadd reassoc nnan ninf nsz arcp contract afn float %i1059, float 0x3F200000
   %i1061 = insertelement <2 x float> undef, %i1060, i64 0
   %i1062 = insertelement %i1061, float 0x0, i64 1
@@ -1567,7 +1567,7 @@ bb101:
 bb102:
   %i1198 = phi <4 x half> [<4 x half> zeroinitializer, bb90], [%i1255, bb102]
   %i1199 = phi i32 [i32 0, bb90], [%i1256, bb102]
-  %i1200 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1199)
+  %i1200 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1199)
   %i1201 = fadd reassoc nnan ninf nsz arcp contract afn float %i1200, float 0x3F400000
   %i1202 = insertelement <2 x float> undef, %i1201, i64 0
   %i1203 = insertelement %i1202, float 0x0, i64 1
@@ -1710,7 +1710,7 @@ bb103:
 bb104:
   %i1339 = phi <4 x half> [<4 x half> zeroinitializer, bb87], [%i1396, bb104]
   %i1340 = phi i32 [i32 0, bb87], [%i1397, bb104]
-  %i1341 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1340)
+  %i1341 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1340)
   %i1342 = fadd reassoc nnan ninf nsz arcp contract afn float %i1341, float 0x3F600000
   %i1343 = insertelement <2 x float> undef, %i1342, i64 0
   %i1344 = insertelement %i1343, float 0x0, i64 1
@@ -1853,7 +1853,7 @@ bb105:
 bb106:
   %i1480 = phi <4 x half> [<4 x half> zeroinitializer, bb84], [%i1537, bb106]
   %i1481 = phi i32 [i32 0, bb84], [%i1538, bb106]
-  %i1482 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1481)
+  %i1482 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1481)
   %i1483 = fadd reassoc nnan ninf nsz arcp contract afn float %i1482, float 0x3F800000
   %i1484 = insertelement <2 x float> undef, %i1483, i64 0
   %i1485 = insertelement %i1484, float 0x0, i64 1
@@ -1996,7 +1996,7 @@ bb107:
 bb108:
   %i1621 = phi <4 x half> [<4 x half> zeroinitializer, bb81], [%i1678, bb108]
   %i1622 = phi i32 [i32 0, bb81], [%i1679, bb108]
-  %i1623 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1622)
+  %i1623 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1622)
   %i1624 = fadd reassoc nnan ninf nsz arcp contract afn float %i1623, float 0x3F000000
   %i1625 = insertelement <2 x float> undef, %i1624, i64 0
   %i1626 = insertelement %i1625, float 0x0, i64 1
@@ -2139,7 +2139,7 @@ bb109:
 bb110:
   %i1762 = phi <4 x half> [<4 x half> zeroinitializer, bb78], [%i1819, bb110]
   %i1763 = phi i32 [i32 0, bb78], [%i1820, bb110]
-  %i1764 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1763)
+  %i1764 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1763)
   %i1765 = fadd reassoc nnan ninf nsz arcp contract afn float %i1764, float 0x3F200000
   %i1766 = insertelement <2 x float> undef, %i1765, i64 0
   %i1767 = insertelement %i1766, float 0x0, i64 1
@@ -2282,7 +2282,7 @@ bb111:
 bb112:
   %i1903 = phi <4 x half> [<4 x half> zeroinitializer, bb75], [%i1960, bb112]
   %i1904 = phi i32 [i32 0, bb75], [%i1961, bb112]
-  %i1905 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1904)
+  %i1905 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1904)
   %i1906 = fadd reassoc nnan ninf nsz arcp contract afn float %i1905, float 0x3F400000
   %i1907 = insertelement <2 x float> undef, %i1906, i64 0
   %i1908 = insertelement %i1907, float 0x0, i64 1
@@ -2425,7 +2425,7 @@ bb113:
 bb114:
   %i2044 = phi <4 x half> [<4 x half> zeroinitializer, bb72], [%i2101, bb114]
   %i2045 = phi i32 [i32 0, bb72], [%i2102, bb114]
-  %i2046 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2045)
+  %i2046 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2045)
   %i2047 = fadd reassoc nnan ninf nsz arcp contract afn float %i2046, float 0x3F600000
   %i2048 = insertelement <2 x float> undef, %i2047, i64 0
   %i2049 = insertelement %i2048, float 0x0, i64 1
@@ -2568,7 +2568,7 @@ bb115:
 bb116:
   %i2185 = phi <4 x half> [<4 x half> zeroinitializer, bb69], [%i2242, bb116]
   %i2186 = phi i32 [i32 0, bb69], [%i2243, bb116]
-  %i2187 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2186)
+  %i2187 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2186)
   %i2188 = fadd reassoc nnan ninf nsz arcp contract afn float %i2187, float 0x3F800000
   %i2189 = insertelement <2 x float> undef, %i2188, i64 0
   %i2190 = insertelement %i2189, float 0x0, i64 1
@@ -2711,7 +2711,7 @@ bb117:
 bb118:
   %i2326 = phi <4 x half> [<4 x half> zeroinitializer, bb66], [%i2383, bb118]
   %i2327 = phi i32 [i32 0, bb66], [%i2384, bb118]
-  %i2328 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2327)
+  %i2328 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2327)
   %i2329 = fadd reassoc nnan ninf nsz arcp contract afn float %i2328, float 0x3F000000
   %i2330 = insertelement <2 x float> undef, %i2329, i64 0
   %i2331 = insertelement %i2330, float 0x0, i64 1
@@ -2854,7 +2854,7 @@ bb119:
 bb120:
   %i2467 = phi <4 x half> [<4 x half> zeroinitializer, bb63], [%i2524, bb120]
   %i2468 = phi i32 [i32 0, bb63], [%i2525, bb120]
-  %i2469 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2468)
+  %i2469 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2468)
   %i2470 = fadd reassoc nnan ninf nsz arcp contract afn float %i2469, float 0x3F200000
   %i2471 = insertelement <2 x float> undef, %i2470, i64 0
   %i2472 = insertelement %i2471, float 0x0, i64 1
@@ -2997,7 +2997,7 @@ bb121:
 bb122:
   %i2608 = phi <4 x half> [<4 x half> zeroinitializer, bb60], [%i2665, bb122]
   %i2609 = phi i32 [i32 0, bb60], [%i2666, bb122]
-  %i2610 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2609)
+  %i2610 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2609)
   %i2611 = fadd reassoc nnan ninf nsz arcp contract afn float %i2610, float 0x3F400000
   %i2612 = insertelement <2 x float> undef, %i2611, i64 0
   %i2613 = insertelement %i2612, float 0x0, i64 1
@@ -3140,7 +3140,7 @@ bb123:
 bb124:
   %i2749 = phi <4 x half> [<4 x half> zeroinitializer, bb57], [%i2806, bb124]
   %i2750 = phi i32 [i32 0, bb57], [%i2807, bb124]
-  %i2751 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2750)
+  %i2751 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2750)
   %i2752 = fadd reassoc nnan ninf nsz arcp contract afn float %i2751, float 0x3F600000
   %i2753 = insertelement <2 x float> undef, %i2752, i64 0
   %i2754 = insertelement %i2753, float 0x0, i64 1
@@ -3283,7 +3283,7 @@ bb125:
 bb126:
   %i2890 = phi <4 x half> [<4 x half> zeroinitializer, bb54], [%i2947, bb126]
   %i2891 = phi i32 [i32 0, bb54], [%i2948, bb126]
-  %i2892 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2891)
+  %i2892 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2891)
   %i2893 = fadd reassoc nnan ninf nsz arcp contract afn float %i2892, float 0x3F800000
   %i2894 = insertelement <2 x float> undef, %i2893, i64 0
   %i2895 = insertelement %i2894, float 0x0, i64 1
@@ -3426,7 +3426,7 @@ bb127:
 bb128:
   %i3031 = phi <4 x half> [<4 x half> zeroinitializer, bb51], [%i3088, bb128]
   %i3032 = phi i32 [i32 0, bb51], [%i3089, bb128]
-  %i3033 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3032)
+  %i3033 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3032)
   %i3034 = fadd reassoc nnan ninf nsz arcp contract afn float %i3033, float 0x3F000000
   %i3035 = insertelement <2 x float> undef, %i3034, i64 0
   %i3036 = insertelement %i3035, float 0x0, i64 1
@@ -3569,7 +3569,7 @@ bb129:
 bb130:
   %i3172 = phi <4 x half> [<4 x half> zeroinitializer, bb48], [%i3229, bb130]
   %i3173 = phi i32 [i32 0, bb48], [%i3230, bb130]
-  %i3174 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3173)
+  %i3174 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3173)
   %i3175 = fadd reassoc nnan ninf nsz arcp contract afn float %i3174, float 0x3F200000
   %i3176 = insertelement <2 x float> undef, %i3175, i64 0
   %i3177 = insertelement %i3176, float 0x0, i64 1
@@ -3712,7 +3712,7 @@ bb131:
 bb132:
   %i3313 = phi <4 x half> [<4 x half> zeroinitializer, bb45], [%i3370, bb132]
   %i3314 = phi i32 [i32 0, bb45], [%i3371, bb132]
-  %i3315 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3314)
+  %i3315 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3314)
   %i3316 = fadd reassoc nnan ninf nsz arcp contract afn float %i3315, float 0x3F400000
   %i3317 = insertelement <2 x float> undef, %i3316, i64 0
   %i3318 = insertelement %i3317, float 0x0, i64 1
@@ -3855,7 +3855,7 @@ bb133:
 bb134:
   %i3454 = phi <4 x half> [<4 x half> zeroinitializer, bb42], [%i3511, bb134]
   %i3455 = phi i32 [i32 0, bb42], [%i3512, bb134]
-  %i3456 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3455)
+  %i3456 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3455)
   %i3457 = fadd reassoc nnan ninf nsz arcp contract afn float %i3456, float 0x3F600000
   %i3458 = insertelement <2 x float> undef, %i3457, i64 0
   %i3459 = insertelement %i3458, float 0x0, i64 1
@@ -3998,7 +3998,7 @@ bb135:
 bb136:
   %i3595 = phi <4 x half> [<4 x half> zeroinitializer, bb39], [%i3652, bb136]
   %i3596 = phi i32 [i32 0, bb39], [%i3653, bb136]
-  %i3597 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3596)
+  %i3597 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3596)
   %i3598 = fadd reassoc nnan ninf nsz arcp contract afn float %i3597, float 0x3F800000
   %i3599 = insertelement <2 x float> undef, %i3598, i64 0
   %i3600 = insertelement %i3599, float 0x0, i64 1
@@ -4141,7 +4141,7 @@ bb137:
 bb138:
   %i3736 = phi <4 x half> [<4 x half> zeroinitializer, bb36], [%i3793, bb138]
   %i3737 = phi i32 [i32 0, bb36], [%i3794, bb138]
-  %i3738 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3737)
+  %i3738 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3737)
   %i3739 = fadd reassoc nnan ninf nsz arcp contract afn float %i3738, float 0x3F000000
   %i3740 = insertelement <2 x float> undef, %i3739, i64 0
   %i3741 = insertelement %i3740, float 0x0, i64 1
@@ -4284,7 +4284,7 @@ bb139:
 bb140:
   %i3877 = phi <4 x half> [<4 x half> zeroinitializer, bb33], [%i3934, bb140]
   %i3878 = phi i32 [i32 0, bb33], [%i3935, bb140]
-  %i3879 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i3878)
+  %i3879 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3878)
   %i3880 = fadd reassoc nnan ninf nsz arcp contract afn float %i3879, float 0x3F200000
   %i3881 = insertelement <2 x float> undef, %i3880, i64 0
   %i3882 = insertelement %i3881, float 0x0, i64 1
@@ -4427,7 +4427,7 @@ bb141:
 bb142:
   %i4018 = phi <4 x half> [<4 x half> zeroinitializer, bb30], [%i4075, bb142]
   %i4019 = phi i32 [i32 0, bb30], [%i4076, bb142]
-  %i4020 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4019)
+  %i4020 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4019)
   %i4021 = fadd reassoc nnan ninf nsz arcp contract afn float %i4020, float 0x3F400000
   %i4022 = insertelement <2 x float> undef, %i4021, i64 0
   %i4023 = insertelement %i4022, float 0x0, i64 1
@@ -4570,7 +4570,7 @@ bb143:
 bb144:
   %i4159 = phi <4 x half> [<4 x half> zeroinitializer, bb27], [%i4216, bb144]
   %i4160 = phi i32 [i32 0, bb27], [%i4217, bb144]
-  %i4161 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4160)
+  %i4161 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4160)
   %i4162 = fadd reassoc nnan ninf nsz arcp contract afn float %i4161, float 0x3F600000
   %i4163 = insertelement <2 x float> undef, %i4162, i64 0
   %i4164 = insertelement %i4163, float 0x0, i64 1
@@ -4713,7 +4713,7 @@ bb145:
 bb146:
   %i4300 = phi <4 x half> [<4 x half> zeroinitializer, bb24], [%i4357, bb146]
   %i4301 = phi i32 [i32 0, bb24], [%i4358, bb146]
-  %i4302 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4301)
+  %i4302 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4301)
   %i4303 = fadd reassoc nnan ninf nsz arcp contract afn float %i4302, float 0x3F800000
   %i4304 = insertelement <2 x float> undef, %i4303, i64 0
   %i4305 = insertelement %i4304, float 0x0, i64 1
@@ -4856,7 +4856,7 @@ bb147:
 bb148:
   %i4441 = phi <4 x half> [<4 x half> zeroinitializer, bb21], [%i4498, bb148]
   %i4442 = phi i32 [i32 0, bb21], [%i4499, bb148]
-  %i4443 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4442)
+  %i4443 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4442)
   %i4444 = fadd reassoc nnan ninf nsz arcp contract afn float %i4443, float 0x3F000000
   %i4445 = insertelement <2 x float> undef, %i4444, i64 0
   %i4446 = insertelement %i4445, float 0x0, i64 1
@@ -4999,7 +4999,7 @@ bb149:
 bb150:
   %i4582 = phi <4 x half> [<4 x half> zeroinitializer, bb18], [%i4639, bb150]
   %i4583 = phi i32 [i32 0, bb18], [%i4640, bb150]
-  %i4584 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4583)
+  %i4584 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4583)
   %i4585 = fadd reassoc nnan ninf nsz arcp contract afn float %i4584, float 0x3F200000
   %i4586 = insertelement <2 x float> undef, %i4585, i64 0
   %i4587 = insertelement %i4586, float 0x0, i64 1
@@ -5142,7 +5142,7 @@ bb151:
 bb152:
   %i4723 = phi <4 x half> [<4 x half> zeroinitializer, bb15], [%i4780, bb152]
   %i4724 = phi i32 [i32 0, bb15], [%i4781, bb152]
-  %i4725 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4724)
+  %i4725 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4724)
   %i4726 = fadd reassoc nnan ninf nsz arcp contract afn float %i4725, float 0x3F400000
   %i4727 = insertelement <2 x float> undef, %i4726, i64 0
   %i4728 = insertelement %i4727, float 0x0, i64 1
@@ -5285,7 +5285,7 @@ bb153:
 bb154:
   %i4864 = phi <4 x half> [<4 x half> zeroinitializer, bb12], [%i4921, bb154]
   %i4865 = phi i32 [i32 0, bb12], [%i4922, bb154]
-  %i4866 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4865)
+  %i4866 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4865)
   %i4867 = fadd reassoc nnan ninf nsz arcp contract afn float %i4866, float 0x3F600000
   %i4868 = insertelement <2 x float> undef, %i4867, i64 0
   %i4869 = insertelement %i4868, float 0x0, i64 1
@@ -5428,7 +5428,7 @@ bb155:
 bb156:
   %i5005 = phi i32 [i32 0, bb9], [%i5063, bb156]
   %i5006 = phi <4 x half> [<4 x half> zeroinitializer, bb9], [%i5062, bb156]
-  %i5007 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i5005)
+  %i5007 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i5005)
   %i5008 = fadd reassoc nnan ninf nsz arcp contract afn float %i5007, float 0x3F800000
   %i5009 = insertelement <2 x float> undef, %i5008, i64 0
   %i5010 = insertelement %i5009, float 0x0, i64 1
@@ -5571,7 +5571,7 @@ bb157:
 bb158:
   %i5146 = phi i32 [i32 0, bb6], [%i5204, bb158]
   %i5147 = phi <4 x half> [<4 x half> zeroinitializer, bb6], [%i5203, bb158]
-  %i5148 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i5146)
+  %i5148 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i5146)
   %i5149 = fadd reassoc nnan ninf nsz arcp contract afn float %i5148, float 0x3F000000
   %i5150 = insertelement <2 x float> undef, %i5149, i64 0
   %i5151 = insertelement %i5150, float 0x0, i64 1
@@ -5714,7 +5714,7 @@ bb159:
 bb160:
   %i5287 = phi i32 [i32 0, bb3], [%i5345, bb160]
   %i5288 = phi <4 x half> [<4 x half> zeroinitializer, bb3], [%i5344, bb160]
-  %i5289 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i5287)
+  %i5289 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i5287)
   %i5290 = fadd reassoc nnan ninf nsz arcp contract afn float %i5289, float 0x3F200000
   %i5291 = insertelement <2 x float> undef, %i5290, i64 0
   %i5292 = insertelement %i5291, float 0x0, i64 1

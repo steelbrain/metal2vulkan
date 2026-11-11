@@ -25,9 +25,9 @@ bb0:
   %i12 = getelementptr inbounds <4 x i32>, %a0, %i11
   %i13 = bitcast %i12 to ptr addrspace(1)
   %i14 = load <4 x float>, %i13, align 16
-  %i15 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i4)
-  %i16 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i9)
-  %i17 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i14)
+  %i15 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i4)
+  %i16 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i9)
+  %i17 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i14)
   %i18 = shl i32 %a2, i32 2
   %i19 = zext %i18 to i64
   %i20 = getelementptr inbounds <4 x i32>, %a1, %i19
@@ -50,7 +50,7 @@ bb0:
   %i37 = getelementptr inbounds <4 x i32>, %i20, i64 2
   store %i36, %i37, align 16
   %i39 = fmul <4 x float> %i4, %i9
-  %i40 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i39)
+  %i40 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i39)
   %i41 = bitcast %i40 to <2 x i32>
   %i42 = tail call <4 x half> @f2 [llvm Float { op: FMulAdd, ty: NumTy { elem: F16, lanes: 4 } }](%i15, %i16, %i17)
   %i43 = bitcast %i42 to <2 x i32>

@@ -303,30 +303,76 @@ fn math_conversion_and_atomic_families_decode() {
 /// The rounding Apple's OpenCL compiler spells after a conversion's types, and `.sat` after it to
 /// an integer, on every `convert_*` it emits (`convert_float4_rte(uchar4)` is
 /// `air.convert.f.v4f32.u.v4i8.rte`, `convert_int_sat(float)` is
-/// `air.convert.s.i32.f.f32.rtz.sat`): the conversion its types name, as Metal's compilers for
-/// the x86 Macs answer it.
+/// `air.convert.s.i32.f.f32.rtz.sat`): the conversion its types name, with the suffix beside it.
 #[test]
-fn a_rounded_or_saturated_convert_is_the_conversion_its_types_name() {
-    for (suffixed, plain) in [
+fn a_rounded_or_saturated_convert_decodes_its_suffix_beside_its_types() {
+    use super::Rounding as R;
+    for (suffixed, plain, rounding, saturate) in [
         (
             "air.convert.f.v4f32.u.v4i8.rte",
             "air.convert.f.v4f32.u.v4i8",
+            R::Even,
+            false,
         ),
         (
             "air.convert.f.v4f32.s.v4i32.rte",
             "air.convert.f.v4f32.s.v4i32",
+            R::Even,
+            false,
         ),
-        ("air.convert.f.f16.s.i32.rtz", "air.convert.f.f16.s.i32"),
-        ("air.convert.f.f16.f.f32.rtp", "air.convert.f.f16.f.f32"),
-        ("air.convert.s.i32.f.f32.rtn", "air.convert.s.i32.f.f32"),
-        ("air.convert.s.i32.f.f32.rtz.sat", "air.convert.s.i32.f.f32"),
+        (
+            "air.convert.f.f16.s.i32.rtz",
+            "air.convert.f.f16.s.i32",
+            R::Zero,
+            false,
+        ),
+        (
+            "air.convert.f.f16.f.f32.rtp",
+            "air.convert.f.f16.f.f32",
+            R::Up,
+            false,
+        ),
+        (
+            "air.convert.s.i32.f.f32.rtn",
+            "air.convert.s.i32.f.f32",
+            R::Down,
+            false,
+        ),
+        (
+            "air.convert.s.i32.f.f32.rtz.sat",
+            "air.convert.s.i32.f.f32",
+            R::Zero,
+            true,
+        ),
         (
             "air.convert.u.v2i16.s.v2i64.rte.sat",
             "air.convert.u.v2i16.s.v2i64",
+            R::Even,
+            true,
         ),
-        ("air.convert.u.i8.u.i32.rtz", "air.convert.u.i8.u.i32"),
+        (
+            "air.convert.u.i8.u.i32.rtz",
+            "air.convert.u.i8.u.i32",
+            R::Zero,
+            false,
+        ),
     ] {
-        assert_eq!(air(suffixed), air(plain), "{suffixed}");
+        let (AirIntrinsic::Convert(c), AirIntrinsic::Convert(p)) = (air(suffixed), air(plain))
+        else {
+            panic!("{suffixed} or {plain} is no conversion");
+        };
+        assert_eq!(
+            (c.rounding, c.saturate),
+            (Some(rounding), saturate),
+            "{suffixed}"
+        );
+        assert_eq!((p.rounding, p.saturate), (None, false), "{plain}");
+        let types = Convert {
+            rounding: None,
+            saturate: false,
+            ..c
+        };
+        assert_eq!(types, p, "{suffixed}");
     }
 }
 

@@ -24,10 +24,10 @@ define %t4 @f0 "signed_color_v" memory(NoModRef, NoModRef, NoModRef) "approx-fun
 bb0:
   %i0 = shl i32 %a0, i32 1
   %i1 = and i32 %i0, i32 2
-  %i2 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1)
+  %i2 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1)
   %i3 = insertelement <2 x float> undef, %i2, i64 0
   %i4 = and i32 %a0, i32 2
-  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4)
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4)
   %i6 = insertelement %i3, %i5, i64 1
   %i7 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i6, <2 x float> c25
   %i8 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i7, <2 x float> c26
@@ -41,7 +41,7 @@ declare %t5 @f1 "air.convert.f.f32.u.i32" memory(NoModRef, NoModRef, NoModRef)
 define %t7 @f2 "signed_color_f" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i32 @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = add nsw i32 %i1, i32 16777217
   %i3 = insertelement <4 x i32> undef, %i2, i64 0
   %i4 = sub nsw i32 i32 4278190079, %i1
@@ -58,7 +58,7 @@ declare %t8 @f3 "air.convert.s.i32.f.f32" memory(NoModRef, NoModRef, NoModRef)
 define %t12 @f4 "signed_targets_f" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( align 16 dereferenceable(16) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i32 @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = shufflevector <4 x float> %a0, <4 x float> c33, <0, 1, 6, 7>
   %i3 = sub nsw i32 i32 0, %i1
   %i4 = add nsw i32 %i1, i32 4293967296
@@ -76,7 +76,7 @@ bb0:
 define %t15 @f5 "narrow_signed_color_f" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i16 @f6 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i16 @f6 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = insertelement <4 x i16> c51, %i1, i64 3
   ret %i2
 }

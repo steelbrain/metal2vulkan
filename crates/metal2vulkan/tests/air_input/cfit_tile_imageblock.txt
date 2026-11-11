@@ -104,10 +104,10 @@ bb0:
   %i3 = getelementptr inbounds i8, %i0, i64 4
   %i4 = bitcast %i3 to ptr addrspace(4)
   %i5 = load i32, %i4, align 4
-  %i6 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a4)
-  %i7 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a5)
+  %i6 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a4)
+  %i7 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a5)
   %i8 = mul <2 x i32> %i7, %i6
-  %i9 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a3)
+  %i9 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a3)
   %i10 = add <2 x i32> %i8, %i9
   %i11 = extractelement %i10, i64 0
   %i12 = load <2 x i32>, %a2, align 8
@@ -148,10 +148,10 @@ bb0:
   %i6 = getelementptr inbounds i8, %i0, i64 4
   %i7 = bitcast %i6 to ptr addrspace(4)
   %i8 = load i32, %i7, align 4
-  %i9 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a4)
-  %i10 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a5)
+  %i9 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a4)
+  %i10 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a5)
   %i11 = mul <2 x i32> %i10, %i9
-  %i12 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a3)
+  %i12 = tail call <2 x i32> @f6 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: I16, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a3)
   %i13 = add <2 x i32> %i11, %i12
   %i14 = extractelement %i13, i64 0
   %i15 = load <2 x i32>, %a2, align 8

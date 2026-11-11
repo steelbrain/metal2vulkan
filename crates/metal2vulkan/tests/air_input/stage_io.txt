@@ -43,7 +43,7 @@ bb0:
   %i2 = load <4 x float>, %a4, align 16
   %i3 = fmul reassoc nnan ninf nsz arcp contract afn <4 x float> %i2, %i1
   %i4 = fmul reassoc nnan ninf nsz arcp contract afn <2 x half> %a1, <2 x half> c37
-  %i5 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%a3)
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a3)
   %i6 = fmul reassoc nnan ninf nsz arcp contract afn <4 x float> %i5, <4 x float> c38
   %i7 = mul i32 %a5, i32 7
   %i8 = extractelement %a2, i64 0
@@ -67,9 +67,9 @@ declare %t14 @f1 "air.convert.f.v4f32.u.v4i8" memory(NoModRef, NoModRef, NoModRe
 define %t15 @f2 "stage_io_vertex_position" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = and i32 %a0, i32 1
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = lshr i32 %a0, i32 1
-  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2)
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = insertelement <4 x float> c44, %i1, i64 0
   %i5 = insertelement %i4, %i3, i64 1
   ret %i5
@@ -79,7 +79,7 @@ declare %t16 @f3 "air.convert.f.f32.u.i32" memory(NoModRef, NoModRef, NoModRef)
 
 define %t19 @f4 "stage_io_vertex_clip" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a0)
   %i1 = insertelement <4 x float> c45, %i0, i64 0
   %i2 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, float 0xBF800000
   %i3 = fsub reassoc nnan ninf nsz arcp contract afn float float 0x40000000, %i0
@@ -98,7 +98,7 @@ bb0:
 
 define %t23 @f6 "stage_io_vertex_invariant" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a0)
   %i1 = insertelement <4 x float> c45, %i0, i64 0
   %i2 = insertvalue %t22 undef %i1, 0
   ret %i2
@@ -106,14 +106,14 @@ bb0:
 
 define %t27 @f7 "stage_io_fragment" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f8 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 2 }, src_kind: Float, src_fp8: None })](%a1)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f8 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i1 = shufflevector <4 x float> %i0, <2 x float> poison, <0, 1, poison, poison>
   %i2 = extractelement %a2, i64 2
   %i3 = insertelement %i1, %i2, i64 2
   %i4 = select reassoc nnan ninf nsz arcp contract afn float %a4, float 0x3F800000, float 0x3F000000
   %i5 = insertelement %i3, %i4, i64 3
   %i6 = extractelement %a0, i64 0
-  %i7 = tail call i32 @f9 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i6)
+  %i7 = tail call i32 @f9 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i6)
   %i8 = insertelement <4 x i32> c59, %a3, i64 0
   %i9 = insertelement %i8, %a5, i64 1
   %i10 = insertelement %i9, %i7, i64 2
@@ -134,9 +134,9 @@ declare %t30 @f9 "air.convert.u.i32.f.f32" memory(NoModRef, NoModRef, NoModRef)
 
 define %t32 @f10 "stage_io_fragment_point" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x half> @f11 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 2 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%a0)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x half> @f11 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 2 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%a0)
   %i1 = shufflevector <4 x half> %i0, <2 x half> poison, <0, 1, poison, poison>
-  %i2 = tail call reassoc nnan ninf nsz arcp contract afn half @f12 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i2 = tail call reassoc nnan ninf nsz arcp contract afn half @f12 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i3 = insertelement %i1, half 0x3C00, i64 3
   %i4 = insertelement %i3, %i2, i64 2
   ret %i4
@@ -148,7 +148,7 @@ declare %t34 @f12 "air.convert.f.f16.u.i32" memory(NoModRef, NoModRef, NoModRef)
 
 define %t15 @f13 "stage_io_fragment_primitive" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a0)
   %i1 = insertelement <4 x float> c45, %i0, i64 0
   ret %i1
 }

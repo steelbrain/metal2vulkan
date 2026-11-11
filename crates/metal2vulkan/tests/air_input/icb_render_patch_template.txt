@@ -15,12 +15,12 @@ bb0:
   %i1 = fmul float %i0, float 0x40800000
   %i2 = tail call float @f3 [air Math(Math { f: Rint, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i1)
   %i3 = tail call float @f2 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i2, float 0x0, float 0x40800000)
-  %i4 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3)
+  %i4 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i3)
   %i5 = extractelement %a2, i64 1
   %i6 = fmul float %i5, float 0x40800000
   %i7 = tail call float @f3 [air Math(Math { f: Rint, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i6)
   %i8 = tail call float @f2 [air Math(Math { f: Clamp, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i7, float 0x0, float 0x40800000)
-  %i9 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i8)
+  %i9 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i8)
   %i10 = tail call i32 @f4 [air Math(Math { f: IMin(Unsigned), precision: Precise, ty: NumTy { elem: I32, lanes: 1 } })](%a1, i32 7)
   %i11 = shl i32 %i10, i32 3
   %i12 = tail call i32 @f4 [air Math(Math { f: IMin(Unsigned), precision: Precise, ty: NumTy { elem: I32, lanes: 1 } })](%a0, i32 7)

@@ -149,7 +149,7 @@ bb5:
   %i123 = tail call float @f31 [air Math(Math { f: Mix, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i4, %i5, %i121)
   %i124 = insertelement %i122, %i123, i64 2
   %i125 = fcmp oge %i5, %i4
-  %i126 = tail call float @f32 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i125)
+  %i126 = tail call float @f32 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i125)
   %i127 = insertelement %i124, %i126, i64 3
   %i128 = add i32 %i14, i32 7
   %i129 = zext %i128 to i64

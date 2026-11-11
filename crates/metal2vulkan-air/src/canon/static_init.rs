@@ -18,7 +18,8 @@
 //! element and member access,
 //! shuffles, `air.convert` of an integer or `bool`, a scalar or each lane of a vector, to another
 //! integer (as C++ converts it) or to `bool` (`x != 0`), and of a scalar one to a float (rounded
-//! to nearest even, as `sitofp` and `uitofp` are), scalar `fadd`, `fsub`, `fmul`,
+//! to nearest even, as `sitofp` and `uitofp` are), unless it names `.sat` or a rounding to a float
+//! other than `rte` (a compute pipeline of OpenCL mode honors those), scalar `fadd`, `fsub`, `fmul`,
 //! `fdiv`, and `fneg` where every IEEE 754 evaluation agrees (finite normal operands, and a result
 //! that is an exact zero or normal: [`Folder::static_float_binop`]), GEPs with constant indices,
 //! non-volatile loads and stores of globals, `llvm.{s,u}{max,min}` and `llvm.ctpop`, and the two
@@ -53,7 +54,9 @@ use std::collections::{BTreeMap, HashMap};
 use crate::budget::Meter;
 use crate::error::{CanonError, DiagName, InputError, InputErrorKind, Location};
 use crate::error::{Error, Feature, Unsupported};
-use crate::intrinsics::{AirIntrinsic, FunctionConstant, LlvmIntrinsic, NumKind};
+use crate::intrinsics::{
+    AirIntrinsic, Convert, FunctionConstant, LlvmIntrinsic, NumKind, Rounding,
+};
 use crate::ir::layout::Endian;
 use crate::ir::{AddrSpace, Arena, BlockId, Body, Callee, CastOp, Const, ConstExpr, ConstId};
 use crate::ir::{Constant, FuncId, Function, Global, GlobalId, Idx, InstId, InstKind};
@@ -107,6 +110,17 @@ pub(super) struct Evaluated {
     /// evaluate. Their initializers are left as they were. Always empty under
     /// [`Unevaluable::Refuse`].
     pub opaque: Vec<GlobalId>,
+}
+
+/// Whether conversion `c` of an integer names a suffix that a compute pipeline of OpenCL mode
+/// honors and no other pipeline does: `.sat`, or a rounding to a float other than to nearest
+/// even. Its answer depends on the pipeline, so it is not evaluated here.
+fn honored_in_opencl_mode(c: &Convert) -> bool {
+    let directed = matches!(
+        c.rounding,
+        Some(Rounding::Zero | Rounding::Up | Rounding::Down)
+    );
+    c.saturate || (c.dst_kind == NumKind::Float && directed)
 }
 
 fn not_evaluable(at: Location) -> Error {
@@ -541,7 +555,8 @@ impl<'a> Eval<'a> {
                     ..
                 } if c.src_kind != NumKind::Float
                     && c.src_fp8.is_none()
-                    && (c.dst_kind != NumKind::Float || !c.src.is_vector()) =>
+                    && (c.dst_kind != NumKind::Float || !c.src.is_vector())
+                    && !honored_in_opencl_mode(c) =>
                 {
                     let signed = c.src_kind == NumKind::Signed;
                     let x = match call.args.first() {

@@ -49,7 +49,7 @@ declare %t10 @f1 "air.normalize_function_constant_predicate.i8" memory(NoModRef,
 
 define %t9 @f2 "rfs_absent_read" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Mod nocapture "air-buffer-no-alias"="" ) %a2( align 4 dereferenceable(4) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a3)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a3)
   %i1 = insertelement <4 x float> c40, %i0, i64 0
   %i2 = load i32, %a2, align 4
   %i3 = icmp eq %i2, i32 0

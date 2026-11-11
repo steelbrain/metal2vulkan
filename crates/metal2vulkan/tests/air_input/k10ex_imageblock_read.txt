@@ -11,7 +11,7 @@ define %t5 @f0 "k10ex_imageblock_read" memory(NoModRef, NoModRef, NoModRef) "fra
 bb0:
   %i0 = extractvalue <4 x half> %a0, 0
   %i1 = extractvalue i16 %a0, 1
-  %i2 = tail call half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1)
+  %i2 = tail call half @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1)
   %i3 = insertelement <4 x half> poison, %i2, i64 0
   %i4 = shufflevector <4 x half> %i3, <4 x half> poison, <0, 0, 0, 0>
   %i5 = fadd <4 x half> %i0, %i4

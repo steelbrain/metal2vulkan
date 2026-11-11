@@ -29,7 +29,7 @@ bb0:
   %i1 = zext %i0 to i64
   %i2 = getelementptr inbounds <4 x float>, %a1, %i1
   %i3 = load <4 x float>, %i2, align 16
-  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a0)
   %i5 = insertvalue %t4 undef %i3, 0
   %i6 = insertvalue %i5 %i4, 1
   %i7 = insertvalue %i6 %a0, 2
@@ -44,7 +44,7 @@ bb0:
   %i1 = zext %i0 to i64
   %i2 = getelementptr inbounds <4 x float>, %a1, %i1
   %i3 = load <4 x float>, %i2, align 16
-  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a0)
   %i5 = insertvalue %t8 undef %i3, 0
   %i6 = insertvalue %i5 %i4, 1
   ret %i6

@@ -60,7 +60,7 @@ bb0:
 define %t11 @f2 "psb_read" memory(Ref, Ref, Ref) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture ) {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
   %i3 = tail call %t19 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a1, %i2, %i1, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
   %i4 = extractvalue <4 x float> %i3, 0
@@ -82,7 +82,7 @@ bb0:
 define %t15 @f5 "psb_masked" memory(Ref, Ref, Ref) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture ) {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
   %i3 = tail call %t19 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a1, %i2, %i1, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
   %i4 = extractvalue <4 x float> %i3, 0
@@ -103,7 +103,7 @@ bb0:
 define %t15 @f6 "psb_under" memory(Ref, Ref, Ref) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture ) {
 bb0:
   %i0 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = tail call ptr addrspace(2) @f8 [air Sampler(GetReadSampler)]()
   %i3 = tail call %t19 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a1, %i2, %i1, <2 x i32> zeroinitializer, i32 0, i32 1) arg0( Ref nocapture )
   %i4 = extractvalue <4 x float> %i3, 0

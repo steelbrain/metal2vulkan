@@ -23,10 +23,10 @@ define %t5 @f0 "fbl_safe_vertex" memory(NoModRef, NoModRef, NoModRef) "frame-poi
 bb0:
   %i0 = shl i32 %a0, i32 1
   %i1 = and i32 %i0, i32 2
-  %i2 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i1)
+  %i2 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i1)
   %i3 = insertelement <2 x float> undef, %i2, i64 0
   %i4 = and i32 %a0, i32 2
-  %i5 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4)
+  %i5 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4)
   %i6 = insertelement %i3, %i5, i64 1
   %i7 = tail call <2 x float> @f2 [llvm Float { op: FMulAdd, ty: NumTy { elem: F32, lanes: 2 } }](%i6, <2 x float> c24, <2 x float> c25)
   %i8 = shufflevector <4 x float> %i7, <2 x float> poison, <0, 1, poison, poison>
@@ -42,10 +42,10 @@ declare %t8 @f2 "llvm.fmuladd.v2f32" memory(NoModRef, NoModRef, NoModRef)
 define %t13 @f3 "fbl_safe_loaded" memory(Ref, NoModRef, NoModRef) "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-trapping-math"="true" "stack-protector-buffer-size"="8" %a2( Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 1
-  %i1 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = shl i32 %i1, i32 6
   %i3 = extractelement %a0, i64 0
-  %i4 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3)
+  %i4 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i3)
   %i5 = add i32 %i2, %i4
   %i6 = extractelement %a1, i64 3
   %i7 = fcmp ogt %i6, half 0x4000
@@ -64,10 +64,10 @@ declare %t14 @f4 "air.convert.u.i32.f.f32" memory(NoModRef, NoModRef, NoModRef)
 define %t16 @f5 "fbl_safe_loaded_float" memory(Ref, NoModRef, NoModRef) "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-trapping-math"="true" "stack-protector-buffer-size"="8" %a2( Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 1
-  %i1 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = shl i32 %i1, i32 6
   %i3 = extractelement %a0, i64 0
-  %i4 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3)
+  %i4 = tail call i32 @f4 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i3)
   %i5 = add i32 %i2, %i4
   %i6 = extractelement %a1, i64 3
   %i7 = fcmp ogt %i6, float 0x40000000

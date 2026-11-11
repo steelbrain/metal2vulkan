@@ -19,7 +19,7 @@ c33 = ptr addrspace(3) inttoptr (2064)
 
 define %t13 @f0 "threadgroup_integer_address" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i1 = insertelement <2 x float> poison, %i0, i64 0
   %i2 = shufflevector <2 x float> %i1, <2 x float> poison, <0, 0>
   %i3 = zext %a1 to i64
@@ -29,7 +29,7 @@ bb0:
   %i7 = shufflevector <4 x float> %i6, <4 x float> poison, <0, 0, 0, 0>
   %i8 = getelementptr inbounds %t6, ptr addrspace(3) @g1, i64 0, %i3
   store %i7, %i8, align 16
-  %i10 = tail call reassoc nnan ninf nsz arcp contract afn half @f2 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i10 = tail call reassoc nnan ninf nsz arcp contract afn half @f2 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i11 = insertelement <4 x half> poison, %i10, i64 0
   %i12 = shufflevector <4 x half> %i11, <4 x half> poison, <0, 0, 0, 0>
   %i13 = getelementptr inbounds %t3, ptr addrspace(3) @g0, i64 0, %i3

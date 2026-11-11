@@ -10,7 +10,7 @@ c6 = %t12 [27, 0]
 define %t6 @f0 "smw_unread" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-trapping-math"="true" "stack-protector-buffer-size"="8" %a2( align 8 dereferenceable(8) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i0)
+  %i1 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = and i32 %i1, i32 3
   %i3 = icmp eq %i2, i32 0
   br %i3, bb1, bb2

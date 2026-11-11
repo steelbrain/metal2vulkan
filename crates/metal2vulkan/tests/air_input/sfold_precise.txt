@@ -37,7 +37,7 @@ bb0:
   %i0 = zext %a2 to i64
   %i1 = getelementptr inbounds <4 x float>, %a0, %i0
   %i2 = load <4 x float>, %i1, align 16
-  %i3 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i2)
+  %i3 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = load float, ptr addrspace(2) @g0, align 4
   %i5 = insertelement <4 x float> poison, %i4, i64 0
   %i6 = shufflevector <4 x float> %i5, <4 x float> poison, <0, 0, 0, 0>

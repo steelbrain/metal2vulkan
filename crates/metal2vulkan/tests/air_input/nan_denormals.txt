@@ -164,7 +164,7 @@ bb5:
   %i141 = tail call float @f29 [air Math(Math { f: Mix, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i4, %i6, %i8)
   %i142 = insertelement %i140, %i141, i64 2
   %i143 = fcmp oge %i6, %i4
-  %i144 = tail call float @f30 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i143)
+  %i144 = tail call float @f30 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i143)
   %i145 = insertelement %i142, %i144, i64 3
   %i146 = getelementptr inbounds <4 x i32>, %i11, i64 9
   %i147 = bitcast %i146 to ptr addrspace(1)

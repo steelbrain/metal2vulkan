@@ -20,7 +20,7 @@ bb0:
   %i0 = zext %a6 to i64
   %i1 = getelementptr inbounds <2 x float>, %a4, %i0
   %i2 = load <2 x float>, %i1, align 8
-  %i3 = tail call <2 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i2)
+  %i3 = tail call <2 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = mul i32 %a6, i32 12
   %i5 = zext %i4 to i64
   %i6 = getelementptr inbounds <4 x float>, %a5, %i5

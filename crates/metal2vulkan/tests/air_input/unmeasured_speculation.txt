@@ -16,11 +16,11 @@ bb0:
   br %i1, bb2, bb1
 bb1:
   %i3 = mul i32 %a1, i32 10
-  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Math(Math { f: Sin, precision: Fast, ty: NumTy { elem: F32, lanes: 1 } })](%i4)
   %i6 = fmul reassoc nnan ninf nsz arcp contract afn float %i5, float 0x40800000
   %i7 = fadd reassoc nnan ninf nsz arcp contract afn float %i6, float 0x40800000
-  %i8 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i7)
+  %i8 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i7)
   %i9 = freeze i32 %i8
   %i10 = add i32 %i9, %i3
   %i11 = tail call i32 @f5 [air Group(Group { scope: Quad, op: BroadcastFirst, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10) convergent
@@ -44,11 +44,11 @@ bb0:
   br %i1, bb2, bb1
 bb1:
   %i3 = mul i32 %a1, i32 10
-  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Math(Math { f: Sin, precision: Fast, ty: NumTy { elem: F32, lanes: 1 } })](%i4)
   %i6 = fmul reassoc nnan ninf nsz arcp contract afn float %i5, float 0x40800000
   %i7 = fadd reassoc nnan ninf nsz arcp contract afn float %i6, float 0x40800000
-  %i8 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i7)
+  %i8 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i7)
   %i9 = add i32 %i8, %i3
   br bb2
 bb2:

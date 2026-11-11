@@ -28,11 +28,11 @@ bb0:
   %i10 = getelementptr inbounds <2 x i32>, %a4, %i5
   store %i9, %i10, align 8
   %i12 = and i32 %a0, i32 1
-  %i13 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i12)
+  %i13 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i12)
   %i14 = fadd reassoc nnan ninf nsz arcp contract afn float %i13, float 0xBF000000
   %i15 = lshr i32 %a0, i32 1
   %i16 = and i32 %i15, i32 1
-  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i16)
+  %i17 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i16)
   %i18 = fadd reassoc nnan ninf nsz arcp contract afn float %i17, float 0xBF000000
   %i19 = insertelement <4 x float> c27, %i14, i64 0
   %i20 = insertelement %i19, %i18, i64 1

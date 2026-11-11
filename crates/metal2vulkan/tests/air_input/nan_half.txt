@@ -204,7 +204,7 @@ bb0:
   %i187 = insertelement %i173, %i186, i64 2
   %i188 = tail call half @f32 [air Math(Math { f: Mix, precision: Precise, ty: NumTy { elem: F16, lanes: 1 } })](%i5, %i8, %i11)
   %i189 = fcmp oge %i8, %i5
-  %i190 = tail call half @f33 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i189)
+  %i190 = tail call half @f33 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i189)
   %i191 = bitcast %i188 to i16
   %i192 = zext %i191 to i32
   %i193 = bitcast %i190 to i16

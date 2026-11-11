@@ -130,7 +130,7 @@ bb17:
   br bb26
 bb18:
   %i72 = and i32 %i47, i32 65535
-  %i73 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i72)
+  %i73 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i72)
   %i74 = fmul reassoc nnan ninf nsz arcp contract afn float %i73, float 0x3E800000
   %i75 = fadd reassoc nnan ninf nsz arcp contract afn float %i74, float 0x3F800000
   %i76 = bitcast %i75 to i32
@@ -211,11 +211,11 @@ bb0:
   %i8 = load i8, ptr addrspace(2) @g8, align 1
   store %i2, ptr addrspace(2) @g9, align 16
   store %i4, ptr addrspace(2) c73, align 1
-  %i11 = tail call <4 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i6)
+  %i11 = tail call <4 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i6)
   store %i11, ptr addrspace(2) c74, align 16
   store %i3, ptr addrspace(2) c75, align 16
   store %i5, ptr addrspace(2) c76, align 1
-  %i15 = tail call <4 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i7)
+  %i15 = tail call <4 x i32> @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i7)
   store %i15, ptr addrspace(2) c77, align 16
   %i17 = zext %i8 to i32
   store %i17, ptr addrspace(2) c78, align 16

@@ -77,11 +77,11 @@ bb0:
   %i6 = getelementptr inbounds <4 x float>, %a2, i64 1
   store %i5, %i6, align 16
   %i8 = tail call i32 @f17 [air Texture(Texture { op: Query(Width), image: ImageShape { dim: Cube, array: false, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0, i32 0) arg0( Ref nocapture )
-  %i9 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i8)
+  %i9 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i8)
   %i10 = tail call i32 @f18 [air Texture(Texture { op: Query(ArraySize), image: ImageShape { dim: Cube, array: true, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a1) arg0( Ref nocapture )
-  %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i10)
+  %i11 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i10)
   %i12 = tail call i32 @f19 [air Texture(Texture { op: Query(NumMipLevels), image: ImageShape { dim: Cube, array: false, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%a0) arg0( Ref nocapture )
-  %i13 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i12)
+  %i13 = tail call reassoc nnan ninf nsz arcp contract afn float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i12)
   %i14 = insertelement <4 x float> c57, %i9, i64 0
   %i15 = insertelement %i14, %i11, i64 1
   %i16 = insertelement %i15, %i13, i64 2
@@ -150,7 +150,7 @@ bb0:
   %i4 = tail call %t23 @f33 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: false, ms: true, depth: false }, texel: Some(Texel { ty: NumTy { elem: I32, lanes: 4 }, sign: Some(Signed) }), coord16: false, form: Current, status: true, access: Some(Read), states_access: true })](%a1, %i0, %a3, i32 2, i32 1) arg0( Ref nocapture )
   %i5 = extractvalue <4 x i32> %i4, 0
   %i6 = extractelement %i5, i64 1
-  %i7 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i6)
+  %i7 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%i6)
   %i8 = getelementptr inbounds float, %a2, i64 1
   store %i7, %i8, align 4
   ret void

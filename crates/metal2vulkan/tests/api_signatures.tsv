@@ -1200,6 +1200,7 @@ enum	metal2vulkan-air::intrinsics::Precision	#[derive(Clone, Copy, Debug, Partia
 enum	metal2vulkan-air::intrinsics::Query	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Query
 enum	metal2vulkan-air::intrinsics::RenderState	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum RenderState
 enum	metal2vulkan-air::intrinsics::ResultField	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum ResultField
+enum	metal2vulkan-air::intrinsics::Rounding	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Rounding
 enum	metal2vulkan-air::intrinsics::SamplerOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum SamplerOp
 enum	metal2vulkan-air::intrinsics::Sign	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Sign
 enum	metal2vulkan-air::intrinsics::SimdMatrix	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum SimdMatrix
@@ -1854,6 +1855,8 @@ field	metal2vulkan-air::intrinsics::Coherent.ty	pub ty: NumTy
 field	metal2vulkan-air::intrinsics::Coherent.volatile	pub volatile: bool
 field	metal2vulkan-air::intrinsics::Convert.dst	pub dst: NumTy
 field	metal2vulkan-air::intrinsics::Convert.dst_kind	pub dst_kind: NumKind
+field	metal2vulkan-air::intrinsics::Convert.rounding	pub rounding: Option<Rounding>
+field	metal2vulkan-air::intrinsics::Convert.saturate	pub saturate: bool
 field	metal2vulkan-air::intrinsics::Convert.src	pub src: NumTy
 field	metal2vulkan-air::intrinsics::Convert.src_fp8	pub src_fp8: Option<Fp8>
 field	metal2vulkan-air::intrinsics::Convert.src_kind	pub src_kind: NumKind
@@ -11380,6 +11383,10 @@ variant	metal2vulkan-air::intrinsics::ResultField::PrimitiveId	PrimitiveId
 variant	metal2vulkan-air::intrinsics::ResultField::Type	Type
 variant	metal2vulkan-air::intrinsics::ResultField::UserInstanceId	UserInstanceId
 variant	metal2vulkan-air::intrinsics::ResultField::WorldToObject	WorldToObject(u8)
+variant	metal2vulkan-air::intrinsics::Rounding::Down	Down
+variant	metal2vulkan-air::intrinsics::Rounding::Even	Even
+variant	metal2vulkan-air::intrinsics::Rounding::Up	Up
+variant	metal2vulkan-air::intrinsics::Rounding::Zero	Zero
 variant	metal2vulkan-air::intrinsics::SamplerOp::GetReadSampler	GetReadSampler
 variant	metal2vulkan-air::intrinsics::Sign::Signed	Signed
 variant	metal2vulkan-air::intrinsics::Sign::Unsigned	Unsigned

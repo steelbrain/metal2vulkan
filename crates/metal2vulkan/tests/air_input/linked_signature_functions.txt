@@ -66,7 +66,7 @@ bb0:
 
 define %t8 @f6 "int_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%a1)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i1 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %a0
   ret %i1
 }
@@ -87,9 +87,9 @@ bb0:
 define %t14 @f9 "uint2_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = extractelement %a0, i64 0
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = extractelement %a0, i64 1
-  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2)
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = fadd reassoc nnan ninf nsz arcp contract afn float %i3, %i1
   ret %i4
 }
@@ -110,7 +110,7 @@ bb0:
 
 define %t18 @f13 "long_param" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f14 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%a1)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f14 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i1 = fadd reassoc nnan ninf nsz arcp contract afn float %i0, %a0
   ret %i1
 }
@@ -199,8 +199,8 @@ bb0:
 
 define %t28 @f27 "uints_for_floats" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f10 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i2 = fadd reassoc nnan ninf nsz arcp contract afn float %i1, %i0
   ret %i2
 }
@@ -208,7 +208,7 @@ bb0:
 define %t31 @f28 "bytes_extra" memory(NoModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" {
 bb0:
   %i0 = extractvalue i8 %a0, 0
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f29 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f29 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = fadd reassoc nnan ninf nsz arcp contract afn float %i1, %a1
   ret %i2
 }

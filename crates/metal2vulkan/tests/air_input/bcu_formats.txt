@@ -68,14 +68,14 @@ bb0:
   store %i46, %i49, align 16
   %i51 = tail call %t19 @f3 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a8, ptr addrspace(2) @g0, %i2, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i52 = extractvalue <4 x half> %i51, 0
-  %i53 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i52)
+  %i53 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i52)
   %i54 = add i32 %i5, i32 8
   %i55 = zext %i54 to i64
   %i56 = getelementptr inbounds <4 x float>, %a11, %i55
   store %i53, %i56, align 16
   %i58 = tail call %t19 @f3 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a9, ptr addrspace(2) @g0, %i2, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i59 = extractvalue <4 x half> %i58, 0
-  %i60 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i59)
+  %i60 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i59)
   %i61 = add i32 %i5, i32 9
   %i62 = zext %i61 to i64
   %i63 = getelementptr inbounds <4 x float>, %a11, %i62

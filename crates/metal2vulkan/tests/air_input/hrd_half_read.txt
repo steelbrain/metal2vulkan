@@ -29,7 +29,7 @@ bb0:
   %i4 = tail call ptr addrspace(2) @f3 [air Sampler(GetReadSampler)]()
   %i5 = tail call %t18 @f4 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, %i4, %i3, <2 x i32> zeroinitializer, i32 0, i32 0) arg0( Ref nocapture )
   %i6 = extractvalue <4 x half> %i5, 0
-  %i7 = tail call <2 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%i3)
+  %i7 = tail call <2 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i3)
   %i8 = fadd <2 x float> %i7, <2 x float> c30
   %i9 = fmul <2 x float> %i8, <2 x float> c31
   %i10 = tail call %t18 @f5 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, ptr addrspace(2) @g0, %i9, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
@@ -48,7 +48,7 @@ bb0:
   %i23 = shufflevector <4 x i32> %i22, <4 x i32> c39, <0, 1, 6, 7>
   %i24 = getelementptr inbounds <4 x i32>, %i16, i64 1
   store %i23, %i24, align 16
-  %i26 = tail call <4 x float> @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i6)
+  %i26 = tail call <4 x float> @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i6)
   %i27 = getelementptr inbounds <4 x i32>, %i16, i64 2
   %i28 = bitcast %i27 to ptr addrspace(1)
   store %i26, %i28, align 16

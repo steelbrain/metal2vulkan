@@ -19,7 +19,7 @@ bb0:
   %i0 = extractelement %a0, i64 0
   %i1 = fadd float %i0, float 0x3F800000
   %i2 = insertelement <4 x float> undef, %i1, i64 0
-  %i3 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i3 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i4 = insertelement %i2, %i3, i64 1
   %i5 = extractelement %a0, i64 2
   %i6 = fadd float %i5, %i5
@@ -35,7 +35,7 @@ bb0:
   %i0 = extractelement %a0, i64 0
   %i1 = fadd float %i0, float 0x3F800000
   %i2 = insertelement <4 x float> undef, %i1, i64 0
-  %i3 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i3 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i4 = insertelement %i2, %i3, i64 1
   %i5 = shufflevector <4 x float> %i4, %a0, <0, 1, 6, 7>
   ret %i5

@@ -53,10 +53,10 @@ bb1:
 bb2:
   %i8 = extractvalue <4 x half> %i2, 0
   %i9 = extractelement %a0, i64 1
-  %i10 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i9)
+  %i10 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i9)
   %i11 = shl i32 %i10, i32 6
   %i12 = extractelement %a0, i64 0
-  %i13 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i12)
+  %i13 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i12)
   %i14 = add i32 %i11, %i13
   %i15 = zext %i14 to i64
   %i16 = getelementptr inbounds i32, %a4, %i15
@@ -80,10 +80,10 @@ bb1:
   br bb2
 bb2:
   %i5 = extractelement %a0, i64 1
-  %i6 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i5)
+  %i6 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i5)
   %i7 = shl i32 %i6, i32 6
   %i8 = extractelement %a0, i64 0
-  %i9 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i8)
+  %i9 = tail call i32 @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i8)
   %i10 = add i32 %i7, %i9
   %i11 = zext %i10 to i64
   %i12 = getelementptr inbounds i32, %a3, %i11

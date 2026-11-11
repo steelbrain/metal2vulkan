@@ -61,25 +61,25 @@ bb0:
   %i39 = bitcast %i38 to ptr addrspace(1)
   store %i37, %i39, align 16
   %i41 = fcmp olt %i4, %i9
-  %i42 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i41)
+  %i42 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i41)
   %i43 = fcmp ole %i4, %i9
-  %i44 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i43)
+  %i44 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i43)
   %i45 = shl <4 x i32> %i44, <4 x i32> c31
   %i46 = or <4 x i32> %i45, %i42
   %i47 = fcmp oeq %i4, %i9
-  %i48 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i47)
+  %i48 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i47)
   %i49 = shl <4 x i32> %i48, <4 x i32> c32
   %i50 = or <4 x i32> %i46, %i49
   %i51 = fcmp une %i4, %i9
-  %i52 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i51)
+  %i52 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i51)
   %i53 = shl <4 x i32> %i52, <4 x i32> c33
   %i54 = or <4 x i32> %i50, %i53
   %i55 = fcmp ogt %i4, %i9
-  %i56 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i55)
+  %i56 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i55)
   %i57 = shl <4 x i32> %i56, <4 x i32> c34
   %i58 = or <4 x i32> %i54, %i57
   %i59 = fcmp oge %i4, %i9
-  %i60 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i59)
+  %i60 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i59)
   %i61 = shl <4 x i32> %i60, <4 x i32> c35
   %i62 = or <4 x i32> %i58, %i61
   %i63 = getelementptr inbounds <4 x i32>, %i21, i64 5
@@ -108,22 +108,22 @@ bb0:
   %i86 = getelementptr inbounds <4 x i32>, %i21, i64 11
   %i87 = bitcast %i86 to ptr addrspace(1)
   store %i85, %i87, align 16
-  %i89 = tail call <4 x float> @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None })](%i18)
+  %i89 = tail call <4 x float> @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None, rounding: None, saturate: false })](%i18)
   %i90 = fneg <4 x float> %i14
   %i91 = tail call <4 x float> @f1 [llvm Float { op: FMulAdd, ty: NumTy { elem: F32, lanes: 4 } }](%i89, %i4, %i90)
   %i92 = getelementptr inbounds <4 x i32>, %i21, i64 12
   %i93 = bitcast %i92 to ptr addrspace(1)
   store %i91, %i93, align 16
   %i95 = fcmp olt %i29, %i14
-  %i96 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i95)
+  %i96 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i95)
   %i97 = fneg <4 x float> %i4
   %i98 = fcmp ogt %i9, %i97
-  %i99 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i98)
+  %i99 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i98)
   %i100 = shl <4 x i32> %i99, <4 x i32> c31
   %i101 = or <4 x i32> %i100, %i96
   %i102 = tail call <4 x float> @f10 [air Math(Math { f: Fabs, precision: Precise, ty: NumTy { elem: F32, lanes: 4 } })](%i4)
   %i103 = fcmp oeq %i102, %i9
-  %i104 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i103)
+  %i104 = tail call <4 x i32> @f2 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i103)
   %i105 = shl <4 x i32> %i104, <4 x i32> c32
   %i106 = or <4 x i32> %i101, %i105
   %i107 = getelementptr inbounds <4 x i32>, %i21, i64 13
@@ -133,7 +133,7 @@ bb0:
   %i111 = getelementptr inbounds <4 x i32>, %i21, i64 14
   %i112 = bitcast %i111 to ptr addrspace(1)
   store %i110, %i112, align 16
-  %i114 = tail call <4 x float> @f12 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i43)
+  %i114 = tail call <4 x float> @f12 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i43)
   %i115 = getelementptr inbounds <4 x i32>, %i21, i64 15
   %i116 = bitcast %i115 to ptr addrspace(1)
   store %i114, %i116, align 16

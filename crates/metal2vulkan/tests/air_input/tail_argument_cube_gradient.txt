@@ -19,7 +19,7 @@ bb0:
   %i0 = icmp ult %a2, i32 2
   %i1 = select reassoc nnan ninf nsz arcp contract afn float %i0, float 0x3E800000, float 0xBE800000
   %i2 = and i32 %a2, i32 1
-  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2)
+  %i3 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i2)
   %i4 = fmul reassoc nnan ninf nsz arcp contract afn float %i3, float 0x40800000
   %i5 = getelementptr inbounds %t19, %a0, i64 0, i32 1, i32 0
   %i6 = load ptr addrspace(2), %i5, align 8

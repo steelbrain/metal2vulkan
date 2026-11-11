@@ -37,11 +37,11 @@ c56 = <4 x float> [0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000]
 define %t10 @f0 "a22_vs" memory(Ref, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( align 16 dereferenceable(16) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = and i32 %a0, i32 1
-  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i0)
+  %i1 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i0)
   %i2 = insertelement <2 x float> undef, %i1, i64 0
   %i3 = lshr i32 %a0, i32 1
   %i4 = and i32 %i3, i32 1
-  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i4)
+  %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i4)
   %i6 = insertelement %i2, %i5, i64 1
   %i7 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i6, <2 x float> c38
   %i8 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i7, <2 x float> c39
@@ -73,7 +73,7 @@ bb0:
   %i11 = shufflevector <4 x float> %i10, <4 x float> poison, <0, 0, 0, 0>
   %i12 = fadd reassoc nnan ninf nsz arcp contract afn <4 x float> %i7, %i11
   %i13 = shufflevector <2 x float> %a0, <4 x float> poison, <0, 1>
-  %i14 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None })](%i13)
+  %i14 = tail call <2 x i32> @f3 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 2 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 2 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i13)
   %i15 = tail call %t20 @f9 [air Texture(Texture { op: Read, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Legacy, status: true, access: Some(Read), states_access: true })](%a6, %i14, i32 0, i32 1) arg0( Ref nocapture )
   %i16 = extractvalue <4 x float> %i15, 0
   %i17 = fadd reassoc nnan ninf nsz arcp contract afn <4 x float> %i12, %i16

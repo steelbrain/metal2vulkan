@@ -138,7 +138,7 @@ bb0:
   %i122 = tail call reassoc nnan ninf nsz arcp contract afn float @f28 [air Math(Math { f: Mix, precision: Precise, ty: NumTy { elem: F32, lanes: 1 } })](%i4, %i6, %i8)
   %i123 = insertelement %i121, %i122, i64 2
   %i124 = fcmp reassoc nnan ninf nsz arcp contract afn oge %i6, %i4
-  %i125 = tail call reassoc nnan ninf nsz arcp contract afn float @f29 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i124)
+  %i125 = tail call reassoc nnan ninf nsz arcp contract afn float @f29 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I1, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i124)
   %i126 = insertelement %i123, %i125, i64 3
   %i127 = getelementptr inbounds <4 x i32>, %i11, i64 9
   %i128 = bitcast %i127 to ptr addrspace(1)

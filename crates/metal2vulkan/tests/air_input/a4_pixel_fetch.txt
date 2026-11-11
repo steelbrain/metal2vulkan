@@ -14,7 +14,7 @@ c20 = <2 x float> [0x3F000000, 0x3F000000]
 
 define %t8 @f0 "a4_pixel_fetch" convergent memory(ModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture ) %a1( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a2)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a2)
   %i1 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i0, <2 x float> c20
   %i2 = tail call %t14 @f2 [air Texture(Texture { op: Sample { compare: false, lod: Bias, offset: true }, image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, ptr addrspace(2) @g0, %i1, i1 1, <2 x i32> zeroinitializer, i1 0, float 0x0, float 0x0, i32 0) convergent arg0( Ref nocapture ) arg1( Ref nocapture )
   %i3 = extractvalue <4 x float> %i2, 0

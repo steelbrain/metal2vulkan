@@ -25,8 +25,8 @@ bb0:
   %i5 = zext %i4 to i64
   %i6 = getelementptr inbounds <4 x float>, %a0, %i5
   %i7 = load <4 x float>, %i6, align 16
-  %i8 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i3)
-  %i9 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i7)
+  %i8 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i3)
+  %i9 = tail call <4 x half> @f1 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i7)
   %i10 = shufflevector <2 x float> %i3, <4 x float> poison, <0, 1>
   %i11 = shufflevector <2 x float> %i7, <4 x float> poison, <0, 1>
   %i12 = tail call float @f2 [air Math(Math { f: Dot, precision: Precise, ty: NumTy { elem: F32, lanes: 2 } })](%i10, %i11)

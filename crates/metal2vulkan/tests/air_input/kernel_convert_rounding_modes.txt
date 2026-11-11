@@ -46,111 +46,111 @@ bb0:
   %i11 = mul i32 %a2, i32 31
   %i12 = zext %i11 to i64
   %i13 = getelementptr inbounds i32, %a1, %i12
-  %i14 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i14 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i2) convergent "no-builtins"=""
   %i15 = bitcast %i13 to ptr addrspace(1)
   store %i14, %i15, align 4
-  %i17 = tail call float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i17 = tail call float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: false })](%i2) convergent "no-builtins"=""
   %i18 = getelementptr inbounds i32, %i13, i64 1
   %i19 = bitcast %i18 to ptr addrspace(1)
   store %i17, %i19, align 4
-  %i21 = tail call float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i21 = tail call float @f3 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Up), saturate: false })](%i2) convergent "no-builtins"=""
   %i22 = getelementptr inbounds i32, %i13, i64 2
   %i23 = bitcast %i22 to ptr addrspace(1)
   store %i21, %i23, align 4
-  %i25 = tail call float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i25 = tail call float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Down), saturate: false })](%i2) convergent "no-builtins"=""
   %i26 = getelementptr inbounds i32, %i13, i64 3
   %i27 = bitcast %i26 to ptr addrspace(1)
   store %i25, %i27, align 4
-  %i29 = tail call float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i29 = tail call float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Even), saturate: false })](%i2) convergent "no-builtins"=""
   %i30 = getelementptr inbounds i32, %i13, i64 4
   %i31 = bitcast %i30 to ptr addrspace(1)
   store %i29, %i31, align 4
-  %i33 = tail call float @f6 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i33 = tail call float @f6 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: false })](%i2) convergent "no-builtins"=""
   %i34 = getelementptr inbounds i32, %i13, i64 5
   %i35 = bitcast %i34 to ptr addrspace(1)
   store %i33, %i35, align 4
-  %i37 = tail call float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i37 = tail call float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Up), saturate: false })](%i2) convergent "no-builtins"=""
   %i38 = getelementptr inbounds i32, %i13, i64 6
   %i39 = bitcast %i38 to ptr addrspace(1)
   store %i37, %i39, align 4
-  %i41 = tail call float @f8 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i41 = tail call float @f8 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Down), saturate: false })](%i2) convergent "no-builtins"=""
   %i42 = getelementptr inbounds i32, %i13, i64 7
   %i43 = bitcast %i42 to ptr addrspace(1)
   store %i41, %i43, align 4
-  %i45 = tail call half @f9 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i45 = tail call half @f9 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i2) convergent "no-builtins"=""
   %i46 = bitcast %i45 to i16
   %i47 = zext %i46 to i32
   %i48 = getelementptr inbounds i32, %i13, i64 8
   store %i47, %i48, align 4
-  %i50 = tail call half @f10 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i50 = tail call half @f10 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: false })](%i2) convergent "no-builtins"=""
   %i51 = bitcast %i50 to i16
   %i52 = zext %i51 to i32
   %i53 = getelementptr inbounds i32, %i13, i64 9
   store %i52, %i53, align 4
-  %i55 = tail call half @f11 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i55 = tail call half @f11 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Up), saturate: false })](%i2) convergent "no-builtins"=""
   %i56 = bitcast %i55 to i16
   %i57 = zext %i56 to i32
   %i58 = getelementptr inbounds i32, %i13, i64 10
   store %i57, %i58, align 4
-  %i60 = tail call half @f12 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i60 = tail call half @f12 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Down), saturate: false })](%i2) convergent "no-builtins"=""
   %i61 = bitcast %i60 to i16
   %i62 = zext %i61 to i32
   %i63 = getelementptr inbounds i32, %i13, i64 11
   store %i62, %i63, align 4
   %i65 = trunc %i2 to i16
-  %i66 = tail call half @f13 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i65) convergent "no-builtins"=""
+  %i66 = tail call half @f13 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Even), saturate: false })](%i65) convergent "no-builtins"=""
   %i67 = bitcast %i66 to i16
   %i68 = zext %i67 to i32
   %i69 = getelementptr inbounds i32, %i13, i64 12
   store %i68, %i69, align 4
-  %i71 = tail call half @f14 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i65) convergent "no-builtins"=""
+  %i71 = tail call half @f14 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: false })](%i65) convergent "no-builtins"=""
   %i72 = bitcast %i71 to i16
   %i73 = zext %i72 to i32
   %i74 = getelementptr inbounds i32, %i13, i64 13
   store %i73, %i74, align 4
-  %i76 = tail call half @f15 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i65) convergent "no-builtins"=""
+  %i76 = tail call half @f15 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Up), saturate: false })](%i65) convergent "no-builtins"=""
   %i77 = bitcast %i76 to i16
   %i78 = zext %i77 to i32
   %i79 = getelementptr inbounds i32, %i13, i64 14
   store %i78, %i79, align 4
-  %i81 = tail call half @f16 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i65) convergent "no-builtins"=""
+  %i81 = tail call half @f16 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Down), saturate: false })](%i65) convergent "no-builtins"=""
   %i82 = bitcast %i81 to i16
   %i83 = zext %i82 to i32
   %i84 = getelementptr inbounds i32, %i13, i64 15
   store %i83, %i84, align 4
-  %i86 = tail call float @f17 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i10) convergent "no-builtins"=""
+  %i86 = tail call float @f17 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i10) convergent "no-builtins"=""
   %i87 = getelementptr inbounds i32, %i13, i64 16
   %i88 = bitcast %i87 to ptr addrspace(1)
   store %i86, %i88, align 4
-  %i90 = tail call float @f18 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i10) convergent "no-builtins"=""
+  %i90 = tail call float @f18 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: false })](%i10) convergent "no-builtins"=""
   %i91 = getelementptr inbounds i32, %i13, i64 17
   %i92 = bitcast %i91 to ptr addrspace(1)
   store %i90, %i92, align 4
-  %i94 = tail call float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i10) convergent "no-builtins"=""
+  %i94 = tail call float @f19 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Up), saturate: false })](%i10) convergent "no-builtins"=""
   %i95 = getelementptr inbounds i32, %i13, i64 18
   %i96 = bitcast %i95 to ptr addrspace(1)
   store %i94, %i96, align 4
-  %i98 = tail call float @f20 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i10) convergent "no-builtins"=""
+  %i98 = tail call float @f20 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Down), saturate: false })](%i10) convergent "no-builtins"=""
   %i99 = getelementptr inbounds i32, %i13, i64 19
   %i100 = bitcast %i99 to ptr addrspace(1)
   store %i98, %i100, align 4
-  %i102 = tail call float @f21 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i65) convergent "no-builtins"=""
+  %i102 = tail call float @f21 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: false })](%i65) convergent "no-builtins"=""
   %i103 = getelementptr inbounds i32, %i13, i64 20
   %i104 = bitcast %i103 to ptr addrspace(1)
   store %i102, %i104, align 4
   %i106 = trunc %i2 to i8
-  %i107 = tail call half @f22 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i106) convergent "no-builtins"=""
+  %i107 = tail call half @f22 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Up), saturate: false })](%i106) convergent "no-builtins"=""
   %i108 = bitcast %i107 to i16
   %i109 = zext %i108 to i32
   %i110 = getelementptr inbounds i32, %i13, i64 21
   store %i109, %i110, align 4
-  %i112 = tail call half @f23 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i106) convergent "no-builtins"=""
+  %i112 = tail call half @f23 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Down), saturate: false })](%i106) convergent "no-builtins"=""
   %i113 = bitcast %i112 to i16
   %i114 = zext %i113 to i32
   %i115 = getelementptr inbounds i32, %i13, i64 22
   store %i114, %i115, align 4
   %i117 = bitcast %i2 to <4 x i8>
-  %i118 = tail call <4 x float> @f24 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i117) convergent "no-builtins"=""
+  %i118 = tail call <4 x float> @f24 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Even), saturate: false })](%i117) convergent "no-builtins"=""
   %i119 = insertelement <4 x i32> undef, %i2, i64 0
   %i120 = add i32 %a2, i32 1
   %i121 = urem i32 %i120, %a3
@@ -170,7 +170,7 @@ bb0:
   %i135 = getelementptr inbounds i32, %a0, %i134
   %i136 = load i32, %i135, align 4
   %i137 = insertelement %i131, %i136, i64 3
-  %i138 = tail call <4 x float> @f25 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None })](%i137) convergent "no-builtins"=""
+  %i138 = tail call <4 x float> @f25 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i137) convergent "no-builtins"=""
   %i139 = bitcast %i118 to <4 x i32>
   %i140 = extractelement %i139, i64 0
   %i141 = getelementptr inbounds i32, %i13, i64 23
@@ -260,55 +260,55 @@ bb0:
   %i5 = mul i32 %a2, i32 24
   %i6 = zext %i5 to i64
   %i7 = getelementptr inbounds i32, %a1, %i6
-  %i8 = tail call i32 @f27 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i8 = tail call i32 @f27 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: false })](%i3) convergent "no-builtins"=""
   store %i8, %i7, align 4
-  %i10 = tail call i32 @f28 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i10 = tail call i32 @f28 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i3) convergent "no-builtins"=""
   %i11 = getelementptr inbounds i32, %i7, i64 1
   store %i10, %i11, align 4
-  %i13 = tail call i32 @f29 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i13 = tail call i32 @f29 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Up), saturate: false })](%i3) convergent "no-builtins"=""
   %i14 = getelementptr inbounds i32, %i7, i64 2
   store %i13, %i14, align 4
-  %i16 = tail call i32 @f30 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i16 = tail call i32 @f30 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Down), saturate: false })](%i3) convergent "no-builtins"=""
   %i17 = getelementptr inbounds i32, %i7, i64 3
   store %i16, %i17, align 4
-  %i19 = tail call i32 @f31 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i19 = tail call i32 @f31 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: true })](%i3) convergent "no-builtins"=""
   %i20 = getelementptr inbounds i32, %i7, i64 4
   store %i19, %i20, align 4
-  %i22 = tail call i32 @f32 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i22 = tail call i32 @f32 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: true })](%i3) convergent "no-builtins"=""
   %i23 = getelementptr inbounds i32, %i7, i64 5
   store %i22, %i23, align 4
-  %i25 = tail call i32 @f33 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i25 = tail call i32 @f33 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Up), saturate: true })](%i3) convergent "no-builtins"=""
   %i26 = getelementptr inbounds i32, %i7, i64 6
   store %i25, %i26, align 4
-  %i28 = tail call i32 @f34 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i28 = tail call i32 @f34 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Down), saturate: true })](%i3) convergent "no-builtins"=""
   %i29 = getelementptr inbounds i32, %i7, i64 7
   store %i28, %i29, align 4
-  %i31 = tail call i32 @f35 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i31 = tail call i32 @f35 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i3) convergent "no-builtins"=""
   %i32 = getelementptr inbounds i32, %i7, i64 8
   store %i31, %i32, align 4
-  %i34 = tail call i32 @f36 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i34 = tail call i32 @f36 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: true })](%i3) convergent "no-builtins"=""
   %i35 = getelementptr inbounds i32, %i7, i64 9
   store %i34, %i35, align 4
-  %i37 = tail call i32 @f37 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i37 = tail call i32 @f37 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: true })](%i3) convergent "no-builtins"=""
   %i38 = getelementptr inbounds i32, %i7, i64 10
   store %i37, %i38, align 4
-  %i40 = tail call i8 @f38 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i40 = tail call i8 @f38 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: true })](%i3) convergent "no-builtins"=""
   %i41 = zext %i40 to i32
   %i42 = getelementptr inbounds i32, %i7, i64 11
   store %i41, %i42, align 4
-  %i44 = tail call i8 @f39 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i44 = tail call i8 @f39 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Down), saturate: true })](%i3) convergent "no-builtins"=""
   %i45 = sext %i44 to i32
   %i46 = getelementptr inbounds i32, %i7, i64 12
   store %i45, %i46, align 4
-  %i48 = tail call i16 @f40 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None })](%i4) convergent "no-builtins"=""
+  %i48 = tail call i16 @f40 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Up), saturate: true })](%i4) convergent "no-builtins"=""
   %i49 = sext %i48 to i32
   %i50 = getelementptr inbounds i32, %i7, i64 13
   store %i49, %i50, align 4
-  %i52 = tail call i16 @f41 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None })](%i4) convergent "no-builtins"=""
+  %i52 = tail call i16 @f41 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: false })](%i4) convergent "no-builtins"=""
   %i53 = zext %i52 to i32
   %i54 = getelementptr inbounds i32, %i7, i64 14
   store %i53, %i54, align 4
-  %i56 = tail call i64 @f42 [air Convert(Convert { dst: NumTy { elem: I64, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i56 = tail call i64 @f42 [air Convert(Convert { dst: NumTy { elem: I64, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: true })](%i3) convergent "no-builtins"=""
   %i57 = bitcast %i56 to <2 x i32>
   %i58 = extractelement %i57, i64 0
   %i59 = getelementptr inbounds i32, %i7, i64 15
@@ -338,7 +338,7 @@ bb0:
   %i83 = bitcast %i82 to ptr addrspace(1)
   %i84 = load float, %i83, align 4
   %i85 = insertelement %i78, %i84, i64 3
-  %i86 = tail call <4 x i32> @f43 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i85) convergent "no-builtins"=""
+  %i86 = tail call <4 x i32> @f43 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 4 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: false })](%i85) convergent "no-builtins"=""
   %i87 = extractelement %i86, i64 0
   %i88 = getelementptr inbounds i32, %i7, i64 17
   store %i87, %i88, align 4
@@ -413,47 +413,47 @@ bb0:
   %i11 = mul i32 %a2, i32 20
   %i12 = zext %i11 to i64
   %i13 = getelementptr inbounds i32, %a1, %i12
-  %i14 = tail call i8 @f45 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i14 = tail call i8 @f45 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i15 = zext %i14 to i32
   store %i15, %i13, align 4
-  %i17 = tail call i8 @f46 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i17 = tail call i8 @f46 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i18 = sext %i17 to i32
   %i19 = getelementptr inbounds i32, %i13, i64 1
   store %i18, %i19, align 4
-  %i21 = tail call i8 @f47 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i21 = tail call i8 @f47 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i22 = zext %i21 to i32
   %i23 = getelementptr inbounds i32, %i13, i64 2
   store %i22, %i23, align 4
-  %i25 = tail call i8 @f48 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i25 = tail call i8 @f48 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i26 = sext %i25 to i32
   %i27 = getelementptr inbounds i32, %i13, i64 3
   store %i26, %i27, align 4
-  %i29 = tail call i16 @f49 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i29 = tail call i16 @f49 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i30 = zext %i29 to i32
   %i31 = getelementptr inbounds i32, %i13, i64 4
   store %i30, %i31, align 4
-  %i33 = tail call i16 @f50 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i33 = tail call i16 @f50 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i34 = sext %i33 to i32
   %i35 = getelementptr inbounds i32, %i13, i64 5
   store %i34, %i35, align 4
-  %i37 = tail call i32 @f51 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i37 = tail call i32 @f51 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i38 = getelementptr inbounds i32, %i13, i64 6
   store %i37, %i38, align 4
-  %i40 = tail call i32 @f52 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i40 = tail call i32 @f52 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i41 = getelementptr inbounds i32, %i13, i64 7
   store %i40, %i41, align 4
-  %i43 = tail call i16 @f53 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i43 = tail call i16 @f53 [air Convert(Convert { dst: NumTy { elem: I16, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: false })](%i2) convergent "no-builtins"=""
   %i44 = sext %i43 to i32
   %i45 = getelementptr inbounds i32, %i13, i64 8
   store %i44, %i45, align 4
-  %i47 = tail call i8 @f54 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i47 = tail call i8 @f54 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Even), saturate: false })](%i2) convergent "no-builtins"=""
   %i48 = zext %i47 to i32
   %i49 = getelementptr inbounds i32, %i13, i64 9
   store %i48, %i49, align 4
-  %i51 = tail call i32 @f55 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i10) convergent "no-builtins"=""
+  %i51 = tail call i32 @f55 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i10) convergent "no-builtins"=""
   %i52 = getelementptr inbounds i32, %i13, i64 10
   store %i51, %i52, align 4
-  %i54 = tail call i64 @f56 [air Convert(Convert { dst: NumTy { elem: I64, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i54 = tail call i64 @f56 [air Convert(Convert { dst: NumTy { elem: I64, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i2) convergent "no-builtins"=""
   %i55 = bitcast %i54 to <2 x i32>
   %i56 = extractelement %i55, i64 0
   %i57 = getelementptr inbounds i32, %i13, i64 11
@@ -461,7 +461,7 @@ bb0:
   %i59 = extractelement %i55, i64 1
   %i60 = getelementptr inbounds i32, %i13, i64 12
   store %i59, %i60, align 4
-  %i62 = tail call i64 @f57 [air Convert(Convert { dst: NumTy { elem: I64, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I64, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i10) convergent "no-builtins"=""
+  %i62 = tail call i64 @f57 [air Convert(Convert { dst: NumTy { elem: I64, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I64, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: true })](%i10) convergent "no-builtins"=""
   %i63 = bitcast %i62 to <2 x i32>
   %i64 = extractelement %i63, i64 0
   %i65 = getelementptr inbounds i32, %i13, i64 13
@@ -470,10 +470,10 @@ bb0:
   %i68 = getelementptr inbounds i32, %i13, i64 14
   store %i67, %i68, align 4
   %i70 = trunc %i2 to i8
-  %i71 = tail call i32 @f58 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i70) convergent "no-builtins"=""
+  %i71 = tail call i32 @f58 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: I8, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i70) convergent "no-builtins"=""
   %i72 = getelementptr inbounds i32, %i13, i64 15
   store %i71, %i72, align 4
-  %i74 = tail call i32 @f59 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I8, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i70) convergent "no-builtins"=""
+  %i74 = tail call i32 @f59 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: I8, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Zero), saturate: true })](%i70) convergent "no-builtins"=""
   %i75 = getelementptr inbounds i32, %i13, i64 16
   store %i74, %i75, align 4
   %i77 = insertelement <4 x i32> undef, %i2, i64 0
@@ -495,7 +495,7 @@ bb0:
   %i93 = getelementptr inbounds i32, %a0, %i92
   %i94 = load i32, %i93, align 4
   %i95 = insertelement %i89, %i94, i64 3
-  %i96 = tail call <4 x i8> @f60 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None })](%i95) convergent "no-builtins"=""
+  %i96 = tail call <4 x i8> @f60 [air Convert(Convert { dst: NumTy { elem: I8, lanes: 4 }, dst_kind: Unsigned, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None, rounding: Some(Zero), saturate: true })](%i95) convergent "no-builtins"=""
   %i97 = getelementptr inbounds i32, %i13, i64 17
   %i98 = bitcast %i97 to ptr addrspace(1)
   store %i96, %i98, align 4
@@ -547,26 +547,26 @@ bb0:
   %i4 = shl i32 %a2, i32 3
   %i5 = zext %i4 to i64
   %i6 = getelementptr inbounds i32, %a1, %i5
-  %i7 = tail call half @f62 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i7 = tail call half @f62 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: false })](%i3) convergent "no-builtins"=""
   %i8 = bitcast %i7 to i16
   %i9 = zext %i8 to i32
   store %i9, %i6, align 4
-  %i11 = tail call half @f63 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i11 = tail call half @f63 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i3) convergent "no-builtins"=""
   %i12 = bitcast %i11 to i16
   %i13 = zext %i12 to i32
   %i14 = getelementptr inbounds i32, %i6, i64 1
   store %i13, %i14, align 4
-  %i16 = tail call half @f64 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i16 = tail call half @f64 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Up), saturate: false })](%i3) convergent "no-builtins"=""
   %i17 = bitcast %i16 to i16
   %i18 = zext %i17 to i32
   %i19 = getelementptr inbounds i32, %i6, i64 2
   store %i18, %i19, align 4
-  %i21 = tail call half @f65 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i3) convergent "no-builtins"=""
+  %i21 = tail call half @f65 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Down), saturate: false })](%i3) convergent "no-builtins"=""
   %i22 = bitcast %i21 to i16
   %i23 = zext %i22 to i32
   %i24 = getelementptr inbounds i32, %i6, i64 3
   store %i23, %i24, align 4
-  %i26 = tail call float @f66 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None })](%i7) convergent "no-builtins"=""
+  %i26 = tail call float @f66 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i7) convergent "no-builtins"=""
   %i27 = getelementptr inbounds i32, %i6, i64 4
   %i28 = bitcast %i27 to ptr addrspace(1)
   store %i26, %i28, align 4
@@ -592,7 +592,7 @@ bb0:
   %i49 = bitcast %i48 to ptr addrspace(1)
   %i50 = load float, %i49, align 4
   %i51 = insertelement %i44, %i50, i64 3
-  %i52 = tail call <4 x half> @f67 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None })](%i51) convergent "no-builtins"=""
+  %i52 = tail call <4 x half> @f67 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i51) convergent "no-builtins"=""
   %i53 = bitcast %i52 to <2 x i32>
   %i54 = extractelement %i53, i64 0
   %i55 = getelementptr inbounds i32, %i6, i64 5
@@ -637,30 +637,30 @@ bb0:
   %i14 = mul i32 %a3, i32 21
   %i15 = zext %i14 to i64
   %i16 = getelementptr inbounds i32, %a2, %i15
-  %i17 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i17 = tail call float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i2) convergent "no-builtins"=""
   %i18 = bitcast %i16 to ptr addrspace(1)
   store %i17, %i18, align 4
-  %i20 = tail call float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i20 = tail call float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Even), saturate: false })](%i2) convergent "no-builtins"=""
   %i21 = getelementptr inbounds i32, %i16, i64 1
   %i22 = bitcast %i21 to ptr addrspace(1)
   store %i20, %i22, align 4
-  %i24 = tail call float @f17 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i10) convergent "no-builtins"=""
+  %i24 = tail call float @f17 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I64, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i10) convergent "no-builtins"=""
   %i25 = getelementptr inbounds i32, %i16, i64 2
   %i26 = bitcast %i25 to ptr addrspace(1)
   store %i24, %i26, align 4
-  %i28 = tail call half @f9 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None })](%i2) convergent "no-builtins"=""
+  %i28 = tail call half @f9 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i2) convergent "no-builtins"=""
   %i29 = bitcast %i28 to i16
   %i30 = zext %i29 to i32
   %i31 = getelementptr inbounds i32, %i16, i64 3
   store %i30, %i31, align 4
   %i33 = trunc %i2 to i16
-  %i34 = tail call half @f13 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i33) convergent "no-builtins"=""
+  %i34 = tail call half @f13 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I16, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Even), saturate: false })](%i33) convergent "no-builtins"=""
   %i35 = bitcast %i34 to i16
   %i36 = zext %i35 to i32
   %i37 = getelementptr inbounds i32, %i16, i64 4
   store %i36, %i37, align 4
   %i39 = bitcast %i2 to <4 x i8>
-  %i40 = tail call <4 x float> @f24 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None })](%i39) convergent "no-builtins"=""
+  %i40 = tail call <4 x float> @f24 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I8, lanes: 4 }, src_kind: Unsigned, src_fp8: None, rounding: Some(Even), saturate: false })](%i39) convergent "no-builtins"=""
   %i41 = insertelement <4 x i32> undef, %i2, i64 0
   %i42 = add i32 %a3, i32 1
   %i43 = urem i32 %i42, %a4
@@ -680,7 +680,7 @@ bb0:
   %i57 = getelementptr inbounds i32, %a0, %i56
   %i58 = load i32, %i57, align 4
   %i59 = insertelement %i53, %i58, i64 3
-  %i60 = tail call <4 x float> @f25 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None })](%i59) convergent "no-builtins"=""
+  %i60 = tail call <4 x float> @f25 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 4 }, src_kind: Signed, src_fp8: None, rounding: Some(Even), saturate: false })](%i59) convergent "no-builtins"=""
   %i61 = bitcast %i40 to <4 x i32>
   %i62 = extractelement %i61, i64 0
   %i63 = getelementptr inbounds i32, %i16, i64 5
@@ -707,24 +707,24 @@ bb0:
   %i84 = extractelement %i74, i64 3
   %i85 = getelementptr inbounds i32, %i16, i64 12
   store %i84, %i85, align 4
-  %i87 = tail call i32 @f28 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i13) convergent "no-builtins"=""
+  %i87 = tail call i32 @f28 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i13) convergent "no-builtins"=""
   %i88 = getelementptr inbounds i32, %i16, i64 13
   store %i87, %i88, align 4
-  %i90 = tail call i32 @f32 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i13) convergent "no-builtins"=""
+  %i90 = tail call i32 @f32 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Signed, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: true })](%i13) convergent "no-builtins"=""
   %i91 = getelementptr inbounds i32, %i16, i64 14
   store %i90, %i91, align 4
-  %i93 = tail call i32 @f35 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i13) convergent "no-builtins"=""
+  %i93 = tail call i32 @f35 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i13) convergent "no-builtins"=""
   %i94 = getelementptr inbounds i32, %i16, i64 15
   store %i93, %i94, align 4
-  %i96 = tail call i32 @f36 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i13) convergent "no-builtins"=""
+  %i96 = tail call i32 @f36 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: true })](%i13) convergent "no-builtins"=""
   %i97 = getelementptr inbounds i32, %i16, i64 16
   store %i96, %i97, align 4
-  %i99 = tail call half @f62 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i13) convergent "no-builtins"=""
+  %i99 = tail call half @f62 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Even), saturate: false })](%i13) convergent "no-builtins"=""
   %i100 = bitcast %i99 to i16
   %i101 = zext %i100 to i32
   %i102 = getelementptr inbounds i32, %i16, i64 17
   store %i101, %i102, align 4
-  %i104 = tail call float @f66 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None })](%i99) convergent "no-builtins"=""
+  %i104 = tail call float @f66 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: Some(Zero), saturate: false })](%i99) convergent "no-builtins"=""
   %i105 = getelementptr inbounds i32, %i16, i64 18
   %i106 = bitcast %i105 to ptr addrspace(1)
   store %i104, %i106, align 4

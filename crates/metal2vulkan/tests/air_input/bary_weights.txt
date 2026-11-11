@@ -57,7 +57,7 @@ bb0:
   %i7 = fmul reassoc nnan ninf nsz arcp contract afn float %i6, float 0x3F000000
   %i8 = fadd reassoc nnan ninf nsz arcp contract afn float %i7, float 0x3E800000
   %i9 = insertelement %i5, %i8, i64 1
-  %i10 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a0)
+  %i10 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a0)
   %i11 = fmul reassoc nnan ninf nsz arcp contract afn float %i10, float 0x3E124925
   %i12 = insertelement %i9, %i11, i64 2
   %i13 = extractelement %i2, i64 3

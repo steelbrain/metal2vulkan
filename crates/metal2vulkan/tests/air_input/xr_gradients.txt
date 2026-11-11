@@ -106,7 +106,7 @@ bb5:
   %i60 = insertelement <3 x float> poison, %i58, i64 0
   %i61 = shufflevector <3 x float> %i60, <3 x float> poison, <0, 0, 0>
   %i62 = fmul reassoc nnan ninf nsz arcp contract afn <3 x float> %i61, %i59
-  %i63 = tail call reassoc nnan ninf nsz arcp contract afn <3 x half> @f2 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 3 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 3 }, src_kind: Float, src_fp8: None })](%i62)
+  %i63 = tail call reassoc nnan ninf nsz arcp contract afn <3 x half> @f2 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 3 }, dst_kind: Float, src: NumTy { elem: F32, lanes: 3 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i62)
   %i64 = shufflevector <4 x half> %i63, <3 x half> poison, <0, 1, 2, poison>
   %i65 = fptrunc %i58 to half
   %i66 = insertelement %i64, %i65, i64 3

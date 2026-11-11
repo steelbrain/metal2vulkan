@@ -86,7 +86,7 @@ bb6:
   %i50 = phi i32 [i32 0, bb4], [%i51, bb6]
   %i51 = add nuw i32 %i50, i32 1
   %i52 = add i32 %i51, %i37
-  %i53 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i52)
+  %i53 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i52)
   %i54 = trunc %i50 to i16
   %i55 = call ptr addrspace(0) @f11(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i15, %i54, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i56 = bitcast %i55 to ptr addrspace(0)
@@ -100,7 +100,7 @@ bb7:
   %i63 = call ptr addrspace(0) @f11(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i15, %i62, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i64 = bitcast %i63 to ptr addrspace(0)
   %i65 = load float, %i64, align 4
-  %i66 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i65)
+  %i66 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i65)
   %i67 = add i32 %i66, %i61
   %i68 = add nuw i32 %i60, i32 1
   %i69 = icmp eq %i68, %i29
@@ -155,7 +155,7 @@ bb14:
   %i111 = phi i32 [i32 0, bb12], [%i112, bb14]
   %i112 = add nuw i32 %i111, i32 1
   %i113 = add i32 %i112, %i98
-  %i114 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i113)
+  %i114 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i113)
   %i115 = trunc %i111 to i16
   %i116 = call ptr addrspace(0) @f11(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i13, %i115, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
   %i117 = bitcast %i116 to ptr addrspace(0)
@@ -169,7 +169,7 @@ bb15:
   %i124 = call ptr addrspace(0) @f11(i32 2, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i13, %i123, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
   %i125 = bitcast %i124 to ptr addrspace(0)
   %i126 = load float, %i125, align 4
-  %i127 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i126)
+  %i127 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i126)
   %i128 = add i32 %i127, %i122
   %i129 = add nuw i32 %i121, i32 1
   %i130 = icmp eq %i129, %i90
@@ -292,7 +292,7 @@ bb30:
   %i232 = phi i32 [i32 0, bb28], [%i233, bb30]
   %i233 = add nuw i32 %i232, i32 1
   %i234 = add i32 %i233, %i219
-  %i235 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i234)
+  %i235 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i234)
   %i236 = trunc %i232 to i16
   %i237 = call ptr addrspace(0) @f11(i32 2, i32 16, i32 64, i32 16, i8 0, i8 0, i8 0, i32 1, %i9, %i236, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i238 = bitcast %i237 to ptr addrspace(0)
@@ -306,7 +306,7 @@ bb31:
   %i245 = call ptr addrspace(0) @f11(i32 2, i32 16, i32 64, i32 16, i8 0, i8 0, i8 0, i32 1, %i9, %i244, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i246 = bitcast %i245 to ptr addrspace(0)
   %i247 = load float, %i246, align 4
-  %i248 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i247)
+  %i248 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i247)
   %i249 = add i32 %i248, %i243
   %i250 = add nuw i32 %i242, i32 1
   %i251 = icmp eq %i250, %i211
@@ -362,7 +362,7 @@ bb38:
   %i294 = phi i32 [i32 0, bb36], [%i295, bb38]
   %i295 = add nuw i32 %i294, i32 1
   %i296 = add i32 %i295, %i281
-  %i297 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i296)
+  %i297 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i296)
   %i298 = trunc %i294 to i16
   %i299 = call ptr addrspace(0) @f11(i32 2, i32 64, i32 64, i32 32, i8 0, i8 0, i8 0, i32 1, %i7, %i298, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i300 = bitcast %i299 to ptr addrspace(0)
@@ -376,7 +376,7 @@ bb39:
   %i307 = call ptr addrspace(0) @f11(i32 2, i32 64, i32 64, i32 32, i8 0, i8 0, i8 0, i32 1, %i7, %i306, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i308 = bitcast %i307 to ptr addrspace(0)
   %i309 = load float, %i308, align 4
-  %i310 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i309)
+  %i310 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i309)
   %i311 = add i32 %i310, %i305
   %i312 = add nuw i32 %i304, i32 1
   %i313 = icmp eq %i312, %i273
@@ -432,7 +432,7 @@ bb46:
   %i356 = phi i32 [i32 0, bb44], [%i357, bb46]
   %i357 = add nuw i32 %i356, i32 1
   %i358 = add i32 %i357, %i342
-  %i359 = call reassoc nnan ninf nsz arcp contract afn half @f22 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i358)
+  %i359 = call reassoc nnan ninf nsz arcp contract afn half @f22 [air Convert(Convert { dst: NumTy { elem: F16, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i358)
   %i360 = trunc %i356 to i16
   %i361 = call ptr addrspace(0) @f11(i32 1, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i5, %i360, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i362 = bitcast %i361 to ptr addrspace(0)
@@ -446,7 +446,7 @@ bb47:
   %i369 = call ptr addrspace(0) @f11(i32 1, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i5, %i368, i32 268435472, i32 268435472, i32 268435488) convergent "no-builtins"=""
   %i370 = bitcast %i369 to ptr addrspace(0)
   %i371 = load half, %i370, align 2
-  %i372 = call i32 @f23 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None })](%i371)
+  %i372 = call i32 @f23 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F16, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i371)
   %i373 = add i32 %i372, %i367
   %i374 = add nuw i32 %i366, i32 1
   %i375 = icmp eq %i374, %i334
@@ -501,7 +501,7 @@ bb54:
   %i417 = phi i32 [i32 0, bb52], [%i418, bb54]
   %i418 = add nuw i32 %i417, i32 1
   %i419 = add i32 %i418, %i404
-  %i420 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i419)
+  %i420 = call reassoc nnan ninf nsz arcp contract afn float @f7 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i419)
   %i421 = trunc %i417 to i16
   %i422 = call ptr addrspace(0) @f11(i32 1, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i3, %i421, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
   %i423 = bitcast %i422 to ptr addrspace(0)
@@ -515,7 +515,7 @@ bb55:
   %i430 = call ptr addrspace(0) @f11(i32 1, i32 16, i32 16, i32 32, i8 0, i8 0, i8 0, i32 1, %i3, %i429, i32 268435488, i32 268435488, i32 268435488) convergent "no-builtins"=""
   %i431 = bitcast %i430 to ptr addrspace(0)
   %i432 = load float, %i431, align 4
-  %i433 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i432)
+  %i433 = call i32 @f8 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i432)
   %i434 = add i32 %i433, %i428
   %i435 = add nuw i32 %i427, i32 1
   %i436 = icmp eq %i435, %i396

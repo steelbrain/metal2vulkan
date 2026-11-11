@@ -40,7 +40,7 @@ bb0:
   store %i16, %i19, align 16
   %i21 = tail call %t21 @f7 [air Texture(Texture { op: Read, image: ImageShape { dim: D1, array: true, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F16, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a2, %i5, %i2, %i4, i32 0, i32 0) arg0( Ref nocapture )
   %i22 = extractvalue <4 x half> %i21, 0
-  %i23 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%i22)
+  %i23 = tail call reassoc nnan ninf nsz arcp contract afn <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i22)
   %i24 = or i32 %i8, i32 2
   %i25 = zext %i24 to i64
   %i26 = getelementptr inbounds <4 x i32>, %a3, %i25

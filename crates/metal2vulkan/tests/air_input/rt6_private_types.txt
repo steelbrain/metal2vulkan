@@ -41,10 +41,10 @@ bb0:
   %i12 = shufflevector <4 x float> %i11, <2 x float> poison, <0, 1, poison, poison>
   %i13 = shufflevector <4 x float> %i12, %i3, <0, 1, 6, 7>
   %i14 = and i32 %a0, i32 65535
-  %i15 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i14)
+  %i15 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i14)
   %i16 = insertelement <4 x float> undef, %i15, i64 0
   %i17 = lshr i32 %a0, i32 16
-  %i18 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i17)
+  %i18 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i17)
   %i19 = insertelement %i16, %i18, i64 1
   %i20 = shufflevector <4 x float> %i19, %i12, <0, 1, 4, 5>
   %i21 = insertelement <4 x i32> undef, %a0, i64 0

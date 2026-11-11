@@ -22,7 +22,7 @@ c32 = <4 x float> [0x40000000, 0x40000000, 0x40000000, 0x40000000]
 
 define %t7 @f0 "a4_heap_sample" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( align 8 dereferenceable(16) Ref nocapture "air-buffer-no-alias"="" ) {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 2 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn <2 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 2 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 2 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i1 = fadd reassoc nnan ninf nsz arcp contract afn <2 x float> %i0, <2 x float> c26
   %i2 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c27
   %i3 = getelementptr inbounds %t22, %a0, i64 0, i32 0, i32 0

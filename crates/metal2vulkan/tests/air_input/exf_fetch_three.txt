@@ -12,7 +12,7 @@ c21 = <4 x i32> [1, 2, 3, 0]
 
 define %t7 @f0 "exf_fetch_three" memory(NoModRef, NoModRef, NoModRef) "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-trapping-math"="true" "stack-protector-buffer-size"="8" {
 bb0:
-  %i0 = tail call <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None })](%a2)
+  %i0 = tail call <4 x float> @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 4 }, dst_kind: Float, src: NumTy { elem: F16, lanes: 4 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%a2)
   %i1 = fadd <4 x float> %i0, %a0
   %i2 = fmul <4 x float> %i1, <4 x float> c17
   %i3 = mul i32 %a1, i32 5

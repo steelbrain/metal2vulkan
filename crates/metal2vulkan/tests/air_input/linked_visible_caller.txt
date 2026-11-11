@@ -22,7 +22,7 @@ bb0:
   %i1 = zext %a2 to i64
   %i2 = getelementptr inbounds i32, %a0, %i1
   store %i0, %i2, align 4
-  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a2)
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a2)
   %i5 = tail call reassoc nnan ninf nsz arcp contract afn float @f3(%i4, float 0x3F000000) "no-builtins"=""
   %i6 = getelementptr inbounds float, %a1, %i1
   store %i5, %i6, align 4
@@ -37,7 +37,7 @@ declare %t8 @f4 "air.convert.f.f32.u.i32" memory(NoModRef, NoModRef, NoModRef)
 
 define %t5 @f5 "linked_visible_sampling" "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
-  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a2)
+  %i0 = tail call reassoc nnan ninf nsz arcp contract afn float @f4 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a2)
   %i1 = insertelement <2 x float> poison, %i0, i64 0
   %i2 = fmul reassoc nnan ninf nsz arcp contract afn <2 x float> %i1, <2 x float> c24
   %i3 = shufflevector <2 x float> %i2, <2 x float> poison, <0, 0>

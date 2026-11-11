@@ -55,7 +55,7 @@ bb0:
   %i18 = shufflevector <3 x float> %i12, <4 x float> poison, <0, 1, 2>
   %i19 = extractelement %i2, i64 3
   %i20 = extractelement %i4, i64 3
-  %i21 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None })](%i20)
+  %i21 = tail call i32 @f1 [air Convert(Convert { dst: NumTy { elem: I32, lanes: 1 }, dst_kind: Unsigned, src: NumTy { elem: F32, lanes: 1 }, src_kind: Float, src_fp8: None, rounding: None, saturate: false })](%i20)
   %i22 = tail call %t12 @f2 [air Texture(Texture { op: SampleGrad { compare: false, offset: true }, image: ImageShape { dim: D3, array: false, ms: false, depth: false }, texel: Some(Texel { ty: NumTy { elem: F32, lanes: 4 }, sign: None }), coord16: false, form: Current, status: true, access: Some(Sample), states_access: true })](%a0, ptr addrspace(2) @g0, %i13, %i14, %i15, float 0x0, i1 1, <3 x i32> zeroinitializer, i32 0) arg0( Ref nocapture ) arg1( Ref nocapture )
   %i23 = extractvalue <4 x float> %i22, 0
   %i24 = mul i32 %a9, i32 6

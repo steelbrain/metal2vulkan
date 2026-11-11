@@ -61,7 +61,7 @@ bb0:
 define %t11 @f4 "cfb_rl_position_layer" memory(NoModRef, NoModRef, NoModRef) "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins"="" "no-trapping-math"="true" "stack-protector-buffer-size"="8" {
 bb0:
   %i0 = insertelement %a0, float 0x3F800000, i64 2
-  %i1 = tail call float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i1 = tail call float @f5 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i2 = insertelement %i0, %i1, i64 3
   ret %i2
 }

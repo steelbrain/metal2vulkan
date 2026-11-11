@@ -34,7 +34,7 @@ bb0:
   %i16 = load float, %i15, align 8
   %i17 = fmul reassoc nnan ninf nsz arcp contract afn float %i16, %i14
   %i18 = tail call i32 @f4 [air Texture(Texture { op: Query(Width), image: ImageShape { dim: D2, array: false, ms: false, depth: false }, texel: None, coord16: false, form: Current, status: true, access: None, states_access: true })](%i7, i32 0) arg0( Ref nocapture )
-  %i19 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%i18)
+  %i19 = tail call reassoc nnan ninf nsz arcp contract afn float @f1 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%i18)
   %i20 = fadd reassoc nnan ninf nsz arcp contract afn float %i17, %i19
   %i21 = zext %a2 to i64
   %i22 = getelementptr inbounds float, %a1, %i21

@@ -121,7 +121,7 @@ bb0:
   %i1 = shl i64 %i0, i64 33
   %i2 = getelementptr inbounds %t33, %a0, i64 0, i32 0, i32 0
   tail call void @f13 [air Atomic(Atomic { space: Global, op: Max, sign: Some(Unsigned), ty: NumTy { elem: I64, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: false, fetch: false, flags: Some(MemFlags { device: true, threadgroup: false, texture: false, threadgroup_imageblock: false, object_data: false }), stated_volatile: true })](%i2, %i1, i32 0, i32 2, i32 1, i1 0) arg0( nocapture )
-  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None })](%a1)
+  %i4 = tail call reassoc nnan ninf nsz arcp contract afn float @f2 [air Convert(Convert { dst: NumTy { elem: F32, lanes: 1 }, dst_kind: Float, src: NumTy { elem: I32, lanes: 1 }, src_kind: Unsigned, src_fp8: None, rounding: None, saturate: false })](%a1)
   %i5 = getelementptr inbounds %t33, %a0, i64 0, i32 1, i32 0
   %i6 = tail call reassoc nnan ninf nsz arcp contract afn float @f14 [air Atomic(Atomic { space: Global, op: Add, sign: None, ty: NumTy { elem: F32, lanes: 1 }, order: SeqCst, failure: None, scope: Device, volatile: false, fetch: true, flags: Some(MemFlags { device: true, threadgroup: true, texture: true, threadgroup_imageblock: true, object_data: true }), stated_volatile: true })](%i5, %i4, i32 5, i32 2, i32 31, i1 0) arg0( nocapture )
   ret void
