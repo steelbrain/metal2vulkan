@@ -973,6 +973,17 @@ impl Buffer {
     /// over the buffer lives, is given such a copy laid out at the old offset, the gate unasked.
     /// Metal rebinds over any memory; the copy is the difference.
     ///
+    /// A `Managed` no-copy buffer on a device without unified memory is two copies
+    /// ([`HostBacking::DeviceCopy`](crate::HostBacking::DeviceCopy)): the call gives its host copy
+    /// the new memory, imported as at the making but never a copy of it (where the import is not
+    /// made, the pages are reached through staging buffers), and copies the new pages into the
+    /// GPU's copy by the device's next submission, before any of its commands, so every command
+    /// buffer committed after the call reads them; nothing is refused for uses encoded before it.
+    /// The old memory's deallocator runs once nothing holds its host copy (in the call, where
+    /// nothing does). Over pages the process maps read-only, the GPU's writes are dropped:
+    /// `synchronize_resource` copies nothing out to them, and they are copied in again at the
+    /// completion of each command buffer that used the buffer.
+    ///
     /// Refused: a buffer that is not a no-copy buffer of its own (`Invalid`,
     /// [`RebindProblem::NotHostMemory`]); a command buffer not yet committed whose commands used
     /// the buffer, or an open encoder that did (a render encoder with an attachment over it, from

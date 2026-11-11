@@ -506,6 +506,19 @@ impl Device {
     /// instead, as Metal drops them, and writes nothing to the pages. Pages the process cannot read
     /// are never copied, and keep the import's refusal.
     ///
+    /// On a device without unified memory
+    /// ([`DeviceProperties::has_unified_memory`](crate::DeviceProperties::has_unified_memory)) a
+    /// buffer of `Managed` storage (without bit 24) is two copies, as Metal keeps a managed
+    /// resource on a Mac with a discrete GPU ([`HostBacking::DeviceCopy`](crate::HostBacking)):
+    /// the GPU's own in device-local memory, which every command reads and writes, and the
+    /// caller's pages, its `contents`, copied in now (before any command of a command buffer
+    /// committed after the call) and by [`did_modify_range`](Buffer::did_modify_range), and copied
+    /// out by a blit's `synchronize_resource`. The pages are imported as above to be the copies'
+    /// source and target, but never copied: where the import is not made, the copies go through
+    /// staging buffers. A CPU write no `did_modify_range` names is not seen by the GPU. Where no
+    /// device-local memory has room for the GPU's copy, the buffer lies in the pages as a `Shared`
+    /// one does, announced (`device-memory-overflow`).
+    ///
     /// Refused: a length of 0 or past `max_buffer_length` (`Nil`, as plain Metal answers nil);
     /// `Private` or `Memoryless` storage, as Metal stops them, and an undefined option
     /// (`Invalid`); on a device that imports neither pointers (`VK_EXT_external_memory_host`) nor

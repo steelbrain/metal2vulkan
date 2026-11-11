@@ -114,6 +114,13 @@ impl Buffer {
     /// pages again: its queries answer its own descriptor, an unnamed read reads zeros, and a
     /// command that names it fails as one that names the buffer.
     ///
+    /// A `Managed` no-copy buffer on a device without unified memory is two copies
+    /// ([`HostBacking::DeviceCopy`](crate::HostBacking::DeviceCopy)): the call lets go of its host
+    /// copy (an import of the pages answers as above; pages no import maps detach at once) and
+    /// keeps the GPU's copy, which commands go on reading and writing, with no stand-in and no
+    /// failed command buffer; `synchronize_resource` copies nothing out until a rebind gives it
+    /// pages again, which it copies in whole.
+    ///
     /// Refused: a buffer that is not a no-copy buffer of its own (`Invalid`,
     /// [`RebindProblem::NotHostMemory`]); a buffer with a texture being made over its bytes
     /// (`NotImplemented(DetachTextures)`); a texture over it whose stand-in the device makes none

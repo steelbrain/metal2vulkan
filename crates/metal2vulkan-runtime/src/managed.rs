@@ -20,8 +20,8 @@
 //!   copies the buffer back where the command buffer runs it. A program that skips them sees stale
 //!   bytes there, as on a Mac with a discrete GPU. A GPU writing host-cached memory across the bus
 //!   ran a kernel's writes at 0.03 to 0.1 GB/s on an RTX 3090 and an RTX 5080, where a device-local
-//!   write and a copy back ran at several GB/s. A no-copy buffer is the caller's
-//!   memory and has no device copy.
+//!   write and a copy back ran at several GB/s. A `Managed` no-copy buffer is two copies the
+//!   same way, its host copy the caller's pages (`managed_copy.rs`).
 
 use super::buffer::Buffer;
 use super::error::{invalid, Error, Problem};
