@@ -67,8 +67,8 @@
 //!
 //! Priming makes each entry point once, in the runtime's shapes; it cannot promise that a layer
 //! makes no new static on a code path a later call takes with other parameters. A section's
-//! first call of each entry point, and every section whose count reaches a power of two,
-//! register the hook again for those (`exit_guard`).
+//! first call of each entry point registers the hook again; a static a later call makes is the
+//! hook's hole (`exit_guard`, "Registered again").
 
 use crate::draw_source::SizedIndexBind;
 use crate::dynamic_state::{ColorWriteMasks, ExtendedDynamicState};

@@ -775,8 +775,7 @@ fn a_destructor_registered_after_the_hook_runs_before_it() {
 }
 
 /// A section that ends after the first call of an entry point registers the hook again, so a
-/// destructor registered before it (by that call) runs after the hook. Its count is not a power
-/// of two, so that trigger is the first call's.
+/// destructor registered before it (by that call) runs after the hook.
 #[cfg(unix)]
 #[test]
 fn a_section_after_an_entry_point_s_first_call_registers_the_hook_again() {
@@ -787,10 +786,6 @@ fn a_section_after_an_entry_point_s_first_call_registers_the_hook_again() {
                 .copied()
                 .find(|&call| !exit_guard::was_called(call))
                 .expect("an entry point no section called");
-            // Sections before the destructor, until the next one's count is no power of two.
-            while (exit_guard::sections() + 1).is_power_of_two() {
-                drop(exit_guard::enter());
-            }
             let busy = exit_guard::enter();
             exit_guard::called(call);
             drop(busy);
@@ -800,20 +795,21 @@ fn a_section_after_an_entry_point_s_first_call_registers_the_hook_again() {
     );
 }
 
-/// A section whose count reaches a power of two registers the hook again, for statics made at a
-/// later call of an entry point already called.
+/// Sections that call no entry point for the first time register the hook no more, however many
+/// end: a registration after an exit handler the program registered would run the hook before
+/// it, and the handler's work would find the guard closed. The destructor stands for that
+/// handler.
 #[cfg(unix)]
 #[test]
-fn a_section_at_a_power_of_two_registers_the_hook_again() {
+fn sections_of_entry_points_called_before_register_the_hook_no_more() {
     assert_eq!(
-        late_destructor_exit(|| loop {
-            drop(exit_guard::enter());
-            if exit_guard::sections().is_power_of_two() {
-                break;
+        late_destructor_exit_after(call_the_first_entry_point, || {
+            for _ in 0..1024 {
+                call_the_first_entry_point();
             }
         }),
-        42,
-        "the destructor ran before the hook"
+        43,
+        "a section registered the hook again after the destructor"
     );
 }
 
@@ -2755,18 +2751,6 @@ fn call_the_first_entry_point() {
     drop(busy);
 }
 
-/// The call before the layer's load, then empty sections until the next section's count is no
-/// power of two. Those sections run before the destructor's registration: one ending at a power
-/// of two registers the hook again, and after it that would pass the tests below for that
-/// trigger's reason, not the first call's.
-#[cfg(unix)]
-fn call_the_first_entry_point_then_skip_powers_of_two() {
-    call_the_first_entry_point();
-    while (exit_guard::sections() + 1).is_power_of_two() {
-        drop(exit_guard::enter());
-    }
-}
-
 /// The gap this closes: a layer loaded again registers a destructor at an entry point's first call
 /// since (after the hook's registration at the device), and a section calling that entry point,
 /// called before the load, registers nothing, so the destructor runs before the hook.
@@ -2774,10 +2758,7 @@ fn call_the_first_entry_point_then_skip_powers_of_two() {
 #[test]
 fn a_call_made_before_a_load_registers_nothing_again_unforgotten() {
     assert_eq!(
-        late_destructor_exit_after(
-            call_the_first_entry_point_then_skip_powers_of_two,
-            call_the_first_entry_point
-        ),
+        late_destructor_exit_after(call_the_first_entry_point, call_the_first_entry_point),
         43
     );
 }
@@ -2789,7 +2770,7 @@ fn a_call_made_before_a_load_registers_nothing_again_unforgotten() {
 #[test]
 fn a_section_after_an_entry_point_s_first_call_since_a_load_registers_the_hook_again() {
     assert_eq!(
-        late_destructor_exit_after(call_the_first_entry_point_then_skip_powers_of_two, || {
+        late_destructor_exit_after(call_the_first_entry_point, || {
             exit_guard::forget_calls();
             call_the_first_entry_point();
         }),

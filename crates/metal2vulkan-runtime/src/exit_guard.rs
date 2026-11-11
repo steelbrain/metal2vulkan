@@ -90,9 +90,12 @@
 //!   and device waits crashed inside the validation layer's synchronization code at exit while
 //!   the hook still waited for them. So a section that ends after the first call of a Vulkan
 //!   entry point the runtime calls in sections ([`Call`], a fixed set) registers the hook again,
-//!   after anything that call registered, and so does every section whose count in the process
-//!   reaches a power of two, for statics made at a later call with new parameters: at most 64,
-//!   and one per entry point of the table at each load. Each `vkCreate*Pipelines` the runtime
+//!   after anything that call registered: at most one per entry point of the table at each load.
+//!   A registration after an exit handler the program registered runs the hook before that
+//!   handler, which then finds the guard closed and its work left pending, where Metal runs it
+//!   (the exits lane's `cpu_work_exit`); so no section registers the hook for its count alone,
+//!   and a static a later call makes with new parameters is in the hole below. Each
+//!   `vkCreate*Pipelines` the runtime
 //!   makes on a device (`device/compiles.rs`, their one door: a pool's piece, a host step's, the
 //!   warm pass's, a self-check's, or the program's own on its thread) registers it again as the
 //!   driver's call returns, while the guard is open ([`pipelines_made`]): a
@@ -345,10 +348,6 @@ static REGISTRAR_PID: AtomicU32 = AtomicU32::new(0);
 /// The registrar's thread, to wake as a making begins: set by the thread itself as it starts, in
 /// the process [`REGISTRAR_PID`] names; null before (and in a forked child, until its own starts).
 static REGISTRAR: AtomicPtr<std::thread::Thread> = AtomicPtr::new(std::ptr::null_mut());
-
-/// The sections of the process's guard that ended: the hook is registered again when it reaches
-/// a power of two.
-static SECTIONS: AtomicU64 = AtomicU64::new(0);
 
 /// The entry points ([`Call`]) called in sections that ended since the hook was last registered
 /// at a device after a load of a shared object ([`register_device`], they were the process's), one
@@ -828,7 +827,8 @@ pub(crate) fn in_host_step() -> bool {
 /// A section in progress: it ends when dropped, on the thread it started on.
 pub(crate) struct Busy<'a> {
     guard: &'a Guard,
-    /// A section of the process's guard ([`GUARD`]), counted in [`SECTIONS`] as it ends.
+    /// A section of the process's guard ([`GUARD`]), whose first calls register the hook again
+    /// as it ends.
     counted: bool,
     /// It makes a `VkPipeline`, counted in its guard's makings ([`Guard::enter_making`]).
     making: bool,
@@ -994,8 +994,7 @@ impl Drop for Busy<'_> {
                 calls
             });
             let first = calls.beyond(CALLED.fetch_or(calls));
-            let ended = SECTIONS.fetch_add(1, Ordering::Relaxed) + 1;
-            if (first || ended.is_power_of_two()) && !self.guard.is_closed() {
+            if first && !self.guard.is_closed() {
                 register_again();
             }
         }
@@ -1657,11 +1656,10 @@ pub struct Registrations {
     /// `MAKING_REGISTRATIONS` (16384) in the process.
     pub during_makings: u64,
     /// In all: at devices, after instances, after makings, while makings were in progress, and at
-    /// the end of sections (after the first call of an entry point of the table, and at powers of
-    /// two of the sections' count).
+    /// the end of sections (after the first call of an entry point of the table).
     pub total: u64,
     /// The most the sections can make: one per entry point of the table at each load a device
-    /// was made after, the process's first device's included (It was one per entry point), and 64.
+    /// was made after, the process's first device's included.
     pub section_bound: u64,
     /// The shared objects the process has loaded so far, unloaded ones included, as the rule
     /// that registers the hook at a device after a load counts them; `None` where the host keeps
@@ -1677,7 +1675,7 @@ pub fn registrations() -> Registrations {
         at_makings: AT_MAKINGS.load(Ordering::Relaxed),
         during_makings: DURING_MAKINGS.load(Ordering::Relaxed),
         total: INSTALLED.load(Ordering::Relaxed),
-        section_bound: Call::ALL.len() as u64 * LOADS.load(Ordering::Relaxed).max(1) + 64,
+        section_bound: Call::ALL.len() as u64 * LOADS.load(Ordering::Relaxed).max(1),
         loads: loaded::count(),
     }
 }
@@ -1859,12 +1857,6 @@ pub(crate) fn hook(
 #[cfg(test)]
 pub(crate) fn own() -> usize {
     OWN.with(Cell::get)
-}
-
-/// The sections of the process's guard that ended.
-#[cfg(test)]
-pub(crate) fn sections() -> u64 {
-    SECTIONS.load(Ordering::Relaxed)
 }
 
 /// Whether a section that ended called `call`.
