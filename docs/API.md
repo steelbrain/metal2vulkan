@@ -1680,8 +1680,11 @@ How a notice reaches you:
 - `Device::degraded_objects(kind)` counts the textures a device met as a kind that is announced
   once per object.
 
-With `METAL2VULKAN_LOG_PIPELINES` set, a device also logs one line per render `VkPipeline` it
-makes (id name `metal2vulkan-pipeline-creation`, `Info` severity), with where its time went: the
+With `METAL2VULKAN_LOG_PIPELINES` set, a device also logs one line per compute `VkPipeline` it
+makes (id name `metal2vulkan-pipeline-creation`, `Info` severity): its kernel, its SPIR-V (a hash
+and its length), each specialization constant, the precision notes the stage holds under that
+specialization and the creation's time. And one line per render `VkPipeline` it makes (the same
+id name and severity), with where its time went: the
 wait for its turn, the digests that name its parts, each library (made by this making, from its
 driver cache record or not, or another caller's) and the link; a state's first line also names
 the descriptor it was made from (each function's name, the SHA-256 of its bitcode and the constant

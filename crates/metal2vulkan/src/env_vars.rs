@@ -37,8 +37,10 @@ pub const REGISTRY: &[EnvVar] = &[
     EnvVar {
         name: "METAL2VULKAN_LOG_PIPELINES",
         default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: one line per render VkPipeline a device \
-                 makes, through the device's message sink or on stderr: its state, its key, the \
+        effect: "metal2vulkan-runtime's diagnostics: one line per compute VkPipeline a device \
+                 makes (its kernel, its SPIR-V, its specialization constants, its precision notes \
+                 and the creation's time) and one per render VkPipeline, through the device's \
+                 message sink or on stderr: its state, its key, the \
                  key's fields that differ from the state's closest earlier pipeline (a state's \
                  first line also names the descriptor the state was made from: each function's \
                  name, the SHA-256 of its bitcode and the constant values it was made with, each \

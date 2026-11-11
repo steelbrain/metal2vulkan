@@ -13,6 +13,7 @@
 //! a variant's are shares.
 
 use super::content_keyed::{program_call, ContentKeyed, Owned};
+use super::creation_log;
 use super::graphics::Notices;
 use super::interlocked_writes;
 use super::kept::{Compiled, Instance, KeptObjects, KeptPipeline, Place};
@@ -508,6 +509,9 @@ pub(crate) struct VariantObjects {
     /// The digests its graphics pipeline libraries are named by (`graphics.rs`), from its first
     /// making linked from libraries.
     parts_content: OnceLock<PartsContent>,
+    /// A compute variant's kernel stage, kept for the pipeline creation log's lines while the log
+    /// is on (`creation_log::compute_stage`).
+    logged: Option<Box<StageModule>>,
 }
 
 /// The digests of a variant's layout and of each of its stages (its stage, entry point,
@@ -731,6 +735,10 @@ impl VariantObjects {
             content: variant_content(layout, stages, &words),
             words: Arc::clone(&words),
             parts_content: OnceLock::new(),
+            logged: creation_log::compute_stage(
+                stages,
+                matches!(pipeline, CompiledPipeline::Kernel(_)),
+            ),
         };
         for (stage, words) in stages.iter().zip(words.iter()) {
             let entry = CString::new(stage.entry_point.as_str())
@@ -822,6 +830,10 @@ impl VariantObjects {
             content: back.objects.content,
             words: back.objects.words,
             parts_content: OnceLock::new(),
+            logged: creation_log::compute_stage(
+                stages,
+                matches!(pipeline, CompiledPipeline::Kernel(_)),
+            ),
         };
         let pipelines = back
             .pipelines
@@ -1159,6 +1171,9 @@ impl VariantObjects {
         // reads no data back (`shader_cache/driver.rs`).
         let raw = shared.make_compute_pipeline(making, info)?;
         let created_in = started.elapsed();
+        if let Some(stage) = &self.logged {
+            creation_log::compute(&self.device, stage, c.specialization, created_in);
+        }
         drop(leader);
         drop(turn);
         self.device.shared().counts.variant_pipeline_made();

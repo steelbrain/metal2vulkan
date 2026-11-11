@@ -1,6 +1,14 @@
-//! The render pipeline creation log: a default-off diagnostic, `METAL2VULKAN_LOG_PIPELINES`
+//! The pipeline creation log: a default-off diagnostic, `METAL2VULKAN_LOG_PIPELINES`
 //! (`metal2vulkan::env_vars`), that tells which part of a draw's key made it pay for a `VkPipeline`
 //! of its own, and where that creation's time went.
+//!
+//! - **Compute pipelines.** One line per compute `VkPipeline` a device makes ([`compute`]): the
+//!   kernel's entry, its SPIR-V (a hash and its length), each specialization constant (its id, its
+//!   meaning and its value), the precision notes the stage holds under that specialization
+//!   (`notes`, as a render line names a stage's) and the creation's wall time. A compute state's
+//!   pipelines differ by their specialization alone (the threadgroup size, an edge region), so
+//!   each line prints it whole: no numbering, no diff and no split. The rest of this log is the
+//!   render pipelines'.
 //!
 //! - **What it prints.** One line per render `VkPipeline` a device makes for a draw (or a host
 //!   step's draw), through the device's message sink at `Info` severity (id name
@@ -60,8 +68,9 @@
 use super::graphics::GraphicsKey;
 use crate::device::lock;
 use crate::Device;
+use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::cache::VariantKey;
-use metal2vulkan::pipeline::{RenderPipeline, SpecKey};
+use metal2vulkan::pipeline::{RenderPipeline, SpecKey, StageModule};
 use metal2vulkan::vk::{DriverId, ShaderStage};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
@@ -601,6 +610,59 @@ fn elided(old: &str, new: &str) -> (String, String) {
         )
     };
     (cut(old), cut(new))
+}
+
+/// The kernel stage of a compute variant's `stages` (`compute`: the variant is a compute
+/// state's), kept for its pipelines' lines ([`compute`]) while the log is on; `None` while it is
+/// off, or for a render variant.
+pub(crate) fn compute_stage(stages: &[StageModule], compute: bool) -> Option<Box<StageModule>> {
+    match (enabled() && compute, stages) {
+        (true, [kernel]) => Some(Box::new(kernel.clone())),
+        _ => None,
+    }
+}
+
+/// Deliver the line of a compute `VkPipeline` `device` made of `stage` under `specialization`,
+/// its creation `took` long (the module's documentation, "Compute pipelines").
+pub(crate) fn compute(
+    device: &Device,
+    stage: &StageModule,
+    specialization: &SpecializationKey,
+    took: Duration,
+) {
+    let meanings: BTreeMap<u32, SpecKey> = stage
+        .specialization
+        .constants
+        .iter()
+        .map(|c| (c.id, c.key))
+        .collect();
+    let constants: Vec<String> = specialization
+        .entries
+        .iter()
+        .map(|e| {
+            let at = e.offset as usize;
+            let mut word = [0u8; 8];
+            if let Some(bytes) = specialization.data.get(at..at + e.size.min(8)) {
+                word[..bytes.len()].copy_from_slice(bytes);
+            }
+            let meaning = meanings
+                .get(&e.constant_id)
+                .map_or_else(String::new, |k| format!(" {k:?}"));
+            format!("{}{meaning} = {}", e.constant_id, u64::from_le_bytes(word))
+        })
+        .collect();
+    let notes = stage.precision_notes_under(specialization);
+    deliver(
+        device,
+        format!(
+            "compute pipeline {}: {:.3} ms, spirv {:016x} ({} words), specialization [{}], notes {notes:?}",
+            stage.entry_point,
+            took.as_secs_f64() * 1000.0,
+            spirv_hash(&stage.spirv),
+            stage.spirv.len(),
+            constants.join(", "),
+        ),
+    );
 }
 
 /// Hand `line` to the device's message sink, else to stderr.
