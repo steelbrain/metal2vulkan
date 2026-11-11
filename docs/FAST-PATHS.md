@@ -1502,7 +1502,9 @@ driver's. Each is open work.
     host-visible type tried, failed imports dedicated to nothing in every one): it spins inside
     `vkAllocateMemory` holding the driver's lock, the other threads' makings and frees waiting
     for it, the GPU idle. With no import as type 4 tried, 8 of 8 four-thread runs ended on the
-    RTX 2080; with the type order, 8 of 8 on the RTX 2080 and 8 of 8 on the RTX 3090. The first
+    RTX 2080; with the type order, 8 of 8 on the RTX 2080 and 8 of 8 on the RTX 3090; with the
+    form and type order and a kind's first imports one at a time, 6 of 6 four- and eight-thread
+    runs on the RTX 5080 Laptop GPU, in 8 to 9 s each. The first
     imports of each kind on a device still try a refused form or type, one at a time, so the
     stall stays **open** for them.
 
