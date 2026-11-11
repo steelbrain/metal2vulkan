@@ -710,9 +710,9 @@ fn an_indirect_threadgroup_dispatch_runs_on_the_gpu() {
 }
 
 /// A direct `dispatchThreads:` of a ragged grid runs on the flat variant (one dispatch, no split)
-/// and each of Metal's threads runs once, at its own position: the Simulator's 1206 x 2622 screen
-/// in 32 x 32 threadgroups (its masked blit's dispatch, 3.16 M threads, the flat count's 32-bit
-/// form), and ragged 3-D grids. The expectation is computed here, not by another dispatch.
+/// and each of Metal's threads runs once, at its own position: a 1206 x 2622 grid in 32 x 32
+/// and 32 x 8 threadgroups (3.16 M threads, the flat count's 32-bit form), and ragged 3-D grids.
+/// The expectation is computed here, not by another dispatch.
 #[test]
 fn a_ragged_direct_dispatch_runs_each_thread_once_on_the_flat_variant() {
     on_device(|device, messages| {

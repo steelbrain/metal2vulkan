@@ -1450,17 +1450,15 @@ impl KernelDecl {
     ///
     /// - a workgroup with `wy = wz = 0` (group `wx`) whose last index `wx·N + N - 1` is below
     ///   2^32 counts in 32 bits from `wx·N`, its test and start read from the workgroup's id and
-    ///   `N` alone (every workgroup of a dispatch whose groups fit along `x`, as the Simulator's);
+    ///   `N` alone (every workgroup of a dispatch whose groups fit along `x`);
     /// - any other, of a dispatch of at most 2^32 invocations (`nx · ny · nz · N <= 2^32`, so
     ///   every index is below 2^32), counts in 32 bits from `((wz · ny + wy) · nx + wx) · N`;
     /// - past that the index is 64-bit and divided by [`Self::divmod_64_by_32`].
     ///
     /// Devices without a 64-bit divider (Intel's) lower each 64-bit division to a long software
-    /// sequence: on Arrow Lake the Simulator's 1206 x 2622 masked blit ran 4.85 ms with the
-    /// 64-bit form and 1.13 ms with the 32-bit one. Mesa 26.2 also compiled the whole kernel at
-    /// SIMD8 while 64-bit `OpUDiv`/`OpUMod` sat in its last arm, and per invocation tested and
-    /// counted with `NumWorkgroups`, which ANV merges from two sources per invocation: the first
-    /// arm reads neither.
+    /// sequence per invocation. ANV (Mesa 26.2) also compiles a whole kernel at SIMD8 while
+    /// 64-bit `OpUDiv`/`OpUMod` sit in any arm of it, and merges `NumWorkgroups` from two sources
+    /// per invocation: the first arm reads neither.
     fn flat(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -1594,8 +1592,8 @@ impl KernelDecl {
     ///
     /// The flat variant's 64-bit arm divides by it rather than by a 64-bit `OpUDiv`/`OpUMod`:
     /// lowered on a device without a 64-bit divider (Intel's), four of those made the arm so large
-    /// that the whole kernel compiled at a narrower SIMD width (SIMD8 for the Simulator's masked
-    /// blit on Arrow Lake, Mesa 26.2), though the arm runs only past 2^32 invocations.
+    /// that the whole kernel compiled at a narrower SIMD width (SIMD8 for SIMD16 on ANV, Mesa
+    /// 26.2), though the arm runs only past 2^32 invocations.
     fn divmod_64_by_32(
         fb: &mut FunctionBuilder<'_>,
         [lo, hi]: [SValue; 2],

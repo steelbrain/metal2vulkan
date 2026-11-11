@@ -692,7 +692,7 @@ fn derivation_modules_are_valid() {
 /// The flat variant's 64-bit arm divides a `u64` by a `u32` in 32-bit operations
 /// ([`KernelDecl::divmod_64_by_32`]): on the CPU interpreter its quotient and remainder are Rust's
 /// for dividends at and around every power-of-two boundary of interest (2^16, 2^32, 2^58, 2^63,
-/// 2^64 - 1) and the Simulator screen's index range, and divisors 1, small, 1206 and 2622, and at
+/// 2^64 - 1) and a 1206 x 2622 grid's index range, and divisors 1, small, 1206 and 2622, and at
 /// both sides of 2^31 and 2^32 (where `2r + bit` carries past 32 bits).
 #[test]
 fn the_flat_variant_s_64_bit_division_is_exact() {
