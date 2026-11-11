@@ -38,8 +38,14 @@
 //!   dma-buf the source makes of the pages its memory requirements cover
 //!   ([`Device::dma_buf_image`]). Its one plane starts at the texels' offset in their first page,
 //!   its rows the driver's own (`VkImageDrmFormatModifierListCreateInfoEXT`), as a texture placed
-//!   in a heap over pages imported by their pointer is the driver's linear image. Its features are
-//!   the modifier's (64-bit where the device has `format_feature_flags2`: `modifier_features`),
+//!   in a heap over pages imported by their pointer is the driver's linear image. Where the
+//!   driver lays a plane out at another offset than the one asked (Honeykrisp, Mesa 25.3.6 on
+//!   Apple's M2 Pro, answers offset 0 for a plane 8192 bytes into a 16 KiB page), the image's
+//!   plane starts at offset 0 and the image is bound at the texels' offset of an import of the
+//!   pages that is no dedicated allocation, where the driver takes such a binding (it requires no
+//!   dedicated allocation of the image, and its memory's alignment divides the offset); counted
+//!   (`WorkCounts::dma_buf_images_at_offset`). Elsewhere such a texture is a shadow. Its features
+//!   are the modifier's (64-bit where the device has `format_feature_flags2`: `modifier_features`),
 //!   checked as a linear image's are against the optimal tiling's for the texture's usage, and its
 //!   limits the format query's for that modifier and dma-bufs. RADV (Mesa 26.2.4 and 26.0.8) lays
 //!   a plane only at an offset that is a multiple of 256 bytes and rows a multiple of 256 apart,
@@ -1097,12 +1103,50 @@ pub(super) enum DmaBufRefusal {
     Import,
 }
 
-/// An image over dma-buf pages made and not yet bound: its requirements, and the request for
-/// its pages.
+/// Why the driver made no `DRM_FORMAT_MOD_LINEAR` image of an explicit plane as asked
+/// (`Device::explicit_plane_image`).
+pub(super) enum PlaneMiss {
+    /// It refuses the layout: why, in words.
+    Refused(String),
+    /// It lays the plane out otherwise (`vkGetImageSubresourceLayout`): its answer, and the words.
+    Answered(vk::SubresourceLayout, String),
+}
+
+impl PlaneMiss {
+    /// Why, in words.
+    pub(super) fn words(self) -> String {
+        match self {
+            PlaneMiss::Refused(why) | PlaneMiss::Answered(_, why) => why,
+        }
+    }
+}
+
+/// The route a test takes for an image over dma-buf pages whose texels lie past their first page's
+/// first byte (`DeviceShared::plane_route_forced`), whatever the driver answers of the explicit
+/// plane at their offset.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlaneRoute {
+    /// The driver's answers decide, as in the product.
+    Answered = 0,
+    /// The explicit plane at the texels' offset is taken as made, its layout unchecked: what such
+    /// an image reads, on a driver that lays it out at another offset.
+    Unchecked = 1,
+    /// The explicit plane at the texels' offset is taken as laid out at offset 0, so the image of
+    /// its plane at 0 bound at the offset is tried: that route, on a driver that answers the
+    /// offset asked.
+    AtOffset = 2,
+}
+
+/// An image over dma-buf pages made and not yet bound: its requirements, the request for its
+/// pages, and where it binds in their import: at offset 0 of a dedicated one (`None`), or at its
+/// texels' offset of one that is no dedicated allocation, its plane at offset 0 (`Some`:
+/// [`Device::offset_bound_image`]).
 pub(super) struct Unbound {
     raw: vk::Image,
     requirements: vk::MemoryRequirements,
     request: DmaBufRequest,
+    bound_at: Option<u64>,
 }
 
 impl Unbound {
@@ -1120,19 +1164,27 @@ impl Device {
     /// first page, rows `row_pitch` apart (slices `slice_pitch`), made for dma-bufs, and bound to
     /// a dedicated import (`VkMemoryDedicatedAllocateInfo`) of the one dma-buf the caller's source
     /// makes of exactly the pages its memory requirements cover (`DmaBufRequest { granule:
-    /// length }`), of the pages' imports' memory type; counted (`WorkCounts::dma_buf_images`). It
-    /// starts `UNDEFINED`, as Vulkan makes an image of external memory, for its first move to
-    /// acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT` (`FirstMove::acquired`).
+    /// length }`), of the pages' imports' memory type; counted (`WorkCounts::dma_buf_images`).
+    /// Where the driver lays that plane out at another offset than the texels' (it answers
+    /// `vkGetImageSubresourceLayout` so), the image's one plane starts at offset 0 instead, and it
+    /// is bound at the texels' offset of an import of the pages that is no dedicated allocation,
+    /// where the driver takes such a binding (`offset_bound_image`;
+    /// `WorkCounts::dma_buf_images_at_offset`). It starts `UNDEFINED`, as Vulkan makes an image
+    /// of external memory, for its first move to acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT`
+    /// (`FirstMove::acquired`).
     ///
     /// Why not, for the notice of the path taken instead (`shadowed-texture`), where the device
     /// makes none: it does not enable the extensions; the plan has several levels, depth or
     /// samples, or a mutable format with no list of its views; the modifier's tiling lacks a
     /// feature the plan's optimal tiling has for its usage; the format query refuses such an
-    /// image, or the plan passes its limits; the driver refuses the plane layout or lays it out
-    /// otherwise; the image's memory runs past the pages or takes no memory of their type; the
-    /// source fails or answers against its contract; the driver refuses the import. Everything
-    /// made is released then. The source is called at most once, once the image is made and
-    /// checked, with no lock of the runtime's held (the caller holds none).
+    /// image, or the plan passes its limits; the driver refuses the plane layout, or lays it out
+    /// otherwise and makes no image of its plane at offset 0 bound at the texels' offset (the
+    /// image requires a dedicated allocation, its memory's alignment does not divide the offset,
+    /// or the format query takes dma-bufs for it in a dedicated allocation alone); the image's
+    /// memory runs past the pages or takes no memory of their type; the source fails or answers
+    /// against its contract; the driver refuses the import. Everything made is released then.
+    /// The source is called at most once, once the image is made and checked, with no lock of
+    /// the runtime's held (the caller holds none).
     pub(super) fn dma_buf_image(
         &self,
         plan: &ImagePlan,
@@ -1186,29 +1238,30 @@ impl Device {
         }
         let offset = texels.at % page;
         let pitches = (texels.row_pitch, texels.slice_pitch);
-        let made =
-            self.explicit_plane_image(plan, &view_formats, (offset, "its first page"), pitches)?;
-        let (raw, requirements, _) = match made {
-            Ok(made) => made,
-            Err(why) => return Ok(Err(why)),
-        };
+        let (raw, requirements, bound_at) =
+            match self.plane_image(plan, &view_formats, offset, pitches)? {
+                Ok(made) => made,
+                Err(why) => return Ok(Err((DmaBufRefusal::Pitch, why))),
+            };
         let refuse = |kind: DmaBufRefusal, why: String| {
             // SAFETY: the image is live and unbound, and no command uses it.
             unsafe { release::object(raw_device, raw) };
             Ok(Err((kind, why)))
         };
-        // The pages from the texels' first, through the image's memory.
+        // The pages from the texels' first, through the image's memory from where it binds.
         let first = texels.at - offset;
-        let length = match requirements.size.checked_next_multiple_of(page) {
+        let end = (bound_at.unwrap_or(0)).checked_add(requirements.size);
+        let length = match end.and_then(|end| end.checked_next_multiple_of(page)) {
             Some(length) if texels.pages.holds(first, length) => length,
             _ => {
                 return refuse(
                     DmaBufRefusal::Pages,
                     format!(
-                    "its image's memory, {} bytes from the first page of its texels, runs past \
-                     the pages the buffer's range touches",
-                    requirements.size
-                ),
+                        "its image's memory, {} bytes from {} bytes into the first page of its \
+                         texels, runs past the pages the buffer's range touches",
+                        requirements.size,
+                        bound_at.unwrap_or(0)
+                    ),
                 )
             }
         };
@@ -1235,21 +1288,139 @@ impl Device {
                 length,
                 granule: length,
             },
+            bound_at,
         }))
+    }
+
+    /// The `DRM_FORMAT_MOD_LINEAR` image of `plan` for dma-bufs over texels `offset` bytes into
+    /// their first page, rows and slices `pitches` apart, unbound, with its memory requirements
+    /// and where it binds in the import of their pages ([`Unbound`]): its one plane at `offset`,
+    /// for a dedicated import (`None`), where the driver lays that plane out there; else, where it
+    /// lays it out at another offset and `offset` is not 0, the image of its plane at offset 0 for
+    /// a binding at `offset` ([`offset_bound_image`](Self::offset_bound_image), `Some(offset)`).
+    /// Why not, in words, where the driver refuses the plane, lays it out otherwise and makes no
+    /// such image bound at the offset, or lays out its rows or slices otherwise.
+    fn plane_image(
+        &self,
+        plan: &ImagePlan,
+        view_formats: &[vk::Format],
+        offset: u64,
+        pitches: (u64, u64),
+    ) -> Result<Result<(vk::Image, vk::MemoryRequirements, Option<u64>), String>, Error> {
+        let explicit =
+            self.explicit_plane_image(plan, view_formats, (offset, "its first page"), pitches)?;
+        // A test's stand-in for a driver that lays the plane out at offset 0.
+        #[cfg(test)]
+        let explicit = match explicit {
+            Ok((raw, _, report))
+                if offset != 0 && self.plane_route_forced() == PlaneRoute::AtOffset =>
+            {
+                // SAFETY: the image is live and unbound, and no command uses it.
+                unsafe { release::object(self.shared().vk(), raw) };
+                let answered = vk::SubresourceLayout {
+                    offset: 0,
+                    ..report
+                };
+                let why = format!("a test takes the plane at offset {offset} as laid out at 0");
+                Err(PlaneMiss::Answered(answered, why))
+            }
+            explicit => explicit,
+        };
+        let why = match explicit {
+            Ok((raw, requirements, _)) => return Ok(Ok((raw, requirements, None))),
+            Err(PlaneMiss::Answered(report, why)) if offset != 0 && report.offset != offset => why,
+            Err(miss) => return Ok(Err(miss.words())),
+        };
+        let bound = self.offset_bound_image(plan, view_formats, offset, pitches)?;
+        Ok(match bound {
+            Ok((raw, requirements)) => Ok((raw, requirements, Some(offset))),
+            Err(why_not) => Err(format!(
+                "{why}; and an image of its plane at offset 0 is not bound at offset {offset} of \
+                 an import of its pages: {why_not}"
+            )),
+        })
+    }
+
+    /// The `DRM_FORMAT_MOD_LINEAR` image of `plan` for dma-bufs, viewed as `view_formats`, its one
+    /// plane at offset 0 with rows and slices `pitches` apart, unbound, with its memory
+    /// requirements: to be bound at `offset` of an import of its texels' pages that is no
+    /// dedicated allocation, where the driver lays out an explicit plane at `offset` at another
+    /// offset. Vulkan places an image's memory in memory it shares by its binding's offset
+    /// (`vkBindImageMemory`'s `memoryOffset`: the image's bytes are those from there), and lays a
+    /// `DRM_FORMAT_MOD_LINEAR` plane's texels from the plane's offset in them, so this image's
+    /// texels are those from `offset` of the import, at the plane's pitches. The bytes of the
+    /// pages before `offset` lie outside the image, which a dedicated import's binding at offset 0
+    /// would hold. Why not, the image released, where the driver refuses the plane or lays it out
+    /// otherwise; the image requires a dedicated allocation
+    /// (`VkMemoryDedicatedRequirements::requiresDedicatedAllocation`,
+    /// `VUID-vkBindImageMemory-image-01445`), which binds an image at offset 0 alone
+    /// (`VUID-vkBindImageMemory-memory-02628`); its memory's alignment does not divide `offset`
+    /// (`VUID-vkBindImageMemory-None-10735`); or the image format query takes dma-bufs for it in
+    /// a dedicated allocation alone (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`).
+    fn offset_bound_image(
+        &self,
+        plan: &ImagePlan,
+        view_formats: &[vk::Format],
+        offset: u64,
+        pitches: (u64, u64),
+    ) -> Result<Result<(vk::Image, vk::MemoryRequirements), String>, Error> {
+        let raw_device = self.shared().vk();
+        let within = (0, "the binding at its texels");
+        let raw = match self.explicit_plane_image(plan, view_formats, within, pitches)? {
+            Ok((raw, _, _)) => raw,
+            Err(miss) => return Ok(Err(miss.words())),
+        };
+        let mut dedicated = vk::MemoryDedicatedRequirements::default();
+        let mut asked = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+        let query = vk::ImageMemoryRequirementsInfo2::default().image(raw);
+        // SAFETY: `raw` is a live image of this device; the query is core in Vulkan 1.1.
+        unsafe { raw_device.get_image_memory_requirements2(&query, &mut asked) };
+        let requirements = asked.memory_requirements;
+        let requires_dedicated = dedicated.requires_dedicated_allocation != vk::FALSE;
+        let features = match self.modifier_format_query(plan, view_formats, ModifierMemory::DmaBuf)
+        {
+            Ok((_, features)) => features,
+            Err(error) => {
+                // SAFETY: the image is live and unbound, and no command uses it.
+                unsafe { release::object(raw_device, raw) };
+                return Ok(Err(format!(
+                    "the device's image format query reports no such image ({error:?})"
+                )));
+            }
+        };
+        let why = if requires_dedicated {
+            "it requires a dedicated allocation, which binds it at offset 0 alone".to_owned()
+        } else if !offset.is_multiple_of(requirements.alignment.max(1)) {
+            format!(
+                "its memory's alignment of {} bytes does not divide the offset",
+                requirements.alignment
+            )
+        } else if features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY) {
+            format!(
+                "the image format query takes dma-bufs for it in a dedicated allocation alone \
+                 (features {:#x})",
+                features.as_raw()
+            )
+        } else {
+            return Ok(Ok((raw, requirements)));
+        };
+        // SAFETY: the image is live and unbound, and no command uses it.
+        unsafe { release::object(raw_device, raw) };
+        Ok(Err(why))
     }
 
     /// A `DRM_FORMAT_MOD_LINEAR` image of `plan` for dma-bufs, viewed as `view_formats`, its one
     /// plane at `offset` of its memory (`within`, in words) with rows and slices `pitches` apart,
     /// unbound and made `UNDEFINED`, with its memory requirements and its plane's layout as the
-    /// driver reports it: bound to a dedicated import, whether or not the driver asks one. Why not
-    /// where the driver refuses the layout or lays the plane out otherwise.
+    /// driver reports it. Why not where the driver refuses the layout, or lays the plane out
+    /// otherwise (with its answer: [`PlaneMiss`]).
     fn explicit_plane_image(
         &self,
         plan: &ImagePlan,
         view_formats: &[vk::Format],
         (offset, within): (u64, &str),
         (row_pitch, slice_pitch): (u64, u64),
-    ) -> Result<Result<ExplicitPlane, (DmaBufRefusal, String)>, Error> {
+    ) -> Result<Result<ExplicitPlane, PlaneMiss>, Error> {
         let raw_device = self.shared().vk();
         let array_pitch = if plan.layers > 1 { slice_pitch } else { 0 };
         let planes = [vk::SubresourceLayout {
@@ -1266,13 +1437,10 @@ impl Device {
         let raw = match self.drm_linear_image(plan, view_formats, &mut explicit, dma_buf)? {
             Ok(raw) => raw,
             Err(error) => {
-                return Ok(Err((
-                    DmaBufRefusal::Pitch,
-                    format!(
-                        "the driver refuses a DRM_FORMAT_MOD_LINEAR plane at offset {offset} of \
-                         {within} with rows {row_pitch} bytes apart ({error:?})"
-                    ),
-                )))
+                return Ok(Err(PlaneMiss::Refused(format!(
+                    "the driver refuses a DRM_FORMAT_MOD_LINEAR plane at offset {offset} of \
+                     {within} with rows {row_pitch} bytes apart ({error:?})"
+                ))))
             }
         };
         // SAFETY: `raw` is a live image of this device.
@@ -1281,21 +1449,24 @@ impl Device {
         // is plane 0 (`VUID-vkGetImageSubresourceLayout-tiling-09433`).
         let report = unsafe { raw_device.get_image_subresource_layout(raw, memory_plane_0()) };
         exit_guard::called(Call::GetImageSubresourceLayout);
+        // A test's stand-in for a driver whose answer is not checked: the image as made.
+        #[cfg(test)]
+        if self.plane_route_forced() == PlaneRoute::Unchecked {
+            return Ok(Ok((raw, requirements, report)));
+        }
         if report.offset != offset
             || report.row_pitch != row_pitch
             || (plan.layers > 1 && report.array_pitch != array_pitch)
         {
             // SAFETY: the image is live and unbound, and no command uses it.
             unsafe { release::object(raw_device, raw) };
-            return Ok(Err((
-                DmaBufRefusal::Pitch,
-                format!(
-                    "the driver lays the plane out at offset {}, rows {} and slices {} bytes \
-                     apart, where the texels lie at offset {offset}, rows {row_pitch} and slices \
-                     {array_pitch} apart",
-                    report.offset, report.row_pitch, report.array_pitch
-                ),
-            )));
+            let why = format!(
+                "the driver lays the plane out at offset {}, rows {} and slices {} bytes apart, \
+                 where the texels lie at offset {offset}, rows {row_pitch} and slices \
+                 {array_pitch} apart",
+                report.offset, report.row_pitch, report.array_pitch
+            );
+            return Ok(Err(PlaneMiss::Answered(report, why)));
         }
         Ok(Ok((raw, requirements, report)))
     }
@@ -1333,7 +1504,7 @@ impl Device {
         let made = self.explicit_plane_image(plan, &view_formats, within, pitches)?;
         let (raw, requirements, report) = match made {
             Ok(made) => made,
-            Err((_, why)) => return Ok(Err(why)),
+            Err(miss) => return Ok(Err(miss.words())),
         };
         let why = if requirements.size > texels.size {
             Some(format!(
@@ -1444,9 +1615,12 @@ impl Device {
         }))
     }
 
-    /// `unbound`'s image bound to a dedicated import of the dma-buf the caller's source makes of
-    /// its pages, of `texels`' memory type, and counted; why not, the image released, where the
-    /// source fails or answers against its contract or the driver refuses the import or binding.
+    /// `unbound`'s image bound to an import of the dma-buf the caller's source makes of its
+    /// pages, of `texels`' memory type, and counted: a dedicated import, the image at its offset
+    /// 0; or, for an image bound at its texels' offset ([`Unbound`]), an import of the dma-buf's
+    /// pages whole that is none, the image at that offset
+    /// (`WorkCounts::dma_buf_images_at_offset`). Why not, the image released, where the source
+    /// fails or answers against its contract or the driver refuses the import or binding.
     pub(super) fn bind_dma_buf_image(
         &self,
         unbound: Unbound,
@@ -1456,6 +1630,7 @@ impl Device {
             raw,
             requirements,
             request,
+            bound_at,
         } = unbound;
         let shared = self.shared();
         let raw_device = shared.vk();
@@ -1504,15 +1679,20 @@ impl Device {
         };
         // The pages' type (host-visible and coherent, as every class of theirs is), dedicated to
         // the image at its requirements' size exactly
-        // (`VUID-VkMemoryDedicatedAllocateInfo-image-01433`), within the dma-buf's pages.
+        // (`VUID-VkMemoryDedicatedAllocateInfo-image-01433`), within the dma-buf's pages; or, for
+        // an image bound at its texels' offset, the dma-buf's pages whole, dedicated to nothing.
         let allowed = (types & (1 << texels.type_index), MemoryClass::Shared);
+        let (size, dedicated_to) = match bound_at {
+            None => (requirements.size, Some(raw)),
+            Some(_) => (request.length, None),
+        };
         let imported = memory::import_dma_buf(
             &shared.memory,
             raw_device,
             chunk.fd,
-            requirements.size,
+            size,
             allowed,
-            Some(raw),
+            dedicated_to,
         );
         let memory = match imported {
             Ok((memory, _)) => memory,
@@ -1537,14 +1717,21 @@ impl Device {
                 )
             }
         };
-        // SAFETY: the image is unbound; the memory is its dedicated allocation, of its size.
-        if let Err(error) = unsafe { crate::creation::bind_image(raw_device, raw, memory, 0) } {
+        // SAFETY: the image is unbound; the memory is its dedicated allocation, of its size, or
+        // an import of its pages that is none, of a type it takes, where its requirements' size
+        // from the offset, a multiple of their alignment, lies within it (`offset_bound_image`,
+        // `dma_buf_image_unbound`).
+        let at = bound_at.unwrap_or(0);
+        if let Err(error) = unsafe { crate::creation::bind_image(raw_device, raw, memory, at) } {
             // SAFETY: nothing is bound to the memory, and no command uses it.
             unsafe { release::object(raw_device, memory) };
-            let why = format!("the driver refuses to bind the import ({error:?})");
+            let why = format!("the driver refuses to bind the import at offset {at} ({error:?})");
             return refuse(DmaBufRefusal::Import, why);
         }
         shared.counts.dma_buf_image_made();
+        if bound_at.is_some() {
+            shared.counts.dma_buf_image_bound_at_offset();
+        }
         let mut import = DmaBufPages::new(self, Arc::clone(source), request, true);
         import.hold(memory);
         Ok(Ok(DmaBufImage {
@@ -1808,6 +1995,49 @@ impl Device {
         view_formats: &[vk::Format],
         memory: ModifierMemory,
     ) -> Result<vk::ImageFormatProperties, String> {
+        let (limits, features) = match self.modifier_format_query(plan, view_formats, memory) {
+            Ok(answer) => answer,
+            Err(error) => {
+                return Err(format!(
+                    "the device's image format query reports no DRM_FORMAT_MOD_LINEAR image of \
+                     {:?}, usage {:?}, flags {:?} for {} ({error:?})",
+                    plan.format,
+                    plan.usage,
+                    plan.flags,
+                    memory.words(),
+                ))
+            }
+        };
+        // An image of the runtime's own memory imports none.
+        if memory.handle_type().is_none() {
+            return Ok(limits);
+        }
+        // An image for host allocations is bound at an offset of a buffer's import, and one for
+        // exported memory at an offset of an exported block: neither is a dedicated allocation.
+        let dedicated_only = memory.shared_memory()
+            && features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY);
+        if !features.contains(memory.needs()) || dedicated_only {
+            return Err(format!(
+                "its image format query refuses {} to a DRM_FORMAT_MOD_LINEAR image of {:?}, \
+                 or takes them in a dedicated allocation alone (features {:#x})",
+                memory.words(),
+                plan.format,
+                features.as_raw()
+            ));
+        }
+        Ok(limits)
+    }
+
+    /// The image format query's answer for a `DRM_FORMAT_MOD_LINEAR` image of `plan` for
+    /// `memory`, viewed as `view_formats`: its limits, and the external memory features of
+    /// `memory`'s handle type for it (none for the runtime's own memory, of no handle type); or
+    /// the query's refusal.
+    fn modifier_format_query(
+        &self,
+        plan: &ImagePlan,
+        view_formats: &[vk::Format],
+        memory: ModifierMemory,
+    ) -> Result<(vk::ImageFormatProperties, vk::ExternalMemoryFeatureFlags), vk::Result> {
         let shared = self.shared();
         let families = &shared.queue_families;
         let mut modifier = vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::default()
@@ -1854,36 +2084,22 @@ impl Device {
                     &mut properties,
                 )
         };
-        if let Err(error) = queried {
-            return Err(format!(
-                "the device's image format query reports no DRM_FORMAT_MOD_LINEAR image of {:?}, \
-                 usage {:?}, flags {:?} for {} ({error:?})",
-                plan.format,
-                plan.usage,
-                plan.flags,
-                memory.words(),
-            ));
-        }
+        queried?;
         let limits = properties.image_format_properties;
-        // An image of the runtime's own memory imports none.
-        if memory.handle_type().is_none() {
-            return Ok(limits);
-        }
         let features = imported.external_memory_properties.external_memory_features;
-        // An image for host allocations is bound at an offset of a buffer's import, and one for
-        // exported memory at an offset of an exported block: neither is a dedicated allocation.
-        let dedicated_only = memory.shared_memory()
-            && features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY);
-        if !features.contains(memory.needs()) || dedicated_only {
-            return Err(format!(
-                "its image format query refuses {} to a DRM_FORMAT_MOD_LINEAR image of {:?}, \
-                 or takes them in a dedicated allocation alone (features {:#x})",
-                memory.words(),
-                plan.format,
-                features.as_raw()
-            ));
+        Ok((limits, features))
+    }
+}
+
+#[cfg(test)]
+impl Device {
+    /// The route a test forced (`DeviceShared::plane_route_forced`, as `route as u8`).
+    fn plane_route_forced(&self) -> PlaneRoute {
+        match (self.shared().plane_route_forced).load(std::sync::atomic::Ordering::Relaxed) {
+            1 => PlaneRoute::Unchecked,
+            2 => PlaneRoute::AtOffset,
+            _ => PlaneRoute::Answered,
         }
-        Ok(limits)
     }
 }
 

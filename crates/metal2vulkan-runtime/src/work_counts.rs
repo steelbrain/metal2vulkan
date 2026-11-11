@@ -392,6 +392,7 @@ pub(crate) struct Counters {
     run_imports_live: AtomicU64,
     dma_buf_sparse_buffers: AtomicU64,
     dma_buf_images: AtomicU64,
+    dma_buf_images_at_offset: AtomicU64,
     exported_dma_buf_images: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
     modifier_feature_queries: AtomicU64,
@@ -3512,10 +3513,17 @@ impl Counters {
         self.dma_buf_sparse_buffers.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A texture's image over dma-buf pages was made and bound to a dedicated import of a dma-buf
-    /// of its own pages (`dma_buf.rs`).
+    /// A texture's image over dma-buf pages was made and bound to an import of a dma-buf of its
+    /// own pages (`dma_buf.rs`).
     pub(crate) fn dma_buf_image_made(&self) {
         self.dma_buf_images.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Of those, one whose plane lies at offset 0, bound at its texels' offset of an import that
+    /// is no dedicated allocation (`dma_buf.rs`'s `offset_bound_image`).
+    pub(crate) fn dma_buf_image_bound_at_offset(&self) {
+        self.dma_buf_images_at_offset
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// The device made an image of a texture over a buffer of its own memory exported as a
@@ -7127,11 +7135,18 @@ pub struct WorkCounts {
     /// assembled from several chunks.
     pub dma_buf_sparse_buffers: u64,
     /// Images of textures placed in a no-copy heap over such dma-buf memory (or a view of one),
-    /// each a `DRM_FORMAT_MOD_LINEAR` image bound to a dedicated import of a dma-buf of its own
-    /// pages from the caller's source, aliasing the heap's bytes: one per image made, a rebind's
-    /// too. Not counted in `dma_buf_imports`. A texture over a no-copy buffer's pages takes no such
-    /// image: it is a shadow (`shadowed-texture`).
+    /// and of textures in place over a no-copy buffer's such pages (`dma_buf_textures_in_place`),
+    /// each a `DRM_FORMAT_MOD_LINEAR` image bound to an import of a dma-buf of its own pages from
+    /// the caller's source, aliasing the heap's or buffer's bytes: one per image made, a
+    /// rebind's too. Not counted in `dma_buf_imports`.
     pub dma_buf_images: u64,
+    /// Of `dma_buf_images`, those whose plane lies at offset 0 of an image bound at its texels'
+    /// offset in their first page, in an import of their pages that is no dedicated allocation:
+    /// made where the driver lays out an explicit plane at that offset at another one
+    /// (`vkGetImageSubresourceLayout`), and takes such a binding (it requires no dedicated
+    /// allocation of the image, and its memory's alignment divides the offset). Elsewhere an
+    /// image's plane starts at its texels' offset, bound at offset 0 of a dedicated import.
+    pub dma_buf_images_at_offset: u64,
     /// Images of textures over a buffer of the runtime's memory exported as a dma-buf
     /// (`MemoryExport::DmaBuf`: a shared block of such buffers, or a buffer's dedicated
     /// allocation) where no image binds in that memory itself (RADV takes the dma-buf handle type
@@ -8922,6 +8937,7 @@ impl Device {
             host_imports_kept_for_fds: counters.host_imports_kept_for_fds.load(Ordering::Relaxed),
             dma_buf_sparse_buffers: counters.dma_buf_sparse_buffers.load(Ordering::Relaxed),
             dma_buf_images: counters.dma_buf_images.load(Ordering::Relaxed),
+            dma_buf_images_at_offset: counters.dma_buf_images_at_offset.load(Ordering::Relaxed),
             exported_dma_buf_images: counters.exported_dma_buf_images.load(Ordering::Relaxed),
             dma_buf_image_fallbacks: counters.dma_buf_image_fallbacks.load(Ordering::Relaxed),
             modifier_feature_queries: counters.modifier_feature_queries.load(Ordering::Relaxed),

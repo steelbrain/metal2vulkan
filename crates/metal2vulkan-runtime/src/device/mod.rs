@@ -573,6 +573,11 @@ pub(super) struct DeviceShared {
     /// render target `STORAGE` for nothing.
     #[cfg(test)]
     pub(crate) storage_costs_forced: AtomicBool,
+    /// The route a test takes for images over dma-buf pages, whatever the driver answers of an
+    /// explicit plane's offset (`dma_buf.rs`'s `PlaneRoute`, as its `u8`): for the tests of
+    /// `tests/dma_buf_plane_offset.rs` on a driver that answers the offset asked.
+    #[cfg(test)]
+    pub(crate) plane_route_forced: std::sync::atomic::AtomicU8,
     /// The logs of its shadows over host pages a consumer logs the writes to
     /// (`dirty_pages.rs`).
     pub(super) dirty: super::dirty_pages::DirtyShadows,
@@ -2745,6 +2750,8 @@ impl Device {
             linear_rule_forced: Default::default(),
             #[cfg(test)]
             storage_costs_forced: Default::default(),
+            #[cfg(test)]
+            plane_route_forced: Default::default(),
             dirty: Default::default(),
             standings: Default::default(),
             fresh: Default::default(),

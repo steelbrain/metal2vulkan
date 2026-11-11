@@ -2705,6 +2705,7 @@ field	metal2vulkan-runtime::WorkCounts.dispatches_settled_as_before	pub dispatch
 field	metal2vulkan-runtime::WorkCounts.dma_buf_image_fallbacks	pub dma_buf_image_fallbacks: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_image_memories_live	pub dma_buf_image_memories_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_images	pub dma_buf_images: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_images_at_offset	pub dma_buf_images_at_offset: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_imports	pub dma_buf_imports: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_memories_live	pub dma_buf_memories_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_sparse_buffers	pub dma_buf_sparse_buffers: u64
