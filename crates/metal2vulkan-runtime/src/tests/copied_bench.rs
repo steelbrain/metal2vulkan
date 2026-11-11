@@ -459,3 +459,57 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
     );
     drop(copied);
 }
+
+/// The rate of a copy's block tags (`copied::tag`), portable and (on an x86-64 host with it) AVX2,
+/// against comparing two equal streams 4 KiB at a time, over 256 MiB and over 64 KiB that stays in
+/// the first-level cache, printed as GB/s, the best of [`RUNS`] (`COPIED-TAG`).
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn copied_tag_bench() {
+    use crate::copied::{tag_portable, TAG_BLOCK};
+    for length in [64 << 10, 256 << 20] {
+        let one: Vec<u8> = (0..length).map(|b: usize| (b ^ (b >> 11)) as u8).collect();
+        let two = one.clone();
+        let rate = |name: &str, pass: &dyn Fn() -> u64| {
+            let rounds = (256 << 20) / length;
+            let mut best = f64::MAX;
+            let mut sink = 0u64;
+            for _ in 0..RUNS {
+                let started = Instant::now();
+                for _ in 0..rounds {
+                    sink = sink.wrapping_add(std::hint::black_box(pass()));
+                }
+                best = best.min(started.elapsed().as_secs_f64());
+            }
+            let gb = (rounds * length) as f64 / 1e9;
+            eprintln!(
+                "COPIED-TAG {name} over {} KiB: {:.2} GB/s ({sink:x})",
+                length >> 10,
+                gb / best
+            );
+        };
+        let blocks = || {
+            one.chunks_exact(TAG_BLOCK)
+                .map(|b| <&[u8; TAG_BLOCK]>::try_from(b).unwrap())
+        };
+        rate("portable tag", &|| {
+            blocks()
+                .map(|b| tag_portable(b)[0])
+                .fold(0, u64::wrapping_add)
+        });
+        #[cfg(target_arch = "x86_64")]
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: the host has AVX2.
+            let avx2 = |b| unsafe { crate::copied::tag_avx2(b) }[0];
+            rate("avx2 tag", &|| {
+                blocks().map(avx2).fold(0, u64::wrapping_add)
+            });
+        }
+        rate("two-stream compare", &|| {
+            let pairs = one.chunks_exact(4096).zip(two.chunks_exact(4096));
+            pairs
+                .filter(|(a, b)| std::hint::black_box(a) != std::hint::black_box(b))
+                .count() as u64
+        });
+    }
+}

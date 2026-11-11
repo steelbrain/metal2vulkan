@@ -359,8 +359,37 @@ fn key() -> &'static [u32; KEY_WORDS] {
 /// 2^-64 (the UMAC paper, Black, Halevi, Krawczyk, Krovetz and Rogaway, 1999): for any two
 /// different blocks, which no key decides, their tags agree with a chance of at most 2^-64. A
 /// block a copy's base takes as unchanged may have changed with that chance.
+///
+/// Built for AVX2 too, which an x86-64 host that has it runs ([`tag_avx2`]): the same sums, four
+/// lanes of each to a register.
 pub(crate) fn tag(block: &[u8; TAG_BLOCK]) -> Tag {
-    let key = key();
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: the host has AVX2.
+        return unsafe { tag_avx2(block) };
+    }
+    tag_portable(block)
+}
+
+/// [`tag`] for any host of the target.
+pub(crate) fn tag_portable(block: &[u8; TAG_BLOCK]) -> Tag {
+    nh(block, key())
+}
+
+/// [`tag`] for an x86-64 host with AVX2.
+///
+/// # Safety
+///
+/// The host has AVX2.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn tag_avx2(block: &[u8; TAG_BLOCK]) -> Tag {
+    nh(block, key())
+}
+
+/// The two NH sums of [`tag`], under `key`.
+#[inline(always)]
+fn nh(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
     let (mut first, mut second) = ([0u64; 4], [0u64; 4]);
     for (stretch, bytes) in block.chunks_exact(32).enumerate() {
         let word = |at: usize| {
