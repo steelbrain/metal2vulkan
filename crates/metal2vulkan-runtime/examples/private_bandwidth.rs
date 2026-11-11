@@ -20,7 +20,7 @@
 //! GB/s is read plus written over the median command buffer: `wall` from commit to its wait's end,
 //! `gpu` from its GPU start and end times. A `PASSES` line after it gives each timed command
 //! buffer's two times in milliseconds, `wall/gpu`, and a `COUNTS` line every `WorkCounts` field
-//! the last pass moved. The memory counts are those the two buffers' making
+//! the first timed pass and the last one moved. The memory counts are those the two buffers' making
 //! moved: `vkAllocateMemory` and `vkBindBufferMemory` calls, live dedicated blocks, live empty
 //! blocks, overflows into system memory. With `METAL2VULKAN_LOG_MEMORY=1` the memory log names
 //! the block and memory type each buffer took.
@@ -36,7 +36,7 @@ use metal2vulkan_runtime::{
     WorkCounts,
 };
 use std::ptr::NonNull;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The bytes of each buffer.
 const BYTES: u64 = 256 << 20;
@@ -62,7 +62,14 @@ enum Made {
     Pinned,
     /// `newBufferWithBytesNoCopy:length:options:deallocator:` over pages of the example's own.
     NoCopy,
+    /// `newBufferWithLength:options:`, with a `Shared` no-copy buffer over pages of the example's
+    /// own beside each, which the kernel never uses and which goes with it: as a guest's `Managed`
+    /// buffer is made with its CPU copy over the guest's pages.
+    Beside,
 }
+
+/// The storage mode's bits of a resource's options.
+const STORAGE_MASK: u64 = 0xf0;
 
 /// The resource option bit no Metal header names that programs pass with their buffers' options
 /// (`ResourceOptions::BIT_20`), as a guest's calls carry it.
@@ -115,10 +122,11 @@ impl Drop for Pages {
 }
 
 /// The sequences, each on a device of its own: a pair first in a device, and after pairs of each
-/// storage mode went.
-const SEQUENCES: [(&str, &[Pair]); 5] = [
+/// storage mode went, the pause between two pairs' making and the last one's release.
+const SEQUENCES: [(&str, Duration, &[Pair]); 6] = [
     (
         "first",
+        Duration::ZERO,
         &[
             Pair(StorageMode::Private, Made::New, 0),
             Pair(StorageMode::Private, Made::Descriptor, 0),
@@ -127,6 +135,7 @@ const SEQUENCES: [(&str, &[Pair]); 5] = [
     ),
     (
         "after-managed",
+        Duration::ZERO,
         &[
             Pair(StorageMode::Managed, Made::New, 0),
             Pair(StorageMode::Private, Made::New, 0),
@@ -135,6 +144,7 @@ const SEQUENCES: [(&str, &[Pair]); 5] = [
     ),
     (
         "after-shared",
+        Duration::ZERO,
         &[
             Pair(StorageMode::Shared, Made::New, 0),
             Pair(StorageMode::Private, Made::New, 0),
@@ -143,6 +153,7 @@ const SEQUENCES: [(&str, &[Pair]); 5] = [
     ),
     (
         "shared-managed-private",
+        Duration::ZERO,
         &[
             Pair(StorageMode::Shared, Made::Pinned, 0),
             Pair(StorageMode::Managed, Made::Pinned, 0),
@@ -153,6 +164,7 @@ const SEQUENCES: [(&str, &[Pair]); 5] = [
     // no-copy calls pass it, then `Private` ones at its addresses, of its plain options.
     (
         "no-copy-then-private",
+        Duration::ZERO,
         &[
             Pair(StorageMode::Shared, Made::NoCopy, BIT_20),
             Pair(StorageMode::Managed, Made::NoCopy, BIT_20),
@@ -160,24 +172,57 @@ const SEQUENCES: [(&str, &[Pair]); 5] = [
             Pair(StorageMode::Private, Made::Pinned, BIT_20),
         ],
     ),
+    // As a guest's Metal buffers come: `Shared` ones over its pages, `Managed` ones with their CPU
+    // copies over its pages beside them, then `Private` ones at its addresses, each pair released
+    // and three seconds waited before the next.
+    (
+        "guest-order",
+        Duration::from_secs(3),
+        &[
+            Pair(StorageMode::Shared, Made::NoCopy, 0),
+            Pair(StorageMode::Managed, Made::Beside, 0),
+            Pair(StorageMode::Private, Made::Pinned, 0),
+        ],
+    ),
 ];
 
+/// A `Shared` no-copy buffer of `options`' other modes over new pages of the example's own, which
+/// it pushes to `pages`.
+fn no_copy(
+    device: &Device,
+    options: ResourceOptions,
+    pages: &mut Vec<Pages>,
+) -> common::Result<Buffer> {
+    let host = Pages::new()?;
+    // SAFETY: the pages outlive the buffer (`run_pair` drops them after it), and only its
+    // commands use them.
+    let buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(HostMemory::new(host.0), BYTES, options, None)
+    }?;
+    pages.push(host);
+    Ok(buffer)
+}
+
 /// One buffer of `pair`, the `index`th of its two, over pages it pushes to `pages` where it is a
-/// no-copy one.
-fn make(device: &Device, pair: Pair, index: u64, pages: &mut Vec<Pages>) -> common::Result<Buffer> {
+/// no-copy one, and the buffers beside it pushed to `beside`.
+fn make(
+    device: &Device,
+    pair: Pair,
+    index: u64,
+    (pages, beside): (&mut Vec<Pages>, &mut Vec<Buffer>),
+) -> common::Result<Buffer> {
     let options = pair.options();
     let buffer = match pair.1 {
-        Made::NoCopy => {
-            let host = Pages::new()?;
-            // SAFETY: the pages outlive the buffer (`run_pair` drops them after it), and only its
-            // commands use them.
-            let buffer = unsafe {
-                device.new_buffer_with_bytes_no_copy(HostMemory::new(host.0), BYTES, options, None)
-            }?;
-            pages.push(host);
+        Made::NoCopy => no_copy(device, options, pages)?,
+        Made::New => device.new_buffer(BYTES, options)?,
+        Made::Beside => {
+            let buffer = device.new_buffer(BYTES, options)?;
+            let shared = ResourceOptions::from_raw(
+                (options.raw() & !STORAGE_MASK) | ResourceOptions::shared().raw(),
+            )?;
+            beside.push(no_copy(device, shared, pages)?);
             buffer
         }
-        Made::New => device.new_buffer(BYTES, options)?,
         Made::Descriptor => device.new_buffer_with_descriptor(BufferDescriptor::new(
             BYTES,
             options,
@@ -291,10 +336,10 @@ fn run_pair(
     pair: Pair,
 ) -> common::Result<()> {
     // Before the buffers: dropped after them.
-    let mut pages = Vec::new();
+    let (mut pages, mut beside) = (Vec::new(), Vec::new());
     let before = device.work_counts();
-    let input = make(device, pair, 0, &mut pages)?;
-    let output = make(device, pair, 1, &mut pages)?;
+    let input = make(device, pair, 0, (&mut pages, &mut beside))?;
+    let output = make(device, pair, 1, (&mut pages, &mut beside))?;
     let made = moved(&before, &device.work_counts());
     let command_buffer = queue.command_buffer()?;
     let mut blit = command_buffer.blit_command_encoder()?;
@@ -303,7 +348,7 @@ fn run_pair(
     blit.end_encoding()?;
     common::run(&command_buffer)?;
     let (mut walls, mut gpus) = (Vec::new(), Vec::new());
-    let mut last_counts = String::new();
+    let mut counts = Vec::new();
     for index in 0..PASSES {
         let before = device.work_counts();
         let (wall, gpu) = pass(queue, state, &input, &output)?;
@@ -311,12 +356,14 @@ fn run_pair(
             walls.push(wall);
             gpus.push(gpu);
         }
-        if index == PASSES - 1 {
-            last_counts = changed(&before, &device.work_counts());
+        if index == PASSES - TIMED || index == PASSES - 1 {
+            counts.push((index, changed(&before, &device.work_counts())));
         }
     }
     check(device, queue, &output, &pair)?;
-    println!("COUNTS {sequence} {} last pass: {last_counts}", pair.name());
+    for (index, moved) in counts {
+        println!("COUNTS {sequence} {} pass {index}: {moved}", pair.name());
+    }
     let passes: Vec<String> = (walls.iter().zip(&gpus))
         .map(|(wall, gpu)| format!("{:.2}/{:.2}", wall * 1e3, gpu * 1e3))
         .collect();
@@ -336,7 +383,7 @@ fn run_pair(
 }
 
 fn main() -> common::Result<()> {
-    for (sequence, pairs) in SEQUENCES {
+    for (sequence, pause, pairs) in SEQUENCES {
         // A device of its own: the last sequence's went with its last handle.
         let device = Device::system_default()?;
         let unified = device.properties().has_unified_memory;
@@ -349,7 +396,10 @@ fn main() -> common::Result<()> {
         let state = device
             .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())?;
         let queue = device.new_command_queue()?;
-        for &pair in pairs {
+        for (at, &pair) in pairs.iter().enumerate() {
+            if at > 0 {
+                std::thread::sleep(pause);
+            }
             run_pair(&device, (&queue, &state), sequence, pair)?;
         }
     }
