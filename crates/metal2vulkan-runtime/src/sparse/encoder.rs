@@ -440,7 +440,7 @@ impl ResourceStateCommandEncoder {
             EncoderKind::ResourceState,
             keys,
             None,
-            crate::rebind::Taken::default(),
+            (crate::rebind::Taken::default(), Default::default()),
         );
         state.end_sparse_encoder(
             &open.command_buffer,

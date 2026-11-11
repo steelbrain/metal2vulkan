@@ -1049,14 +1049,16 @@ impl State {
     /// with the event waits and signals encoded before it, and what it made resident joins the
     /// command buffer's residency (`Residency::join_encoder`): its heaps now, its resources where
     /// the command buffer's work first reads that residency
-    /// ([`joined_residency`](Self::joined_residency)). Its place among the ended encoders, which
-    /// each of its recordings' parts carries.
+    /// ([`joined_residency`](Self::joined_residency)). `takes` is what its first uses of copies
+    /// taken at use decided (`shadow::Takes`): an encoding of it again takes each as they did,
+    /// and a part of it that runs nothing gives its takes back ([`fail_part`](Self::fail_part)).
+    /// Its place among the ended encoders, which each of its recordings' parts carries.
     pub(super) fn encoder_ended(
         &mut self,
         kind: EncoderKind,
         keys: BTreeSet<ResourceKey>,
         residency: Option<Residency>,
-        taken: Taken,
+        (taken, takes): (Taken, Takes),
     ) -> usize {
         if let Some(ended) = &residency {
             self.residency
@@ -1072,7 +1074,7 @@ impl State {
             residency,
             taken,
             replay: None,
-            takes: Takes::default(),
+            takes,
             executions: 0..0,
             held: Vec::new(),
             unlogged: None,
@@ -1110,15 +1112,12 @@ impl State {
     }
 
     /// Keep `replay`, the log of ended encoder `encoder`, whose executions take `executions`
-    /// among the command buffer's, with `takes`, what its first uses of copies taken at use
-    /// decided, which an encoding of it again takes as they did. One of no such encoder comes
-    /// back, for the caller to let go of without this lock (what it holds may be the last hold of
-    /// a no-copy buffer).
+    /// among the command buffer's. One of no such encoder comes back, for the caller to let go
+    /// of without this lock (what it holds may be the last hold of a no-copy buffer).
     pub(super) fn keep_replay(
         &mut self,
         encoder: usize,
         replay: Option<Replay>,
-        takes: Takes,
         executions: Range<usize>,
     ) -> Option<Replay> {
         let replay = replay?;
@@ -1126,7 +1125,6 @@ impl State {
             return Some(replay);
         };
         record.replay = Some(Arc::new(replay));
-        record.takes = takes;
         record.executions = executions;
         None
     }
@@ -1831,13 +1829,16 @@ impl State {
     /// (a code-0 `commit_failed` has none).
     fn fail(&mut self, failure: Failure) {
         let State {
-            recorded, retained, ..
+            recorded,
+            retained,
+            ended,
+            ..
         } = self;
         for part in recorded
             .iter_mut()
             .filter(|part| failure.encoders.fails(part.encoder))
         {
-            State::fail_part(part, retained);
+            State::fail_part(part, ended, retained);
         }
         match failure.signals {
             FailedSignals::Every => {}
@@ -1863,21 +1864,35 @@ impl State {
     /// failed encoder's ([`fail_part`](Self::fail_part)).
     pub(super) fn leave_out_ended(&mut self, first: usize) {
         let State {
-            recorded, retained, ..
+            recorded,
+            retained,
+            ended,
+            ..
         } = self;
         for part in recorded.iter_mut().filter(|part| part.encoder >= first) {
-            State::fail_part(part, retained);
+            State::fail_part(part, ended, retained);
         }
     }
 
     /// A failed encoder's recorded `part` runs nothing: its segments (with their recordings),
     /// sparse updates and writes into ASTC carriers go to `retained`, released with what the
     /// command buffer retained without this lock, its `VkCommandBuffer`s are left unsubmitted,
-    /// and it keeps its place among the batches with its fences' waits and updates alone.
-    pub(super) fn fail_part(part: &mut Recorded, retained: &mut Vec<Box<dyn Any + Send + Sync>>) {
+    /// and it keeps its place among the batches with its fences' waits and updates alone. The
+    /// copies taken at use its encoder (among the `ended`) and its segments' recordings took are
+    /// given back, so the next use takes each (`shadow::Takes::give_back`): every one its encoder
+    /// took, whichever of its parts recorded it.
+    pub(super) fn fail_part(
+        part: &mut Recorded,
+        ended: &[EncoderRecord],
+        retained: &mut Vec<Box<dyn Any + Send + Sync>>,
+    ) {
+        if let Some(record) = ended.get(part.encoder) {
+            record.takes.give_back();
+        }
         for segment in part.segments.drain(..) {
             retained.push(Box::new((segment.work, segment.inputs)));
             if let Some(mut done) = segment.recorded {
+                done.takes.give_back();
                 retained.extend(done.retained.into_entry());
                 done.taken.retain_into(retained);
             }

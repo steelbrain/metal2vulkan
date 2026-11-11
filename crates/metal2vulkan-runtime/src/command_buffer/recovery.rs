@@ -109,7 +109,10 @@ pub(super) fn recovered(buffer: &CommandBufferShared) -> Option<Recovery> {
 pub(super) fn cut(buffer: &CommandBufferShared, check: &LoopCheck) {
     let mut state = lock(&buffer.state);
     let State {
-        recorded, retained, ..
+        recorded,
+        retained,
+        ended,
+        ..
     } = &mut *state;
     let holds_check = |part: &Recorded| {
         part.segments.iter().any(|segment| match &segment.work {
@@ -121,6 +124,6 @@ pub(super) fn cut(buffer: &CommandBufferShared, check: &LoopCheck) {
         return;
     };
     for part in &mut recorded[from..] {
-        State::fail_part(part, retained);
+        State::fail_part(part, ended, retained);
     }
 }

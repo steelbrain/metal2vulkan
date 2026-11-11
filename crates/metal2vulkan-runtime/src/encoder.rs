@@ -69,7 +69,7 @@ use super::retained::Retained;
 use super::row_copies::RowCopies;
 use super::shadow::{
     CopyCause, CopyGate, GatedCopyIn, LaterRun, LevelsCopy, ShadowCopies, ShadowCopy, ShadowSync,
-    ShadowUse, Step, Within,
+    ShadowUse, Step, Takes, Within,
 };
 use super::shadow_copy_in::CopyIn;
 use super::shadow_merge::{MergeLease, ShadowMerge};
@@ -319,6 +319,9 @@ pub(super) struct RecordedSegment {
     /// Why some of its commands ran nothing: records the host step could not run
     /// (`indirect_execute.rs`), which the execution report states.
     pub(super) faults: ReplayFaults,
+    /// The copies taken at use its recording took (`shadow::Takes`), given back where its part
+    /// runs nothing (`State::fail_part`).
+    pub(super) takes: Takes,
 }
 
 impl RecordedSegment {
@@ -334,6 +337,7 @@ impl RecordedSegment {
             taken: Default::default(),
             resident_misses: 0,
             faults: ReplayFaults::default(),
+            takes: Takes::default(),
         }
     }
 
@@ -347,6 +351,7 @@ impl RecordedSegment {
         self.taken.join(other.taken);
         self.resident_misses = self.resident_misses.wrapping_add(other.resident_misses);
         self.faults = ReplayFaults(self.faults.0 | other.faults.0);
+        self.takes.join(other.takes);
     }
 }
 
@@ -2793,8 +2798,8 @@ impl EncoderCore {
         }
         // What the encoder leaves the command buffer's later encoders (`shadow::ShadowCarry`).
         state.shadows_carried(shadows.ended());
-        // What its first uses of copies taken at use decided, for an encoding of it again
-        // (`shadow::Takes`).
+        // What its first uses of copies taken at use decided, for an encoding of it again and
+        // for a part of it that runs nothing to give back (`shadow::Takes`).
         let takes = shadows.into_takes();
         if !first_copies.is_empty() {
             let again = state.shadows_copied_in(&first_copies);
@@ -2805,7 +2810,7 @@ impl EncoderCore {
         }
         state.use_heaps(heaps);
         state.routes.join(routes);
-        let encoder = state.encoder_ended(kind, keys, residency, taken);
+        let encoder = state.encoder_ended(kind, keys, residency, (taken, takes));
         if let Some(why) = unlogged {
             state.encoder_unlogged(encoder, why);
         }
@@ -2828,7 +2833,7 @@ impl EncoderCore {
         // One part, its executions these: a log not kept comes back, to go without the lock.
         let logged = replay.as_ref().map(Replay::bytes);
         let executed = base..base + executions.len();
-        let unkept = state.keep_replay(encoder, replay, takes, executed);
+        let unkept = state.keep_replay(encoder, replay, executed);
         if let (Some(bytes), None) = (logged, &unkept) {
             open.command_buffer
                 .device()
@@ -3031,6 +3036,7 @@ impl EncoderCore {
             taken,
             resident_misses: 0,
             faults: ReplayFaults::default(),
+            takes: Takes::default(),
         }
     }
 
@@ -3067,6 +3073,7 @@ impl EncoderCore {
             taken,
             resident_misses: 0,
             faults: ReplayFaults::default(),
+            takes: Takes::default(),
         })
     }
 
@@ -3092,6 +3099,7 @@ impl EncoderCore {
             executions,
             keys,
             taken,
+            shadows,
             ..
         } = self;
         ended.push(raw);
@@ -3104,6 +3112,7 @@ impl EncoderCore {
             taken,
             resident_misses: 0,
             faults: ReplayFaults::default(),
+            takes: shadows.into_takes(),
         })
     }
 
@@ -3345,6 +3354,7 @@ impl Captured {
             taken: self.taken,
             resident_misses: 0,
             faults: ReplayFaults::default(),
+            takes: Takes::default(),
         })
     }
 }

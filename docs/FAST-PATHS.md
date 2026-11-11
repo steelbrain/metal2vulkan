@@ -1591,3 +1591,12 @@ compares with Metal's.
   compute filter or picks need a scratch past the device's limits. Every other format's later
   levels are made as `generate_mipmaps` makes them: the blit chain, the compute filter or the
   integer picks.
+
+- **A tiled texture's take in an encoder whose later part alone runs nothing**
+  (`Buffer::new_tiled_texture`, more than one level, `shadow.rs`'s **Copies taken at use**,
+  `State::fail_part`): a take whose encoder runs nothing is given back, so the next use takes the
+  copy. An encoder split into parts at a host step (an execution of indirect commands the GPU may
+  write) gives back every take of its own where any of its parts runs nothing, so a take that ran
+  in an earlier part, where a failure of a later batch fails only a later one, is taken again at
+  the next use: that use reads the bytes as they are then, where Metal's levels keep the copy that
+  ran.

@@ -579,14 +579,17 @@ impl State {
         }
         due.sort_by_key(|(encoders, _)| encoders.start);
         let State {
-            recorded, retained, ..
+            recorded,
+            retained,
+            ended,
+            ..
         } = self;
         let failing = |encoder: &usize| due.iter().any(|(encoders, _)| encoders.contains(encoder));
         for part in recorded[range.start..]
             .iter_mut()
             .filter(|part| failing(&part.encoder))
         {
-            State::fail_part(part, retained);
+            State::fail_part(part, ended, retained);
         }
         self.unrunnable
             .extend(due.iter().flat_map(|(encoders, _)| encoders.clone()));

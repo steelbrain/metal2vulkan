@@ -2438,7 +2438,8 @@ fn an_encoding_again_takes_a_copy_taken_at_use_where_its_first_encoding_took_it(
     let mut again = ShadowSync::again(took.clone());
     assert_eq!(first_use(&mut again), [Moved::Into(k)]);
     assert_eq!(first_use(&mut again), []);
-    assert_eq!(again.into_takes(), Default::default());
+    // An encoding again notes no take of its own.
+    assert_eq!(first_use(&mut ShadowSync::again(again.into_takes())), []);
     assert_eq!(first_use(&mut ShadowSync::default()), []);
     // After a `did_modify_data`, the later one encoded again takes nothing and the first takes it,
     // as each did; the mark stays for the next use encoded.
@@ -2447,4 +2448,52 @@ fn an_encoding_again_takes_a_copy_taken_at_use_where_its_first_encoding_took_it(
     assert_eq!(first_use(&mut ShadowSync::again(took)), [Moved::Into(k)]);
     assert_eq!(first_use(&mut ShadowSync::default()), [Moved::Into(k)]);
     assert_eq!(first_use(&mut ShadowSync::default()), []);
+}
+
+/// A take whose recording never runs is given back (`Takes::give_back`, as `State::fail_part`
+/// gives back a failed encoder's): the next use takes the copy again, where that take is still the
+/// latest and the mark was not set since. A take a later one followed, or one of an encoder that
+/// took none, gives nothing back; nor does giving back twice. What an encoder leaves out
+/// (`ShadowSync::forget`) is given back so too.
+#[test]
+fn a_take_given_back_is_taken_again_at_the_next_use() {
+    let t = taken_at_use(ResourceKey::new(), 0..4096);
+    let k = t.shadow_key;
+    let levels = t.levels.as_ref().expect("a copy taken at use");
+    let first_use = |sync: &mut ShadowSync<u32>| moved(&planned(sync, &mut 0, &[(&t, false)], &[]));
+    let encode = || {
+        let mut sync = ShadowSync::default();
+        let moved = first_use(&mut sync);
+        (moved, sync.into_takes())
+    };
+    // Given back: the next use takes it, once.
+    let (moved, failed) = encode();
+    assert_eq!(moved, [Moved::Into(k)]);
+    failed.give_back();
+    let (moved, _) = encode();
+    assert_eq!(moved, [Moved::Into(k)]);
+    assert_eq!(encode().0, []);
+    // A later take holds the copy: giving the first back again changes nothing.
+    failed.give_back();
+    assert_eq!(encode().0, []);
+    // An encoder that took none gives nothing back.
+    let (moved, none) = encode();
+    assert_eq!(moved, []);
+    none.give_back();
+    assert_eq!(encode().0, []);
+    // A mark set since the take asks the next use for it once, the give-back adding nothing.
+    levels.mark_stale();
+    let (moved, taken) = encode();
+    assert_eq!(moved, [Moved::Into(k)]);
+    levels.mark_stale();
+    taken.give_back();
+    assert_eq!(encode().0, [Moved::Into(k)]);
+    assert_eq!(encode().0, []);
+    // Left out by the encoder that took it: the next use takes it.
+    levels.mark_stale();
+    let mut sync = ShadowSync::default();
+    assert_eq!(first_use(&mut sync), [Moved::Into(k)]);
+    sync.forget();
+    assert_eq!(encode().0, [Moved::Into(k)]);
+    assert_eq!(encode().0, []);
 }

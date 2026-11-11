@@ -470,6 +470,7 @@ fn nothing() -> RecordedSegment {
         taken: Default::default(),
         resident_misses: 0,
         faults: ReplayFaults::default(),
+        takes: Default::default(),
     }
 }
 

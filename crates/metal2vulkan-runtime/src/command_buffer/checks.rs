@@ -271,13 +271,16 @@ impl State {
         }
         let from = self.batch_range(index).start;
         let State {
-            recorded, retained, ..
+            recorded,
+            retained,
+            ended,
+            ..
         } = self;
         for part in recorded[from..]
             .iter_mut()
             .filter(|part| encoders.contains(&part.encoder))
         {
-            State::fail_part(part, retained);
+            State::fail_part(part, ended, retained);
         }
         if self.failure.is_none() {
             self.failure = Some(CommandBufferError::Injected(code));
@@ -297,10 +300,13 @@ impl State {
         }
         let from = self.batch_range(index).start;
         let State {
-            recorded, retained, ..
+            recorded,
+            retained,
+            ended,
+            ..
         } = self;
         for part in &mut recorded[from..] {
-            State::fail_part(part, retained);
+            State::fail_part(part, ended, retained);
         }
     }
 
