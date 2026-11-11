@@ -22,7 +22,7 @@ slow-timeout = { period = "300s", terminate-after = 24 }
 # exits that took 87 to 97 ms alone took 0.3 to 3.1 s beside other lanes there, and 1.8 to 2 s in
 # an RTX 5080 Laptop GPU's whole suite.
 [[profile.default.overrides]]
-filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::exits::(pending_work_stays_pending_at_exit|exits_from_the_runtime_s_threads_are_clean|an_exit_while_a_host_step_waits_is_clean|an_exit_mid_making_is_clean|an_exit_runs_no_handler_beside_a_cpu_device_s_work|an_exit_handler_registered_after_the_device_runs_its_work_to_completion|an_exit_while_submitting_is_clean|exits_right_after_learning_of_completion_are_clean|an_exit_handler_registered_before_an_instance_runs_after_the_hook|exits_after_a_released_import_are_clean|an_instance_the_program_made_registers_the_exit_hook_after_its_layer_s_handler)$/)'
+filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::exits::(pending_work_stays_pending_at_exit|exits_from_the_runtime_s_threads_are_clean|an_exit_while_a_host_step_waits_is_clean|an_exit_mid_making_is_clean|an_exit_runs_no_handler_beside_a_cpu_device_s_work|an_exit_handler_registered_after_the_device_runs_its_work_to_completion|an_exit_handler_s_common_calls_answer_as_on_any_thread|an_exit_while_submitting_is_clean|exits_right_after_learning_of_completion_are_clean|an_exit_handler_registered_before_an_instance_runs_after_the_hook|exits_after_a_released_import_are_clean|an_instance_the_program_made_registers_the_exit_hook_after_its_layer_s_handler)$/)'
 threads-required = 'num-test-threads'
 
 # The lanes that fault the GPU on purpose (a GPU write into read-only host pages; they make GPU work

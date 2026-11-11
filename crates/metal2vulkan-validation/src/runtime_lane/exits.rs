@@ -50,9 +50,9 @@ use metal2vulkan::metal::{DataType, PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState, Deallocator,
-    Device, DeviceKind, EventRef, HostMemory, PipelineOptions, ResourceOptions, SharedEvent,
-    SharedEventListener, Size, TextureDescriptor,
+    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineState,
+    Deallocator, Device, DeviceKind, EventRef, HostMemory, Origin, PipelineOptions,
+    ResourceOptions, SharedEvent, SharedEventListener, Size, TextureDescriptor,
 };
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -374,6 +374,149 @@ extern "C" fn commit_at_exit() {
     );
     // SAFETY: a write of the line's bytes to standard output.
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
+}
+
+/// The device the calls cases' handler calls ([`calls_at_exit`]) and the AIR of the kernel it
+/// makes (`store_const`), kept to the process's end.
+static CALLS_AT_EXIT: Mutex<Option<(Device, Vec<u8>)>> = Mutex::new(None);
+
+/// An exit handler the calls cases register once the program's own thread made its common calls
+/// ([`common_calls`]), as a program registers its own: the same calls again, on the exiting
+/// thread, whose thread-locals the exit destroyed before it ran the handlers (macOS), those the
+/// runtime made for that thread's earlier calls among them. Its line says whether the device's
+/// hook ran before it (`hook_ran`) and what each call answered. Its pipeline's region (two threads
+/// a threadgroup) is not the earlier one's (one), so its creation makes it on this thread.
+extern "C" fn calls_at_exit() {
+    let kept = CALLS_AT_EXIT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let Some((device, air)) = kept else {
+        return;
+    };
+    let hook_ran = metal2vulkan_runtime::process_exiting();
+    let answered = common_calls(&device, &air, 2);
+    let line = format!(
+        "{REPORT}-CALLS hook_ran={} {answered}\n",
+        u8::from(hook_ran)
+    );
+    // SAFETY: a write of the line's bytes to standard output.
+    unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
+}
+
+/// The program's common calls on this thread, and what each answered, as a line's fields: three
+/// shared buffers (`buffers`), a 4x4 `RGBA8Unorm` texture (`texture`) and `store_const`'s compute
+/// pipeline of `threads` threads a threadgroup, so that its creation makes its pipeline on this
+/// thread (`pipeline`: `made`, else the error); then a command buffer that copies 64 bytes from a
+/// buffer into the texture and back out into another, and runs the kernel, which stores 42, where
+/// its pipeline was made (`committed`, `waited`, `completed`); and what it wrote, read back
+/// (`texels`: the bytes came back; `stored`: the kernel's word, `-` where no kernel ran). A call
+/// that fails ends the line with its error.
+fn common_calls(device: &Device, air: &[u8], threads: u64) -> String {
+    let token = |what: &dyn std::fmt::Debug| {
+        format!("{what:?}")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("_")
+    };
+    let bytes: Vec<u8> = (0u8..64).map(|at| at.wrapping_mul(37) ^ FILLED).collect();
+    let shared = |length| device.new_buffer(length, ResourceOptions::shared());
+    let (upload, back, out) = match (shared(64), shared(64), shared(4)) {
+        (Ok(upload), Ok(back), Ok(out)) => (upload, back, out),
+        (upload, back, out) => {
+            return format!("buffers={}", token(&(upload.err(), back.err(), out.err())))
+        }
+    };
+    let (Some(at), Some(word)) = (upload.contents(), out.contents()) else {
+        return "buffers=no_contents".to_owned();
+    };
+    // SAFETY: the upload buffer's 64 shared bytes and the output's 4, alive with the buffers, and
+    // no command buffer uses them yet.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), at.as_ptr(), bytes.len());
+        std::ptr::write_bytes(word.as_ptr(), 0, 4);
+    }
+    let descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 4, 4, false);
+    let texture = match device.new_texture(&descriptor) {
+        Ok(texture) => texture,
+        Err(error) => return format!("buffers=1 texture={}", token(&error)),
+    };
+    let pipeline = device
+        .new_library_with_air(air)
+        .and_then(|library| library.new_function_with_name("store_const"))
+        .and_then(|function| {
+            let mut descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                function.function_descriptor(),
+            ));
+            descriptor.required_threads_per_threadgroup = Some([threads as u32, 1, 1]);
+            device.new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        });
+    let made = match &pipeline {
+        Ok(_) => "made".to_owned(),
+        Err(error) => token(error),
+    };
+    let encoded = || -> Result<CommandBuffer, metal2vulkan_runtime::Error> {
+        let queue = device.new_command_queue()?;
+        let command_buffer = queue.command_buffer()?;
+        let mut blit = command_buffer.blit_command_encoder()?;
+        let size = Size::new(4, 4, 1);
+        let origin = Origin::new(0, 0, 0);
+        let none = BlitOption::None;
+        blit.copy_from_buffer_to_texture(&upload, 0, 16, 64, size, &texture, 0, 0, origin, none)?;
+        blit.copy_from_texture_to_buffer(&texture, 0, 0, origin, size, &back, 0, 16, 64, none)?;
+        blit.end_encoding()?;
+        if let Ok(pipeline) = &pipeline {
+            let mut encoder = command_buffer.compute_command_encoder()?;
+            encoder.set_compute_pipeline_state(pipeline)?;
+            encoder.set_buffer(Some(&out), 0, 0)?;
+            encoder.dispatch_threadgroups(Size::new(1, 1, 1), Size::new(threads, 1, 1))?;
+            encoder.end_encoding()?;
+        }
+        Ok(command_buffer)
+    };
+    let command_buffer = match encoded() {
+        Ok(command_buffer) => command_buffer,
+        Err(error) => {
+            return format!(
+                "buffers=1 texture=1 pipeline={made} encoded={}",
+                token(&error)
+            )
+        }
+    };
+    let committed = match command_buffer.commit() {
+        Ok(()) => "1".to_owned(),
+        Err(error) => token(&error),
+    };
+    let waited = token(&command_buffer.wait_until_completed());
+    let completed = command_buffer.status() == CommandBufferStatus::Completed;
+    let texels = completed
+        && back.contents().is_some_and(|at| {
+            // SAFETY: the buffer's 64 shared bytes, alive with it; the command buffer that wrote
+            // them completed.
+            let came_back = unsafe { std::slice::from_raw_parts(at.as_ptr(), 64) };
+            came_back == &bytes[..]
+        });
+    let stored = match (&pipeline, completed) {
+        (Ok(_), true) => {
+            // SAFETY: the output's 4 shared bytes, alive with it, which the completed command
+            // buffer wrote.
+            let word = unsafe { word.as_ptr().cast::<u32>().read_unaligned() };
+            word.to_string()
+        }
+        _ => "-".to_owned(),
+    };
+    format!(
+        "buffers=1 texture=1 pipeline={made} committed={committed} waited={waited} completed={} \
+         texels={} stored={stored}",
+        u8::from(completed),
+        u8::from(texels)
+    )
+}
+
+/// The `store_const` kernel's AIR (the engine fixtures'), which the calls cases make their
+/// pipelines of.
+fn store_const_air() -> Vec<u8> {
+    llvm_assemble(&engine_dir().join("store_const.ll")).unwrap()
 }
 
 /// The command buffers the submitting case commits at once.
@@ -727,6 +870,36 @@ fn child() {
                 "{REPORT}-MADE cpu={} {:?}",
                 u8::from(device.properties().kind == DeviceKind::Cpu),
                 metal2vulkan_runtime::exit_registrations()
+            );
+            exit_now(case, &messages);
+        }
+        "handler_calls_exit" | "handler_calls_after_making_exit" => {
+            // The device's submission checks' sections end first, as in `cpu_work_exit`.
+            assert!(
+                device.settle_submit_checks(WAIT),
+                "{case}: the submission checks answered"
+            );
+            // The program's calls on its own thread first: the thread-locals the runtime keeps
+            // for them are made on this thread, and the exit destroys them before the handlers.
+            let air = store_const_air();
+            let answered = common_calls(&device, &air, 1);
+            println!("{REPORT}-OWN {answered}");
+            assert!(
+                answered.ends_with("completed=1 texels=1 stored=42"),
+                "{case}: the program's own calls: {answered}"
+            );
+            *CALLS_AT_EXIT.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some((device.clone(), air));
+            // As a program registers its own exit handler once its device is made.
+            // SAFETY: a handler with no arguments that never unwinds.
+            unsafe { libc::atexit(calls_at_exit) };
+            if case == "handler_calls_after_making_exit" {
+                // A pipeline made after the handler: the exit ends the makings before it.
+                let _made = configured(&device, Some(32), 7);
+            }
+            println!(
+                "{REPORT}-MADE cpu={}",
+                u8::from(device.properties().kind == DeviceKind::Cpu)
             );
             exit_now(case, &messages);
         }
@@ -1597,6 +1770,88 @@ fn an_exit_handler_registered_after_the_device_runs_its_work_to_completion() {
         "the handler's work did not fill its marker: {}",
         what()
     );
+}
+
+/// An exit handler registered after the device makes the program's common calls on the exiting
+/// thread ([`common_calls`]: a buffer, a texture and a compute pipeline made, a copy through the
+/// texture and a dispatch encoded, committed and waited for, what they wrote read back), after the
+/// program's own thread made them before the exit, so the runtime's thread-locals for them were
+/// made there and the exit destroyed them before it ran the handlers (macOS). Each call answers
+/// as on any other thread, and the process exits cleanly. Where the program registered no handler
+/// after a later pipeline making, every call runs and its work completes, on every device. Where
+/// it made a pipeline after the handler, the handler's making answers that the process is exiting
+/// (docs/API.md, accepted differences, "Process exit"); on a GPU the rest of its work completes,
+/// and on a CPU device that making's run of the hook closed the runtime, so the handler's work
+/// answers that the process is exiting too.
+#[test]
+fn an_exit_handler_s_common_calls_answer_as_on_any_thread() {
+    let cases = ["handler_calls_exit", "handler_calls_after_making_exit"];
+    for (case, exited) in cases.into_iter().zip(exits_cleanly(&cases)) {
+        let calls = format!("{REPORT}-CALLS ");
+        let what = || {
+            format!(
+                "{case}: stdout:\n{}\nstderr:\n{}",
+                exited.stdout, exited.stderr
+            )
+        };
+        let line = stdout_line(&exited, &calls)
+            .unwrap_or_else(|| panic!("the handler wrote no line: {}", what()));
+        eprintln!("{case}: {line}");
+        let field = |name: &str| {
+            line.split_whitespace()
+                .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+        };
+        let cpu = stdout_line(&exited, &format!("{REPORT}-MADE "))
+            .is_some_and(|made| made.contains("cpu=1"));
+        let all = (
+            field("hook_ran"),
+            field("pipeline"),
+            field("committed"),
+            field("completed"),
+            field("texels"),
+            field("stored"),
+        );
+        match (case, cpu) {
+            ("handler_calls_exit", _) => assert_eq!(
+                all,
+                (
+                    Some("0"),
+                    Some("made"),
+                    Some("1"),
+                    Some("1"),
+                    Some("1"),
+                    Some("42")
+                ),
+                "the handler's calls did not all run: {}",
+                what()
+            ),
+            (_, false) => {
+                assert!(
+                    field("pipeline").is_some_and(|made| made.contains("Exiting")),
+                    "the handler's making did not answer that the process is exiting: {}",
+                    what()
+                );
+                assert_eq!(
+                    (all.0, all.2, all.3, all.4, all.5),
+                    (Some("0"), Some("1"), Some("1"), Some("1"), Some("-")),
+                    "the handler's other work did not complete: {}",
+                    what()
+                );
+            }
+            (_, true) => {
+                assert!(
+                    field("hook_ran") == Some("1") && field("completed") != Some("1"),
+                    "on a CPU device the making's run of the hook did not close the runtime: {}",
+                    what()
+                );
+                assert!(
+                    line.contains("Exiting"),
+                    "the handler's calls did not answer that the process is exiting: {}",
+                    what()
+                );
+            }
+        }
+    }
 }
 
 /// An exit right after committing many command buffers: the scheduler is still submitting them,
