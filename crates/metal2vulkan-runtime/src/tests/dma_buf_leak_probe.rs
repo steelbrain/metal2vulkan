@@ -64,6 +64,11 @@
 //! - `DMA_BUF_LEAK_SUDO` (0): 1 reads the list through `sudo -n cat` where this user cannot read
 //!   it. Where the list cannot be read the lines say so and give the runtime's side alone.
 //! - `DMA_BUF_LEAK_FILE_MIB` (512): the guest RAM's size. `DMA_BUF_LEAK_SEED` (1).
+//! - `DMA_BUF_LEAK_SERIAL`: `none` (the default), `imports` (one lock across the threads around each
+//!   buffer's making, which imports its dma-buf, and each buffer's drop, which frees an import the
+//!   GPU no longer uses) or `all` (that lock around the workers' commits too), to see whether the
+//!   kernel keeps fewer imports where they never overlap. A free the runtime defers past a command
+//!   buffer in flight runs on its own thread, outside the lock (`DMA_BUF_LEAK_FREE=waited` has none).
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 //! Where `/dev/udmabuf` cannot be opened, or the device lists no dma-buf route, it says so and
@@ -121,6 +126,29 @@ enum Free {
     Idle,
 }
 
+/// How much of the probe's kernel work one lock serialises (`DMA_BUF_LEAK_SERIAL`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Serial {
+    /// No lock.
+    None,
+    /// Each buffer's making and drop.
+    Imports,
+    /// Those and the workers' commits.
+    All,
+}
+
+/// The lock [`Serial`] takes.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The lock where `knobs` serialise `level`'s work.
+fn serial(knobs: &Knobs, level: Serial) -> Option<std::sync::MutexGuard<'static, ()>> {
+    (knobs.serial >= level).then(|| {
+        SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    })
+}
+
 /// The variables' settings (the module docs).
 #[derive(Clone, Debug)]
 struct Knobs {
@@ -139,6 +167,7 @@ struct Knobs {
     sudo: bool,
     file: u64,
     seed: u64,
+    serial: Serial,
 }
 
 impl Knobs {
@@ -192,6 +221,12 @@ impl Knobs {
             sudo: number("DMA_BUF_LEAK_SUDO", 0) != 0,
             file: (number("DMA_BUF_LEAK_FILE_MIB", 512) << 20).max(MOST_BYTES),
             seed: number("DMA_BUF_LEAK_SEED", 1),
+            serial: match word("DMA_BUF_LEAK_SERIAL", "none").as_str() {
+                "none" => Serial::None,
+                "imports" => Serial::Imports,
+                "all" => Serial::All,
+                other => panic!("{TEST}: DMA_BUF_LEAK_SERIAL={other}: none, imports or all"),
+            },
         };
         assert!(
             knobs.smallest >= page && knobs.smallest <= knobs.largest,
@@ -434,6 +469,7 @@ impl Probe {
         });
         // SAFETY: the view stays mapped until the deallocator runs, and the source's dma-buf holds
         // the view's pages, in order.
+        let serialised = serial(&self.knobs, Serial::Imports);
         let buffer = unsafe {
             self.device.new_buffer_with_bytes_no_copy(
                 HostMemory::with_dma_buf(view, source),
@@ -443,6 +479,7 @@ impl Probe {
             )
         }
         .unwrap();
+        drop(serialised);
         self.tally.made.fetch_add(1, Ordering::Relaxed);
         buffer
     }
@@ -483,6 +520,12 @@ struct Worker<'a> {
 }
 
 impl<'a> Worker<'a> {
+    /// Drop `buffer`, under the lock where the knobs serialise imports.
+    fn release(&self, buffer: Buffer) {
+        let _serialised = serial(&self.probe.knobs, Serial::Imports);
+        drop(buffer);
+    }
+
     fn new(probe: &'a Probe, queue: &'a CommandQueue, stream: u64) -> Worker<'a> {
         let device = &probe.device;
         let shared = || {
@@ -529,7 +572,10 @@ impl<'a> Worker<'a> {
                 if check { &self.checked } else { &self.out },
                 probe.knobs.write,
             );
-            command_buffer.commit().unwrap();
+            {
+                let _serialised = serial(&self.probe.knobs, Serial::All);
+                command_buffer.commit().unwrap();
+            }
             if check {
                 wait(&command_buffer);
                 self.check(&buffer);
@@ -578,7 +624,10 @@ impl<'a> Worker<'a> {
             (encoder.copy_from_buffer_to_buffer(from, 0, to, 0, WORK_BYTES)).unwrap();
         }
         encoder.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
+        {
+            let _serialised = serial(&self.probe.knobs, Serial::All);
+            command_buffer.commit().unwrap();
+        }
         self.pending.push(command_buffer);
         self.prune();
     }
@@ -605,7 +654,7 @@ impl<'a> Worker<'a> {
         }
         let tally = &self.probe.tally;
         let Some(copy) = live.copy else {
-            drop(live.buffer);
+            self.release(live.buffer);
             tally.unused.fetch_add(1, Ordering::Relaxed);
             return;
         };
@@ -619,7 +668,7 @@ impl<'a> Worker<'a> {
         match how {
             Free::InFlight => {
                 let done = copy.status() == CommandBufferStatus::Completed;
-                drop(live.buffer);
+                self.release(live.buffer);
                 match done {
                     true => tally.in_flight_done.fetch_add(1, Ordering::Relaxed),
                     false => tally.in_flight.fetch_add(1, Ordering::Relaxed),
@@ -631,12 +680,12 @@ impl<'a> Worker<'a> {
                 wait(&copy);
                 drop(copy);
                 device_idle(&self.probe.device);
-                drop(live.buffer);
+                self.release(live.buffer);
                 tally.idle.fetch_add(1, Ordering::Relaxed);
             }
             _ => {
                 wait(&copy);
-                drop(live.buffer);
+                self.release(live.buffer);
                 tally.waited.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -664,9 +713,12 @@ impl<'a> Worker<'a> {
                 &self.out,
                 self.probe.knobs.write,
             );
-            command_buffer.commit().unwrap();
+            {
+                let _serialised = serial(&self.probe.knobs, Serial::All);
+                command_buffer.commit().unwrap();
+            }
             wait(&command_buffer);
-            drop(live.buffer);
+            self.release(live.buffer);
             self.probe.tally.lingered.fetch_add(1, Ordering::Relaxed);
         }
     }
