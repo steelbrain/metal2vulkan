@@ -149,6 +149,10 @@ pub struct FragmentPass<'a> {
     pub(crate) sample_mask: Option<[u32; 4]>,
     /// The pipeline's private alpha test (`LoweringInputs::alpha_test`).
     pub(crate) alpha_test: Option<crate::metal::CompareFunction>,
+    /// The pipeline's private logic operation the function computes itself
+    /// (`LoweringInputs::logic_operation`); `None` from a descriptor, set by the compile layer on
+    /// a device without Vulkan's `logicOp` (`private_state::logic_operation`).
+    pub(crate) logic_operation: Option<crate::vk::LogicOp>,
     /// The pipeline's private `fragmentDepthCompareClampMask`
     /// (`LoweringInputs::depth_compare_clamp_mask`).
     pub(crate) depth_compare_clamp_mask: u32,
@@ -174,6 +178,7 @@ impl<'a> From<&'a RenderPipelineDescriptor> for FragmentPass<'a> {
             alpha_test: crate::pipeline::private_state::alpha_test(&d.private)
                 .ok()
                 .flatten(),
+            logic_operation: None,
             depth_compare_clamp_mask: d.private.fragment_depth_compare_clamp_mask,
             color_group: None,
         }
@@ -193,6 +198,7 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             sample_mask: None,
             alpha_test: None,
+            logic_operation: None,
             depth_compare_clamp_mask: 0,
             color_group: None,
         }
@@ -2194,6 +2200,9 @@ pub(crate) fn unattached_colors_written(
 /// (`VariantKey::extended_shadows`), the state of each shadowed attachment the entry reads or
 /// writes through its first output, with the pass's depth or stencil attachment and alpha to
 /// coverage, which bear on the shadow the function stores (`lower::fragment`'s `input_shadow`).
+/// On either device, under a private logic operation the function computes
+/// (`FragmentPass::logic_operation`), the state of every attachment whose format the operation
+/// serves that the entry writes through its first output (`lower::fragment`'s `logic`).
 pub(crate) fn fetch_inputs(
     spec: &air::Entry,
     d: FragmentPass<'_>,
@@ -2257,6 +2266,16 @@ pub(crate) fn fetch_inputs(
             .flatten()
             .is_some_and(|c| crate::pipeline::color_writes::shader_rotated_blend(&c, p))
     };
+    // An attachment whose codes the function's write operates on under the pipeline's private
+    // logic operation, over the texel it reads (`lower::fragment`'s `logic`), in either form.
+    let logic = |color: u32| {
+        d.logic_operation.is_some()
+            && d.color_attachments
+                .get(color as usize)
+                .copied()
+                .flatten()
+                .is_some_and(|c| crate::lower::fragment::logic_channels(c.pixel_format).is_some())
+    };
     // A color input counts only where the specialized body reads it, as the lowering plans only
     // a used parameter: a read the function's constants make dead reads nothing, so it takes
     // neither the storage form nor its blend in the shader.
@@ -2280,6 +2299,7 @@ pub(crate) fn fetch_inputs(
                 ..
             } if blended(color)
                 || rotated_blend(color)
+                || logic(color)
                 || (interlock && (stored_word(color) || merged_extended(color)))
                 || (inputs && (merged_word(color) || merged_extended(color))) =>
             {
@@ -2360,6 +2380,7 @@ pub(crate) fn fragment_inputs(
     out.rotated_blends = crate::pipeline::color_writes::rotated_blends(d.color_attachments, p);
     out.sample_mask = d.sample_mask;
     out.alpha_test = d.alpha_test;
+    out.logic_operation = d.logic_operation;
     out.depth_compare_clamp_mask = d.depth_compare_clamp_mask;
     out.texture_write_rounding = d.texture_write_rounding_mode;
     out

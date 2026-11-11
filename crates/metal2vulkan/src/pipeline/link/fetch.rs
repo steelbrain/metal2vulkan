@@ -132,6 +132,7 @@ pub fn storage_attachments(
             early_tests,
             draw_tested,
             math,
+            logic_op: fragment.interface.io.logic_operation,
         };
         match storage_form(color, &inputs, multisampled, use_, p)? {
             Ok(view) if view.format == format && view.kept == kept && view.blend == blend => {

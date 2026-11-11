@@ -220,7 +220,8 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
             .fragment
             .rotated_blends
             .get(&color)
-            .is_some_and(super::RotatedInputBlend::reads);
+            .is_some_and(super::RotatedInputBlend::reads)
+        || cx.families.fragment.logic_inputs.contains_key(&color);
     if !known.iter().any(|c| c.color == color) && !blended {
         cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
         cx.facts.insert(RuntimeFact::FramebufferFetch { color });
@@ -364,7 +365,8 @@ pub(super) const ALPHA_IN_RED_WORDS: u64 = 16;
 /// blend the function computes over it (`input_blend`) and that of every word attachment whose
 /// word the function merges into the texel's (`word_input`), of `uint` texels; and that of every
 /// attachment held with its channels rotated whose blend the function computes over it
-/// (`rotated`, `input_blend`), of `float` texels.
+/// (`rotated`, `input_blend`), of `float` texels; and that of every attachment whose private logic
+/// operation the function computes over it (`logic`).
 pub(super) fn declare(
     mb: &mut ModuleBuilder,
     colors: &[ColorInput],
@@ -373,7 +375,10 @@ pub(super) fn declare(
         &BTreeMap<u32, super::InputBlend>,
         &BTreeMap<u32, u32>,
     ),
-    rotated: &BTreeMap<u32, super::RotatedInputBlend>,
+    (rotated, logic): (
+        &BTreeMap<u32, super::RotatedInputBlend>,
+        &BTreeMap<u32, super::LogicInput>,
+    ),
     multisampled: bool,
 ) -> BResult<BTreeMap<u32, GlobalId>> {
     let mut out = BTreeMap::new();
@@ -407,6 +412,14 @@ pub(super) fn declare(
     for (&color, _) in rotated.iter().filter(|(_, rb)| rb.reads()) {
         if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
             e.insert(input_attachment(mb, color, true, multisampled)?);
+        }
+    }
+    // An attachment whose logic operation the function computes over it, of `float` texels for a
+    // normalized format and `uint` ones (a signed integer's bits) for an integer one.
+    for (&color, li) in logic {
+        if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
+            let float = super::logic::reads_float(li.channels);
+            e.insert(input_attachment(mb, color, float, multisampled)?);
         }
     }
     Ok(out)

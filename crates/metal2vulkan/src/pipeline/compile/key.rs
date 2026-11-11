@@ -431,6 +431,11 @@ pub fn function_key(
             .bytes(&function.as_raw().to_le_bytes());
     }
     // Appended only when set.
+    if let Some(op) = inputs.logic_operation {
+        h.bytes(b"logic-operation")
+            .bytes(&op.as_raw().to_le_bytes());
+    }
+    // Appended only when set.
     if inputs.depth_compare_clamp_mask != 0 {
         h.bytes(b"depth-compare-clamp")
             .bytes(&inputs.depth_compare_clamp_mask.to_le_bytes());

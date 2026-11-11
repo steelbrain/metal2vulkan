@@ -732,6 +732,9 @@ pub(crate) struct ColorUse {
     /// The function's math, which picks the extended-range blends Metal's model holds
     /// (`extended_range::blend::BlendMath`).
     pub math: extended_range::blend::BlendMath,
+    /// The pipeline's private logic operation the function computes over the codes of the
+    /// attachments it writes (`LoweringInputs::logic_operation`, `logic`).
+    pub logic_op: Option<vk::LogicOp>,
 }
 
 /// How the storage form's image holds the attachment's samples.
@@ -815,6 +818,10 @@ pub struct StorageView {
     /// alpha, red, green and blue, so a texel read from the image is rotated into Metal's order and
     /// one written to it out of it ([`metal_order`], [`image_order`]).
     pub rotated: bool,
+    /// The pipeline's private logic operation a write computes over the codes of the texel it
+    /// reads first (`logic::operated`), of an attachment whose channels it serves
+    /// (`logic::channels`). `None` for no write, and for every other attachment.
+    pub logic_op: Option<vk::LogicOp>,
 }
 
 impl StorageView {
@@ -1064,6 +1071,13 @@ pub(crate) fn storage_form(
     // attachment's blend without fast math, which keeps the destination's product by zero (a NaN
     // of an infinite or NaN texel, the sum's zero sign).
     let stores = writes && kept != ColorWriteMask::ALL;
+    // The pipeline's private logic operation, which a write that stores computes over the codes
+    // of an attachment whose channels it serves (`logic`); a float attachment ignores it, as
+    // Metal's does. Metal's operation reads a signed normalized channel's codes through its value
+    // too, so a kept channel written back as it was read is Metal's there.
+    let logic_op = use_
+        .logic_op
+        .filter(|_| stores && super::logic::channels(pf).is_some());
     // The blend of an extended-range attachment the write stores, which the shader computes
     // where Metal's measured model holds it (`extended_range::Blend`), its gap refused by name.
     // And the blend of a 16-bit float attachment, which no Vulkan blend applies to a storage
@@ -1157,6 +1171,12 @@ pub(crate) fn storage_form(
     // An `ARGB8Unorm` attachment is read and written through its `R8G8B8A8_UNORM` image, the
     // function rotating Metal's channels into and out of the image's.
     let rotated = emulation == FormatEmulation::RotatedView;
+    // The logic operation reads the codes of a texel held directly; a word view's, and a write
+    // under alpha to coverage, are refused naming it (`logic`).
+    if logic_op.is_some() && (word.is_some() || inputs.alpha_to_coverage) {
+        let gap = Feature::PrivateRenderState(crate::error::PrivateRenderField::LogicOperation);
+        return Ok(Err(Unsupported::not_implemented(gap)));
+    }
     // An unblended write of every channel stores Metal's write of the output.
     let not_modelled = inputs.amplified
         || (emulation != FormatEmulation::Direct && extended.is_none() && !alpha_in_red && !rotated)
@@ -1170,7 +1190,7 @@ pub(crate) fn storage_form(
                 .contains(ColorWriteMask::UNSPECIALIZED))
         || (stores
             && (blends
-                || (snorm && merged)
+                || (snorm && merged && logic_op.is_none())
                 || inputs.alpha_to_coverage
                 || (inputs.depth_or_stencil && !use_.early_tests && !use_.draw_tested)));
     if not_modelled {
@@ -1263,6 +1283,7 @@ pub(crate) fn storage_form(
             word,
             alpha_in_red,
             rotated,
+            logic_op,
         })),
         _ => {
             // A BGRA-order format no declaration reaches, whose RGBA-order twin lacks something
@@ -1350,6 +1371,7 @@ pub(crate) fn extended_range_blend(
         early_tests: false,
         draw_tested: false,
         math: extended_range::blend::BlendMath::Fast,
+        logic_op: None,
     };
     match storage_form(0, &inputs, false, use_, p) {
         Ok(form) => form.map(drop),
@@ -1644,6 +1666,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             early_tests,
             draw_tested: (tested || untested) && !early_tests,
             math: blend_math(cx),
+            logic_op: cx.inputs.logic_operation,
         };
         let tied = |e: Error| e.at_attachment(Attachment::Color(color));
         let form =
@@ -1852,6 +1875,13 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                         let note = crate::lower::arith::output_precision::half_output_note(cx);
                         cx.precision.insert(note);
                     }
+                }
+                // The logic operation's codes of a normalized output, the device's `float`
+                // product rounded to nearest even, where Metal rounds the exact product (`logic`).
+                let normalized = super::logic::channels(view.pixel_format)
+                    .is_some_and(super::logic::reads_float);
+                if view.logic_op.is_some() && normalized {
+                    cx.precision.insert(PrecisionNote::DeviceColorConversion);
                 }
                 // The channels a partial write mask keeps, as the draw's word.
                 if view.kept_at_draw {
@@ -2108,6 +2138,12 @@ pub fn select_output(
         return Err(cx.invariant("a storage-form output of an attachment of another form"));
     };
     class_of(form, sc.view.read_class(), color, true)?;
+    // The logic operation takes a normalized channel's `float` or `half` output and an integer
+    // channel's 32-bit one (`logic::takes`).
+    let logic = super::logic::channels(sc.view.pixel_format);
+    if sc.view.logic_op.is_some() && !logic.is_some_and(|ch| super::logic::takes(ch, form)) {
+        return Err(super::logic::refused(color));
+    }
     // An extended-range attachment's blend is of a `half4` output, or of a `float4` one where
     // the blend takes it ([`plan`]), and an `_sRGB` one's encodes by the device's `Pow`.
     let output4 = (form.lanes == 4).then(|| form.float_fmt()).flatten();
@@ -2352,6 +2388,12 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
         .filter_map(|sc| sc.view.word)
         .map(|w| stage_io::word_color::encode_words(w) + 4 * 24 + 40)
         .fold(0u64, u64::saturating_add);
+    // A logic-operated write reads its texel and operates on each channel's codes.
+    let logic = fetch
+        .values()
+        .filter(|sc| sc.view.logic_op.is_some())
+        .count() as u64;
+    let logic_write = READ.saturating_add(super::logic::WRITE_WORDS);
     let write = WRITE
         .saturating_mul(written)
         .saturating_add(READ.saturating_mul(merged))
@@ -2361,6 +2403,7 @@ pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
         .saturating_add(stage_io::extended_color::WORDS.saturating_mul(unblended))
         .saturating_add(srgb_write.saturating_mul(srgb_writes))
         .saturating_add(word_write)
+        .saturating_add(logic_write.saturating_mul(logic))
         .saturating_add((READ + WRITE + 8).saturating_mul(shadowed))
         .saturating_add((2 * EXCHANGE).saturating_mul(exchanged))
         .saturating_add((EXCHANGE + super::color::ALPHA_IN_RED_WORDS).saturating_mul(moved))
@@ -2783,6 +2826,11 @@ pub(super) fn emit_return(
                     Some(eq) => half_blended(cx, fb, color, &sc, eq, (form, part))?,
                     None => part,
                 };
+                // The pipeline's private logic operation over the texel's codes.
+                let part = match sc.view.logic_op {
+                    Some(op) => logic_operated(cx, fb, color, &sc, op, (form, part))?,
+                    None => part,
+                };
                 let part = if sc.view.merges() {
                     merge(cx, fb, color, &sc, form, part)?
                 } else {
@@ -2839,6 +2887,32 @@ pub(super) fn emit_return(
 
 /// One storage write: the image, the texel's coordinate, the texel, and the image operands.
 type Write = (SValue, SValue, SValue, ImageOperands);
+
+/// The output `part` of `form` (one to four `f32` lanes of a `half` or `float` output, or `u32`
+/// lanes of an integer one) to attachment `color` under the pipeline's private logic operation
+/// `op` (`StorageView::logic_op`): the texel read first at the invocation's pixel (and sample),
+/// inside the interlock, in Metal's channel order ([`read_texel`]; a signed integer texel's bits),
+/// and the value whose code is the operation of the output's code over the texel's
+/// (`logic::operated`). The channels a write mask keeps are [`merge`]'s to take back from the
+/// texel.
+fn logic_operated(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+    sc: &StorageColor,
+    op: vk::LogicOp,
+    (form, part): (Form, SValue),
+) -> BResult<SValue> {
+    let Some(channels) = super::logic::channels(sc.view.pixel_format) else {
+        return Err(cx.fail("a logic operation of an attachment it does not serve"));
+    };
+    if !super::logic::takes(channels, form) {
+        return Err(cx.fail("a logic operation of an output it does not take"));
+    }
+    let texel = read_texel(cx, fb, color, sc)?;
+    let texel = as_held(fb, texel, sc.view.numeric)?;
+    super::logic::operated(fb, op, channels, (form, part), texel)
+}
 
 /// The output `part` of `form` (one to four `f32` lanes: a `half` output's `half`s, or a `float`
 /// one's `float`s) blended into 16-bit float attachment `color` by Metal's blend `eq`

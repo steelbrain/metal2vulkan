@@ -435,6 +435,7 @@ mod serde_round_trips {
             unattached_colors: BTreeSet::from([5, 7]),
             sample_mask: Some([0b1010, 0b0010, 0b1000, 0]),
             alpha_test: Some(metal::CompareFunction::GreaterEqual),
+            logic_operation: Some(crate::vk::LogicOp::XOR),
             depth_compare_clamp_mask: 0x8000_0005,
             read_only_tests: true,
             shader_tests: true,

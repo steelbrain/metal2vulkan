@@ -52,6 +52,7 @@ const WRITES: ColorUse = ColorUse {
     early_tests: true,
     draw_tested: false,
     math: BlendMath::Fast,
+    logic_op: None,
 };
 const READS: ColorUse = ColorUse {
     writes: false,

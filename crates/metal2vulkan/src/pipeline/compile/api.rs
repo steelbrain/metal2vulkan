@@ -357,7 +357,8 @@ impl Device {
             crate::pipeline::private_state::check_render(d)?;
             let p = self.profile();
             // The attachments as the private logic operation draws them (`render_pipeline`).
-            let (operated, _) = crate::pipeline::private_state::logic_operation(d, p)?;
+            let (operated, logic) = crate::pipeline::private_state::logic_operation(d, p)?;
+            let logic = crate::pipeline::private_state::LogicDraw::shader(logic);
             let d = operated.as_ref();
             // A color group's variant is the pipeline of its group's attachments
             // (`render_pipeline`).
@@ -415,6 +416,7 @@ impl Device {
                     // module, so a pipeline whose masks drop a sample lowers it once.
                     let mut pass: FragmentPass<'_> = d.into();
                     pass.color_group = group.as_ref();
+                    pass.logic_operation = logic;
                     if crate::pipeline::private_state::applied_masks(d).is_some() {
                         let inputs = InputsFrom::Fragment(
                             pass,
@@ -888,9 +890,9 @@ impl Device {
         crate::pipeline::private_state::check_render(d)?;
         let p = self.profile();
         // The attachments as the private logic operation draws them: its normalized and integer
-        // attachments unblended (unwritten under a no-op), and Vulkan's operation where one is
-        // needed.
-        let (operated, logic_op) = crate::pipeline::private_state::logic_operation(d, p)?;
+        // attachments unblended (unwritten under a no-op), and Vulkan's operation, or the fragment
+        // function's, where one is needed.
+        let (operated, logic) = crate::pipeline::private_state::logic_operation(d, p)?;
         let d = operated.as_ref();
         let group = color_group::group(d, v, p)?;
         let grouped = group.as_ref().map(|g| color_group::descriptor(d, g));
@@ -899,6 +901,7 @@ impl Device {
         let pass = || {
             let mut pass = FragmentPass::from(d);
             pass.color_group = group.as_ref();
+            pass.logic_operation = crate::pipeline::private_state::LogicDraw::shader(logic);
             pass
         };
         // On a device without a fragment `PrimitiveId` or without `tessellationShader`, whether
@@ -1058,10 +1061,11 @@ impl Device {
             fragment.as_ref().map(|f| f.artifact()),
         )?;
         crate::pipeline::private_state::logic_operated(
-            logic_op,
+            logic,
             fragment.as_ref().map(|f| f.artifact()),
             &graphics,
         )?;
+        let logic_op = crate::pipeline::private_state::LogicDraw::vulkan(logic);
         graphics.logic_op = logic_op;
         let mut requirements = requirements;
         if logic_op.is_some() {

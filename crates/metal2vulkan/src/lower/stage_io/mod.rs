@@ -2232,6 +2232,12 @@ fn output_part(
             )?;
             color_write::round(cx, fb, color, o.link.form, v)?
         }
+        // The pipeline's private logic operation over the attachment's input attachment.
+        Some(color) if cx.plan.families.fragment.logic_inputs.contains_key(&color) => {
+            let v =
+                crate::lower::fragment::logic_input_operated(cx, fb, color, (o.link.form, part))?;
+            color_write::round(cx, fb, color, o.link.form, v)?
+        }
         Some(color) => match (
             cx.plan.families.stage_io.words_written.get(&color).copied(),
             cx.plan.families.stage_io.extended.get(&color).copied(),

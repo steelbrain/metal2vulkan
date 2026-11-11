@@ -565,6 +565,16 @@ pub struct LoweringInputs {
     /// tests nothing. Any other function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub alpha_test: Option<crate::metal::CompareFunction>,
+    /// The render pipeline's private logic operation (`logicOperationEnabled`, `logicOperation`),
+    /// which the fragment function computes itself on a device without Vulkan's `logicOp` that
+    /// orders framebuffer fetch: its first output's write to each normalized or integer attachment
+    /// the operation serves reads the pixel's texel, operates on the codes, and stores the result
+    /// (`StageIo::logic_operation`; `lower::fragment`'s `logic`). `Device::compile_render_pipeline`
+    /// sets it for a `Function` fragment stage of such a pipeline on such a device, for every
+    /// operation but copy and no-op, which the attachments' blends and masks draw. Any other
+    /// function compiles as without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub logic_operation: Option<vk::LogicOp>,
     /// The render pipeline's private `fragmentDepthCompareClampMask`: a fragment function's depth
     /// comparison through `[[sampler(s)]]` where bit `s` is set, or through a constexpr sampler
     /// where bit 31 is, clamps its reference to `[0, 1]`, a NaN taken as 0, before comparing, as

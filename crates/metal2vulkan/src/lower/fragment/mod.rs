@@ -65,6 +65,7 @@ mod imageblock;
 mod input_blend;
 mod input_shadow;
 mod interpolate;
+mod logic;
 mod rog;
 mod snapshot;
 mod stencil;
@@ -120,6 +121,8 @@ pub use input_blend::{
 };
 pub use input_shadow::InputShadow;
 pub(crate) use input_shadow::{shadows as input_shadow, store as input_shadow_store};
+pub use logic::LogicInput;
+pub(crate) use logic::{channels as logic_channels, input_operated as logic_input_operated};
 #[cfg(test)]
 pub(crate) use snapshot::{decode as snapshot_decode, encode as snapshot_encode};
 pub(crate) use snapshot::{prepare as snapshot_prepare, read as snapshot_read};
@@ -217,6 +220,9 @@ pub struct FragmentPlan {
     /// attachments, on a device that orders fetch through them (`word_input`), by index: the bits
     /// of the fields each write keeps from the texel.
     pub word_merges: BTreeMap<u32, u32>,
+    /// The attachments whose private logic operation the function computes over their input
+    /// attachments, on a device that orders fetch through them (`logic`), by index.
+    pub logic_inputs: BTreeMap<u32, LogicInput>,
     /// The extended-range attachments whose `half` shadow the draw's instance holds, on a device
     /// that orders fetch through input attachments (`input_shadow`), by index.
     pub input_shadows: BTreeMap<u32, InputShadow>,
@@ -435,6 +441,7 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
             returns(cx),
         ))
         .saturating_add(word_input::words(cx, returns(cx)))
+        .saturating_add(logic::words(cx, returns(cx)))
         .saturating_add(depth_test::words(cx, rets))
         .saturating_add(killing_rets.saturating_mul(RETURN_KILL_WORDS))
         .saturating_add((quad_exits.len() as u64).saturating_mul(QUAD_EXIT_WORDS))
@@ -526,7 +533,7 @@ pub fn declare(
         mb,
         &fp.colors,
         (&fp.fetch, &fp.input_blends, &fp.word_merges),
-        &fp.rotated_blends,
+        (&fp.rotated_blends, &fp.logic_inputs),
         fp.fetch_sample.is_some(),
     )?;
     for (&color, sc) in &fp.fetch {
@@ -647,6 +654,7 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     input_blend::plan(cx)?;
     input_shadow::plan(cx)?;
     word_input::plan(cx)?;
+    logic::plan(cx)?;
     coverage::plan(cx)
 }
 

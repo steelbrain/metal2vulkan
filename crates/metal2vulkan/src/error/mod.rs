@@ -1861,6 +1861,11 @@ pub enum RuntimeInput {
     /// or it runs another comparison. It was compiled for another pipeline, and is compiled for
     /// this one again.
     AlphaTest,
+    /// A fragment function in a render pipeline whose private logic operation it computes itself
+    /// on a device without Vulkan's `logicOp` (`LoweringInputs::logic_operation`), as Metal
+    /// operates on its attachments' codes; or it computes another operation, or one its pipeline
+    /// does not take. It was compiled for another pipeline, and is compiled for this one again.
+    LogicOperation,
     /// A fragment function in a render pipeline with a private `fragmentDepthCompareClampMask`
     /// clamps the references of its depth comparisons through the mask's samplers itself
     /// (`LoweringInputs::depth_compare_clamp_mask`), as Metal clamps them; or it clamps others. It

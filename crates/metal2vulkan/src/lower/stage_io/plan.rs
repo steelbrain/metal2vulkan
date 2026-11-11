@@ -3400,6 +3400,12 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
         cx.families.stage_io.interface.alpha_test = Some(function);
     }
+    // The render pipeline's private logic operation, which the function's writes compute
+    // (`lower::fragment`'s `logic`): recorded for link, whether or not the function writes an
+    // attachment the operation serves.
+    if cx.stage == Stage::Fragment {
+        cx.families.stage_io.interface.logic_operation = cx.inputs.logic_operation;
+    }
     // The render pipeline's private masks a fragment function applies itself: its `SampleMask`
     // output, the function's own where it writes one, which each return ANDs the pixel's mask
     // into or stores it as; and the `FragCoord` input whose pixel picks the mask, where the masks

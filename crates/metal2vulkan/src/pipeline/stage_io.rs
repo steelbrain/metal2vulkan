@@ -289,6 +289,13 @@ pub struct StageIo {
     /// the comparison against `PushField::AlphaTestReference`. `None` for every other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub alpha_test: Option<crate::metal::CompareFunction>,
+    /// The render pipeline's private logic operation the fragment function computes itself
+    /// (`LoweringInputs::logic_operation`): its first output's writes to the attachments the
+    /// operation serves store the operation of their codes over the texels they read. Link
+    /// refuses the function in a pipeline that draws another operation, or none
+    /// (`NeedsInput(LogicOperation)`). `None` for every other function.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub logic_operation: Option<crate::vk::LogicOp>,
     /// The samplers a fragment function makes depth comparisons through, and those whose
     /// references it clamps (`LoweringInputs::depth_compare_clamp_mask`). Link refuses a function
     /// whose clamped samplers are not the pipeline's mask over its samplers

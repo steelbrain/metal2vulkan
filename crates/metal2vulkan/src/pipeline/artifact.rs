@@ -1267,6 +1267,13 @@ pub enum PrecisionNote {
     /// converts to its code, where Metal rounds the exact product with 255 (a NaN 0); the store may
     /// take the other code near a tie.
     ///
+    /// Also: a render pipeline's private logic operation the fragment function computes on a
+    /// device without Vulkan's `logicOp` (`LoweringInputs::logic_operation`), into an 8- or 16-bit
+    /// unorm or snorm attachment: the function converts its output to the codes it operates on by
+    /// the device's arithmetic, the `float` product with the channel's largest code rounded to
+    /// nearest even, where Metal rounds the exact product to nearest; the two take different codes
+    /// only where the `float` product rounds onto or across a half-code tie.
+    ///
     /// Also (the runtime announces it): a render pass clears a normalized, sRGB, packed 16-bit,
     /// half or small-float color attachment to a color whose conversion is in question. The device
     /// converts the clear color, which Vulkan lets store either of the two codes closest to a
