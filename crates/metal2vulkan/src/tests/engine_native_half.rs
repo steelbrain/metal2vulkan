@@ -1001,3 +1001,155 @@ fn a_half_read_from_memory_is_the_devices_widening_on_every_profile() {
     }
     assert_eq!(forms.len(), 3, "a profile of each form: {forms:?}");
 }
+
+/// Kernels of one `half` `+ - *` each on the two `float`s narrowed: under fast math (`contract` and
+/// `reassoc`, left to the device's compiler), under `contract` alone and with no flag (kept
+/// apart).
+const CONTRACTION: [(&str, &str); 5] = [
+    (
+        "fast_sum",
+        "  %ha = fptrunc float %a to half\n  %hb = fptrunc float %b to half\n  %hs = fadd fast half %ha, %hb\n  %r = fpext half %hs to float\n",
+    ),
+    (
+        "fast_difference",
+        "  %ha = fptrunc float %a to half\n  %hb = fptrunc float %b to half\n  %hs = fsub fast half %ha, %hb\n  %r = fpext half %hs to float\n",
+    ),
+    (
+        "fast_product",
+        "  %ha = fptrunc float %a to half\n  %hb = fptrunc float %b to half\n  %hs = fmul fast half %ha, %hb\n  %r = fpext half %hs to float\n",
+    ),
+    (
+        "contract_sum",
+        "  %ha = fptrunc float %a to half\n  %hb = fptrunc float %b to half\n  %hs = fadd contract half %ha, %hb\n  %r = fpext half %hs to float\n",
+    ),
+    (
+        "kept_product",
+        "  %ha = fptrunc float %a to half\n  %hb = fptrunc float %b to half\n  %hs = fmul half %ha, %hb\n  %r = fpext half %hs to float\n",
+    ),
+];
+
+/// The 16-bit `OpFAdd`, `OpFSub`, `OpFMul` and `GLSL.std.450 Fma` of `words`: each opcode (the
+/// `Fma` as `Op::ExtInst`) and whether it is decorated `NoContraction`.
+fn f16_arithmetic(words: &[u32]) -> Vec<(crate::spv::Op, bool)> {
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::{Decoration, Op};
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let parsed = parse_bytes(&bytes).expect("parse");
+    let word = |o: Option<&Operand>| match o {
+        Some(Operand::Word(w) | Operand::IdRef(w)) => Some(*w),
+        _ => None,
+    };
+    let mut half = std::collections::HashSet::new();
+    let mut no_contraction = std::collections::HashSet::new();
+    for i in &parsed.instructions {
+        match i.opcode {
+            Op::TypeFloat if word(i.operands.first()) == Some(16) => half.extend(i.result_id),
+            Op::TypeVector if word(i.operands.first()).is_some_and(|e| half.contains(&e)) => {
+                half.extend(i.result_id)
+            }
+            Op::Decorate if word(i.operands.get(1)) == Some(Decoration::NoContraction as u32) => {
+                no_contraction.extend(word(i.operands.first()));
+            }
+            _ => {}
+        }
+    }
+    let fma = |i: &crate::spirv_binary::Instruction| {
+        matches!(i.operands.get(1), Some(Operand::LiteralExtInstInteger(n))
+            if *n == GlslOp::Fma.to_spirv() as u32)
+    };
+    parsed
+        .instructions
+        .iter()
+        .filter(|i| i.result_type.is_some_and(|t| half.contains(&t)))
+        .filter(|i| {
+            matches!(i.opcode, Op::FAdd | Op::FSub | Op::FMul)
+                || (i.opcode == Op::ExtInst && fma(i))
+        })
+        .map(|i| {
+            let kept = i.result_id.is_some_and(|id| no_contraction.contains(&id));
+            (i.opcode, kept)
+        })
+        .collect()
+}
+
+/// A `half` `+ - *` on the device's 16-bit arithmetic (`ops::f16_binary`) takes the AIR's own
+/// contraction, as a `float` one does, on every profile that computes it so (MoltenVK, measured,
+/// and the float-controls profiles): under fast math its one 16-bit instruction is undecorated, a
+/// product a plain `OpFMul`; under `contract` alone or no flag it is kept apart, decorated
+/// `NoContraction`, a product `Fma(a, b, -0.0)`. A lone operation has no neighbour to be rewritten
+/// with, so a float-controls profile notes nothing, as for `float`; on MoltenVK, whose Metal compile
+/// folds an undecorated one's conversions away, a fast one records `FastMathRewrites` and needs no
+/// `MetalHalfArithmetic`, which a kept one requires. On the interpreter each answers the rounded
+/// result either way.
+#[test]
+fn half_arithmetic_on_the_device_takes_the_airs_contraction() {
+    use crate::spv::Op;
+    let Some(bc) = assemble("half-contraction", &module_of(&CONTRACTION)) else {
+        return;
+    };
+    let (mut measured_seen, mut controlled_seen) = (0, 0);
+    for (stem, p) in &committed_profiles().expect("profiles") {
+        let measured = p.fields().leaf.float16
+            && p.takes_driver_deviation(DriverDeviation::MetalHalfArithmetic);
+        let controlled = quantize_form(p) == QuantizeForm::Controlled;
+        if !measured && !controlled {
+            continue;
+        }
+        measured_seen += usize::from(measured);
+        controlled_seen += usize::from(controlled && !measured);
+        for (name, _) in &CONTRACTION {
+            let what = format!("{name} on {stem}");
+            let allowed = name.starts_with("fast_");
+            let a = compile(&bc, name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let want = match (name.ends_with("product"), allowed) {
+                (false, _) if name.ends_with("difference") => Op::FSub,
+                (false, _) => Op::FAdd,
+                (true, true) => Op::FMul,
+                (true, false) => Op::ExtInst,
+            };
+            assert_eq!(
+                f16_arithmetic(&a.module.words),
+                vec![(want, !allowed)],
+                "{what}"
+            );
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::FastMathRewrites),
+                measured && allowed,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfArithmetic),
+                measured && !allowed,
+                "{what}: {:?}",
+                a.requirements.properties
+            );
+        }
+        let run = |name: &str, x: [f32; 2]| interpret(&bc, name, p, x);
+        let (x, y) = (1.0 + 2f32.powi(-10), 2f32.powi(-11));
+        for name in ["fast_sum", "contract_sum"] {
+            assert_eq!(
+                run(name, [x, y]),
+                1.0 + 2f32.powi(-9),
+                "{name} on {stem}: a tie to even"
+            );
+        }
+        assert_eq!(run("fast_difference", [x, y]), 1.0, "{stem}: a tie to even");
+        for name in ["fast_product", "kept_product"] {
+            assert_eq!(run(name, [x, x]), 1.0 + 2f32.powi(-9), "{name} on {stem}");
+            let z = run(name, [-0.0, 1.0]);
+            assert!(z == 0.0 && z.is_sign_negative(), "{name} on {stem}: {z}");
+        }
+    }
+    assert!(
+        measured_seen >= 1,
+        "the MoltenVK capture computes it, measured"
+    );
+    assert!(
+        controlled_seen >= 2,
+        "the float-controls profiles compute it"
+    );
+}

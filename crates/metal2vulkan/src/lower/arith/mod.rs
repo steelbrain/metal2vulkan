@@ -23,10 +23,11 @@
 //! and `double` are native (`f64` needs `shaderFloat64`), and `half` and `bfloat` are held widened
 //! in an `f32` that is always a value of the narrow format ([`narrow`]): each operation rounds its
 //! `f32` result back to the format, so no profile needs `shaderFloat16`; where the device's 16-bit
-//! `+ - *` is Metal's `half` arithmetic and the profile has `shaderFloat16`, a `half` `+ - *` is
-//! that instruction, kept apart, between exact conversions instead ([`ArithStrategy::F16`]): where
+//! `+ - *`, kept apart, is Metal's `half` arithmetic and the profile has `shaderFloat16`, a `half`
+//! `+ - *` is that instruction between exact conversions instead ([`ArithStrategy::F16`]): where
 //! it is measured to be, and where the 16-bit float controls the module then declares make it so
-//! by the Vulkan spec ([`narrow::controlled_modes`]).
+//! by the Vulkan spec ([`narrow::controlled_modes`]). Its contraction is the AIR's own, as
+//! `float`'s is: kept apart unless its flags carry both `contract` and `reassoc`.
 //!
 //! Precision: a `half` rounding keeps half denormals, as Metal does; a `float` or `half` fused
 //! multiply-add (`air.fma`, `llvm.fma`, and `llvm.fmuladd`, which Metal fuses) rounds once where
@@ -198,10 +199,13 @@ pub enum ArithStrategy {
     /// A `half` `fadd`, `fsub` or `fmul` on lanes of `form` by the device's 16-bit arithmetic,
     /// Metal's own in the forms that keep it apart (measured, `DriverDeviation::MetalHalfArithmetic`,
     /// or by the Vulkan spec under the 16-bit float controls, [`ops::f16_binary`]): the operands
-    /// narrowed to 16 bits, exactly, the instruction kept apart, and its result widened, exactly.
+    /// narrowed to 16 bits, exactly, the instruction, and its result widened, exactly. `contract`
+    /// is the AIR's own, as for [`ArithStrategy::Float`] ([`contraction`]): `Allowed` leaves the
+    /// instruction to the device's compiler, `Forbidden` keeps it apart.
     F16 {
         op: AirBin,
         form: Form,
+        contract: Contraction,
     },
     /// `fneg` on floats of `form`: the device's `OpFNegate`.
     FNeg {
@@ -1478,12 +1482,22 @@ fn select_in(
                         let s = S::FastDivide { form: f, contract };
                         with_nan(cx, s, Some(nan::NanAnswer::Canonical))
                     } else if let Some(basis) = f16_arithmetic(cx.profile, *op, f) {
-                        // The device's own `half` arithmetic, Metal's in the forms that keep it
-                        // apart, which the AIR's flags allow whatever they are. Only the measured
-                        // basis is a property the module requires; the float controls are modes
-                        // its entry declares.
-                        cx.families.arith.f16_arith |= basis == F16Basis::Measured;
-                        let s = S::F16 { op: *op, form: f };
+                        // The device's own `half` arithmetic, its contraction the AIR's own as
+                        // `float`'s is. Kept apart, it is Metal's: measured, a property the
+                        // module requires, or under the float controls its entry declares.
+                        // Left to the device's compiler on MoltenVK, Metal's fast compile folds
+                        // its conversions away and answers the `float` result unrounded
+                        // (measured with `DriverDeviation::MetalHalfArithmetic`), noted.
+                        let kept = contract == Contraction::Forbidden;
+                        cx.families.arith.f16_arith |= basis == F16Basis::Measured && kept;
+                        if basis == F16Basis::Measured && !kept {
+                            cx.precision.insert(PrecisionNote::FastMathRewrites);
+                        }
+                        let s = S::F16 {
+                            op: *op,
+                            form: f,
+                            contract,
+                        };
                         with_nan(cx, s, nan::binary_answer(*op, fmt))
                     } else {
                         // A `half` chain's operation held at `float` precision: its operands,
@@ -3043,9 +3057,9 @@ fn value(
             let (p, q) = (a(cx, 0)?, a(cx, 1)?);
             ops::float_binary(fb, *op, *form, *contract, p, q)?
         }
-        S::F16 { op, form } => {
+        S::F16 { op, form, contract } => {
             let (p, q) = (a(cx, 0)?, a(cx, 1)?);
-            ops::f16_binary(fb, *op, form.lanes, p, q)?
+            ops::f16_binary(fb, *op, form.lanes, *contract, p, q)?
         }
         S::FastDivide { contract, .. } => {
             let (p, q) = (a(cx, 0)?, a(cx, 1)?);

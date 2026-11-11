@@ -2208,9 +2208,10 @@ fn half_arithmetic_on_the_device_follows_the_profile() {
 }
 
 /// The device's `half` `+ - *` ([`ops::f16_binary`]) is the exact result rounded once to `half`, on
-/// the interpreter's correctly rounded 16-bit arithmetic: the operands narrow and the result widens
-/// exactly (a NaN stays a NaN), on scalars and vectors, and the product kept apart as `Fma(a, b,
-/// -0.0)` keeps a `-0` product.
+/// the interpreter's correctly rounded 16-bit arithmetic, kept apart or left to the device's
+/// compiler: the operands narrow and the result widens exactly (a NaN stays a NaN), on scalars and
+/// vectors, and the product, kept apart as `Fma(a, b, -0.0)` or a plain `OpFMul`, keeps a `-0`
+/// product.
 #[test]
 fn half_arithmetic_on_the_device_is_the_rounded_result() {
     let vals: Vec<u64> = half_values();
@@ -2226,12 +2227,16 @@ fn half_arithmetic_on_the_device_is_the_rounded_result() {
         AirBin::FSub => a - b,
         _ => a * b,
     };
-    for op in [AirBin::FAdd, AirBin::FSub, AirBin::FMul] {
+    let contracts = [Contraction::Forbidden, Contraction::Allowed];
+    for (op, contract) in [AirBin::FAdd, AirBin::FSub, AirBin::FMul]
+        .into_iter()
+        .flat_map(|op| contracts.map(|c| (op, c)))
+    {
         check_accept(
-            &format!("{op:?} on the device's half"),
+            &format!("{op:?} on the device's half, {contract:?}"),
             &[h, h],
             h,
-            &|fb, x| ops::f16_binary(fb, op, 1, x[0], x[1]),
+            &|fb, x| ops::f16_binary(fb, op, 1, contract, x[0], x[1]),
             &pairs(&vals, &few),
             &|c| {
                 Some(vec![nbits(
@@ -2254,12 +2259,15 @@ fn half_arithmetic_on_the_device_is_the_rounded_result() {
                 ]
             })
             .collect();
-        for op in [AirBin::FAdd, AirBin::FSub, AirBin::FMul] {
+        for (op, contract) in [AirBin::FAdd, AirBin::FSub, AirBin::FMul]
+            .into_iter()
+            .flat_map(|op| contracts.map(|c| (op, c)))
+        {
             check_accept(
-                &format!("{op:?} on {lanes} lanes of the device's half"),
+                &format!("{op:?} on {lanes} lanes of the device's half, {contract:?}"),
                 &[v, v],
                 v,
-                &|fb, x| ops::f16_binary(fb, op, lanes, x[0], x[1]),
+                &|fb, x| ops::f16_binary(fb, op, lanes, contract, x[0], x[1]),
                 &cases,
                 &|c| {
                     Some(
@@ -2278,10 +2286,11 @@ fn half_arithmetic_on_the_device_is_the_rounded_result() {
 /// rounding of the module's own: no conversion barrier (`narrow::rounds_by_conversion` finds none),
 /// and the only instructions computing 16-bit values are the operation and at most two narrowings
 /// of its operands: an operand the module widened from a 16-bit float is that float, narrowed by
-/// nothing (`FunctionBuilder::convert`); the operation is always kept apart: a sum or difference
-/// decorated `NoContraction`, a product `Fma(a, b, -0.0)` decorated `NoContraction`, never an
-/// `OpFMul` (undecorated, Metal's fast compile answers the widened operands' `float` product;
-/// decorated, SPIRV-Cross's `spvFMul` answers `+0` for a `-0` product).
+/// nothing (`FunctionBuilder::convert`). Its contraction is the AIR's own: kept apart
+/// (`Contraction::Forbidden`), a sum or difference decorated `NoContraction` and a product
+/// `Fma(a, b, -0.0)` decorated `NoContraction`, never an `OpFMul` (decorated, SPIRV-Cross's
+/// `spvFMul` answers `+0` for a `-0` product); left to the device's compiler
+/// (`Contraction::Allowed`), an undecorated `OpFAdd`, `OpFSub` or `OpFMul`, and no `Fma`.
 #[test]
 fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
     use crate::spirv::serialize::serialize;
@@ -2299,12 +2308,13 @@ fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
     const NO_CONTRACTION: u32 = 42;
     const FMA: u32 = 50;
     let h = half();
-    for lanes in [1u8, 4] {
+    let contracts = [Contraction::Forbidden, Contraction::Allowed];
+    for (lanes, contract) in [1u8, 4].into_iter().flat_map(|l| contracts.map(|c| (l, c))) {
         let v = vec(h, lanes);
         for op in [AirBin::FAdd, AirBin::FSub, AirBin::FMul] {
-            let what = format!("{op:?} on {lanes} lanes");
+            let what = format!("{op:?} on {lanes} lanes, {contract:?}");
             let m = kernel(&[v, v], v, &|fb, x| {
-                ops::f16_binary(fb, op, lanes, x[0], x[1])
+                ops::f16_binary(fb, op, lanes, contract, x[0], x[1])
             })
             .expect("kernel");
             let mut meter = crate::budget::Meter::new(&crate::budget::Budget::default());
@@ -2356,10 +2366,11 @@ fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
                     })
                 })
                 .collect();
-            let want = match op {
-                AirBin::FAdd => (OP_FADD, 0),
-                AirBin::FSub => (OP_FSUB, 0),
-                _ => (OP_EXT_INST, FMA),
+            let want = match (op, contract) {
+                (AirBin::FAdd, _) => (OP_FADD, 0),
+                (AirBin::FSub, _) => (OP_FSUB, 0),
+                (_, Contraction::Allowed) => (OP_FMUL, 0),
+                (_, Contraction::Forbidden) => (OP_EXT_INST, FMA),
             };
             let shapes: Vec<(u32, u32)> = computed.iter().map(|&(c, g, _)| (c, g)).collect();
             let (last, before) = shapes.split_last().expect("the operation");
@@ -2372,7 +2383,11 @@ fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
                 .last()
                 .map(|&(_, _, id)| id)
                 .expect("the operation");
-            assert!(decorated.contains(&op_id), "{what}: NoContraction");
+            assert_eq!(
+                decorated.contains(&op_id),
+                contract == Contraction::Forbidden,
+                "{what}: NoContraction"
+            );
         }
     }
 }

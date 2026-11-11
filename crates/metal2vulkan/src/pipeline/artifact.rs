@@ -792,7 +792,10 @@ pub enum PrecisionNote {
     /// `HalfChainPolicy::AtExits` (the default), a chain of such `half` additions, subtractions and
     /// products is held at `float` precision between the roundings where its values leave it
     /// (`lower::arith::half_chain`): the result may differ from the rounded operations' by the
-    /// roundings skipped, and a value inside the chain past `half`'s range stays finite.
+    /// roundings skipped, and a value inside the chain past `half`'s range stays finite. On
+    /// MoltenVK, a `half` addition, subtraction or product carrying both flags is the device's
+    /// 16-bit instruction left undecorated, whose conversions Metal's fast compile folds away: it
+    /// answers the `float` result of the widened operands, unrounded, with the same bound.
     /// Recorded on every device.
     FastMathRewrites,
     /// A tessellation pipeline's vertex order: Metal's clockwise output winding is declared

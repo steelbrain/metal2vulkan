@@ -659,7 +659,10 @@ pub enum DriverDeviation {
     /// denormals kept, an exact zero sum `+0` unless both addends are `-0`, and every NaN result
     /// `0x7E00`, in every math mode. Where the profile also has `shaderFloat16`, a `half` `fadd`,
     /// `fsub` or `fmul` converts its operands (each a `half`, so exactly) to 16 bits, takes that
-    /// kept instruction and widens its result. Unmeasured, it takes the same instruction under the
+    /// kept instruction and widens its result; one whose flags carry `contract` and `reassoc` takes
+    /// the instruction undecorated instead, the AIR's own contraction, outside the measurement
+    /// (Metal's fast compile folds its conversions away, `PrecisionNote::FastMathRewrites`), and
+    /// requires nothing for it. Unmeasured, it takes the same instruction under the
     /// 16-bit float controls that make it Metal's by the Vulkan spec (`QuantizeForm::Controlled`),
     /// and elsewhere computes the result in `float` and rounds it to `half` as every `half`
     /// rounds (`narrow::round`, noted `NativeHalfConversion` or `NativeHalfQuantize` where that

@@ -3795,10 +3795,13 @@ bound.
   any other is kept apart (`NoContraction`); Metal's compiler groups and fuses by its own choice.
   On a device without `shaderFloat16`, a chain of such `half` additions, subtractions and products
   is held at `float` precision between the roundings where its values leave it
-  (`HalfChainPolicy::AtExits`, the default; `HalfChainPolicy::EachOperation` rounds each).
-  Cost: a sum of mixed signs grouped otherwise, or a multiply-add fused on one side alone, differs
-  from Metal's by any amount relative to the result; a held `half` chain by the roundings it
-  skips, a value inside it past `half`'s range staying finite.
+  (`HalfChainPolicy::AtExits`, the default; `HalfChainPolicy::EachOperation` rounds each). On
+  MoltenVK a `half` addition, subtraction or product carrying both flags is the 16-bit instruction
+  left undecorated, whose conversions Metal's fast compile folds away: the `float` result,
+  unrounded. Cost: a sum of mixed signs grouped otherwise, or a multiply-add fused on one side
+  alone, differs from Metal's by any amount relative to the result; a held `half` chain, or a
+  MoltenVK `half` operation left to the compiler, by the roundings it skips, a value inside it past
+  `half`'s range staying finite.
 - `metal2vulkan-degrade-tessellation-winding` (precision). `PrecisionNote::TessellationWinding`: A
   tessellation pipeline's vertex order: Metal's clockwise output winding is declared
   `VertexOrderCcw` and its counter-clockwise one `VertexOrderCw`, as MoltenVK maps them under

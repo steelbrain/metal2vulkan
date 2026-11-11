@@ -285,18 +285,23 @@ pub fn f16_binary_words(f: Form) -> u32 {
 /// (the double rounding is innocuous). A NaN's bits are the device's, as the controlled rounding's
 /// are.
 ///
-/// The instruction is always kept apart, whatever the AIR's flags allow: a sum or difference
-/// decorated `NoContraction` (SPIRV-Cross writes its `[[clang::optnone]]` `spvFAdd` or `spvFSub`),
-/// a product as `Fma(a, b, -0.0)` decorated `NoContraction`, the product's value whether the
-/// device fuses it or not. Undecorated, Metal's fast and relaxed compiles fold the narrowings and
-/// the widening away and answer the `float` sum, difference or product of the widened operands; a
-/// `NoContraction` `OpFMul`, which SPIRV-Cross writes as `fma(l, r, 0)`, answers `+0` for a `-0`
-/// product. Keeping each operation apart is one of the values the flags allow, the one the widened
-/// lowering gives.
+/// The instruction takes the AIR's own contraction, as `float` arithmetic does
+/// ([`float_binary`]): one whose flags carry both `contract` and `reassoc`
+/// (`Contraction::Allowed`) is undecorated, a product a plain `OpFMul`, and the device's compiler
+/// groups and fuses it with its neighbours as it chooses. On MoltenVK, Metal's fast and relaxed
+/// compiles fold such an operation's narrowings and widening away and answer the `float` sum,
+/// difference or product of the widened operands, unrounded (measured with
+/// `DriverDeviation::MetalHalfArithmetic`), which selection records as
+/// `PrecisionNote::FastMathRewrites`. Any other (`Contraction::Forbidden`) is kept apart: a sum or
+/// difference decorated `NoContraction` (SPIRV-Cross writes its `[[clang::optnone]]` `spvFAdd` or
+/// `spvFSub`), a product as `Fma(a, b, -0.0)` decorated `NoContraction`, the product's value
+/// whether the device fuses it or not; a `NoContraction` `OpFMul`, which SPIRV-Cross writes as
+/// `fma(l, r, 0)`, answers `+0` for a `-0` product.
 pub fn f16_binary(
     fb: &mut FunctionBuilder<'_>,
     op: AirBin,
     lanes: u8,
+    contract: Contraction,
     a: Value,
     b: Value,
 ) -> BResult<Value> {
@@ -310,10 +315,11 @@ pub fn f16_binary(
     let (h, w) = (float_ty(fb, 16)?, float_ty(fb, 32)?);
     let x = fb.convert(ConvOp::FConvert, a, h)?;
     let y = fb.convert(ConvOp::FConvert, b, h)?;
-    let r = match op {
-        AirBin::FAdd => fb.binary_no_contraction(BinOp::FAdd, x, y)?,
-        AirBin::FSub => fb.binary_no_contraction(BinOp::FSub, x, y)?,
-        AirBin::FMul => {
+    let r = match (op, contract) {
+        (AirBin::FAdd, _) => fb.binary_with(BinOp::FAdd, x, y, contract)?,
+        (AirBin::FSub, _) => fb.binary_with(BinOp::FSub, x, y, contract)?,
+        (AirBin::FMul, Contraction::Allowed) => fb.binary(BinOp::FMul, x, y)?,
+        (AirBin::FMul, Contraction::Forbidden) => {
             let e = fb.module().ty(Type::Float { width: 16 })?;
             let s = fb.module().constant(Constant::Scalar {
                 ty: e,
