@@ -698,7 +698,9 @@ pub enum DriverDeviation {
     /// `[[thread_index_in_simdgroup]]` is that builtin. Unmeasured, the lane and the simdgroup
     /// operations run over the device's own grouping, which Metal does not rule out, and record
     /// `PrecisionNote::FragmentSimdgroupGrouping`: which pixels share a simdgroup, and in what
-    /// order, is the rasterizer's packing, which nothing in Vulkan states or pins.
+    /// order, is the rasterizer's packing, which nothing in Vulkan states or pins. So is which
+    /// quads of a function that discards Apple's GPU shades as several partial quads: unmeasured,
+    /// a quad operation beside a helper query in such a function records the note too.
     MetalFragmentSimdgroups,
     /// The device runs a vertex function's subgroup operations as Metal runs its simdgroup
     /// functions, though its `subgroupSupportedStages` leaves the vertex stage out

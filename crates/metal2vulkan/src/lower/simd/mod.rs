@@ -333,9 +333,10 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // A fragment function's simdgroups are the pixels the device's rasterizer packs into a
     // subgroup, which are Metal's only where the driver runs the fragment on Metal: elsewhere an
     // operation over the simdgroup's members combines a simdgroup Metal allows, not the
-    // reference's.
+    // reference's. So does a quad operation beside a helper query in a function that discards,
+    // whose quads Apple's GPU may split ([`discarding_quads_observed`]).
     if cx.stage == Stage::Fragment
-        && cx.families.simd.simdgroup_members
+        && (cx.families.simd.simdgroup_members || discarding_quads_observed(cx))
         && !cx
             .profile
             .takes_driver_deviation(crate::error::DriverDeviation::MetalFragmentSimdgroups)
@@ -468,6 +469,24 @@ pub fn full_quads(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         Capability::Feature(VkFeature::ShaderQuadControl),
     )
     .into())
+}
+
+/// Whether a fragment function that discards asks whether its thread is a helper and runs a group
+/// operation over other lanes ([`SimdPlan::observes_lanes`]), so an operation may read which of
+/// its quad's lanes are helpers. Apple's GPU shades some quads of a function that discards as
+/// several partial quads from the function's start, each run holding the quad's other covered
+/// pixels as helpers: on the M3 Max (macOS 26.7 and 27.0.1 alike, and MoltenVK there), under the
+/// full-screen triangle with every third pixel discarded, a live pixel's `quad_ballot` of
+/// `quad_is_helper_thread` names covered pixels of its quad as helpers in 3 of the 16 quads of an
+/// 8x8 target and 2 to 4 of the 12 of a 7x5 one, asked before or after the discard, at MSL 2.2 and
+/// 4.0, where the function without the discard runs every quad whole (the public
+/// `helper-threads-*` cases). A Vulkan device shades a primitive's covered pixels of a quad as one
+/// quad, and nothing in Vulkan states or pins which quads Apple's rasterizer splits. A helper
+/// computes what the covered pixel would, so only a helper query tells the runs apart.
+fn discarding_quads_observed(cx: &SelectCx<'_>) -> bool {
+    !cx.families.fragment.discards.is_empty()
+        && cx.families.fragment.helper_queries
+        && cx.families.simd.observes_lanes
 }
 
 /// Whether the profile's vertex stage groups vertices otherwise than Apple's GPUs with nothing to

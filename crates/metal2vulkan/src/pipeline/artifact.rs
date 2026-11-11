@@ -1333,15 +1333,25 @@ pub enum PrecisionNote {
     /// [`DriverWorkaround::VertexGroupingNotApples`]: crate::device::DriverWorkaround::VertexGroupingNotApples
     VertexSimdgroupGrouping,
     /// A fragment function runs a simdgroup operation (a reduction, scan, vote, ballot, shuffle,
-    /// broadcast or AGX multiply-add) or reads its `[[thread_index_in_simdgroup]]` on a device
-    /// whose fragment subgroups are not Metal's simdgroups (the profile does not take
-    /// [`DriverDeviation::MetalFragmentSimdgroups`](crate::error::DriverDeviation::MetalFragmentSimdgroups)):
-    /// the operation runs over the pixels the device's rasterizer packs into a subgroup, so a sum,
-    /// a ballot or a shuffle combines other pixels than on an Apple GPU, whose packing is
-    /// measured, and the lane is the pixel's place in the device's subgroup. Metal does
-    /// not fix which pixels share a simdgroup, so each device subgroup is a simdgroup Metal's API
-    /// allows, not the reference's. Quad operations are not concerned: a quad is the same 2x2
-    /// pixels on every device.
+    /// broadcast or AGX multiply-add) or reads its `[[thread_index_in_simdgroup]]`, or discards,
+    /// asks whether its thread is a helper (`quad_is_helper_thread`, `simd_is_helper_thread`) and
+    /// runs a quad operation, on a device whose fragment subgroups are not Metal's simdgroups (the
+    /// profile does not take
+    /// [`DriverDeviation::MetalFragmentSimdgroups`](crate::error::DriverDeviation::MetalFragmentSimdgroups)).
+    /// A simdgroup operation runs over the pixels the device's rasterizer packs into a subgroup,
+    /// so a sum, a ballot or a shuffle combines other pixels than on an Apple GPU, whose packing is
+    /// measured, and the lane is the pixel's place in the device's subgroup. Metal does not fix
+    /// which pixels share a simdgroup, so each device subgroup is a simdgroup Metal's API allows,
+    /// not the reference's. An Apple GPU also shades some quads of a function that discards as
+    /// several partial quads, from the function's start, each run holding the quad's other covered
+    /// pixels as helpers, where the device shades a primitive's covered pixels of a quad as one
+    /// quad: a ballot of the helper query names covered pixels of the quad as helpers on the Apple
+    /// GPU and none on the device (measured on the M3 Max under the full-screen triangle with every
+    /// third pixel discarded: 3 of the 16 quads of an 8x8 target, 2 to 4 of the 12 of a 7x5 one;
+    /// the same function without the discard runs every quad whole). Metal permits a partly
+    /// occupied quad and does not fix which quads it splits, so the device's quad is one Metal's
+    /// API allows. Elsewhere a quad is the same 2x2 pixels on every device, and a helper computes
+    /// what its covered pixel would, so no other quad operation tells the runs apart.
     ///
     /// A device whose fragment subgroup holds fewer than two quads runs it as a partly occupied
     /// simdgroup (`Tier::PartialFragment`), which Metal permits: there the operation combines the

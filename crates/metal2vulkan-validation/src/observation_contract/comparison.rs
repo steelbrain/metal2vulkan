@@ -218,7 +218,8 @@ impl UlpTable {
 ///   a sum, a ballot, or a shuffle by whole vertices.
 /// - `FragmentSimdgroupGrouping`: unbounded: a fragment function's simdgroup holds the pixels the
 ///   device's rasterizer packs together, not Apple's, which moves a sum, a ballot, or a shuffle by
-///   whole pixels.
+///   whole pixels; and a quad of a function that discards holds every covered pixel where Apple's
+///   GPU may run some as helpers, which moves a ballot of a helper query by whole lanes.
 /// - `BlendedWriteRounding`: unbounded: a blended half-float channel under
 ///   `textureWriteRoundingMode` 2 stores the device's rounding of the blend's result, which no
 ///   Vulkan blend states, where Metal rounds it to nearest even.

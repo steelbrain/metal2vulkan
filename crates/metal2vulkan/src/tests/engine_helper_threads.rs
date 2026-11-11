@@ -161,6 +161,62 @@ fn fragment_helper_queries_take_the_form_of_their_discards() {
     }
 }
 
+/// A fragment function that discards, asks whether its thread is a helper and ballots the answers
+/// over its quad records `PrecisionNote::FragmentSimdgroupGrouping` on every committed profile that
+/// compiles it and does not take `MetalFragmentSimdgroups` (the Radeon 780M's among them), and on
+/// the MoltenVK profile, which takes it, records none: an Apple GPU shades some quads of such a
+/// function as several partial quads, which the device's quads are not. The same function without
+/// the discard (`fragment_helper_threads`), and a function that discards and asks with no quad
+/// operation (`fragment_helper_thread_alone_after_a_terminating_discard`), record none anywhere.
+#[test]
+fn a_discarding_function_s_helper_ballots_record_the_grouping_where_the_driver_is_not_metal_s() {
+    use crate::error::DriverDeviation;
+    use crate::pipeline::artifact::PrecisionNote;
+    use crate::spirv::testing::committed_profiles;
+    let (Some(msl4), Some(msl22)) = (
+        fixture("gsm2_helper_threads"),
+        fixture("gsm2_helper_threads_msl22"),
+    ) else {
+        return;
+    };
+    let note = PrecisionNote::FragmentSimdgroupGrouping;
+    let discarding: [(&[u8], &str); 3] = [
+        (&msl4, "fragment_helper_threads_after_a_discard"),
+        (&msl4, "fragment_helper_threads_before_a_discard"),
+        (
+            &msl22,
+            "fragment_helper_threads_after_a_terminating_discard",
+        ),
+    ];
+    let quiet: [(&[u8], &str); 2] = [
+        (&msl4, "fragment_helper_threads"),
+        (
+            &msl22,
+            "fragment_helper_thread_alone_after_a_terminating_discard",
+        ),
+    ];
+    let mut noted = BTreeMap::new();
+    for (name, p) in committed_profiles().expect("profiles") {
+        let want = !p.takes_driver_deviation(DriverDeviation::MetalFragmentSimdgroups);
+        for (bc, entry) in discarding {
+            if let Ok(a) = compile(bc, entry, &p) {
+                assert_eq!(a.precision.contains(&note), want, "{entry} on {name}");
+                *noted.entry(name.clone()).or_insert(0) += 1;
+            }
+        }
+        for (bc, entry) in quiet {
+            if let Ok(a) = compile(bc, entry, &p) {
+                assert!(!a.precision.contains(&note), "{entry} on {name}");
+            }
+        }
+    }
+    // Both sides ran: the 780M's profile compiles all three and records the note, MoltenVK's
+    // compiles all three and records none.
+    for stem in ["amd-780m-radv", "moltenvk-m3"] {
+        assert_eq!(noted.get(stem), Some(&3), "{stem}: {noted:?}");
+    }
+}
+
 /// A vertex function asks nothing: no vertex is a helper.
 #[test]
 fn a_vertex_function_s_helper_query_is_false() {

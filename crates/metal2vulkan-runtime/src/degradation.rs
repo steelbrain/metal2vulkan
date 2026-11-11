@@ -4571,7 +4571,9 @@ impl Device {
         if note == PrecisionNote::FragmentSimdgroupGrouping {
             return format!(
                 "{recorded}: {}'s fragment subgroups are not Apple's simdgroups, so its simdgroup \
-                 lanes and operations group other pixels than an Apple GPU's",
+                 lanes and operations group other pixels than an Apple GPU's, and a quad of a \
+                 function that discards holds every covered pixel where an Apple GPU may run some \
+                 as helpers",
                 self.name()
             );
         }

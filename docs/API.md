@@ -3955,11 +3955,17 @@ bound.
 - `metal2vulkan-degrade-fragment-simdgroup-grouping` (precision).
   `PrecisionNote::FragmentSimdgroupGrouping`: A fragment function runs a simdgroup operation (a
   reduction, scan, vote, ballot, shuffle, broadcast or AGX multiply-add) or reads its
-  `[[thread_index_in_simdgroup]]` on a device whose fragment subgroups are not Metal's simdgroups
-  (the profile does not take `DriverDeviation::MetalFragmentSimdgroups`): the operation runs over
-  the pixels the device's rasterizer packs into a subgroup, so a sum, a ballot or a shuffle combines
-  other pixels than on an Apple GPU, whose packing is measured, and the lane is the pixel's place in
-  the device's subgroup. A device whose fragment subgroup holds fewer than two quads combines the
+  `[[thread_index_in_simdgroup]]`, or discards, asks `quad_is_helper_thread` or
+  `simd_is_helper_thread` and runs a quad operation, on a device whose fragment subgroups are not
+  Metal's simdgroups (the profile does not take `DriverDeviation::MetalFragmentSimdgroups`). A
+  simdgroup operation runs over the pixels the device's rasterizer packs into a subgroup, so a sum,
+  a ballot or a shuffle combines other pixels than on an Apple GPU, whose packing is measured, and
+  the lane is the pixel's place in the device's subgroup. An Apple GPU also shades some quads of a
+  function that discards as several partial quads from the function's start, each run holding the
+  quad's other covered pixels as helpers, where the device shades them as one quad: a ballot of the
+  helper query names covered pixels as helpers on the M3 Max (3 of the 16 quads of an 8x8 target, 2
+  to 4 of the 12 of a 7x5 one, under the full-screen triangle with every third pixel discarded) and
+  none on the device. A device whose fragment subgroup holds fewer than two quads combines the
   one quad's pixels alone, so a reduction ahead of a `discard_fragment` counts no quad the discard
   drops, where an Apple GPU's simdgroup counts the dropped quads of its 8x4 pixel block; the
   device states one fragment subgroup size, so no required size widens it, and no exact form

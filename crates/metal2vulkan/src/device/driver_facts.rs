@@ -210,7 +210,10 @@ pub(crate) fn among<F: Copy + Ord>(
 /// order; elsewhere, the rasterizer packs the covered quads of several blocks and primitives into
 /// one simdgroup. The gate lane
 /// `runtime_lane::driver_deviations::fragment_simdgroup_lanes_are_metal_s` compares MoltenVK's
-/// subgroup lanes with Metal's lanes of the same draws on each chip. One row per GPU.
+/// subgroup lanes with Metal's lanes of the same draws on each chip. Its quads are Metal's too: in
+/// a function that discards, where the M3 Max shades some quads as several partial quads, the
+/// public `helper-threads-*` cases' MoltenVK rows answer Metal's ballots of the helper query word
+/// for word. One row per GPU.
 ///
 /// `MetalVertexSimdgroups` (the coordinator's reversal of the MoltenVK refusal, 2026-10-08):
 /// MoltenVK 1.4.1 leaves the vertex stage out of `subgroupSupportedStages`, but hands the vertex

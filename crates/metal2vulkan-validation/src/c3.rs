@@ -732,9 +732,11 @@ pub struct SlotRow {
 ///   operation combines the device's group of vertices, a simdgroup Metal allows, and its value is
 ///   ordinary data later words use. No exact path exists on such a device.
 /// - A fragment function's simdgroup operation on a device whose fragment subgroups are not
-///   Metal's simdgroups (`FragmentSimdgroupGrouping`): the operation combines the pixels the
-///   device's rasterizer packs together, a simdgroup Metal allows, and its value is ordinary data
-///   later words use. No exact path exists on such a device.
+///   Metal's simdgroups, or a quad operation beside a helper query in a function that discards
+///   there (`FragmentSimdgroupGrouping`): the operation combines the pixels the device's
+///   rasterizer packs together, or a quad Apple's GPU may shade as several partial quads, a group
+///   Metal allows, and its value is ordinary data later words use. No exact path exists on such a
+///   device.
 /// - A half-float color channel under `textureWriteRoundingMode` 2 that blends with factors
 ///   other than one and zero (`BlendedWriteRounding`): the device's blend converts its result by
 ///   its own rounding where Metal rounds it to nearest even, and the stored half is ordinary data
@@ -865,8 +867,11 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
         PrecisionNote::FragmentSimdgroupGrouping => {
             "a fragment function's simdgroup holds the pixels the device's rasterizer packs into a \
              subgroup, where Apple's GPUs run an aligned 8x4 block one primitive covers whole as \
-             one simdgroup and pack other quads by their own rasterizer (gsm2_fragment_lanes); no \
-             exact path: no Vulkan device states or pins its packing"
+             one simdgroup and pack other quads by their own rasterizer (gsm2_fragment_lanes); in \
+             a function that discards, a quad's helper query names no covered pixel as a helper, \
+             where Apple M3 Max shades some quads as several partial quads, each run holding the \
+             others as helpers (3 of 16 quads at 8x8, 2 to 4 of 12 at 7x5, gsm2_helper_threads); \
+             no exact path: no Vulkan device states or pins its packing"
         }
         PrecisionNote::BlendedWriteRounding => {
             "a half-float color channel under textureWriteRoundingMode 2 blended with factors \
