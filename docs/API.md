@@ -3672,7 +3672,7 @@ bound.
   fragment's write. Exact for a draw whose primitives do not overlap at a pixel; otherwise each
   such pixel holds the result of some order of the draw's fragments there. A raster order group
   on the color input, or on a color output of an attachment the function reads, takes the same
-  form. Announced at the first draw that binds such a pipeline.
+  form.
 - `metal2vulkan-degrade-fp8-value` (precision). `PrecisionNote::Fp8Value`: An 8-bit float converts
   to an integer from the format's documented value with Metal's saturating float-to-integer rule,
   where Metal's device here answers otherwise: Metal on Apple M3 compiles these reads but extends

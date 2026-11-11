@@ -38,9 +38,9 @@
 //! earlier one read input attachments, records after that barrier (`render.rs`'s
 //! `InterlockedStorage`, `WorkCounts::fetch_draw_barriers`): every draw reads what the draws before
 //! it stored, Metal's answer. Nothing orders the overlapping fragments of one draw there, which the
-//! fetching fragment stage records (`PrecisionNote::UnorderedFetchWithinDraw`, announced at the
-//! first draw that binds it): such a fragment may read the texel from before an earlier fragment
-//! of its draw wrote it.
+//! fetching fragment stage records (`PrecisionNote::UnorderedFetchWithinDraw`, announced as the
+//! stage's other notes are, where the pipeline is made): such a fragment may read the texel from
+//! before an earlier fragment of its draw wrote it.
 //!
 //! The storage form ([`through_storage`]): a draw's fetched attachments are storage images it
 //! reads and writes in the interlock, which its subpass leaves out (`render_target.rs`); a pass

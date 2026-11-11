@@ -23,9 +23,11 @@
 //!   one draw over the `R32Float` target cleared to 0.75. Metal halves each texel twice (0.1875).
 //!   Nothing orders the second instance's fragments after the first's here, so each texel holds
 //!   0.1875 or 0.375 (the second read before the first's write landed), printed with its count;
-//!   the pipeline's fragment stage records `PrecisionNote::UnorderedFetchWithinDraw`, and the
-//!   runtime announces it (`unordered-fetch-within-draw`) at the first draw that binds it. No
-//!   barrier: one draw.
+//!   the pipeline's fragment stage records `PrecisionNote::UnorderedFetchWithinDraw`. No barrier:
+//!   one draw.
+//!
+//! The runtime announces the note (`unordered-fetch-within-draw`) once, where the first fetching
+//! pipeline is made, as it announces a stage's other notes; no draw announces it again.
 //!
 //! Each fetching pipeline reads one input attachment and states no rasterization-order access,
 //! which is asserted of the translator's pipeline.
@@ -107,11 +109,13 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
     };
     inputs((&fetch, "fetch_scalar"), pf);
     inputs((&count, "exf_fetch_count"), PixelFormat::RGBA32Uint);
+    let _ = messages.take_notices();
     let halve = pipeline(&lane, &vertices, (&fetch, "fetch_scalar"), &[pf], 1).unwrap();
     let white = pipeline(&lane, &vertices, (&vertices, WHITE), &[pf], 1).unwrap();
-    let _ = messages.take_notices();
+    let announced = counts(&messages.take_notices());
+    assert_eq!(announced.get(&note()), Some(&1), "{device}: {announced:?}");
 
-    // Draws in order: 0.25, three barriers, the note announced once.
+    // Draws in order: 0.25, three barriers.
     let before = barriers(&lane);
     let target = lane.texture(pf, ONE, TextureUsage::RENDER_TARGET);
     let clear = ClearColor::new(0.75, 0.0, 0.0, 0.0);
@@ -133,8 +137,6 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
         3,
         "{device}: barriers between the draws"
     );
-    let announced = counts(&messages.take_notices());
-    assert_eq!(announced.get(&note()), Some(&1), "{device}: {announced:?}");
     eprintln!("FETCH-BETWEEN-DRAWS draws in order on {device}: 0.25 at every texel, 3 barriers");
 
     // Integer read-modify-writes: exact, two barriers.
@@ -196,6 +198,9 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
         "FETCH-BETWEEN-DRAWS one draw over itself on {device}: {metals} of {TEXELS} texels \
          Metal's 0.1875, {other} the other order's 0.375 (unordered-fetch-within-draw)"
     );
+    // Announced once, at the first fetching pipeline's making: no later making or draw again.
+    let again = counts(&messages.take_notices());
+    assert_eq!(again.get(&note()), None, "{device}: {again:?}");
     drop(cache);
     quiet(lane, &messages);
 }
