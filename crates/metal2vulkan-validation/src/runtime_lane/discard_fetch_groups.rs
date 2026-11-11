@@ -9,17 +9,22 @@
 //! whose write did not land, by their 8x4 groups.
 //!
 //! Each pass (`sfd_discard_fetch`) clears an 8-bit color, then draws in one encoder a fullscreen
-//! `sfd_fill` (code [`FILL`]) and an `sfd_alpha` draw ([`Shape`]: one fullscreen triangle, or a
-//! rectangle in each of 8 by 4 cells whose edges cut 2x2 quads) that fetches the color, reads and
-//! samples a texture of one texel value ([`TEXEL`]), discards where the pixel's `(x + 3 y) % 5` is
-//! 0 or never ([`Discards`]), samples again, takes a derivative and writes fetched plus texel plus
-//! 1. So a pixel holds [`expected`]: that sum where the draw covers it and does not discard it,
-//! else [`FILL`]. [`RUNS`] passes of each shape and discard pattern over 224x128 and 1920x1080, the
-//! target kept across passes (fetched in place once it took its storage form) or new each pass
-//! (fetched through a scratch image). Every pixel of every pass must hold its code; each pass
-//! prints its wrong pixels, live and discarded apart, with their 8x4 groups and how many of those
-//! are wrong in every live pixel; and the fragment stage's discard and helper strategies and its
-//! precision notes as the device's compile profile lowers it, the path that ran.
+//! `sfd_fill` (code [`FILL`]) and a draw of one of [`FRAGMENTS`] ([`Shape`]: one fullscreen
+//! triangle, or a rectangle in each of 8 by 4 cells whose edges cut 2x2 quads) that fetches the
+//! color, reads and samples a texture of one texel value ([`TEXEL`]), discards where the pixel's
+//! `(x + 3 y) % 5` is 0 or never ([`Discards`]), samples again, takes a derivative and writes
+//! fetched plus texel plus 1. The fragment functions differ in where float arithmetic the module
+//! keeps apart (`NoContraction`, which SPIRV-Cross writes as `optnone` calls) runs: nowhere
+//! (`sfd_alpha`), in straight-line code (`sfd_line`), in a branch only the discarded fragments
+//! enter (`sfd_dropped`), or in one only the helper invocations past a rectangle's edges enter
+//! (`sfd_edge`). So a pixel holds [`expected`]: that sum where the draw covers it and does not
+//! discard it, else [`FILL`]. [`RUNS`] passes of each function, shape and discard pattern over
+//! 224x128 and 1920x1080, the target kept across passes (fetched in place once it took its storage
+//! form) or new each pass (fetched through a scratch image). Every pixel of every pass must hold
+//! its code; each pass prints its wrong pixels, live and discarded apart, with their 8x4 groups and
+//! how many of those are wrong in every live pixel; and each fragment stage's discard and helper
+//! strategies, its `NoContraction` operations and its precision notes as the device's compile
+//! profile lowers it, the path that ran.
 
 use super::framebuffer_fetch::fetches;
 use super::split_fetch_order::{codes, completed, encode_readback, texture, wrong_groups};
@@ -35,6 +40,7 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan::vk::ShaderStage;
 use metal2vulkan::Budget;
+use metal2vulkan_devtools::spirv::spirv_dis;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     ClearColor, Device, Library, LoadAction, PipelineOptions, Region, RenderPassDescriptor,
@@ -47,8 +53,11 @@ const FILL: u32 = 40;
 /// The code every texel of the sampled texture holds.
 const TEXEL: u32 = 90;
 
-/// The passes of each shape, discard pattern, target and size.
+/// The passes of each fragment function, shape, discard pattern, target and size.
 const RUNS: usize = 8;
+
+/// The fetching fragment functions the lane draws with (the module docs).
+const FRAGMENTS: [&str; 4] = ["sfd_alpha", "sfd_line", "sfd_dropped", "sfd_edge"];
 
 /// The `sfd_alpha` draw's primitives.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,7 +68,7 @@ enum Shape {
     Cells,
 }
 
-/// Where `sfd_alpha` discards.
+/// Where the fetching fragment function discards.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Discards {
     /// Where the pixel's `(x + 3 y) % 5` is 0.
@@ -77,13 +86,13 @@ fn covers(shape: Shape, (width, height): (u64, u64), (x, y): (u64, u64)) -> bool
         || (left + 3 <= x && x < left + cell_x - 2 && top + 5 <= y && y < top + cell_y - 2)
 }
 
-/// Whether `sfd_alpha` discards pixel `(x, y)` under `discards`.
+/// Whether the fetching fragment function discards pixel `(x, y)` under `discards`.
 fn discards_at(discards: Discards, (x, y): (u64, u64)) -> bool {
     discards == Discards::Pattern && (x + 3 * y) % 5 == 0
 }
 
 /// The code pixel `(x, y)` of a target of `sides` holds after a pass (the module docs), and
-/// whether the `sfd_alpha` draw wrote it.
+/// whether the fetching draw wrote it.
 fn expected(shape: Shape, discards: Discards, sides: (u64, u64), pixel: (u64, u64)) -> (u8, bool) {
     match covers(shape, sides, pixel) && !discards_at(discards, pixel) {
         true => (((FILL + TEXEL + 1) & 255) as u8, true),
@@ -114,16 +123,16 @@ fn descriptor(library: &Library, vertex: &str, fragment: &str) -> RenderPipeline
     descriptor
 }
 
-/// The fragment stage's discard and helper strategies and its precision notes, as the device's
-/// compile profile lowers `sfd_alpha` drawn by `sfd_fan`.
-fn lowering(device: &Device, ll: &std::path::Path) -> String {
+/// The fragment stage's discard and helper strategies, its `NoContraction` operations and its
+/// precision notes, as the device's compile profile lowers `fragment` drawn by `sfd_fan`.
+fn lowering(device: &Device, ll: &std::path::Path, fragment: &str) -> String {
     let bitcode = llvm_assemble(ll).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let function = |name: &str| {
         StageSource::Function(FunctionDescriptor::new(library.function(name).unwrap()))
     };
     let mut descriptor = RenderPipelineDescriptor::new(function("sfd_fan"));
-    descriptor.fragment = Some(function("sfd_alpha"));
+    descriptor.fragment = Some(function(fragment));
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm));
     let compiled = device
         .compile_device()
@@ -147,8 +156,9 @@ fn lowering(device: &Device, ll: &std::path::Path) -> String {
         })
         .map(|(name, used)| format!("{name} x{}", used.uses))
         .collect();
+    let kept_apart = spirv_dis(&stage.spirv).matches("NoContraction").count();
     format!(
-        "strategies {strategies:?}, notes {:?}",
+        "strategies {strategies:?}, {kept_apart} NoContraction, notes {:?}",
         stage.precision_notes
     )
 }
@@ -191,7 +201,8 @@ fn pass(
     encoder
         .set_vertex_bytes(&size.map(f32::to_le_bytes).concat(), 0)
         .unwrap();
-    // scale, bias, discard_mod, discard_hit (a hit past the modulus never discards).
+    // scale, bias, discard_mod, discard_hit (a hit past the modulus never discards), and the
+    // cell's sides.
     let hit: u32 = match discards {
         Discards::Pattern => 0,
         Discards::Never => 7,
@@ -201,6 +212,8 @@ fn pass(
         0.0f32.to_le_bytes(),
         5u32.to_le_bytes(),
         hit.to_le_bytes(),
+        ((sides.0 / 8) as f32).to_le_bytes(),
+        ((sides.1 / 4) as f32).to_le_bytes(),
     ]
     .concat();
     encoder.set_fragment_bytes(&globals, 0).unwrap();
@@ -237,16 +250,22 @@ fn a_discarding_fetch_lands_every_live_fragment_s_write() {
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
             .unwrap()
     };
-    let pipelines = Pipelines {
-        fill: make("sfd_fan", "sfd_fill"),
-        fan: make("sfd_fan", "sfd_alpha"),
-        cells: make("sfd_cells", "sfd_alpha"),
-    };
-    eprintln!(
-        "DISCARD-FETCH on {}: sfd_alpha lowers with {}",
-        device.name(),
-        lowering(&device, &ll)
-    );
+    let drawn: Vec<(&str, Pipelines)> = FRAGMENTS
+        .iter()
+        .map(|&fragment| {
+            eprintln!(
+                "DISCARD-FETCH on {}: {fragment} lowers with {}",
+                device.name(),
+                lowering(&device, &ll, fragment)
+            );
+            let pipelines = Pipelines {
+                fill: make("sfd_fan", "sfd_fill"),
+                fan: make("sfd_fan", fragment),
+                cells: make("sfd_cells", fragment),
+            };
+            (fragment, pipelines)
+        })
+        .collect();
     let usage = (TextureUsage::SHADER_READ, ResourceOptions::shared());
     let sampled = texture(&device, PixelFormat::RGBA8Unorm, (4, 4), usage);
     let texel = [TEXEL as u8, TEXEL as u8, TEXEL as u8, 255];
@@ -259,57 +278,64 @@ fn a_discarding_fetch_lands_every_live_fragment_s_write() {
         ResourceOptions::private(),
     );
     let mut wrong_passes = Vec::new();
-    for sides in [(224u64, 128u64), (1920, 1080)] {
-        let kept = texture(&device, PixelFormat::BGRA8Unorm, sides, target_usage);
-        for shape in [Shape::Fan, Shape::Cells] {
-            for discards in [Discards::Pattern, Discards::Never] {
-                let want: Vec<(u8, bool)> = (0..sides.1)
-                    .flat_map(|y| (0..sides.0).map(move |x| (x, y)))
-                    .map(|pixel| expected(shape, discards, sides, pixel))
-                    .collect();
-                for fresh in [false, true] {
-                    for run in 0..RUNS {
-                        let target = match fresh {
-                            true => texture(&device, PixelFormat::BGRA8Unorm, sides, target_usage),
-                            false => kept.clone(),
-                        };
-                        let bound = (&target, &sampled, &sampler);
-                        let got = pass(&device, &pipelines, bound, (shape, discards), sides);
-                        let wrong: Vec<bool> =
-                            got.iter().zip(&want).map(|(g, (w, _))| g != w).collect();
-                        let live_wrong: Vec<bool> = wrong
-                            .iter()
-                            .zip(&want)
-                            .map(|(&w, &(_, live))| w && live)
-                            .collect();
-                        let live = live_wrong.iter().filter(|&&w| w).count();
-                        let other = wrong.iter().filter(|&&w| w).count() - live;
-                        let groups = wrong_groups(&live_wrong, sides);
-                        // Groups wrong in every live pixel they hold.
-                        let whole = groups
-                            .iter()
-                            .filter(|&&(left, top)| {
-                                (top..(top + 4).min(sides.1))
-                                    .flat_map(|y| {
-                                        (left..(left + 8).min(sides.0)).map(move |x| (x, y))
-                                    })
-                                    .map(|(x, y)| (y * sides.0 + x) as usize)
-                                    .filter(|&i| want[i].1)
-                                    .all(|i| wrong[i])
-                            })
-                            .count();
-                        let first: Vec<_> = groups.iter().take(6).collect();
-                        eprintln!(
-                            "DISCARD-FETCH on {}: {}x{} {shape:?} {discards:?} fresh {fresh}, pass \
-                             {run}: {live} live and {other} other pixels wrong, the live ones in \
-                             {} 8x4 groups ({whole} wrong in every live pixel), first {first:?}",
+    for (fragment, pipelines) in &drawn {
+        for sides in [(224u64, 128u64), (1920, 1080)] {
+            let kept = texture(&device, PixelFormat::BGRA8Unorm, sides, target_usage);
+            for shape in [Shape::Fan, Shape::Cells] {
+                for discards in [Discards::Pattern, Discards::Never] {
+                    let want: Vec<(u8, bool)> = (0..sides.1)
+                        .flat_map(|y| (0..sides.0).map(move |x| (x, y)))
+                        .map(|pixel| expected(shape, discards, sides, pixel))
+                        .collect();
+                    for fresh in [false, true] {
+                        for run in 0..RUNS {
+                            let target = match fresh {
+                                true => {
+                                    texture(&device, PixelFormat::BGRA8Unorm, sides, target_usage)
+                                }
+                                false => kept.clone(),
+                            };
+                            let bound = (&target, &sampled, &sampler);
+                            let got = pass(&device, pipelines, bound, (shape, discards), sides);
+                            let wrong: Vec<bool> =
+                                got.iter().zip(&want).map(|(g, (w, _))| g != w).collect();
+                            let live_wrong: Vec<bool> = wrong
+                                .iter()
+                                .zip(&want)
+                                .map(|(&w, &(_, live))| w && live)
+                                .collect();
+                            let live = live_wrong.iter().filter(|&&w| w).count();
+                            let other = wrong.iter().filter(|&&w| w).count() - live;
+                            let groups = wrong_groups(&live_wrong, sides);
+                            // Groups wrong in every live pixel they hold.
+                            let whole = groups
+                                .iter()
+                                .filter(|&&(left, top)| {
+                                    (top..(top + 4).min(sides.1))
+                                        .flat_map(|y| {
+                                            (left..(left + 8).min(sides.0)).map(move |x| (x, y))
+                                        })
+                                        .map(|(x, y)| (y * sides.0 + x) as usize)
+                                        .filter(|&i| want[i].1)
+                                        .all(|i| wrong[i])
+                                })
+                                .count();
+                            let first: Vec<_> = groups.iter().take(6).collect();
+                            eprintln!(
+                            "DISCARD-FETCH on {}: {fragment} {}x{} {shape:?} {discards:?} fresh \
+                             {fresh}, pass {run}: {live} live and {other} other pixels wrong, the \
+                             live ones in {} 8x4 groups ({whole} wrong in every live pixel), first \
+                             {first:?}",
                             device.name(),
                             sides.0,
                             sides.1,
                             groups.len(),
                         );
-                        if live + other > 0 {
-                            wrong_passes.push((sides, shape, discards, fresh, run, live, other));
+                            if live + other > 0 {
+                                wrong_passes.push((
+                                    fragment, sides, shape, discards, fresh, run, live, other,
+                                ));
+                            }
                         }
                     }
                 }
@@ -318,11 +344,11 @@ fn a_discarding_fetch_lands_every_live_fragment_s_write() {
     }
     assert!(
         wrong_passes.is_empty(),
-        "{}: passes whose fragments' writes did not land (sides, shape, discards, fresh, pass, \
-         live pixels, other pixels): {wrong_passes:?}",
+        "{}: passes whose fragments' writes did not land (fragment function, sides, shape, \
+         discards, fresh, pass, live pixels, other pixels): {wrong_passes:?}",
         device.name()
     );
-    drop(pipelines);
+    drop(drawn);
     drop(device);
     layer_reported_nothing_at_all(&messages);
 }
