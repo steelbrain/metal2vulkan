@@ -66,11 +66,12 @@ fn engine_selection_reads_only_the_selected_row_and_names_its_engine() {
     }
 }
 
-/// A fragment function that fetches its color attachment is refused on a profile with no ordered
-/// form of the fetch, and no flag compiles it unordered (`--accept-unordered-fetch` is no
-/// argument).
+/// A fragment function that fetches its color attachment compiles on a profile with no ordered
+/// form of the fetch (neither rasterization-order attachment access nor the pixel interlock):
+/// through input attachments the consumer orders between draws alone, its row naming
+/// `PrecisionNote::UnorderedFetchWithinDraw`.
 #[test]
-fn a_fetch_without_an_ordered_form_is_refused() {
+fn a_fetch_without_an_ordered_form_compiles_noted() {
     let scratch = poisoned_corpus();
     let hash = sha256_bytes(include_bytes!(
         "../../fixtures/public/engine/exf_fetch_blend.ll"
@@ -83,29 +84,15 @@ fn a_fetch_without_an_ordered_form_is_refused() {
             .output()
             .unwrap()
     };
-    let new = |extra: &[&str]| {
-        let mut args = vec![
-            "--profile",
-            "vk12-floor",
-            "--hash",
-            hash.as_str(),
-            "--compile-only",
-        ];
-        args.extend_from_slice(extra);
-        run(&args)
-    };
     if let Err(metal2vulkan_devtools::AssembleError::Missing(why)) =
         metal2vulkan_devtools::tool_version("llvm-as")
     {
         eprintln!("SKIPPED the compile check: {why}");
         return;
     }
-    let refused = String::from_utf8(new(&[]).stdout).unwrap();
-    assert_eq!(refused.lines().count(), 1, "{refused}");
-    assert!(refused.contains("\tNOT_COMPILED\t"), "{refused}");
-    assert!(refused.contains("FramebufferFetch"), "{refused}");
-    let output = new(&["--accept-unordered-fetch"]);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unrecognized argument"), "{stderr}");
+    let args = ["--profile", "vk12-floor", "--hash", &hash, "--compile-only"];
+    let compiled = String::from_utf8(run(&args).stdout).unwrap();
+    assert_eq!(compiled.lines().count(), 1, "{compiled}");
+    assert!(compiled.contains("\tCOMPILED\t"), "{compiled}");
+    assert!(compiled.contains("UnorderedFetchWithinDraw"), "{compiled}");
 }
