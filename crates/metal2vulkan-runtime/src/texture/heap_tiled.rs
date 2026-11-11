@@ -1532,9 +1532,31 @@ fn only_unit<T>(mut units: impl Iterator<Item = T>) -> Option<T> {
 /// One direction of the kernel's moves: its shape, where it lies in the shape buffer, and the
 /// dispatch's workgroups.
 struct Move {
-    shape: Vec<u8>,
+    shape: [u8; TiledTexelsModule::SHAPE_WORDS as usize * 4],
     at: u64,
     groups: [u32; 2],
+}
+
+/// The moves of a tiled heap texture's elements between its image and Metal's tiles, planned once
+/// as its route is chosen ([`HeapTiledCopies::moves`]) and then made ([`HeapTiledCopies::new`]):
+/// its tight buffer's planes, their bytes, and the kernel's levels.
+pub(crate) struct TiledMoves {
+    planes: Vec<HeapPlane>,
+    tight_len: u64,
+    levels: Vec<TiledLevelMove>,
+}
+
+impl TiledMoves {
+    /// The tight buffer's planes, one a level of each aspect (`heap_plane_layout`), or a
+    /// multisample image's samples.
+    pub(crate) fn planes(&self) -> &[HeapPlane] {
+        &self.planes
+    }
+
+    /// The bytes of the tight elements.
+    pub(crate) fn tight_len(&self) -> u64 {
+        self.tight_len
+    }
 }
 
 /// Where the parts of a tiled heap texture's one staging buffer lie
@@ -1690,17 +1712,19 @@ impl HeapTiledCopies {
         fits.then_some([across as u32, down as u32])
     }
 
-    /// Whether the moves of a texture of `tiles`, its tight buffer laid out as `planes` and
-    /// `tight_len` bytes long, fit `device`: every byte they name within `u32`, at most
-    /// `TiledTexelsModule::MAX_LEVELS` levels of all its parts, each binding within
-    /// `maxStorageBufferRange`, the one buffer of them all ([`Scratch`]) within the device's
-    /// buffers' length, and each dispatch within `maxComputeWorkGroupCount`.
-    pub(crate) fn fit(
+    /// The moves of a texture of `tiles` whose image of `format` has its elements in the tight
+    /// buffer as `planes` say, `tight_len` bytes, where they fit `device`: every byte they name
+    /// within `u32`, at most `TiledTexelsModule::MAX_LEVELS` levels of all its parts, each binding
+    /// within `maxStorageBufferRange`, the one buffer of them all ([`Scratch`]) within the
+    /// device's buffers' length, and each dispatch within `maxComputeWorkGroupCount`; a 32-bit
+    /// float depth clamped into `[0, 1]` on its way into the image where the device takes no
+    /// other value there (`depth_clamp::clamps_depth`). `None` where they do not fit.
+    pub(crate) fn moves(
         device: &Device,
         tiles: &TiledTexture,
-        planes: &[HeapPlane],
-        tight_len: u64,
-    ) -> bool {
+        (planes, tight_len): (Vec<HeapPlane>, u64),
+        format: Format,
+    ) -> Option<TiledMoves> {
         let range = u64::from(
             device
                 .properties()
@@ -1708,9 +1732,8 @@ impl HeapTiledCopies {
                 .limits
                 .max_storage_buffer_range,
         );
-        let Some(levels) = Self::levels(tiles, planes, false) else {
-            return false;
-        };
+        let clamps = depth_clamp::clamps_depth(device, format, ImageAspectFlags::DEPTH);
+        let levels = Self::levels(tiles, &planes, clamps)?;
         let moves = [true, false].iter().all(|&into| {
             let invocations = levels
                 .iter()
@@ -1719,13 +1742,18 @@ impl HeapTiledCopies {
             u32::try_from(invocations).is_ok() && Self::grid(device, invocations).is_some()
         });
         let length = Scratch::of(tiles.size, tight_len).length;
-        levels.len() <= TiledTexelsModule::MAX_LEVELS as usize
+        let fits = levels.len() <= TiledTexelsModule::MAX_LEVELS as usize
             && tiles.size <= range
             && u32::try_from(tiles.size).is_ok()
             && tight_len.next_multiple_of(4) <= range
             && u32::try_from(tight_len).is_ok()
             && length <= device.properties().max_buffer_length
-            && moves
+            && moves;
+        fits.then_some(TiledMoves {
+            planes,
+            tight_len,
+            levels,
+        })
     }
 
     /// The staging buffer of a texture of `tiles` whose first byte lies at `at` of the heap's
@@ -1772,23 +1800,23 @@ impl HeapTiledCopies {
         })
     }
 
-    /// The moves of a texture of `tiles` through `staging` (its `staging`, which holds the tight
-    /// elements and the shapes past the texture's bytes, [`Scratch`]), whose image of `format`
-    /// has its elements in the tight elements as `planes` say, `tight_len` bytes, copied to and
-    /// from the image by `regions` (offsets from the tight elements' first byte): a 32-bit float
-    /// depth clamped into `[0, 1]` on its way into the image where the device takes no other
-    /// value there (`depth_clamp::clamps_depth`). Internal where `staging` is not one of
-    /// `staging`'s for them; the caller checked that the moves `fit`.
+    /// The `moves` of a texture of `tiles` ([`moves`](Self::moves), of its image of `samples`)
+    /// through `staging` (its `staging`, which holds the tight elements and the shapes past the
+    /// texture's bytes, [`Scratch`]), the tight elements copied to and from the image by
+    /// `regions` (offsets from the tight elements' first byte). Internal where `staging` is not
+    /// one of `staging`'s for them.
     pub(crate) fn new(
         device: &Device,
         staging: &ShadowStaging,
-        (tiles, format): (TiledTexture, Format),
-        (planes, tight_len, samples): (Vec<HeapPlane>, u64, u32),
+        tiles: TiledTexture,
+        (moves, samples): (TiledMoves, u32),
         mut regions: Vec<vk::BufferImageCopy>,
     ) -> Result<HeapTiledCopies, Error> {
-        let clamps = depth_clamp::clamps_depth(device, format, ImageAspectFlags::DEPTH);
-        let levels = Self::levels(&tiles, &planes, clamps)
-            .ok_or_else(|| internal("a tiled heap texture's moves past u32"))?;
+        let TiledMoves {
+            planes,
+            tight_len,
+            levels,
+        } = moves;
         let scratch = Scratch::of(tiles.size, tight_len);
         if staging.buffer.length() < scratch.length {
             return Err(internal(

@@ -184,7 +184,11 @@ impl TiledTexelsModule {
     /// The shape's bytes of a move of `levels` into the image (the tight buffer) where
     /// `into_tight`, else back, in a grid whose rows are `grid_width` invocations wide; `None`
     /// past [`MAX_LEVELS`](Self::MAX_LEVELS) levels.
-    pub fn shape(levels: &[TiledLevelMove], into_tight: bool, grid_width: u32) -> Option<Vec<u8>> {
+    pub fn shape(
+        levels: &[TiledLevelMove],
+        into_tight: bool,
+        grid_width: u32,
+    ) -> Option<[u8; Self::SHAPE_WORDS as usize * 4]> {
         if levels.len() > Self::MAX_LEVELS as usize {
             return None;
         }
@@ -215,7 +219,11 @@ impl TiledTexelsModule {
             words[at..at + record.len()].copy_from_slice(&record);
             start += count;
         }
-        Some(words.iter().flat_map(|word| word.to_le_bytes()).collect())
+        let mut bytes = [0u8; Self::SHAPE_WORDS as usize * 4];
+        for (to, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+            *to = word.to_le_bytes();
+        }
+        Some(bytes)
     }
 }
 

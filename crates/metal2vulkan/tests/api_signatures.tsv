@@ -9195,7 +9195,7 @@ method	metal2vulkan::bind::TiledLevelMove::clamping_depth	pub const fn clamping_
 method	metal2vulkan::bind::TiledLevelMove::invocations	pub const fn invocations(&self, into_tight: bool) -> u32
 method	metal2vulkan::bind::TiledLevelMove::new	pub const fn new(unit: u32, extent: [u32; 2], images: u32, tile: [u32; 2], across: u32, tiled_first: u32, chain_stride: u32, tight_first: u32, region_bytes: u32) -> TiledLevelMove
 method	metal2vulkan::bind::TiledTexelsModule::invocations	pub fn invocations(levels: &[TiledLevelMove], into_tight: bool) -> u32
-method	metal2vulkan::bind::TiledTexelsModule::shape	pub fn shape(levels: &[TiledLevelMove], into_tight: bool, grid_width: u32) -> Option<Vec<u8>>
+method	metal2vulkan::bind::TiledTexelsModule::shape	pub fn shape(levels: &[TiledLevelMove], into_tight: bool, grid_width: u32) -> Option<[u8; Self::SHAPE_WORDS as usize * 4]>
 method	metal2vulkan::bind::TwoPlaneTexelsModule::alpha_words	pub const fn alpha_words([width, height]: [u32; 2], slices: u32) -> u32
 method	metal2vulkan::bind::TwoPlaneTexelsModule::shape	pub fn shape([width, height]: [u32; 2], slices: u32, color: PlaneLayout, alpha: PlaneLayout, into_texels: bool, grid_width: u32) -> [u8; 52]
 method	metal2vulkan::bind::UsedResource::new	pub fn new(class: ResourceClass, token: u32) -> UsedResource

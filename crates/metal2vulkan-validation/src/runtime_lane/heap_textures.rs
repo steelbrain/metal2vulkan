@@ -1161,7 +1161,7 @@ fn a_heap_depth_texture_without_optimized_contents_answers_metal_s_footprint() {
 /// (`DriverFact::DepthStencilImagesStayGpuOptimized`: MoltenVK on Apple's GPUs), announces
 /// `optimized-depth-stencil-texture`: a shadow of Metal's tiles moves one level of **each aspect**
 /// per level of the texture, and the kernel's shape holds 16 of them
-/// (`bind::TiledTexelsModule::MAX_LEVELS`, through `HeapTiledCopies::fit`), so a two-aspect texture
+/// (`bind::TiledTexelsModule::MAX_LEVELS`, through `HeapTiledCopies::moves`), so a two-aspect texture
 /// of 9 levels asks 18 and no shadow serves it. Its image is then a shadow of the heap's bytes in
 /// rows rather than in Metal's tiles, announced `heap-texture-untiled-layout` beside this kind.
 ///

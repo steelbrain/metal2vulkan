@@ -34,7 +34,7 @@ use super::super::texture_descriptor::{texture_usage, TextureDescriptor, Texture
 use super::super::tracker::UseRange;
 use super::super::values::ResourceOptions;
 use super::super::view_plan::ViewRecord;
-use super::heap::{heap_plane_layout, heap_planes};
+use super::heap::{copies_into, heap_plane_layout};
 use super::heap_tiled::{Elements, HeapTiledCopies, TiledLayout, TiledTexture};
 use super::{image_error, IdUse, Image, Storage, Texture};
 use ash::vk;
@@ -117,20 +117,16 @@ impl Texture {
             let (format, plan_pf, extent) = (plan.format, plan.pixel_format, plan.extent);
             // The plane's aspect alone moves between the image and the tiles.
             let (planes, tight_len) = heap_plane_layout(format, plan_pf, extent, 1, 1);
-            let (regions, _) = heap_planes(format, plan_pf, extent, 1, 1);
             let planes: Vec<_> = planes
                 .into_iter()
                 .filter(|plane| plane.aspect == unit.aspect)
                 .collect();
-            let aspect = unit.aspect.into();
-            let regions: Vec<_> = (regions.into.into_iter())
-                .filter(|region| region.image_subresource.aspect_mask == aspect)
-                .collect();
             // The plane's aspect alone: one part, of the planes given.
             let tiled = TiledTexture::one(tiled);
-            if !HeapTiledCopies::fit(device, &tiled, &planes, tight_len) {
-                return Err(gap());
-            }
+            let moves = HeapTiledCopies::moves(device, &tiled, (planes, tight_len), format)
+                .ok_or_else(gap)?;
+            let regions = copies_into(moves.planes(), 1);
+            let aspect = unit.aspect.into();
             let (raw, at) = texels.buffer.at(base);
             let mut staging = HeapTiledCopies::staging(device, &tiled, tight_len, at, hazard)?;
             let start = staging.into.dst_offset;
@@ -143,9 +139,7 @@ impl Texture {
                     size: run.end - run.start,
                 })
                 .collect();
-            let shape = (planes, tight_len, 1);
-            let tiles = (tiled, format);
-            let tiles = HeapTiledCopies::new(device, &staging, tiles, shape, regions)?;
+            let tiles = HeapTiledCopies::new(device, &staging, tiled, (moves, 1), regions)?;
             let (truth, tracked) = texels.buffer.tracked(base..end);
             let copies = ShadowCopies {
                 source: ShadowSource::Bytes {

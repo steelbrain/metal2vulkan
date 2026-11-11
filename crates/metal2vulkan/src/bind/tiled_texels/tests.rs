@@ -82,7 +82,7 @@ fn moved(
             buffers: vec![
                 part(TIGHT, tight.to_vec()),
                 part(TILED, tiled.to_vec()),
-                part(SHAPE, shape.clone()),
+                part(SHAPE, shape.to_vec()),
             ],
             push: Vec::new(),
             spec: Default::default(),

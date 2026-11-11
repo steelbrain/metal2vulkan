@@ -108,7 +108,7 @@
 //!   of Metal's tiles in the heap's bytes (below), which answers Metal's size and lays its texels
 //!   out as Metal does. Where no such shadow serves it — a multisample texture whose samples the
 //!   device does not move, a texture whose levels of all its parts pass the moves one shadow holds
-//!   (`HeapTiledCopies::fit`: 16, so a two-aspect texture of 9 levels asks 18) or whose moves pass
+//!   (`HeapTiledCopies::moves`: 16, so a two-aspect texture of 9 levels asks 18) or whose moves pass
 //!   the device's limits, a layout not measured — its image keeps that layout, so
 //!   the heap's bytes are not Metal's layout of its texels, and the device announces
 //!   `optimized-depth-stencil-texture` once. The **answer** there is Metal's own still wherever
@@ -215,7 +215,7 @@
 use super::first_move::FirstMove;
 use super::heap_tiled::{
     footprint_size, metal_compresses_layout, metal_heap_layout, modelled_size, own_heap_layout,
-    shadow_tiles, HeapLayout, HeapTiledCopies, TiledPart, TiledTexture, Untiled,
+    shadow_tiles, HeapLayout, HeapTiledCopies, TiledMoves, TiledPart, TiledTexture, Untiled,
 };
 use super::heap_two_planes::{HeapPlaneCopies, TwoPlaneHeapLayout};
 use super::stand_in::StandIn;
@@ -611,6 +611,9 @@ struct HeapImage {
     tiling: vk::ImageTiling,
     requirements: vk::MemoryRequirements,
     route: AliasRoute,
+    /// The moves of its elements between it and Metal's tiles, planned as its route was chosen
+    /// ([`tiles_serve`](Device::tiles_serve)), on [`AliasRoute::Tiled`]; `None` on every other.
+    moves: Option<TiledMoves>,
 }
 
 /// `placement` for a heap's image of `tiling` on `route` ([`heap_extent`]):
@@ -2072,6 +2075,7 @@ impl Device {
                 tiling: vk::ImageTiling::OPTIMAL,
                 requirements,
                 route,
+                moves: None,
             }
         } else if one_plane_apart(&layout) {
             // A mipmapped or 3D one-plane YCbCr texture, whose texels Metal lays at bytes that
@@ -2084,6 +2088,7 @@ impl Device {
                 tiling: vk::ImageTiling::OPTIMAL,
                 requirements,
                 route: AliasRoute::Unaliased,
+                moves: None,
             }
         } else {
             match self.heap_image(
@@ -2109,6 +2114,7 @@ impl Device {
                         tiling: vk::ImageTiling::OPTIMAL,
                         requirements,
                         route: AliasRoute::Lossless,
+                        moves: None,
                     }
                 }
                 made => made?,
@@ -2255,10 +2261,11 @@ impl Device {
                 None => matches!(metal_layout, HeapLayout::Tiled(_)).then_some(&metal_layout),
             };
             if let (Some(tiles), Some(answer)) = (tiles, metal_answer) {
-                let serves = (tiles.tiles())
-                    .is_some_and(|tiled| self.tiles_serve(&image.plan, tiled, answer.size));
-                if serves {
+                let moves = (tiles.tiles())
+                    .and_then(|tiled| self.tiles_serve(&image.plan, tiled, answer.size));
+                if let Some(moves) = moves {
                     image.route = AliasRoute::Tiled;
+                    image.moves = Some(moves);
                     size_and_align = answer;
                     if let Some(made) = made {
                         metal_layout = made;
@@ -2271,9 +2278,10 @@ impl Device {
         // (`heap_tiled.rs`): its bytes are Metal's, and it takes Metal's answer.
         if image.route == AliasRoute::Lossless && layout.samples > 1 {
             let shadow = self.sample_tiles(&layout, &image.plan, &metal_layout, metal_answer)?;
-            if let Some((plan, tiles, answer)) = shadow {
+            if let Some((plan, tiles, answer, moves)) = shadow {
                 image.plan = plan;
                 image.route = AliasRoute::Tiled;
+                image.moves = Some(moves);
                 size_and_align = answer;
                 metal_layout = tiles;
             }
@@ -2440,6 +2448,7 @@ impl Device {
                         tiling: vk::ImageTiling::OPTIMAL,
                         requirements,
                         route: AliasRoute::MemoryShadow,
+                        moves: None,
                     })
                 }
                 made => made,
@@ -2465,6 +2474,7 @@ impl Device {
                 } else {
                     AliasRoute::Apart
                 },
+                moves: None,
             });
         }
         let hides =
@@ -2475,6 +2485,7 @@ impl Device {
                 tiling: vk::ImageTiling::OPTIMAL,
                 requirements,
                 route: AliasRoute::Direct,
+                moves: None,
             });
         }
         let policy = self.compile_device().policy().heap_compression;
@@ -2484,6 +2495,7 @@ impl Device {
                 tiling: vk::ImageTiling::OPTIMAL,
                 requirements,
                 route: AliasRoute::Compressed,
+                moves: None,
             });
         }
         if let Some(image) = self.host_transfer_image(&optimal, texture_type, &takes)? {
@@ -2498,6 +2510,7 @@ impl Device {
             tiling: vk::ImageTiling::OPTIMAL,
             requirements,
             route: AliasRoute::Hidden,
+            moves: None,
         })
     }
 
@@ -2635,6 +2648,7 @@ impl Device {
             tiling: vk::ImageTiling::OPTIMAL,
             requirements,
             route: AliasRoute::HostTransfer,
+            moves: None,
         }))
     }
 
@@ -2665,6 +2679,7 @@ impl Device {
             tiling: vk::ImageTiling::LINEAR,
             requirements,
             route,
+            moves: None,
         })
     }
 
@@ -2892,12 +2907,13 @@ impl Device {
             let plan = self.with_free_usage(plan, p.layout.texture_type)?;
             let answer = Some(p.size_and_align);
             let shadow = self.sample_tiles(&p.layout, &plan, &p.metal_layout, answer)?;
-            if let Some((plan, tiles, _)) = shadow {
+            if let Some((plan, tiles, _, moves)) = shadow {
                 let image = HeapImage {
                     plan,
                     tiling: vk::ImageTiling::OPTIMAL,
                     requirements: p.image.requirements,
                     route: AliasRoute::Tiled,
+                    moves: Some(moves),
                 };
                 return Ok(HeapPlan {
                     image,
@@ -2910,6 +2926,7 @@ impl Device {
                 tiling: vk::ImageTiling::OPTIMAL,
                 requirements: p.image.requirements,
                 route: AliasRoute::Lossless,
+                moves: None,
             };
             return Ok(HeapPlan { image, ..p });
         }
@@ -2995,6 +3012,7 @@ impl Device {
                         tiling,
                         requirements,
                         route: AliasRoute::Direct,
+                        moves: None,
                     };
                     return Ok(HeapPlan { image, ..p });
                 }
@@ -3034,6 +3052,7 @@ impl Device {
                     // The optimal image's, which its shadow takes where none is made.
                     requirements: p.image.requirements,
                     route: AliasRoute::Direct,
+                    moves: None,
                 });
             }
             Ok(natural) => format!(
@@ -3150,6 +3169,7 @@ impl Device {
             tiling: vk::ImageTiling::OPTIMAL,
             requirements: p.image.requirements,
             route: AliasRoute::MemoryShadow,
+            moves: None,
         })
     }
 
@@ -3185,7 +3205,7 @@ impl Device {
     /// (`AliasRoute::Tiled`): its optimal image with the runtime's free usage, in memory of its
     /// own; `None` where that image takes no copies or has more than one sample, the texture's
     /// answered bytes do not hold `tiled`, or the moves of its elements do not fit the device
-    /// (`HeapTiledCopies::fit`).
+    /// (`HeapTiledCopies::moves`).
     fn tiled_heap_image(
         &self,
         call: &'static str,
@@ -3200,12 +3220,13 @@ impl Device {
         let plan = plan_image(&p.layout, descriptor.image_usage(), false, &facts)
             .map_err(|refusal| image_error(call, refusal))?;
         let optimal = self.with_free_usage(plan, p.layout.texture_type)?;
-        let serves = self.tiles_serve(&optimal, tiled, p.size_and_align.size);
-        Ok(serves.then_some(HeapImage {
+        let moves = self.tiles_serve(&optimal, tiled, p.size_and_align.size);
+        Ok(moves.map(|moves| HeapImage {
             plan: optimal,
             tiling: vk::ImageTiling::OPTIMAL,
             requirements: p.image.requirements,
             route: AliasRoute::Tiled,
+            moves: Some(moves),
         }))
     }
 
@@ -3267,22 +3288,22 @@ impl Device {
     /// tiles Metal lays them in (`AliasRoute::Tiled`; a compressed one's uncompressed tiles,
     /// [`shadow_tiles`]), where Metal lays it out as `metal` and answers `answer`: `plan` with the
     /// usages the moves take ([`with_sample_moves_usage`](Self::with_sample_moves_usage)), the
-    /// tiles, and the answer, which the texture takes; `None` where the tiles are not known, do not
-    /// fit the answer, or the device does not move the samples ([`tiles_serve`](Self::tiles_serve)).
+    /// tiles, the answer, which the texture takes, and the moves; `None` where the tiles are not
+    /// known, do not fit the answer, or the device does not move the samples
+    /// ([`tiles_serve`](Self::tiles_serve)).
     fn sample_tiles(
         &self,
         layout: &TextureLayout,
         plan: &ImagePlan,
         metal: &HeapLayout,
         answer: Option<SizeAndAlign>,
-    ) -> Result<Option<(ImagePlan, HeapLayout, SizeAndAlign)>, Error> {
+    ) -> Result<Option<(ImagePlan, HeapLayout, SizeAndAlign, TiledMoves)>, Error> {
         let (Some(tiles), Some(answer)) = (shadow_tiles(layout, plan.format, metal), answer) else {
             return Ok(None);
         };
         let plan = self.with_sample_moves_usage(plan, layout.texture_type)?;
-        let serves =
-            (tiles.tiles()).is_some_and(|tiled| self.tiles_serve(&plan, tiled, answer.size));
-        Ok(serves.then_some((plan, tiles, answer)))
+        let moves = (tiles.tiles()).and_then(|tiled| self.tiles_serve(&plan, tiled, answer.size));
+        Ok(moves.map(|moves| (plan, tiles, answer, moves)))
     }
 
     /// `plan` with the usages a multisample image's moves to and from a buffer take
@@ -3310,17 +3331,19 @@ impl Device {
         })
     }
 
-    /// Whether a shadow of Metal's tiles `tiled` serves an image of `plan` whose texture takes
-    /// `size` bytes of its heap: an image that takes copies, whose tiles fit those bytes, and
-    /// whose moves fit the device (`HeapTiledCopies::fit`); a multisample one, whose samples the
-    /// device moves to and from a buffer ([`sample_moves_run`](Self::sample_moves_run)).
-    fn tiles_serve(&self, plan: &ImagePlan, tiled: &TiledTexture, size: u64) -> bool {
+    /// The moves of a shadow of Metal's tiles `tiled` that serves an image of `plan` whose
+    /// texture takes `size` bytes of its heap, planned once (`HeapTiledCopies::moves`): an image
+    /// that takes copies, whose tiles fit those bytes, and whose moves fit the device; a
+    /// multisample one, whose samples the device moves to and from a buffer
+    /// ([`sample_moves_run`](Self::sample_moves_run)). `None` where none serves.
+    fn tiles_serve(&self, plan: &ImagePlan, tiled: &TiledTexture, size: u64) -> Option<TiledMoves> {
         let copies = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
-        let (planes, tight_len) = tight_planes(plan);
-        plan.usage.contains(copies)
-            && tiled.size <= size
-            && HeapTiledCopies::fit(self, tiled, &planes, tight_len)
-            && (plan.samples == SampleCountFlags::COUNT_1 || self.sample_moves_run(plan))
+        if !plan.usage.contains(copies) || tiled.size > size {
+            return None;
+        }
+        let moves = HeapTiledCopies::moves(self, tiled, tight_planes(plan), plan.format)?;
+        let samples = plan.samples == SampleCountFlags::COUNT_1 || self.sample_moves_run(plan);
+        samples.then_some(moves)
     }
 
     /// Whether the device moves the samples of a multisample image of `plan` to and from a buffer
@@ -4121,13 +4144,13 @@ impl Device {
         tiled: TiledTexture,
         (place, options, descriptor): (HeapPlace, ResourceOptions, &TextureDescriptor),
     ) -> Result<Image, Error> {
-        let plan = image.plan;
+        let HeapImage { plan, moves, .. } = image;
+        let moves = moves.ok_or_else(|| internal("a tiled heap texture's image without moves"))?;
         let samples = plan.samples.as_raw();
-        let (planes, tight_len) = tight_planes(&plan);
         // A single-sample image's copies are its tight planes'; a multisample image's region,
         // which its moves move, is its planes' one sample a pixel.
         let regions = match samples {
-            1 => copies_into(&planes, plan.layers),
+            1 => copies_into(moves.planes(), plan.layers),
             _ => {
                 let (format, pf, extent) = (plan.format, plan.pixel_format, plan.extent);
                 let (one, _) = heap_plane_layout(format, pf, extent, plan.levels, plan.layers);
@@ -4142,10 +4165,8 @@ impl Device {
         let buffer = ShadowBuffer::of(bytes, raw);
         let (heap_bytes, tracked) = bytes.tracked(place.offset..place.offset + tiled.size);
         let hazard = options.hazard_tracking_mode()?;
-        let staging = HeapTiledCopies::staging(self, &tiled, tight_len, start, hazard)?;
-        let shape = (planes, tight_len, samples);
-        let tiles = (tiled, plan.format);
-        let tiles = HeapTiledCopies::new(self, &staging, tiles, shape, regions)?;
+        let staging = HeapTiledCopies::staging(self, &tiled, moves.tight_len(), start, hazard)?;
+        let tiles = HeapTiledCopies::new(self, &staging, tiled, (moves, samples), regions)?;
         let tiles = Box::new(tiles);
         let shadow_range = UseRange::Image {
             aspects: image_aspects(plan.format).into(),
