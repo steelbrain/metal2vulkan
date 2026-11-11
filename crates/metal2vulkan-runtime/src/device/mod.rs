@@ -278,6 +278,9 @@ pub(super) struct DeviceShared {
     /// queue plan's round robin and presenting `VkQueue`s: what the device's notes of the limits
     /// compare with (`Device::next_queue`).
     planned: Option<(usize, usize)>,
+    /// The driver refused the device with its queue plan's `VkQueue`s, and it took its least
+    /// plan's: the reason a presenting queue shares one (`Device::place_queue`).
+    pub(super) least_plan: bool,
     /// The presenting queues made so far, on a reserved `VkQueue` or not, counted only where
     /// `planned` is.
     presenting_asked: AtomicU64,
@@ -1716,6 +1719,9 @@ pub(super) struct Parts {
     /// Where the device's queue limits changed its queues (`DeviceOptions::queue_limits`), the
     /// queue plan's round robin and presenting `VkQueue`s; `None` for an adopted device.
     pub(super) planned: Option<(usize, usize)>,
+    /// The driver refused the device with its queue plan's `VkQueue`s, and it took its least
+    /// plan's (`create.rs`'s `made_within_resources`, `Degradation::LeastQueuePlan`).
+    pub(super) least_plan: bool,
     /// The queue reserved for staging copies, its family and index there, outside `queues`
     /// (`staging.rs`): `None` for an adopted device, or where the families have no more.
     pub(super) staging: Option<(u32, u32)>,
@@ -1843,6 +1849,7 @@ impl Device {
             queues: queue_places,
             present_queues,
             planned,
+            least_plan,
             staging: staging_place,
             reserved_queues: reserved_places,
             extra_queues: extra_places,
@@ -2631,6 +2638,7 @@ impl Device {
             round_robin_made: AtomicU64::new(0),
             presenting_made: AtomicU64::new(0),
             planned,
+            least_plan,
             presenting_asked: AtomicU64::new(0),
             program_queues_made: AtomicU64::new(0),
             queue_switch: Arc::new(crate::queue_share::QueueSwitch::new(

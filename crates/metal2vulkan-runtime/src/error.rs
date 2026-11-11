@@ -130,6 +130,10 @@ pub enum Error {
     /// A driver setting the runtime cannot run under, read from the device when it is made or
     /// adopted: the device is refused, naming the setting ([`DriverSetting`]). Turn it back on.
     DriverSetting(DriverSetting),
+    /// A device the driver refused to make for want of its resources, with its queue plan and
+    /// then its least one ([`DeviceRefused`]): other devices of the GPU hold them. Metal makes
+    /// the device.
+    DeviceRefused(DeviceRefused),
     /// What plain Metal answers nil for, the process going on: the call and the problem (the
     /// module's docs).
     Nil(Nil),
@@ -207,6 +211,7 @@ impl fmt::Display for Error {
             Error::DynamicLibrary(error) => write!(f, "{error}"),
             Error::LoaderNotFound(missing) => write!(f, "{missing}"),
             Error::DriverSetting(setting) => write!(f, "{setting}"),
+            Error::DeviceRefused(refused) => write!(f, "{refused}"),
             Error::Nil(nil) => {
                 write!(f, "Metal answers nil for {}: {:?}", nil.call, nil.problem)
             }
@@ -387,6 +392,41 @@ impl fmt::Display for DriverSetting {
                  fragment functions and the bind limits shrink; turn the setting back on"
             }
         })
+    }
+}
+
+/// A device the driver refused to make for want of its resources ([`Error::DeviceRefused`]):
+/// `vkCreateDevice` answered `VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`
+/// for the `VkQueue`s of the device's queue plan, and again for those of its least plan (a round
+/// robin of one `VkQueue` and none reserved for presenting, beside the plan's reserved, extra and
+/// staging queues), or the least plan takes no fewer and the device was asked for once. Other
+/// devices of the GPU, in this process or others, hold what the driver lacks: on NVIDIA's driver
+/// its channels, one or more a `VkQueue`, and its BAR. Its counterpart, Metal's
+/// `MTLCreateSystemDefaultDevice`, makes a device on its GPU however many processes use it; a
+/// device asked for again once fewer are live may be made.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceRefused {
+    /// The device, by its Vulkan name (`VkPhysicalDeviceProperties::deviceName`).
+    pub device: String,
+    /// Each attempt in order, the queue plan's first: the `VkQueue`s it asked for and the
+    /// driver's answer.
+    pub attempts: Vec<(usize, VkResultCode)>,
+}
+
+impl fmt::Display for DeviceRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the driver refused a device on {} for want of resources:",
+            self.device
+        )?;
+        for (i, &(queues, code)) in self.attempts.iter().enumerate() {
+            let separator = if i == 0 { " " } else { ", then " };
+            let result = ash::vk::Result::from_raw(code.0);
+            write!(f, "{separator}{result:?} with {queues} VkQueue(s)")?;
+        }
+        Ok(())
     }
 }
 

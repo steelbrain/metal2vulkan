@@ -300,8 +300,8 @@ pub use error::NotInPlace;
 pub use error::Unproven;
 pub use error::{
     ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, CommandBufferError, DeadlockCause,
-    DriverSetting, EncoderCall, Error, InstanceApiVersion, Invalid, LoaderNotFound, MemoryKind,
-    MeshRecordsOverflow, Problem, RuntimeGap, SamplerLimit, ShaderCacheError,
+    DeviceRefused, DriverSetting, EncoderCall, Error, InstanceApiVersion, Invalid, LoaderNotFound,
+    MemoryKind, MeshRecordsOverflow, Problem, RuntimeGap, SamplerLimit, ShaderCacheError,
     TessellationRecordsOverflow, TimedOut, VkResultCode,
 };
 pub use error::{FailedPipeline, FailedState, PipelineCreationCause};

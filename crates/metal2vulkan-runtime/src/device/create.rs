@@ -36,7 +36,9 @@ use super::properties::{DeviceKind, PhysicalDeviceIdentity};
 use super::{device_error, holds, lock, Device, InstanceShared, Parts};
 use crate::degradation::{Degradation, DegradeNotice, Told};
 use crate::enables::{host_image_copy_names, listed_reported, listed_structures, Enables};
-use crate::error::{vulkan, Error, InstanceApiVersion, LoaderNotFound};
+use crate::error::{
+    vulkan, DeviceRefused, Error, InstanceApiVersion, LoaderNotFound, VkResultCode,
+};
 use crate::exit_guard;
 use crate::gpu_time;
 use crate::image_barrier::MemoryReads;
@@ -1280,6 +1282,159 @@ pub(crate) struct PlannedQueues {
     pub(crate) extra: Vec<Option<(u32, u32)>>,
 }
 
+/// A device's queues: its queue plan, and its extra queues' places
+/// (`DeviceOptions::extra_queues`, [`extra_queue_places`]), `None` for one the device has none of.
+pub(crate) type PlacedQueues = (QueuePlan, Vec<Option<(u32, u32)>>);
+
+/// The queue limits of a device's least queue plan ([`made_within_resources`]): a round robin of
+/// one `VkQueue`, none reserved for presenting.
+pub(crate) const LEAST_QUEUE_LIMITS: QueueLimits = QueueLimits {
+    round_robin: 1,
+    presenting: 0,
+};
+
+/// The least queue plan of a device of `families` made with `options`, its textures' images in
+/// memory the host caches or not (`cached`, as [`queue_plan`] takes it): the plan within
+/// [`LEAST_QUEUE_LIMITS`], with the reserved and extra queues `options` asks for, placed as
+/// [`extra_queue_places`] places them.
+pub(crate) fn least_queue_plan(
+    families: &[vk::QueueFamilyProperties],
+    options: &DeviceOptions,
+    cached: bool,
+) -> Option<PlacedQueues> {
+    let limits = Some(LEAST_QUEUE_LIMITS);
+    let mut plan = queue_plan_within(families, options.reserved_queues, limits, cached)?;
+    let extra = extra_queue_places(families, &mut plan, &options.extra_queues);
+    Some((plan, extra))
+}
+
+/// The `VkQueue`s a device of `placed` makes: its round robin's, those reserved for presenting
+/// and for the caller, its staging queue and its extra queues.
+pub(crate) fn vk_queues((plan, extra): &PlacedQueues) -> usize {
+    plan.queues.len()
+        + plan.present.len()
+        + plan.reserved.len()
+        + usize::from(plan.staging.is_some())
+        + extra.iter().flatten().count()
+}
+
+/// The families a device of `plan` and `extra_places` takes queues of, each with how many: one
+/// `VkDeviceQueueCreateInfo` each.
+fn families_taken(plan: &QueuePlan, extra_places: &[Option<(u32, u32)>]) -> Vec<(u32, usize)> {
+    let mut taken: Vec<(u32, usize)> = Vec::new();
+    let all = (plan.queues.iter().chain(&plan.present))
+        .chain(&plan.reserved)
+        .chain(&plan.staging)
+        .chain(extra_places.iter().flatten());
+    for &(family, _) in all {
+        match taken.iter_mut().find(|(at, _)| *at == family) {
+            Some((_, count)) => *count += 1,
+            None => taken.push((family, 1)),
+        }
+    }
+    taken
+}
+
+/// A device made with its least queue plan's `VkQueue`s, the driver having refused its queue
+/// plan's ([`made_within_resources`], `Degradation::LeastQueuePlan`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LeastPlanTaken {
+    /// The `VkQueue`s of the queue plan.
+    pub(crate) planned: usize,
+    /// The driver's answer to them.
+    pub(crate) refusal: vk::Result,
+    /// The `VkQueue`s of the least plan, which the device took.
+    pub(crate) least: usize,
+}
+
+/// Whether `result` is a driver's refusal of a device for want of its resources:
+/// `VK_ERROR_INITIALIZATION_FAILED` (NVIDIA's driver, its GPU's channels or BAR taken by other
+/// devices) or `VK_ERROR_OUT_OF_DEVICE_MEMORY`.
+fn for_want_of_resources(result: vk::Result) -> bool {
+    matches!(
+        result,
+        vk::Result::ERROR_INITIALIZATION_FAILED | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+    )
+}
+
+/// The device `make` makes with the queues of `planned`, with them and `None`; where the driver
+/// refuses it for want of its resources ([`for_want_of_resources`]) and `least`, the least queue
+/// plan's queues ([`least_queue_plan`]), takes fewer `VkQueue`s ([`vk_queues`]), the device made
+/// once more with `least`'s, with them and what it took ([`LeastPlanTaken`]). On an RTX 2080
+/// (NVIDIA 620.70.06) one process made seven devices of the plan's 17 `VkQueue`s, and the driver
+/// refused the eighth (`VK_ERROR_INITIALIZATION_FAILED`). Refused, naming the device (`device`)
+/// and each attempt
+/// ([`Error::DeviceRefused`]), where the driver refuses the least plan's for want of resources
+/// too, or where the least plan takes no fewer; any other failure is the driver's
+/// ([`vulkan`]).
+pub(crate) fn made_within_resources<D>(
+    device: &str,
+    planned: PlacedQueues,
+    least: Option<PlacedQueues>,
+    mut make: impl FnMut(&PlacedQueues) -> Result<D, vk::Result>,
+) -> Result<(D, PlacedQueues, Option<LeastPlanTaken>), Error> {
+    let refusal = match make(&planned) {
+        Ok(made) => return Ok((made, planned, None)),
+        Err(result) if for_want_of_resources(result) => result,
+        Err(result) => return Err(vulkan(result)),
+    };
+    let asked = vk_queues(&planned);
+    let refused = |attempts: &[(usize, vk::Result)]| {
+        Error::DeviceRefused(DeviceRefused {
+            device: device.to_owned(),
+            attempts: (attempts.iter())
+                .map(|&(queues, result)| (queues, VkResultCode(result.as_raw())))
+                .collect(),
+        })
+    };
+    let Some(least) = least.filter(|least| vk_queues(least) < asked) else {
+        return Err(refused(&[(asked, refusal)]));
+    };
+    let fewer = vk_queues(&least);
+    match make(&least) {
+        Ok(made) => {
+            let taken = LeastPlanTaken {
+                planned: asked,
+                refusal,
+                least: fewer,
+            };
+            Ok((made, least, Some(taken)))
+        }
+        Err(result) if for_want_of_resources(result) => {
+            Err(refused(&[(asked, refusal), (fewer, result)]))
+        }
+        Err(result) => Err(vulkan(result)),
+    }
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// How many of the next `vkCreateDevice` calls of this thread a test refuses before they
+    /// reach the driver ([`refuse_next_devices`]).
+    static REFUSED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Refuse this thread's next `count` `vkCreateDevice` calls as the driver refuses one for want of
+/// its resources (`VK_ERROR_INITIALIZATION_FAILED`): a test's stand-in for a GPU whose other
+/// devices hold its channels ([`made_within_resources`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn refuse_next_devices(count: u32) {
+    REFUSED.with(|refused| refused.set(count));
+}
+
+/// The stand-in's refusal of this `vkCreateDevice` call, where [`refuse_next_devices`] asked for
+/// one.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn refusal_stand_in() -> Option<vk::Result> {
+    REFUSED.with(|refused| {
+        let left = refused.get();
+        (left > 0).then(|| {
+            refused.set(left - 1);
+            vk::Result::ERROR_INITIALIZATION_FAILED
+        })
+    })
+}
+
 /// Whether the `made`th queue counted from 0 of the round robin, or of the presenting queues,
 /// that the limits give `limited` `VkQueue`s takes one another took where the plan's `planned`
 /// give it one of its own (`DeviceOptions::queue_limits`).
@@ -1904,7 +2059,6 @@ pub(super) fn create_on(
             cached,
         )
     });
-    let reserved_places = plan.reserved.clone();
     let queue_family = plan.primary;
     let api = description.api_version;
     let mut set = enable_set(&description, options);
@@ -2102,34 +2256,32 @@ pub(super) fn create_on(
             sparse::device::wanted(&available)
         });
     enables.enable_sparse(&sparse_features);
-    // One create info per family taken, of as many queues as the plan takes of it.
-    let mut taken: Vec<(u32, usize)> = Vec::new();
-    let extra: Vec<(u32, u32)> = extra_places.iter().flatten().copied().collect();
-    let all = (plan.queues.iter().chain(&plan.present))
-        .chain(&plan.reserved)
-        .chain(&plan.staging);
-    for &(family, _) in all.chain(&extra) {
-        match taken.iter_mut().find(|(at, _)| *at == family) {
-            Some((_, count)) => *count += 1,
-            None => taken.push((family, 1)),
+    // The device of the plan's queues, else, where the driver refuses it for want of its
+    // resources, of the least plan's (`made_within_resources`).
+    let least = least_queue_plan(&families, options, cached);
+    let make = |(plan, extra_places): &PlacedQueues| {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if let Some(refused) = refusal_stand_in() {
+            return Err(refused);
         }
-    }
-    // One priority per queue of the family the plan and the extra queues take most of, so the
-    // slice each create info names is always within it: the round robin alone takes up to
-    // `ROUND_ROBIN_CEILING` of one family, presenting `PRESENT_QUEUES` more, and the reserved and
-    // extra queues at most the family's own count.
-    let priorities = vec![1.0f32; taken.iter().map(|&(_, count)| count).max().unwrap_or(0)];
-    let queues: Vec<vk::DeviceQueueCreateInfo<'_>> = taken
-        .iter()
-        .map(|&(family, count)| {
-            vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(family)
-                .queue_priorities(&priorities[..count])
-        })
-        .collect();
-    // At the user-initiated class: MoltenVK compiles its command shaders as it makes the device.
-    let raw = enables
-        .with_create_info(&queues, |info| {
+        // One create info per family taken, of as many queues as the plan takes of it.
+        let taken = families_taken(plan, extra_places);
+        // One priority per queue of the family the plan and the extra queues take most of, so
+        // the slice each create info names is always within it: the round robin alone takes up
+        // to `ROUND_ROBIN_CEILING` of one family, presenting `PRESENT_QUEUES` more, and the
+        // reserved and extra queues at most the family's own count.
+        let priorities = vec![1.0f32; taken.iter().map(|&(_, count)| count).max().unwrap_or(0)];
+        let queues: Vec<vk::DeviceQueueCreateInfo<'_>> = taken
+            .iter()
+            .map(|&(family, count)| {
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(family)
+                    .queue_priorities(&priorities[..count])
+            })
+            .collect();
+        // At the user-initiated class: MoltenVK compiles its command shaders as it makes the
+        // device.
+        enables.with_create_info(&queues, |info| {
             let asked = super::compiles::Sent::new(info);
             let instance = &instance.raw;
             super::compiles::at_user_initiated(move || {
@@ -2138,7 +2290,13 @@ pub(super) fn create_on(
                 unsafe { instance.create_device(physical, asked.into_inner(), None) }
             })
         })
-        .map_err(vulkan)?;
+    };
+    let name = &enabled.device_name;
+    let (raw, (plan, extra_places), took_least) =
+        made_within_resources(name, (plan, extra_places), least, make)?;
+    // The least plan's queues are the runtime's own choice, not the caller's limits: no limits'
+    // messages ([`LeastPlanTaken`]).
+    let planned = planned.filter(|_| took_least.is_none());
     // SAFETY: the device was just created: its word is the loader's.
     let loader_word = unsafe { DeviceWord::of_device(raw.handle()) };
     let primary = families.get(queue_family as usize);
@@ -2147,6 +2305,7 @@ pub(super) fn create_on(
         enables.names(),
     );
     let reserved = plan.reserved.len();
+    let plan_reserved = plan.reserved.clone();
     let parts = Parts {
         instance: Arc::clone(instance),
         physical,
@@ -2155,6 +2314,7 @@ pub(super) fn create_on(
         queue_family,
         present_queues: plan.present.len(),
         planned: (planned.as_ref()).map(|planned| (planned.round_robin, planned.presenting)),
+        least_plan: took_least.is_some(),
         queues: plan.queues.into_iter().chain(plan.present).collect(),
         staging: plan.staging,
         reserved_queues: plan.reserved,
@@ -2219,8 +2379,21 @@ pub(super) fn create_on(
     if let Some(text) = reserved_queues_absent(options.reserved_queues, reserved, device.name()) {
         device.inform(RESERVED_QUEUES_ABSENT, text);
     }
+    if let Some(taken) = took_least {
+        device.degrade(Degradation::LeastQueuePlan, || {
+            (
+                format!("the device, on {}", device.name()),
+                format!(
+                    "the driver refused it with its queue plan's {} VkQueue(s) ({:?}); it took \
+                     its least plan's {}",
+                    taken.planned, taken.refusal, taken.least
+                ),
+            )
+        });
+    }
+    let reserved_places = &plan_reserved;
     if let Some(planned) = &planned {
-        if planned.reserved != reserved_places {
+        if planned.reserved != *reserved_places {
             device.inform_once(Told::QueueLimitsReached, QUEUE_LIMITS_REACHED, || {
                 let what = format!(
                     "the queues reserved for the caller are {reserved_places:?} (family, index), \

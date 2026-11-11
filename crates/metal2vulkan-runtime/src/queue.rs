@@ -517,11 +517,21 @@ impl Device {
                 Some(reserved) => reserved,
                 None => {
                     self.degrade(Degradation::SharedPresentQueue, || {
+                        let why = match self.shared().least_plan {
+                            true => {
+                                "the device reserved no `VkQueue` for presenting: the driver \
+                                 refused its queue plan's, and it took its least plan's \
+                                 (`least-queue-plan`)"
+                            }
+                            false => {
+                                "the device reserved no `VkQueue` for presenting: its queue \
+                                 families have no queue past the ones its other command queues \
+                                 share"
+                            }
+                        };
                         (
                             "a command queue made for presenting".to_owned(),
-                            "the device reserved no `VkQueue` for presenting: its queue families \
-                             have no queue past the ones its other command queues share"
-                                .to_owned(),
+                            why.to_owned(),
                         )
                     });
                     self.next_queue(None)

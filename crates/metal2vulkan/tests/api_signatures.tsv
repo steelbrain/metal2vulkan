@@ -2135,6 +2135,8 @@ field	metal2vulkan-runtime::DeviceProperties.pci_bus	pub pci_bus: Option<(u32, u
 field	metal2vulkan-runtime::DeviceProperties.read_write_texture_support	pub read_write_texture_support: ReadWriteTextureTier
 field	metal2vulkan-runtime::DeviceProperties.supports_32bit_float_filtering	pub supports_32bit_float_filtering: bool
 field	metal2vulkan-runtime::DeviceProperties.vendor_id	pub vendor_id: u32
+field	metal2vulkan-runtime::DeviceRefused.attempts	pub attempts: Vec<(usize, VkResultCode)>
+field	metal2vulkan-runtime::DeviceRefused.device	pub device: String
 field	metal2vulkan-runtime::DmaBufChunk.fd	pub fd: OwnedFd
 field	metal2vulkan-runtime::DmaBufChunk.length	pub length: u64
 field	metal2vulkan-runtime::DmaBufRequest.granule	pub granule: u64
@@ -5505,6 +5507,7 @@ macro-member	metal2vulkan-runtime::Degradation::IndirectNilBufferOffset	Indirect
 macro-member	metal2vulkan-runtime::Degradation::InterlockedBufferOrder	InterlockedBufferOrder = "interlocked-buffer-order", Precision,
 macro-member	metal2vulkan-runtime::Degradation::IsolatedIndexBytes	IsolatedIndexBytes = "isolated-index-bytes", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LandedVisibilityResults	LandedVisibilityResults = "landed-visibility-results", Performance,
+macro-member	metal2vulkan-runtime::Degradation::LeastQueuePlan	LeastQueuePlan = "least-queue-plan", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LinearAttachmentClearCopies	LinearAttachmentClearCopies = "linear-attachment-clear-copies", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LinearAttachmentCopies	LinearAttachmentCopies = "linear-attachment-copies", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LinesAtNearestWidth	LinesAtNearestWidth = "lines-at-nearest-width", Precision,
@@ -9894,6 +9897,7 @@ struct	metal2vulkan-runtime::DeviceCheckWork	#[derive(Clone, Copy, Debug, Defaul
 struct	metal2vulkan-runtime::DeviceHandles	#[derive(Clone, Copy)] #[non_exhaustive] pub struct DeviceHandles<'a>
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties
+struct	metal2vulkan-runtime::DeviceRefused	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceRefused
 struct	metal2vulkan-runtime::DirtyStamp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct DirtyStamp(pub u64)
 struct	metal2vulkan-runtime::DmaBufChunk	#[derive(Debug)] pub struct DmaBufChunk
 struct	metal2vulkan-runtime::DmaBufRequest	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DmaBufRequest
@@ -10418,6 +10422,7 @@ trait-impl	metal2vulkan-runtime::Device impl ImageMaker	impl ImageMaker for Devi
 trait-impl	metal2vulkan-runtime::Device impl std::fmt::Debug	impl std::fmt::Debug for Device
 trait-impl	metal2vulkan-runtime::DeviceHandles impl std::fmt::Debug	impl std::fmt::Debug for DeviceHandles<'_>
 trait-impl	metal2vulkan-runtime::DeviceOptions impl std::fmt::Debug	impl std::fmt::Debug for DeviceOptions
+trait-impl	metal2vulkan-runtime::DeviceRefused impl fmt::Display	impl fmt::Display for DeviceRefused
 trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Send	unsafe impl Send for DmaBufRequest
 trait-impl	metal2vulkan-runtime::DmaBufRequest impl fe impl Sync	unsafe impl Sync for DmaBufRequest
 trait-impl	metal2vulkan-runtime::DrawPrimitiveType impl From<PrimitiveType>	impl From<PrimitiveType> for DrawPrimitiveType
@@ -11862,6 +11867,7 @@ variant	metal2vulkan-runtime::Error::Bind	Bind(BindError)
 variant	metal2vulkan-runtime::Error::Compile	Compile(CompileError)
 variant	metal2vulkan-runtime::Error::Degraded	Degraded(Box<crate::degradation::DegradeNotice>)
 variant	metal2vulkan-runtime::Error::DeviceLost	DeviceLost
+variant	metal2vulkan-runtime::Error::DeviceRefused	DeviceRefused(DeviceRefused)
 variant	metal2vulkan-runtime::Error::DriverSetting	DriverSetting(DriverSetting)
 variant	metal2vulkan-runtime::Error::DynamicLibrary	DynamicLibrary(DynamicLibraryError)
 variant	metal2vulkan-runtime::Error::ExtensionFeature	ExtensionFeature(ExtensionFeature)

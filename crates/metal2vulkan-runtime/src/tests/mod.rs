@@ -296,6 +296,8 @@ mod kernel_end_device;
 mod layer_claim;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod learned_coverage;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod least_queue_plan;
 mod left;
 mod linear_alignment;
 mod linear_attachment;

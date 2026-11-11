@@ -193,6 +193,17 @@ Vulkan-side choices Metal has no counterpart for:
 | `lowering_refuses` | Degradation kinds that refuse a render encoder's call when its lowering after the call meets them (`RenderLoweringPolicy::Worker`), failing its command buffer, instead of being announced. Empty by default. |
 | `record_executions` | Keep, per command buffer, which pipeline each dispatch and draw ran (`CommandBuffer::executions`). Off by default. |
 
+**A driver short of resources.** Where the driver refuses a device with its queue plan's `VkQueue`s
+for want of its resources (`vkCreateDevice` answering `VK_ERROR_INITIALIZATION_FAILED` or
+`VK_ERROR_OUT_OF_DEVICE_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this process or
+others, holding its channels or its BAR), the runtime asks once more with its least plan's: a round
+robin of one `VkQueue` and none reserved for presenting, the reserved, extra and staging queues
+kept (`queue_limits` of one and none, without that option's messages). A device made so announces
+`metal2vulkan-degrade-least-queue-plan` once, as it is made: its command queues share that one
+`VkQueue`. A device the driver refuses again, or whose least plan takes no fewer queues, is refused,
+`Error::DeviceRefused`. On an RTX 2080 and an RTX 3090 (NVIDIA 620.70.06) one process made seven
+devices of the plan's 17 `VkQueue`s and the driver refused the eighth.
+
 While a handle lives, equal options give the same device for a physical device, as Metal has one
 `MTLDevice` per GPU. Nothing is read from the environment but the platform's default cache
 directory. `Device::registry_ids_with` lists each qualifying physical device's `registryID`,
@@ -674,6 +685,7 @@ message text. The ones a consumer meets most:
 | `OutOfMemory`, `DeviceLost`, `Vulkan`, `NoDevice` | The device's own failures. `NoDevice`: the loader opened but found no usable device. A device holding `maxMemoryAllocationCount` allocations live has the next refused (`Vulkan`, `VK_ERROR_TOO_MANY_OBJECTS`) without a call of the driver, counted in `WorkCounts::memory_allocations_refused_at_limit`, once the frees its releases posted to its free thread (which count until they run) completed. |
 | `LoaderNotFound(LoaderNotFound)` | The Vulkan loader did not open; `tried` lists each path. |
 | `DriverSetting(DriverSetting)` | A driver setting the runtime cannot run under, such as MoltenVK with `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS` off. |
+| `DeviceRefused(DeviceRefused)` | The driver refused to make the device for want of its resources (`VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`), with its queue plan's `VkQueue`s and then with its least plan's; `attempts` names each. Other devices of the GPU, in any process, hold what it lacks; once fewer are live it may be made. |
 | `WaitWouldDeadlock(DeadlockCause)` | A command buffer wait that would deadlock, refused at once instead of hanging. |
 | `ShaderCache(...)` | The shader cache directory cannot be made or written. |
 

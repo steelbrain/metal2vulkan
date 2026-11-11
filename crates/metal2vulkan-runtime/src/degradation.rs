@@ -2240,6 +2240,19 @@ degradations! {
             "the driver keeps its own cache of the device's pipelines beside the shader cache's \
              records, with whatever it writes to disk and holds in memory for it; the pipelines \
              made are the same";
+        /// A device the driver refused to make for want of its resources with the `VkQueue`s of
+        /// its queue plan (`vkCreateDevice` answering `VK_ERROR_INITIALIZATION_FAILED` or
+        /// `VK_ERROR_OUT_OF_DEVICE_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this
+        /// process or others, holding its channels or its BAR), made with those of its least
+        /// plan: a round robin of one `VkQueue` and none reserved for presenting, beside the
+        /// plan's reserved, extra and staging queues (`DeviceOptions::queue_limits` of one and
+        /// none, without its informational messages). Announced once, as the device is made; the
+        /// payload names the device, the `VkQueue`s of each plan and the driver's answer. A device
+        /// the driver refuses with its least plan too is refused (`Error::DeviceRefused`).
+        LeastQueuePlan = "least-queue-plan", Performance,
+            "its command queues, presenting ones included, share one `VkQueue`, so one queue's \
+             command buffers wait behind another's whole command buffer where Metal's run beside \
+             each other; what each command buffer does is the same";
         /// A device whose `VkDevice` was lost made a new one behind it, as Metal's device
         /// survives its GPU's recovery (`device/line.rs`): its command buffers in flight failed,
         /// the oldest incomplete one as the hang (`GpuHang`) and the rest as its victims

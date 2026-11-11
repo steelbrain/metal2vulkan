@@ -9,10 +9,11 @@
 //! that a device sends exactly those messages, and none without limits.
 
 use crate::device::create::{
-    extra_queue_places, planned_queues, queue_limits_reached, queue_plan, queue_plan_within,
-    shares_past_limit, PlannedQueues, QUEUE_LIMITS_REACHED,
+    extra_queue_places, least_queue_plan, made_within_resources, planned_queues,
+    queue_limits_reached, queue_plan, queue_plan_within, shares_past_limit, vk_queues,
+    LeastPlanTaken, PlacedQueues, PlannedQueues, LEAST_QUEUE_LIMITS, QUEUE_LIMITS_REACHED,
 };
-use crate::QueueLimits;
+use crate::{DeviceOptions, DeviceRefused, Error, QueueLimits, VkResultCode};
 use ash::vk;
 
 /// Every flag a graphics family of NVIDIA's, MoltenVK's or RADV's has.
@@ -263,4 +264,103 @@ fn reserved_and_extra_queues_placed_otherwise_are_noted() {
         "{text}"
     );
     assert_eq!(QUEUE_LIMITS_REACHED, "metal2vulkan-queue-limits-reached");
+}
+
+/// The queues a device of `families` takes with `options`: its queue plan's, and its extra
+/// queues' places.
+fn planned(families: &[vk::QueueFamilyProperties], options: &DeviceOptions) -> PlacedQueues {
+    let mut plan = queue_plan(families, options.reserved_queues, true).unwrap();
+    let extra = extra_queue_places(families, &mut plan, &options.extra_queues);
+    (plan, extra)
+}
+
+/// A device the driver refuses for want of its resources (`VK_ERROR_INITIALIZATION_FAILED`,
+/// `VK_ERROR_OUT_OF_DEVICE_MEMORY`) with its queue plan's `VkQueue`s is asked for once more with
+/// its least plan's (the lane's limits: one for the round robin, none for presenting, the
+/// reserved, extra and staging queues kept), and made with them, saying what it took; refused
+/// twice, it is refused naming both attempts, and where the least plan takes no fewer (RADV's and
+/// lavapipe's one graphics queue) it is asked for once and refused naming it. Any other failure is
+/// the driver's, asked for once, and a device made at once takes its plan.
+#[test]
+fn a_device_refused_for_want_of_resources_is_asked_for_once_with_its_least_plan() {
+    const FAILED: vk::Result = vk::Result::ERROR_INITIALIZATION_FAILED;
+    const MEMORY: vk::Result = vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    assert_eq!(LEAST_QUEUE_LIMITS, LEAN);
+    let options = DeviceOptions {
+        reserved_queues: 1,
+        extra_queues: vec![vk::QueueFlags::VIDEO_DECODE_KHR],
+        ..DeviceOptions::default()
+    };
+    let families = nvidia();
+    let plan = planned(&families, &options);
+    let least = least_queue_plan(&families, &options, true).unwrap();
+    // NVIDIA's: 13 for the round robin, two presenting, one reserved, the copy engine's staging
+    // queue and the decode queue; then one for the round robin beside the last three.
+    assert_eq!((vk_queues(&plan), vk_queues(&least)), (18, 4));
+    assert_eq!((least.0.queues.len(), least.0.present.len()), (1, 0));
+    assert_eq!(least.0.reserved.len(), 1);
+    assert_eq!((least.0.staging, &least.1), (plan.0.staging, &plan.1));
+    // Each call's answer in turn, and the queues each asked for.
+    let run = |answers: &[vk::Result]| {
+        let mut asked = Vec::new();
+        let mut answers = answers.iter();
+        let made = made_within_resources("a GPU", plan.clone(), Some(least.clone()), |placed| {
+            asked.push(vk_queues(placed));
+            match answers.next() {
+                Some(&refused) => Err(refused),
+                None => Ok("made"),
+            }
+        });
+        (
+            made.map(|(made, placed, took)| (made, vk_queues(&placed), took)),
+            asked,
+        )
+    };
+    assert_eq!(run(&[]), (Ok(("made", 18, None)), vec![18]));
+    for refusal in [FAILED, MEMORY] {
+        let took = LeastPlanTaken {
+            planned: 18,
+            refusal,
+            least: 4,
+        };
+        assert_eq!(run(&[refusal]), (Ok(("made", 4, Some(took))), vec![18, 4]));
+    }
+    let refused = |attempts: &[(usize, vk::Result)]| {
+        Error::DeviceRefused(DeviceRefused {
+            device: "a GPU".to_owned(),
+            attempts: (attempts.iter())
+                .map(|&(queues, result)| (queues, VkResultCode(result.as_raw())))
+                .collect(),
+        })
+    };
+    assert_eq!(
+        run(&[FAILED, MEMORY]),
+        (Err(refused(&[(18, FAILED), (4, MEMORY)])), vec![18, 4])
+    );
+    let other = vk::Result::ERROR_FEATURE_NOT_PRESENT;
+    let driver = Err(Error::Vulkan(VkResultCode(other.as_raw())));
+    assert_eq!(run(&[other]), (driver.clone(), vec![18]));
+    assert_eq!(run(&[FAILED, other]), (driver, vec![18, 4]));
+    let text = refused(&[(18, FAILED), (4, MEMORY)]).to_string();
+    assert_eq!(
+        text,
+        "the driver refused a device on a GPU for want of resources: \
+         ERROR_INITIALIZATION_FAILED with 18 VkQueue(s), then ERROR_OUT_OF_DEVICE_MEMORY with 4 \
+         VkQueue(s)"
+    );
+    // A shape whose least plan takes no fewer: asked for once.
+    for families in [vec![family(ALL, 1)], radv()] {
+        let options = DeviceOptions::default();
+        let plan = planned(&families, &options);
+        let least = least_queue_plan(&families, &options, true);
+        let queues = vk_queues(&plan);
+        assert_eq!(least.as_ref().map(vk_queues), Some(queues));
+        let mut calls = 0;
+        let made = made_within_resources("a GPU", plan, least, |_| -> Result<(), _> {
+            calls += 1;
+            Err(FAILED)
+        });
+        assert_eq!(made.err(), Some(refused(&[(queues, FAILED)])));
+        assert_eq!(calls, 1);
+    }
 }
