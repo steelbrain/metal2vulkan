@@ -17,8 +17,8 @@
 //! - **A copied backing over the pages** (the import gate refused, the RAM's log given) takes a
 //!   scatter's bytes at the next commit, the log told of them; a gather after its merge back
 //!   reads what the GPU wrote through it. A `Managed` no-copy buffer over exactly such a copy's
-//!   bytes, on a device without unified memory, is two copies, its device copy in device-local
-//!   memory, never the copy.
+//!   bytes, or a run bound in its chunk, on a device without unified memory, is two copies, its
+//!   device copy in device-local memory, never the copy or the chunk.
 //! - **Memory of Metal's private option bit 24 over the pages**, where the system maps no
 //!   read-only view of them: a copy, never bound in the chunk, whose commit after the CPU wrote
 //!   one page compares that page alone (the RAM's log, `copied_copy_in_bytes_skipped`); the GPU's
@@ -1140,12 +1140,13 @@ fn a_copied_backing_over_the_pages_takes_a_scatter_at_the_next_commit() {
 }
 
 /// A `Managed` no-copy buffer over the RAM's pages, made over exactly the bytes of a live `Shared`
-/// one that is a copy of them (the gate refused their import, their chunk not imported), is two
-/// copies on a device without unified memory, as over any pages (`managed_copy.rs`): its device
-/// copy in device-local memory, never the `Shared` buffer's copy, through one run or two, and it
-/// reads the pages' bytes.
+/// one, is two copies on a device without unified memory, as over any pages (`managed_copy.rs`):
+/// its device copy in device-local memory, and it reads the pages' bytes. The `Shared` one lies in
+/// a copy of them where they are two runs whose import the gate refused, and in the chunk's import
+/// where they are one run inside it (bound there whatever the gate answers); the `Managed` one lies
+/// in neither.
 #[test]
-fn a_managed_no_copy_buffer_over_a_copied_run_s_bytes_is_two_copies() {
+fn a_managed_no_copy_buffer_over_a_shared_one_s_run_is_two_copies() {
     let Some(device) = device() else {
         return;
     };
@@ -1161,19 +1162,20 @@ fn a_managed_no_copy_buffer_over_a_copied_run_s_bytes_is_two_copies() {
         crate::HazardTrackingMode::Default,
     );
     let length = 4 * host_page();
-    for (seed, (runs, at)) in [(itself(), 8 * MIB), (two_runs(), 16 * MIB)]
-        .into_iter()
-        .enumerate()
-    {
+    let cases = [
+        (two_runs(), 16 * MIB, HostBacking::Copied),
+        (itself(), 8 * MIB, HostBacking::InHostRam),
+    ];
+    for (seed, (runs, at, shared_backing)) in cases.into_iter().enumerate() {
         let at = start + at;
         write_pattern(at..at + length, seed as u64);
-        let copy = over_ram(&device, at, length, Arc::clone(&runs), false);
-        assert_eq!(copy.host_backing(), Some(HostBacking::Copied));
+        let beside = over_ram(&device, at, length, Arc::clone(&runs), false);
+        assert_eq!(beside.host_backing(), Some(shared_backing));
         let before = device.work_counts();
         let buffer = over_ram_as(&device, (at, length), runs, false, managed);
         let made = device.work_counts();
         eprintln!(
-            "HOST-RAM-COPY over a copied run {seed} {}: {:?}, {} device copies, {} in a copy",
+            "HOST-RAM-COPY over a {shared_backing:?} run {}: {:?}, {} device copies, {} in a copy",
             device.name(),
             buffer.host_backing(),
             made.managed_device_copies - before.managed_device_copies,
