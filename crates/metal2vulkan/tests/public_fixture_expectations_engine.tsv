@@ -577,6 +577,14 @@ engine/coverage_outputs.ll	cvo_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/coverage_outputs.ll	cvo_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/coverage_outputs.ll	cvo_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
 engine/coverage_outputs.ll	cvo_masked	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(FragmentStoresAndAtomics)]]}
+engine/dcs_dont_care_split.air.ll	dcs_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/dcs_dont_care_split.air.ll	dcs_mark	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/dcs_dont_care_split.air.ll	dcs_read	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	ok
+engine/dcs_dont_care_split.air.ll	dcs_flag	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/dcs_dont_care_split.ll	dcs_rect	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/dcs_dont_care_split.ll	dcs_mark	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/dcs_dont_care_split.ll	dcs_read	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	NeedsInput{FramebufferFetch}	ok	ok	ok
+engine/dcs_dont_care_split.ll	dcs_flag	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/denormal_texels.air.ll	denormal_texels	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/denormal_texels.ll	denormal_texels	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/descriptor_limit_uniform_views.air.ll	descriptor_limit_uniform_views	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
