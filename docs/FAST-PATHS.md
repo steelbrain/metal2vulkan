@@ -116,6 +116,18 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   the device behind it. A refusal only the lowering finds then fails the command buffer, naming
   the call (`CommandBufferError::CallRefused`), rather than returning from it (docs/API.md section
   1). The runtime's choice: no pipeline differs.
+- `unshared_isolation = UnsharedIsolationPolicy::Bounded` (the default) holds other command
+  queues' batches back from a `VkQueue` that a queue made with `Device::new_command_queue_unshared`
+  shares with them (`unshared_hold.rs`; a device with one graphics queue: RADV, ANV, lavapipe):
+  another queue's batch goes there only while less than 2 ms of their expected GPU work is in
+  flight on it, its queue's expected run being the host's view of its recent batches' runs, raised
+  at once by a longer one and halved toward a shorter one. So a compositor's command buffer waits
+  behind about one batch of an application's, as Metal runs it beside the application's work, and
+  the next batch goes in before the one ahead ends. `unshared_isolation =
+  UnsharedIsolationPolicy::Off` submits every ready batch at once: peak rate with no hold, the
+  unshared queue's command buffer behind every batch submitted before it. Not an accuracy choice:
+  it trades the other queues' submission ahead for the unshared queue's wait. The runtime's choice:
+  no pipeline differs.
 - `pointer_domain`, `handle_domain`, `containment` and `isolation` choose how resources resolve and
   how guests are contained, not an answer of Metal's arithmetic or sampling.
 
@@ -732,18 +744,24 @@ driver's. Each is open work.
   (`HostMemory::with_dma_buf`) keeps its pages on every driver, but is taken only where the device
   refuses the pointer.
 - **On a device with one graphics queue, a compositor's command buffers wait behind another
-  queue's long one**: RADV, ANV and lavapipe expose a single graphics `VkQueue`, so every command
-  queue, `Device::new_command_queue_unshared`'s included, submits to it, in order. A command buffer committed behind another queue's 200 ms one starts
-  after it, where Metal runs the compositor's beside it. On the Iris Xe (ANV, Mesa 26.2.6, i915)
-  work of another `VkDevice` (its own kernel context) ran only between submissions, never inside
-  one, whatever its global priority (`HIGH` is refused without privilege; `MEDIUM` against `LOW`
+  queue's long batch**: RADV, ANV and lavapipe expose a single graphics `VkQueue`, so every command
+  queue, `Device::new_command_queue_unshared`'s included, submits to it, in order. Other queues'
+  batches are held back to about 2 ms of expected work ahead of an unshared queue's
+  (`unshared_isolation = UnsharedIsolationPolicy::Bounded`, above), but a batch already submitted
+  runs to its end: a command buffer committed behind another queue's 200 ms one starts after it,
+  where Metal runs the compositor's beside it, and one behind a batch longer than its queue's
+  recent ones waits for the rest of that one too. On the Iris Xe (ANV, Mesa 26.2.6, i915) work of
+  another `VkDevice` (its own kernel context) ran only between submissions, never inside one,
+  whatever its global priority (`HIGH` is refused without privilege; `MEDIUM` against `LOW`
   answered as equal priorities did): a light submission waited the whole of a 440 ms command
   buffer, and 14 ms where the same work was 32 submissions. Neither a second `VkDevice` for such
   queues nor splitting long command buffers into submissions is built. Each command buffer whose
   first batch goes behind another command queue's batch not yet seen complete is counted
   (`WorkCounts::command_buffers_behind_other_queues`, those whose wait ran over 16 and 33 ms, the
   longest wait, and the same four for unshared queues), its wait timed on the host from its
-  submission to that batch's observed completion: an upper bound.
+  submission to that batch's observed completion: an upper bound; for an unshared queue's waits
+  over 16 ms, also the batches in flight ahead of each and its longest single run
+  (`WorkCounts::unshared_waits_over_16ms_batches_ahead` and kin).
 - **On Asahi Linux, the kernel can keep a freed dma-buf import, and its pages, past the process's
   exit**: the asahi DRM driver (its source at tag `asahi-6.19.14-2`; Honeykrisp in Mesa 25.3.6)
   makes an imported object without the driver's close callback, so a freed import stays mapped in

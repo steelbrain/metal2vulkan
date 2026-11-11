@@ -422,6 +422,16 @@ impl Device {
     /// itself: the round robin's next `VkQueue`, shared past the round robin's `VkQueue`s as every
     /// command queue's is.
     ///
+    /// On a `VkQueue` it shares with other command queues, so (a device with one graphics queue:
+    /// RADV, ANV, lavapipe), under
+    /// [`UnsharedIsolationPolicy::Bounded`](metal2vulkan::device::UnsharedIsolationPolicy::Bounded)
+    /// (the default) the other queues' batches are held back from that `VkQueue` while 2 ms or
+    /// more of their expected GPU work is in flight there, so its command buffers wait behind
+    /// about one batch of theirs, the whole of one longer than its queue's recent ones, where
+    /// Metal runs a compositor's beside them. Under
+    /// [`Off`](metal2vulkan::device::UnsharedIsolationPolicy::Off) they wait behind every batch
+    /// submitted before them there.
+    ///
     /// Refused as that call is: a count of 0 (`Invalid`, `MaxCommandBufferCount`), and a lost
     /// device (`DeviceLost`).
     pub fn new_command_queue_unshared(&self, count: usize) -> Result<CommandQueue, Error> {

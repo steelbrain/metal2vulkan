@@ -254,6 +254,19 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   queue is known long only by its command buffers' timestamps.
   `queue_sharing = QueueSharingPolicy::PerQueue`, which `exact_answers()` selects, keeps each
   command queue on that `VkQueue` everywhere and runs no check.
+- **Other queues' work is held back from an unshared queue's `VkQueue`**
+  (`UnsharedIsolationPolicy::Bounded`, the default; the runtime's choice, no pipeline differs).
+  Where a queue made with `Device::new_command_queue_unshared` shares its `VkQueue` with other
+  command queues (a device with one graphics queue: RADV, ANV, lavapipe), another queue's batch is
+  submitted there only while less than 2 ms of the other queues' expected GPU work is in flight on
+  it; else the scheduler holds it, in its place in the order, until enough completes. A batch's
+  expected work is its command queue's: the host's view of how long its recent batches ran, raised
+  at once by a longer one and halved toward a shorter one. The next batch goes in before the one
+  ahead ends, so the GPU is not left idle between them, and the unshared queue's command buffer
+  waits behind about one batch of theirs: the whole of one, however long, as a submission runs to
+  its end. Counted: `WorkCounts::heads_held_for_unshared_isolation`.
+  `unshared_isolation = UnsharedIsolationPolicy::Off` submits every ready batch at once, so the
+  unshared queue's command buffers wait behind every batch submitted before them there.
 - **An attachment loaded `DontCare` and not stored, cleared where its driver clears it no slower**
   (`UnstoredDontCarePolicy::Driver`, the default; the runtime's choice, no pipeline differs). Metal's
   draws read zero (a colour) or the pass's clear value (depth, stencil) of such an attachment
