@@ -525,7 +525,21 @@ The copy is host-visible memory of the device's own; the buffer's `contents` is 
 Each commit writes into the copy every byte the CPU changed in the pages since the copy and the
 pages last agreed, and each batch's completion writes back every byte the GPU changed, before its
 handlers run or a waiter returns, keeping a byte the CPU changed since (`copied_copy_in_bytes`,
-`copied_merge_back_bytes`). An event signal submitted while a copy is live is seen at its batch's
+`copied_merge_back_bytes`). Until a command buffer that may write the copy is committed, the copy
+itself holds the bytes the pages and it agree on, and nothing else is kept: a copy the GPU only
+reads costs its own length and no more. At the first such commit the copy takes a base
+(`copied_bases_made`): a 128-bit tag of each 1 KiB block in host memory (a 64th of the copy's
+length), and the agreed bytes in device-local memory the host maps where the device's resizable
+BAR makes that heap as large as its memory and the runtime's blocks there and the base stay within
+half of it (an RTX 5080 Laptop GPU's), else in host memory, the copy's length again (an RTX 3090
+or RTX 2080 without resizable BAR, and every device with unified memory)
+(`copied_base_host_bytes`, `copied_base_device_bytes`). From then on a commit reads the pages'
+blocks and a completion the copy's, each compared with its block's tag, and the base's bytes are
+read only for a block both sides changed since they agreed (`copied_base_blocks_read`; uncached,
+across the bus, where they lie in the device's memory). A block whose tag agrees is taken as
+unchanged: a changed block is missed with a chance of at most 2^-64 at each comparison. A commit
+that finds no host memory for a base fails with `Error::OutOfMemory` and runs nothing
+(`copied_bases_refused`); the copy keeps none, and a later commit makes it. An event signal submitted while a copy is live is seen at its batch's
 completion, after that write-back: no read of the event's value shows it earlier, and a wait for it
 on another queue (a plain `Event`'s too) is held until then rather than chained on the GPU
 (`event_signals_behind_merge`). Each completion compares every byte of each copy its command
