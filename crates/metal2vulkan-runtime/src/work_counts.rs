@@ -242,6 +242,9 @@ pub(crate) struct Counters {
     joins_withheld_from_unshared: AtomicU64,
     picks_with_none_busy: AtomicU64,
     joins_withheld_from_old_heads: AtomicU64,
+    /// Command buffers' waits behind other command queues' batches (`queue_wait.rs`): of every
+    /// queue's, then of unshared queues' alone.
+    behind_other_queues: [BehindOtherQueues; 2],
     queue_switch_checks_run: AtomicU64,
     queue_switch_checks_recalled: AtomicU64,
     submit_checks_run: AtomicU64,
@@ -561,6 +564,28 @@ pub(crate) struct Counters {
 /// rarer event a command meets (a split of its pass, a making, a first use) stays an atomic of
 /// the device's own ([`Counters`]): it costs its event, not every command. Those a draw of a
 /// steady pass adds come first, in a shard's first 128 bytes.
+/// One tally of command buffers' waits behind other command queues' batches
+/// (`WorkCounts::command_buffers_behind_other_queues` and kin).
+#[derive(Default)]
+struct BehindOtherQueues {
+    count: AtomicU64,
+    over_16ms: AtomicU64,
+    over_33ms: AtomicU64,
+    longest_nanos: AtomicU64,
+}
+
+impl BehindOtherQueues {
+    /// Its four counts: the command buffers, those over 16 ms and over 33 ms, the longest.
+    fn read(&self) -> [u64; 4] {
+        [
+            self.count.load(Ordering::Relaxed),
+            self.over_16ms.load(Ordering::Relaxed),
+            self.over_33ms.load(Ordering::Relaxed),
+            self.longest_nanos.load(Ordering::Relaxed),
+        ]
+    }
+}
+
 #[derive(Default)]
 struct CommandCounters {
     stage_tables_read: AtomicU64,
@@ -2720,6 +2745,27 @@ impl Counters {
     /// batch's age (`queue_share.rs`).
     pub(crate) fn join_withheld_from_old_head(&self) {
         (self.joins_withheld_from_old_heads).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A command buffer's first batch went to its `VkQueue` behind another command queue's batch
+    /// not seen complete (`queue_wait.rs`), of an unshared queue where `unshared`.
+    pub(crate) fn behind_other_queue(&self, unshared: bool) {
+        for tally in &self.behind_other_queues[..1 + usize::from(unshared)] {
+            tally.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Such a command buffer's wait ended, `nanos` after its submission (`queue_wait.rs`).
+    pub(crate) fn waited_behind_other_queue(&self, nanos: u64, unshared: bool) {
+        for tally in &self.behind_other_queues[..1 + usize::from(unshared)] {
+            if nanos > 16_000_000 {
+                tally.over_16ms.fetch_add(1, Ordering::Relaxed);
+            }
+            if nanos > 33_000_000 {
+                tally.over_33ms.fetch_add(1, Ordering::Relaxed);
+            }
+            tally.longest_nanos.fetch_max(nanos, Ordering::Relaxed);
+        }
     }
 
     /// The device's check of its GPU's idling between `VkQueue`s ran in this process
@@ -5869,6 +5915,35 @@ pub struct WorkCounts {
     /// wait behind a long command buffer. Beside another process's GPU work, or on a host too busy
     /// to see batches complete at once, a busy `VkQueue` can look so.
     pub joins_withheld_from_old_heads: u64,
+    /// Command buffers that waited on their `VkQueue` behind another command queue's batch: their
+    /// first batch went there (submitted, or held for one submission with later batches) while
+    /// the latest batch of another command queue's before it there was not seen complete
+    /// (`queue_wait.rs`). That batch went there before this command buffer's first batch did, and
+    /// runs first; a command buffer the scheduler held back (an event's value, a binary semaphore)
+    /// can be passed so by one committed after it. Each command buffer counts once, at its first
+    /// batch; the runtime's own submissions (staging, checks) neither count nor are waited behind.
+    /// Counted wherever command queues share a `VkQueue`: RADV's, ANV's and lavapipe's one
+    /// graphics queue, unshared queues' included, or past the round robin's `VkQueue`s.
+    pub command_buffers_behind_other_queues: u64,
+    /// Of those, the ones whose wait lasted over 16 ms: from the host time of their first batch's
+    /// submission (or hold) to the host's observation of that other batch's completion. An upper
+    /// bound of the wait on the GPU: the host sees a completion after the GPU's end.
+    pub command_buffers_behind_other_queues_over_16ms: u64,
+    /// Of those, the ones whose wait, measured so, lasted over 33 ms.
+    pub command_buffers_behind_other_queues_over_33ms: u64,
+    /// The longest of those waits, measured so, in nanoseconds. A wait counts here, and over 16
+    /// or 33 ms, once the host saw it end.
+    pub wait_behind_other_queues_longest_nanos: u64,
+    /// Of `command_buffers_behind_other_queues`, those of command queues made with
+    /// `Device::new_command_queue_unshared`.
+    pub unshared_command_buffers_behind_other_queues: u64,
+    /// Of `command_buffers_behind_other_queues_over_16ms`, those of unshared command queues.
+    pub unshared_command_buffers_behind_other_queues_over_16ms: u64,
+    /// Of `command_buffers_behind_other_queues_over_33ms`, those of unshared command queues.
+    pub unshared_command_buffers_behind_other_queues_over_33ms: u64,
+    /// The longest wait of an unshared command queue's command buffer behind another command
+    /// queue's batch, in nanoseconds, measured as `wait_behind_other_queues_longest_nanos`.
+    pub unshared_wait_behind_other_queues_longest_nanos: u64,
     /// Runs in this process of the device's check of its GPU's idling between `VkQueue`s
     /// (`queue_switch_check.rs`), whatever they answered.
     pub queue_switch_checks_run: u64,
@@ -8098,6 +8173,9 @@ impl Device {
         let held_for =
             |reason: HeldFor| counters.heads_held_for[reason as usize].load(Ordering::Relaxed);
         let pending = |bucket: usize| counters.batches_by_pending[bucket].load(Ordering::Relaxed);
+        let [behind, unshared_behind] = (counters.behind_other_queues)
+            .each_ref()
+            .map(|tally| tally.read());
         let not_inline =
             |why: NotInline| counters.passes_not_inline[why.index()].load(Ordering::Relaxed);
         let actions = |action: ActionsRefused| {
@@ -8556,6 +8634,14 @@ impl Device {
             joins_withheld_from_old_heads: counters
                 .joins_withheld_from_old_heads
                 .load(Ordering::Relaxed),
+            command_buffers_behind_other_queues: behind[0],
+            command_buffers_behind_other_queues_over_16ms: behind[1],
+            command_buffers_behind_other_queues_over_33ms: behind[2],
+            wait_behind_other_queues_longest_nanos: behind[3],
+            unshared_command_buffers_behind_other_queues: unshared_behind[0],
+            unshared_command_buffers_behind_other_queues_over_16ms: unshared_behind[1],
+            unshared_command_buffers_behind_other_queues_over_33ms: unshared_behind[2],
+            unshared_wait_behind_other_queues_longest_nanos: unshared_behind[3],
             queue_switch_checks_run: counters.queue_switch_checks_run.load(Ordering::Relaxed),
             queue_switch_checks_recalled: counters
                 .queue_switch_checks_recalled

@@ -1228,6 +1228,15 @@ impl CommandBufferShared {
             state.retained.push(Box::new(held));
         }
         scheduler.values[queue] = at.value;
+        // Its command buffer's wait behind another command queue's batch there, from its first
+        // batch's submission or hold (`queue_wait.rs`).
+        let on = &shared.queues[queue];
+        let first = (index == 0).then(|| crate::queue_wait::First {
+            since: called.unwrap_or_else(gpu_time::host_nanos),
+            unshared: self.queue.unshared(),
+        });
+        let completed = || on.completed_value();
+        (on.waits).taken(at.value, self.queue.id(), first, completed, &shared.counts);
         for image in &images {
             image.submitted();
             // One that rests in `GENERAL` from now on (an encode-time image after its first

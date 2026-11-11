@@ -1199,6 +1199,8 @@ pub(crate) struct QueueSlot {
     submitted_before: AtomicU64,
     /// Its part in the command queues' sharing of `VkQueue`s (`queue_share.rs`).
     pub(crate) share: crate::queue_share::SlotShare,
+    /// Its command buffers' waits behind other command queues' batches (`queue_wait.rs`).
+    pub(crate) waits: crate::queue_wait::QueueWaits,
     /// The device's queue uses, which each hold of the queue's lock counts (`queue_quiet.rs`).
     quiet: Arc<queue_quiet::QueueQuiet>,
 }
@@ -1253,10 +1255,12 @@ impl QueueSlot {
         self.stall_due.load(Ordering::Relaxed)
     }
 
-    /// The host saw the timeline reach `value`.
-    pub(super) fn completed(&self, value: u64) {
+    /// The host saw the timeline reach `value`: published, then the waits behind other command
+    /// queues' batches it ends are timed (`queue_wait.rs`).
+    pub(super) fn completed(&self, value: u64, counts: &crate::work_counts::Counters) {
         if self.completed.fetch_max(value, Ordering::AcqRel) < value {
             self.share.completed();
+            self.waits.completed(value, counts);
         }
     }
 
@@ -1999,6 +2003,7 @@ impl Device {
                     submitted: AtomicU64::new(0),
                     submitted_before: AtomicU64::new(0),
                     share: crate::queue_share::SlotShare::default(),
+                    waits: crate::queue_wait::QueueWaits::default(),
                     quiet: Arc::clone(&queue_quiet),
                 }
             })

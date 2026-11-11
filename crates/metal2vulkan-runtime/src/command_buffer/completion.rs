@@ -1327,7 +1327,7 @@ fn poll(device: &Device, queue: usize, front: Front) -> Result<u64, CommandBuffe
             reaches(value)
         },
     )?;
-    slot.completed(value);
+    slot.completed(value, &shared.counts);
     // Freed memory that waits for the batches in flight goes once they completed, on a handler
     // thread (`freed_memory.rs`).
     if let Some(parking) = shared.parking.get() {

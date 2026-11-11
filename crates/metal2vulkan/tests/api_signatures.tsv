@@ -2630,6 +2630,9 @@ field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_internal	pub comman
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_kept_barriers	pub command_buffers_begun_kept_barriers: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_secondaries	pub command_buffers_begun_secondaries: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_begun_segments	pub command_buffers_begun_segments: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues	pub command_buffers_behind_other_queues: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues_over_16ms	pub command_buffers_behind_other_queues_over_16ms: u64
+field	metal2vulkan-runtime::WorkCounts.command_buffers_behind_other_queues_over_33ms	pub command_buffers_behind_other_queues_over_33ms: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_completed_after_another_queue	pub command_buffers_completed_after_another_queue: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_submitted	pub command_buffers_submitted: u64
 field	metal2vulkan-runtime::WorkCounts.command_buffers_unsubmitted	pub command_buffers_unsubmitted: u64
@@ -3317,6 +3320,10 @@ field	metal2vulkan-runtime::WorkCounts.uncached_host_images	pub uncached_host_im
 field	metal2vulkan-runtime::WorkCounts.unlisted_argument_sampler_buffers	pub unlisted_argument_sampler_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.unobserved_padding_aliases	pub unobserved_padding_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.unrun_instances_ended	pub unrun_instances_ended: u64
+field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues	pub unshared_command_buffers_behind_other_queues: u64
+field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues_over_16ms	pub unshared_command_buffers_behind_other_queues_over_16ms: u64
+field	metal2vulkan-runtime::WorkCounts.unshared_command_buffers_behind_other_queues_over_33ms	pub unshared_command_buffers_behind_other_queues_over_33ms: u64
+field	metal2vulkan-runtime::WorkCounts.unshared_wait_behind_other_queues_longest_nanos	pub unshared_wait_behind_other_queues_longest_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.untouched_passes_skipped	pub untouched_passes_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.upload_chunks_in_device_memory	pub upload_chunks_in_device_memory: u64
 field	metal2vulkan-runtime::WorkCounts.uses_noted_covered	pub uses_noted_covered: u64
@@ -3328,6 +3335,7 @@ field	metal2vulkan-runtime::WorkCounts.visibility_queries_begun	pub visibility_q
 field	metal2vulkan-runtime::WorkCounts.vk_devices_live	pub vk_devices_live: u64
 field	metal2vulkan-runtime::WorkCounts.vk_devices_made	pub vk_devices_made: u64
 field	metal2vulkan-runtime::WorkCounts.wait_behind_idle_stall_longest_nanos	pub wait_behind_idle_stall_longest_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.wait_behind_other_queues_longest_nanos	pub wait_behind_other_queues_longest_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_command_buffer_waiters	pub wakes_command_buffer_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_completion_waiters	pub wakes_completion_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_event_waiters	pub wakes_event_waiters: u64

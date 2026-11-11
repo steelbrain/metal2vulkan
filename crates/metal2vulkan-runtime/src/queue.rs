@@ -884,6 +884,11 @@ impl QueueGen {
         self.0.id
     }
 
+    /// Whether it was made with `Device::new_command_queue_unshared`.
+    pub(super) fn unshared(&self) -> bool {
+        self.0.kind == Kind::Unshared
+    }
+
     /// The index of the device's `VkQueue` the queue submits to: the same from one of its command
     /// buffers' making to that command buffer's completion ([`QueueShared::vk_queue`]).
     pub(super) fn vk_queue(&self) -> usize {

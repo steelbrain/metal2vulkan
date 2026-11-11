@@ -1,0 +1,122 @@
+//! The waits of command buffers behind another command queue's work on their shared `VkQueue`
+//! (`WorkCounts::command_buffers_behind_other_queues` and kin): counted always, at a cost of O(1)
+//! per batch and per completion the host sees.
+//!
+//! - **Why.** A `VkQueue` runs its submissions in order, so where command queues share one (one
+//!   graphics queue on RADV, ANV and lavapipe, `Device::new_command_queue_unshared`'s included), a
+//!   command buffer waits there for every other queue's work submitted before it, however long.
+//! - **What counts.** A command buffer's first batch, as the scheduler gives it its value of its
+//!   `VkQueue`'s timeline (submitted, or held in a group for one submission with later batches:
+//!   `group.rs`), where the latest batch of another command queue's before it on that `VkQueue`
+//!   is not yet seen complete. That batch took the lower value, so it went to the `VkQueue`, or
+//!   into the group, before this command buffer's first batch did, and the `VkQueue` runs it
+//!   first. A command buffer whose first batch the scheduler held back (for an event's value, a
+//!   binary semaphore, a check) can be passed there by another queue's command buffer committed
+//!   after it; such a wait counts too. A command buffer's later batches are not counted again.
+//! - **How long.** From its first batch's submission (the host time the scheduler called
+//!   `vkQueueSubmit`, or held the batch in a group) to the host's observation of that other batch's
+//!   completion (`QueueSlot::completed`): an upper bound of the wait on the GPU, since the
+//!   observation comes after the GPU's end (a completion waiter's wake, a busy host). It holds the
+//!   other batch's whole run where that one had not started yet.
+//! - **How.** Each `VkQueue` keeps its last batch's value and command queue, and the value of its
+//!   latest batch of another command queue than that one: the latest batch of a queue other than
+//!   a new batch's own is the last where the last is another queue's, else that kept one. Where a
+//!   batch follows its own queue's last, that value is the one the batch before it found, and where
+//!   it follows another queue's, it is that last one, above every earlier value: the values waited
+//!   for never fall, so the waits being timed are kept in that order, and a completion takes those
+//!   whose value it reached from the front. No command queue of the device is looked at. Only
+//!   command buffers' batches are seen: the runtime's own submissions (staging, checks, a step's
+//!   run again) neither count nor are waited behind.
+
+use crate::device::lock;
+use crate::work_counts::Counters;
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+/// One `VkQueue`'s part (`QueueSlot::waits`): a leaf lock, taken under the scheduler's at a
+/// batch's value and on a completion turn as the host sees its timeline move.
+#[derive(Default)]
+pub(crate) struct QueueWaits(Mutex<Ahead>);
+
+/// What [`QueueWaits`] keeps.
+#[derive(Default)]
+struct Ahead {
+    /// Its last batch's value and command queue (`QueueGen::id`); none before the first.
+    last: Option<(u64, u64)>,
+    /// The value of its latest batch of a command queue other than the last's; 0 for none.
+    other: u64,
+    /// The waits being timed, by the value each waits for, which rises.
+    timed: VecDeque<Timed>,
+}
+
+/// A command buffer's wait behind another command queue's batch, being timed.
+struct Timed {
+    /// The value of the batch it waits for.
+    through: u64,
+    /// The host time its first batch was submitted (`gpu_time::host_nanos`).
+    since: u64,
+    /// Its command queue was made with `Device::new_command_queue_unshared`.
+    unshared: bool,
+}
+
+/// A command buffer's first batch, as [`QueueWaits::taken`] times it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct First {
+    /// The host time it was submitted, or held in a group (`gpu_time::host_nanos`).
+    pub(crate) since: u64,
+    /// Its command queue was made with `Device::new_command_queue_unshared`.
+    pub(crate) unshared: bool,
+}
+
+impl QueueWaits {
+    /// A batch of command queue `queue` took `value` of the `VkQueue`'s timeline, under the
+    /// scheduler's lock, so in the order of the values. Where it is its command buffer's `first`
+    /// and the latest batch of another queue's before it is not seen complete (`completed`, the
+    /// value the host saw the timeline reach, read under this lock: a completion that published a
+    /// higher value before this lock was taken is seen here, one after takes the wait), the
+    /// command buffer waits behind it: counted, and timed to that batch's completion.
+    pub(crate) fn taken(
+        &self,
+        value: u64,
+        queue: u64,
+        first: Option<First>,
+        completed: impl FnOnce() -> u64,
+        counts: &Counters,
+    ) {
+        let mut ahead = lock(&self.0);
+        let through = match ahead.last {
+            Some((last, by)) if by != queue => {
+                ahead.other = last;
+                last
+            }
+            _ => ahead.other,
+        };
+        ahead.last = Some((value, queue));
+        let Some(First { since, unshared }) = first else {
+            return;
+        };
+        if through > completed() {
+            counts.behind_other_queue(unshared);
+            ahead.timed.push_back(Timed {
+                through,
+                since,
+                unshared,
+            });
+        }
+    }
+
+    /// The host saw the timeline reach `value`, published before this call: each wait for a batch
+    /// at or below it ends now.
+    pub(crate) fn completed(&self, value: u64, counts: &Counters) {
+        let mut ahead = lock(&self.0);
+        let mut at = None;
+        while let Some(timed) = ahead.timed.front() {
+            if timed.through > value {
+                break;
+            }
+            let now = *at.get_or_insert_with(crate::gpu_time::host_nanos);
+            counts.waited_behind_other_queue(now.saturating_sub(timed.since), timed.unshared);
+            ahead.timed.pop_front();
+        }
+    }
+}

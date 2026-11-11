@@ -759,3 +759,149 @@ fn a_compositor_beside_a_queue_waiting_on_the_gpu_for_long_work_keeps_its_latenc
         assert!(run.stalls() <= 1, "{} stalls", run.stalls());
     });
 }
+
+/// What one run of [`behind`] saw: the counts it added, the long command buffer's GPU work left
+/// at the short one's submission (seconds of the host's clock, its GPU end less the short one's
+/// kernel end), and the host's time from before the short one's commit to both completed.
+struct Behind {
+    before: WorkCounts,
+    after: WorkCounts,
+    left: f64,
+    elapsed: Duration,
+}
+
+/// A long command buffer of `fills` on `long_queue`, scheduled, then a short one on
+/// `short_queue`, both waited for.
+fn behind(
+    device: &Device,
+    (long_queue, big, fills): (&CommandQueue, &Buffer, usize),
+    short_queue: &CommandQueue,
+    small: &Buffer,
+) -> Behind {
+    let before = device.work_counts();
+    let long = long(long_queue, big, fills);
+    long.commit().unwrap();
+    long.wait_until_scheduled().unwrap();
+    let began = Instant::now();
+    let short = short_queue.command_buffer().unwrap();
+    let mut blit = short.blit_command_encoder().unwrap();
+    blit.fill_buffer(small, 0..256, 1).unwrap();
+    blit.end_encoding().unwrap();
+    short.commit().unwrap();
+    short.wait_until_completed_for(WAIT).unwrap();
+    long.wait_until_completed_for(WAIT).unwrap();
+    Behind {
+        before,
+        after: device.work_counts(),
+        left: long.gpu_end_time().unwrap() - short.kernel_end_time(),
+        elapsed: began.elapsed(),
+    }
+}
+
+impl Behind {
+    /// Its wait, the longest of the tally's (`longest`), held to the host's view: at least the
+    /// long command buffer's work left at its submission, less 1 ms for the clocks' calibration,
+    /// at most the host's time around it.
+    fn wait(&self, longest: impl Fn(&WorkCounts) -> u64) -> u64 {
+        let wait = longest(&self.after);
+        println!(
+            "waited {:.2} ms behind {:.2} ms of the long one's work left, {:.2} ms around",
+            wait as f64 / 1e6,
+            self.left * 1e3,
+            self.elapsed.as_secs_f64() * 1e3
+        );
+        assert!(
+            self.left > 0.0,
+            "the long one ended before the short one went"
+        );
+        assert!(wait as f64 >= (self.left - 0.001) * 1e9, "{wait} ns");
+        assert!(wait as u128 <= self.elapsed.as_nanos(), "{wait} ns");
+        wait
+    }
+}
+
+/// Two command queues on one `VkQueue` (`PerQueue`: no queue moves), a long command buffer of
+/// about 30 ms of GPU time, then a short one (`queue_wait.rs`). From the same queue the short one
+/// waits behind nothing of another's; from another queue it counts one wait, as long as the long
+/// one's work left at its submission at least and the host's time around it at most, over 16 and
+/// 33 ms as it is; from an unshared queue, one in the unshared tallies too.
+#[test]
+fn a_command_buffer_behind_another_queue_s_long_one_counts_its_wait() {
+    let scratch = Scratch::new("queue-wait");
+    let device = device(&scratch, QueueSharingPolicy::PerQueue);
+    let long_queue = device.new_command_queue().unwrap();
+    let at = long_queue.vk_queue_sharing().0;
+    // Queues made until one is on the long queue's `VkQueue`: the round robin wraps.
+    let beside = |make: &dyn Fn() -> CommandQueue| {
+        let queue = (0..64)
+            .map(|_| make())
+            .find(|queue| queue.vk_queue_sharing().0 == at);
+        queue.expect("a queue on the long queue's VkQueue")
+    };
+    let other = beside(&|| device.new_command_queue().unwrap());
+    let unshared = beside(&|| device.new_command_queue_unshared(64).unwrap());
+    let big = device
+        .new_buffer(FILL_BYTES, ResourceOptions::private())
+        .unwrap();
+    let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+    let fills = long_fills(&long_queue, &big);
+    let longs = (&long_queue, &big, fills);
+    let tally = |counts: &WorkCounts| {
+        [
+            counts.command_buffers_behind_other_queues,
+            counts.command_buffers_behind_other_queues_over_16ms,
+            counts.command_buffers_behind_other_queues_over_33ms,
+            counts.wait_behind_other_queues_longest_nanos,
+        ]
+    };
+    let unshared_tally = |counts: &WorkCounts| {
+        [
+            counts.unshared_command_buffers_behind_other_queues,
+            counts.unshared_command_buffers_behind_other_queues_over_16ms,
+            counts.unshared_command_buffers_behind_other_queues_over_33ms,
+            counts.unshared_wait_behind_other_queues_longest_nanos,
+        ]
+    };
+    let added = |run: &Behind, of: &dyn Fn(&WorkCounts) -> [u64; 4]| {
+        let (before, after) = (of(&run.before), of(&run.after));
+        [
+            after[0] - before[0],
+            after[1] - before[1],
+            after[2] - before[2],
+        ]
+    };
+    let over = |wait: u64| {
+        [
+            1,
+            u64::from(wait > 16_000_000),
+            u64::from(wait > 33_000_000),
+        ]
+    };
+
+    let same = behind(&device, longs, &long_queue, &small);
+    assert_eq!(tally(&same.after), [0; 4], "behind its own queue's");
+    assert_eq!(unshared_tally(&same.after), [0; 4]);
+
+    let run = behind(&device, longs, &other, &small);
+    let wait = run.wait(|counts| counts.wait_behind_other_queues_longest_nanos);
+    assert_eq!(added(&run, &tally), over(wait));
+    assert_eq!(
+        unshared_tally(&run.after),
+        [0; 4],
+        "not an unshared queue's"
+    );
+
+    let run = behind(&device, longs, &unshared, &small);
+    let wait = run.wait(|counts| counts.unshared_wait_behind_other_queues_longest_nanos);
+    assert_eq!(added(&run, &unshared_tally), over(wait));
+    assert_eq!(
+        added(&run, &tally),
+        over(wait),
+        "counted among every queue's"
+    );
+    let longest = run.after.wait_behind_other_queues_longest_nanos;
+    assert_eq!(
+        longest,
+        wait.max(run.before.wait_behind_other_queues_longest_nanos)
+    );
+}

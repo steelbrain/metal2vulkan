@@ -187,6 +187,7 @@ mod pvrtc;
 mod queue;
 mod queue_share;
 mod queue_switch_check;
+mod queue_wait;
 mod range;
 mod rate_map;
 mod rate_mapped_pass;

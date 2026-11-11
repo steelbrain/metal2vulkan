@@ -708,7 +708,11 @@ driver's. Each is open work.
   one, whatever its global priority (`HIGH` is refused without privilege; `MEDIUM` against `LOW`
   answered as equal priorities did): a light submission waited the whole of a 440 ms command
   buffer, and 14 ms where the same work was 32 submissions. Neither a second `VkDevice` for such
-  queues nor splitting long command buffers into submissions is built.
+  queues nor splitting long command buffers into submissions is built. Each command buffer whose
+  first batch goes behind another command queue's batch not yet seen complete is counted
+  (`WorkCounts::command_buffers_behind_other_queues`, those whose wait ran over 16 and 33 ms, the
+  longest wait, and the same four for unshared queues), its wait timed on the host from its
+  submission to that batch's observed completion: an upper bound.
 - **On Asahi Linux, the kernel can keep a freed dma-buf import, and its pages, past the process's
   exit**: the asahi DRM driver (its source at tag `asahi-6.19.14-2`; Honeykrisp in Mesa 25.3.6)
   makes an imported object without the driver's close callback, so a freed import stays mapped in
