@@ -937,12 +937,16 @@ impl Device {
                             let again = None;
                             Ok((buffer, memory, again))
                         }
+                        // A heap's import is dedicated to nothing, as textures placed in the
+                        // heap may be bound in its memory (`texture/heap.rs`); a buffer's own
+                        // binds the buffer alone, its textures in place bound in imports of their
+                        // own (`Device::dma_buf_image`).
                         // SAFETY: as above.
                         Ok(Err((source, refusal))) => unsafe {
-                            let keep = !of_heap;
+                            let kept = (!of_heap, !of_heap);
                             let window = &window;
                             self.import_from_source(
-                                call, importer, pointer, length, window, source, class, keep,
+                                call, importer, pointer, length, window, source, class, kept,
                             )
                         }
                         .map_err(|failed| {
@@ -1331,12 +1335,15 @@ impl Device {
                     // settled again after it.
                     Ok(Err((source, refusal))) => {
                         let was_settled = settled.take().is_some();
+                        // Kept by no descriptor; dedicated as a no-copy buffer's own import is
+                        // where the buffer is no heap's (`Device::buffer_over_host_parts`).
                         // SAFETY: as above, and the source's pieces hold the pages
                         // (`HostMemory::with_dma_buf`).
                         let from_source = unsafe {
                             let window = &window;
+                            let kept = (false, heap.is_none());
                             self.import_from_source(
-                                call, importer, pointer, length, window, source, class, false,
+                                call, importer, pointer, length, window, source, class, kept,
                             )
                         }
                         .map_err(|failed| source_failure(failed, refusal));

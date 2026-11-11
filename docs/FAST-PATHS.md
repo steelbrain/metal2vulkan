@@ -1325,22 +1325,31 @@ driver's. Each is open work.
   cost is the dispatch.
 
 - **A dma-buf import on NVIDIA**: the driver enables `VK_EXT_external_memory_dma_buf` and refuses
-  to import a udmabuf of host pages, `vkAllocateMemory` answering `ERROR_OUT_OF_DEVICE_MEMORY` for
-  8 KiB with 15,291 MiB of the card free (615.71.09). It also **closes the descriptor it was
+  to import a small udmabuf of host pages dedicated to nothing, `vkAllocateMemory` answering
+  `ERROR_OUT_OF_DEVICE_MEMORY` (615.71.09, measured: one 4 KiB page and a 16 KiB window refused,
+  with 15,291 MiB of the card free for 8 KiB; 64 KiB taken). It takes the same 4 KiB page
+  imported dedicated to its buffer (`VkMemoryDedicatedAllocateInfo`), so an import whose memory
+  backs one buffer alone for its life (a no-copy buffer's own import of one chunk, a copy's list
+  of a guest RAM's runs, the page a RAM's use asks the driver with) is made so where the driver
+  refuses the first form (`memory.rs`'s `DmaBufFor::Buffer`,
+  `WorkCounts::dma_buf_buffer_imports_dedicated`). A guest RAM's chunk or an object's run inside
+  one cannot be: its objects' buffers are bound in it, and Vulkan binds only the dedicated buffer
+  in a dedicated allocation (`VUID-vkBindBufferMemory-memory-01508`). A chunk is 64 MiB or more;
+  an object's run alone of a few pages the driver may refuse so, and the object then takes the
+  runtime's other paths (`host_ram.rs`'s `bind_in_chunk`). It also **closes the descriptor it was
   handed**, which the Vulkan specification gives it only on a successful import: `F_GETFD` on the
   descriptor reads `EBADF` the instant the call returns. Closing it again aborted the process on
   Rust's I/O safety check, so an import now hands the driver a clone and never closes a clone it
   has handed over (`memory.rs`), which lets go of one descriptor per failed import. Giving a
-  well-behaved driver its descriptor back would need a measured driver fact; the pages' other route
-  (importing the pointer) is the one NVIDIA takes for writable pages and is unaffected: a guest
-  RAM's chunk whose dma-buf it refused is imported by its pointer, the refusal counted
-  (`WorkCounts::host_ram_dma_buf_imports_failed`) and remembered for the device's life, so the
-  device's later chunks and copies' lists take their pointer without asking the source, and no
-  second descriptor is let go of. Where the import tax holds, a RAM's use asks the driver first,
-  by an import of the RAM's first page as one: refused, the RAM keeps its 64 MiB chunks imported
-  ahead by their pointer, never the long chunks made for dma-bufs. A device whose driver failed one such import for want of memory remembers it the same
-  way and pays the import tax for its later chunks. A device that imports dma-bufs (RADV) is
-  **unaudited** for the clone.
+  well-behaved driver its descriptor back would need a measured driver fact. A refusal for want
+  of memory is that import's alone, never remembered: only a refusal that lasts (the driver
+  refuses the dma-buf itself, `ERROR_INVALID_EXTERNAL_HANDLE`, or imports it as no memory type
+  its buffer takes) is counted (`WorkCounts::host_ram_dma_buf_imports_failed`) and remembered
+  for the device's life, so that the device's later chunks and copies' lists take their pointer
+  without asking the source, and a RAM's use that asks the driver first, by an import of the
+  RAM's first page, keeps its 64 MiB chunks imported ahead by their pointer, never the long
+  chunks made for dma-bufs. A device that imports dma-bufs (RADV) is **unaudited** for the
+  clone.
 
 - **A pointer import of pages the kernel cannot pin on NVIDIA** (a dma-buf's mapping, `VM_PFNMAP`)
   fails as out of device memory (615.71.09), where Vulkan requires

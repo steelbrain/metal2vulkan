@@ -15,10 +15,12 @@
 //!   chunk's whole span at the RAM's addresses, with a granule of its length
 //!   (`WorkCounts::host_ram_dma_buf_imports`), or, where the driver refuses that dma-buf, by its
 //!   pointer, the refusal counted (`host_ram_dma_buf_imports_failed`)
-//!   and remembered: the next chunk, and a copy's list of runs, goes to its pointer, the sources
-//!   unasked, and a RAM used after it is not listed; a refusal of the use's own page leaves the
-//!   RAM its 64 MiB chunks, each to its pointer (shown on every device through a stand-in for the
-//!   driver's refusal); where the tax is not held (forced
+//!   and, where it lasts, remembered: the next chunk, and a copy's list of runs, goes to its
+//!   pointer, the sources unasked, and a RAM used after it is not listed; a lasting refusal of the
+//!   use's own page leaves the RAM its 64 MiB chunks, each to its pointer; a refusal for want of
+//!   memory is that import's alone, and the use's page refused so dedicated to nothing is imported
+//!   dedicated to its buffer (`dma_buf_buffer_imports_dedicated`), the RAM listed (each shown on
+//!   every device through a stand-in for the driver's refusal); where the tax is not held (forced
 //!   so), the pointer is
 //!   imported where the driver takes it, the source never asked, and the dma-buf only where it
 //!   refuses it. Either way the buffer is bound in the chunk (`chunk_bound_buffers_made`), reports
@@ -67,7 +69,7 @@ use crate::submit_check::{Check, Verdict};
 use crate::{
     Buffer, CommandBufferStatus, Device, DmaBufChunk, DmaBufRequest, DmaBufRunsSource,
     DmaBufSource, Error, HostBacking, HostMemory, HostRam, KeepAlive, MessageSink, Origin,
-    ResourceOptions, RunResolver, Size, TextureDescriptor,
+    ResourceOptions, RunResolver, Size, TextureDescriptor, WorkCounts,
 };
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -552,7 +554,8 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
 
 /// Where the driver refuses a chunk's dma-buf (a test's stand-in for a driver's refusal of every
 /// dma-buf, `Memory::import_refusal`, on every device that imports dma-bufs, set once the use
-/// began; the import tax forced held), the device remembers the refusal: the RAM's first chunk
+/// began, as `ERROR_INVALID_EXTERNAL_HANDLE`, a refusal that lasts; the import tax forced held),
+/// the device remembers the refusal: the RAM's first chunk
 /// asks the source, its dma-buf is refused and counted
 /// (`WorkCounts::host_ram_dma_buf_imports_failed`), and the chunk takes its pointer; the second
 /// chunk goes to its pointer at once, the source unasked and nothing counted again; and a RAM
@@ -582,7 +585,7 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
         );
         return;
     };
-    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    let refusal = ash::vk::Result::ERROR_INVALID_EXTERNAL_HANDLE;
     crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
     let counts = |device: &Device| {
         let counts = device.work_counts();
@@ -648,8 +651,9 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
 }
 
 /// Where the driver refuses the dma-buf of the page a use of a RAM asks it with (a test's
-/// stand-in for a driver's refusal of every dma-buf, `Memory::import_refusal`, set before the use;
-/// the import tax forced held), the RAM is not listed: it keeps its 64 MiB chunks
+/// stand-in for a driver's refusal of every dma-buf, `Memory::import_refusal`, set before the use,
+/// as `ERROR_INVALID_EXTERNAL_HANDLE`, a refusal that lasts, in both forms the page's import
+/// tries; the import tax forced held), the RAM is not listed: it keeps its 64 MiB chunks
 /// (`Device::host_ram_chunks`), the source asked once, for the RAM's first page, the refusal
 /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`); and a buffer over its first chunk
 /// takes the chunk's pointer, the source unasked and nothing counted again (on a device that
@@ -665,7 +669,7 @@ fn a_driver_s_refusal_as_the_use_begins_keeps_the_ram_s_chunks_short() {
         return;
     }
     (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
-    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    let refusal = ash::vk::Result::ERROR_INVALID_EXTERNAL_HANDLE;
     crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
     let pointers = device.imports_shared_host_pointers().unwrap();
     let (ram, start, view, asked, _dropped) = ram(true);
@@ -717,9 +721,131 @@ fn a_driver_s_refusal_as_the_use_begins_keeps_the_ram_s_chunks_short() {
     drop((made, used, ram));
 }
 
+/// Where the driver refuses each dma-buf imported dedicated to nothing for want of memory (a
+/// test's stand-in, `Memory::undedicated_import_refusal`, for NVIDIA's 615.71.09 and a dma-buf of
+/// one page, set before the use; the import tax forced held), the page the use asks the driver
+/// with is imported dedicated to its buffer, the only resource bound in it
+/// (`WorkCounts::dma_buf_buffer_imports_dedicated`), nothing refused, and the RAM is listed. A
+/// chunk's import, in which its objects' buffers are bound, is never dedicated: refused, counted
+/// (`host_ram_dma_buf_imports_failed`) and not remembered, memory that ran out being that
+/// import's alone, so the next chunk asks the source again, and a RAM used after them is listed,
+/// its page imported dedicated again. Each chunk takes its pointer where the device imports
+/// pointers to shared memory.
+#[test]
+fn a_dma_buf_refused_for_want_of_memory_is_that_import_s_alone() {
+    let scratch = Scratch::new();
+    let Some(device) = held_device(&scratch, None) else {
+        return;
+    };
+    if !imports_dma_bufs(&device) {
+        eprintln!("HOST-RAM-DMA-BUF: the device imports no dma-bufs; nothing to test");
+        return;
+    }
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    crate::device::lock(&device.shared().memory).undedicated_import_refusal = Some(refusal);
+    let pointers = device.imports_shared_host_pointers().unwrap();
+    let (ram, start, view, asked, _dropped) = ram(true);
+    let unused = device.work_counts();
+    let used = device.use_host_ram(&ram).unwrap();
+    let at_use = device.work_counts();
+    let chunks = device.host_ram_chunks();
+    let first = try_buffer(&device, view, start, AT, LENGTH);
+    let after_first = device.work_counts();
+    let second = try_buffer(&device, view, start, 64 * MIB + AT, LENGTH);
+    let after_second = device.work_counts();
+    let requests = asked.lock().unwrap().requests.clone();
+    let dedicated = |later: &WorkCounts, earlier: &WorkCounts| {
+        later.dma_buf_buffer_imports_dedicated - earlier.dma_buf_buffer_imports_dedicated
+    };
+    let failed = |later: &WorkCounts, earlier: &WorkCounts| {
+        later.host_ram_dma_buf_imports_failed - earlier.host_ram_dma_buf_imports_failed
+    };
+    let made = |buffer: &Result<Buffer, Error>| match buffer {
+        Ok(buffer) => format!("made, {:?}", buffer.host_backing()),
+        Err(error) => format!("refused: {error}"),
+    };
+    println!(
+        "HOST-RAM-DMA-BUF {}: the driver refuses each import dedicated to nothing: the use's page \
+         {} dedicated ({} refused), chunks {chunks:?}; the first object {} ({} refused), the \
+         second {} ({} refused); the source asked {requests:?}",
+        device.name(),
+        dedicated(&at_use, &unused),
+        failed(&at_use, &unused),
+        made(&first),
+        failed(&after_first, &at_use),
+        made(&second),
+        failed(&after_second, &after_first),
+    );
+    let page = page_of(&device);
+    assert_eq!(dedicated(&at_use, &unused), 1, "the use's page dedicated");
+    assert_eq!(failed(&at_use, &unused), 0, "the use's page refused");
+    assert!(
+        matches!(chunks[..], [(true, _)]),
+        "the RAM not listed: {chunks:?}"
+    );
+    let second_chunk = (start + 64 * MIB, 64 * MIB, 64 * MIB);
+    assert_eq!(
+        requests,
+        [
+            (start, page, page),
+            (start, 64 * MIB, 64 * MIB),
+            second_chunk
+        ],
+        "the source asked for each chunk"
+    );
+    assert_eq!(
+        failed(&after_first, &at_use),
+        1,
+        "the first chunk's refusal"
+    );
+    assert_eq!(
+        failed(&after_second, &after_first),
+        1,
+        "the second chunk's refusal"
+    );
+    assert_eq!(dedicated(&after_second, &at_use), 0, "a chunk dedicated");
+    assert!(
+        !device.shared().host_ram.refuses_dma_bufs(),
+        "the refusal remembered"
+    );
+    if pointers {
+        // Each chunk by its pointer.
+        assert_eq!(
+            after_second.host_ram_chunks_imported - at_use.host_ram_chunks_imported,
+            2
+        );
+        for buffer in [&first, &second] {
+            let backing = buffer.as_ref().map(Buffer::host_backing).ok().flatten();
+            assert_eq!(backing, Some(HostBacking::InHostRam));
+        }
+    }
+    drop((first, second, used, ram));
+    // A RAM used after them: listed, its page asked for and imported dedicated again.
+    let (later, later_start, _, later_asked, _later_dropped) = self::ram(true);
+    let before_later = device.work_counts();
+    let later_use = device.use_host_ram(&later).unwrap();
+    let chunks = device.host_ram_chunks();
+    assert!(
+        matches!(chunks[..], [(true, _)]),
+        "a later RAM not listed: {chunks:?}"
+    );
+    assert_eq!(
+        later_asked.lock().unwrap().requests,
+        [(later_start, page, page)],
+        "the later use's question"
+    );
+    assert_eq!(
+        dedicated(&device.work_counts(), &before_later),
+        1,
+        "the later use's page dedicated"
+    );
+    drop((later_use, later));
+}
+
 /// Where the driver refuses a dma-buf of a RAM's sources (a test's stand-in for a driver's refusal
-/// of every dma-buf, `Memory::import_refusal`, set once the use of a listed RAM began; the import
-/// tax forced held), a copy over a chunk not imported asks the source of run lists once: its list's
+/// of every dma-buf, `Memory::import_refusal`, set once the use of a listed RAM began, as
+/// `ERROR_INVALID_EXTERNAL_HANDLE`, a refusal that lasts; the import tax forced held), a copy over a chunk not imported asks the source of run lists once: its list's
 /// dma-buf is refused and remembered, and the copy takes its chunk's pointer, the source of
 /// dma-bufs unasked; a copy over the other chunk after it asks neither source. On a device whose
 /// barriers do not order blits through two imports of the same pages ([`runs_alone`]: ANV's), or
@@ -751,7 +877,7 @@ fn a_driver_s_refused_dma_buf_sends_copies_past_the_source_of_run_lists() {
         );
         return;
     };
-    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    let refusal = ash::vk::Result::ERROR_INVALID_EXTERNAL_HANDLE;
     crate::device::lock(&device.shared().memory).import_refusal = Some(refusal);
     let at_use = asked.lock().unwrap().requests.clone();
     let own = device
@@ -957,8 +1083,12 @@ fn without_pointer_imports_a_ram_s_chunks_are_its_dma_bufs() {
     let dma_bufs = after.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
     let failed = after.host_ram_pointer_imports_failed - unused.host_ram_pointer_imports_failed;
     let requests = asked.lock().unwrap().requests.clone();
+    let dedicated =
+        after.dma_buf_buffer_imports_dedicated - unused.dma_buf_buffer_imports_dedicated;
     println!(
-        "HOST-RAM-DMA-BUF {}: no pointer import: the RAM listed: {listed}; {dma_bufs} dma-buf          import(s) of the chunk, {failed} pointer import(s) tried, the source asked {requests:?}",
+        "HOST-RAM-DMA-BUF {}: no pointer import: the RAM listed: {listed}; {dma_bufs} dma-buf \
+         import(s) of the chunk, {failed} pointer import(s) tried, {dedicated} import(s) \
+         dedicated to their buffer, the source asked {requests:?}",
         device.name(),
     );
     assert_eq!(buffer.host_backing(), Some(HostBacking::InHostRam));

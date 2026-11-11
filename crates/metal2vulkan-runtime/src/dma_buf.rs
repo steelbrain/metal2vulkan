@@ -15,7 +15,13 @@
 //! - **The buffer** is a `VkBuffer` made for dma-bufs over the pages from their first byte, so its
 //!   bytes lie at their offset in their first page whatever the chunks, and a rebind between one
 //!   chunk and several keeps their place in it. **One chunk** gives a plain buffer bound at the
-//!   import's start. **Several chunks** give a sparse one (`SPARSE_BINDING`), each chunk bound at
+//!   import's start, the import dedicated to nothing; where the driver refuses that in every type
+//!   and the buffer is the only resource bound in the import for its life (a no-copy buffer's
+//!   own import, never a heap's; a copy's list of a guest RAM's runs; the page a use of a RAM asks
+//!   the driver with), dedicated to the buffer (`memory.rs`'s `DmaBufFor::Buffer`), counted
+//!   (`WorkCounts::dma_buf_buffer_imports_dedicated`). A guest RAM's chunk or an object's run
+//!   inside one never is: its objects' buffers are bound in it too (`host_ram.rs`).
+//!   **Several chunks** give a sparse one (`SPARSE_BINDING`), each chunk bound at
 //!   its offset from the request's start by one `vkQueueBindSparse` on the device's first queue
 //!   (`device/submit.rs`): the call does not wait for it, which would wait behind that queue's
 //!   work in flight; every later submission on every queue waits for it until it completed, and
@@ -102,7 +108,7 @@ use super::host_residency::Again;
 use super::image_plan::{ImageFacts, ImagePlan};
 use super::in_place_check::Unmade;
 use super::linear_plan::{check_linear_limits, tiling_lack, viewed_formats, LinearLack};
-use super::memory::{self, ImportFailure, MemoryClass, Placement};
+use super::memory::{self, DmaBufFor, ImportFailure, MemoryClass, Placement};
 use super::program_objects::ProgramObject;
 use super::Device;
 use crate::release;
@@ -419,6 +425,17 @@ pub(super) fn chunks_cover(lengths: &[u64], request: &DmaBufRequest, page: u64) 
     }
 }
 
+/// Whether a failed import of a guest RAM's dma-buf (`Device::ram_span_as_dma_buf`,
+/// `ram_runs_as_dma_buf`) is a refusal that lasts for the device's life: the driver refuses the
+/// dma-buf's descriptor, or its import in every memory type and form tried
+/// (`ERROR_INVALID_EXTERNAL_HANDLE`), imports it as no type its buffer takes, or the buffer's
+/// requirements miss its pages: each [`not_importable`]. Memory that ran out (`OutOfMemory`,
+/// the driver's answer in every type and form tried) is that import's alone: a later dma-buf,
+/// of another length, or with memory freed, may be taken.
+fn lasting_refusal(error: &Error) -> bool {
+    *error == not_importable()
+}
+
 /// Whether `chunks` answer `request` as the [`DmaBufSource`] contract allows on a host of
 /// `page`-byte pages ([`chunks_cover`]), each a dma-buf of at least its length.
 fn answers(chunks: &[DmaBufChunk], request: &DmaBufRequest, page: u64) -> bool {
@@ -481,7 +498,8 @@ impl Device {
     ///
     /// The window's pages are host memory of this process that stays mapped until the placement
     /// is freed (`HostMemory::new`), and the chunks the source returns hold exactly those pages
-    /// (`HostMemory::with_dma_buf`).
+    /// (`HostMemory::with_dma_buf`). Where `sole`, the buffer is the only resource ever bound in
+    /// the imports ([`Device::chunks_buffer`]).
     pub(super) unsafe fn import_from_source(
         &self,
         call: &'static str,
@@ -491,7 +509,7 @@ impl Device {
         window: &ImportWindow,
         source: DmaBufSource,
         class: MemoryClass,
-        keep: bool,
+        (keep, sole): (bool, bool),
     ) -> Result<(HostBuffer, Placement, Option<Again>), Error> {
         if !self.imports_dma_buf_buffers(vk::BufferCreateFlags::empty()) {
             return Err(not_importable());
@@ -524,8 +542,9 @@ impl Device {
         let kept_source = kept.as_ref().map(|_| Arc::clone(&source));
         let mut pages = DmaBufPages::new(self, source, request, false);
         // SAFETY: the caller's.
-        let (buffer, memory, type_index) =
-            unsafe { self.chunks_buffer(importer, chunks, &mut pages, length, window, class) }?;
+        let (buffer, memory, type_index) = unsafe {
+            self.chunks_buffer(importer, chunks, &mut pages, length, window, (class, sole))
+        }?;
         let counts = &self.shared().counts;
         counts.dma_buf_imported(pages.memories.len());
         if pages.bound.is_some() {
@@ -544,18 +563,20 @@ impl Device {
 
     /// `span`, host pages of a guest RAM (`host_ram.rs`), imported as the one dma-buf of them
     /// that the RAM's `source` makes: a chunk of the RAM or an object's run inside one, asked for
-    /// with a granule of its whole length, so that one import holds it. The `VkBuffer` over the
-    /// whole span, made for dma-bufs and bound to the import at its start, and its placement,
-    /// which keeps the import and the source. Refused, everything made released, as
+    /// with a granule of its whole length, so that one import holds it; or, where `sole`, a span
+    /// whose buffer is the only resource ever bound in its import ([`Device::chunks_buffer`]: the
+    /// page a use of the RAM asks the driver with, [`Device::ram_takes_dma_bufs`]). The `VkBuffer`
+    /// over the whole span, made for dma-bufs and bound to the import at its start, and its
+    /// placement, which keeps the import and the source. Refused, everything made released, as
     /// [`Device::import_from_source`] is, where the device makes no such buffer, the source fails
     /// or answers more than one chunk, or the driver refuses the dma-buf: each of the last three
-    /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`). The driver's refusal, its own
-    /// answer to the dma-buf the source made in every memory type the import tries (`memory.rs`'s
-    /// `import_dma_buf`), is remembered for the device's life (`RamSource::refuse_dma_bufs`):
-    /// from then on every span is refused here unasked and uncounted, and takes its pointer, so
-    /// that no later chunk pays a dma-buf, a failed import and a descriptor for nothing. A
-    /// transient failure of the driver's (memory that ran out) is remembered so too; the source's
-    /// failures are that span's alone.
+    /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`). A refusal that lasts
+    /// ([`lasting_refusal`]: the driver's of the dma-buf itself, in every memory type and form the
+    /// import tries, `memory.rs`'s `import_dma_buf`) is remembered for the device's life
+    /// (`RamSource::refuse_dma_bufs`): from then on every span is refused here unasked and
+    /// uncounted, and takes its pointer, so that no later chunk pays a dma-buf, a failed import
+    /// and a descriptor for nothing. Memory that ran out is that span's alone, as the source's
+    /// failures are: a later span asks again.
     ///
     /// # Safety
     ///
@@ -566,6 +587,7 @@ impl Device {
         importer: &Importer,
         span: Range<u64>,
         source: &DmaBufSource,
+        sole: bool,
     ) -> Result<(vk::Buffer, Placement), Error> {
         let shared = self.shared();
         if !importer.imports_dma_bufs()
@@ -592,16 +614,19 @@ impl Device {
             }
         };
         // SAFETY: the caller's.
-        let imported = unsafe { self.ram_span_import(importer, chunks, request, source) };
-        if imported.is_err() {
+        let imported = unsafe { self.ram_span_import(importer, chunks, request, source, sole) };
+        if let Err(error) = &imported {
             shared.counts.host_ram_dma_buf_import_failed();
-            shared.host_ram.refuse_dma_bufs();
+            if lasting_refusal(error) {
+                shared.host_ram.refuse_dma_bufs();
+            }
         }
         imported
     }
 
     /// The driver's import of `chunks`, the one dma-buf `source` answered `request` with
-    /// ([`Device::ram_span_as_dma_buf`]): the `VkBuffer` over it and its placement.
+    /// ([`Device::ram_span_as_dma_buf`], whose `sole` this is): the `VkBuffer` over it and its
+    /// placement.
     ///
     /// # Safety
     ///
@@ -612,6 +637,7 @@ impl Device {
         chunks: Vec<DmaBufChunk>,
         request: DmaBufRequest,
         source: &DmaBufSource,
+        sole: bool,
     ) -> Result<(vk::Buffer, Placement), Error> {
         let length = request.length;
         let window = ImportWindow {
@@ -628,7 +654,7 @@ impl Device {
                 &mut pages,
                 length,
                 &window,
-                MemoryClass::Shared,
+                (MemoryClass::Shared, sole),
             )
         }?;
         self.shared().counts.dma_buf_imported(pages.memories.len());
@@ -640,11 +666,16 @@ impl Device {
     /// Whether the driver takes the dma-bufs a guest RAM's `source` makes of its pages
     /// (`host_ram.rs`'s `Plan::listed`, whose chunks are those dma-bufs): asked of it by an import
     /// of `page`, the RAM's first host page, as one ([`Device::ram_span_as_dma_buf`], which counts
-    /// a failure and remembers the driver's refusal), released at once. Not where the device
-    /// imports no dma-buf or makes no buffer for one, or the driver refused a dma-buf of a RAM's
-    /// source before (`RamSource::refuses_dma_bufs`), the source unasked; taken where the source
-    /// alone failed the page, its failures that span's alone. The page's dma-buf pins it, and
-    /// udmabuf allocates it in the guest's file where the guest never wrote it.
+    /// a failure and remembers a refusal that lasts), released at once. The import takes the form
+    /// a chunk's does, dedicated to nothing, and where the driver refuses that, dedicated to the
+    /// page's buffer, the only resource bound in it (`memory.rs`'s `DmaBufFor::Buffer`): a driver
+    /// that refuses one page's dma-buf in the first form alone (NVIDIA's 615.71.09, which takes a
+    /// 64 KiB one so, and a 64 MiB chunk is longer) is no driver that refuses the RAM's dma-bufs.
+    /// Not where the device imports no dma-buf or makes no buffer for one, or the driver refused a
+    /// dma-buf of a RAM's source before (`RamSource::refuses_dma_bufs`), the source unasked; taken
+    /// where the source alone failed the page, or memory ran out for it, those the page's alone.
+    /// The page's dma-buf pins it, and udmabuf allocates it in the guest's file where the guest
+    /// never wrote it.
     ///
     /// # Safety
     ///
@@ -663,7 +694,7 @@ impl Device {
             return false;
         }
         // SAFETY: the caller's.
-        match unsafe { self.ram_span_as_dma_buf(importer, page, source) } {
+        match unsafe { self.ram_span_as_dma_buf(importer, page, source, true) } {
             Ok((raw, placement)) => {
                 self.discard_import(raw, placement);
                 true
@@ -677,12 +708,13 @@ impl Device {
     /// RAM's `source` of run lists makes (`HostRam::with_dma_buf_of_runs`): the `VkBuffer` over
     /// all their bytes, made for dma-bufs and bound to the import at its start, and its
     /// placement, which keeps the import. Only a copy's commands name the buffer: no object is
-    /// placed in it.
+    /// placed in it, so it is the only resource bound in the import ([`Device::chunks_buffer`]).
     /// Refused, everything made released, as [`Device::ram_span_as_dma_buf`] is, where the device
     /// makes no such buffer, the source fails or answers a chunk of another length, or the driver
     /// refuses the dma-buf; and, the source unasked, where the driver refused a dma-buf of a
-    /// RAM's source before (`RamSource::refuses_dma_bufs`). The driver's refusal of the list's is
-    /// remembered so too, for the device's life; the source's failures are that list's alone.
+    /// RAM's source before (`RamSource::refuses_dma_bufs`). A refusal of the list's that lasts
+    /// ([`lasting_refusal`]) is remembered so too, for the device's life; memory that ran out and
+    /// the source's failures are that list's alone.
     ///
     /// # Safety
     ///
@@ -738,10 +770,14 @@ impl Device {
                 &mut pages,
                 length,
                 &window,
-                MemoryClass::Shared,
+                (MemoryClass::Shared, true),
             )
         }
-        .inspect_err(|_| shared.host_ram.refuse_dma_bufs())?;
+        .inspect_err(|error| {
+            if lasting_refusal(error) {
+                shared.host_ram.refuse_dma_bufs();
+            }
+        })?;
         shared.counts.dma_buf_imported(pages.memories.len());
         let placement = Placement::dma_buf(Arc::new(pages), memory, type_index, length, start);
         Ok((buffer.raw, placement))
@@ -784,7 +820,9 @@ impl Device {
         let mut pages = DmaBufPages::new(self, Arc::clone(source), request, false);
         let window = &again.window;
         // SAFETY: the dma-bufs are those the first import took, which hold the pages it was
-        // made over for as long as they are open (the import holds them).
+        // made over for as long as they are open (the import holds them). Kept only by a
+        // no-copy buffer's own import (`Device::import_from_source`'s `keep`), its buffer the
+        // only resource bound in it, as the new one is.
         let (buffer, memory, type_index) = unsafe {
             self.chunks_buffer(
                 importer,
@@ -792,7 +830,7 @@ impl Device {
                 &mut pages,
                 again.length,
                 window,
-                again.class,
+                (again.class, true),
             )
         }
         .map_err(|error| match error {
@@ -817,10 +855,12 @@ impl Device {
     /// its offset from the window's start: one chunk by `vkBindBufferMemory` to a plain buffer,
     /// several by a sparse binding of a `SPARSE_BINDING` one (`Device::bind_sparse_buffer`, noted
     /// in `pages`). The buffer, its one import (`VK_NULL_HANDLE` for several) and the first
-    /// import's type. Refused, the buffer released, where the bytes padded to 16 run past the
-    /// chunks, the buffer's memory does not fit them or its alignment misses their boundaries, a
-    /// chunk's types take none of the class's the buffer takes, the driver refuses a chunk, or
-    /// the binding fails.
+    /// import's type. Each import is dedicated to nothing; where `sole` (the caller binds no
+    /// other resource in the import, ever) and the buffer is a plain one, an import the driver
+    /// refuses so is made dedicated to the buffer (`memory.rs`'s `DmaBufFor::Buffer`). Refused,
+    /// the buffer released, where the bytes padded to 16 run past the chunks, the buffer's memory
+    /// does not fit them or its alignment misses their boundaries, a chunk's types take none of
+    /// the class's the buffer takes, the driver refuses a chunk, or the binding fails.
     ///
     /// # Safety
     ///
@@ -832,7 +872,7 @@ impl Device {
         pages: &mut DmaBufPages,
         length: u64,
         window: &ImportWindow,
-        class: MemoryClass,
+        (class, sole): (MemoryClass, bool),
     ) -> Result<(HostBuffer, vk::DeviceMemory, u32), Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
@@ -875,7 +915,15 @@ impl Device {
             if !fits {
                 return Err(not_importable());
             }
-            let memories = self.import_chunks(importer, chunks, pages, &requirements, class)?;
+            // A plain buffer bound at the import's start, its requirements' size within it.
+            let dedicated_to = (sole && !sparse).then_some(raw);
+            let memories = self.import_chunks(
+                importer,
+                chunks,
+                pages,
+                &requirements,
+                (class, dedicated_to),
+            )?;
             if !sparse {
                 // SAFETY: the buffer is unbound, made for dma-bufs; the memory is of a type it
                 // takes and holds its requirements from 0.
@@ -919,16 +967,19 @@ impl Device {
     }
 
     /// Each of `chunks` imported as memory of `class` of a type both it and a buffer of
-    /// `requirements` take, in order, noted in `pages` (which frees them), with its type.
-    /// Refused (`Unsupported`, `HostMemory`) where a chunk's types take none of the class's the
-    /// buffer takes, or the driver refuses it; the descriptors not yet imported are closed then.
+    /// `requirements` take, in order, noted in `pages` (which frees them), with its type: where
+    /// `dedicated_to` names the buffer (one chunk, its import the buffer's alone), dedicated to it
+    /// where the driver refuses the import dedicated to nothing, counted
+    /// (`WorkCounts::dma_buf_buffer_imports_dedicated`). Refused (`Unsupported`, `HostMemory`)
+    /// where a chunk's types take none of the class's the buffer takes, or the driver refuses it;
+    /// the descriptors not yet imported are closed then.
     fn import_chunks(
         &self,
         importer: &Importer,
         chunks: Vec<DmaBufChunk>,
         pages: &mut DmaBufPages,
         requirements: &vk::MemoryRequirements,
-        class: MemoryClass,
+        (class, dedicated_to): (MemoryClass, Option<vk::Buffer>),
     ) -> Result<Vec<(vk::DeviceMemory, u32)>, Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
@@ -938,18 +989,22 @@ impl Device {
             let types = unsafe { importer.dma_buf_types(raw_device, fd.as_fd()) }
                 .map_err(import_refused)?;
             let allowed = types & requirements.memory_type_bits;
+            let purpose = dedicated_to.map_or(DmaBufFor::Shared, DmaBufFor::Buffer);
             let made = memory::import_dma_buf(
                 &shared.memory,
                 raw_device,
                 fd,
                 length,
                 (allowed, class),
-                None,
+                purpose,
             );
-            let (memory, type_index) = made.map_err(|failure| match failure {
+            let (memory, type_index, dedicated) = made.map_err(|failure| match failure {
                 ImportFailure::NoMemoryType => not_importable(),
                 ImportFailure::Vulkan(error) => import_refused(error),
             })?;
+            if dedicated {
+                shared.counts.dma_buf_buffer_import_dedicated();
+            }
             pages.hold(memory);
             imported.push((memory, type_index));
         }
@@ -1582,10 +1637,10 @@ impl Device {
             fd,
             requirements.size,
             allowed,
-            Some(raw),
+            DmaBufFor::Image(raw),
         );
         let memory = match imported {
-            Ok((memory, _)) => memory,
+            Ok((memory, _, _)) => memory,
             Err(ImportFailure::NoMemoryType) => {
                 return refuse(format!(
                     "the driver imports the buffer memory's dma-buf as none of its memory type {}",
@@ -1687,20 +1742,14 @@ impl Device {
         // (`VUID-VkMemoryDedicatedAllocateInfo-image-01433`), within the dma-buf's pages; or, for
         // an image bound at its texels' offset, the dma-buf's pages whole, dedicated to nothing.
         let allowed = (types & (1 << texels.type_index), MemoryClass::Shared);
-        let (size, dedicated_to) = match bound_at {
-            None => (requirements.size, Some(raw)),
-            Some(_) => (request.length, None),
+        let (size, purpose) = match bound_at {
+            None => (requirements.size, DmaBufFor::Image(raw)),
+            Some(_) => (request.length, DmaBufFor::Shared),
         };
-        let imported = memory::import_dma_buf(
-            &shared.memory,
-            raw_device,
-            chunk.fd,
-            size,
-            allowed,
-            dedicated_to,
-        );
+        let imported =
+            memory::import_dma_buf(&shared.memory, raw_device, chunk.fd, size, allowed, purpose);
         let memory = match imported {
-            Ok((memory, _)) => memory,
+            Ok((memory, _, _)) => memory,
             Err(ImportFailure::NoMemoryType) => {
                 return refuse(
                     DmaBufRefusal::Import,

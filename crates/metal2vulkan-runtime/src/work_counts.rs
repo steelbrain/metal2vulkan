@@ -324,6 +324,7 @@ pub(crate) struct Counters {
     host_keep_alives_covered: AtomicU64,
     host_mappings_queried: AtomicU64,
     dma_buf_imports: AtomicU64,
+    dma_buf_buffer_imports_dedicated: AtomicU64,
     dma_buf_memories_live: AtomicU64,
     dma_buf_image_memories_live: AtomicU64,
     host_imports_released: AtomicU64,
@@ -3151,6 +3152,12 @@ impl Counters {
     pub(crate) fn dma_buf_imported(&self, chunks: usize) {
         self.dma_buf_imports
             .fetch_add(chunks as u64, Ordering::Relaxed);
+    }
+
+    /// A dma-buf the driver refused to import dedicated to nothing, in every type tried, was
+    /// imported dedicated to the one buffer bound in it (`dma_buf.rs`'s `chunks_buffer`).
+    pub(crate) fn dma_buf_buffer_import_dedicated(&self) {
+        (self.dma_buf_buffer_imports_dedicated).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A `VkDeviceMemory` was imported from a dma-buf of a caller's source and is held: an
@@ -6822,6 +6829,14 @@ pub struct WorkCounts {
     /// (`HostMemory::with_dma_buf`), where the device refused the pages' pointer: no-copy
     /// buffers', heaps' and rebinds' alike, one per chunk. None where every pointer was imported.
     pub dma_buf_imports: u64,
+    /// Imports of a dma-buf of host pages that back one `VkBuffer` alone for their life (a
+    /// no-copy buffer's own import of one chunk, a heap's never; a copy's list of a guest RAM's
+    /// runs; the page a use of a RAM asks the driver with) made dedicated to that buffer
+    /// (`VkMemoryDedicatedAllocateInfo`), where the driver refused the import dedicated to
+    /// nothing, the form every other such import takes, in every memory type tried. NVIDIA's
+    /// 615.71.09 refuses a dma-buf of one 4 KiB page so (`ERROR_OUT_OF_DEVICE_MEMORY`) and takes
+    /// it dedicated; one of 64 KiB it takes either way. Counted in `dma_buf_imports` too.
+    pub dma_buf_buffer_imports_dedicated: u64,
     /// Those chunks' imports live now: each a `VkDeviceMemory` the device holds until the last
     /// buffer, texture or command buffer over its pages lets go. RADV lists each, as every
     /// imported memory, in every kernel submission of the device (Mesa 26.2.4's global BO list),
@@ -7062,14 +7077,18 @@ pub struct WorkCounts {
     /// The imports of guest RAM, chunks and objects' runs alike, as one dma-buf each of the RAM's
     /// source (`HostRam::with_dma_buf`) that failed on a device that imports dma-bufs: the source
     /// failed or answered other lengths, or the driver refused the dma-buf (NVIDIA's 615.71.09
-    /// refuses a udmabuf of host pages as out of device memory). Each was then imported by its
+    /// refuses a udmabuf of a few host pages imported dedicated to nothing, as a chunk's or a
+    /// run's import is, as out of device memory). Each was then imported by its
     /// pointer where the dma-buf went first, where the device's held pointer imports add to every
     /// submission's cost, which that import then adds (`host_ram_pointer_imports_failed` where
     /// it failed too). Counted too: the import of a RAM's first page as one that asks the driver
     /// as its use begins, where its chunks would be the source's dma-bufs (`Device::use_host_ram`
-    /// on such a device), which leaves them to their pointer. The driver's refusal is remembered
-    /// for the device's life: no later span or copy's list asks a source, none is counted here
-    /// again, and no RAM's chunks are its dma-bufs.
+    /// on such a device), refused in both forms that import tries
+    /// (`dma_buf_buffer_imports_dedicated`), which leaves them to their pointer where the refusal
+    /// lasts. A refusal that lasts (the driver refuses the dma-buf itself, or imports it as no
+    /// memory type its buffer takes) is remembered for the device's life: no later span or copy's
+    /// list asks a source, none is counted here again, and no RAM's chunks are its dma-bufs.
+    /// Memory that ran out is that import's alone, and a later one asks again.
     pub host_ram_dma_buf_imports_failed: u64,
     /// Of `host_ram_chunks_imported`, those the device's own thread imported ahead of every
     /// object over them, so that no making waited for their import: the few chunks past the one
@@ -8842,6 +8861,8 @@ impl Device {
             host_keep_alives_covered: counters.host_keep_alives_covered.load(Ordering::Relaxed),
             host_mappings_queried: counters.host_mappings_queried.load(Ordering::Relaxed),
             dma_buf_imports: counters.dma_buf_imports.load(Ordering::Relaxed),
+            dma_buf_buffer_imports_dedicated: (counters.dma_buf_buffer_imports_dedicated)
+                .load(Ordering::Relaxed),
             dma_buf_memories_live: counters.dma_buf_memories_live.load(Ordering::Relaxed),
             dma_buf_image_memories_live: counters
                 .dma_buf_image_memories_live

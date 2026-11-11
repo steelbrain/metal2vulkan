@@ -2702,6 +2702,7 @@ field	metal2vulkan-runtime::WorkCounts.dispatches_dropped_still_making	pub dispa
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_settled_as_before	pub dispatches_settled_as_before: u64
+field	metal2vulkan-runtime::WorkCounts.dma_buf_buffer_imports_dedicated	pub dma_buf_buffer_imports_dedicated: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_image_fallbacks	pub dma_buf_image_fallbacks: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_image_memories_live	pub dma_buf_image_memories_live: u64
 field	metal2vulkan-runtime::WorkCounts.dma_buf_images	pub dma_buf_images: u64

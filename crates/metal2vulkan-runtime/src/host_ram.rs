@@ -23,8 +23,9 @@
 //!   dma-buf of its own pages from the same source (`dma_buf.rs`), asked at the RAM's addresses
 //!   of them (`Placement::dma_buf_address`). Counted: `WorkCounts::host_ram_dma_buf_imports`,
 //!   and `host_ram_dma_buf_imports_failed` where the driver refused the dma-buf, which then takes
-//!   the pointer. The driver's refusal is remembered for the device's
-//!   life: no later chunk, run or copy's list asks a source.
+//!   the pointer. A refusal that lasts (the driver's of the dma-buf itself, not memory that ran
+//!   out: `dma_buf.rs`'s `lasting_refusal`) is remembered for the device's life: no later chunk,
+//!   run or copy's list asks a source.
 //! - **Few listed imports** ([`Plan::listed`]). Where the device imports dma-bufs, the RAM has a
 //!   source and the device's held imports add to the cost of every submission (RADV lists every
 //!   import in each submission: measured with a probe on the Radeon 780M, Mesa 26.2.6, Linux 7.3.1,
@@ -1986,8 +1987,9 @@ pub(crate) struct RamSource {
     #[cfg(test)]
     import_heaps: std::sync::atomic::AtomicU64,
     /// Whether the driver refused a dma-buf a RAM's source made of a span or a list of its pages
-    /// (`Device::ram_span_as_dma_buf`, `ram_runs_as_dma_buf`): from then on, for the device's
-    /// life, no span or list asks a source, and no RAM's plan is [`Plan::listed`].
+    /// for a cause that lasts (`Device::ram_span_as_dma_buf`, `ram_runs_as_dma_buf`): from then
+    /// on, for the device's life, no span or list asks a source, and no RAM's plan is
+    /// [`Plan::listed`].
     dma_bufs_refused: AtomicBool,
 }
 
@@ -2020,12 +2022,14 @@ impl RamSource {
         lock(&self.rams).iter().any(|used| Arc::ptr_eq(used, ram))
     }
 
-    /// Whether the driver refused a span's or a list's dma-buf ([`RamSource::refuse_dma_bufs`]).
+    /// Whether the driver refused a span's or a list's dma-buf for a cause that lasts
+    /// ([`RamSource::refuse_dma_bufs`]).
     pub(crate) fn refuses_dma_bufs(&self) -> bool {
         self.dma_bufs_refused.load(Ordering::Relaxed)
     }
 
-    /// Remember that the driver refused a span's or a list's dma-buf, for the device's life.
+    /// Remember that the driver refused a span's or a list's dma-buf for a cause that lasts, for
+    /// the device's life.
     pub(crate) fn refuse_dma_bufs(&self) {
         self.dma_bufs_refused.store(true, Ordering::Relaxed);
     }
@@ -2103,9 +2107,11 @@ impl Device {
     /// Where the device's held imports add to the cost of every submission and it imports the RAM's
     /// dma-bufs (RADV), each listed import costs every submission, so the RAM is imported in fewer,
     /// longer chunks instead, once the driver took one: the call asks the RAM's source for its
-    /// first host page and imports that dma-buf, released at once (a refusal counted in
-    /// `WorkCounts::host_ram_dma_buf_imports_failed`, and remembered for the device's life, its
-    /// RAMs then keeping their 64 MiB chunks). The chunks are as long
+    /// first host page and imports that dma-buf, released at once: dedicated to nothing, as a
+    /// chunk's import is, and where the driver refuses that, dedicated to the page's buffer (a
+    /// refusal counted in `WorkCounts::host_ram_dma_buf_imports_failed`, and one that lasts
+    /// remembered for the device's life, its RAMs then keeping their 64 MiB chunks; memory that
+    /// ran out is that page's alone). The chunks are as long
     /// as one dma-buf of its source holds ([`HostRam::with_largest_dma_buf`]) and the device's
     /// `maxMemoryAllocationSize`, `maxBufferSize` and `maxStorageBufferRange` take, in whole
     /// 64 MiB, and never past 512 MiB (a chunk's import makes every page of it resident, those the
@@ -2476,8 +2482,9 @@ impl Device {
     /// pointer first elsewhere, the dma-buf where the pointer is refused; the dma-buf alone where
     /// the device imports no pointer. Counted:
     /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf),
-    /// `host_ram_dma_buf_imports_failed` (each that failed: a driver's refusal the device then
-    /// remembers, and no later span asks the source) and
+    /// `host_ram_dma_buf_imports_failed` (each that failed: a refusal that lasts, which the device
+    /// then remembers, and no later span asks the source; memory that ran out, the span's alone)
+    /// and
     /// `host_ram_pointer_imports_failed` (each pointer import that failed).
     ///
     /// # Safety
@@ -2503,9 +2510,11 @@ impl Device {
             return by_pointer(span);
         };
         let as_dma_buf = |span: Range<u64>| {
+            // A chunk's or a run's import is dedicated to nothing: its objects' buffers are
+            // bound in it (`Device::bind_in`) beside the span's own.
             // SAFETY: the caller's.
             let (raw, placement) =
-                unsafe { self.ram_span_as_dma_buf(importer, span.clone(), source) }?;
+                unsafe { self.ram_span_as_dma_buf(importer, span.clone(), source, false) }?;
             self.shared().counts.host_ram_dma_buf_imported();
             Ok(self.ram_chunk(ram, span, of, raw, placement))
         };

@@ -8,6 +8,9 @@
 //!   `WorkCounts::dma_buf_imports`) with no pointer imported (`host_pointer_imports_made`); the GPU
 //!   reads the CPU's bytes, its writes land in the file's pages in place, and the CPU's later
 //!   writes reach its next read;
+//! - where the driver refuses such an import dedicated to nothing (a test's stand-in), the import
+//!   of a buffer's one page, which binds the buffer alone, is made dedicated to the buffer
+//!   (`WorkCounts::dma_buf_buffer_imports_dedicated`);
 //! - on a device that lists no dma-buf route, memory with a source is refused, naming the
 //!   extension.
 //!
@@ -129,14 +132,15 @@ fn without_pointer_imports_a_sourced_no_copy_buffer_lies_in_its_dma_bufs() {
     let after = device.work_counts();
     let route = lists_dma_buf_route(&device);
     println!(
-        "{TEST}: on {} (the dma-buf route listed: {route}): {}; {} dma-buf import(s), {} pointer \
-         import(s), the source called {} time(s)",
+        "{TEST}: on {} (the dma-buf route listed: {route}): {}; {} dma-buf import(s) ({} \
+         dedicated to the buffer), {} pointer import(s), the source called {} time(s)",
         device.name(),
         match &made {
             Ok(buffer) => format!("made, {:?}", buffer.host_backing()),
             Err(error) => format!("refused: {error}"),
         },
         after.dma_buf_imports - before.dma_buf_imports,
+        after.dma_buf_buffer_imports_dedicated - before.dma_buf_buffer_imports_dedicated,
         after.host_pointer_imports_made - before.host_pointer_imports_made,
         calls.load(Ordering::Acquire),
     );
@@ -196,6 +200,85 @@ fn without_pointer_imports_a_sourced_no_copy_buffer_lies_in_its_dma_bufs() {
         calls.load(Ordering::Acquire),
         1,
         "{TEST}: the source called again"
+    );
+    drop(buffer);
+}
+
+/// A no-copy buffer over 256 bytes of one page of a `memfd` mapped shared, whose memory has a
+/// source of dma-bufs of it, where the driver refuses each dma-buf imported dedicated to nothing
+/// for want of memory (a test's stand-in, `Memory::undedicated_import_refusal`, for NVIDIA's
+/// 615.71.09 and a dma-buf of a few pages): on a device that lists the dma-buf route, the page's
+/// one import, in which the buffer alone is bound, is made dedicated to the buffer
+/// (`WorkCounts::dma_buf_buffer_imports_dedicated`), the buffer `ImportedAsDmaBuf`; the GPU reads
+/// the file's bytes through it and fills them in the file's pages. Where the route is not listed
+/// there is nothing to test.
+#[test]
+fn a_sourced_no_copy_buffer_refused_undedicated_takes_an_import_dedicated_to_it() {
+    const TEST: &str =
+        "a_sourced_no_copy_buffer_refused_undedicated_takes_an_import_dedicated_to_it";
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    let scratch = Scratch::new();
+    let device = device(&scratch.0, None);
+    if !lists_dma_buf_route(&device) {
+        println!(
+            "{TEST}: on {}: the dma-buf route not listed; nothing to test",
+            device.name()
+        );
+        return;
+    }
+    let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+    crate::device::lock(&device.shared().memory).undedicated_import_refusal = Some(refusal);
+    let page = host_page();
+    let ram = Ram::new(2 * page, 0, 2 * page);
+    let bytes = counting(2 * page, 0);
+    ram.write_file(0, &bytes);
+    let (offset, length) = (256, 256);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let before = device.work_counts();
+    // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            HostMemory::with_dma_buf(ram.pointer(offset), ram.source(&calls)),
+            length as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let after = device.work_counts();
+    let dedicated =
+        after.dma_buf_buffer_imports_dedicated - before.dma_buf_buffer_imports_dedicated;
+    println!(
+        "{TEST}: on {}: {}; {} dma-buf import(s), {dedicated} dedicated to the buffer",
+        device.name(),
+        match &made {
+            Ok(buffer) => format!("made, {:?}", buffer.host_backing()),
+            Err(error) => format!("refused: {error}"),
+        },
+        after.dma_buf_imports - before.dma_buf_imports,
+    );
+    let buffer = made.unwrap_or_else(|error| panic!("{TEST}: refused: {error}"));
+    assert_eq!(
+        buffer.host_backing(),
+        Some(HostBacking::ImportedAsDmaBuf),
+        "{TEST}"
+    );
+    assert_eq!(
+        after.dma_buf_imports - before.dma_buf_imports,
+        1,
+        "{TEST}: the page's import"
+    );
+    assert_eq!(dedicated, 1, "{TEST}: the import dedicated to the buffer");
+    let queue = device.new_command_queue().unwrap();
+    assert!(
+        read(&queue, &buffer, length) == bytes[offset..offset + length],
+        "{TEST}: the GPU's read of the CPU's bytes"
+    );
+    gpu_fill(&queue, &buffer, 0..length as u64, 0x5a);
+    assert!(
+        ram.read_file(offset, length).iter().all(|&b| b == 0x5a),
+        "{TEST}: the GPU's fill in the file's pages"
     );
     drop(buffer);
 }

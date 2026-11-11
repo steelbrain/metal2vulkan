@@ -650,9 +650,9 @@ submission, can give the device the guest's RAM once instead:
   is 64, a chunk's size). A texture over an object bound in such a chunk is an image over a dma-buf
   of its own pages, as over an object's own dma-buf imports, asked of the same source. A source that
   fails, or a dma-buf the driver refuses, leaves the chunk to its
-  pointer (`WorkCounts::host_ram_dma_buf_imports_failed`); a driver's refusal is remembered for the
-  device's life, and its later chunks (and the copies' lists below) take their pointer without
-  asking the source.
+  pointer (`WorkCounts::host_ram_dma_buf_imports_failed`); a driver's refusal that lasts (of the
+  dma-buf itself, not for want of memory) is remembered for the device's life, and its later
+  chunks (and the copies' lists below) take their pointer without asking the source.
 - `HostRam::with_largest_dma_buf(bytes)` says how long one dma-buf of the source may be (for
   `udmabuf`, its `size_limit_mb` parameter, read from `/sys/module/udmabuf/parameters/`). On a
   device whose held imports add to the cost of every submission, with a source, each listed
@@ -661,8 +661,11 @@ submission, can give the device the guest's RAM once instead:
   `runtime_lane::submit_per_import::submit_per_ram_dma_buf`), as 3 of 2730 MiB to 16 us. There
   `use_host_ram` first asks the driver whether it takes the source's dma-bufs: it asks the source
   for the RAM's first host page and imports that dma-buf, released at once (so that page is
-  allocated in the `memfd` where the guest never wrote it). Where the driver refuses it, or
-  refused one before, the RAM keeps its 64 MiB chunks, imported ahead, each by its pointer. Where
+  allocated in the `memfd` where the guest never wrote it), dedicated to nothing as a chunk's
+  import is, or, where the driver refuses that, dedicated to the page's buffer
+  (`WorkCounts::dma_buf_buffer_imports_dedicated`). Where the driver refuses it in both forms for
+  a cause that lasts, or refused one so before, the RAM keeps its 64 MiB chunks, imported ahead,
+  each by its pointer. Where
   it takes it, each chunk is as long as that, the device's `maxMemoryAllocationSize`,
   `maxBufferSize` and `maxStorageBufferRange` all take, in whole 64 MiB, and never longer than
   512 MiB (an 8 GiB RAM in 16 chunks at most): a chunk's import pins every page of it, and

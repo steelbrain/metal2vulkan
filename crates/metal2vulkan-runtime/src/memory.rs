@@ -2053,6 +2053,11 @@ pub(super) struct Memory {
     /// asked.
     #[cfg(test)]
     pub(crate) import_refusal: Option<vk::Result>,
+    /// A test's stand-in for a driver that refuses, with this answer, each dma-buf import
+    /// dedicated to nothing and takes those dedicated to a buffer or an image
+    /// ([`import_dma_buf`]): answered where the driver's import would run, the driver never asked.
+    #[cfg(test)]
+    pub(crate) undedicated_import_refusal: Option<vk::Result>,
     /// A test's stand-in for every heap's budget of kept empty blocks ([`Memory::kept_budget`]).
     #[cfg(test)]
     pub(crate) kept_budget_stand_in: Option<u64>,
@@ -2259,6 +2264,8 @@ impl Memory {
             import_hold: None,
             #[cfg(test)]
             import_refusal: None,
+            #[cfg(test)]
+            undedicated_import_refusal: None,
             #[cfg(test)]
             kept_budget_stand_in: None,
             #[cfg(test)]
@@ -4043,21 +4050,42 @@ fn image_types(
     })
 }
 
+/// What memory imported from a dma-buf backs ([`import_dma_buf`]), which decides whether the
+/// import is a dedicated allocation (`VkMemoryDedicatedAllocateInfo`).
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DmaBufFor {
+    /// An image bound at offset 0, the import its requirements' size: dedicated to it.
+    Image(vk::Image),
+    /// Memory that resources bind in at offsets of their own (a guest RAM's chunk, its objects'
+    /// buffers and the chunk's), or an image bound at its texels' offset: dedicated to nothing.
+    Shared,
+    /// Memory this buffer alone binds, at offset 0, for the memory's life: made without
+    /// `SPARSE_BINDING`, its requirements' size within the import. Dedicated to nothing in each
+    /// type first, as a shared import is; where the driver refuses every one of those, dedicated
+    /// to the buffer in each type again, the form Vulkan documents for memory of one buffer
+    /// (`VkMemoryDedicatedAllocateInfo`), which a driver may take where it refuses the other
+    /// (NVIDIA's 615.71.09, measured: a dma-buf of one 4 KiB page refused dedicated to nothing,
+    /// `ERROR_OUT_OF_DEVICE_MEMORY`, and imported dedicated to its buffer).
+    Buffer(vk::Buffer),
+}
+
 /// Import the dma-buf `fd`, `size` bytes, as memory of `memory`'s best type among `allowed` (the
 /// types both the dma-buf and what is bound in it take) for `class`, those of the class first and
-/// then the dma-buf's others ([`dma_buf_candidates`]): the memory and its type, the caller's to
-/// free (`dma_buf.rs`'s `DmaBufPages`), in no block and never mapped. Allocated
-/// with the device-address flag where the device enables `bufferDeviceAddress`, as every block of
-/// the runtime's is (`BlockMaker::make_as`), and for `image` as its dedicated allocation (`size`
-/// its requirements'): every import of one dma-buf, a buffer's and its textures' images', and the
-/// device's own allocation of it agree, as ANV (Mesa 26.2.6) refuses an import of memory it holds
-/// whose flag differs (`VK_ERROR_INVALID_EXTERNAL_HANDLE`, of every memory type:
+/// then the dma-buf's others ([`dma_buf_candidates`]), dedicated as `purpose` has it: the memory,
+/// its type and whether it is a buffer's dedicated allocation made after the driver refused the
+/// import dedicated to nothing ([`DmaBufFor::Buffer`]), the caller's to free (`dma_buf.rs`'s
+/// `DmaBufPages`), in no block and never mapped. Allocated with the device-address flag where the
+/// device enables `bufferDeviceAddress`, as every block of the runtime's is
+/// (`BlockMaker::make_as`): every import of one dma-buf, a buffer's and its textures' images', and
+/// the device's own allocation of it agree, as ANV (Mesa 26.2.6) refuses an import of memory it
+/// holds whose flag differs (`VK_ERROR_INVALID_EXTERNAL_HANDLE`, of every memory type:
 /// `dma_buf::ExportedPages`). The import is made with `memory`'s lock released, as
 /// [`import_host`]'s is: the types are chosen under it, and the import logged under it once made.
 /// A driver's import of a dma-buf maps its pages for the device, which may take long (a consumer
 /// measured no-copy buffers over dma-bufs on the Radeon 780M taking 120 to 273 ms to make), and
 /// the device's other placements, imports and frees, all under that lock, would wait for it.
-/// Refused when no type is among `allowed`, else with the failure of the last type tried.
+/// Refused when no type is among `allowed`, else with the failure of the last import tried.
 ///
 /// Each attempt hands the driver a **clone** of `fd`, never `fd` itself, and never closes a
 /// clone it has handed over. Vulkan takes a descriptor's ownership only on a successful
@@ -4078,8 +4106,8 @@ pub(super) fn import_dma_buf(
     fd: std::os::fd::OwnedFd,
     size: u64,
     (allowed, class): (u32, MemoryClass),
-    image: Option<vk::Image>,
-) -> Result<(vk::DeviceMemory, u32), ImportFailure> {
+    purpose: DmaBufFor,
+) -> Result<(vk::DeviceMemory, u32, bool), ImportFailure> {
     use std::os::fd::{AsRawFd, IntoRawFd};
     let (types, device_address) = {
         let memory = lock(memory);
@@ -4089,12 +4117,24 @@ pub(super) fn import_dma_buf(
         )
     };
     #[cfg(test)]
-    let (hold, refusal) = {
+    let (hold, refusal, undedicated_refusal) = {
         let memory = lock(memory);
-        (memory.import_hold.clone(), memory.import_refusal)
+        (
+            memory.import_hold.clone(),
+            memory.import_refusal,
+            memory.undedicated_import_refusal,
+        )
     };
+    // The forms of the import, each tried in every type: a buffer's memory dedicated to nothing
+    // first, then to the buffer.
+    let forms = match purpose {
+        DmaBufFor::Buffer(_) => [Some(DmaBufFor::Shared), Some(purpose)],
+        DmaBufFor::Image(_) | DmaBufFor::Shared => [Some(purpose), None],
+    };
+    let attempts = (forms.into_iter().flatten())
+        .flat_map(|form| types.iter().map(move |&type_index| (form, type_index)));
     let mut failure = ImportFailure::NoMemoryType;
-    for type_index in types {
+    for (form, type_index) in attempts {
         // The descriptor the driver takes, which it owns once the import succeeds and may
         // close even when it fails (the doc above): never `fd`, and never closed here.
         let handed = match fd.try_clone() {
@@ -4109,14 +4149,21 @@ pub(super) fn import_dma_buf(
             .fd(handed.as_raw_fd());
         let mut flags =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default();
+        let mut dedicated = match form {
+            DmaBufFor::Image(image) => {
+                Some(vk::MemoryDedicatedAllocateInfo::default().image(image))
+            }
+            DmaBufFor::Buffer(buffer) => {
+                Some(vk::MemoryDedicatedAllocateInfo::default().buffer(buffer))
+            }
+            DmaBufFor::Shared => None,
+        };
         let mut info = vk::MemoryAllocateInfo::default()
             .allocation_size(size)
             .memory_type_index(type_index)
             .push_next(&mut import);
-        if let Some(image) = image {
-            dedicated = dedicated.image(image);
-            info = info.push_next(&mut dedicated);
+        if let Some(dedicated) = &mut dedicated {
+            info = info.push_next(dedicated);
         }
         if device_address {
             info = info.push_next(&mut flags);
@@ -4127,28 +4174,34 @@ pub(super) fn import_dma_buf(
         if let Some(hold) = &hold {
             hold();
         }
-        // A test's stand-in for a driver that refuses the import: the clone, never handed over,
-        // is closed as it goes.
+        // A test's stand-ins for a driver that refuses the import, every one or each dedicated
+        // to nothing: the clone, never handed over, is closed as it goes.
         #[cfg(test)]
-        if let Some(refused) = refusal {
-            failure = ImportFailure::Vulkan(refused);
-            continue;
+        {
+            let undedicated = undedicated_refusal.filter(|_| form == DmaBufFor::Shared);
+            if let Some(refused) = refusal.or(undedicated) {
+                failure = ImportFailure::Vulkan(refused);
+                continue;
+            }
         }
         // SAFETY: `info` and its chain live for the call; the type index is the device's and
-        // allows the dma-buf (and the image, unbound and made for dma-bufs, whose size this
-        // is). The descriptor it takes is the clone, whose fate is the driver's either way.
+        // allows the dma-buf (and the image or buffer it is dedicated to, unbound and made for
+        // dma-bufs, whose requirements' size this is or holds). The descriptor it takes is the
+        // clone, whose fate is the driver's either way.
         match unsafe { crate::creation::allocate_memory(device, &info) } {
             Ok(raw) => {
                 // A successful import owns the descriptor: Vulkan closes it with the memory.
                 let _ = handed.into_raw_fd();
                 if let Some(log) = &lock(memory).log {
-                    let what = match image {
-                        Some(_) => "imported a dma-buf for an image",
-                        None => "imported a dma-buf",
+                    let what = match form {
+                        DmaBufFor::Image(_) => "imported a dma-buf for an image",
+                        DmaBufFor::Buffer(_) => "imported a dma-buf dedicated to its buffer",
+                        DmaBufFor::Shared => "imported a dma-buf",
                     };
                     log.say(what, raw, type_index, size, None);
                 }
-                return Ok((raw, type_index));
+                let retried = matches!(form, DmaBufFor::Buffer(_));
+                return Ok((raw, type_index, retried));
             }
             Err(error) => {
                 // Let go of it rather than close it: a driver that took it on a failure has
