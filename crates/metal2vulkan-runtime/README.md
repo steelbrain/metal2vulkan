@@ -438,8 +438,8 @@ after it, and 0 of 80 with the device dropped first
   copied out, and the pages are copied in again at the completion of each command buffer that
   used the buffer (`managed_writes_undone`). A detach keeps the GPU's copy, which commands go on
   reading and writing; `contents` answers the detached pages' pointer, as every detached no-copy
-  buffer's does (`Buffer::detach_backing`). The device-local memory it holds
-  is counted in `managed_device_copy_bytes`.
+  buffer's does (`Buffer::detach_backing`). The device-local memory it holds is counted in
+  `managed_device_copy_bytes`.
   `CommandBuffer::used_resources` lists what a command buffer uses until it completes, so a
   program knows when it may take memory away. The pages under a no-copy object are unmapped only
   after the object goes and its keep-alive is dropped (or, given none, its deallocator ran), never
