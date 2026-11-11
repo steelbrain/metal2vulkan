@@ -52,6 +52,9 @@
 //!   the device waited idle, then the buffer freed).
 //! - `DMA_BUF_LEAK_BUSY` (1): the other work; 0 leaves it out.
 //! - `DMA_BUF_LEAK_QUEUES`: `shared` (the default, one command queue for all) or `own` (one each).
+//! - `DMA_BUF_LEAK_WRITE` (0): 1 has each copy write the bytes it read back over the buffer's
+//!   ends, so that the GPU writes the imported pages too; no copy is checked then, as buffers
+//!   share pages.
 //! - `DMA_BUF_LEAK_LINGER` (0): 1 keeps a quarter of the used buffers past the device's idle
 //!   window (2.5 s), then copies from each again and frees it, so the device's residency thread
 //!   releases their imports while other threads import, and the copy imports the kept dma-buf
@@ -131,6 +134,7 @@ struct Knobs {
     busy: bool,
     shared_queue: bool,
     linger: bool,
+    write: bool,
     named: bool,
     sudo: bool,
     file: u64,
@@ -183,6 +187,7 @@ impl Knobs {
             busy: number("DMA_BUF_LEAK_BUSY", 1) != 0,
             shared_queue,
             linger: number("DMA_BUF_LEAK_LINGER", 0) != 0,
+            write: number("DMA_BUF_LEAK_WRITE", 0) != 0,
             named: number("DMA_BUF_LEAK_NAME", 1) != 0,
             sudo: number("DMA_BUF_LEAK_SUDO", 0) != 0,
             file: (number("DMA_BUF_LEAK_FILE_MIB", 512) << 20).max(MOST_BYTES),
@@ -443,13 +448,18 @@ impl Probe {
     }
 }
 
-/// Encode copies of `PROBE` bytes from each end of `buffer` into `out`.
-fn copy_ends(command_buffer: &CommandBuffer, buffer: &Buffer, out: &Buffer) {
+/// Encode copies of `PROBE` bytes from each end of `buffer` into `out`, and where `write`, of
+/// `out`'s bytes back over them.
+fn copy_ends(command_buffer: &CommandBuffer, buffer: &Buffer, out: &Buffer, write: bool) {
     let length = buffer.length();
     let each = PROBE.min(length);
     let mut encoder = command_buffer.blit_command_encoder().unwrap();
     (encoder.copy_from_buffer_to_buffer(buffer, 0, out, 0, each)).unwrap();
     (encoder.copy_from_buffer_to_buffer(buffer, length - each, out, PROBE, each)).unwrap();
+    if write {
+        (encoder.copy_from_buffer_to_buffer(out, 0, buffer, 0, each)).unwrap();
+        (encoder.copy_from_buffer_to_buffer(out, PROBE, buffer, length - each, each)).unwrap();
+    }
     encoder.end_encoding().unwrap();
 }
 
@@ -511,12 +521,13 @@ impl<'a> Worker<'a> {
             _ => false,
         };
         let copy = (!unused).then(|| {
-            let check = cycle % 8 == 0;
+            let check = cycle % 8 == 0 && !probe.knobs.write;
             let command_buffer = self.queue.command_buffer().unwrap();
             copy_ends(
                 &command_buffer,
                 &buffer,
                 if check { &self.checked } else { &self.out },
+                probe.knobs.write,
             );
             command_buffer.commit().unwrap();
             if check {
@@ -647,7 +658,12 @@ impl<'a> Worker<'a> {
                 wait(copy);
             }
             let command_buffer = self.queue.command_buffer().unwrap();
-            copy_ends(&command_buffer, &live.buffer, &self.out);
+            copy_ends(
+                &command_buffer,
+                &live.buffer,
+                &self.out,
+                self.probe.knobs.write,
+            );
             command_buffer.commit().unwrap();
             wait(&command_buffer);
             drop(live.buffer);
@@ -962,7 +978,10 @@ fn probe(way: &str, plan: Plan) {
             (made, made),
             "{TEST}: {way}: each buffer one import, each import freed"
         );
-        assert!(checked > 0 || made < 8, "{TEST}: {way}: no copy checked");
+        assert!(
+            checked > 0 || made < 8 || probe.knobs.write,
+            "{TEST}: {way}: no copy checked"
+        );
     }
     let imports = Counts::of(&device.work_counts()).made - start.made;
     let name = device.name().to_string();
