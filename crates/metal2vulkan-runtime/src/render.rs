@@ -4746,7 +4746,9 @@ impl RenderLowering {
         };
         // A `DontCare` load of an attachment the pass stores: loaded in a pass whose draws reach
         // no tile, else cleared to zero or its clear value, Metal's answer in each tile a draw
-        // reaches (`clear_reach.rs`), and only in those `tiles` bounds.
+        // reaches (`clear_reach.rs`), and only in those `tiles` bounds. One the pass does not
+        // store is cleared over the render area where the draws reach a tile, Metal's answer
+        // wherever a fragment reads it.
         let dont_care = clear_reach::dont_care_loads(&mut layout, reach);
         // The tiles the draws reach, which only those loads' clears read: none made for a pass
         // without one.
@@ -4757,7 +4759,7 @@ impl RenderLowering {
         if let Some(named) = dont_care.named.clone() {
             device.degrade(Degradation::DontCareLoadTiles, || {
                 (
-                    format!("{named} of a render pass, loaded with `DontCare`"),
+                    format!("{named} of a render pass, loaded with `DontCare` and stored"),
                     "Metal clears only the tiles a draw's primitives touch, which depend on where \
                      the GPU places the vertices"
                         .to_owned(),

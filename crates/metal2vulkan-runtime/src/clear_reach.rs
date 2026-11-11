@@ -24,6 +24,12 @@
 //!   tile holds zero before the draws (a color, every color attachment of the pass) or the
 //!   attachment's clear value (depth, stencil); the tiles no primitive touches keep their texels.
 //!   Which tiles those are depends on where the GPU places the vertices.
+//! - **A `DontCare` load** of an attachment the pass does not store (`DontCare`) reads the same
+//!   wherever a fragment reads it: zero (a color) or the pass's clear value (a stencil), never its
+//!   earlier texels (an M3 Max, macOS 27.0.1, lane `dont_care_unstored`: an `RG16Float` second
+//!   color a framebuffer fetch reads and a `Stencil8` a stencil test reads, over 224x128 and
+//!   128x128 targets, in a pass whose first draw reaches some tiles and a later one every tile, a
+//!   pass of the reading draw alone, and a pass of no fetch).
 //! - A `Load` keeps the texels past the render area, and a `DontCare` store stores nothing.
 //!
 //! **The runtime** gives the `Clear` load's answer and the `DontCare` load's near-equivalent, as
@@ -44,6 +50,13 @@
 //!   pass's `tileWidth` and `tileHeight`, which set Metal's grid, as measured), a clear before the
 //!   pass, and loads: every other tile keeps its texels, Metal's answer (a draw writes no pixel
 //!   outside them), and a pass whose draws reach no pixel loads, as one whose draws draw nothing.
+//! - A `DontCare`-loaded attachment the pass does not store (but separate depth and stencil
+//!   textures, and memoryless ones) clears to zero (a color) or its clear value (depth, stencil)
+//!   in a pass whose draws reach a tile, over the render area: by the load operation of the pass's
+//!   first instance, or before the pass where that instance leaves it out (as below). Metal's
+//!   answer wherever a fragment reads it, so no notice: no fragment reads a tile no draw touches.
+//!   What the pass leaves in it is a `DontCare` store's (`kept_bytes.rs`). In a pass whose draws
+//!   reach no tile it stays `DontCare`.
 //! - A `DontCare`-loaded memoryless color attachment clears to zero in a pass whose draws reach a
 //!   tile: Metal's answer in every tile a fragment reads it (an Apple M4), and it is
 //!   never stored, so the answer is exact.
@@ -263,8 +276,11 @@ pub(super) fn dont_care_clear(pf: PixelFormat) -> vk::ClearColorValue {
 
 /// Give each `DontCare` load of `layout` that the module docs name its answer in a pass of
 /// `reach`: `Load` where it reaches no tile, else `Clear`, to the format's zero for a color
-/// attachment ([`dont_care_clear`]) and to its clear value for depth and stencil. Which attachments took it, and whether the pass took
-/// the near-equivalent (its draws reach the tiles their primitives touch): the attachment it
+/// attachment ([`dont_care_clear`]) and to its clear value for depth and stencil. One of an
+/// attachment the pass does not store takes `Clear` wherever the pass reaches a tile, over its
+/// whole render area, by the load operation (the module docs): no fragment reads past the tiles
+/// its draws touch, and no texel is kept. Which stored attachments took it, and whether the pass
+/// took the near-equivalent (its draws reach the tiles their primitives touch): the attachment it
 /// names, for the notice.
 pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> DontCareLoads {
     let load = match reach {
@@ -293,7 +309,14 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
             }
             continue;
         }
-        if color.load != LoadAction::DontCare || color.memoryless || !stores(color.store) {
+        if color.load != LoadAction::DontCare || color.memoryless {
+            continue;
+        }
+        if !stores(color.store) {
+            if reach != PassReach::Nothing {
+                color.load = LoadAction::Clear;
+                color.clear = dont_care_clear(color.target.texture.pixel_format());
+            }
             continue;
         }
         color.load = load;
@@ -317,7 +340,13 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
             let Some(aspect) = aspect else {
                 continue;
             };
-            if aspect.load != LoadAction::DontCare || aspect.memoryless || !stores(aspect.store) {
+            if aspect.load != LoadAction::DontCare || aspect.memoryless {
+                continue;
+            }
+            if !stores(aspect.store) {
+                if reach != PassReach::Nothing {
+                    aspect.load = LoadAction::Clear;
+                }
                 continue;
             }
             aspect.load = load;

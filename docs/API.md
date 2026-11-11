@@ -2343,7 +2343,11 @@ bound.
   with `DontCare` and stored, in a pass that draws, is cleared before the draws to zero (a color) or
   its clear value (depth, stencil) over the render area and the tiles past it a clear reaches, where
   Metal clears only the tiles a draw's primitives touch and keeps the texels of the others. Cost:
-  the tiles no draw touches hold zero or the clear value where Metal keeps their texels.
+  the tiles no draw touches hold zero or the clear value where Metal keeps their texels. An
+  attachment loaded with `DontCare` that the pass does not store is not announced: in a pass that
+  draws, the runtime clears it over the render area to zero or its clear value, which is what
+  Metal's draws read of it wherever they read it (an M3 Max, macOS 27.0.1: a framebuffer fetch of
+  a second color and a stencil test, in passes split and whole).
 - `metal2vulkan-degrade-fresh-pattern-zeroed` (precision). `FreshPatternZeroed`: On a device that
   presents an Apple silicon Mac's compression (`DeviceProperties::lossless_compression`,
   `MacClass::AppleSilicon`; never on one that presents a Mac with an Intel or AMD GPU, whose new

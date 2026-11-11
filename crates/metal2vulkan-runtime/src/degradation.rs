@@ -835,7 +835,9 @@ degradations! {
         /// An attachment loaded with `DontCare` and stored, in a pass that draws, is cleared
         /// before the draws to zero (a color) or its clear value (depth, stencil) over the render
         /// area and the tiles past it a clear reaches (`clear_reach.rs`), where Metal clears only
-        /// the tiles a draw's primitives touch and keeps the texels of the others.
+        /// the tiles a draw's primitives touch and keeps the texels of the others. Not one the
+        /// pass does not store, which its load operation clears over the render area: Metal's
+        /// answer wherever a fragment reads it.
         DontCareLoadTiles = "dont-care-load-tiles", Precision,
             "the tiles no draw touches hold zero or the clear value where Metal keeps their \
              texels";
