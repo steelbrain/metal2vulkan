@@ -232,15 +232,16 @@ fn pattern(seed: u8) -> Vec<u8> {
 }
 
 /// The degrade notices a device announced.
-type Heard = Arc<Mutex<Vec<Degradation>>>;
+type Heard = Arc<Mutex<Vec<(Degradation, String)>>>;
 
-/// A device's message sink, its degrade notices into the answer's list.
+/// A device's message sink, its degrade notices, each kind with its reason, into the answer's list.
 fn hearing() -> (Heard, MessageSink) {
     let heard: Heard = Arc::default();
     let hearing = Arc::clone(&heard);
     let sink = MessageSink::new(move |message| {
         if let Some(notice) = &message.degradation {
-            hearing.lock().unwrap().push(notice.degradation);
+            let heard = (notice.degradation, notice.reason.clone());
+            hearing.lock().unwrap().push(heard);
         }
     });
     (heard, sink)
@@ -404,11 +405,16 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> [u64; 5] {
 
 /// How many of `heard` are `copied-host-pages`.
 fn announced(heard: &Heard) -> usize {
+    copies_reasons(heard).len()
+}
+
+/// The reasons of the `copied-host-pages` notices of `heard`.
+fn copies_reasons(heard: &Heard) -> Vec<String> {
     let notices = heard.lock().unwrap();
-    notices
-        .iter()
-        .filter(|&&kind| kind == Degradation::CopiedHostPages)
-        .count()
+    (notices.iter())
+        .filter(|(kind, _)| *kind == Degradation::CopiedHostPages)
+        .map(|(_, reason)| reason.clone())
+        .collect()
 }
 
 #[test]
@@ -669,6 +675,9 @@ fn copied_buffer_is_made_where_an_admitted_import_fails_announced() {
     drop((buffer, imported));
 }
 
+/// A no-copy buffer whose pointer's import fails (the driver's out of device memory, as
+/// `Device::fail_next_host_imports` stands in for) is a copy, announced with the failure: its
+/// notice names the pointer's import that failed and its error. Printed (`COPIED`): the reason.
 #[test]
 fn copied_buffer_without_a_gate_whose_import_fails_is_made_announced() {
     let host = Host::new(5);
@@ -680,7 +689,18 @@ fn copied_buffer_without_a_gate_whose_import_fails_is_made_announced() {
     let buffer = host.buffer(&device, None);
     let after = device.work_counts();
     assert_eq!(moved(&before, &after), [0, 1, 0, 1, 0]);
-    assert_eq!(announced(&heard), 1, "announced once");
+    let reasons = copies_reasons(&heard);
+    eprintln!(
+        "COPIED {}: a failed import's copy: {reasons:?}",
+        device.name()
+    );
+    assert_eq!(reasons.len(), 1, "announced once");
+    let named = "their pointer's import failed: out of";
+    assert!(
+        reasons[0].starts_with(named),
+        "{named:?} named: {}",
+        reasons[0]
+    );
     lies_in_a_copy(&device, &buffer, &host);
 }
 
@@ -848,7 +868,14 @@ fn copied_rebind_pages_are_made_where_an_admitted_import_fails_announced() {
         1
     );
     assert_eq!(asked.lock().unwrap().len(), 1, "the gate was asked once");
-    assert_eq!(announced(&heard), 1, "announced once");
+    let reasons = copies_reasons(&heard);
+    assert_eq!(reasons.len(), 1, "announced once");
+    let named = "their pointer's import failed: out of";
+    assert!(
+        reasons[0].starts_with(named),
+        "{named:?} named: {}",
+        reasons[0]
+    );
     lies_in_a_copy(&device, &buffer, &second);
     assert_eq!(
         first.bytes(),
