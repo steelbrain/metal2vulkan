@@ -20,7 +20,8 @@
 //! - **vsh_round**: `vstore_half` and its `_rte`, `_rtz`, `_rtp` and `_rtn` forms of 32 floats:
 //!   the Radeon Pro 5300M and the UHD Graphics 630 store every form as `vstore_half_rte`, word for
 //!   word, and the M3 Max rounds as each names; the crate stores every form as the device converts
-//!   (the device's own rounding to nearest even, checked on the values whose `half` is normal).
+//!   (to nearest even, checked on the values whose `half` is normal; toward zero too where the
+//!   module records `NativeHalfConversion`, as on NVIDIA's RTX 2080).
 //! - **vsh_round** of NaNs: each form stores a `half` NaN, its bits the device's conversion's,
 //!   and the pipeline announces `native-nan-encoding` (but where the device's narrowing is
 //!   measured to move a NaN as Metal's).
@@ -355,10 +356,29 @@ const ROUNDED: [(f32, Option<u16>); 32] = [
     (std::f32::consts::PI, Some(0x4248)),
 ];
 
+/// `x`'s `half` rounded toward zero (finite `x`): 65504 from there up, a subnormal truncated.
+fn half_toward_zero(x: f32) -> u16 {
+    let sign = if x.is_sign_negative() { 0x8000 } else { 0 };
+    let a = x.abs();
+    let magnitude = if a.is_infinite() {
+        0x7c00
+    } else if a >= 65504.0 {
+        0x7bff
+    } else if a >= 1.0 / 16_384.0 {
+        let b = a.to_bits();
+        u16::try_from((((b >> 23) - 112) << 10) | ((b >> 13) & 0x3ff)).unwrap()
+    } else {
+        // A power-of-two scaling, exact; the cast truncates.
+        (a * 16_777_216.0) as u16
+    };
+    sign | magnitude
+}
+
 #[test]
 fn opencl_mode_vstore_half_stores_every_rounding_as_the_device_converts() {
     let scratch = Scratch::new("opencl-data-vstore-half");
-    let device = device(&scratch.0);
+    let heard = Heard::default();
+    let device = noting_device(&scratch.0, &heard, Degradation::NativeHalfConversion);
     let s = state(&device, &vsh_round(), "__entry_vsh_round");
     let f = floats_buffer(&device, &ROUNDED.map(|(x, _)| x));
     let h = halves_buffer(&device, &[0xeeee; 160]);
@@ -369,30 +389,39 @@ fn opencl_mode_vstore_half_stores_every_rounding_as_the_device_converts() {
     for (k, form) in forms.chunks(32).enumerate() {
         assert_eq!(form, plain, "form {k} of rte, rtz, rtp, rtn");
     }
-    // That is the device's conversion: to nearest, ties to even, where the half is normal.
+    // That is the device's conversion: to nearest, ties to even, where the half is normal. Where
+    // the module records `NativeHalfConversion`, Vulkan leaves the conversion's rounding to the
+    // device (no `RoundingModeRTE`), and the note's bound lets it round toward zero (NVIDIA's RTX
+    // 3090 and RTX 2080) and flush a 16-bit denormal to the zero of its sign.
+    let devices_rounding = !heard.lock().unwrap().is_empty();
     for (i, (&(x, rte), &got)) in ROUNDED.iter().zip(plain).enumerate() {
         if let Some(rte) = rte {
-            assert_eq!(got, rte, "{i}: {x:e}");
+            let rtz = half_toward_zero(x);
+            let flushed = (rtz & 0x7fff) < 0x0400 && got == (rtz & 0x8000);
+            assert!(
+                got == rte || (devices_rounding && (got == rtz || flushed)),
+                "{i}: {x:e}: {got:#06x}, to nearest {rte:#06x}, toward zero {rtz:#06x}"
+            );
         }
     }
 }
 
-/// What the device's sink heard of `native-nan-encoding`.
+/// What the device's sink heard of one kind of notice.
 type Heard = Arc<Mutex<Vec<DegradeNotice>>>;
 
-/// The device the cfg selects, its shader cache in `cache`, announcing `native-nan-encoding` at
-/// every occurrence into `heard`, so a note an earlier pipeline announced does not hide this one's.
-fn noting_device(cache: &Path, heard: &Heard) -> Device {
+/// The device the cfg selects, its shader cache in `cache`, announcing `kind` at every occurrence
+/// into `heard`, so a note an earlier pipeline announced does not hide this one's.
+fn noting_device(cache: &Path, heard: &Heard, kind: Degradation) -> Device {
     let heard = Arc::clone(heard);
     let mut options = options(cache);
     options.messages = Some(MessageSink::new(move |message| {
         if let Some(notice) = &message.degradation {
-            if notice.degradation == Degradation::NativeNanEncoding {
+            if notice.degradation == kind {
                 heard.lock().unwrap().push(notice.clone());
             }
         }
     }));
-    options.announce_each = [Degradation::NativeNanEncoding].into_iter().collect();
+    options.announce_each = [kind].into_iter().collect();
     Device::system_default_with(&options).unwrap()
 }
 
@@ -404,7 +433,7 @@ fn noting_device(cache: &Path, heard: &Heard) -> Device {
 fn opencl_mode_vstore_half_of_a_nan_announces_the_devices_nan_encoding() {
     let scratch = Scratch::new("opencl-data-vstore-half-nan");
     let heard = Heard::default();
-    let device = noting_device(&scratch.0, &heard);
+    let device = noting_device(&scratch.0, &heard, Degradation::NativeNanEncoding);
     let s = state(&device, &vsh_round(), "__entry_vsh_round");
     let nans = [0x7fc0_0000u32, 0x7fff_ffff, 0xffc0_0000, 0x7f80_0001];
     let inputs: Vec<f32> = (0..32)
