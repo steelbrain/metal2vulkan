@@ -245,6 +245,10 @@ pub(crate) struct Counters {
     /// Command buffers' waits behind other command queues' batches (`queue_wait.rs`): of every
     /// queue's, then of unshared queues' alone.
     behind_other_queues: [BehindOtherQueues; 2],
+    /// What unshared queues' waits over 16 ms waited behind (`queue_wait.rs`): the batches ahead
+    /// of each, summed and the most, its longest run, summed, and those whose longest run alone
+    /// was over 16 ms.
+    unshared_long_waits: [AtomicU64; 4],
     queue_switch_checks_run: AtomicU64,
     queue_switch_checks_recalled: AtomicU64,
     submit_checks_run: AtomicU64,
@@ -2755,8 +2759,22 @@ impl Counters {
         }
     }
 
-    /// Such a command buffer's wait ended, `nanos` after its submission (`queue_wait.rs`).
-    pub(crate) fn waited_behind_other_queue(&self, nanos: u64, unshared: bool) {
+    /// Such a command buffer's wait ended, `waited.nanos` after its submission (`queue_wait.rs`).
+    pub(crate) fn waited_behind_other_queue(
+        &self,
+        waited: crate::queue_wait::Waited,
+        unshared: bool,
+    ) {
+        let nanos = waited.nanos;
+        if unshared && nanos > 16_000_000 {
+            let [batches, most, longest, one] = &self.unshared_long_waits;
+            batches.fetch_add(waited.batches, Ordering::Relaxed);
+            most.fetch_max(waited.batches, Ordering::Relaxed);
+            longest.fetch_add(waited.longest, Ordering::Relaxed);
+            if waited.longest > 16_000_000 {
+                one.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         for tally in &self.behind_other_queues[..1 + usize::from(unshared)] {
             if nanos > 16_000_000 {
                 tally.over_16ms.fetch_add(1, Ordering::Relaxed);
@@ -5944,6 +5962,22 @@ pub struct WorkCounts {
     /// The longest wait of an unshared command queue's command buffer behind another command
     /// queue's batch, in nanoseconds, measured as `wait_behind_other_queues_longest_nanos`.
     pub unshared_wait_behind_other_queues_longest_nanos: u64,
+    /// Of the waits counted in `unshared_command_buffers_behind_other_queues_over_16ms`, the
+    /// batches in flight ahead of each on its `VkQueue` as its first batch went there (timeline
+    /// values submitted past the one the host saw complete), summed: divided by that count, how
+    /// many batches such a wait was behind.
+    pub unshared_waits_over_16ms_batches_ahead: u64,
+    /// The most batches in flight ahead of one of those waits, counted so.
+    pub unshared_waits_over_16ms_most_batches_ahead: u64,
+    /// The longest run each of those waits waited for, summed, in nanoseconds: a run is the
+    /// host's view of how long the oldest batch in flight on the `VkQueue` was so, from the
+    /// completion seen before it (or its submission onto a `VkQueue` the host saw idle) to the
+    /// completion that ended it. One batch's GPU work and the host's lateness to see it end, or
+    /// several seen complete at once.
+    pub unshared_waits_over_16ms_longest_runs_nanos: u64,
+    /// Of those waits, the ones whose longest run alone was over 16 ms: behind one long batch,
+    /// rather than many short ones.
+    pub unshared_waits_over_16ms_behind_one_long_run: u64,
     /// Runs in this process of the device's check of its GPU's idling between `VkQueue`s
     /// (`queue_switch_check.rs`), whatever they answered.
     pub queue_switch_checks_run: u64,
@@ -8176,6 +8210,9 @@ impl Device {
         let [behind, unshared_behind] = (counters.behind_other_queues)
             .each_ref()
             .map(|tally| tally.read());
+        let unshared_long_waits = (counters.unshared_long_waits)
+            .each_ref()
+            .map(|count| count.load(Ordering::Relaxed));
         let not_inline =
             |why: NotInline| counters.passes_not_inline[why.index()].load(Ordering::Relaxed);
         let actions = |action: ActionsRefused| {
@@ -8642,6 +8679,10 @@ impl Device {
             unshared_command_buffers_behind_other_queues_over_16ms: unshared_behind[1],
             unshared_command_buffers_behind_other_queues_over_33ms: unshared_behind[2],
             unshared_wait_behind_other_queues_longest_nanos: unshared_behind[3],
+            unshared_waits_over_16ms_batches_ahead: unshared_long_waits[0],
+            unshared_waits_over_16ms_most_batches_ahead: unshared_long_waits[1],
+            unshared_waits_over_16ms_longest_runs_nanos: unshared_long_waits[2],
+            unshared_waits_over_16ms_behind_one_long_run: unshared_long_waits[3],
             queue_switch_checks_run: counters.queue_switch_checks_run.load(Ordering::Relaxed),
             queue_switch_checks_recalled: counters
                 .queue_switch_checks_recalled
