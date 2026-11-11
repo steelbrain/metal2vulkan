@@ -385,13 +385,13 @@ fn a_whole_written_device_base_is_read_back_by_the_gpu() {
 /// The cost of a comparison's reads of `n` blocks of a base in the device's memory that both
 /// sides changed, each read by the host against all read back through one copy on the staging
 /// queue, for `n` from 8 to 4096, each the median of three first merges back of fresh blocks of
-/// a 64 MiB copy, every other block (`COPIED-READ-BACK`); and 64 and 651 after three seconds of
-/// the device idle, once each: what sets `copied.rs`'s `READ_BACK_BLOCKS`. Ignored: run it in
+/// a 128 MiB copy, every other block (`COPIED-READ-BACK`); and 16, 64 and 651 after three seconds
+/// of the device idle, once each: what sets `copied.rs`'s `READ_BACK_BLOCKS`. Ignored: run it in
 /// release with `--ignored --nocapture`.
 #[test]
 #[ignore = "a release-mode benchmark"]
 fn copied_read_back_bench() {
-    const BYTES: usize = 64 << 20;
+    const BYTES: usize = 128 << 20;
     let Some(device) = device() else {
         return;
     };
@@ -445,7 +445,7 @@ fn copied_read_back_bench() {
             host[1], back[1],
         );
     }
-    for n in [64, 651] {
+    for n in [16, 64, 651] {
         std::thread::sleep(Duration::from_secs(3));
         let host = merge(n, false, &mut pages, &mut copy);
         std::thread::sleep(Duration::from_secs(3));
