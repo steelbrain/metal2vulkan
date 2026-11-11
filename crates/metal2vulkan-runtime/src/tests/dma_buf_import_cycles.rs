@@ -18,6 +18,10 @@
 //!   dedicated import of a dma-buf of its own pages; read by one GPU copy, waited for, released.
 //!   Where the texture is a shadow (the device's check did not pass for such pages) the line says
 //!   so.
+//! - **freed once the device is idle**: as one import, its copy waited for, then the device
+//!   waited idle (each queue the runtime submits to, `vkQueueWaitIdle` under the queue's lock, and
+//!   its staging queue's last submission), then released: the test holds the buffer through the
+//!   wait, so the import's `vkFreeMemory` follows it.
 //! - **unused**: as one import, released with no GPU use.
 //! - **freed while other work runs**: as one import, its copy waited for, then released while a
 //!   command buffer of other work (copies between two private buffers) is scheduled on the same
@@ -368,6 +372,41 @@ fn dma_buf_cycles_one_import() {
         let command_buffer = queue.command_buffer().unwrap();
         copy_out(&command_buffer, &buffer, out);
         run(&command_buffer);
+        assert!(
+            read(out, LENGTH) == counting(FILE as usize, 7)[..LENGTH as usize],
+            "{TEST}: the copy of the pages"
+        );
+        drop(buffer);
+        false
+    });
+}
+
+/// Wait until the device is idle: each queue the runtime submits to (`vkQueueWaitIdle` under the
+/// queue's lock, as the device's teardown waits, `DeviceShared::queues_idle`), and its staging
+/// queue's last submission.
+fn device_idle(device: &Device) {
+    let shared = device.shared();
+    let raw = shared.vk();
+    for slot in shared.queues.iter() {
+        // SAFETY: the device's queue, used under its lock.
+        (slot.with(|queue| unsafe { raw.queue_wait_idle(queue) })).unwrap();
+    }
+    if let Some((_, value)) = device.staging_wait() {
+        device.wait_staging(value).unwrap();
+    }
+}
+
+/// A buffer over one dma-buf import, read by one GPU copy, waited for, then the device waited
+/// idle, then released: its import's `vkFreeMemory` after the wait, as the test holds the buffer
+/// through it.
+#[test]
+fn dma_buf_cycles_freed_once_the_device_is_idle() {
+    buffer_cycles("freed once the device is idle", |queue, buffer, out| {
+        let command_buffer = queue.command_buffer().unwrap();
+        copy_out(&command_buffer, &buffer, out);
+        run(&command_buffer);
+        drop(command_buffer);
+        device_idle(queue.device());
         assert!(
             read(out, LENGTH) == counting(FILE as usize, 7)[..LENGTH as usize],
             "{TEST}: the copy of the pages"
