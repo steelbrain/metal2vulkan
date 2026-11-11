@@ -9,20 +9,21 @@
 //! METAL2VULKAN_LOG_MEMORY=1 cargo run --release -p metal2vulkan-runtime --example private_bandwidth
 //! ```
 //!
-//! Each sequence runs on a device of its own (the last one's dropped first), each pair made, filled
-//! once with zero by a blit, then run [`PASSES`] times; the last [`TIMED`] are timed. It prints one
-//! line a pair:
+//! Each sequence runs on a device of its own (the last one's dropped first), each pair made after
+//! the device idled for [`PAUSE`], filled once with zero by a blit, then run [`PASSES`] times in
+//! each of [`ROUNDS`] rounds back to back; the last [`TIMED`] of a round are timed. It prints one
+//! line a round:
 //!
 //! ```text
-//! BANDWIDTH <sequence> <pair> wall <GB/s> gpu <GB/s> made: <memory counts> <the device>
+//! BANDWIDTH <sequence> <pair> round <n> wall <GB/s> gpu <GB/s> made: <memory counts> <the device>
 //! ```
 //!
 //! GB/s is read plus written over the median command buffer: `wall` from commit to its wait's end,
-//! `gpu` from its GPU start and end times. A `PASSES` line after it gives each timed command
-//! buffer's two times in milliseconds, `wall/gpu`, and a `COUNTS` line every `WorkCounts` field
-//! the first timed pass and the last one moved. The memory counts are those the two buffers' making
-//! moved: `vkAllocateMemory` and `vkBindBufferMemory` calls, live dedicated blocks, live empty
-//! blocks, overflows into system memory. With `METAL2VULKAN_LOG_MEMORY=1` the memory log names
+//! `gpu` from its GPU start and end times. A `PASSES` line after it gives each command buffer's
+//! commit time since the Unix epoch and its two times, in milliseconds (`at:wall/gpu`), and
+//! `COUNTS` lines every `WorkCounts` field the first timed pass and the last one moved. The memory
+//! counts are those the two buffers' making moved: `vkAllocateMemory` and `vkBindBufferMemory`
+//! calls, live dedicated blocks, live empty blocks, overflows into system memory. With `METAL2VULKAN_LOG_MEMORY=1` the memory log names
 //! the block and memory type each buffer took.
 //!
 //! The kernel is `scale_and_offset` of the owned fixture (`common::library`), with a scale of 1:
@@ -36,7 +37,7 @@ use metal2vulkan_runtime::{
     WorkCounts,
 };
 use std::ptr::NonNull;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The bytes of each buffer.
 const BYTES: u64 = 256 << 20;
@@ -46,6 +47,10 @@ const COUNT: u64 = BYTES / 4;
 const PASSES: usize = 10;
 /// The last of them timed.
 const TIMED: usize = 8;
+/// The rounds of [`PASSES`] a pair runs, back to back.
+const ROUNDS: usize = 2;
+/// The device's idle time before each pair is made: as long as a guest's stages wait.
+const PAUSE: Duration = Duration::from_secs(3);
 /// The first pinned address, and the distance between a pair's two pins: past every range the
 /// runtime picks for two 256 MiB buffers at the space's start.
 const PIN_BASE: u64 = 1 << 40;
@@ -122,11 +127,10 @@ impl Drop for Pages {
 }
 
 /// The sequences, each on a device of its own: a pair first in a device, and after pairs of each
-/// storage mode went, the pause between two pairs' making and the last one's release.
-const SEQUENCES: [(&str, Duration, &[Pair]); 6] = [
+/// storage mode went.
+const SEQUENCES: [(&str, &[Pair]); 6] = [
     (
         "first",
-        Duration::ZERO,
         &[
             Pair(StorageMode::Private, Made::New, 0),
             Pair(StorageMode::Private, Made::Descriptor, 0),
@@ -135,7 +139,6 @@ const SEQUENCES: [(&str, Duration, &[Pair]); 6] = [
     ),
     (
         "after-managed",
-        Duration::ZERO,
         &[
             Pair(StorageMode::Managed, Made::New, 0),
             Pair(StorageMode::Private, Made::New, 0),
@@ -144,7 +147,6 @@ const SEQUENCES: [(&str, Duration, &[Pair]); 6] = [
     ),
     (
         "after-shared",
-        Duration::ZERO,
         &[
             Pair(StorageMode::Shared, Made::New, 0),
             Pair(StorageMode::Private, Made::New, 0),
@@ -153,7 +155,6 @@ const SEQUENCES: [(&str, Duration, &[Pair]); 6] = [
     ),
     (
         "shared-managed-private",
-        Duration::ZERO,
         &[
             Pair(StorageMode::Shared, Made::Pinned, 0),
             Pair(StorageMode::Managed, Made::Pinned, 0),
@@ -164,7 +165,6 @@ const SEQUENCES: [(&str, Duration, &[Pair]); 6] = [
     // no-copy calls pass it, then `Private` ones at its addresses, of its plain options.
     (
         "no-copy-then-private",
-        Duration::ZERO,
         &[
             Pair(StorageMode::Shared, Made::NoCopy, BIT_20),
             Pair(StorageMode::Managed, Made::NoCopy, BIT_20),
@@ -173,11 +173,9 @@ const SEQUENCES: [(&str, Duration, &[Pair]); 6] = [
         ],
     ),
     // As a guest's Metal buffers come: `Shared` ones over its pages, `Managed` ones with their CPU
-    // copies over its pages beside them, then `Private` ones at its addresses, each pair released
-    // and three seconds waited before the next.
+    // copies over its pages beside them, then `Private` ones at its addresses.
     (
         "guest-order",
-        Duration::from_secs(3),
         &[
             Pair(StorageMode::Shared, Made::NoCopy, 0),
             Pair(StorageMode::Managed, Made::Beside, 0),
@@ -272,14 +270,15 @@ fn changed(before: &WorkCounts, after: &WorkCounts) -> String {
     lines.join(" ")
 }
 
-/// One command buffer of the kernel from `input` to `output`: its wall time from commit to its
-/// wait's end and its GPU time, in seconds.
+/// One command buffer of the kernel from `input` to `output`: its commit's time since the Unix
+/// epoch, in milliseconds, and its wall time from commit to its wait's end and its GPU time, in
+/// seconds.
 fn pass(
     queue: &CommandQueue,
     state: &ComputePipelineState,
     input: &Buffer,
     output: &Buffer,
-) -> common::Result<(f64, f64)> {
+) -> common::Result<(u128, f64, f64)> {
     let command_buffer = queue.command_buffer()?;
     let mut encoder = command_buffer.compute_command_encoder()?;
     encoder.set_compute_pipeline_state(state)?;
@@ -288,11 +287,12 @@ fn pass(
     encoder.set_bytes(&1.0f32.to_le_bytes(), 2)?;
     encoder.dispatch_threads(Size::new(COUNT, 1, 1), Size::new(256, 1, 1))?;
     encoder.end_encoding()?;
+    let at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let start = Instant::now();
     common::run(&command_buffer)?;
     let wall = start.elapsed().as_secs_f64();
     let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
-    Ok((wall, gpu))
+    Ok((at, wall, gpu))
 }
 
 /// The floats at the start of an output the check reads.
@@ -347,43 +347,42 @@ fn run_pair(
     blit.fill_buffer(&output, 0..BYTES, 0)?;
     blit.end_encoding()?;
     common::run(&command_buffer)?;
-    let (mut walls, mut gpus) = (Vec::new(), Vec::new());
-    let mut counts = Vec::new();
-    for index in 0..PASSES {
-        let before = device.work_counts();
-        let (wall, gpu) = pass(queue, state, &input, &output)?;
-        if index >= PASSES - TIMED {
-            walls.push(wall);
-            gpus.push(gpu);
+    for round in 0..ROUNDS {
+        let (mut walls, mut gpus, mut passes) = (Vec::new(), Vec::new(), Vec::new());
+        let mut counts = Vec::new();
+        for index in 0..PASSES {
+            let before = device.work_counts();
+            let (at, wall, gpu) = pass(queue, state, &input, &output)?;
+            passes.push(format!("{at}:{:.2}/{:.2}", wall * 1e3, gpu * 1e3));
+            if index >= PASSES - TIMED {
+                walls.push(wall);
+                gpus.push(gpu);
+            }
+            if index == PASSES - TIMED || index == PASSES - 1 {
+                counts.push((index, changed(&before, &device.work_counts())));
+            }
         }
-        if index == PASSES - TIMED || index == PASSES - 1 {
-            counts.push((index, changed(&before, &device.work_counts())));
+        check(device, queue, &output, &pair)?;
+        let name = pair.name();
+        for (index, moved) in counts {
+            println!("COUNTS {sequence} {name} round {round} pass {index}: {moved}");
         }
+        println!(
+            "BANDWIDTH {sequence} {name} round {round} wall {:.1} gpu {:.1} made: {made} {}",
+            rate(walls),
+            rate(gpus),
+            device.name()
+        );
+        println!(
+            "PASSES {sequence} {name} round {round} at-ms:wall/gpu-ms: {}",
+            passes.join(" ")
+        );
     }
-    check(device, queue, &output, &pair)?;
-    for (index, moved) in counts {
-        println!("COUNTS {sequence} {} pass {index}: {moved}", pair.name());
-    }
-    let passes: Vec<String> = (walls.iter().zip(&gpus))
-        .map(|(wall, gpu)| format!("{:.2}/{:.2}", wall * 1e3, gpu * 1e3))
-        .collect();
-    println!(
-        "BANDWIDTH {sequence} {} wall {:.1} gpu {:.1} made: {made} {}",
-        pair.name(),
-        rate(walls),
-        rate(gpus),
-        device.name()
-    );
-    println!(
-        "PASSES {sequence} {} wall/gpu ms: {}",
-        pair.name(),
-        passes.join(" ")
-    );
     Ok(())
 }
 
 fn main() -> common::Result<()> {
-    for (sequence, pause, pairs) in SEQUENCES {
+    for (sequence, pairs) in SEQUENCES {
         // A device of its own: the last sequence's went with its last handle.
         let device = Device::system_default()?;
         let unified = device.properties().has_unified_memory;
@@ -396,10 +395,8 @@ fn main() -> common::Result<()> {
         let state = device
             .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())?;
         let queue = device.new_command_queue()?;
-        for (at, &pair) in pairs.iter().enumerate() {
-            if at > 0 {
-                std::thread::sleep(pause);
-            }
+        for &pair in pairs {
+            std::thread::sleep(PAUSE);
             run_pair(&device, (&queue, &state), sequence, pair)?;
         }
     }
