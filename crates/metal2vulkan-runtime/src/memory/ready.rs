@@ -362,16 +362,6 @@ impl Readying {
         lock(&self.shared.state).will_hold(least)
     }
 
-    /// The bytes of each of its blocks made and not yet added, being made, and still to make.
-    pub(super) fn held(&self) -> Vec<u64> {
-        let state = lock(&self.shared.state);
-        let made = state.made.iter().map(|made| made.block.size);
-        (made
-            .chain(state.making)
-            .chain(state.to_make.iter().copied()))
-        .collect()
-    }
-
     /// The bytes of each of its blocks made and not yet added, for the crate's device tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(super) fn made(&self) -> Vec<u64> {
@@ -379,11 +369,13 @@ impl Readying {
         state.made.iter().map(|made| made.block.size).collect()
     }
 
-    /// What it holds against its heap's budget of kept empty blocks: the bytes of [`held`].
-    ///
-    /// [`held`]: Self::held
+    /// What it holds against its heap's budget of kept empty blocks: the bytes of its blocks made
+    /// and not yet added, being made, and still to make. Summed under its lock, no list of them
+    /// made: every creation call that keeps room in its pool asks it (`Memory::keep_ahead`).
     pub(super) fn outstanding_bytes(&self) -> u64 {
-        self.held().iter().sum()
+        let state = lock(&self.shared.state);
+        let made: u64 = state.made.iter().map(|made| made.block.size).sum();
+        made + state.making.unwrap_or(0) + state.to_make.iter().sum::<u64>()
     }
 
     /// Its smallest block made and not yet added of `least` bytes or more, taken.

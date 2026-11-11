@@ -2713,16 +2713,15 @@ impl Memory {
     }
 
     /// The block `pool`, its blocks of `bytes`, lacks of the one it keeps made ahead
-    /// (`memory/ready.rs`), `held` the bytes of each block made, being made and still to make:
+    /// (`memory/ready.rs`), `held` the bytes of the blocks made, being made and still to make:
     /// counted in bytes together with its room ([`Pool::room`]), one where those held and its
     /// room come to less than a block. So a block just taken from them, which leaves the pool a
     /// whole block of room, is made again as soon as a placement takes any of that room, not only
     /// once the pool lacks room for a whole block: the room left then is less than the next
     /// creation calls' placements may take before the making ends (a 31.6 MiB texture after a
     /// 64 MiB block was taken).
-    fn lacking(&mut self, pool: (Holds, u32), bytes: u64, held: &[u64]) -> Vec<u64> {
-        let have: u64 = held.iter().sum();
-        match self.pool(pool.0, pool.1).room().saturating_add(have) < bytes {
+    fn lacking(&mut self, pool: (Holds, u32), bytes: u64, held: u64) -> Vec<u64> {
+        match self.pool(pool.0, pool.1).room().saturating_add(held) < bytes {
             true => vec![bytes],
             false => Vec::new(),
         }
@@ -2743,11 +2742,8 @@ impl Memory {
     /// [`lacking`](Self::lacking)): one it lacks made after the blocks its thread still makes, or
     /// on a new thread, once a burst of the device's queue uses ended.
     fn keep_ahead(&mut self, pool: (Holds, u32), bytes: u64) {
-        let held = match self.readying_at(pool) {
-            Some(at) => self.readying[at].held(),
-            None => Vec::new(),
-        };
-        let lacking = self.lacking(pool, bytes, &held);
+        let held = (self.readying_at(pool)).map_or(0, |at| self.readying[at].outstanding_bytes());
+        let lacking = self.lacking(pool, bytes, held);
         if lacking.is_empty() {
             return;
         }
