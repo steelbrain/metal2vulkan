@@ -395,6 +395,8 @@ mod dma_buf_imports;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod dont_care_stores;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod dont_care_unstored;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod draw_bases;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod draw_changes;
