@@ -3,10 +3,10 @@
 
 use crate::in_place::DriverIdentity;
 use crate::submit_check::{
-    decode, encode, merge_clear, merge_tried, merge_try, merge_verdict, record_name, tax_clear,
-    tax_holds, tax_tried, tax_try, tax_verdict, tried, Measured, SubmitChecks, Timed, Verdict,
-    MERGE_FAILS_CLEAR, MERGE_HOLDS_CLEAR, MERGE_RATIO, MERGE_REPEATS, ROUNDS, TAX_FLOOR,
-    TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
+    apart_floor, decode, encode, merge_clear, merge_tried, merge_try, merge_verdict, record_name,
+    tax_clear, tax_holds, tax_tried, tax_try, tax_verdict, tried, Measured, SubmitChecks, Timed,
+    Verdict, MERGED, MERGE_FAILS_CLEAR, MERGE_HOLDS_CLEAR, MERGE_RATIO, MERGE_REPEATS, ROUNDS,
+    TAX_FLOOR, TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
 };
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
@@ -146,13 +146,54 @@ fn a_try_answers_only_where_its_halves_agree() {
         (29_000, 31_000),
     ]);
     assert_eq!(tax_try(&half_slow).verdict, None);
-    let apart = vec![35_000; ROUNDS];
+    let apart = vec![[8_750; MERGED]; ROUNDS];
     let mut merged = vec![13_000; ROUNDS];
     assert_eq!(merge_try(&merged, &apart).verdict, Some(Verdict::Holds));
     merged[1..ROUNDS / 2].fill(34_000);
     assert_eq!(merge_try(&merged, &apart).verdict, Some(Verdict::Holds));
     merged[..ROUNDS / 2].fill(34_000);
     assert_eq!(merge_try(&merged, &apart).verdict, None);
+}
+
+/// A driver that does not merge (the quiet M3 Max's floors: 4.5 us in one call of four against
+/// 1.15 us a call apart), its rounds under load that lengthened one call of each round apart, a
+/// different one round after round, and every round of the one call but one in each half: the
+/// least of the rounds' sums of the calls apart took that load in every round and answered a
+/// merge, as 145 of 15,181 devices on the M3 Max did beside loops of the device tests; the sum of
+/// each call's floor ([`apart_floor`]) takes none of it, and the try answers `Fails`.
+#[test]
+fn load_on_one_call_of_each_round_apart_answers_no_merge() {
+    const LOAD: i64 = 15_000;
+    let mut merged = vec![4_500 + LOAD; ROUNDS];
+    merged[0] = 4_500;
+    merged[ROUNDS / 2] = 4_500;
+    let apart: Vec<[i64; MERGED]> = (0..ROUNDS)
+        .map(|round| std::array::from_fn(|at| 1_150 + LOAD * i64::from(at == round % MERGED)))
+        .collect();
+    let sums: Vec<i64> = apart.iter().map(|calls| calls.iter().sum()).collect();
+    let (first, second) = sums.split_at(ROUNDS / 2);
+    let least = |sums: &[i64]| *sums.iter().min().unwrap();
+    for half in [first, second] {
+        assert_eq!(
+            merge_verdict(4_500, least(half)),
+            Verdict::Holds,
+            "the least of the sums answers a merge"
+        );
+    }
+    assert_eq!(apart_floor(&apart), 4_600);
+    assert_eq!(
+        merge_try(&merged, &apart),
+        Timed {
+            verdict: Some(Verdict::Fails),
+            floors: (4_500, 4_600),
+        }
+    );
+    // A driver that merges (the Radeon 780M's floors) under the same load still answers `Holds`.
+    let merging: Vec<[i64; MERGED]> = (0..ROUNDS)
+        .map(|round| std::array::from_fn(|at| 9_325 + LOAD * i64::from(at == round % MERGED)))
+        .collect();
+    let merged = vec![13_200; ROUNDS];
+    assert_eq!(merge_try(&merged, &merging).verdict, Some(Verdict::Holds));
 }
 
 /// The import tax's phases that hold the imports run one after another, so a try makes and

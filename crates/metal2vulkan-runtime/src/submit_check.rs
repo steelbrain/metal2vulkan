@@ -9,7 +9,9 @@
 //! - **Merge.** [`ROUNDS`] rounds of each of two forms, alternating, each of [`MERGED`] empty
 //!   command buffers on the device's first `VkQueue`: one `vkQueueSubmit` of [`MERGED`]
 //!   `VkSubmitInfo`s, the last with a fence, against [`MERGED`] calls of one each, the last with
-//!   the fence; the time inside the calls. A driver whose one call's floor is at most
+//!   the fence; the time inside each call. The calls apart's floor is the sum of each call's own
+//!   ([`apart_floor`]: the least of the first calls of the rounds, plus that of the second...). A
+//!   driver whose one call's floor is at most
 //!   [`MERGE_RATIO`] of the calls' apart in both halves of the rounds merges them (`Holds`), and
 //!   one whose floor passes it in both does not (`Fails`): Mesa's common queue does
 //!   (`vulkan/runtime/vk_queue.c`, `vk_queue_submits_merge`: "Don't merge if there are signals in
@@ -91,7 +93,17 @@
 //!   that load ([`merge_clear`]: a `Holds` at most [`MERGE_HOLDS_CLEAR`] of the calls apart, a
 //!   `Fails` at least [`MERGE_FAILS_CLEAR`]) and each of [`MERGE_REPEATS`] tries more answers it
 //!   so ([`merge_tried`]); short of that it answers for the device's life, unrecorded, and the
-//!   next device measures again.
+//!   next device measures again. Those `Holds` on the M3 Max came from floors that were each the
+//!   least of a form's rounds, inside one call for the one call of the infos and inside
+//!   [`MERGED`] for the calls apart: load that lengthened any one call of a round lengthened its
+//!   sum, so each round of the calls apart took a hit about [`MERGED`] times as often, and their
+//!   floor rose where the one call's stayed, which reads as a merge. On an adopted MoltenVK
+//!   device, whose queues are not relayed, a `Holds` for its life groups its batches
+//!   (`command_buffer/group.rs`) on a driver that runs each `VkSubmitInfo` as a Metal command
+//!   buffer of its own. So each call apart has a floor of its own, over as many rounds as the
+//!   one call's, and the form's floor is their sum ([`apart_floor`]): each floor is the least of
+//!   as many calls, equally exposed to the load, and a hit to one call of each round, whichever,
+//!   moves none.
 //! - **Its verdicts** are `Pending` until it answers, and the device takes the form a driver
 //!   without each answer takes: every batch its own call, its long buffers placed and cleared as
 //!   ever, every pointer import kept. `Unchecked` where a check could not run (no
@@ -562,17 +574,30 @@ pub(crate) struct Timed {
 }
 
 /// One merge try's answer from its rounds' times, in nanoseconds, of one call of the infos and
-/// of the calls apart: each half of the rounds compares the two forms' floors ([`merge_verdict`]).
-pub(crate) fn merge_try(merged: &[i64], apart: &[i64]) -> Timed {
+/// of each of the calls apart: each half of the rounds compares the two forms' floors
+/// ([`merge_verdict`]), the calls apart's the sum of each call's own ([`apart_floor`]).
+pub(crate) fn merge_try(merged: &[i64], apart: &[[i64; MERGED]]) -> Timed {
     let (merged_first, merged_second) = merged.split_at(merged.len() / 2);
     let (apart_first, apart_second) = apart.split_at(apart.len() / 2);
     Timed {
         verdict: agree(
-            merge_verdict(floor(merged_first), floor(apart_first)),
-            merge_verdict(floor(merged_second), floor(apart_second)),
+            merge_verdict(floor(merged_first), apart_floor(apart_first)),
+            merge_verdict(floor(merged_second), apart_floor(apart_second)),
         ),
-        floors: (floor(merged), floor(apart)),
+        floors: (floor(merged), apart_floor(apart)),
     }
+}
+
+/// The floor of the calls apart over `rounds`: the sum of each call's floor, the least of the
+/// call at its place in every round (the first, the second... the last, with the fence). Each
+/// call so has as many tries to come out clear of the load beside the check as the one call of
+/// the infos, and load that lengthens one of the calls of every round (a different one in each)
+/// moves no floor, where the least of the rounds' sums took that load in every round (the module
+/// docs, "Load beside it").
+pub(crate) fn apart_floor(rounds: &[[i64; MERGED]]) -> i64 {
+    (0..MERGED)
+        .map(|at| (rounds.iter()).map(|calls| calls[at]).min().unwrap_or(0))
+        .sum()
 }
 
 /// One import tax try's answer from its phases' submission times, in nanoseconds, those
@@ -607,8 +632,9 @@ fn floor(times: &[i64]) -> i64 {
 /// The version of what the checks measure, of what earns a record and of how it is named and
 /// framed: a change to any bumps it, and a record of another version is never read (one of 3 may
 /// hold an import tax `Holds` short of [`TAX_MARGIN`], one of 5 a merge verdict of one loaded
-/// try, one of 6 three verdicts).
-pub(crate) const CHECK_VERSION: u32 = 7;
+/// try, one of 6 three verdicts, one of 7 a merge verdict from the least of the calls apart's
+/// sums rather than [`apart_floor`]).
+pub(crate) const CHECK_VERSION: u32 = 8;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -1214,13 +1240,13 @@ fn merge(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
             if !parts.goes_on() {
                 return None;
             }
-            let Some(nanos) = objects.submit_round(parts, together)? else {
+            let Some(calls) = objects.submit_round(parts, together)? else {
                 return Some(None);
             };
             if round >= WARM {
                 match together {
-                    true => merged.push(nanos),
-                    false => apart.push(nanos),
+                    true => merged.push(calls.iter().sum()),
+                    false => apart.push(std::array::from_fn(|at| calls[at])),
                 }
             }
         }
@@ -1516,15 +1542,15 @@ impl Objects {
     }
 
     /// Submit `infos` to the device's first `VkQueue`, the last signalling the fence, in one call
-    /// where `together`, else one call each, and wait for the fence: the nanoseconds inside the
-    /// calls. `Some(None)` where a call was refused or the wait failed; `None` where the process
-    /// is exiting or the device was lost (the module docs, "Its thread").
+    /// where `together`, else one call each, and wait for the fence: the nanoseconds inside each
+    /// call, in order. `Some(None)` where a call was refused or the wait failed; `None` where the
+    /// process is exiting or the device was lost (the module docs, "Its thread").
     fn submit(
         &self,
         parts: &Parts,
         buffers: &[vk::CommandBuffer],
         together: bool,
-    ) -> Option<Option<i64>> {
+    ) -> Option<Option<Vec<i64>>> {
         let calls = match together {
             true => 1,
             false => buffers.len(),
@@ -1546,7 +1572,7 @@ impl Objects {
             let uses = parts.queue_uses();
             let use_queue = |queue: vk::Queue| unsafe {
                 let held = parts.loader_word.held();
-                let mut spent = Duration::ZERO;
+                let mut spent = Vec::with_capacity(infos.len());
                 let last = infos.len() - 1;
                 let calls: Vec<(&[vk::SubmitInfo<'_>], vk::Fence)> = match together {
                     true => vec![(&infos[..], self.fence)],
@@ -1565,7 +1591,7 @@ impl Objects {
                 for (infos, fence) in calls {
                     let start = Instant::now();
                     submitted = raw.queue_submit(queue, infos, fence);
-                    spent += start.elapsed();
+                    spent.push(i64::try_from(start.elapsed().as_nanos()).unwrap_or(i64::MAX));
                     if submitted.is_err() {
                         break;
                     }
@@ -1603,17 +1629,19 @@ impl Objects {
         if !waited? {
             return Some(None);
         }
-        Some(Some(i64::try_from(nanos.as_nanos()).unwrap_or(i64::MAX)))
+        Some(Some(nanos))
     }
 
-    /// One merge round ([`submit`](Self::submit) of every empty command buffer).
-    fn submit_round(&self, parts: &Parts, together: bool) -> Option<Option<i64>> {
+    /// One merge round ([`submit`](Self::submit) of every empty command buffer): the time inside
+    /// each call, one where `together`, else [`MERGED`].
+    fn submit_round(&self, parts: &Parts, together: bool) -> Option<Option<Vec<i64>>> {
         self.submit(parts, &self.empty, together)
     }
 
-    /// One submission of one empty command buffer with the fence.
+    /// One submission of one empty command buffer with the fence: the time inside the call.
     fn submit_one(&self, parts: &Parts) -> Option<Option<i64>> {
-        self.submit(parts, &self.empty[..1], true)
+        let times = self.submit(parts, &self.empty[..1], true)?;
+        Some(times.map(|times| times.iter().sum()))
     }
 
     /// Wait for the fence, a slice at a time, each a section, then reset it: whether it was
