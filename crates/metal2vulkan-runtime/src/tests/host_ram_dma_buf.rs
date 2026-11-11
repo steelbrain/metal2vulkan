@@ -13,12 +13,12 @@
 //!   the RAM's first page from the source, released at once, and lists the RAM where it takes it;
 //!   the chunk an object lies in is imported as one dma-buf of it, the source asked once for the
 //!   chunk's whole span at the RAM's addresses, with a granule of its length
-//!   (`WorkCounts::host_ram_dma_buf_imports`), or, where the driver refuses that dma-buf (NVIDIA's
-//!   refuses a udmabuf), by its pointer, the refusal counted (`host_ram_dma_buf_imports_failed`)
+//!   (`WorkCounts::host_ram_dma_buf_imports`), or, where the driver refuses that dma-buf, by its
+//!   pointer, the refusal counted (`host_ram_dma_buf_imports_failed`)
 //!   and remembered: the next chunk, and a copy's list of runs, goes to its pointer, the sources
 //!   unasked, and a RAM used after it is not listed; a refusal of the use's own page leaves the
 //!   RAM its 64 MiB chunks, each to its pointer (shown on every device through a stand-in for the
-//!   driver's refusal, and on NVIDIA's by the driver itself); where the tax is not held (forced
+//!   driver's refusal); where the tax is not held (forced
 //!   so), the pointer is
 //!   imported where the driver takes it, the source never asked, and the dma-buf only where it
 //!   refuses it. Either way the buffer is bound in the chunk (`chunk_bound_buffers_made`), reports
@@ -515,7 +515,7 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
         outside.is_empty(),
         "the source was asked at the view's addresses: {outside:?}"
     );
-    // A driver's refusal is the device's to remember (NVIDIA's of every udmabuf): a buffer over
+    // A driver's refusal is the device's to remember: a buffer over
     // the RAM's second chunk takes that chunk's pointer, the source unasked and nothing counted
     // again.
     let third = (refused + probe_refused == 1).then(|| {
@@ -550,8 +550,8 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
     }
 }
 
-/// Where the driver refuses a chunk's dma-buf (a test's stand-in for NVIDIA's refusal of every
-/// udmabuf, `Memory::import_refusal`, on every device that imports dma-bufs, set once the use
+/// Where the driver refuses a chunk's dma-buf (a test's stand-in for a driver's refusal of every
+/// dma-buf, `Memory::import_refusal`, on every device that imports dma-bufs, set once the use
 /// began; the import tax forced held), the device remembers the refusal: the RAM's first chunk
 /// asks the source, its dma-buf is refused and counted
 /// (`WorkCounts::host_ram_dma_buf_imports_failed`), and the chunk takes its pointer; the second
@@ -559,7 +559,7 @@ fn where_the_import_tax_holds_a_chunk_takes_its_dma_buf_first() {
 /// used after it is not listed, its source unasked (`Device::ram_takes_dma_bufs`). On a device
 /// that refuses pointers to shared memory (RADV's) neither chunk is imported, and the source is
 /// still asked once. Where the driver itself refused the dma-buf of the page the use asked it
-/// with (NVIDIA's), the RAM is not listed and nothing more to test.
+/// with, the RAM is not listed and nothing more to test.
 #[test]
 fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer() {
     let scratch = Scratch::new();
@@ -648,7 +648,7 @@ fn a_driver_s_refused_dma_buf_sends_the_device_s_later_chunks_to_their_pointer()
 }
 
 /// Where the driver refuses the dma-buf of the page a use of a RAM asks it with (a test's
-/// stand-in for NVIDIA's refusal of every udmabuf, `Memory::import_refusal`, set before the use;
+/// stand-in for a driver's refusal of every dma-buf, `Memory::import_refusal`, set before the use;
 /// the import tax forced held), the RAM is not listed: it keeps its 64 MiB chunks
 /// (`Device::host_ram_chunks`), the source asked once, for the RAM's first page, the refusal
 /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`); and a buffer over its first chunk
@@ -717,15 +717,15 @@ fn a_driver_s_refusal_as_the_use_begins_keeps_the_ram_s_chunks_short() {
     drop((made, used, ram));
 }
 
-/// Where the driver refuses a dma-buf of a RAM's sources (a test's stand-in for NVIDIA's refusal of
-/// every udmabuf, `Memory::import_refusal`, set once the use of a listed RAM began; the import tax
-/// forced held), a copy over a chunk not imported asks the source of run lists once: its list's
+/// Where the driver refuses a dma-buf of a RAM's sources (a test's stand-in for a driver's refusal
+/// of every dma-buf, `Memory::import_refusal`, set once the use of a listed RAM began; the import
+/// tax forced held), a copy over a chunk not imported asks the source of run lists once: its list's
 /// dma-buf is refused and remembered, and the copy takes its chunk's pointer, the source of
 /// dma-bufs unasked; a copy over the other chunk after it asks neither source. On a device whose
-/// barriers do not order blits through two imports of the same pages
-/// ([`runs_alone`]: ANV's), or that imports no dma-buf, or whose driver refused the use's own
-/// question (NVIDIA's), copies take no lists: nothing to test. The copies' bytes are checked where
-/// the device imports pointers to shared memory.
+/// barriers do not order blits through two imports of the same pages ([`runs_alone`]: ANV's), or
+/// that imports no dma-buf, or whose driver refused the use's own question, copies take no lists:
+/// nothing to test. The copies' bytes are checked where the device imports pointers to shared
+/// memory.
 #[test]
 fn a_driver_s_refused_dma_buf_sends_copies_past_the_source_of_run_lists() {
     let scratch = Scratch::new();
@@ -1001,7 +1001,7 @@ fn udmabuf_size_limit() -> u64 {
 /// over it asked (or, where the device's barriers do not order blits through two imports of the
 /// same pages, by that object: [`runs_alone`]), and, the RAM made too long for the memory the
 /// device's imports count against, released once idle (the module docs); elsewhere (a device
-/// that imports no dma-buf, or whose driver refused the page's: NVIDIA's) it keeps its 64 MiB
+/// that imports no dma-buf, or whose driver refused the page's) it keeps its 64 MiB
 /// chunks. The device's thread runs (no hold), so the release is its.
 #[test]
 fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_once_idle() {
@@ -1259,8 +1259,8 @@ fn where_each_listed_import_costs_a_submission_the_ram_is_long_chunks_released_o
 /// and the RAM fits in the memory the device's imports count against (made four times the RAM by
 /// the test), its chunks, once imported, stay imported past their objects and the idle window:
 /// none is released, and the next object over each lies in its chunk with no import made for it.
-/// Elsewhere (a device that imports no dma-buf, or whose driver refused the page's: NVIDIA's)
-/// the RAM is not listed: nothing more to test.
+/// Elsewhere (a device that imports no dma-buf, or whose driver refused the page's) the RAM is
+/// not listed: nothing more to test.
 #[test]
 fn where_the_ram_fits_its_listed_chunks_stay_imported_once_idle() {
     let scratch = Scratch::new();

@@ -1,7 +1,7 @@
 use crate::memory::{
-    candidates, fd_buffer_types, host_cached, host_cached_placement, host_image_types,
-    host_incoherent, kept_budget, overflow_candidates, MemoryClass, Pool, KEPT_EMPTY_BLOCKS,
-    KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
+    candidates, dma_buf_candidates, fd_buffer_types, host_cached, host_cached_placement,
+    host_image_types, host_incoherent, kept_budget, overflow_candidates, MemoryClass, Pool,
+    KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -53,6 +53,46 @@ fn classes_pick_their_memory_types_best_first() {
     assert_eq!(
         candidates(&types, all, MemoryClass::Memoryless, false),
         [0, 2]
+    );
+}
+
+/// An import of a dma-buf tries its class's types first, then every other type the dma-buf and
+/// what is bound in it take that the runtime may allocate and that is neither protected nor
+/// lazily allocated, in Vulkan's order: with an RTX 3090's types (NVIDIA's 620.70.06), whose
+/// udmabuf lists types 0 and 4, a `Shared` import tries type 4, the class's, then type 0, system
+/// memory with no property flag, which that driver imports a udmabuf as.
+#[test]
+fn dma_buf_imports_try_the_class_s_types_then_the_dma_buf_s_others() {
+    use vk::MemoryPropertyFlags as P;
+    let host = P::HOST_VISIBLE | P::HOST_COHERENT;
+    let nvidia = [
+        ty(P::empty()),
+        ty(P::DEVICE_LOCAL),
+        ty(P::DEVICE_LOCAL),
+        ty(host),
+        ty(host | P::HOST_CACHED),
+        ty(P::DEVICE_LOCAL | host),
+    ];
+    assert_eq!(
+        dma_buf_candidates(&nvidia, 0x11, MemoryClass::Shared, false),
+        [4, 0]
+    );
+    // The class's own order first, the others after it in Vulkan's.
+    assert_eq!(
+        dma_buf_candidates(&nvidia, 0x3f, MemoryClass::Shared, false),
+        [4, 5, 3, 0, 1, 2]
+    );
+    assert!(dma_buf_candidates(&nvidia, 0, MemoryClass::Shared, false).is_empty());
+    // Never a protected, lazily allocated or AMD device-coherent type.
+    let others = [
+        ty(P::PROTECTED),
+        ty(P::DEVICE_LOCAL | P::LAZILY_ALLOCATED),
+        ty(P::DEVICE_LOCAL | P::DEVICE_COHERENT_AMD),
+        ty(host),
+    ];
+    assert_eq!(
+        dma_buf_candidates(&others, 0b1111, MemoryClass::Shared, false),
+        [3]
     );
 }
 

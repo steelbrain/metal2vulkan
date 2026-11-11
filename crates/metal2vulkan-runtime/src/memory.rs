@@ -847,6 +847,39 @@ pub(super) fn overflow_candidates(
     ranked.into_iter().map(|(_, index)| index).collect()
 }
 
+/// The memory types an import of a dma-buf takes among `types` (the bits of `allowed`, the types
+/// both the dma-buf and what is bound in it take), in the order they are tried: the [`candidates`]
+/// of `class` first, then every other type of `allowed` the runtime may allocate ([`allocatable`])
+/// that is neither protected nor lazily allocated, in Vulkan's order. The runtime never maps such
+/// an import (the CPU reaches the pages through the caller's own mapping of them), so a type the
+/// host does not map serves it as well, where the driver imports the dma-buf as no type of the
+/// class: NVIDIA's 620.70.06 on an RTX 3090 lists a udmabuf's types as its type 0 (system memory,
+/// no property flag) and its type 4 (host-visible, coherent and cached), answers
+/// `ERROR_OUT_OF_DEVICE_MEMORY` for the import into type 4, with a dedicated allocation or
+/// without, and imports it as type 0.
+pub(super) fn dma_buf_candidates(
+    types: &[vk::MemoryType],
+    allowed: u32,
+    class: MemoryClass,
+    unified: bool,
+) -> Vec<u32> {
+    use vk::MemoryPropertyFlags as P;
+    let mut ranked = candidates(types, allowed, class, unified);
+    let others: Vec<u32> = (types.iter().enumerate())
+        .filter(|&(index, ty)| {
+            allowed & (1 << index) != 0
+                && allocatable(ty.property_flags)
+                && !ty
+                    .property_flags
+                    .intersects(P::PROTECTED | P::LAZILY_ALLOCATED)
+                && !ranked.contains(&(index as u32))
+        })
+        .map(|(index, _)| index as u32)
+        .collect();
+    ranked.extend(others);
+    ranked
+}
+
 /// Where a device's memory may lie ([`Memory::type_view`]), for the crate's device tests.
 #[cfg(all(test, any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards))))]
 pub(super) struct TypeView {
@@ -2010,9 +2043,9 @@ pub(super) struct Memory {
     /// the lock released where the driver's import runs.
     #[cfg(test)]
     pub(crate) import_hold: Option<Arc<dyn Fn() + Send + Sync>>,
-    /// A test's stand-in for a driver that refuses every dma-buf import with this answer, as
-    /// NVIDIA's 615.71.09 refuses a udmabuf ([`import_dma_buf`]): answered where the driver's
-    /// import would run, the driver never asked.
+    /// A test's stand-in for a driver that refuses every dma-buf import with this answer
+    /// ([`import_dma_buf`]): answered where the driver's import would run, the driver never
+    /// asked.
     #[cfg(test)]
     pub(crate) import_refusal: Option<vk::Result>,
     /// A test's stand-in for every heap's budget of kept empty blocks ([`Memory::kept_budget`]).
@@ -4009,9 +4042,10 @@ fn image_types(
     })
 }
 
-/// Import the dma-buf `fd`, `size` bytes, as memory of `memory`'s best type of `class` among
-/// `allowed` (the types both the dma-buf and what is bound in it take): the memory and its type,
-/// the caller's to free (`dma_buf.rs`'s `DmaBufPages`), in no block and never mapped. Allocated
+/// Import the dma-buf `fd`, `size` bytes, as memory of `memory`'s best type among `allowed` (the
+/// types both the dma-buf and what is bound in it take) for `class`, those of the class first and
+/// then the dma-buf's others ([`dma_buf_candidates`]): the memory and its type, the caller's to
+/// free (`dma_buf.rs`'s `DmaBufPages`), in no block and never mapped. Allocated
 /// with the device-address flag where the device enables `bufferDeviceAddress`, as every block of
 /// the runtime's is (`BlockMaker::make_as`), and for `image` as its dedicated allocation (`size`
 /// its requirements'): every import of one dma-buf, a buffer's and its textures' images', and the
@@ -4022,8 +4056,7 @@ fn image_types(
 /// A driver's import of a dma-buf maps its pages for the device, which may take long (a consumer
 /// measured no-copy buffers over dma-bufs on the Radeon 780M taking 120 to 273 ms to make), and
 /// the device's other placements, imports and frees, all under that lock, would wait for it.
-/// Refused when no type of `class` is among `allowed`, else with the failure of the last type
-/// tried.
+/// Refused when no type is among `allowed`, else with the failure of the last type tried.
 ///
 /// Each attempt hands the driver a **clone** of `fd`, never `fd` itself, and never closes a
 /// clone it has handed over. Vulkan takes a descriptor's ownership only on a successful
@@ -4050,7 +4083,7 @@ pub(super) fn import_dma_buf(
     let (types, device_address) = {
         let memory = lock(memory);
         (
-            candidates(&memory.types, allowed, class, memory.unified),
+            dma_buf_candidates(&memory.types, allowed, class, memory.unified),
             memory.device_address,
         )
     };

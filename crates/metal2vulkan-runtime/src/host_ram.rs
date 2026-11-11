@@ -22,8 +22,8 @@
 //!   A `VkBuffer` bound in such a chunk is made for dma-bufs; a texture over it is an image over a
 //!   dma-buf of its own pages from the same source (`dma_buf.rs`), asked at the RAM's addresses
 //!   of them (`Placement::dma_buf_address`). Counted: `WorkCounts::host_ram_dma_buf_imports`,
-//!   and `host_ram_dma_buf_imports_failed` where the driver refused the dma-buf (NVIDIA's refuses
-//!   a udmabuf), which then takes the pointer. The driver's refusal is remembered for the device's
+//!   and `host_ram_dma_buf_imports_failed` where the driver refused the dma-buf, which then takes
+//!   the pointer. The driver's refusal is remembered for the device's
 //!   life: no later chunk, run or copy's list asks a source.
 //! - **Few listed imports** ([`Plan::listed`]). Where the device imports dma-bufs, the RAM has a
 //!   source and the device's held imports add to the cost of every submission (RADV lists every
@@ -33,8 +33,7 @@
 //!   us) or the device imports no pointer (it enables no `VK_EXT_external_memory_host`, so each
 //!   import of the RAM is a dma-buf), and the driver takes the source's dma-bufs (asked as the
 //!   use begins, by an import of the RAM's first page as one, the source asked for that page,
-//!   released at once; not where it refused one before: NVIDIA's refuses a udmabuf, and its RAMs
-//!   keep their 64 MiB chunks), a
+//!   released at once; not where it refused one before, whose RAMs keep their 64 MiB chunks), a
 //!   chunk is as long as [`LONGEST_LISTED_CHUNK`] (512 MiB), one dma-buf of the source
 //!   ([`HostRam::with_largest_dma_buf`]) and the device's `maxMemoryAllocationSize`,
 //!   `maxBufferSize` and `maxStorageBufferRange` take, in whole [`CHUNK_BYTES`]
@@ -2105,8 +2104,8 @@ impl Device {
     /// dma-bufs (RADV), each listed import costs every submission, so the RAM is imported in fewer,
     /// longer chunks instead, once the driver took one: the call asks the RAM's source for its
     /// first host page and imports that dma-buf, released at once (a refusal counted in
-    /// `WorkCounts::host_ram_dma_buf_imports_failed`, and remembered for the device's life:
-    /// NVIDIA's refuses a udmabuf, and its RAMs keep their 64 MiB chunks). The chunks are as long
+    /// `WorkCounts::host_ram_dma_buf_imports_failed`, and remembered for the device's life, its
+    /// RAMs then keeping their 64 MiB chunks). The chunks are as long
     /// as one dma-buf of its source holds ([`HostRam::with_largest_dma_buf`]) and the device's
     /// `maxMemoryAllocationSize`, `maxBufferSize` and `maxStorageBufferRange` take, in whole
     /// 64 MiB, and never past 512 MiB (a chunk's import makes every page of it resident, those the
@@ -2477,8 +2476,8 @@ impl Device {
     /// pointer first elsewhere, the dma-buf where the pointer is refused; the dma-buf alone where
     /// the device imports no pointer. Counted:
     /// `WorkCounts::host_ram_dma_buf_imports` (each import of a dma-buf),
-    /// `host_ram_dma_buf_imports_failed` (each that failed: NVIDIA's driver refuses a udmabuf,
-    /// which the device then remembers, and no later span asks the source) and
+    /// `host_ram_dma_buf_imports_failed` (each that failed: a driver's refusal the device then
+    /// remembers, and no later span asks the source) and
     /// `host_ram_pointer_imports_failed` (each pointer import that failed).
     ///
     /// # Safety

@@ -550,8 +550,7 @@ impl Device {
     /// [`Device::import_from_source`] is, where the device makes no such buffer, the source fails
     /// or answers more than one chunk, or the driver refuses the dma-buf: each of the last three
     /// counted (`WorkCounts::host_ram_dma_buf_imports_failed`). The driver's refusal, its own
-    /// answer to the dma-buf the source made (NVIDIA's 615.71.09 refuses every udmabuf as out of
-    /// device memory, and lets go of the descriptor it was handed: `memory.rs`'s
+    /// answer to the dma-buf the source made in every memory type the import tries (`memory.rs`'s
     /// `import_dma_buf`), is remembered for the device's life (`RamSource::refuse_dma_bufs`):
     /// from then on every span is refused here unasked and uncounted, and takes its pointer, so
     /// that no later chunk pays a dma-buf, a failed import and a descriptor for nothing. A
@@ -1683,8 +1682,8 @@ impl Device {
                 return refuse(DmaBufRefusal::Import, why);
             }
         };
-        // The pages' type (host-visible and coherent, as every class of theirs is), dedicated to
-        // the image at its requirements' size exactly
+        // The pages' type (the class's, or another the dma-buf takes: `memory.rs`'s
+        // `dma_buf_candidates`), dedicated to the image at its requirements' size exactly
         // (`VUID-VkMemoryDedicatedAllocateInfo-image-01433`), within the dma-buf's pages; or, for
         // an image bound at its texels' offset, the dma-buf's pages whole, dedicated to nothing.
         let allowed = (types & (1 << texels.type_index), MemoryClass::Shared);

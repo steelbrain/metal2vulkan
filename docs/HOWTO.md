@@ -649,7 +649,7 @@ submission, can give the device the guest's RAM once instead:
   exactly those pages (a `udmabuf` of the `memfd` behind them; `udmabuf`'s default `size_limit_mb`
   is 64, a chunk's size). A texture over an object bound in such a chunk is an image over a dma-buf
   of its own pages, as over an object's own dma-buf imports, asked of the same source. A source that
-  fails, or a dma-buf the driver refuses (NVIDIA's refuses a udmabuf), leaves the chunk to its
+  fails, or a dma-buf the driver refuses, leaves the chunk to its
   pointer (`WorkCounts::host_ram_dma_buf_imports_failed`); a driver's refusal is remembered for the
   device's life, and its later chunks (and the copies' lists below) take their pointer without
   asking the source.
