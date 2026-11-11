@@ -833,6 +833,16 @@ let exported = frame.export_memory_dma_buf()?;
 // plane at `exported.offset` plus its offset in the frame, DRM_FORMAT_MOD_LINEAR.
 ```
 
+An opaque file descriptor (`export_memory_fd`) is imported the same way: CUDA's
+`cuImportExternalMemory` takes `exported.fd` with `exported.allocation_size` as its size, flagged
+`cudaExternalMemoryDedicated` only where `exported.dedicated`, and `cuExternalMemoryGetMappedBuffer`
+takes `exported.offset` and `exported.length`; another `VkDevice` imports it with that size and
+`exported.memory_type_index`, dedicated to a buffer of the same parameters only where
+`exported.dedicated`, and binds that buffer at `exported.offset`. The buffer is its own dedicated
+allocation only where the device exports such memory only from one or requires one; elsewhere it
+lies at `exported.offset` in a block that other exportable buffers share, and the import reaches the
+whole block, of which the other API reads and writes the buffer's bytes alone.
+
 A texture over a plane of the frame is an image of the exported memory in place, made for the
 export's handle type (`VkExternalMemoryImageCreateInfo`, as Vulkan requires of an image bound in
 exported memory), where all of these hold for the plane's linear image (its format, extent and
