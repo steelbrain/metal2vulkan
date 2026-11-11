@@ -25,6 +25,13 @@
 //! - **freed by its own use's completion**: as one import, released while the command buffer
 //!   that copies it (after the other work) is scheduled and not yet complete: the command buffer
 //!   holds it, and its completion frees it.
+//! - **released while idle and imported again**: a no-copy buffer made once over one import, each
+//!   cycle read by one GPU copy, waited for, then its import released while idle
+//!   (`Device::release_idle_host_imports`, as the device's residency thread releases it once its
+//!   idle window passed, `host_residency.rs`): its `VkBuffer` destroyed and its memory freed, the
+//!   dma-buf's descriptor kept open, from which the next cycle's copy imports the same dma-buf
+//!   again. The buffer goes after the last cycle. Where the device keeps the import (it kept no
+//!   descriptor), the line says so.
 //!
 //! Each prints one line (`DMA-BUF-CYCLES`): the way, the cycles, and the imports the device made
 //! and freed of buffers' pages (`WorkCounts::dma_buf_imports`, and `dma_buf_memories_live`'s
@@ -33,7 +40,8 @@
 //! the last command buffer's completion let go of it, and that its way ran (the imports and
 //! buffers it counts, and for the last two the command buffer still in flight at the release).
 //!
-//! The release order, in the runtime: a buffer's `VkBuffer` is destroyed first (a sparse one's
+//! The release order, in the runtime (the last way apart: there the runtime frees the memory and
+//! keeps the dma-buf open, and imports it again later): a buffer's `VkBuffer` is destroyed first (a sparse one's
 //! after a wait for its binding, where no submission waited for it; its bindings are not unbound
 //! first, Vulkan ends them with the buffer), then its imports are freed (`vkFreeMemory`), each in
 //! turn, as the last holder of its pages lets go of them (`dma_buf.rs`'s `DmaBufPages`); an
@@ -546,6 +554,83 @@ fn dma_buf_cycles_image_import() {
         "{TEST}: {WAY}: an image's import a texture in place, no buffer's"
     );
     drop(buffer);
+    drop(out);
+    drop(queue);
+    drop(device);
+    drop(pages);
+}
+
+/// A buffer over one dma-buf import made once, each cycle read by one GPU copy, waited for, then
+/// its import released while idle, the dma-buf's descriptor kept, which the next cycle's copy
+/// imports again.
+#[test]
+fn dma_buf_cycles_released_while_idle_and_imported_again() {
+    const WAY: &str = "released while idle and imported again";
+    const SETTLE: Duration = Duration::from_secs(20);
+    let scratch = Scratch::new();
+    let Some(device) = cycling_device(&scratch, WAY) else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    let out = device
+        .new_buffer(LENGTH, ResourceOptions::shared())
+        .unwrap();
+    let pages = Pages::new();
+    let asked = Arc::default();
+    let cycles = cycles();
+    let before = Imports::of(&device.work_counts());
+    let counts = device.work_counts();
+    let (released_before, again_before) =
+        (counts.host_imports_released, counts.host_imports_reimported);
+    let buffer = pages.buffer(&device, false, &asked);
+    let mut kept = false;
+    for _ in 0..cycles {
+        let command_buffer = queue.command_buffer().unwrap();
+        copy_out(&command_buffer, &buffer, &out);
+        run(&command_buffer);
+        assert!(
+            read(&out, LENGTH) == counting(FILE as usize, 7)[..LENGTH as usize],
+            "{TEST}: {WAY}: the copy of the pages"
+        );
+        // The command buffer lets go of the import at its completion, on the device's handler
+        // thread.
+        let start = Instant::now();
+        while device.release_idle_host_imports() == 0 {
+            if start.elapsed() > SETTLE {
+                kept = true;
+                break;
+            }
+            std::thread::yield_now();
+        }
+        if kept {
+            break;
+        }
+    }
+    drop(buffer);
+    let after = settled(&device, before);
+    let counts = device.work_counts();
+    let what = match kept {
+        true => "the device keeps the import (no descriptor kept, or not releasable): not run"
+            .to_owned(),
+        false => format!(
+            "imports released while idle {}, imported again {}",
+            counts.host_imports_released - released_before,
+            counts.host_imports_reimported - again_before,
+        ),
+    };
+    report(&device, WAY, cycles, (before, after), &what);
+    if !kept {
+        assert_eq!(
+            counts.host_imports_released - released_before,
+            cycles as u64,
+            "{TEST}: {WAY}: a release a cycle"
+        );
+        assert_eq!(
+            counts.host_imports_reimported - again_before,
+            cycles as u64 - 1,
+            "{TEST}: {WAY}: an import again a cycle but the first"
+        );
+    }
     drop(out);
     drop(queue);
     drop(device);
