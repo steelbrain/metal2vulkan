@@ -1084,11 +1084,8 @@ driver's. Each is open work.
   more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a `Private`
   `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, and one of 2048x2048 in 16 MiB and
   64 KiB, at an alignment of 64 KiB), so a block of images holds three such 2048x2048 textures
-  there, not four (`tests::blocks_ahead`). Blocks of images a sixteenth larger (68 MiB), which
-  hold four, dropped more frames in a macOS guest's page scroll on a Hawk Point 780M; with
-  64 MiB blocks the same build matched the build before the larger blocks, over 4 + 4 boots in
-  ABBA BAAB order: 8 rAF gaps of 100 ms or more against 8, 22 of 50 ms or more against 24, and
-  29.0 presents a second against 29.3. On a Radeon 780M (RADV PHOENIX, Mesa
+  there, not four (`tests::blocks_ahead`): one block size for every pool, at the cost of a
+  fourth such texture's block. On a Radeon 780M (RADV PHOENIX, Mesa
   26.2.6), the kernel's page pools emptied before each run (through debugfs, the measurement's
   method alone: with freed pages in them a block of 16 to 64 MiB took 0.1 to 0.3 ms), a `Private`
   texture made every 16.7 ms beside a command buffer committed about every millisecond
