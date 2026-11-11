@@ -45,14 +45,15 @@ use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::DevicePolicy;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
-    CompareFunction, PixelFormat, PrimitiveType, StencilOperation, TextureUsage,
+    CompareFunction, PixelFormat, PrimitiveType, StencilOperation, TextureType, TextureUsage,
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, CommandQueue, Degradation, DepthStencilState, Device, Library,
+    BlitOption, ClearColor, CommandQueue, Degradation, DepthStencilState, Device, Error, Library,
     LoadAction, Origin, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction, Texture, Viewport,
+    RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction, Texture,
+    TextureDescriptor, Viewport,
 };
 use std::collections::BTreeMap;
 
@@ -194,8 +195,9 @@ impl Lane {
         }
     }
 
-    /// `dcs_rect` and `dcs_flag` into a `BGRA8Unorm` color and `arrangement`'s depth and stencil.
-    fn pipeline(&self, arrangement: Arrangement) -> RenderPipelineState {
+    /// `dcs_rect` and `dcs_flag` into a `BGRA8Unorm` color and `arrangement`'s depth and stencil,
+    /// at `samples`.
+    fn pipeline(&self, arrangement: Arrangement, samples: u32) -> RenderPipelineState {
         let function = |name: &str| {
             StageSource::Function(
                 self.library
@@ -210,6 +212,7 @@ impl Lane {
             Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm));
         descriptor.depth_format = Some(arrangement.depth);
         descriptor.stencil_format = arrangement.stencil;
+        descriptor.raster_sample_count = samples;
         self.device
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
             .unwrap()
@@ -459,7 +462,7 @@ fn separate_depth_and_stencil_loaded_dont_care_and_stored_hold_metal_s_tiles() {
     let lane = Lane::new(false, &messages, &cache);
     let mut failures = Vec::new();
     for arrangement in [SEPARATE, COMBINED] {
-        let pipeline = lane.pipeline(arrangement);
+        let pipeline = lane.pipeline(arrangement, 1);
         let writes = lane.state(CompareFunction::Always, true, true);
         let textures = lane.textures(arrangement, 128);
         let rects = RECTS
@@ -585,7 +588,7 @@ fn a_dont_care_load_s_clear_depth_outside_0_1_or_nan_is_clamped_or_announced() {
     ];
     let mut failures = Vec::new();
     for arrangement in [D32, D16, COMBINED, SEPARATE] {
-        let pipeline = lane.pipeline(arrangement);
+        let pipeline = lane.pipeline(arrangement, 1);
         let writes = lane.state(CompareFunction::Always, true, arrangement.stencil.is_some());
         let textures = lane.textures(arrangement, side);
         for (name, value) in values {
@@ -720,7 +723,7 @@ fn a_dont_care_load_s_depth16_clear_announces_the_device_s_rounding() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let lane = Lane::new(true, &messages, &cache);
-    let pipeline = lane.pipeline(D16);
+    let pipeline = lane.pipeline(D16, 1);
     let untested = lane.state(CompareFunction::Always, false, false);
     let textures = lane.textures(D16, 64);
     for (clear, rounds) in [(0.0, false), (0.5, true)] {
@@ -747,6 +750,145 @@ fn a_dont_care_load_s_depth16_clear_announces_the_device_s_rounding() {
             "a `DontCare` load's clear to {clear}: `unorm-depth-rounding` announced or not"
         );
     }
+    drop(lane);
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A private multisampled (4 samples) texture of `pf` and `side` a pass renders and shaders read.
+fn multisampled(device: &Device, pf: PixelFormat, side: u64) -> Result<Texture, Error> {
+    let mut descriptor = TextureDescriptor::texture_2d(pf, side, side, false);
+    descriptor.texture_type = TextureType::Type2DMultisample;
+    descriptor.sample_count = 4;
+    descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::private();
+    device.new_texture(&descriptor)
+}
+
+/// A multisampled (4 samples) separate `Depth32Float` loaded `DontCare`, stored and resolved
+/// (`StoreAndMultisampleResolve`, sample 0) into a single-sampled texture, beside a `Stencil8`
+/// loaded and stored, under a writing draw over a 4x4 rectangle at (40, 8) of 64x64 targets. The
+/// runtime copies such a depth into the scratch image and clears the tiles the draw reaches where
+/// colour copies move it, and where it copies the aspect by draws (lavapipe, MoltenVK) it clears
+/// it over the render area, announced. Either way the resolved depth holds the draw's depth in
+/// the rectangle and the clear value in the rest of the 32x16 tile the rectangle lies in, and
+/// everywhere else one value: the poison (its texels) or the clear value. Which form ran is
+/// printed; `dont-care-load-tiles` is announced. A device that refuses the textures or the pass
+/// is printed and passes.
+#[test]
+fn a_multisampled_separate_depth_loaded_dont_care_and_stored_holds_one_of_the_two_answers() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let lane = Lane::new(false, &messages, &cache);
+    let side = 64;
+    let made = (
+        multisampled(&lane.device, PixelFormat::BGRA8Unorm, side),
+        multisampled(&lane.device, PixelFormat::Depth32Float, side),
+        multisampled(&lane.device, PixelFormat::Stencil8, side),
+    );
+    let (color, depth, stencil) = match made {
+        (Ok(color), Ok(depth), Ok(stencil)) => (color, depth, stencil),
+        (Err(Error::Unsupported(u)), _, _)
+        | (_, Err(Error::Unsupported(u)), _)
+        | (_, _, Err(Error::Unsupported(u))) => {
+            eprintln!(
+                "DONT-CARE-MULTISAMPLED on {}: textures refused: {u:?}",
+                lane.device.name()
+            );
+            return;
+        }
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+            panic!("new_texture: {error}")
+        }
+    };
+    let resolved = texture(
+        &lane.device,
+        PixelFormat::Depth32Float,
+        (side, side),
+        (TextureUsage::RENDER_TARGET, ResourceOptions::private()),
+    );
+    let textures = Textures {
+        arrangement: SEPARATE,
+        color,
+        depth,
+        stencil: Some(stencil),
+    };
+    let pipeline = lane.pipeline(SEPARATE, 4);
+    let writes = lane.state(CompareFunction::Always, true, true);
+    let command_buffer = textures.poison(&lane);
+    let mut descriptor = textures.pass(
+        LoadAction::Load,
+        [
+            (
+                LoadAction::DontCare,
+                StoreAction::StoreAndMultisampleResolve,
+            ),
+            (LoadAction::Load, StoreAction::Store),
+        ],
+        (CLEAR_DEPTH, CLEAR_STENCIL),
+    );
+    descriptor.depth_attachment.resolve_texture = Some(resolved.clone());
+    let mut encoder = match command_buffer.render_command_encoder(&descriptor) {
+        Ok(encoder) => encoder,
+        Err(Error::Unsupported(u)) => {
+            eprintln!(
+                "DONT-CARE-MULTISAMPLED on {}: pass refused: {u:?}",
+                lane.device.name()
+            );
+            return;
+        }
+        Err(error) => panic!("render_command_encoder: {error}"),
+    };
+    let rect = [40, 8, 44, 12];
+    draw(
+        &mut encoder,
+        (&pipeline, &writes),
+        side,
+        MARK_DEPTH,
+        Some(rect),
+    );
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    completed(&command_buffer);
+    let words: Vec<u32> = lane
+        .read(&resolved, 4, BlitOption::None)
+        .chunks(4)
+        .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+        .collect();
+    let (poison, clear, mark) = (
+        SEPARATE.word(POISON_DEPTH),
+        SEPARATE.word(CLEAR_DEPTH),
+        SEPARATE.drawn_word(MARK_DEPTH),
+    );
+    // The rest: the texels outside the rectangle's 32x16 tile, all one answer.
+    let rest = |(x, y): (u32, u32)| !((32..64).contains(&x) && (0..16).contains(&y));
+    let form = words[(side * side - 1) as usize];
+    let wrong = mismatches(&words, side, |(x, y)| {
+        match (
+            expected_tiles(Some(rect), true, (form, clear, mark), (x, y)),
+            rest((x, y)),
+        ) {
+            (_, true) => form,
+            (value, false) => value,
+        }
+    });
+    eprintln!(
+        "DONT-CARE-MULTISAMPLED on {}: texels outside the rectangle's tile hold {}; texels not \
+         that answer (expected, found) {wrong:x?}",
+        lane.device.name(),
+        match form {
+            f if f == poison => "the poison (copied in, its tiles cleared)",
+            f if f == clear => "the clear value (cleared over the render area)",
+            _ => "neither",
+        }
+    );
+    assert!(
+        (form == poison || form == clear) && wrong.is_empty(),
+        "the resolved depth: {form:x} outside the rectangle's tile, {wrong:x?}"
+    );
+    assert!(
+        announced(&messages, Degradation::DontCareLoadTiles),
+        "a writing draw over a `DontCare` load announced no `dont-care-load-tiles`"
+    );
     drop(lane);
     layer_reported_nothing_at_all(&messages);
 }
