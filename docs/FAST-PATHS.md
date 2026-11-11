@@ -121,13 +121,27 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   shares with them (`unshared_hold.rs`; a device with one graphics queue: RADV, ANV, lavapipe):
   another queue's batch goes there only while less than 2 ms of their expected GPU work is in
   flight on it, its queue's expected run being the host's view of its recent batches' runs, raised
-  at once by a longer one and halved toward a shorter one. So a compositor's command buffer waits
-  behind about one batch of an application's, as Metal runs it beside the application's work, and
-  the next batch goes in before the one ahead ends. `unshared_isolation =
-  UnsharedIsolationPolicy::Off` submits every ready batch at once: peak rate with no hold, the
-  unshared queue's command buffer behind every batch submitted before it. Not an accuracy choice:
-  it trades the other queues' submission ahead for the unshared queue's wait. The runtime's choice:
-  no pipeline differs.
+  at once by a longer one and halved toward a shorter one; a batch of a queue with no run seen yet
+  holds the others back until it completes. So a compositor's command buffer waits behind about
+  one batch of an application's, as Metal runs it beside the application's work, and the next
+  batch goes in before the one ahead ends. `unshared_isolation = UnsharedIsolationPolicy::Off`
+  submits every ready batch at once: peak rate with no hold, the unshared queue's command buffer
+  behind every batch submitted before it. Not an accuracy choice: it trades the other queues'
+  submission ahead for the unshared queue's wait. The runtime's choice: no pipeline differs.
+  Measured with the runtime's `queue_share` example (`frames --unshared`: an application keeping
+  three command buffers in flight beside a compositor committing one draw every 16 ms), `Off`
+  against `Bounded`. On the Iris Xe (ANV, Mesa 26.2.6, a quiet host; m3-max-16880, -16885), with
+  30 ms command buffers, the compositor's median wait fell from 75 to 17.5 ms and the application
+  ran 33.2-33.5 command buffers a second under both (the GPU idle 0.12% against 0.15-0.16%); with
+  5 ms ones, from 12.6 to 4.7 ms, at 196.4-198.6 a second under both. On the Radeon 780M (RADV, Mesa 26.2.6;
+  m3-max-16900), with 30 ms ones, the median fell from 71-84 to 18 ms and the worst from 94-114 to
+  35-40 ms, about one command buffer. The cost: no throughput measurable on a quiet host, but the
+  hold leaves 2 ms of slack where `Off` keeps two batches queued, so under the host's CPU load the
+  GPU waits for the scheduler's thread more often: on the Iris at a load of about 10, with 5 ms
+  command buffers, 181.8 a second against 189.3 (the GPU idle 8.9% against 4.5%; m3-max-16885),
+  and on the 780M 192.4 against 203.7 (m3-max-16900). The 780M's rate otherwise follows its
+  command buffers' own GPU time, which moved 4.1-4.8 ms between runs of either value on a host
+  other jobs loaded. The default on every driver with one graphics queue.
 - `pointer_domain`, `handle_domain`, `containment` and `isolation` choose how resources resolve and
   how guests are contained, not an answer of Metal's arithmetic or sampling.
 

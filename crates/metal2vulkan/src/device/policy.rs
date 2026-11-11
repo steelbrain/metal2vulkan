@@ -566,9 +566,11 @@ pub enum UnsharedIsolationPolicy {
     /// unshared queue's command buffer goes in behind about one batch of theirs. A batch's
     /// expected GPU work is its command queue's: the host's view of how long that queue's
     /// recent batches ran on the `VkQueue`, raised at once by a longer one and halved toward a
-    /// shorter one. The next batch is submitted before the one ahead ends, so the GPU is not
-    /// left idle between them; a batch longer than its command queue's recent ones still holds
-    /// the unshared queue for its whole length, as one command buffer is one submission.
+    /// shorter one; while a batch of a command queue with no run seen yet is in flight there, no
+    /// other is submitted until it completes. The next batch is submitted before the one ahead
+    /// ends, so the GPU is not left idle between them where the host's scheduler thread runs in
+    /// time; a batch longer than its command queue's recent ones still holds the unshared queue
+    /// for its whole length, as one command buffer is one submission.
     #[default]
     Bounded,
     /// Every ready batch is submitted at once: an unshared queue's command buffer waits behind

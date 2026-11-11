@@ -261,12 +261,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   submitted there only while less than 2 ms of the other queues' expected GPU work is in flight on
   it; else the scheduler holds it, in its place in the order, until enough completes. A batch's
   expected work is its command queue's: the host's view of how long its recent batches ran, raised
-  at once by a longer one and halved toward a shorter one. The next batch goes in before the one
-  ahead ends, so the GPU is not left idle between them, and the unshared queue's command buffer
-  waits behind about one batch of theirs: the whole of one, however long, as a submission runs to
-  its end. Counted: `WorkCounts::heads_held_for_unshared_isolation`.
-  `unshared_isolation = UnsharedIsolationPolicy::Off` submits every ready batch at once, so the
-  unshared queue's command buffers wait behind every batch submitted before them there.
+  at once by a longer one and halved toward a shorter one; while a batch of a command queue with
+  no run seen yet is in flight, no other goes until it completes. The next batch goes in before
+  the one ahead ends, so the GPU is not left idle between them where the scheduler's thread runs
+  in time, and the unshared queue's command buffer waits behind about one batch of theirs: the
+  whole of one, however long, as a submission runs to its end. Beside an application keeping three
+  30 ms command buffers in flight, a compositor's median wait fell from 75 to 17.5 ms on the Iris
+  Xe and from 71-84 to 18 ms on the Radeon 780M, with no throughput lost on a quiet host; under
+  the host's CPU load the GPU idles more (docs/FAST-PATHS.md has the numbers). Counted:
+  `WorkCounts::heads_held_for_unshared_isolation`. `unshared_isolation =
+  UnsharedIsolationPolicy::Off` submits every ready batch at once, so the unshared queue's command
+  buffers wait behind every batch submitted before them there.
 - **An attachment loaded `DontCare` and not stored, cleared where its driver clears it no slower**
   (`UnstoredDontCarePolicy::Driver`, the default; the runtime's choice, no pipeline differs). Metal's
   draws read zero (a colour) or the pass's clear value (depth, stencil) of such an attachment

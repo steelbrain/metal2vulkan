@@ -41,8 +41,12 @@
 //!   thread, which it wakes.
 //! - **What it costs.** A batch longer than its queue's recent ones still holds the unshared
 //!   queue's command buffer for its whole length: one command buffer's batch is one submission,
-//!   which the GPU runs to its end. Every batch on such a `VkQueue` costs a place in its
-//!   [`Flight`] and a lock of its own at the submission and the completion. Counted:
+//!   which the GPU runs to its end. The next batch goes in about [`BUDGET`] before the one ahead
+//!   ends, where `Off` keeps every ready batch queued, so the GPU waits for the scheduler's thread
+//!   where the host's CPU is loaded: on the Iris Xe at a load of about 10, an application's 5 ms
+//!   command buffers ran 181.8 a second against 189.3 (docs/FAST-PATHS.md); on a quiet host no
+//!   throughput was lost. Every batch on such a `VkQueue` costs a place in its [`Flight`] and a
+//!   lock of its own at the submission and the completion. Counted:
 //!   `WorkCounts::heads_held_for_unshared_isolation` (each look that held a head so).
 
 use std::collections::VecDeque;
