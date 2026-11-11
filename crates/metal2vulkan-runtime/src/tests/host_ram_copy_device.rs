@@ -16,7 +16,9 @@
 //!   the fill's; in one encoder a barrier is recorded between them.
 //! - **A copied backing over the pages** (the import gate refused, the RAM's log given) takes a
 //!   scatter's bytes at the next commit, the log told of them; a gather after its merge back
-//!   reads what the GPU wrote through it.
+//!   reads what the GPU wrote through it. A `Managed` no-copy buffer over exactly such a copy's
+//!   bytes, on a device without unified memory, is two copies, its device copy in device-local
+//!   memory, never the copy.
 //! - **Memory of Metal's private option bit 24 over the pages**, where the system maps no
 //!   read-only view of them: a copy, never bound in the chunk, whose commit after the CPU wrote
 //!   one page compares that page alone (the RAM's log, `copied_copy_in_bytes_skipped`); the GPU's
@@ -264,16 +266,30 @@ fn two_runs() -> RunResolver {
 /// A no-copy buffer of `length` bytes at host address `at`, resolved by `runs`, its import
 /// admitted or refused by its gate as `admit` says.
 fn over_ram(device: &Device, at: u64, length: u64, runs: RunResolver, admit: bool) -> Buffer {
+    over_ram_as(
+        device,
+        (at, length),
+        runs,
+        admit,
+        ResourceOptions::default(),
+    )
+}
+
+/// [`over_ram`] of `options`.
+fn over_ram_as(
+    device: &Device,
+    (at, length): (u64, u64),
+    runs: RunResolver,
+    admit: bool,
+    options: ResourceOptions,
+) -> Buffer {
     let gate: ImportGate = Arc::new(move |_| admit);
     // SAFETY: the RAM's bytes, mapped until its keep-alive goes, after every device let go.
     let memory = unsafe { HostMemory::new(NonNull::new(at as *mut u8).unwrap()) }
         .with_runs(runs)
         .with_import_gate(gate);
     // SAFETY: as above.
-    unsafe {
-        device.new_buffer_with_bytes_no_copy(memory, length, ResourceOptions::default(), None)
-    }
-    .unwrap()
+    unsafe { device.new_buffer_with_bytes_no_copy(memory, length, options, None) }.unwrap()
 }
 
 /// One run, as a list.
@@ -1121,6 +1137,63 @@ fn a_copied_backing_over_the_pages_takes_a_scatter_at_the_next_commit() {
         contents(&out).iter().all(|&byte| byte == 0x3c),
         "the merge back gathered"
     );
+}
+
+/// A `Managed` no-copy buffer over the RAM's pages, made over exactly the bytes of a live `Shared`
+/// one that is a copy of them (the gate refused their import, their chunk not imported), is two
+/// copies on a device without unified memory, as over any pages (`managed_copy.rs`): its device
+/// copy in device-local memory, never the `Shared` buffer's copy, through one run or two, and it
+/// reads the pages' bytes.
+#[test]
+fn a_managed_no_copy_buffer_over_a_copied_run_s_bytes_is_two_copies() {
+    let Some(device) = device() else {
+        return;
+    };
+    if device.properties().has_unified_memory {
+        eprintln!("HOST-RAM-COPY {}: unified memory, one copy", device.name());
+        return;
+    }
+    let (ram, start) = new_ram(None);
+    let _used = device.use_host_ram(&ram).unwrap();
+    let managed = ResourceOptions::new(
+        crate::StorageMode::Managed,
+        crate::CpuCacheMode::DefaultCache,
+        crate::HazardTrackingMode::Default,
+    );
+    let length = 4 * host_page();
+    for (seed, (runs, at)) in [(itself(), 8 * MIB), (two_runs(), 16 * MIB)]
+        .into_iter()
+        .enumerate()
+    {
+        let at = start + at;
+        write_pattern(at..at + length, seed as u64);
+        let copy = over_ram(&device, at, length, Arc::clone(&runs), false);
+        assert_eq!(copy.host_backing(), Some(HostBacking::Copied));
+        let before = device.work_counts();
+        let buffer = over_ram_as(&device, (at, length), runs, false, managed);
+        let made = device.work_counts();
+        eprintln!(
+            "HOST-RAM-COPY over a copied run {seed} {}: {:?}, {} device copies, {} in a copy",
+            device.name(),
+            buffer.host_backing(),
+            made.managed_device_copies - before.managed_device_copies,
+            made.copied_host_buffers_shared - before.copied_host_buffers_shared,
+        );
+        assert_eq!(buffer.host_backing(), Some(HostBacking::DeviceCopy));
+        assert_eq!(made.managed_device_copies - before.managed_device_copies, 1);
+        assert_eq!(
+            made.copied_host_buffers_shared,
+            before.copied_host_buffers_shared
+        );
+        assert_eq!(made.managed_device_copies_in_place, 0);
+        let out = shared(&device, length, |_| 0);
+        blit(&device, |encoder| {
+            encoder
+                .copy_from_buffer_to_buffer(&buffer, 0, &out, 0, length)
+                .unwrap();
+        });
+        assert!(contents(&out) == bytes(at..at + length), "the pages' bytes");
+    }
 }
 
 /// Memory of Metal's private option bit 24 over the RAM's pages, where the system maps no
