@@ -61,11 +61,11 @@ fn the_translators_fragment_stages_state_their_interlocked_writes() {
     }
 }
 
-/// A module of `body` after a header.
+/// A module of `body` after a header: each instruction its opcode, then its operands.
 fn module(body: &[&[u32]]) -> Vec<u32> {
     let mut words = vec![0x0723_0203, 0x0001_0500, 0, 100, 0];
     for instruction in body {
-        words.push(((instruction.len() as u32 + 1) << 16) | instruction[0]);
+        words.push(((instruction.len() as u32) << 16) | instruction[0]);
         words.extend(&instruction[1..]);
     }
     words
