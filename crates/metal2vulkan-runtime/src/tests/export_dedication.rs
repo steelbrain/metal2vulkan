@@ -7,17 +7,17 @@
 //! (`VkMemoryDedicatedRequirements::requiresDedicatedAllocation`), never where the driver only
 //! prefers it (`prefersDedicatedAllocation`).
 //!
-//! For each handle type, the device's answers are asked apart from the runtime and printed
-//! (`EXPORT-DEDICATION`): of a buffer of the runtime's usage and [`LENGTH`] bytes, whether the
-//! handle type is exportable, only so, and preferred or required dedicated; of a linear [`SIDE`]
-//! squared `R8_UNORM` image of a sampled texture's usage made for the handle type, the same. Then
-//! an exportable `Shared` buffer of [`LENGTH`] bytes is made and exported: dedicated exactly where
-//! the buffer's answers require it. A texture over its first bytes, `R8Unorm` rows [`SIDE`] bytes
-//! apart, is asked for once the device's in-place check answered: where the buffer's memory is
-//! shared and
-//! the image's answers neither require a dedicated allocation nor export only so, an image in place
-//! (`TexturePlacement::NotHostPages`), no shadow counted, that reads what the buffer holds. Every
-//! placement, the shadows counted and the check's notes of the class are printed.
+//! For each handle type and each of [`LENGTHS`], the device's answers are asked apart from the
+//! runtime and printed (`EXPORT-DEDICATION`): of a buffer of the runtime's usage and that length,
+//! whether the handle type is exportable, only so, and preferred or required dedicated; of a
+//! linear [`SIDE`] squared `R8_UNORM` image of a sampled texture's usage made for the handle type,
+//! the same. Then an exportable `Shared` buffer of that length is made and exported: dedicated
+//! exactly where the buffer's answers require it. A texture over its first bytes, `R8Unorm` rows
+//! [`SIDE`] bytes apart, is asked for once the device's in-place check answered: where the
+//! buffer's memory is shared and the image's answers neither require a dedicated allocation nor
+//! export only so, an image in place (`TexturePlacement::NotHostPages`), no shadow counted. Each
+//! texture reads what its buffer holds. Every buffer's allocation and placement, the shadows
+//! counted and the check's notes of the class are printed before the test fails on any of them.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
@@ -33,10 +33,12 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 /// The side of the texture, and the bytes of each of its rows.
 const SIDE: u64 = 1024;
 
-/// The exportable buffer's bytes: a 3840 x 2160 NV12 picture's, the consumer's decoded frame. The
-/// driver's preference follows the size: an RTX 3090 (NVIDIA 620.70.06) prefers no dedicated
-/// allocation for an exportable buffer of 1 MiB, and prefers one for the in-place check's of 40 MiB.
-const LENGTH: u64 = 3840 * 2160 * 3 / 2;
+/// The exportable buffers' bytes: a 3840 x 2160 NV12 picture's, the consumer's decoded frame, and
+/// the in-place check's buffer's (`in_place_check.rs`), whose class's verdicts decide every texture
+/// over such memory. The driver's preference follows the size: an RTX 3090 (NVIDIA 620.70.06)
+/// prefers no dedicated allocation for an exportable buffer of the picture's bytes, and prefers one
+/// for the check's 40 MiB.
+const LENGTHS: [u64; 2] = [3840 * 2160 * 3 / 2, crate::in_place_check::BUFFER_BYTES];
 
 /// What a device answers of exporting memory of one handle type from a resource.
 struct Dedication {
@@ -76,9 +78,13 @@ fn handle(export: MemoryExport) -> vk::ExternalMemoryHandleTypeFlags {
     }
 }
 
-/// What `device` answers of a buffer of the runtime's usage, [`LENGTH`] bytes, whose memory
-/// it exports as `handle`: asked, and the buffer made for its requirements and destroyed.
-fn buffer_dedication(device: &Device, handle: vk::ExternalMemoryHandleTypeFlags) -> Dedication {
+/// What `device` answers of a buffer of the runtime's usage, `length` bytes, whose memory it exports
+/// as `handle`: asked, and the buffer made for its requirements and destroyed.
+fn buffer_dedication(
+    device: &Device,
+    handle: vk::ExternalMemoryHandleTypeFlags,
+    length: u64,
+) -> Dedication {
     let shared = device.shared();
     let usage = crate::buffer::usage(shared.device_address);
     // SAFETY: the handles are read while the device lives.
@@ -103,7 +109,7 @@ fn buffer_dedication(device: &Device, handle: vk::ExternalMemoryHandleTypeFlags)
     let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
     let info = shared.sharing().buffer(
         vk::BufferCreateInfo::default()
-            .size(LENGTH)
+            .size(length)
             .usage(usage)
             .push_next(&mut external),
     );
@@ -245,59 +251,78 @@ fn an_exportable_buffer_is_dedicated_only_where_required_and_its_texture_lies_in
     let scratch = Scratch::new("export-dedication");
     let device = device(&scratch.0);
     let name = device.name().to_owned();
+    let mut failures = Vec::new();
     for export in [MemoryExport::OpaqueFd, MemoryExport::DmaBuf] {
-        let descriptor =
-            BufferDescriptor::new(LENGTH, ResourceOptions::shared(), BufferContents::Zero)
-                .with_exported_as(export);
-        let buffer = match device.new_buffer_with_descriptor(descriptor) {
-            Ok(buffer) => buffer,
-            Err(Error::NotImplemented(
-                gap @ (RuntimeGap::ExportableMemory | RuntimeGap::DmaBufExport),
-            )) => {
-                eprintln!("EXPORT-DEDICATION on {name}: {export:?} refused: {gap:?}");
-                continue;
+        for length in LENGTHS {
+            let descriptor =
+                BufferDescriptor::new(length, ResourceOptions::shared(), BufferContents::Zero)
+                    .with_exported_as(export);
+            let buffer = match device.new_buffer_with_descriptor(descriptor) {
+                Ok(buffer) => buffer,
+                Err(Error::NotImplemented(
+                    gap @ (RuntimeGap::ExportableMemory | RuntimeGap::DmaBufExport),
+                )) => {
+                    eprintln!("EXPORT-DEDICATION on {name}: {export:?} refused: {gap:?}");
+                    break;
+                }
+                Err(error) => panic!("{name} {export:?}: {error:?}"),
+            };
+            let at = format!("{export:?} of {length} bytes");
+            // Asked of a device that exports the handle type, which enabled its extensions.
+            let buffer_asked = buffer_dedication(&device, handle(export), length);
+            let image_asked = image_dedication(&device, handle(export));
+            eprintln!(
+                "EXPORT-DEDICATION on {name}: {at}: buffer: {buffer_asked}; linear R8 image: \
+                 {image_asked}"
+            );
+            let exported = match export {
+                MemoryExport::OpaqueFd => buffer.export_memory_fd(),
+                MemoryExport::DmaBuf => buffer.export_memory_dma_buf(),
             }
-            Err(error) => panic!("{name} {export:?}: {error:?}"),
-        };
-        // Asked of a device that exports the handle type, which enabled its extensions.
-        let buffer_asked = buffer_dedication(&device, handle(export));
-        let image_asked = image_dedication(&device, handle(export));
-        eprintln!(
-            "EXPORT-DEDICATION on {name}: {export:?}: buffer: {buffer_asked}; linear R8 image: \
-             {image_asked}"
-        );
-        let exported = match export {
-            MemoryExport::OpaqueFd => buffer.export_memory_fd(),
-            MemoryExport::DmaBuf => buffer.export_memory_dma_buf(),
-        }
-        .unwrap();
-        let bytes: Vec<u8> = (0..SIDE * SIDE).map(byte).collect();
-        // SAFETY: the buffer's mapped bytes, which no command uses now.
-        unsafe {
-            let contents = buffer.contents().unwrap().as_ptr();
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents, bytes.len());
-        }
-        let mut texture_descriptor =
-            TextureDescriptor::texture_2d(PixelFormat::R8Unorm, SIDE, SIDE, false);
-        texture_descriptor.usage = TextureUsage::SHADER_READ;
-        texture_descriptor.resource_options = ResourceOptions::shared();
-        // The first query starts the device's check, which answers in seconds.
-        let asked = buffer
-            .texture_placement(&texture_descriptor, 0, SIDE)
             .unwrap();
-        assert!(device.settle_in_place_checks(WAIT), "the check answered");
-        let placement = buffer
-            .texture_placement(&texture_descriptor, 0, SIDE)
-            .unwrap();
-        let shadows = device.work_counts().shadowed_textures;
-        let texture = buffer.new_texture(&texture_descriptor, 0, SIDE).unwrap();
-        let shadowed = device.work_counts().shadowed_textures - shadows;
-        eprintln!(
-            "EXPORT-DEDICATION on {name}: {export:?}: an allocation of {} bytes, dedicated {}, \
-             type {}; a texture over it: {asked:?} before the check, {placement:?} after, \
-             shadows made {shadowed}",
-            exported.allocation_size, exported.dedicated, exported.memory_type_index
-        );
+            let bytes: Vec<u8> = (0..SIDE * SIDE).map(byte).collect();
+            // SAFETY: the buffer's mapped bytes, which no command uses now.
+            unsafe {
+                let contents = buffer.contents().unwrap().as_ptr();
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents, bytes.len());
+            }
+            let mut texture_descriptor =
+                TextureDescriptor::texture_2d(PixelFormat::R8Unorm, SIDE, SIDE, false);
+            texture_descriptor.usage = TextureUsage::SHADER_READ;
+            texture_descriptor.resource_options = ResourceOptions::shared();
+            // The first query starts the device's check, which answers in seconds.
+            let asked = buffer
+                .texture_placement(&texture_descriptor, 0, SIDE)
+                .unwrap();
+            assert!(device.settle_in_place_checks(WAIT), "the check answered");
+            let placement = buffer
+                .texture_placement(&texture_descriptor, 0, SIDE)
+                .unwrap();
+            let shadows = device.work_counts().shadowed_textures;
+            let texture = buffer.new_texture(&texture_descriptor, 0, SIDE).unwrap();
+            let shadowed = device.work_counts().shadowed_textures - shadows;
+            eprintln!(
+                "EXPORT-DEDICATION on {name}: {at}: an allocation of {} bytes, dedicated {}, \
+                 type {}; a texture over it: {asked:?} before the check, {placement:?} after, \
+                 shadows made {shadowed}",
+                exported.allocation_size, exported.dedicated, exported.memory_type_index
+            );
+            assert!(read(&device, &texture) == bytes, "{at}: the texels");
+            if exported.dedicated != buffer_asked.needed() {
+                failures.push(format!(
+                    "{at}: dedicated {}, where the device requires it {}",
+                    exported.dedicated,
+                    buffer_asked.needed()
+                ));
+            }
+            let in_memory = !exported.dedicated && image_asked.exportable && !image_asked.needed();
+            if in_memory && (placement != TexturePlacement::NotHostPages || shadowed != 0) {
+                failures.push(format!(
+                    "{at}: the texture over its shared memory is {placement:?}, shadows made \
+                     {shadowed}"
+                ));
+            }
+        }
         let class = match export {
             MemoryExport::OpaqueFd => "ExportedFd ",
             MemoryExport::DmaBuf => "ExportedDmaBuf ",
@@ -308,19 +333,6 @@ fn an_exportable_buffer_is_dedicated_only_where_required_and_its_texture_lies_in
         {
             eprintln!("EXPORT-DEDICATION on {name}: the check: {line}");
         }
-        assert!(read(&device, &texture) == bytes, "{export:?}: the texels");
-        assert_eq!(
-            exported.dedicated,
-            buffer_asked.needed(),
-            "{name} {export:?}: a dedicated allocation exactly where the device requires one"
-        );
-        if !exported.dedicated && image_asked.exportable && !image_asked.needed() {
-            assert_eq!(
-                placement,
-                TexturePlacement::NotHostPages,
-                "{name} {export:?}: the texture lies in the buffer's shared memory"
-            );
-            assert_eq!(shadowed, 0, "{name} {export:?}: no shadow");
-        }
     }
+    assert!(failures.is_empty(), "{name}: {failures:#?}");
 }

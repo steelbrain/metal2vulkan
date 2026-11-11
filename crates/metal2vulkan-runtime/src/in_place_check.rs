@@ -450,7 +450,7 @@ impl Shape {
 
 /// The bytes of each class's buffer: past half a pooled block, so that a buffer of the runtime's
 /// own lies in fresh pages (`fresh_pages.rs`), and room for the largest shape's window.
-const BUFFER_BYTES: u64 = 40 << 20;
+pub(crate) const BUFFER_BYTES: u64 = 40 << 20;
 
 /// The bytes of the pooled class's buffer: within half a pooled block, so that it lies in a
 /// block of the runtime's pooled memory as the product's buffers of that class do
