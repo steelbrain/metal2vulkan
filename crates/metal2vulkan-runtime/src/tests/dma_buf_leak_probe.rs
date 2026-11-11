@@ -820,13 +820,36 @@ fn probe(way: &str, plan: Plan) {
         true => 0,
         false => listed.count,
     });
+    // The control: the kernel's list shows a buffer's dma-buf while it is imported, so that a
+    // count of 0 after a round is the kernel's answer, not a name the list never shows.
+    let control = probe.listed().map(|_| {
+        let live = Counts::of(&device.work_counts()).live;
+        let buffer = probe.buffer(&mut Rng::new(probe.knobs.seed, u64::MAX));
+        let imported = probe.listed().unwrap();
+        drop(buffer);
+        while Counts::of(&device.work_counts()).live > live {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let (freed, _) = probe.listed_settled(floor).unwrap();
+        probe.tally.take();
+        assert!(
+            imported.count > floor,
+            "{TEST}: the kernel's list shows no dma-buf of the probe's while one is imported"
+        );
+        (imported, freed)
+    });
     println!(
         "{TEST} on {}: {way}: {:?}; {}-byte pages; the kernel's list {}",
         device.name(),
         probe.knobs,
         host_page(),
-        match probe.listed() {
-            Some(_) => format!("read, {floor} of the probe's kind listed before"),
+        match control {
+            Some((imported, freed)) => format!(
+                "read, {floor} of the probe's kind listed before; the control: one buffer's \
+                 dma-buf listed while imported ({} listed, {} attached to a device), {} after \
+                 its free",
+                imported.count, imported.attached, freed.count
+            ),
             None => format!(
                 "unreadable ({BUFINFO}: run as a user who reads it, or with DMA_BUF_LEAK_SUDO=1 \
                  where sudo asks no password)"
