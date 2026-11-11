@@ -789,12 +789,12 @@ impl BaseBytes {
     }
 
     /// [`BaseBytes::read`] with plain loads, whatever the memory: a benchmark's measure of the
-    /// streaming loads against them.
+    /// streaming loads against them (`tests/copied_base_device.rs`).
     ///
     /// # Safety
     ///
     /// As [`BaseBytes::read`]'s.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) unsafe fn read_plain(&self, offset: usize, into: &mut [u8]) {
         // SAFETY: the caller's; `into` is the caller's own, apart.
         unsafe {
