@@ -381,17 +381,22 @@ pub fn group<G: Gpu, S>(
     }
 }
 
-/// What a call must have made, per call: the group, the count under the name the table prints
-/// (`allocs`, or `rt_<count>_at_call` and `rt_<count>_at_commit` for the runtime's own counts),
-/// and the most a call of it may make. A count a group never moved is not printed, and reads as
-/// zero here, so a row of `0.0` holds a call to making none of that work at all.
+/// What a call may make, per call: the group, the count under the name the table prints
+/// (`allocs`, or `rt_<count>_at_call`, `rt_<count>_at_commit` and `rt_<count>` for the runtime's
+/// own counts), and the most a call of it may make. A count a group never moved is not printed,
+/// and reads as zero here, so a row of `0.0` holds a call to making none of that work at all.
 ///
 /// These are the gate on the cost half. A count is the same under any load and on any host, so a
 /// regression reads "this call now makes two allocations where it made none" and fails the run,
 /// where a 12% change in a time would not. Each row is a fact measured on this M3 Max that the
 /// runtime should not quietly lose: an upper bound, so a call that does *less* work passes and the
-/// row is then tightened.
-const HELD: [(&str, &str, f64); 46] = [
+/// row is then tightened. The bound holds on every device: where a call takes another path there,
+/// the row holds that path's count too, and a count the path does not move reads zero. A `Shared`
+/// texture's image, for one, is made at the call where the device copies its texels on the host
+/// (`texture/host_copy.rs`: the M3 Max), and taken from the parked images the textures of an
+/// earlier window left where it copies them on the staging queue (`texture/staging_copy.rs`:
+/// NVIDIA's copy engine), which makes no image, binds none and starts none on the host.
+const HELD: [(&str, &str, f64); 47] = [
     // A draw records exactly one draw command, at the call, and makes no driver object: the cost
     // it pays there is planning and recording, which is settled work and nothing a driver
     // charges for.
@@ -427,8 +432,10 @@ const HELD: [(&str, &str, f64); 46] = [
     ("heap_texture_256", "rt_vk_image_bindings_at_call", 1.0),
     ("heap_texture_256", "rt_vk_memory_allocations_at_call", 0.0),
     ("heap_texture_256", "allocs", 17.25),
-    // A Shared texture likewise, and it starts its image on the host once.
+    // A Shared texture likewise, and it starts its image on the host once; or it takes one parked
+    // image, made and bound before, where the device stages its copies.
     ("texture_256_shared", "rt_vk_images_made_at_call", 1.0),
+    ("texture_256_shared", "rt_images_recycled_at_call", 1.0),
     ("texture_256_shared", "rt_vk_image_bindings_at_call", 1.0),
     (
         "texture_256_shared",
@@ -487,26 +494,49 @@ const HELD: [(&str, &str, f64); 46] = [
 ];
 
 /// Fail where a group's call made more work than [`HELD`] allows it, naming the call, the count,
-/// what it made and what it is held to.
-///
-/// A count a group never moved is not printed, so a row that names one reads zero and would pass
-/// whatever the call did: a row holding a call to *some* work must therefore name a count the
-/// group moved, or it is a misspelling that holds nothing, and that fails too.
+/// what it made and what it is held to. A count the group never moved reads zero: the call made
+/// none of it on this device, where it may take another path than on the M3 Max ([`HELD`]).
 fn hold(name: &str, measured: &[(String, f64)]) {
     for (group, what, most) in HELD {
         if group != name {
             continue;
         }
         let made = measured.iter().find(|(counted, _)| counted == what);
-        assert!(
-            most <= 0.0 || made.is_some(),
-            "{name}: {what} is held to at most {most}, but the group moved no such count, so the \
-             row holds nothing"
-        );
         let made = made.map_or(0.0, |(_, value)| *value);
         assert!(
             made <= most,
             "{name}: {what} is {made} a call, where it is held to at most {most}"
+        );
+    }
+}
+
+/// Fail where a row of [`HELD`] could hold nothing on any device: its group has no entry in
+/// [`TIMED`], or its count is none the table prints, `allocs` or one of the side's own counts
+/// `kept` ([`Gpu::work_counts`], every one whatever its value) under `rt_`, with `_at_call` or
+/// `_at_commit` after it or nothing. A count that moved nowhere is not printed and reads zero
+/// ([`hold`]), so a misspelled one would pass whatever the call made: checked by name, before any
+/// group runs, on every device, whichever path its calls take.
+fn check_held(kept: &[(&'static str, f64)]) {
+    let keeps = |count: &str| counted(count) && kept.iter().any(|(name, _)| *name == count);
+    for (group, what, _) in HELD {
+        assert!(
+            TIMED.iter().any(|(timed, _)| *timed == group),
+            "HELD holds {group}, a group TIMED does not name"
+        );
+        let own = what.strip_prefix("rt_").is_some_and(|rest| {
+            keeps(rest)
+                || [
+                    rest.strip_suffix("_at_call"),
+                    rest.strip_suffix("_at_commit"),
+                ]
+                .into_iter()
+                .flatten()
+                .any(keeps)
+        });
+        assert!(
+            what == "allocs" || own,
+            "{group}: HELD holds {what}, which names no count the side keeps, so the row holds \
+             nothing"
         );
     }
 }
@@ -633,6 +663,10 @@ pub fn percall<G: Gpu>(g: &G, s: &Scene<G>, library: &G::Library, sizes: &Sizes)
     // counts steps in 41.67 ns, so a call of a few tens of nanoseconds needs many of them.
     let lone = w * 6;
     let made_before = g.work_counts();
+    // The side that keeps no counts of its own is Metal's, which [`HELD`] does not hold.
+    if !made_before.is_empty() {
+        check_held(&made_before);
+    }
 
     // The command buffer: made, committed empty, committed with one encoder's work, and the
     // status, times and completed wait a frame's end reads.
