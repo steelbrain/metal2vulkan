@@ -286,10 +286,9 @@ fn the_core_count_and_fp16_are_the_devices() {
     }
 }
 
-/// The answers read from the device: the linear texture alignments are the device's
-/// (`Device::device_linear_texture_alignment`), and the IOSurface ones the 16 bytes the runtime
-/// takes a plane at; ordered atomics follow the Vulkan memory model at
-/// device scope; the XR10 formats and framebuffer reads follow their family rows (reads yes on
+/// The answers read from the device: the linear texture alignments and the IOSurface ones are the
+/// device's (`Device::device_linear_texture_alignment`); ordered atomics follow the Vulkan memory
+/// model at device scope; the XR10 formats and framebuffer reads follow their family rows (reads yes on
 /// MoltenVK and RADV); a half-float texture is filtered
 /// bicubically everywhere; and `RGB10A2Unorm_sRGB`, held as its raw word and filtered by the
 /// function (`ExtendedRange::Rgb10A2Srgb`), is filtered everywhere.
@@ -302,21 +301,18 @@ fn the_alignments_atomics_and_formats_are_the_devices() {
     for (stem, desc) in committed_descriptions() {
         let (enabled, _) = created(&stem, &desc);
         let p = answers(&stem, &desc);
-        for (c, answer) in [
-            (C::DeviceLinearTextureAlignmentBytes, linear(&stem)),
-            (C::LinearTextureAlignmentBytes, linear(&stem)),
-            (
-                C::IosurfaceTextureAlignmentBytes,
-                crate::linear_plan::LINEAR_ALIGNMENT,
-            ),
-            (
-                C::IosurfaceReadOnlyTextureAlignmentBytes,
-                crate::linear_plan::LINEAR_ALIGNMENT,
-            ),
+        for c in [
+            C::DeviceLinearTextureAlignmentBytes,
+            C::LinearTextureAlignmentBytes,
+            C::IosurfaceTextureAlignmentBytes,
+            C::IosurfaceReadOnlyTextureAlignmentBytes,
         ] {
             assert_eq!(
                 p.count(c),
-                PrivateAnswer::Device { answer, metal: 16 },
+                PrivateAnswer::Device {
+                    answer: linear(&stem),
+                    metal: 16
+                },
                 "{stem} {c:?}"
             );
         }

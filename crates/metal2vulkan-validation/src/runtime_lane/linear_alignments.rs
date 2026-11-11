@@ -9,11 +9,12 @@
 //!   its row's bytes rounded up to the answer apart, is an image in place (`vk_image` answers it,
 //!   counted `host_textures_in_place`), and a blit out of it reads the caller's texels. Printed
 //!   (`LINEAR-ALIGNMENT`): every format's answer, by answer, the device's own
-//!   (`deviceLinearTextureAlignmentBytes`), and how long the answers took.
+//!   (`deviceLinearTextureAlignmentBytes`), which `iosurfaceTextureAlignmentBytes` and
+//!   `iosurfaceReadOnlyTextureAlignmentBytes` answer too, and how long the answers took.
 //! - [`a_row_under_the_answer_is_made`]: an `RGBA8Unorm` texture of rows of 64 bytes at an
-//!   offset of 64, over a no-copy buffer and over a buffer of the runtime's, is made on every
-//!   device, as Metal makes it: a shadow (counted `shadowed_textures`) where the answer is more
-//!   than 64, and its blit out reads its texels.
+//!   offset of 64, over a no-copy buffer, over a buffer of the runtime's and over that buffer as
+//!   an IOSurface's plane, is made on every device, as Metal makes it: a shadow (counted
+//!   `shadowed_textures`) where the answer is more than 64, and its blit out reads its texels.
 //! - [`a_device_of_the_same_driver_reads_the_answer_again`]: the first query probes every format
 //!   of the driver (`WorkCounts::linear_alignments_probed`) and no later one asks anything; a
 //!   device of the same driver and cache reads the one record and probes nothing
@@ -29,8 +30,8 @@ use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, Device, Origin, PrivateCount, ResourceOptions, Size, Texture,
-    TextureDescriptor,
+    BlitOption, Buffer, Device, IoSurfacePlane, Origin, PrivateCount, ResourceOptions, Size,
+    Texture, TextureDescriptor,
 };
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -174,8 +175,8 @@ fn on_device_of_with(
     layer_reported_nothing_at_all(&messages);
 }
 
-/// Every format's answer and the device's own, printed, each at least 16 and a power of two: a
-/// texture at the answer is in place, over host pages imported by their pointer, wherever the
+/// Every format's answer and the device's own, printed, each at least 16 and a power of two, the
+/// IOSurface alignments the device's own: a texture at the answer is in place, over host pages imported by their pointer, wherever the
 /// device's check passed for textures that read there, and its blit out reads its texels.
 #[test]
 fn a_texture_at_the_answered_alignment_is_in_place() {
@@ -200,6 +201,15 @@ fn a_texture_at_the_answered_alignment_is_in_place() {
                 .value();
             let most = by_answer.keys().max().copied();
             assert_eq!(own, most, "the device's own is the largest of the formats'");
+            for c in [
+                PrivateCount::IosurfaceTextureAlignmentBytes,
+                PrivateCount::IosurfaceReadOnlyTextureAlignmentBytes,
+            ] {
+                let surface = device.private_properties().count(c).value();
+                eprintln!("LINEAR-ALIGNMENT on {}: {c:?} {surface:?}", device.name());
+                assert_eq!(surface, own, "{c:?} is the device's own");
+                assert!(surface.is_some_and(|a| a >= 16), "{c:?}: {surface:?}");
+            }
             for (answer, formats) in &by_answer {
                 eprintln!(
                     "LINEAR-ALIGNMENT on {}: {answer} for {} formats: {}",
@@ -330,6 +340,27 @@ fn a_row_under_the_answer_is_made() {
                 device.name()
             );
             if answer > 64 {
+                assert_eq!((aliased, shadowed), (false, 1));
+            }
+            let ours = blitted(device, &texture, (w, ROWS), texel);
+            assert!(ours == packed(&bytes, at, (w, ROWS), texel));
+            // Over that buffer as an IOSurface's plane, under the device's IOSurface answer.
+            let surface = (device.private_properties())
+                .count(PrivateCount::IosurfaceTextureAlignmentBytes)
+                .value()
+                .unwrap();
+            let before = device.work_counts();
+            let plane = IoSurfacePlane::new(at.0, at.1, true);
+            let texture = buffer.new_texture_with_iosurface_plane(&d, plane).unwrap();
+            let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
+            // SAFETY: the handle is only compared, while the texture lives.
+            let aliased = unsafe { texture.vk_image() }.is_some();
+            eprintln!(
+                "LINEAR-ALIGNMENT on {}: 64-byte rows over an IOSurface plane, the answer \
+             {surface}: aliased {aliased}, shadows {shadowed}",
+                device.name()
+            );
+            if surface > 64 {
                 assert_eq!((aliased, shadowed), (false, 1));
             }
             let ours = blitted(device, &texture, (w, ROWS), texel);

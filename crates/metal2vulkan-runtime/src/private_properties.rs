@@ -35,7 +35,6 @@ use crate::families::{
     FamilyRow, FeatureRow, FormatCapabilities, FormatCapability, GpuFamily, LimitRow, Refusal,
     RowAudit, RowState,
 };
-use crate::linear_plan::LINEAR_ALIGNMENT;
 use crate::render_state::MAX_VIEWPORTS;
 use crate::texture_descriptor::{largest_side, MAX_ARRAY_LENGTH};
 use crate::{Degradation, Device};
@@ -106,8 +105,15 @@ pub enum PrivateCount {
     /// `linearTextureAlignmentBytes`: as
     /// [`DeviceLinearTextureAlignmentBytes`](Self::DeviceLinearTextureAlignmentBytes).
     LinearTextureAlignmentBytes,
-    /// `iosurfaceTextureAlignmentBytes`: the device's: 16, the alignment the runtime takes an
-    /// IOSurface plane's offset and rows at on every device.
+    /// `iosurfaceTextureAlignmentBytes`: the device's, as
+    /// [`DeviceLinearTextureAlignmentBytes`](Self::DeviceLinearTextureAlignmentBytes): the
+    /// alignment of a texture's offset and rows at which the device's images hold it in place over
+    /// a buffer's bytes (256 on Mesa's RADV, 64 on lavapipe), where Metal answers 16 on an Apple
+    /// GPU. A caller that lays out its surfaces by it aligns their rows so (a macOS 11 guest's
+    /// CoreAnimation rounds its backing stores' rows to it, at least 64). The runtime still takes a
+    /// plane at any offset and rows that are multiples of 16
+    /// ([`Buffer::new_texture_with_iosurface_plane`](crate::Buffer::new_texture_with_iosurface_plane)):
+    /// a texture over one the device lays out no image at is a shadow.
     IosurfaceTextureAlignmentBytes,
     /// `iosurfaceReadOnlyTextureAlignmentBytes`: as
     /// [`IosurfaceTextureAlignmentBytes`](Self::IosurfaceTextureAlignmentBytes): a plane read
@@ -606,12 +612,10 @@ impl Answers<'_> {
         Some(match property {
             C::GpuCoreCount => u64::from(self.properties.gpu_core_count?),
             C::MaxVertexAmplificationCount | C::MaxComputeThreadgroupMemory => return None,
-            C::DeviceLinearTextureAlignmentBytes | C::LinearTextureAlignmentBytes => {
-                self.linear_alignment
-            }
-            C::IosurfaceTextureAlignmentBytes | C::IosurfaceReadOnlyTextureAlignmentBytes => {
-                LINEAR_ALIGNMENT
-            }
+            C::DeviceLinearTextureAlignmentBytes
+            | C::LinearTextureAlignmentBytes
+            | C::IosurfaceTextureAlignmentBytes
+            | C::IosurfaceReadOnlyTextureAlignmentBytes => self.linear_alignment,
             C::MaxVertexBuffers
             | C::MaxFragmentBuffers
             | C::MaxComputeBuffers
