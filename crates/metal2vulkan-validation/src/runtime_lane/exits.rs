@@ -328,6 +328,54 @@ extern "C" fn release_the_gate() {
     unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
 }
 
+/// The handler case's command buffer, a fill of [`HANDLER_MARKER`]'s buffer, encoded and not
+/// committed, which [`commit_at_exit`] commits.
+static AT_EXIT: OnceLock<CommandBuffer> = OnceLock::new();
+
+/// The 16 shared bytes the handler case's command buffer fills, kept to the process's end.
+static HANDLER_MARKER: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The hook's registrations in the process right after the handler case registered
+/// [`commit_at_exit`]: one more by the exit means the hook was registered again after it.
+static AT_THE_HANDLER: AtomicU64 = AtomicU64::new(0);
+
+/// An exit handler the handler case registers once its device is made, as a program registers its
+/// own: note whether the device's hook ran before it (`hook_ran`) and the hook's registrations
+/// since its own (`since`); then commit the case's command buffer and wait until it completed, as
+/// Metal runs a program's work handed over in its exit (`committed`, `completed`, and the marker
+/// it fills, `written`). It runs before the handlers registered as the device was made (its
+/// driver's and layer's), so the marker's pages are still mapped.
+extern "C" fn commit_at_exit() {
+    let Some(command_buffer) = AT_EXIT.get() else {
+        return;
+    };
+    let hook_ran = metal2vulkan_runtime::process_exiting();
+    let now = metal2vulkan_runtime::exit_registrations();
+    let since = now
+        .total
+        .saturating_sub(AT_THE_HANDLER.load(Ordering::SeqCst));
+    let committed = command_buffer.commit();
+    let waited = command_buffer.wait_until_completed();
+    let completed = command_buffer.status() == CommandBufferStatus::Completed;
+    let at = HANDLER_MARKER.load(Ordering::SeqCst);
+    // SAFETY: the marker's 16 shared bytes, mapped while the device's driver's handlers have not
+    // run (they run after this one), and the case keeps the buffer.
+    let written = !at.is_null()
+        && unsafe { std::slice::from_raw_parts(at, 16) }
+            .iter()
+            .all(|&b| b == FILLED);
+    let line = format!(
+        "{REPORT}-HANDLER hook_ran={} committed={} completed={} written={} since={since} \
+         waited={waited:?} registrations={now:?}\n",
+        u8::from(hook_ran),
+        u8::from(committed.is_ok()),
+        u8::from(completed),
+        u8::from(written)
+    );
+    // SAFETY: a write of the line's bytes to standard output.
+    unsafe { libc::write(1, line.as_ptr().cast(), line.len()) };
+}
+
 /// The command buffers the submitting case commits at once.
 const COMMITS: usize = 256;
 
@@ -645,6 +693,39 @@ fn child() {
             AT_THE_GATE.store(
                 metal2vulkan_runtime::exit_registrations().total,
                 Ordering::SeqCst,
+            );
+            exit_now(case, &messages);
+        }
+        "handler_work_exit" => {
+            // The device's submission checks' sections end first, as in `cpu_work_exit`.
+            assert!(
+                device.settle_submit_checks(WAIT),
+                "{case}: the submission checks answered"
+            );
+            let queue = device.new_command_queue().unwrap();
+            let first = small(&queue);
+            first.commit().unwrap();
+            first.wait_until_completed().unwrap();
+            let marker: &'static Buffer = Box::leak(Box::new(
+                device.new_buffer(16, ResourceOptions::shared()).unwrap(),
+            ));
+            let at = marker.contents().expect("a shared buffer's contents");
+            HANDLER_MARKER.store(at.as_ptr(), Ordering::SeqCst);
+            let command_buffer = queue.command_buffer().unwrap();
+            fill(&command_buffer, marker, 16);
+            assert!(AT_EXIT.set(command_buffer).is_ok(), "one handler a process");
+            // As a program registers its own exit handler once its device is made.
+            // SAFETY: a handler with no arguments that never unwinds.
+            unsafe { libc::atexit(commit_at_exit) };
+            AT_THE_HANDLER.store(
+                metal2vulkan_runtime::exit_registrations().total,
+                Ordering::SeqCst,
+            );
+            // Then the program goes on: a pipeline made on its own thread, after its handler.
+            let _made = configured(&device, Some(32), 5);
+            println!(
+                "{REPORT}-MADE {:?}",
+                metal2vulkan_runtime::exit_registrations()
             );
             exit_now(case, &messages);
         }
@@ -1452,6 +1533,50 @@ fn an_exit_runs_no_handler_beside_a_cpu_device_s_work() {
             true => "CPU device",
             false => "GPU",
         },
+    );
+}
+
+/// An exit handler the program registers once its device is made commits work as the process
+/// exits and waits for it: Metal runs that work to completion, and so must the runtime, whatever
+/// the program did after registering the handler (here, a pipeline made on its own thread). The
+/// device's hook runs after the handler, so the handler finds the device's guard open.
+#[test]
+fn an_exit_handler_registered_after_the_device_runs_its_work_to_completion() {
+    let case = "handler_work_exit";
+    let exited = exits_cleanly(&[case]).remove(0);
+    let handler = format!("{REPORT}-HANDLER ");
+    let field = |name: &str| -> Option<u8> {
+        stdout_line(&exited, &handler)?
+            .split_whitespace()
+            .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))?
+            .parse()
+            .ok()
+    };
+    let what = || format!("stdout:\n{}\nstderr:\n{}", exited.stdout, exited.stderr);
+    eprintln!("{}", stdout_line(&exited, &handler).unwrap_or_default());
+    assert_eq!(
+        field("hook_ran"),
+        Some(0),
+        "the device's hook ran before the program's handler: {}",
+        what()
+    );
+    assert_eq!(
+        field("committed"),
+        Some(1),
+        "the handler's commit failed: {}",
+        what()
+    );
+    assert_eq!(
+        field("completed"),
+        Some(1),
+        "the handler's work did not complete: {}",
+        what()
+    );
+    assert_eq!(
+        field("written"),
+        Some(1),
+        "the handler's work did not fill its marker: {}",
+        what()
     );
 }
 
