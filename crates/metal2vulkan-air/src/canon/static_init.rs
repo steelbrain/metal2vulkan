@@ -556,7 +556,7 @@ impl<'a> Eval<'a> {
                 } if c.src_kind != NumKind::Float
                     && c.src_fp8.is_none()
                     && (c.dst_kind != NumKind::Float || !c.src.is_vector())
-                    && !honored_in_opencl_mode(c) =>
+                    && !honored_in_opencl_mode(&c) =>
                 {
                     let signed = c.src_kind == NumKind::Signed;
                     let x = match call.args.first() {
