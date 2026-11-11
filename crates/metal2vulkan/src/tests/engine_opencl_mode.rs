@@ -468,6 +468,130 @@ fn an_opencl_mode_argument_by_value_reflects_as_a_constant_buffer_of_its_type() 
         .expect("an OpenCL-mode pipeline");
 }
 
+/// `__kernel void images(__read_only image1d_t f, __read_only image1d_t i, __read_only image1d_t
+/// u, __read_only image1d_t h, __read_only image1d_array_t a, __write_only image1d_t w, __global
+/// float *o)`: `o[x]` takes the sum of `read_imagef(f, x)`, `read_imagei(i, x)`,
+/// `read_imageui(u, x)` and `read_imageh(h, x)`'s first lanes, and `w` at `x` takes
+/// `read_imagef(a, (int2)(x, 1))`, for `x = get_global_id(0)`. AIR names every image's component
+/// `unknown`, whatever the kernel reads it as.
+const IMAGES: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v29-apple-macosx27.0.0\"\n\
+define void @__entry_images(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) %3, ptr addrspace(1) %4, ptr addrspace(1) %5, ptr addrspace(1) %6) #0 {\n\
+entry:\n\
+  tail call fastcc void @images(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) %3, ptr addrspace(1) %4, ptr addrspace(1) %5, ptr addrspace(1) %6)\n\
+  ret void\n}\n\
+define internal fastcc void @images(ptr addrspace(1) %f, ptr addrspace(1) %i, ptr addrspace(1) %u, ptr addrspace(1) %h, ptr addrspace(1) %a, ptr addrspace(1) %w, ptr addrspace(1) %o) #1 {\n\
+entry:\n\
+  %x = tail call i32 @air.get_global_id.i32(i32 0) #2\n\
+  %rs = tail call ptr addrspace(2) @air.get_read_sampler() #2\n\
+  %rf = tail call { <4 x float>, i8 } @air.read_texture_1d.v4f32(ptr addrspace(1) %f, ptr addrspace(2) %rs, i32 %x, i32 0, i32 1) #2\n\
+  %vf = extractvalue { <4 x float>, i8 } %rf, 0\n\
+  %ef = extractelement <4 x float> %vf, i32 0\n\
+  %ri = tail call { <4 x i32>, i8 } @air.read_texture_1d.s.v4i32(ptr addrspace(1) %i, ptr addrspace(2) %rs, i32 %x, i32 0, i32 1) #2\n\
+  %vi = extractvalue { <4 x i32>, i8 } %ri, 0\n\
+  %ei = extractelement <4 x i32> %vi, i32 0\n\
+  %fi = sitofp i32 %ei to float\n\
+  %ru = tail call { <4 x i32>, i8 } @air.read_texture_1d.u.v4i32(ptr addrspace(1) %u, ptr addrspace(2) %rs, i32 %x, i32 0, i32 1) #2\n\
+  %vu = extractvalue { <4 x i32>, i8 } %ru, 0\n\
+  %eu = extractelement <4 x i32> %vu, i32 0\n\
+  %fu = uitofp i32 %eu to float\n\
+  %rh = tail call { <4 x half>, i8 } @air.read_texture_1d.v4f16(ptr addrspace(1) %h, ptr addrspace(2) %rs, i32 %x, i32 0, i32 1) #2\n\
+  %vh = extractvalue { <4 x half>, i8 } %rh, 0\n\
+  %eh = extractelement <4 x half> %vh, i32 0\n\
+  %fh = fpext half %eh to float\n\
+  %s1 = fadd float %ef, %fi\n\
+  %s2 = fadd float %s1, %fu\n\
+  %s3 = fadd float %s2, %fh\n\
+  %xo = zext i32 %x to i64\n\
+  %po = getelementptr inbounds float, ptr addrspace(1) %o, i64 %xo\n\
+  store float %s3, ptr addrspace(1) %po, align 4\n\
+  %ra = tail call { <4 x float>, i8 } @air.read_texture_1d_array.v4f32(ptr addrspace(1) %a, ptr addrspace(2) %rs, i32 %x, i32 1, i32 0, i32 1) #2\n\
+  %va = extractvalue { <4 x float>, i8 } %ra, 0\n\
+  tail call void @air.write_texture_1d.v4f32(ptr addrspace(1) %w, i32 %x, <4 x float> %va, i32 0, i32 2) #3\n\
+  ret void\n}\n\
+declare i32 @air.get_global_id.i32(i32) #2\n\
+declare ptr addrspace(2) @air.get_read_sampler() #2\n\
+declare { <4 x float>, i8 } @air.read_texture_1d.v4f32(ptr addrspace(1), ptr addrspace(2), i32, i32, i32) #2\n\
+declare { <4 x i32>, i8 } @air.read_texture_1d.s.v4i32(ptr addrspace(1), ptr addrspace(2), i32, i32, i32) #2\n\
+declare { <4 x i32>, i8 } @air.read_texture_1d.u.v4i32(ptr addrspace(1), ptr addrspace(2), i32, i32, i32) #2\n\
+declare { <4 x half>, i8 } @air.read_texture_1d.v4f16(ptr addrspace(1), ptr addrspace(2), i32, i32, i32) #2\n\
+declare { <4 x float>, i8 } @air.read_texture_1d_array.v4f32(ptr addrspace(1), ptr addrspace(2), i32, i32, i32, i32) #2\n\
+declare void @air.write_texture_1d.v4f32(ptr addrspace(1), i32, <4 x float>, i32, i32) #3\n\
+attributes #0 = { nounwind }\n\
+attributes #1 = { convergent nounwind }\n\
+attributes #2 = { nounwind readonly willreturn }\n\
+attributes #3 = { nounwind willreturn }\n\
+!air.kernel = !{!0}\n\
+!air.version = !{!10}\n\
+!air.language_version = !{!11}\n\
+!0 = !{ptr @__entry_images, !1, !2}\n\
+!1 = !{}\n\
+!2 = !{!3, !4, !5, !6, !7, !8, !9}\n\
+!3 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.sample\", !\"air.arg_type_name\", !\"texture1d<unknown, read>\", !\"air.arg_name\", !\"f\"}\n\
+!4 = !{i32 1, !\"air.texture\", !\"air.location_index\", i32 1, i32 1, !\"air.sample\", !\"air.arg_type_name\", !\"texture1d<unknown, read>\", !\"air.arg_name\", !\"i\"}\n\
+!5 = !{i32 2, !\"air.texture\", !\"air.location_index\", i32 2, i32 1, !\"air.sample\", !\"air.arg_type_name\", !\"texture1d<unknown, read>\", !\"air.arg_name\", !\"u\"}\n\
+!6 = !{i32 3, !\"air.texture\", !\"air.location_index\", i32 3, i32 1, !\"air.sample\", !\"air.arg_type_name\", !\"texture1d<unknown, read>\", !\"air.arg_name\", !\"h\"}\n\
+!7 = !{i32 4, !\"air.texture\", !\"air.location_index\", i32 4, i32 1, !\"air.sample\", !\"air.arg_type_name\", !\"texture1d_array<unknown, read>\", !\"air.arg_name\", !\"a\"}\n\
+!8 = !{i32 5, !\"air.texture\", !\"air.location_index\", i32 5, i32 1, !\"air.write\", !\"air.arg_type_name\", !\"texture1d<unknown, write>\", !\"air.arg_name\", !\"w\"}\n\
+!9 = !{i32 6, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"float\", !\"air.arg_name\", !\"o\"}\n\
+!10 = !{i32 2, i32 9, i32 0}\n\
+!11 = !{!\"Metal\", i32 1, i32 1, i32 0}\n";
+
+/// Each image argument reflects as the M3 Max reflects it in a pipeline of OpenCL mode (the
+/// conformance crate's `probes/opencl_image_reflection.m`, macOS 27.0.1): the texture Apple's
+/// OpenCL binds for it, an `image1d_t` a 2D texture and an `image1d_array_t` a 2D array, at its own
+/// index, read-only or write-only as declared, of data type `None` whether the kernel reads it as
+/// float, int, uint or half (AIR names each component `unknown`), not depth, of array length 1;
+/// the buffer 3 past its index, then the three hidden buffers.
+#[test]
+fn an_opencl_mode_pipeline_reflects_its_images_as_the_textures_bound_of_no_data_type() {
+    use crate::metal::TextureType;
+    let Some(f) = function(IMAGES, "__entry_images") else {
+        return;
+    };
+    let d = descriptor(StageSource::Function(f), true);
+    let r = d.reflection(&Budget::standard()).expect("reflection");
+    let textures: Vec<_> = (r.bindings().iter())
+        .filter_map(|b| {
+            let t = b.texture()?;
+            let texture = (t.texture_type(), t.texture_data_type());
+            let shape = (t.is_depth_texture(), t.array_length());
+            Some((b.name().to_owned(), b.index(), b.access(), texture, shape))
+        })
+        .collect();
+    let image = |name: &str, index, access, texture_type| {
+        let texture = (texture_type, DataType::None);
+        (name.to_owned(), index, access, texture, (false, 1))
+    };
+    let read = BindingAccess::ReadOnly;
+    assert_eq!(
+        textures,
+        [
+            image("f", 0, read, TextureType::Type2D),
+            image("i", 1, read, TextureType::Type2D),
+            image("u", 2, read, TextureType::Type2D),
+            image("h", 3, read, TextureType::Type2D),
+            image("a", 4, read, TextureType::Type2DArray),
+            image("w", 5, BindingAccess::WriteOnly, TextureType::Type2D),
+        ]
+    );
+    let buffers: Vec<_> = rows(&d)
+        .into_iter()
+        .filter(|row| row.1 == BindingType::Buffer)
+        .map(|(name, _, index, access, used, _)| (name, index, access, used))
+        .collect();
+    let buffer = |name: &str, index, access| (name.to_owned(), index, access, true);
+    assert_eq!(
+        buffers,
+        [
+            buffer("o", 3, BindingAccess::ReadWrite),
+            buffer("__global_offset_and_num_dims", 0, read),
+            buffer("__printf_buffer", 1, BindingAccess::ReadWrite),
+            buffer("__image_order_data_type_table", 2, read),
+        ]
+    );
+}
+
 /// A kernel's required work-group size (`reqd_work_group_size(64, 1, 1)`) caps the pipeline's
 /// `maxTotalThreadsPerThreadgroup` at its 64 threads, Metal's answer and the device's, as the M3
 /// Max answers; a kernel without one answers the profile's 1024.

@@ -85,16 +85,30 @@ const TEXTURES: [(&str, TextureType, bool); 16] = [
     ("depthcube_array", TextureType::CubeArray, true),
 ];
 
+/// The component AIR names for a texture whose type states none: an OpenCL C image's
+/// (`texture2d<unknown, read>`), read as float, int or uint by each call. Metal reflects such a
+/// texture's data type as `MTLDataTypeNone`, whatever the calls read it as (an `image1d_t`,
+/// `image1d_array_t`, `image2d_t` and `image3d_t` read with `read_imagef`, `read_imagei`,
+/// `read_imageui` and `read_imageh`, written, only queried or unused, in a pipeline of OpenCL mode,
+/// measured on an M3 Max under macOS 27.0.1 by the conformance crate's
+/// `probes/opencl_image_reflection.m`).
+const NO_COMPONENT: &str = "unknown";
+
 /// The texture an MSL texture type names (`texture2d<float, sample>`, `depth2d<float, read>`),
-/// or `None` for any other spelling.
+/// of data type `None` where AIR names its component unknown ([`NO_COMPONENT`]), or `None` for any
+/// other spelling.
 pub(super) fn texture(name: &str) -> Option<Texture> {
     let (template, rest) = name.split_once('<')?;
     let args = rest.strip_suffix('>')?;
     let component = args.split(',').next()?.trim();
     let (_, texture_type, depth) = TEXTURES.iter().find(|(t, _, _)| *t == template)?;
+    let data_type = match component {
+        NO_COMPONENT => DataType::None,
+        component => data_type(component)?,
+    };
     Some(Texture {
         texture_type: *texture_type,
-        data_type: data_type(component)?,
+        data_type,
         depth: *depth,
     })
 }

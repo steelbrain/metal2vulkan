@@ -777,7 +777,11 @@ layout stride of `None` is `MTLBufferLayoutStrideDynamic`: the stride comes from
     swizzled texel, a write stores it with the swizzle undone (each channel from the first lane
     whose source it is), and a query answers the view's size and the hidden buffer's words, which
     no swizzle reaches, as plain Metal answers for the same view; the order is never applied twice.
-    A storage slot the kernel only queries binds the texture's view with no swizzle.
+    A storage slot the kernel only queries binds the texture's view with no swizzle. The reflection
+    states each image argument as the texture bound for it, an `image1d_t` `TextureType::Type2D`
+    and an `image1d_array_t` `Type2DArray`, of data type `DataType::None` (the AIR names its component
+    `unknown`) whatever the kernel reads it as, as an M3 Max (macOS 27.0.1) answers for 1D, 1D
+    array, 2D and 3D images read as float, int, uint and half, written, only queried and unused.
   - OpenCL C's `native_<function>` and `half_<function>` of `float` types
     (`air.native_<stem>.<type>` and `air.half_<stem>.<type>`, for `cos`, `exp`, `exp10`, `exp2`,
     `log`, `log10`, `log2`, `powr`, `rsqrt`, `sin`, `sqrt` and `tan`, scalar and of every vector

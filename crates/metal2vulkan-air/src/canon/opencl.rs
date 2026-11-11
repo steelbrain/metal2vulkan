@@ -33,6 +33,11 @@
 //!   queries of one kind's wrapper (`get_image_channel_order` of two read-only 2D images) answer
 //!   the same word on both, the M3 Max's and the 5300M's of different calls; here each query
 //!   answers its own image's.
+//! - **Images in the reflection.** An image argument reflects as the texture bound for it: an
+//!   `image1d_t` a 2D texture and an `image1d_array_t` a 2D array ([`entry`]), each of data type
+//!   `MTLDataTypeNone` (AIR names its component `unknown`), whatever the kernel reads or writes it
+//!   as. Measured on an M3 Max (macOS 27.0.1) over `image1d_t`, `image1d_array_t`, `image2d_t` and
+//!   `image3d_t` arguments read as float, int, uint and half, written, only queried and unused.
 //!
 //! `expand` runs after SCCP, whose constants name each read's dimension, and before the global
 //! built-ins (`global_builtin`) take the reads it leaves. It appends the three buffers to the entry
@@ -597,9 +602,17 @@ fn rewrite(
 /// Entry point `ep` as a pipeline of OpenCL mode binds it, the three hidden buffers its parameters
 /// `first` to `first + 2`: each argument bound at a buffer index 3 past its own (an argument
 /// buffer, a function table and an acceleration structure as a buffer), threadgroup memory,
-/// textures and samplers at theirs, and the buffers' bindings after the entry's own.
+/// textures and samplers at theirs, a 1D image's texture of the 2D type Metal's OpenCL binds
+/// ([`bound_texture`]), and the buffers' bindings after the entry's own.
 pub fn entry(mut ep: EntryPoint, first: u32) -> Result<EntryPoint, Error> {
     for p in &mut ep.params {
+        if let ParamRole::Texture(_) = p.role {
+            let bound = (p.ty.name.as_ref()).and_then(|name| bound_texture(&name.to_string()));
+            if let Some(bound) = bound {
+                p.ty.name = Some(DiagName::new(bound));
+            }
+            continue;
+        }
         let slot = match &mut p.role {
             ParamRole::Buffer(b) | ParamRole::ArgumentBuffer(b) => &mut b.location,
             ParamRole::AccelerationStructure { arg, .. }
@@ -640,4 +653,19 @@ pub fn entry(mut ep: EntryPoint, first: u32) -> Result<EntryPoint, Error> {
         });
     }
     Ok(ep)
+}
+
+/// The MSL type of the texture Metal's OpenCL binds for an image argument whose type AIR names
+/// `name`, where that is another: a 1D image's texture is 2D (`texture1d<..>` a `texture2d<..>`,
+/// `texture1d_array<..>` a `texture2d_array<..>`), as [`opencl_1d`](super::opencl_1d) reads it,
+/// and as a pipeline of OpenCL mode reflects it (`MTLTextureType2D` and `MTLTextureType2DArray`,
+/// measured on an M3 Max under macOS 27.0.1 and a Radeon Pro 5300M under macOS 26.7.1).
+fn bound_texture(name: &str) -> Option<String> {
+    let (template, rest) = name.split_once('<')?;
+    let bound = match template {
+        "texture1d" => "texture2d",
+        "texture1d_array" => "texture2d_array",
+        _ => return None,
+    };
+    Some(format!("{bound}<{rest}"))
 }

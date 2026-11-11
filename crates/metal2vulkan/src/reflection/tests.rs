@@ -87,6 +87,15 @@ fn the_type_grammar_names_textures() {
             "depth2d_ms_array<float, read>",
             t(TextureType::Type2DMultisampleArray, DataType::Float, true),
         ),
+        // An OpenCL C image's: AIR names no component, Metal reflects none.
+        (
+            "texture1d<unknown, read>",
+            t(TextureType::Type1D, DataType::None, false),
+        ),
+        (
+            "texture2d_array<unknown, write>",
+            t(TextureType::Type2DArray, DataType::None, false),
+        ),
         ("texture4d<float, read>", None),
         ("texture2d<Opaque, read>", None),
         ("sampler", None),
