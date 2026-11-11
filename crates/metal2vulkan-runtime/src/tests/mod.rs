@@ -423,6 +423,8 @@ mod render_sibling_work;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod render_stage_digests;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod rerouted_scissors;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rerun_arenas;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod reserved_queues;
