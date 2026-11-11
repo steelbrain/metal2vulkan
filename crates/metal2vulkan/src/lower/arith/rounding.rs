@@ -15,11 +15,11 @@
 //!   conversion (its `FPRoundingMode` decoration is for 16-bit stores only, and an entry's
 //!   `RoundingModeRTZ` would round its arithmetic too), so the result is computed exactly by
 //!   integer arithmetic on the operand's bits ([`int_to_float`], [`narrow_float`]); a conversion
-//!   that cannot round is the plain one.
+//!   that cannot round is the plain one. `air.convert` names no `double`.
 
 use crate::air::intrinsics::ConvertRounding;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
-use crate::lower::arith::narrow::{self, u32_form};
+use crate::lower::arith::narrow::u32_form;
 use crate::lower::arith::ops::{self, fsplat, mask, sext, splat, ty};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, OperandRule};
@@ -203,10 +203,10 @@ pub fn magnitude_f32(
     magnitude32(fb, u, to, m, a)
 }
 
-/// Unsigned 64-bit magnitude `m` (`u64` lanes of form `w`) as a float of form `to` (`f32` or
-/// `f64`) rounded toward zero, or away from it where `away`, as [`magnitude32`] does for 32 bits:
-/// the most significant bit is found from the two halves, the bits below the format's significand
-/// are dropped (one added where any was set and the lane rounds away), and the kept part converts
+/// Unsigned 64-bit magnitude `m` (`u64` lanes of form `w`) as an `f32` (lanes of form `to`)
+/// rounded toward zero, or away from it where `away`, as [`magnitude32`] does for 32 bits: the most
+/// significant bit is found from the two halves, the bits below the 24 the significand keeps are
+/// dropped (one added where any was set and the lane rounds away), and the kept part converts
 /// exactly and scales back exactly.
 fn magnitude64(
     fb: &mut FunctionBuilder<'_>,
@@ -215,10 +215,10 @@ fn magnitude64(
     m: Value,
     away: Away,
 ) -> BResult<Value> {
-    let keep = match to.float_fmt() {
-        Some(fmt @ (FloatFmt::F32 | FloatFmt::F64)) => u64::from(significand(fmt)),
-        _ => return Err(unconverted()),
-    };
+    if to.float_fmt() != Some(FloatFmt::F32) {
+        return Err(unconverted());
+    }
+    let keep = u64::from(significand(FloatFmt::F32));
     let u = u32_form(w);
     let ut = ty(fb, u)?;
     let wt = ty(fb, w)?;
@@ -244,13 +244,13 @@ fn magnitude64(
     fb.glsl(GlslOp::Ldexp, &[f, s])
 }
 
-/// Integer `x` of form `from` (read as signed when `signed`) converted to float form `to` (`half`,
-/// `float`, or `double` from a 64-bit integer), rounded `dir`, exactly on every device.
+/// Integer `x` of form `from` (read as signed when `signed`) converted to float form `to` (`half`
+/// or `float`), rounded `dir`, exactly on every device.
 ///
 /// A `half` is the integer's `f32` (exact below `2^24`, and at least `2^24` elsewhere, past
 /// `half`'s range whichever way the device rounds it) rounded to `half` by [`to_half`]. A `float`
-/// or `double` is the magnitude rounded by integer arithmetic ([`magnitude32`], [`magnitude64`]),
-/// given its sign.
+/// is the magnitude rounded by integer arithmetic ([`magnitude32`], [`magnitude64`]), given its
+/// sign.
 pub fn int_to_float(
     fb: &mut FunctionBuilder<'_>,
     (signed, dir): (bool, Directed),
@@ -373,57 +373,8 @@ pub fn to_half(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, dir: Directed) -
     fb.convert(ConvOp::Bitcast, r, ft)
 }
 
-/// `x` (`double` lanes of form `from`) converted to `f32` rounded `dir`: the device's conversion,
-/// which returns one of the two `f32`s around `x` (Vulkan's correctly rounded conversion in any
-/// mode), stepped one `f32` to the other where it lies on the wrong side of `x` (the step from a
-/// zero is to the smallest denormal of the direction's sign). A NaN is kept.
-fn f64_to_f32(fb: &mut FunctionBuilder<'_>, from: Form, x: Value, dir: Directed) -> BResult<Value> {
-    let f32f = from.with(Held::Float(FloatFmt::F32));
-    let u = u32_form(from);
-    let t32 = ty(fb, f32f)?;
-    let ut = ty(fb, u)?;
-    let t64 = ty(fb, from)?;
-    let r = fb.convert(ConvOp::FConvert, x, t32)?;
-    let back = fb.convert(ConvOp::FConvert, r, t64)?;
-    let rb = fb.convert(ConvOp::Bitcast, r, ut)?;
-    let one = splat(fb, u, 1)?;
-    let less = bin(fb, BinOp::ISub, rb, one)?;
-    let more = bin(fb, BinOp::IAdd, rb, one)?;
-    let rb = match dir {
-        Directed::Zero => {
-            let ab = fb.glsl(GlslOp::FAbs, &[back])?;
-            let ax = fb.glsl(GlslOp::FAbs, &[x])?;
-            let past = bin(fb, BinOp::FOrdGreaterThan, ab, ax)?;
-            fb.select(past, less, rb)?
-        }
-        Directed::Up | Directed::Down => {
-            let (wrong, from_zero, toward) = if dir == Directed::Up {
-                (BinOp::FOrdLessThan, 0x0000_0001, (less, more))
-            } else {
-                (BinOp::FOrdGreaterThan, 0x8000_0001, (more, less))
-            };
-            let wrong = bin(fb, wrong, back, x)?;
-            let k31 = splat(fb, u, 31)?;
-            let sign = bin(fb, BinOp::ShiftRightLogical, rb, k31)?;
-            let z = splat(fb, u, 0)?;
-            let neg = bin(fb, BinOp::INotEqual, sign, z)?;
-            // Toward the direction's infinity: a negative's magnitude shrinks for `Up`.
-            let step = fb.select(neg, toward.0, toward.1)?;
-            let abs_mask = splat(fb, u, 0x7FFF_FFFF)?;
-            let mag = bin(fb, BinOp::BitwiseAnd, rb, abs_mask)?;
-            let zero = bin(fb, BinOp::IEqual, mag, z)?;
-            let from_zero = splat(fb, u, from_zero)?;
-            let step = fb.select(zero, from_zero, step)?;
-            fb.select(wrong, step, rb)?
-        }
-    };
-    fb.convert(ConvOp::Bitcast, rb, t32)
-}
-
 /// Float `x` of form `from` narrowed to float form `to`, rounded `dir`, exactly: `float` to `half`
-/// ([`to_half`]), `double` to `float` ([`f64_to_f32`]), and `double` to `half` through an `f32`
-/// rounded to odd (`narrow::f64_to_f32_odd`), whose one rounding after it to `half` is the exact
-/// value's, as any rounding to a format of at most 22 significand bits is.
+/// ([`to_half`]), the one narrowing `air.convert` names a directed rounding for.
 pub fn narrow_float(
     fb: &mut FunctionBuilder<'_>,
     from: Form,
@@ -431,25 +382,15 @@ pub fn narrow_float(
     x: Value,
     dir: Directed,
 ) -> BResult<Value> {
-    match (from.float_fmt(), to.float_fmt()) {
-        (Some(FloatFmt::F32), Some(FloatFmt::Half)) => to_half(fb, from, x, dir),
-        (Some(FloatFmt::F64), Some(FloatFmt::F32)) => f64_to_f32(fb, from, x, dir),
-        (Some(FloatFmt::F64), Some(FloatFmt::Half)) => {
-            let o = narrow::f64_to_f32_odd(fb, from, x)?;
-            to_half(fb, from.with(Held::Float(FloatFmt::F32)), o, dir)
-        }
-        _ => Err(unconverted()),
+    if !narrows(from, to) {
+        return Err(unconverted());
     }
+    to_half(fb, from, x, dir)
 }
 
-/// Whether [`narrow_float`] narrows from `from` to `to`.
-pub fn narrows(from: FloatFmt, to: FloatFmt) -> bool {
-    matches!(
-        (from, to),
-        (FloatFmt::F32, FloatFmt::Half)
-            | (FloatFmt::F64, FloatFmt::F32)
-            | (FloatFmt::F64, FloatFmt::Half)
-    )
+/// Whether [`narrow_float`] narrows from `from` to `to`: `float` to `half`.
+pub fn narrows(from: Form, to: Form) -> bool {
+    (from.float_fmt(), to.float_fmt()) == (Some(FloatFmt::F32), Some(FloatFmt::Half))
 }
 
 /// The range of an integer of `bits` bits, signed or not.
@@ -522,16 +463,13 @@ pub fn saturate(
     mask(fb, from, r)
 }
 
-/// An upper estimate of the SPIR-V words of a directed conversion from `from` to `to` beyond the
-/// conversion it replaces: [`to_half`]'s sixty instructions and twenty constants (a vector's
-/// constants carry their lanes), a magnitude's rounding, or a `double`'s step.
-pub fn directed_words(from: Form, to: Form) -> u32 {
+/// An upper estimate of the SPIR-V words of a directed conversion to `to` beyond the conversion it
+/// replaces: [`to_half`]'s sixty instructions and twenty constants (a vector's constants carry
+/// their lanes), or a magnitude's rounding.
+pub fn directed_words(to: Form) -> u32 {
     let lanes = u32::from(to.lanes);
-    let half = 360 + 20 * lanes;
     match to.float_fmt() {
-        Some(FloatFmt::Half) if from.float_fmt() == Some(FloatFmt::F64) => half + 96,
-        Some(FloatFmt::Half) => half + 32,
-        _ if from.is_float() => 160 + 8 * lanes,
+        Some(FloatFmt::Half) => 392 + 20 * lanes,
         _ => 200 + 10 * lanes,
     }
 }

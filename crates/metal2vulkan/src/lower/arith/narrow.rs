@@ -276,27 +276,24 @@ pub fn controlled_modes(p: &DeviceProfile) -> Option<Vec<ExecMode>> {
 }
 
 /// The widths whose `RoundingModeRTE` an entry declares on profile `p` so that a conversion with a
-/// `width`-bit float result rounds to nearest even, or `None` where the profile lacks one: `width`
-/// itself, and the widths the device's rounding-mode independence ties to it (RuntimeSpirv VUIDs
-/// 06291 and 06292): 16 and 64 together where rounding modes are independent for 32 bits only and
-/// `width` is not 32, every width where they are not independent. The Vulkan spec ("Precision and
-/// Operation of SPIR-V Instructions") rounds a correctly rounded operation "according to IEEE 754
-/// roundTiesToEven" in an entry that declares it, and to either neighbour, the device's choice,
-/// elsewhere.
-pub fn rte_modes(p: &DeviceProfile, width: u8) -> Option<Vec<u8>> {
+/// `float` result rounds to nearest even, or `None` where the profile lacks one: 32, and 16 and 64
+/// with it where the device's rounding modes are not independent (RuntimeSpirv VUID 06292; with
+/// independence for 32 bits only, 32 is free of the others, VUID 06291). The Vulkan spec
+/// ("Precision and Operation of SPIR-V Instructions") rounds a correctly rounded operation
+/// "according to IEEE 754 roundTiesToEven" in an entry that declares it, and to either neighbour,
+/// the device's choice, elsewhere.
+pub fn rte_modes(p: &DeviceProfile) -> Option<Vec<u8>> {
     let fc = p.fields().float_controls;
     let has = |w: u8| match w {
         16 => fc.f16.rounding_rte,
         32 => fc.f32.rounding_rte,
-        64 => fc.f64.rounding_rte,
-        _ => false,
+        _ => fc.f64.rounding_rte,
     };
-    let widths = match (fc.rounding_independence, width) {
-        (Independence::All, w) | (Independence::Only32Bit, w @ 32) => vec![w],
-        (Independence::Only32Bit, _) => vec![16, 64],
-        (Independence::None, _) => vec![16, 32, 64],
+    let widths = match fc.rounding_independence {
+        Independence::All | Independence::Only32Bit => vec![32],
+        Independence::None => vec![16, 32, 64],
     };
-    (has(width) && widths.iter().all(|w| has(*w))).then_some(widths)
+    widths.iter().all(|w| has(*w)).then_some(widths)
 }
 
 /// Whether module `m` rounds to `half` through [`converted`] or [`controlled`]: an `OpFConvert` of

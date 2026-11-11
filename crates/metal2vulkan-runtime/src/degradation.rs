@@ -2585,12 +2585,11 @@ degradations! {
         NativeHalfConversion = "native-half-conversion";
         /// Class: native device maths (a conversion). The device's correctly rounded conversion
         /// answers an `air.convert` whose name rounds to nearest even (`.rte`, OpenCL's
-        /// `convert_float` of an `int`) and that can round (a 32- or 64-bit integer to `float`, a
-        /// 64-bit integer to `double`, a `double` to `float`), on a device whose float controls
-        /// cannot declare `RoundingModeRTE` for the result's width with the widths its
-        /// independence ties to it (MoltenVK). Recorded bound: the exact value's neighbour on
-        /// either side, one unit in the last place, the device's choice, where Metal answers the
-        /// nearer one, ties to even.
+        /// `convert_float` of an `int`) and that can round (a 32- or 64-bit integer to `float`), on
+        /// a device whose float controls cannot declare `RoundingModeRTE` for 32 bits with the
+        /// widths its independence ties to it (MoltenVK). Recorded bound: the exact value's
+        /// neighbour on either side, one unit in the last place, the device's choice, where Metal
+        /// answers the nearer one, ties to even.
         NativeConversionRounding = "native-conversion-rounding";
         /// Class: native half rounding. The device's `OpQuantizeToF16` alone rounds the
         /// pipeline's `half` results computed in `float` on every device without `shaderFloat16`,

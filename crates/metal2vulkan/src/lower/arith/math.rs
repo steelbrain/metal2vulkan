@@ -2376,7 +2376,8 @@ pub enum ConvertKind {
     /// Integer (`signed` source) to integer.
     Int { signed: bool },
     /// Integer (`src_signed` source) to integer (`dst_signed`), saturating (`air.convert`'s
-    /// `.sat`): clamped to the range both share ([`rounding::saturate`]), then [`ConvertKind::Int`].
+    /// `.sat`): clamped to the range both share ([`rounding::saturate`]), then
+    /// [`ConvertKind::Int`].
     SatInt { src_signed: bool, dst_signed: bool },
     /// Integer (`signed` source) to a float that cannot hold every value of it, rounded `dir`
     /// (`air.convert`'s `.rtz`, `.rtp` and `.rtn`): exact by integer arithmetic

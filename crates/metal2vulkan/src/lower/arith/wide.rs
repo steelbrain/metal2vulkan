@@ -1619,9 +1619,9 @@ impl WideOp {
             // A directed rounding's magnitude and `half` steps beyond the plain conversion.
             WideOp::Convert {
                 kind: ConvertKind::ToFloatDirected { .. },
-                from,
                 to,
-            } => 1024 + rounding::directed_words(*from, *to),
+                ..
+            } => 1024 + rounding::directed_words(*to),
             WideOp::Cast { .. } | WideOp::Convert { .. } => {
                 // The float paths: the collapse to 32 bits (two shifts, a compare) and rounding.
                 1024
@@ -2168,9 +2168,9 @@ fn select_convert(
                 // Nearest even: the conversion's rounding where the entry declares
                 // `RoundingModeRTE` for its width (a `half` or `bfloat` rounds by integer
                 // arithmetic).
-                (None, Some(fmt @ (FloatFmt::F32 | FloatFmt::F64))) => {
+                (None, Some(FloatFmt::F32)) => {
                     if c.rounding.is_some() {
-                        cx.families.arith.rte.insert(fmt.container());
+                        cx.families.arith.rounds_even = true;
                     }
                     ConvertKind::ToFloat { signed }
                 }
@@ -2178,7 +2178,8 @@ fn select_convert(
                 (Some(dir), Some(FloatFmt::F32 | FloatFmt::Half)) => {
                     ConvertKind::ToFloatDirected { signed, dir }
                 }
-                // A `double` or `bfloat` by a directed rounding from a wide integer.
+                // A `bfloat` by a directed rounding from a wide integer (`air.convert` names no
+                // `double`).
                 (Some(_), _) => return Err(not_lowered()),
             }
         }

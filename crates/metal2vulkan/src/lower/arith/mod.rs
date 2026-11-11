@@ -555,7 +555,7 @@ impl FamilyStrategy for ArithStrategy {
                 kind: ConvertKind::ToFloatDirected { .. } | ConvertKind::FloatDirected(_),
                 from,
                 to,
-            } => 160 + conversion_words(*from, *to) + rounding::directed_words(*from, *to),
+            } => 160 + conversion_words(*from, *to) + rounding::directed_words(*to),
             S::Convert { from, to, .. } => 160 + conversion_words(*from, *to),
             S::Pack {
                 dir,
@@ -752,13 +752,12 @@ pub struct ArithPlan {
     /// [`pack::measured`]), recorded at selection: the module then requires
     /// `VkProperty::MetalPackConversions`.
     pub metal_packs: bool,
-    /// The float widths (32 or 64) of the conversions that round to nearest even by their name
-    /// (`air.convert`'s `.rte`) and can round (an integer of more bits than the format's
-    /// significand, a `double` to `float`), recorded at selection; [`finish`] decides
-    /// [`ArithPlan::rounding_modes`] from them.
-    pub rte: BTreeSet<u8>,
+    /// Whether a conversion rounds an integer to `float` to nearest even by its name
+    /// (`air.convert`'s `.rte`) and can round (an integer of more than 24 bits of magnitude),
+    /// recorded at selection; [`finish`] decides [`ArithPlan::rounding_modes`] from it.
+    pub rounds_even: bool,
     /// The widths whose `RoundingModeRTE` execution mode the entry declares, decided by [`finish`]:
-    /// those [`ArithPlan::rte`] needs and the device's float controls tie to them
+    /// those [`ArithPlan::rounds_even`] needs and the device's float controls tie to them
     /// (`narrow::rte_modes`), where the profile supports them all; elsewhere the conversions are
     /// the device's (`PrecisionNote::NativeConversionRounding`).
     pub rounding_modes: BTreeSet<u8>,
@@ -848,12 +847,11 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             cx.precision.insert(PrecisionNote::DeviceSignedZeroInfNan);
         }
     }
-    // A conversion that rounds to nearest even by its name: under `RoundingModeRTE` for its width
+    // A conversion that rounds to nearest even by its name: under `RoundingModeRTE` for 32 bits
     // (and the widths the device ties to it) where the device has them all, the device's
     // correctly rounded conversion elsewhere.
-    let rte: Vec<u8> = cx.families.arith.rte.iter().copied().collect();
-    for w in rte {
-        match narrow::rte_modes(cx.profile, w) {
+    if cx.families.arith.rounds_even {
+        match narrow::rte_modes(cx.profile) {
             Some(widths) => cx.families.arith.rounding_modes.extend(widths),
             None => {
                 cx.precision.insert(PrecisionNote::NativeConversionRounding);
@@ -2837,10 +2835,8 @@ fn select_convert(
 
 /// The kind of a float-to-float `air.convert` from `from` to `to` with `c`'s rounding: the plain
 /// conversion, which is exact for a widening and rounds to nearest even as Metal's `fptrunc` does
-/// for a narrowing (`.rte` asks no more of it, but that a `double` narrowed to `float` rounds so
-/// only where the entry declares `RoundingModeRTE` for 32 bits, [`ArithPlan::rte`]); or, for a
-/// narrowing toward zero or an infinity, [`ConvertKind::FloatDirected`], which Vulkan has no
-/// conversion of.
+/// for a narrowing (`.rte` asks no more of it); or, for a narrowing toward zero or an infinity,
+/// [`ConvertKind::FloatDirected`], which Vulkan has no conversion of.
 fn float_convert(
     cx: &mut SelectCx<'_>,
     c: &Convert,
@@ -2852,22 +2848,15 @@ fn float_convert(
     };
     let widening = matches!(
         (src, dst),
-        (
-            FloatFmt::Half | FloatFmt::BFloat,
-            FloatFmt::F32 | FloatFmt::F64
-        ) | (FloatFmt::F32, FloatFmt::F64)
+        (FloatFmt::Half | FloatFmt::BFloat, FloatFmt::F32)
     );
     if src == dst || widening {
         return Ok(ConvertKind::Float);
     }
     match rounding::Directed::of(c.rounding) {
-        None => {
-            if c.rounding.is_some() && (src, dst) == (FloatFmt::F64, FloatFmt::F32) {
-                cx.families.arith.rte.insert(32);
-            }
-            Ok(ConvertKind::Float)
-        }
-        Some(dir) if rounding::narrows(src, dst) => Ok(ConvertKind::FloatDirected(dir)),
+        // Nearest even: the narrowing every `air.convert` to `half` takes, which rounds so.
+        None => Ok(ConvertKind::Float),
+        Some(dir) if rounding::narrows(from, to) => Ok(ConvertKind::FloatDirected(dir)),
         // A `bfloat` narrowing by a directed rounding: Apple's OpenCL compiler emits none.
         Some(_) => Err(not_lowered()),
     }
@@ -2876,9 +2865,9 @@ fn float_convert(
 /// The kind of an integer-to-float `air.convert` (a `signed` source) from `from` to `to` with
 /// `c`'s rounding. One whose every source value is a value of the destination cannot round: the
 /// plain conversion, whatever the rounding. Elsewhere, nearest even is the plain conversion too,
-/// which rounds so where the entry declares `RoundingModeRTE` for the result's width
-/// ([`ArithPlan::rte`]; a `half` or `bfloat` result is rounded by integer arithmetic already); and
-/// toward zero or an infinity is [`ConvertKind::ToFloatDirected`].
+/// which rounds so where the entry declares `RoundingModeRTE` for 32 bits
+/// ([`ArithPlan::rounds_even`]; a `half` or `bfloat` result is rounded by integer arithmetic
+/// already); and toward zero or an infinity is [`ConvertKind::ToFloatDirected`].
 fn int_to_float_convert(
     cx: &mut SelectCx<'_>,
     c: &Convert,
@@ -2894,19 +2883,16 @@ fn int_to_float_convert(
         return Ok(plain);
     }
     match (rounding::Directed::of(c.rounding), dst) {
-        (None, FloatFmt::F32 | FloatFmt::F64) => {
-            cx.families.arith.rte.insert(dst.container());
+        (None, FloatFmt::F32) => {
+            cx.families.arith.rounds_even = true;
             Ok(plain)
         }
         (None, _) => Ok(plain),
         (Some(dir), FloatFmt::Half | FloatFmt::F32) => {
             Ok(ConvertKind::ToFloatDirected { signed, dir })
         }
-        // Only a 64-bit integer rounds to `double`.
-        (Some(dir), FloatFmt::F64) if from.container() == 64 => {
-            Ok(ConvertKind::ToFloatDirected { signed, dir })
-        }
-        // A `bfloat` result by a directed rounding: Apple's OpenCL compiler emits none.
+        // A `bfloat` result by a directed rounding: Apple's OpenCL compiler emits none (and
+        // `air.convert` names no `double`).
         (Some(_), _) => Err(not_lowered()),
     }
 }

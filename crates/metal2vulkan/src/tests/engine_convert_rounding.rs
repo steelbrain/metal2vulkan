@@ -620,7 +620,7 @@ fn every_rounding_is_exact_on_the_interpreter() {
             let out = run(&m, &Config::default(), res)
                 .unwrap_or_else(|e| panic!("{what}: interpreter: {e}"))
                 .buffers;
-            let got = &out[0].bytes;
+            let got = &out[0];
             let n = c.dst.ty.bytes();
             for (k, x) in xs.iter().enumerate() {
                 let mut word = [0u8; 8];
@@ -739,7 +739,7 @@ fn nearest_even_declares_the_mode_or_records_the_note() {
                 .precision
                 .contains(&PrecisionNote::NativeConversionRounding);
             let widths = rounds_even_at(&a.module.words);
-            let modes = narrow::rte_modes(&p, 32);
+            let modes = narrow::rte_modes(&p);
             if rounds {
                 match &modes {
                     Some(want) => {
@@ -757,11 +757,21 @@ fn nearest_even_declares_the_mode_or_records_the_note() {
                 }
             } else {
                 assert!(!noted_here, "{what}: noted");
-                assert!(
-                    widths.is_empty() || narrow::controlled_modes(&p).is_some(),
-                    "{what}: declares {widths:?}"
-                );
+                assert!(widths.is_empty(), "{what}: declares {widths:?}");
             }
+        }
+        // The float controls of the profiles the venues run, read from their descriptions:
+        // RADV's rounding modes are independent for 32 bits only, ANV's not at all (so 32 brings
+        // 16 and 64), lavapipe's fully; MoltenVK has no 64-bit RTE and no independence, and the
+        // floor states no float controls.
+        let known: Option<Option<Vec<u8>>> = match stem.as_str() {
+            "lavapipe" | "amd-780m-radv" => Some(Some(vec![32])),
+            "intel-irisxe-anv" => Some(Some(vec![16, 32, 64])),
+            "moltenvk-m3" | "vk12-floor" => Some(None),
+            _ => None,
+        };
+        if let Some(want) = known {
+            assert_eq!(narrow::rte_modes(&p), want, "{stem}");
         }
     }
     assert!(

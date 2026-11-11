@@ -322,7 +322,7 @@ fn convert_parses_its_rounding_and_saturation() {
             false,
         ),
         ("air.convert.f.f16.s.i32.rtz", ConvertRounding::Rtz, false),
-        ("air.convert.f.f32.f.f64.rtp", ConvertRounding::Rtp, false),
+        ("air.convert.f.f16.f.f32.rtp", ConvertRounding::Rtp, false),
         ("air.convert.s.i32.f.f32.rtn", ConvertRounding::Rtn, false),
         (
             "air.convert.s.i32.f.f32.rtz.sat",
