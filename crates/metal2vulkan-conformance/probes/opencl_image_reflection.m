@@ -1,9 +1,9 @@
-// What Metal's reflection states for the image arguments of a compute pipeline of OpenCL mode, and
-// what the AIR of each image argument names as its type. Our own OpenCL C kernels, one library
-// each: an `image1d_t`, an `image1d_array_t`, an `image2d_t` and an `image3d_t` read with
-// `read_imagef`, `read_imagei` and `read_imageui` (and `read_imageh` where the compiler takes
-// `cl_khr_fp16`), written with the write forms, only queried, unused, read through a sampler, two
-// images read as float and int, and a `__read_write` image (OpenCL C 2.0).
+// What Metal's reflection states for the image arguments of a compute pipeline of OpenCL mode. Our
+// own OpenCL C kernels, one library each: an `image1d_t`, an `image1d_array_t`, an `image2d_t` and
+// an `image3d_t` read with `read_imagef`, `read_imagei` and `read_imageui` (and `read_imageh` where
+// the compiler takes `cl_khr_fp16`), written with the write forms, only queried, unused, read
+// through a sampler, two images read as float and int, and a `__read_write` image (OpenCL C 2.0).
+// Nothing is written to disk.
 //
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation \
 //       -o opencl_image_reflection opencl_image_reflection.m
@@ -13,10 +13,18 @@
 // `__entry_<name>` (`newFunctionWithPluginData:bitcodeType:` 2), a pipeline with
 // `openCLModeEnabled`, and its reflection both ways: `arguments` (`MTLArgument`: type, index,
 // access, texture type, texture data type, depth, array length, active) and `bindings`
-// (`MTLTextureBinding`: the same fields). Then `air`: every texture template the library's
-// serialized bytes name (`texture...<...>`, `depth...<...>`), where the library serializes
-// (`serializeToURL:error:`, written to a temporary file and removed): AIR metadata strings lie in
-// the bitcode's blob as their own bytes.
+// (`MTLTextureBinding`: the same fields).
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1:
+//   - Every image argument's texture data type is 0 (`MTLDataTypeNone`), both ways: read as float,
+//     int, uint and half (`rh1` compiles), written as float, int and uint, only queried (`q1`),
+//     unused (`n1`: active 0, used 0), read through a sampler (`s1`), and each of two images read
+//     as float and int (`mix1`).
+//   - Texture types: `image1d_t` 2 (`MTLTextureType2D`), `image1d_array_t` 3 (`2DArray`),
+//     `image2d_t` 2, `image3d_t` 7 (`3D`). Access: `__read_only` 0 (read-only), `__write_only` 2
+//     (write-only). Depth 0, array length 1, at the image's own index.
+//   - The `__read_write` image (`rw1`, OpenCL C 2.0): no library, "Undefined symbol(s) for
+//     architecture 'air64'" for `read_imagef` and `write_imagef` of `ocl_image1d_rw`.
 #define CL_SILENCE_DEPRECATION
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -124,58 +132,6 @@ static void printBindings(const char *name, MTLComputePipelineReflection *r)
 	}
 }
 
-// Every `texture...<...>` and `depth...<...>` the bytes name, once each, in order.
-static void printTemplates(const char *name, NSData *bytes)
-{
-	const char *p = bytes.bytes;
-	NSUInteger n = bytes.length;
-	NSMutableOrderedSet<NSString *> *seen = [NSMutableOrderedSet orderedSet];
-	const char *heads[] = {"texture", "depth"};
-	for (NSUInteger i = 0; i < n; i++) {
-		for (unsigned h = 0; h < 2; h++) {
-			size_t len = strlen(heads[h]);
-			if (i + len > n || memcmp(p + i, heads[h], len) != 0)
-				continue;
-			NSUInteger j = i + len;
-			while (j < n && j - i < 32 && (p[j] == '_' || (p[j] >= 'a' && p[j] <= 'z') || (p[j] >= '0' && p[j] <= '9')))
-				j++;
-			if (j >= n || p[j] != '<')
-				continue;
-			NSUInteger k = j;
-			while (k < n && k - j < 48 && p[k] != '>' && p[k] >= 0x20 && p[k] < 0x7f)
-				k++;
-			if (k < n && p[k] == '>')
-				[seen addObject:[[NSString alloc] initWithBytes:p + i length:k + 1 - i encoding:NSASCIIStringEncoding]];
-		}
-	}
-	printf("air kernel=%s templates=%lu", name, (unsigned long)seen.count);
-	for (NSString *s in seen)
-		printf(" \"%s\"", s.UTF8String);
-	printf("\n");
-}
-
-static void serialized(const char *name, id<MTLLibrary> lib)
-{
-	SEL serialize = sel_registerName("serializeToURL:error:");
-	if (![(id)lib respondsToSelector:serialize]) {
-		printf("air kernel=%s serialize=unavailable class=%s\n", name, class_getName([(id)lib class]));
-		return;
-	}
-	NSString *path = [NSTemporaryDirectory()
-	    stringByAppendingPathComponent:[NSString stringWithFormat:@"opencl-image-reflection-%d-%s.metallib",
-	                                                              getpid(), name]];
-	NSURL *url = [NSURL fileURLWithPath:path];
-	NSError *error = nil;
-	BOOL ok = ((BOOL(*)(id, SEL, NSURL *, NSError **))objc_msgSend)(lib, serialize, url, &error);
-	NSData *bytes = ok ? [NSData dataWithContentsOfURL:url] : nil;
-	[NSFileManager.defaultManager removeItemAtURL:url error:nil];
-	if (bytes == nil) {
-		printf("air kernel=%s serialize=failed error=%s\n", name, oneLine(error));
-		return;
-	}
-	printTemplates(name, bytes);
-}
-
 static void probe(id<MTLDevice> d, const struct Kernel *k)
 {
 	NSError *error = nil;
@@ -198,7 +154,6 @@ static void probe(id<MTLDevice> d, const struct Kernel *k)
 	                 : nil;
 	if (variant == nil) {
 		printf("kernel=%s function=%s variant=nil\n", k->name, fn ? "yes" : "no");
-		serialized(k->name, lib);
 		return;
 	}
 	MTLComputePipelineDescriptor *desc = [MTLComputePipelineDescriptor new];
@@ -218,7 +173,6 @@ static void probe(id<MTLDevice> d, const struct Kernel *k)
 		printArguments(k->name, r);
 		printBindings(k->name, r);
 	}
-	serialized(k->name, lib);
 }
 
 int main(int argc, char **argv)
