@@ -322,7 +322,7 @@ fn copies(route: Route) {
         "{route:?}: no copy of the pages"
     );
     let address = buffer.gpu_address();
-    assert_ne!(address, 0);
+    assert_ne!(address.0, 0);
 
     // The first command buffer reads the pages' bytes.
     assert_eq!(read(&device, &queue, &buffer, 0..BYTES), pattern(BYTES));
