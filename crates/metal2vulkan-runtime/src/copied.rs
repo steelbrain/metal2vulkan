@@ -365,11 +365,28 @@ pub(crate) fn key() -> &'static [u32; KEY_WORDS] {
 pub(crate) fn tag(block: &[u8; TAG_BLOCK]) -> Tag {
     #[cfg(target_arch = "x86_64")]
     {
-        // SAFETY: every x86-64 host has SSE2.
-        unsafe { x86::tag_sse2(block, key()) }
+        // SAFETY: the block's bytes; every x86-64 host has SSE2.
+        unsafe { x86::tag_sse2(block.as_ptr(), key()) }
     }
     #[cfg(not(target_arch = "x86_64"))]
     tag_portable(block)
+}
+
+/// [`tag`] of the `span` bytes at `from` (at most [`TAG_BLOCK`], zero past them): read in place
+/// where the block is whole, as each block of a comparison is once, else through `scratch`.
+///
+/// # Safety
+///
+/// `from` is `span` bytes of mapped memory the host reads.
+unsafe fn tag_in_place(from: *const u8, span: usize, scratch: &mut [u8; TAG_BLOCK]) -> Tag {
+    #[cfg(target_arch = "x86_64")]
+    if span == TAG_BLOCK {
+        // SAFETY: the caller's; every x86-64 host has SSE2.
+        return unsafe { x86::tag_sse2(from, key()) };
+    }
+    // SAFETY: the caller's.
+    unsafe { read_block(from, span, scratch) };
+    tag(scratch)
 }
 
 /// [`tag`] one word pair at a time: the host's answer where it has no SIMD form, and the
@@ -419,15 +436,19 @@ pub(crate) mod x86 {
         _mm_srli_epi64, _mm_storeu_si128,
     };
 
-    /// [`tag`] of `block` under `key`.
+    /// [`tag`] of the [`TAG_BLOCK`] bytes at `block` under `key`, read with plain loads.
+    ///
+    /// # Safety
+    ///
+    /// `block` is [`TAG_BLOCK`] bytes of mapped memory the host reads.
     #[target_feature(enable = "sse2")]
-    pub(crate) fn tag_sse2(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
-        let words = block.as_ptr().cast::<__m128i>();
+    pub(crate) unsafe fn tag_sse2(block: *const u8, key: &[u32; KEY_WORDS]) -> Tag {
+        let words = block.cast::<__m128i>();
         let keys = key.as_ptr().cast::<__m128i>();
         let (mut first, mut second) = ([_mm_setzero_si128(); 2], [_mm_setzero_si128(); 2]);
         for stretch in 0..TAG_BLOCK / 32 {
             // SAFETY: unaligned loads of the block's 16-byte pieces `2 * stretch` and the next
-            // (at most its 63rd of 64), and of the key's 4-word pieces `2 * stretch` to two
+            // (at most its 63rd of 64: the caller's), and of the key's 4-word pieces `2 * stretch` to two
             // after it (at most its 64th of 65: words 256 to 259).
             let (low, high, low_key, high_key, next_key) = unsafe {
                 (
@@ -1292,9 +1313,15 @@ unsafe fn copy_in_tagged(
         let at = index * TAG_BLOCK;
         let span = (length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the pages (the caller's).
+        if unsafe { tag_in_place(pages.add(at), span, &mut now) } == *agreed {
+            continue;
+        }
+        // The block's bytes, read once: those merged, and those the base takes.
+        // SAFETY: as above.
         unsafe { read_block(pages.add(at), span, &mut now) };
         let changed = tag(&now);
         if changed == *agreed {
+            // Written back since its tag was read.
             continue;
         }
         // SAFETY: as above, in the copy.
@@ -1344,6 +1371,11 @@ unsafe fn merge_tagged(
         let at = index * TAG_BLOCK;
         let span = (length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
+        if unsafe { tag_in_place(copy.add(at), span, &mut now) } == *agreed {
+            continue;
+        }
+        // The block's bytes, read once: those merged, and those the base takes.
+        // SAFETY: as above.
         unsafe { read_block(copy.add(at), span, &mut now) };
         let changed = tag(&now);
         if changed == *agreed {
@@ -1392,10 +1424,11 @@ unsafe fn restore_tagged(
         let at = index * TAG_BLOCK;
         let span = (length - at).min(TAG_BLOCK);
         // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
-        unsafe { read_block(copy.add(at), span, &mut now) };
-        if tag(&now) == *tagged {
+        if unsafe { tag_in_place(copy.add(at), span, &mut now) } == *tagged {
             continue;
         }
+        // SAFETY: as above.
+        unsafe { read_block(copy.add(at), span, &mut now) };
         // SAFETY: as above, in the pages.
         unsafe { read_block(pages.add(at), span, &mut agreed) };
         if tag(&agreed) != *tagged {
