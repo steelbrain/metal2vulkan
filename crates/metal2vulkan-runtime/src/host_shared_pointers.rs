@@ -28,14 +28,14 @@ impl Device {
     /// Where it is false, a no-copy buffer over shared memory is imported only from the caller's
     /// dma-buf source ([`HostMemory::with_dma_buf`](crate::HostMemory::with_dma_buf)), and without
     /// one that works is a copy of the pages, announced (`copied-host-pages`,
-    /// `WorkCounts::copied_host_buffers_device_refused`); on a device that imports no pointer,
-    /// memory that comes with no source is refused instead, naming the extension. A source is
-    /// what such memory needs to be imported, whatever its pages' protection: pages the process
-    /// maps read-only go to the source without their pointer's import being tried (a dma-buf pins
-    /// nothing of the process's mapping), so a caller need not make a writable second mapping of
-    /// them for the import. Measured: MoltenVK (an M3 Max) and lavapipe answer true, RADV (a
-    /// Radeon 780M and an RX 7900 XTX, Mesa 26.2.4) false; NVIDIA's driver imported such memory
-    /// where the no-copy buffers were measured, though this answer was not asked there.
+    /// `WorkCounts::copied_host_buffers_device_refused`), as is any memory without one on a
+    /// device that imports no pointer. A source is what such memory needs to be imported,
+    /// whatever its pages' protection: pages the process maps read-only go to the source without
+    /// their pointer's import being tried (a dma-buf pins nothing of the process's mapping), so a
+    /// caller need not make a writable second mapping of them for the import. Measured: MoltenVK
+    /// (an M3 Max) and lavapipe answer true, RADV (a Radeon 780M and an RX 7900 XTX, Mesa 26.2.4)
+    /// false; NVIDIA's driver imported such memory where the no-copy buffers were measured,
+    /// though this answer was not asked there.
     ///
     /// Fails only where the answer cannot be found: out of host memory for the page, or the
     /// device lost. The device's refusal of the pointer is no failure but the answer, false.

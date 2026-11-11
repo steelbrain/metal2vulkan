@@ -210,9 +210,11 @@ source is refused with `Unsupported`, `HostMemory`.
 A device that enables no `VK_EXT_external_memory_host` (a driver that lists none, or a device made
 with it in `DeviceOptions::withheld_extensions`) but enables the dma-buf route imports no pointer
 at all: memory made with a source is imported from its dma-bufs, its pages rounded out to the host
-page, and memory made without one is refused (`Unsupported`, naming the extension), as is every
-no-copy object on a device with neither. A guest RAM there (`Device::use_host_ram`) needs a source
-too, and its chunks are its dma-bufs; an object whose runs lie in one of its chunks
+page. A no-copy buffer or heap over memory made without one, or with one that fails, is a copy of
+the pages, as where a driver refuses the pointer above (`copied_host_buffers_device_refused`); a
+rebind to such memory is refused (`Unsupported`, naming the extension), as is every no-copy object
+on a device with neither route. A guest RAM there (`Device::use_host_ram`) needs a source too, and
+its chunks are its dma-bufs; an object whose runs lie in one of its chunks
 (`HostMemory::with_runs`) is bound there with no source of its own.
 
 No driver that pins imported pages imports a mapping the kernel cannot pin (`VM_IO` or `VM_PFNMAP`:

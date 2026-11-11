@@ -161,7 +161,8 @@
 //!   use; of runs one after another, bytes of the buffer that start off a 4-byte word of its memory
 //!   (runs each at a byte of their own are copied by regions there); a copy by regions with a
 //!   buffer over host pages its bytes' span overlaps. A device without
-//!   `VK_EXT_external_memory_host` uses no RAM (`Unsupported`, naming it); the buffer's bytes past
+//!   `VK_EXT_external_memory_host` uses no RAM that comes with no dma-buf source it imports
+//!   (`Unsupported`, naming it); the buffer's bytes past
 //!   its length are a range past it ([`Problem::RangeOutOfBounds`]: of runs each at a byte of their
 //!   own, the first run's past it). A chunk the device cannot import fails the copy with the
 //!   import's error.

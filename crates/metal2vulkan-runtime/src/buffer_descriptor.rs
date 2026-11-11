@@ -495,8 +495,10 @@ impl Device {
     /// command buffers already submitted read what the GPU wrote, and each batch's completion
     /// puts the copy back to the caller's bytes, which the GPU never writes.
     ///
-    /// Where the caller's gate refuses the import ([`HostMemory::with_import_gate`]), or the import
-    /// the device and the gate admitted fails (out of memory, another Vulkan error), of the pointer
+    /// Where the caller's gate refuses the import ([`HostMemory::with_import_gate`]), where the
+    /// device refuses the pointer or imports none and no dma-buf of the pages serves (no source
+    /// given, or one that failed or whose dma-bufs the device refused), or where the import the
+    /// device and the gate admitted fails (out of memory, another Vulkan error), of the pointer
     /// or of the dma-bufs, the buffer is made over a copy of the bytes in memory of the device's
     /// own instead, its `contents` still the pointer, announced (`copied-host-pages`): each commit
     /// copies in the bytes the CPU changed, and each batch's completion merges back the bytes the
@@ -505,12 +507,11 @@ impl Device {
     /// are never copied, and keep the import's refusal.
     ///
     /// Refused: a length of 0 or past `max_buffer_length` (`Nil`, as plain Metal answers nil);
-    /// `Private` or `Memoryless` storage, as Metal stops them, and an undefined
-    /// option (`Invalid`); on a device without `VK_EXT_external_memory_host`, memory that comes
-    /// with no dma-buf source it imports and lies in no chunk of a guest RAM it uses
-    /// (`Device::use_host_ram`, `HostMemory::with_runs`) (`Unsupported`, naming it); memory this
-    /// device cannot import exactly, by its pointer or by its dma-bufs (`Unsupported`,
-    /// `HostMemory`), among it on Linux a page this process cannot write ([`HostMemory::new`]);
+    /// `Private` or `Memoryless` storage, as Metal stops them, and an undefined option
+    /// (`Invalid`); on a device that imports neither pointers (`VK_EXT_external_memory_host`) nor
+    /// dma-bufs, every memory (`Unsupported`, naming the extension); memory this device cannot
+    /// import exactly, by its pointer or by its dma-bufs (`Unsupported`, `HostMemory`), among it
+    /// on Linux a page this process cannot write ([`HostMemory::new`]);
     /// dma-bufs that break the source's contract (`Invalid`, `Problem::DmaBuf`); pages past the
     /// device's allocation size (`OutOfMemory`). Pages not mapped, or mapped without access, which
     /// Metal makes no buffer over (nil), are refused here too, typed as the check or the import
@@ -751,8 +752,9 @@ impl Device {
         let source = (source, dma_buf_only);
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         // Pages with no route of their own are refused here, but where their runs may lie in a
-        // guest RAM's chunk (below), refused there where they do not.
-        let no_route = match (host.no_route(importer), &runs) {
+        // guest RAM's chunk (below), refused there where they do not; on a device that imports no
+        // pointer, they are a copy instead (below), as where a device refuses their pointer.
+        let no_route = match (host.no_route(importer).filter(|_| !host.pointerless), &runs) {
             (Some(refusal), None) => return Err(refusal),
             (no_route, _) => no_route,
         };
@@ -919,9 +921,10 @@ impl Device {
                 // idle and import them again (`host_residency.rs`), as it may its own import of the
                 // pointer where the driver's pointer imports follow their address; a heap's import
                 // stays, as does an import of a read-only view.
-                // Whether the device was asked the pointer, whose refusal a failed source leaves
-                // standing (the window takes it, and the memory is no dma-buf-only memory).
-                let by_pointer = host.by_pointer;
+                // Whether the device was asked the pointer, or imports none, whose refusal a
+                // failed source leaves standing (the window takes it, and the memory is no
+                // dma-buf-only memory).
+                let pointer_refused = host.by_pointer || host.pointerless;
                 let imported =
                     match unsafe { self.import_by_pointer(importer, pointer, length, host, class) }
                     {
@@ -947,7 +950,7 @@ impl Device {
                             // device refused its dma-bufs): the device's refusal of the pointer,
                             // as where no source is given.
                             let by_device =
-                                by_pointer && refused(&failed) && refusal == not_importable();
+                                pointer_refused && refused(&failed) && refusal == not_importable();
                             (source_failure(failed, refusal), by_device)
                         }),
                         // The device's refusal of the pointer, with no source of dma-bufs of the
@@ -976,9 +979,10 @@ impl Device {
                         return copied.map(|buffer| noted(kept(buffer, log, kept_runs, made_of)));
                     }
                     // Pages whose pointer the device refuses (RADV refuses shared memory, a
-                    // `memfd` mapping among it), with no dma-buf of them served (no source given,
-                    // a source that failed, dma-bufs the device refused): a copy, announced, as
-                    // Metal makes a no-copy buffer over any page.
+                    // `memfd` mapping among it; a device without `VK_EXT_external_memory_host`
+                    // every pointer), with no dma-buf of them served (no source given, a source
+                    // that failed, dma-bufs the device refused): a copy, announced, as Metal makes
+                    // a no-copy buffer over any page.
                     Err((_, true)) if copyable => {
                         let why = CopiedFor::DeviceRefused;
                         // SAFETY: the caller's contract.
@@ -1611,6 +1615,7 @@ impl Device {
             by_pointer,
             source,
             drops_writes,
+            pointerless: _,
         } = host;
         let refusal = match (by_pointer, importer.pointers()) {
             // SAFETY: the caller's.
@@ -1888,7 +1893,8 @@ impl Device {
                 }
                 CopiedBecause::DeviceRefused => {
                     "the device refused their pointer's import (VK_EXT_external_memory_host), as \
-                     RADV refuses shared memory, and no dma-buf of them served it: no source of \
+                     RADV refuses shared memory, or imports no pointer (it enables no \
+                     VK_EXT_external_memory_host), and no dma-buf of them served it: no source of \
                      them was given (HostMemory::with_dma_buf), or it failed, or the device \
                      refused its dma-bufs"
                 }
@@ -2340,6 +2346,11 @@ struct HostWindow {
     by_pointer: bool,
     /// The caller's dma-buf source, where it gave one and the device imports dma-bufs.
     source: Option<Source>,
+    /// The device imports no pointer (it enables no `VK_EXT_external_memory_host`), and the pages
+    /// are not the source's dma-bufs alone (`HostMemory::dma_buf_only`): where no dma-buf of them
+    /// serves, a no-copy buffer or heap over them is a copy (`copied.rs`), as where a device
+    /// refuses their pointer.
+    pointerless: bool,
 }
 
 /// Whether a no-copy buffer, heap or rebind whose pages the caller resolves to runs of a guest RAM
@@ -2387,9 +2398,10 @@ pub(super) fn no_copy_options(options: ResourceOptions) -> (ResourceOptions, boo
 enum CopiedFor {
     /// The caller's gate refused their import (`HostMemory::with_import_gate`).
     Refused,
-    /// The device refused their pointer's import, and no dma-buf of them served it: the caller
-    /// gave no source of them (`HostMemory::with_dma_buf`), or its source failed, or the device
-    /// refused its dma-bufs.
+    /// The device refused their pointer's import, or imports no pointer (it enables no
+    /// `VK_EXT_external_memory_host`), and no dma-buf of them served it: the caller gave no
+    /// source of them (`HostMemory::with_dma_buf`), or its source failed, or the device refused
+    /// its dma-bufs.
     DeviceRefused,
     /// The import the device and the gate admitted failed, with this.
     Failed(Error),
@@ -2447,11 +2459,13 @@ fn host_window(
         && (importer.pointers()).is_some_and(|pointers| {
             import_window(at, length, importer.page, pointers.alignment).is_ok()
         });
+    let pointerless = !dma_buf_only && importer.pointers().is_none();
     Ok(HostWindow {
         drops_writes,
         window,
         by_pointer,
         source,
+        pointerless,
     })
 }
 
@@ -2462,7 +2476,9 @@ impl HostWindow {
     /// `VK_EXT_external_memory_host`, `Unsupported` naming it; elsewhere a range the import
     /// alignment cannot cover, or memory imported only as dma-bufs (`Unsupported`, `HostMemory`).
     /// `None` where they have a route. Such pages may still lie in a guest RAM's chunk
-    /// (`HostMemory::with_runs`), which takes no import of their own.
+    /// (`HostMemory::with_runs`), which takes no import of their own. A rebind to them takes this
+    /// refusal; a no-copy buffer or heap over them is a copy instead where the device imports no
+    /// pointer ([`HostWindow::pointerless`]).
     fn no_route(&self, importer: &Importer) -> Option<Error> {
         let copied = self.drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES;
         (!self.by_pointer && self.source.is_none() && !copied).then(|| {

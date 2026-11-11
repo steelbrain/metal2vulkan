@@ -6891,10 +6891,11 @@ pub struct WorkCounts {
     pub copied_host_buffers_made: u64,
     /// Of those, the ones made because the caller's gate refused the import.
     pub copied_host_buffers_refused: u64,
-    /// Of those, the ones made because the device refused the pointer's import and no dma-buf of
-    /// the pages served it: the caller gave no source of them (`HostMemory::with_dma_buf`), or
-    /// its source failed, or the device refused its dma-bufs. RADV refuses shared memory, a
-    /// `memfd` mapping among it (`Device::imports_shared_host_pointers`).
+    /// Of those, the ones made because the device refused the pointer's import, or imports no
+    /// pointer (it enables no `VK_EXT_external_memory_host`), and no dma-buf of the pages served
+    /// it: the caller gave no source of them (`HostMemory::with_dma_buf`), or its source failed,
+    /// or the device refused its dma-bufs. RADV refuses shared memory, a `memfd` mapping among it
+    /// (`Device::imports_shared_host_pointers`).
     pub copied_host_buffers_device_refused: u64,
     /// Of those, the ones made because an import the device and the gate admitted failed (out
     /// of memory, another Vulkan error), or because the runtime refused the pages for the driver
@@ -9269,8 +9270,8 @@ impl Device {
 pub(crate) enum CopiedBecause {
     /// The caller's gate refused their import (`HostMemory::with_import_gate`).
     Refused,
-    /// The device refused their pointer's import, and no dma-buf of them served it: no source of
-    /// them was given, or it failed, or the device refused its dma-bufs.
+    /// The device refused their pointer's import, or imports no pointer, and no dma-buf of them
+    /// served it: no source of them was given, or it failed, or the device refused its dma-bufs.
     DeviceRefused,
     /// The import the device and the gate admitted failed.
     Failed,

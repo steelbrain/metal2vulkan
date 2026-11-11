@@ -1501,18 +1501,27 @@ fn contents(buffer: &Buffer) -> Result<NonNull<u8>, Unmade> {
 /// where the device imports no host pointer at all (`VK_EXT_external_memory_host`), else one that
 /// may pass (the import of these pages refused or failed, `copied.rs`).
 fn unimported(device: &Device, why: &str) -> Unmade {
-    let pointers = (device.shared().host_import.as_ref()).is_ok_and(|i| i.pointers().is_some());
-    match pointers {
+    match imports_pointers(device) {
         true => Unmade::passing(why),
         false => Unmade::lasting(why),
     }
 }
 
+/// Whether `device` imports a host pointer (`VK_EXT_external_memory_host`).
+fn imports_pointers(device: &Device) -> bool {
+    (device.shared().host_import.as_ref()).is_ok_and(|importer| importer.pointers().is_some())
+}
+
 /// A no-copy buffer of `length` bytes over anonymous pages mapped for it, imported by their
 /// pointer, which its keep-alive unmaps ([`Anonymous`]). Why not, where the device makes none,
-/// or does not import the pointer (dma-bufs, or a copied host buffer, `copied.rs`).
+/// or does not import the pointer (dma-bufs, or a copied host buffer, `copied.rs`), the buffer
+/// unmade where the device imports no pointer at all (it would be a copy of the pages, announced).
 #[cfg(unix)]
 fn pointer_pages(device: &Device, length: u64) -> Result<ClassPages, Unmade> {
+    if !imports_pointers(device) {
+        let why = "the device imports no host pointer (VK_EXT_external_memory_host)";
+        return Err(Unmade::lasting(why));
+    }
     let start = map_anonymous(length).ok_or_else(|| {
         Unmade::passing(format!("no anonymous mapping of {length} bytes was made"))
     })?;

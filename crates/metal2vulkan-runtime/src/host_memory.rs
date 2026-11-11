@@ -17,8 +17,8 @@
 //!   the buffer reads them past its length, the caller's bytes, as plain Metal reads them
 //!   (`Buffer::copy_reach`). The import is never a dedicated allocation in Vulkan's sense
 //!   (`VkMemoryDedicatedAllocateInfo`), which host memory cannot be.
-//! - **What it refuses**, typed: memory with no dma-buf source the device imports, on a device
-//!   without the extension (`Unsupported` naming it), and what this device cannot import exactly
+//! - **What it refuses**, typed: every memory on a device that imports neither pointers nor
+//!   dma-bufs (`Unsupported` naming the extension), and what this device cannot import exactly
 //!   (`Unsupported`, `not_representable`): an import
 //!   alignment above the host page whose rounding would take pages the range does not touch, an
 //!   offset in the pages that misses the buffer's memory alignment, no memory type both allow, or
@@ -53,9 +53,12 @@
 //!   takes by its pointer is made exactly as before, with no call more. A device that enables no
 //!   `VK_EXT_external_memory_host` (a driver that lists none, or a device made withholding it,
 //!   `DeviceOptions::withheld_extensions`) but imports dma-bufs takes this route alone: no pointer
-//!   is asked of it ([`Importer::pointers`]), the pages are rounded out to the host page, and
-//!   memory that comes with no source is refused, naming the extension
-//!   ([`Importer::pointer_import`]).
+//!   is asked of it ([`Importer::pointers`]), and the pages are rounded out to the host page. A
+//!   no-copy buffer or heap over memory that comes with no source it can use, or whose source
+//!   fails, is a copy of the pages (`copied.rs`, announced as `copied-host-pages`, counted as
+//!   the device's refusal, `WorkCounts::copied_host_buffers_device_refused`), as where a device
+//!   refuses the pointer; a rebind to such memory is refused, as is a guest RAM with no source
+//!   (`Device::use_host_ram`), naming the extension ([`Importer::pointer_import`]).
 //! - **When**. The pages are imported when the buffer is made, on every platform, as Metal wires
 //!   them then: the GPU uses the pages mapped at the pointer when the buffer was made, whatever is
 //!   mapped there later, but on a driver whose pointer imports follow their address (as the

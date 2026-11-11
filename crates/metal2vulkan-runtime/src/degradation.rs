@@ -2053,7 +2053,8 @@ degradations! {
         /// (`HostMemory::with_import_gate`) refused the pages' import, or the device refused the
         /// pointer's import and no dma-buf of the pages served it, the caller giving no source of
         /// them (`HostMemory::with_dma_buf`) or one that failed or whose dma-bufs the device
-        /// refused (RADV refuses shared memory, a `memfd` mapping among it,
+        /// refused (RADV refuses shared memory, a `memfd` mapping among it, and a device without
+        /// `VK_EXT_external_memory_host` every pointer,
         /// `WorkCounts::copied_host_buffers_device_refused`), or the import the device
         /// and the gate admitted failed, of the pointer or of the caller's dma-bufs (out of
         /// memory, or another Vulkan error, such as a driver out of the mappings the host kernel

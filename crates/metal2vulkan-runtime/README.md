@@ -382,16 +382,18 @@ the record the pass is making.
   ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)), and a no-copy buffer or heap
   over memory made without a source is a copy of its pages, as below. A device that enables no
   `VK_EXT_external_memory_host` but imports dma-bufs imports only those: memory made with a
-  source is imported from its dma-bufs, and memory made without one is refused
-  (`Unsupported`, naming the extension); on NVIDIA's driver the runtime
+  source is imported from its dma-bufs, and a no-copy buffer or heap over memory made without
+  one is a copy of its pages, as where a driver refuses the pointer (a rebind to such memory is
+  refused, `Unsupported`, naming the extension); on NVIDIA's driver the runtime
   never hands the driver pages the kernel cannot pin (a dma-buf's mapping): they take the source,
   and else, or where its import fails, a copy, as below. A no-copy buffer's import of such
   dma-bufs that only blits have read may be released while idle and imported again at its next
   blit, which then costs time: RADV lists every import in every submission. Nothing of Metal's
   observes it. A no-copy buffer, heap, or buffer's or heap's rebind whose import the caller's gate
   refuses (`HostMemory::with_import_gate`), or whose admitted import fails, and a no-copy buffer
-  or heap whose pointer the device refuses with no dma-buf of its pages serving it (no source
-  given, or one that failed or whose dma-bufs the device refused), is made over a copy of
+  or heap whose pointer the device refuses, or on a device that imports no pointer, with no
+  dma-buf of its pages serving it (no source given, or one that failed or whose dma-bufs the
+  device refused), is made over a copy of
   its bytes in memory of the device's own, announced (`copied-host-pages`,
   [HOWTO](../../docs/HOWTO.md#copied-host-buffers)), wherever the process maps the pages
   readable (a dma-buf's mapping among them); over pages not mapped readable it is refused. A

@@ -1,12 +1,13 @@
 //! Copied host buffers: a no-copy buffer whose import of the caller's pages the caller's gate
 //! refused ([`HostMemory::with_import_gate`](crate::HostMemory)), whose pointer the device refused
 //! with no dma-buf of the pages serving it (no source of them given, or one that failed or whose
-//! dma-bufs the device refused; RADV refuses shared memory, a `memfd` mapping among it), or whose
-//! import the gate and the device admitted and that then failed (out of memory, another Vulkan
-//! error, or the runtime's refusal of pages the kernel cannot pin on a driver whose failed import
-//! of them breaks it, `RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`, that no dma-buf of
-//! them served), is made all the same over a copy of its bytes (`Device::buffer_over_host_memory`),
-//! announced (`copied-host-pages`). No import maps the pages, so they take no kernel mapping.
+//! dma-bufs the device refused; RADV refuses shared memory, a `memfd` mapping among it, and a
+//! device without `VK_EXT_external_memory_host` every pointer), or whose import the gate and the
+//! device admitted and that then failed (out of memory, another Vulkan error, or the runtime's
+//! refusal of pages the kernel cannot pin on a driver whose failed import of them breaks it,
+//! `RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`, that no dma-buf of them served), is made
+//! all the same over a copy of its bytes (`Device::buffer_over_host_memory`), announced
+//! (`copied-host-pages`). No import maps the pages, so they take no kernel mapping.
 //!
 //! - **The copy.** A `VkBuffer` of the buffer's length in host-visible, coherent memory of the
 //!   runtime's own ([`MemoryClass::Shared`](crate::memory::MemoryClass)), which the GPU uses; the
