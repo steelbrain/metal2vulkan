@@ -12,15 +12,13 @@
 //! blit.
 //! The tests release imports at once through the crate's hook (`Device::release_idle_host_imports`)
 //! and check:
-//! - that a kept import reads the pages a remap put at its address, which is what the check
-//!   found, on a device where it found so, for the guest's shared pages too, which the check does
-//!   not map; on any other the test prints the pages it read, a measurement of the driver;
 //! - the counts that show the release and the import again ran (`WorkCounts::host_imports_released`,
 //!   `host_imports_reimported`, `host_imports_resident`, `host_imports_live`), and none of a
 //!   dma-buf's descriptors kept;
 //! - the bytes a blit reads and writes after a release, the CPU's writes made while released among
 //!   them;
-//! - that a released import reads after a remap the pages the kept one would read;
+//! - that a released import, made again at its pointer, reads the pages a remap put there while
+//!   no import of them lived;
 //! - that a buffer whose Metal address was handed out stays imported.
 //!
 //! A device whose check found otherwise keeps every pointer import: the hook
@@ -28,9 +26,10 @@
 //! kinds of pages each test says so and passes without running.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
-//! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects. Its remap of a file's pages under
-//! a kept import ([`a_file_s_pages_mapped_under_a_kept_pointer_import`]) is a GPU hazard: on a GPU
-//! it compiles only with `m2v_gpu_hazards` too (docs/VALIDATION.md).
+//! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects. No test maps pages over a live
+//! import of them but [`a_file_s_pages_mapped_under_a_kept_pointer_import`], which breaks
+//! `VK_EXT_external_memory_host`'s rule on purpose to measure what a driver then does, a GPU
+//! hazard: on a GPU it compiles only with `m2v_gpu_hazards` too (docs/VALIDATION.md).
 
 use super::host_residency::{
     counting, device, gpu_fill, gpu_read, host_page, read, release, residency, Ram, Scratch,
@@ -224,48 +223,6 @@ fn no_copy(test: &str, device: &Device, bytes: &[u8]) -> Option<(Pages, Buffer)>
     None
 }
 
-/// A no-copy buffer over 2 pages, read by a blit; then other pages mapped over its addresses and
-/// the device told (`Device::host_range_remapped`). On a device whose driver's pointer imports
-/// follow their address the next blit of the buffer, its import kept all along, reads the new
-/// pages (Metal's buffer keeps the pages it was made over). On any other the test prints which it
-/// read.
-#[test]
-fn a_kept_pointer_import_reads_the_pages_a_remap_put_at_its_address() {
-    const TEST: &str = "pointer import remap";
-    on_device(|device| {
-        let page = host_page();
-        let len = 2 * page;
-        let queue = device.new_command_queue().unwrap();
-        let old = counting(len, 13);
-        let new = counting(len, 131);
-        let Some((pages, buffer)) = no_copy(TEST, device, &old) else {
-            return;
-        };
-        assert!(read(&queue, &buffer, len) == old, "{TEST}");
-
-        pages.remap(&new);
-        device.host_range_remapped(pages.pointer(0), len as u64);
-        assert!(pages.view() == new, "{TEST}: the CPU's view");
-        let bytes = read(&queue, &buffer, len);
-        let read_of = match bytes {
-            _ if bytes == new => "the new pages",
-            _ if bytes == old => "the pages it was made over",
-            _ => "neither",
-        };
-        eprintln!(
-            "POINTER-REMAP {TEST}: on {} (the fact {}), over {}: the kept import read {read_of}",
-            device.name(),
-            follows(device),
-            pages.kind(),
-        );
-        if follows(device) {
-            assert!(bytes == new, "{TEST}: the kept import read {read_of}");
-            assert_eq!(residency(&device.work_counts()).0, 0, "{TEST}: no release");
-        }
-        drop(buffer);
-    });
-}
-
 /// A no-copy buffer over 4 pages, imported by its pointer, on a device whose driver's pointer
 /// imports follow their address:
 /// - read by a blit, its import released: the device's live host imports fall by one, no
@@ -352,13 +309,11 @@ fn an_idle_pointer_import_is_released_and_imported_again_at_its_next_blit() {
 }
 
 /// A no-copy buffer over 2 pages, imported by its pointer on a device whose driver's pointer
-/// imports follow their address, read by a blit and its import released; then other pages mapped
-/// over its addresses and the device told. The next blit imports it again at its pointer and reads
-/// the new pages: what the kept import reads
-/// (`a_kept_pointer_import_reads_the_pages_a_remap_put_at_its_address`), so the release changed
-/// nothing a command reads.
+/// imports follow their address, read by a blit and its import released; then, with no import of
+/// them live, other pages mapped over its addresses and the device told. The next blit imports it
+/// again at its pointer and reads the new pages.
 #[test]
-fn a_released_pointer_import_reads_after_a_remap_what_the_kept_one_would() {
+fn a_released_pointer_import_is_made_again_over_the_pages_mapped_at_its_pointer() {
     const TEST: &str = "pointer residency remap";
     on_device(|device| {
         if !follows(device) {
@@ -386,7 +341,7 @@ fn a_released_pointer_import_reads_after_a_remap_what_the_kept_one_would() {
         assert_eq!(residency(&counts), (1, 1, 1, 0), "{TEST}: imported again");
         drop(buffer);
         eprintln!(
-            "{TEST}: on {}: the released import read the new pages, as the kept one does",
+            "{TEST}: on {}: the import made again read the new pages",
             device.name()
         );
     });
