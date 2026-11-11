@@ -19,7 +19,11 @@
 # for the pinned deployment target (default_macos_min below). A line
 # `// air-rename: <declared> <intrinsic>` renames a function the source declares and never defines
 # to an `llvm.*` or `air.*` intrinsic MSL cannot spell (such as `llvm.agx3.yield`) in the typed
-# text; <name>.air is then metal-as of the renamed typed text, and <name>.ll its disassembly.
+# text; <name>.air is then metal-as of the renamed typed text, and <name>.ll its disassembly. A line
+# `// air-by-value-buffer: <arg>` rewrites the node of the read-only `constant` buffer argument
+# named <arg> to the one Apple's compiler writes for a by-value argument it passes as a constant
+# pointer, which MSL cannot spell: a read-only `device` buffer of one `char`; the module is then
+# metal-as of the rewritten typed text, as for a rename.
 #
 # The .air companion: a run refreshes a <name>.air the fixture directory already holds, and
 # writes none where there is none. The committed outputs are <name>.ll, <name>.air.ll and
@@ -182,13 +186,25 @@ if [[ ${#sources[@]} -eq 0 ]]; then
 fi
 
 # Sets `flags` to the compile flags the source $1's directives select, `renames` to its
-# `air-rename` pairs (declared, intrinsic, ...), and `macos_min` to the deployment target it
-# compiles for (`macos_min_from` saying what selected it), or fails naming a bad directive.
+# `air-rename` pairs (declared, intrinsic, ...), `by_value` to its `air-by-value-buffer` argument
+# names, and `macos_min` to the deployment target it compiles for (`macos_min_from` saying what
+# selected it), or fails naming a bad directive.
 directive_flags() {
-  local source="$1" name std fast_math from to rest
+  local source="$1" name std fast_math from to rest arg
   name="$(basename "$source" .metal)"
   flags=()
   renames=()
+  by_value=()
+  # Optional `// air-by-value-buffer: <arg>` lines: the read-only `constant` buffer argument named
+  # <arg> takes the node Apple's compiler writes for a by-value argument it passes as a constant
+  # pointer (rewrite_buffer_nodes).
+  while read -r arg rest; do
+    if [[ ! "$arg" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || -n "$rest" ]]; then
+      echo "$name.metal: air-by-value-buffer needs one argument name, not: $arg $rest" >&2
+      exit 1
+    fi
+    by_value+=("$arg")
+  done < <(sed -n 's|^// air-by-value-buffer: *||p' "$source")
   # Optional `// air-rename: <declared> <intrinsic>` lines: the source declares a function it never
   # defines (a mangled C++ name), and both companions call the intrinsic MSL has no spelling for
   # instead, as the call sites, arguments and attributes the compiler wrote for the declaration.
@@ -255,6 +271,34 @@ rename_text() {
   done
 }
 
+# Applies the `by_value` arguments of fixture $1 to typed module text $2 in place: the one
+# `air.buffer` node naming each argument (`!"air.arg_name", !"<arg>"`), a read-only `constant`
+# buffer (`air.read`, `air.address_space 2`, its struct description, size, alignment and type name),
+# becomes the node Apple's compiler writes for a by-value argument passed as a constant pointer:
+# `air.read`, `air.address_space 1`, one `char` (`air.arg_type_size 1`, `air.arg_type_align_size 1`,
+# `air.arg_type_name "char"`). The parameter stays a `constant` pointer. Fails when no node or more
+# than one names the argument, or the node is not such a buffer's.
+rewrite_buffer_nodes() {
+  local name="$1" text="$2" arg node count line
+  local constant='!"air\.read", !"air\.address_space", i32 2, (!"air\.struct_type_info", ![0-9]+, )?!"air\.arg_type_size", i32 [0-9]+, !"air\.arg_type_align_size", i32 [0-9]+, !"air\.arg_type_name", !"[^"]*"'
+  local by_value_node='!"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 1, !"air.arg_type_align_size", i32 1, !"air.arg_type_name", !"char"'
+  for arg in ${by_value[@]+"${by_value[@]}"}; do
+    node="!\"air\\.buffer\".*!\"air\\.arg_name\", !\"$arg\"[,}]"
+    count="$(grep -c -E "$node" "$text" || true)"
+    if [[ "$count" -ne 1 ]]; then
+      echo "$name.metal: air-by-value-buffer: $count buffer nodes name $arg, not one" >&2
+      exit 1
+    fi
+    line="$(grep -E "$node" "$text")"
+    if ! grep -q -E "$constant" <<<"$line"; then
+      echo "$name.metal: air-by-value-buffer: $arg is no read-only constant buffer" >&2
+      exit 1
+    fi
+    sed -E "/$node/s/$constant/$by_value_node/" "$text" >"$text.rewritten"
+    mv "$text.rewritten" "$text"
+  done
+}
+
 # Compiles fixture $1 into $out (<name>.ll, <name>.air.ll, <name>.air), checking both companions.
 compile_fixture() {
   local name="$1" source="$dir/$1.metal"
@@ -266,13 +310,17 @@ compile_fixture() {
   # A renamed fixture's module is `xcrun metal-as` of the renamed typed text. Apple's assembler
   # gives an intrinsic it knows its own declaration (`llvm.agx3.yield` becomes `convergent
   # noduplicate nounwind`, without the parameter's attributes), so that module is not the one
-  # `xcrun metal` compiled with the plain declaration, and is not compared with it.
+  # `xcrun metal` compiled with the plain declaration, and is not compared with it. A fixture whose
+  # buffer nodes are rewritten (`air-by-value-buffer`) is likewise metal-as of the rewritten text.
   if [[ ${#renames[@]} -gt 0 ]]; then
     rename_text "$name" "$work/$name.typed.ll"
   fi
+  if [[ ${#by_value[@]} -gt 0 ]]; then
+    rewrite_buffer_nodes "$name" "$work/$name.typed.ll"
+  fi
   xcrun -sdk macosx metal-as "$work/$name.typed.ll" -o "$work/$name.rt.air"
   "$llvm_dis" -o "$work/$name.rt.ll" <"$work/$name.rt.air"
-  if [[ ${#renames[@]} -gt 0 ]]; then
+  if [[ ${#renames[@]} -gt 0 || ${#by_value[@]} -gt 0 ]]; then
     cp "$work/$name.rt.air" "$work/$name.air"
     cp "$work/$name.rt.ll" "$work/$name.dis.ll"
   fi

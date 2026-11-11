@@ -238,6 +238,55 @@ class RegenAirFixturesTests(unittest.TestCase):
                 self.assertIn(message, result.stderr)
                 self.assertEqual(self.committed(), {})
 
+    BY_VALUE_SOURCE = (
+        "// air-by-value-buffer: p\n"
+        '!4 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", '
+        '!"air.address_space", i32 2, !"air.struct_type_info", !5, !"air.arg_type_size", i32 160, '
+        '!"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"Params", !"air.arg_name", '
+        '!"p"}\n'
+        '!6 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", '
+        '!"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", '
+        'i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"out"}\n')
+
+    def test_a_by_value_buffer_reaches_both_companions_and_the_check(self):
+        (self.fixtures / "byvalue.metal").write_text(self.BY_VALUE_SOURCE)
+        result = self.run_script([self.pinned])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        files = self.committed()
+        rewritten = ('!4 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, '
+                     '!"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 1, '
+                     '!"air.arg_type_align_size", i32 1, !"air.arg_type_name", !"char", '
+                     '!"air.arg_name", !"p"}')
+        untouched = self.BY_VALUE_SOURCE.splitlines()[2]
+        for suffix in (".ll", ".air.ll"):
+            with self.subTest(file="byvalue" + suffix):
+                body = files["byvalue" + suffix].splitlines()
+                self.assertIn(rewritten, body)
+                self.assertIn(untouched, body)
+                self.assertFalse(any('!"Params"' in line for line in body), body)
+        check = self.run_script([self.pinned], "--check")
+        self.assertEqual(check.returncode, 0, check.stderr)
+        self.assertEqual(self.committed(), files)
+
+    def test_a_by_value_buffer_needs_one_read_only_constant_buffer_of_its_name(self):
+        node = self.BY_VALUE_SOURCE.splitlines()[1]
+        for text, message in (
+            ("// air-by-value-buffer: p q\n" + node + "\n",
+             "byvalue.metal: air-by-value-buffer needs one argument name, not: p q"),
+            ("// air-by-value-buffer: q\n" + node + "\n",
+             "byvalue.metal: air-by-value-buffer: 0 buffer nodes name q, not one"),
+            ("// air-by-value-buffer: p\n" + node + "\n" + node + "\n",
+             "byvalue.metal: air-by-value-buffer: 2 buffer nodes name p, not one"),
+            ("// air-by-value-buffer: out\n" + self.BY_VALUE_SOURCE.splitlines()[2] + "\n",
+             "byvalue.metal: air-by-value-buffer: out is no read-only constant buffer"),
+        ):
+            with self.subTest(text=text):
+                (self.fixtures / "byvalue.metal").write_text(text)
+                result = self.run_script([self.pinned])
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(self.committed(), {})
+
     def test_a_fast_math_value_other_than_off_is_refused(self):
         (self.fixtures / "kernel.metal").write_text("// metal-fast-math: on\nkernel\n")
         for args in ((), ("--check",)):
