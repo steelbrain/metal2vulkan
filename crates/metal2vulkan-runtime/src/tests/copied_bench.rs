@@ -408,7 +408,8 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
     };
     let mut report = |case: &str, pair: &mut Pair, change: &mut dyn FnMut(&mut Pair, bool)| {
         let (mut ins, mut backs) = (Vec::new(), Vec::new());
-        let read = counts.copied_tallies().base_blocks_read;
+        let before = counts.copied_tallies();
+        let read = before.base_blocks_read;
         for _ in 0..RUNS {
             change(pair, true);
             let started = Instant::now();
@@ -420,11 +421,18 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
             buffers.merge_back(&counts, &all);
             backs.push(started.elapsed().as_secs_f64() * 1e3);
         }
-        let read = counts.copied_tallies().base_blocks_read - read;
+        let after = counts.copied_tallies();
+        let read = after.base_blocks_read - read;
+        let copied_in = (after.copy_in_bytes - before.copy_in_bytes) / RUNS as u64;
+        let merged = (after.merge_back_bytes - before.merge_back_bytes) / RUNS as u64;
+        let (ins, backs) = (median(ins), median(backs));
+        let rate = |bytes: u64, ms: f64| bytes as f64 / 1e6 / ms;
         eprintln!(
-            "COPIED-256 {label} {case}: copy in {:.2} ms, merge back {:.2} ms (median of {RUNS}), {} base blocks read",
-            median(ins),
-            median(backs),
+            "COPIED-256 {label} {case}: copy in {ins:.2} ms ({} MB, {:.2} GB/s), merge back {backs:.2} ms ({} MB, {:.2} GB/s) (median of {RUNS}), {} base blocks read",
+            copied_in / 1_000_000,
+            rate(copied_in, ins),
+            merged / 1_000_000,
+            rate(merged, backs),
             read / RUNS as u64,
         );
     };

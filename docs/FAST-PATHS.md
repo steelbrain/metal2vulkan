@@ -553,21 +553,62 @@ driver's. Each is open work.
   buffer's copy alike, whose bytes are the buffer's length (ANV on the Iris Xe, RADV). The shadow
   copies the texels in before each command buffer that uses the texture and merges them back
   after each write.
-- **A copied host buffer costs O(its size) at every batch's completion that may have written
-  it, and at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`): each
-  compares every byte of the copy with the bytes the copy and the pages last agreed on, a page at
-  a time, so 680 MiB of copies that agree take 28-30 ms at each commit without a log on an M3
-  Max (52-53 ms on the RTX 5080 laptop's Core Ultra 9 275HX), and as long at each completion of
-  a command buffer whose functions read addresses and may store (which may write every copy;
-  a draw whose vertex and fragment functions store nothing writes none) or that executes an
-  indirect command buffer (`tests/copied_bench.rs`). Where the pages' memory carries a log of
-  their writes (`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`, a copy that drops
-  the GPU's writes included), the commit compares only the pages it reports written: 0.15 ms
-  where none changed, 4.6 ms where 1% did (0.3 and 3.5 ms on the 275HX). A completion whose
-  command buffers' uses name the copies they write compares those alone. A copy is made only
-  where the caller's gate refuses an import, an admitted import fails, or the GPU's writes to
-  the pages must be dropped (pages the process cannot write, and memory of Metal's private
-  option bit 24 where the system maps no read-only view), never for other memory by default.
+- **A copied host buffer costs O(its size) at every batch's completion that may have written it, and
+  at every commit where its pages carry no log** (`copied.rs`, `copied-host-pages`): until a command
+  buffer that may write the copy is committed, a commit compares the pages with the copy a page at a
+  time; from then on each comparison reads one side whole (the pages at a commit, the copy at a
+  completion) and compares each 1 KiB block's tag with its base's (below), reading the other side's
+  block only where the tag changed. On a Ryzen 7 7840HS (the RTX 3090's and RTX 2080's hosts) a 256
+  MiB copy that agrees takes 9.1-10.5 ms each way, 9.9-10.1 ms where 1% of its pages changed on one
+  side or both, and 172-177 ms in and 218-222 ms back where every byte changed on both sides; 680
+  MiB of copies that agree take 27-28 ms each way (the byte-for-byte snapshot this replaced:
+  14.0-15.0, 14.8-15.0, 141-146 and 198-202 ms, and 42 ms; `tests/copied_bench.rs`, the two
+  interleaved on a quiet host). As long at each completion of a command buffer whose functions read
+  addresses and may store (which may write every copy; a draw whose vertex and fragment functions
+  store nothing writes none) or that executes an indirect command buffer. Where the pages' memory
+  carries a log of their writes (`HostMemory::with_dirty_pages`, `HostRam::with_dirty_pages`, a copy
+  that drops the GPU's writes included), the commit compares only the pages it reports written:
+  0.2-0.3 ms for 680 MiB where none changed, 4.8-6.0 ms where 1% did (0.2-0.4 and 8-11 ms before;
+  the 7840HS, loaded). A completion whose command buffers' uses name the copies they write compares
+  those alone. A copy is made only where the caller's gate refuses an import, an admitted import
+  fails, or the GPU's writes to the pages must be dropped (pages the process cannot write, and
+  memory of Metal's private option bit 24 where the system maps no read-only view), never for other
+  memory by default.
+- **A kernel that rewrites a copied host buffer pays its merge back, about 1 GB/s of the bytes it
+  changed** (`copied.rs`, `tests/copied_pass_bench.rs`): the merge stores only the bytes that
+  changed, 8 bytes at once where all 8 did and one at a time otherwise, so that no byte the other
+  side may be writing is stored over, on one thread. Every float of 256 MiB changed as `x + i`
+  merges back in 276-280 ms on the 7840HS (244-251 ms with the snapshot). One command buffer a pass
+  of a kernel that reads and rewrites a 64 MiB copied buffer took 150-156 ms on the RTX 2080 host:
+  its commit 3.3-3.7 ms, the GPU's time across the bus 50 ms, the merge back of 50 MB the rest
+  (484-495 ms with the snapshot; 50 ms over the device's own `Shared` buffer, the eGPU link's 2.7
+  GB/s read and written).
+- **A copied host buffer that a command buffer may write finds changed bytes by a keyed tag**
+  (`copied.rs`'s `tag`, `copied-host-pages`): from the first commit whose command buffer may write
+  the copy (its uses wrote one of the copy's keys, or it may write memory no use names), a
+  comparison takes a 1 KiB block whose 128-bit tag agrees with its base's as unchanged and reads
+  none of its bytes. The tag is two NH sums of the block (RFC 4418, the second keyed by the first's
+  key shifted by four words) under a key drawn at random once per process: a changed block keeps its
+  tag with a chance of at most 2^-64 per block per comparison, whatever its bytes. A CPU write so
+  missed is not copied in at that commit, a GPU write not merged back at that completion (nor
+  dropped, for a copy that drops them). A copy no command buffer may write compares bytes. No switch
+  compares the bytes instead: that needs the agreed bytes on the host again, the copy's length
+  (`copied_base_host_bytes`, `copied_base_device_bytes`).
+- **A written copied host buffer's base costs its length again, in the device's memory where a
+  resizable BAR has room, else in the host's** (`copied.rs`, `Device::copied_base`): a copy holds
+  nothing beyond itself until a command buffer that may write it is committed; then a 64th of its
+  length in host memory for its tags, and the agreed bytes in coherent device-local memory the host
+  maps where that heap is 1 GiB or more (a resizable BAR's: the RTX 5080 Laptop GPU's, the RX 7900
+  XTX's) and the runtime's blocks there and the base stay within half of it. Elsewhere the bytes lie
+  in host memory: on the RTX 3090 and RTX 2080 hosts, whose device-local host-visible heap is the
+  246 MiB BAR window, a written 256 MiB copy holds 260 MiB of host memory beyond itself (the
+  snapshot this replaced: 256 MiB for every copy, written or not), its base made in 72 ms on the
+  7840HS; and on every device with unified memory. A base in device-only memory, read and written
+  through the device's copy engine, is not built. Where the base's bytes lie in the device's memory,
+  a block both sides changed since they agreed reads them across the bus, uncached (with streaming
+  loads on an x86-64 host with SSE4.1; `copied_base_blocks_read`): with plain loads, 651 such blocks
+  added about 18 ms to a 256 MiB merge back on the RTX 5080 Laptop GPU's host (about 28 µs a block);
+  the streaming loads' rate there is unmeasured.
 - **Two memories over overlapping host bytes agree GPU to GPU only through the pages when one is
   a copied host buffer** (`copied.rs`, `copied-host-pages`): a copy and another copy or an import
   of pages that overlap without being the same first byte and length (a rebind's bytes inside a
