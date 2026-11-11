@@ -123,11 +123,15 @@
 //! - **Cost.** A copy is compared whole at each batch's completion that may have written it, and
 //!   at each commit where its pages carry no log: O(bytes) per such batch, and per commit without
 //!   a log, a fallback's cost (`docs/FAST-PATHS.md`, known gaps). A command buffer whose
-//!   functions read addresses may write every copy. A page that agrees costs one read of each
-//!   side and a slice comparison: 680 MiB of copies that agree took 28-30 ms each way on an M3
-//!   Max, 52-53 ms on a Core Ultra 9 275HX; their logged copy in took 0.15 ms (0.3) where no page
-//!   changed, and 4.6 ms (3.5) where 1% of the pages changed on each side; a merge back of no
-//!   copy written, none (`tests/copied_bench.rs`). Counted:
+//!   functions read addresses may write every copy. Without a base, a page that agrees costs one
+//!   read of each side and a slice comparison; with one, a block that agrees costs one read of
+//!   one side and its tag (SSE2 on x86-64, about 55 GB/s over a block in the first-level cache
+//!   on a Ryzen 7 7840HS). On that host a 256 MiB copy with a base that agrees took 9.1-9.4 ms
+//!   each way, and where every byte changed on both sides 172 ms in and 218 ms back; 680 MiB of
+//!   copies that agree 27-28 ms each way; their logged copy in 0.2-0.3 ms where no page changed,
+//!   and 4.8-6.0 ms where 1% of the pages changed on each side; a merge back of no copy written,
+//!   none (`tests/copied_bench.rs`; `docs/FAST-PATHS.md` has the snapshot's figures they
+//!   replaced). Counted:
 //!   `WorkCounts::copied_copy_in_bytes`, `WorkCounts::copied_merge_back_bytes`,
 //!   `WorkCounts::copied_dropped_bytes`.
 //! - **Heaps and rebinds.** A no-copy heap's own buffer is copied as a buffer is, where the heap's
