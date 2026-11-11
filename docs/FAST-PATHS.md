@@ -1081,7 +1081,13 @@ driver's. Each is open work.
   buffer where the device's buffers lie in plain blocks; not the runtime's own pages, which it
   imports) shares the reservation of the process's buffer objects on RADV, and its
   `vkAllocateMemory` holds every submission of the process while the kernel fills its pages (the
-  row above). Pooled blocks are 64 MiB on every device, images' included. A driver's image takes
+  row above). The kernel fills them from its page allocator in runs of up to 4 MiB, and a run of
+  2 MiB (the size amdgpu names beneficial; Linux 7.3.3, `ttm_pool.c`) may reclaim and compact
+  memory until it succeeds or fails, under that reservation: beside a consumer's guest on a Radeon
+  780M whose host was short of free memory (RADV PHOENIX, Mesa 26.2.6), one making held the
+  submissions 228 ms, 222 ms of it one compaction for one 2 MiB run. Every block of 2 MiB or more
+  takes such runs, so no block size bounds the hold below one run's. Pooled blocks are 64 MiB on
+  every device, images' included. A driver's image takes
   more than its texels (RADV on a Radeon 780M and ANV on an Iris Xe place a `Private`
   `RGBA8Unorm` texture of 1024x1024 in 4 MiB and 16 KiB, and one of 2048x2048 in 16 MiB and
   64 KiB, at an alignment of 64 KiB), so a block of images holds three such 2048x2048 textures
@@ -1103,7 +1109,17 @@ driver's. Each is open work.
   its size, freed at once. On a Radeon 780M under memory pressure most such fills missed (the
   kernel handed the block other pages), so that the kernel compacted for both allocations: in a
   scroll of a consumer's guest, every frame gap of 100 ms or more lay within one block making's
-  direct compaction (46 to 164 ms), and with no fill there were none. No switch: no answer of
+  direct compaction (46 to 164 ms), and with no fill there were none. No other allocation avoids
+  the hold for these blocks: RADV makes every memory neither exported nor imported a buffer
+  object of the process's reservation (Mesa 26.2.6, `radv_device_memory.c`), and asks a dedicated
+  allocation of every image made for an external handle type in other than linear tiling
+  (`radv_device.c`), so a block that holds images of optimal tiling, or the
+  `DRM_FORMAT_MOD_LINEAR` images over buffers that declare their padding unobserved, can be
+  neither exportable memory nor imported pages; a dedicated exportable allocation per image would
+  add each image to the buffer objects every submission names, about 1 µs a submission each on a
+  Radeon 780M (the row above). Its device-local types lie in the carve-out while it has room and
+  in system memory past it, and Vulkan reports neither the carve-out's size nor its room (the row
+  above), so no placement there is decided from the device's answers. No switch: no answer of
   Metal's changes. Not announced.
 
 - **Making and releasing an event on NVIDIA take 0.1 to 0.6 ms of the calling thread.**
