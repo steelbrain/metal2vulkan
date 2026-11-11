@@ -456,14 +456,17 @@ fn encode_separate_run(
 
 /// What a pixel's first color says (`BGRA8Unorm` bytes in memory order): `P` the poison (no draw
 /// wrote it), `M` `dcs_mark`'s, `Z` a read of a zero second color, `S` a read of the poison's
-/// second color, `K` a read of `dcs_mark`'s, `F` `dcs_flag`'s, `?` anything else.
+/// second color, `K` a read of `dcs_mark`'s, `F` `dcs_flag`'s, `?` anything else. A `0.5` channel
+/// (`dcs_mark`'s green, and its second color's `y` that `dcs_read` writes) is the midpoint 127.5 of
+/// a `UNORM8` step, which the device's own conversion rounds (AGENTS.md rule 1): Metal and RADV
+/// store 128, NVIDIA's may store 127.
 fn class(bgra: &[u8]) -> char {
     match bgra {
         [17, 34, 51, 68] => 'P',
-        [0, 128, 0, 255] => 'M',
+        [0, 127 | 128, 0, 255] => 'M',
         [255, 0, 0, 255] => 'Z',
         [255, 223, 191, 255] => 'S',
-        [255, 128, 64, 255] => 'K',
+        [255, 127 | 128, 64, 255] => 'K',
         [255, 0, 255, 255] => 'F',
         _ => '?',
     }
