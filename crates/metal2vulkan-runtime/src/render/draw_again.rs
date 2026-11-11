@@ -15,8 +15,10 @@
 //!   split, stand-in, snapshot, copy, index bounds or rewrite pass, mesh or tessellation work, rate
 //!   map, color groups, extended-range color or its shadow, set 1 or handle table, root table or
 //!   push hole, barrier in its instance, read of a color its pass clears behind its load actions
-//!   (a copy cleared to the clear, `texture/attached_reads.rs`), and no write among its uses, which
-//!   each change what the next draw meets or are work of the draw's own. Its uses are noted as the
+//!   (a copy cleared to the clear, `texture/attached_reads.rs`), read of input attachments ordered
+//!   between draws alone beside a color write (the next such draw records after a barrier:
+//!   `render.rs`'s `InterlockedStorage`), and no write among its uses, which each change what the
+//!   next draw meets or are work of the draw's own. Its uses are noted as the
 //!   next draw would note them (`NotedApart`). A draw that met a notice its device announces or
 //!   refuses at every occurrence (`EachWatch`) keeps nothing: its next draw must meet it again.
 //! - **Shadowed textures gathered once.** A kept draw may use shadowed textures, a texture of its

@@ -10898,6 +10898,9 @@ impl RenderLowering {
             && !apart
             && !first_write
             && storage_colors == 0
+            // A draw that reads input attachments ordered between draws alone and writes a color
+            // of its pass meets its own writes: drawn again, it records after a barrier.
+            && !interlocked.meets_fetch(interlocked_writes)
             && reformats.is_empty()
             && views == ViewSetup::default()
             && resumed.is_none()
