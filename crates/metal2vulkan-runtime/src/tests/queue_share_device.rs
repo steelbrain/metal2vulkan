@@ -28,8 +28,10 @@
 //!   shares with another queue, three long command buffers of that queue committed at once:
 //!   under `UnsharedIsolationPolicy::Bounded` the second is held until the first is nearly done,
 //!   so the unshared queue's command buffer committed meanwhile runs before it; under `Off` all
-//!   three go at once and it runs after the third. Every device, a `VkQueue` shared on purpose
-//!   (`PerQueue`, the round robin wrapped).
+//!   three go at once and it runs after the third. A pass that finds the second let go and the
+//!   unshared queue's command buffer ready together (the scheduler's thread late, held off by the
+//!   test) sends the unshared one first. Every device, a `VkQueue` shared on purpose (`PerQueue`,
+//!   the round robin wrapped).
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
@@ -40,12 +42,12 @@
 
 use super::blit_holds::Scratch;
 use crate::{
-    Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
-    ShaderCacheOptions, WorkCounts,
+    Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind, DeviceOptions,
+    ResourceOptions, ShaderCacheOptions, WorkCounts,
 };
 use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy, UnsharedIsolationPolicy};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The longest any wait of these tests lasts.
@@ -928,20 +930,34 @@ fn a_command_buffer_behind_another_queue_s_long_one_counts_its_wait() {
     );
 }
 
-/// Under `UnsharedIsolationPolicy::Bounded` (the default), three long command buffers of about
-/// 30 ms committed at once on a `VkQueue` an unshared queue shares with theirs go one at a time,
-/// each held until the one ahead is nearly done (`unshared_hold.rs`), so the unshared queue's
-/// small command buffer committed once the first was scheduled runs before the second; under
-/// `Off` all three go at once, and it runs after the third. Their queue's expected run is a long
-/// one's first: four run one at a time beforehand.
-#[test]
-fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
-    for isolation in [
-        UnsharedIsolationPolicy::Bounded,
-        UnsharedIsolationPolicy::Off,
-    ] {
-        let scratch = Scratch::new(&format!("unshared-hold-{isolation:?}"));
-        let device = isolated(&scratch, QueueSharingPolicy::PerQueue, isolation);
+/// The held-work tests' device under `isolation` (`PerQueue`), an application's queue, an
+/// unshared queue on its `VkQueue`, and the fills of a long command buffer of about 30 ms.
+struct HeldWork {
+    device: Device,
+    app: CommandQueue,
+    unshared: CommandQueue,
+    big: Buffer,
+    small: Buffer,
+    fills: usize,
+}
+
+/// One run of [`HeldWork`]: the long command buffers' and the unshared one's GPU starts and ends,
+/// in seconds of the host's clock.
+struct HeldRun {
+    longs: [(f64, f64); 3],
+    short: (f64, f64),
+    /// The host time the unshared one's commit returned.
+    committed: f64,
+    /// The second long one's kernel start time: when a pass took it to submit.
+    let_go: f64,
+    /// The looks that held a head back for the unshared queue
+    /// (`WorkCounts::heads_held_for_unshared_isolation`).
+    held: u64,
+}
+
+impl HeldWork {
+    fn new(scratch: &Scratch, isolation: UnsharedIsolationPolicy) -> HeldWork {
+        let device = isolated(scratch, QueueSharingPolicy::PerQueue, isolation);
         let app = device.new_command_queue().unwrap();
         let unshared = beside(&app, &|| device.new_command_queue_unshared(64).unwrap());
         let big = device
@@ -949,39 +965,101 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
             .unwrap();
         let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
         let fills = long_fills(&app, &big);
-        let warm = long(&app, &big, fills);
+        HeldWork {
+            device,
+            app,
+            unshared,
+            big,
+            small,
+            fills,
+        }
+    }
+
+    /// A long command buffer run alone (its queue's expected run a long one's), then three
+    /// committed at once, the first scheduled, then the unshared queue's small one committed.
+    /// Where `late`, it is committed while the test holds the scheduler's lock
+    /// (`Scheduler::under_lock`), kept until the first long one completed: the pass that takes it
+    /// in finds the second let go too, as the pass of a scheduler thread the host ran late does.
+    fn run(&self, late: bool) -> HeldRun {
+        let warm = long(&self.app, &self.big, self.fills);
         warm.commit().unwrap();
         warm.wait_until_completed_for(WAIT).unwrap();
-        let before = device.work_counts();
+        let before = self.device.work_counts();
         let longs: Vec<CommandBuffer> = (0..3)
             .map(|_| {
-                let command_buffer = long(&app, &big, fills);
+                let command_buffer = long(&self.app, &self.big, self.fills);
                 command_buffer.commit().unwrap();
                 command_buffer
             })
             .collect();
         longs[0].wait_until_scheduled().unwrap();
-        let short = unshared.command_buffer().unwrap();
+        let short = self.unshared.command_buffer().unwrap();
         let mut blit = short.blit_command_encoder().unwrap();
-        blit.fill_buffer(&small, 0..256, 1).unwrap();
+        blit.fill_buffer(&self.small, 0..256, 1).unwrap();
         blit.end_encoding().unwrap();
-        short.commit().unwrap();
+        let (short, committed) = match late {
+            false => {
+                short.commit().unwrap();
+                (short, crate::host_time())
+            }
+            true => self.commit_late(short, &longs[0]),
+        };
         short.wait_until_completed_for(WAIT).unwrap();
         for command_buffer in &longs {
             command_buffer.wait_until_completed_for(WAIT).unwrap();
         }
-        let after = device.work_counts();
+        let after = self.device.work_counts();
         let times = |command_buffer: &CommandBuffer| {
             let start = command_buffer.gpu_start_time().unwrap();
             (start, command_buffer.gpu_end_time().unwrap())
         };
-        let ((s0, e0), (s1, e1), (s2, e2)) = (times(&longs[0]), times(&longs[1]), times(&longs[2]));
-        let (ss, se) = times(&short);
-        let held =
-            after.heads_held_for_unshared_isolation - before.heads_held_for_unshared_isolation;
+        HeldRun {
+            longs: [times(&longs[0]), times(&longs[1]), times(&longs[2])],
+            short: times(&short),
+            committed,
+            let_go: longs[1].kernel_start_time(),
+            held: after.heads_held_for_unshared_isolation
+                - before.heads_held_for_unshared_isolation,
+        }
+    }
+
+    /// Commit `short` on another thread while this one holds the scheduler's lock, kept until
+    /// `first` completed (a commit takes no lock of the state's, `scheduler/inbox.rs`, nor does
+    /// a completion turn); with the host time the commit returned.
+    fn commit_late(&self, short: CommandBuffer, first: &CommandBuffer) -> (CommandBuffer, f64) {
+        let (committer, returned) = self.device.shared().scheduler.under_lock(|| {
+            let (done, returns) = mpsc::channel();
+            let committer = std::thread::spawn(move || {
+                short.commit().unwrap();
+                // Gone where the test stopped waiting for it.
+                let _ = done.send(crate::host_time());
+                short
+            });
+            let returned = returns.recv_timeout(WAIT);
+            let began = Instant::now();
+            while first.status() != CommandBufferStatus::Completed && began.elapsed() < WAIT {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            (committer, returned)
+        });
+        let committed = returned.expect("the commit returned while the lock was held");
+        assert_eq!(
+            first.status(),
+            CommandBufferStatus::Completed,
+            "the first long one completed while the lock was held"
+        );
+        (committer.join().unwrap(), committed)
+    }
+}
+
+impl HeldRun {
+    fn print(&self, label: &str) {
+        let [(s0, e0), (s1, e1), (s2, e2)] = self.longs;
+        let (ss, se) = self.short;
         println!(
-            "{isolation:?}: long ones {:.1}-{:.1}, {:.1}-{:.1}, {:.1}-{:.1} ms, the unshared one \
-             {:.1}-{:.1} ms; GPU idle between the long ones {:.2} and {:.2} ms; {held} looks held",
+            "{label}: long ones {:.1}-{:.1}, {:.1}-{:.1}, {:.1}-{:.1} ms, the unshared one \
+             {:.1}-{:.1} ms, committed at {:.1} ms, the second let go at {:.1} ms; GPU idle \
+             between the long ones {:.2} and {:.2} ms; {} looks held",
             0.0,
             (e0 - s0) * 1e3,
             (s1 - s0) * 1e3,
@@ -990,19 +1068,89 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
             (e2 - s0) * 1e3,
             (ss - s0) * 1e3,
             (se - s0) * 1e3,
+            (self.committed - s0) * 1e3,
+            (self.let_go - s0) * 1e3,
             // The unshared one ends the first gap only where it ran in it.
             (s1 - if se <= s1 { e0.max(se) } else { e0 }) * 1e3,
             (s2 - e1) * 1e3,
+            self.held,
         );
+    }
+
+    /// The unshared one ran before the second long one.
+    fn ahead_of_the_second(&self) -> bool {
+        self.short.1 <= self.longs[1].0 + 0.001
+    }
+}
+
+/// The runs [`an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work`] makes
+/// under `Bounded` for one whose unshared command buffer was committed before the second long
+/// one was let go.
+const HELD_RUNS: usize = 5;
+
+/// Under `UnsharedIsolationPolicy::Bounded` (the default), three long command buffers of about
+/// 30 ms committed at once on a `VkQueue` an unshared queue shares with theirs go one at a time,
+/// each held until the one ahead is nearly done (`unshared_hold.rs`), so the unshared queue's
+/// small command buffer committed once the first was scheduled runs before the second; under
+/// `Off` all three go at once, and it runs after the third. Their queue's expected run is a long
+/// one's first: four run one at a time beforehand.
+///
+/// The second is let go about 28 ms after the first went: a run whose unshared command buffer was
+/// committed only after that (the test's thread late on a loaded host: inside a whole suite's run
+/// on an RTX 5080 Laptop, this test took 35 s where it takes 2 s alone) shows nothing of the
+/// hold, and is made again, up to [`HELD_RUNS`] runs.
+#[test]
+fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
+    for isolation in [
+        UnsharedIsolationPolicy::Bounded,
+        UnsharedIsolationPolicy::Off,
+    ] {
+        let scratch = Scratch::new(&format!("unshared-hold-{isolation:?}"));
+        let work = HeldWork::new(&scratch, isolation);
         match isolation {
             UnsharedIsolationPolicy::Bounded => {
-                assert!(se <= s1 + 0.001, "the unshared one ran before the second");
-                assert!(held > 0, "a long one was held");
+                let run = (0..HELD_RUNS)
+                    .map(|_| work.run(false))
+                    .inspect(|run| run.print("Bounded"))
+                    .find(|run| run.committed < run.let_go)
+                    .expect("a run committed the unshared one before the second was let go");
+                assert!(
+                    run.ahead_of_the_second(),
+                    "the unshared one ran before the second"
+                );
+                assert!(run.held > 0, "a long one was held");
             }
             _ => {
-                assert!(ss >= e2 - 0.001, "the unshared one ran after the third");
-                assert_eq!(held, 0, "none held");
+                let run = work.run(false);
+                run.print("Off");
+                assert!(
+                    run.short.0 >= run.longs[2].1 - 0.001,
+                    "the unshared one ran after the third"
+                );
+                assert_eq!(run.held, 0, "none held");
             }
         }
     }
+}
+
+/// Under `Bounded`, a pass that finds the unshared queue's command buffer ready together with the
+/// second long one, which the hold let go meanwhile, sends the unshared one first
+/// (`scheduler/order.rs`): its commit made while the test holds the scheduler's lock, kept until
+/// the first long one completed, as a scheduler thread the host ran late takes both in one pass.
+/// It runs before the second.
+#[test]
+fn a_late_pass_sends_an_unshared_queue_s_command_buffer_before_work_let_go_with_it() {
+    let scratch = Scratch::new("unshared-hold-late");
+    let work = HeldWork::new(&scratch, UnsharedIsolationPolicy::Bounded);
+    let run = work.run(true);
+    run.print("Bounded, a late pass");
+    assert!(
+        run.committed < run.let_go,
+        "the second was let go after the commit"
+    );
+    assert!(
+        run.ahead_of_the_second(),
+        "the unshared one ran before the second"
+    );
+    assert!(run.held > 0, "a long one was held");
 }
