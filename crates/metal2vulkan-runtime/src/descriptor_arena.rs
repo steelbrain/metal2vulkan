@@ -80,7 +80,7 @@ impl SetNeeds {
 
     /// The descriptors a pool of `sets` such sets holds, of every type: [`Room::of`]'s
     /// [`Room::descriptors`], counted without the room's list.
-    fn pool_descriptors(&self, sets: u32) -> u64 {
+    pub(super) fn pool_descriptors(&self, sets: u32) -> u64 {
         (self.counts.iter())
             .map(|&(_, count)| u64::from(count.saturating_mul(sets)))
             .sum()

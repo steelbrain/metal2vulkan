@@ -1184,6 +1184,71 @@ fn a_heap_one_plane_texture_s_rows_lie_as_metal_s_blits_lay_them() {
     }
 }
 
+/// The planes' length without their list (`heap_plane_bytes`) is the end `heap_plane_layout`
+/// answers, and the copies into the image of the planes laid out once (`copies_into`) are those
+/// `heap_planes` lays them out again for: of colour, block-compressed, two-aspect, 3D, array and
+/// mipmapped textures, and of 4:2:2 and 4:4:4 ones whose rows share bytes.
+#[test]
+fn a_heap_shadows_planes_answer_alike_however_many_times_they_are_laid_out() {
+    use crate::texture::heap::{copies_into, heap_plane_bytes, heap_plane_layout, heap_planes};
+    use metal2vulkan::metal::PixelFormat as P;
+    use metal2vulkan::vk::Format as F;
+    for (format, pf, extent, levels, layers) in [
+        (
+            F::R8G8B8A8_UNORM,
+            P::RGBA8Unorm,
+            [5u32, 3u32, 1u32],
+            2u32,
+            1u32,
+        ),
+        (F::B8G8R8A8_UNORM, P::BGRA8Unorm, [256, 256, 1], 1, 1),
+        (F::B8G8R8A8_UNORM, P::BGRA8Unorm, [100, 70, 1], 7, 3),
+        (F::BC1_RGBA_UNORM_BLOCK, P::BC1RGBA, [10, 6, 1], 1, 2),
+        (F::R8_UNORM, P::R8Unorm, [3, 2, 4], 2, 1),
+        (
+            F::D32_SFLOAT_S8_UINT,
+            P::Depth32FloatStencil8,
+            [17, 9, 1],
+            3,
+            2,
+        ),
+        (F::R16_UINT, P::YCBCR84221P, [13, 7, 1], 1, 3),
+        (F::R16_UINT, P::YCBCR84221P, [33, 3, 1], 1, 1),
+        (F::R32_UINT, P::YCBCR104441P, [13, 7, 1], 1, 1),
+    ] {
+        let what = format!("{pf:?} {extent:?}, {levels} levels, {layers} slices");
+        let (planes, end) = heap_plane_layout(format, pf, extent, levels, layers);
+        assert!(!planes.is_empty(), "{what}: planes");
+        assert_eq!(
+            heap_plane_bytes(format, pf, extent, levels, layers),
+            end,
+            "{what}: length"
+        );
+        let (copies, length) = heap_planes(format, pf, extent, levels, layers);
+        assert_eq!(length, end, "{what}: copies' length");
+        let into = copies_into(&planes, layers);
+        let key = |r: &ash::vk::BufferImageCopy| {
+            (
+                r.buffer_offset,
+                r.buffer_row_length,
+                r.image_subresource.aspect_mask.as_raw(),
+                r.image_subresource.mip_level,
+                r.image_subresource.base_array_layer,
+                r.image_subresource.layer_count,
+                (r.image_offset.x, r.image_offset.y, r.image_offset.z),
+                (
+                    r.image_extent.width,
+                    r.image_extent.height,
+                    r.image_extent.depth,
+                ),
+            )
+        };
+        let into: Vec<_> = into.iter().map(key).collect();
+        let again: Vec<_> = copies.into.iter().map(key).collect();
+        assert_eq!(into, again, "{what}: copies into the image");
+    }
+}
+
 /// A heap's one-level 2D two-plane texture lays its planes out as an Apple M4 does: plane 0's rows
 /// at a multiple of 16 bytes, plane 1 from a multiple of 16 KiB in rows at a multiple of 16,
 /// spanning the size Metal's heap query answers for each size measured

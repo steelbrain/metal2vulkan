@@ -128,3 +128,25 @@ fn pools_of_other_flags_are_not_shared() {
     assert!(opened);
     assert_ne!(first, second);
 }
+
+/// A fitted arena counts the descriptors of the pool it would open from the set's needs alone
+/// (`SetNeeds::pool_descriptors`): what that pool's room holds, every type's count saturating as
+/// the room's does.
+#[test]
+fn a_pools_descriptors_are_counted_from_its_sets_needs_as_its_room_holds_them() {
+    let mixed = needs(&[
+        (vk::DescriptorType::STORAGE_BUFFER, 3),
+        (vk::DescriptorType::SAMPLED_IMAGE, 2),
+        (vk::DescriptorType::STORAGE_IMAGE, 1),
+    ]);
+    let large = needs(&[(vk::DescriptorType::STORAGE_BUFFER, u32::MAX / 2)]);
+    for set in [&mixed, &large] {
+        for sets in [1, 2, FIRST, MOST, 7] {
+            assert_eq!(
+                set.pool_descriptors(sets),
+                Room::of(set, sets).descriptors(),
+                "{sets} sets"
+            );
+        }
+    }
+}
