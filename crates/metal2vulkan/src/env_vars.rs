@@ -39,14 +39,26 @@ pub const REGISTRY: &[EnvVar] = &[
         default: "unset (off)",
         effect: "metal2vulkan-runtime's diagnostics: one line per render VkPipeline a device \
                  makes, through the device's message sink or on stderr: its state, its key, the \
-                 key's fields that differ from the state's closest earlier pipeline, and the \
-                 creation's time, split by the making's parts (the digests, each library made \
+                 key's fields that differ from the state's closest earlier pipeline (a state's \
+                 first line also names the descriptor the state was made from: each function's \
+                 name, the SHA-256 of its bitcode and the constant values it was made with, each \
+                 color attachment's format, blend and write mask, the depth and stencil formats \
+                 and the raster samples), and the creation's time, split by the making's parts (the digests, each library made \
                  with its record loaded or missed or another caller's, the link) and by \
                  MoltenVK's activities where its performance tracking is on \
                  (MVK_CONFIG_PERFORMANCE_TRACKING=1); and once per reason, why a draw \
                  that reads its own pass's color attachment after a barrier took the split rather \
                  than a snapshot, and how many such draws the snapshot's area rule weighed at each \
                  share of their colors' pixels and texel bytes; set to anything but empty or 0",
+    },
+    EnvVar {
+        name: "METAL2VULKAN_DUMP_PIPELINES",
+        default: "unset (off)",
+        effect: "metal2vulkan-runtime's diagnostics: a directory (made where missing) each device \
+                 writes the SPIR-V modules of every render VkPipeline it makes into, one file per \
+                 module, `<hash>.spv`, the hash METAL2VULKAN_LOG_PIPELINES's lines name the \
+                 module by, each written once; setting it turns that log on too; empty or 0 is \
+                 off",
     },
     EnvVar {
         name: "METAL2VULKAN_LOG_MEMORY",
@@ -150,6 +162,14 @@ pub fn log_memory() -> bool {
 pub fn log_shadows() -> bool {
     std::env::var_os("METAL2VULKAN_LOG_SHADOWS")
         .is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+/// The directory metal2vulkan-runtime writes its render pipelines' SPIR-V modules into
+/// (`REGISTRY`), as set; `None` where unset, empty or `0`. A default-off diagnostic: it writes
+/// files, and changes no pipeline.
+pub fn dump_pipelines() -> Option<OsString> {
+    std::env::var_os("METAL2VULKAN_DUMP_PIPELINES")
+        .filter(|value| !value.is_empty() && value != "0")
 }
 
 /// The textures metal2vulkan-runtime's pass log watches, as set (`REGISTRY`): a comma-separated

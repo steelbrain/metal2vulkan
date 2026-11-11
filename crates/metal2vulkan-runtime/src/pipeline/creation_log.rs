@@ -23,6 +23,15 @@
 //!   state's first pipeline prints every field; a later one prints the fields that differ from the
 //!   state's closest earlier pipeline (the one with the fewest differing fields), each as
 //!   `old -> new` with the parts both share elided.
+//! - **The descriptor.** A state's first line also names what the state was made from
+//!   (`descriptor:`, `StateDescriptor::logged`): each function's name, the SHA-256 of its bitcode
+//!   (`FunctionInfo::air_hash`; a precompiled function's key) and the constant values it was made
+//!   with, each color attachment's format, blend and write mask, the depth and stencil formats,
+//!   and the raster samples: enough to make the same state again from the same library.
+//! - **The SPIR-V.** With `METAL2VULKAN_DUMP_PIPELINES` naming a directory, each pipeline's
+//!   modules are written there ([`dump`]), one file per module named by the hash the line prints
+//!   it by (`<hash>.spv`), each once; a write that fails is named in the line. Setting it turns
+//!   the log on too, so the lines that name the files are there.
 //! - **MoltenVK's split.** Where the device's driver is MoltenVK and its performance tracking is
 //!   on (`MVK_CONFIG_PERFORMANCE_TRACKING=1`), the line adds what MoltenVK's own statistics
 //!   (`vkGetPerformanceStatisticsMVK`) gained during the creation, per activity: SPIR-V to MSL,
@@ -39,7 +48,7 @@
 //!   made it), then the `link`; else the whole `pipeline`'s driver making, its record loaded or
 //!   missed. The translation of the state's functions is not in it: a variant is translated
 //!   before any of its pipelines is made, on the program's thread.
-//! - **Bounded, and off by default.** Nothing is kept or measured while the variable is unset.
+//! - **Bounded, and off by default.** Nothing is kept or measured while the variables are unset.
 //!   With it set, each state keeps the fields of its last [`HISTORY`] pipelines, and nothing
 //!   else changes: the same pipelines are made, from the same keys, at the same points.
 //! - **Numbered where the making begins** (the owner's HITCH rule 1). A pipeline's number and the
@@ -57,6 +66,8 @@ use metal2vulkan::vk::{DriverId, ShaderStage};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -74,10 +85,49 @@ const HELPER_GUARD_STRATEGY: &str = "fragment.helper-guard";
 /// The census name of a fragment function's calls an identity shuffle follows.
 const HELPER_FENCE_STRATEGY: &str = "fragment.helper-fence";
 
-/// Whether the log is on: read once, at the first state made.
+/// Whether the log is on: read once, at the first state made. The SPIR-V dump turns it on too.
 pub(crate) fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(metal2vulkan::env_vars::log_pipelines)
+    *ON.get_or_init(|| metal2vulkan::env_vars::log_pipelines() || dump_dir().is_some())
+}
+
+/// The directory the pipelines' SPIR-V is written into (`METAL2VULKAN_DUMP_PIPELINES`), read
+/// once.
+fn dump_dir() -> Option<&'static Path> {
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DIR.get_or_init(|| metal2vulkan::env_vars::dump_pipelines().map(PathBuf::from))
+        .as_deref()
+}
+
+/// Write each of `pipeline`'s modules into the dump directory, where one is set, as
+/// `<hash>.spv` (`spirv` holding each stage's [`spirv_hash`], in its stages' order), each once:
+/// a module already there is left as it is. Where a write fails, the line's note of it.
+fn dump(pipeline: &RenderPipeline, spirv: &[u64]) -> Option<String> {
+    let dir = dump_dir()?;
+    let written = std::fs::create_dir_all(dir).and_then(|()| {
+        for (i, module) in pipeline.stages.iter().enumerate() {
+            let hash = spirv
+                .get(i)
+                .copied()
+                .unwrap_or_else(|| spirv_hash(&module.spirv));
+            let path = dir.join(format!("{hash:016x}.spv"));
+            let opened = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path);
+            let mut file = match opened {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            };
+            let bytes: Vec<u8> = module.spirv.iter().flat_map(|w| w.to_le_bytes()).collect();
+            file.write_all(&bytes)?;
+        }
+        Ok(())
+    });
+    written
+        .err()
+        .map(|error| format!("; SPIR-V dump into {} failed: {error}", dir.display()))
 }
 
 thread_local! {
@@ -183,6 +233,8 @@ static BEGUN: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct StateLog {
     /// How the line names the state.
     name: String,
+    /// What the state was made from, as its first line names it (`StateDescriptor::logged`).
+    descriptor: String,
     /// The fields of its pipelines made so far, the latest last, at most [`HISTORY`].
     made: Mutex<VecDeque<Fields>>,
     /// Its pipelines made so far.
@@ -193,9 +245,13 @@ pub(crate) struct StateLog {
 type Fields = BTreeMap<String, String>;
 
 impl StateLog {
-    /// The log of a state labelled `label` whose functions are `functions`, numbered now; `None`
-    /// while the log is off.
-    pub(crate) fn new(label: Option<&str>, functions: &[String]) -> Option<StateLog> {
+    /// The log of a state labelled `label` whose functions are `functions`, made from what
+    /// `descriptor` names, numbered now; `None` while the log is off.
+    pub(crate) fn new(
+        label: Option<&str>,
+        functions: &[String],
+        descriptor: impl FnOnce() -> String,
+    ) -> Option<StateLog> {
         if !enabled() {
             return None;
         }
@@ -203,6 +259,7 @@ impl StateLog {
         let label = label.map_or_else(String::new, |label| format!(" {label:?}"));
         Some(StateLog {
             name: format!("state {number}{label} ({})", functions.join(", ")),
+            descriptor: descriptor(),
             made: Mutex::new(VecDeque::new()),
             count: AtomicU64::new(0),
         })
@@ -230,8 +287,16 @@ impl StateLog {
     ) -> Line {
         let number = self.count.fetch_add(1, Ordering::Relaxed) + 1;
         let fields = fields(variant, pipeline, key, spirv);
+        let dumped = dump(pipeline, spirv).unwrap_or_default();
         let mut made = lock(&self.made);
-        let described = describe(&fields, &made, number);
+        let described = match number {
+            1 => format!(
+                "; descriptor: {}{}{dumped}",
+                self.descriptor,
+                describe(&fields, &made, number)
+            ),
+            _ => format!("{}{dumped}", describe(&fields, &made, number)),
+        };
         if made.len() == HISTORY {
             made.pop_front();
         }

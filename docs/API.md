@@ -1638,7 +1638,12 @@ How a notice reaches you:
 With `METAL2VULKAN_LOG_PIPELINES` set, a device also logs one line per render `VkPipeline` it
 makes (id name `metal2vulkan-pipeline-creation`, `Info` severity), with where its time went: the
 wait for its turn, the digests that name its parts, each library (made by this making, from its
-driver cache record or not, or another caller's) and the link; and, once per reason, why a draw
+driver cache record or not, or another caller's) and the link; a state's first line also names
+the descriptor it was made from (each function's name, the SHA-256 of its bitcode and the constant
+values it was made with, each color attachment's format, blend and write mask, the depth and
+stencil formats and the raster samples). With `METAL2VULKAN_DUMP_PIPELINES` naming a directory, a
+device writes each such pipeline's SPIR-V modules there, one file per module named by the hash
+the line prints it by (`<hash>.spv`), and the log is on too. And, once per reason, why a draw
 that reads its own pass's color attachment after a barrier took the split rather than a snapshot
 (id name `metal2vulkan-snapshot-fallback`, `Info` severity; `WorkCounts::reading_draws_snapshotted`
 counts those that took a snapshot), and now and then a count of the draws the snapshot's area rule

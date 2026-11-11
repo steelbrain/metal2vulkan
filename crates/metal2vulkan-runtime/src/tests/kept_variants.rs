@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 const STATES: usize = 64;
 
 /// The library of the owned fixture `name` on `device`.
-fn library(device: &Device, name: &str) -> Library {
+pub(super) fn library(device: &Device, name: &str) -> Library {
     let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/fixtures/public/engine")
         .join(format!("{name}.ll"));

@@ -374,6 +374,8 @@ mod pending_audit_device;
 mod pending_rebind;
 mod pipeline;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod pipeline_dump;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pipeline_wait_order;
 #[cfg(unix)]
 mod pixel_format_info;

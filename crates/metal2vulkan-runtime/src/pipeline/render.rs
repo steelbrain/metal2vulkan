@@ -400,9 +400,9 @@ pub(crate) enum StateDescriptor {
 }
 
 impl StateDescriptor {
-    /// Its functions' names, in pipeline order (`stage_name`).
-    fn function_names(&self) -> Vec<String> {
-        let stages: Vec<&StageSource> = match self {
+    /// Its functions, in pipeline order.
+    fn stages(&self) -> Vec<&StageSource> {
+        match self {
             StateDescriptor::Vertex(descriptor) => std::iter::once(&descriptor.vertex)
                 .chain(&descriptor.fragment)
                 .collect(),
@@ -412,8 +412,61 @@ impl StateDescriptor {
                 .chain(std::iter::once(&descriptor.mesh))
                 .chain(&descriptor.fragment)
                 .collect(),
+        }
+    }
+
+    /// Its functions' names, in pipeline order (`stage_name`).
+    fn function_names(&self) -> Vec<String> {
+        self.stages().into_iter().map(stage_name).collect()
+    }
+
+    /// What the pipeline creation log names a state of this descriptor by
+    /// (`creation_log.rs`): each function's name, the SHA-256 of its bitcode
+    /// (`FunctionInfo::air_hash`; a precompiled function's key) and the constant values it was
+    /// made with, by index and by name, each as its type and its bytes; each color attachment's
+    /// format, blend and write mask; the depth and stencil formats; and the raster samples.
+    fn logged(&self) -> String {
+        let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let functions: Vec<String> = self
+            .stages()
+            .into_iter()
+            .map(|source| match source {
+                StageSource::Function(descriptor) => {
+                    let info = descriptor.function.info();
+                    let constants = &descriptor.constants;
+                    let values: Vec<String> = (constants.by_index.iter())
+                        .map(|(index, value)| {
+                            format!("{index}: {:?} {}", value.ty, hex(&value.bytes))
+                        })
+                        .chain(constants.by_name.iter().map(|(name, value)| {
+                            format!("{name}: {:?} {}", value.ty, hex(&value.bytes))
+                        }))
+                        .collect();
+                    format!(
+                        "`{}` air {} constants {{{}}}",
+                        info.name,
+                        hex(&info.air_hash),
+                        values.join(", ")
+                    )
+                }
+                StageSource::Compiled(compiled) => format!("{:?}", compiled.key()),
+            })
+            .collect();
+        let colors: Vec<String> = (self.color_attachments().iter().enumerate())
+            .filter_map(|(index, color)| {
+                color.map(|a| format!("{index}: {:?} {}", a.pixel_format, blend_text(&a)))
+            })
+            .collect();
+        let (depth, stencil) = match self {
+            StateDescriptor::Vertex(d) => (d.depth_format, d.stencil_format),
+            StateDescriptor::Mesh(d) => (d.depth_format, d.stencil_format),
         };
-        stages.into_iter().map(stage_name).collect()
+        format!(
+            "functions [{}]; colors [{}]; depth {depth:?}; stencil {stencil:?}; raster samples {}",
+            functions.join("; "),
+            colors.join("; "),
+            self.raster_sample_count()
+        )
     }
 
     /// A draw of a state of this descriptor at color `index`, in words for a notice: its
@@ -434,18 +487,7 @@ impl StateDescriptor {
             .copied()
             .flatten();
         let state = match color {
-            Some(a) if a.blending_enabled => format!(
-                "color {index} blended: color {:?} {:?} {:?}, alpha {:?} {:?} {:?}, write mask \
-                 {:?}",
-                a.source_rgb_blend_factor,
-                a.rgb_blend_operation,
-                a.destination_rgb_blend_factor,
-                a.source_alpha_blend_factor,
-                a.alpha_blend_operation,
-                a.destination_alpha_blend_factor,
-                a.write_mask
-            ),
-            Some(a) => format!("color {index} unblended, write mask {:?}", a.write_mask),
+            Some(a) => format!("color {index} {}", blend_text(&a)),
             None => format!("no color {index}"),
         };
         format!("a draw of {function} ({state})")
@@ -1987,7 +2029,9 @@ impl GraphicsState {
         let at_bind_views = AtBindViews::new(device, &base.shared_pipeline().interface);
         let log = match warming {
             true => None,
-            false => StateLog::new(label.as_deref(), &descriptor.function_names()),
+            false => StateLog::new(label.as_deref(), &descriptor.function_names(), || {
+                descriptor.logged()
+            }),
         };
         Ok(GraphicsState(Arc::new_cyclic(|state| {
             // The state holds its ID's slot, which lists it among the states an indirect render
@@ -2704,6 +2748,24 @@ fn mesh_descriptor_key(device: &Device, d: &MeshPipelineDescriptor) -> PipelineK
 }
 
 /// A stage's function name, or the compile key of a stage compiled already.
+/// A color attachment's blend state, in words: its operation and factors for color and alpha, or
+/// unblended, and its write mask, as the descriptor states them.
+fn blend_text(a: &ColorAttachmentDescriptor) -> String {
+    match a.blending_enabled {
+        true => format!(
+            "blended: color {:?} {:?} {:?}, alpha {:?} {:?} {:?}, write mask {:?}",
+            a.source_rgb_blend_factor,
+            a.rgb_blend_operation,
+            a.destination_rgb_blend_factor,
+            a.source_alpha_blend_factor,
+            a.alpha_blend_operation,
+            a.destination_alpha_blend_factor,
+            a.write_mask
+        ),
+        false => format!("unblended, write mask {:?}", a.write_mask),
+    }
+}
+
 fn stage_name(source: &StageSource) -> String {
     match source {
         StageSource::Function(descriptor) => descriptor.function.info().name.to_string(),
