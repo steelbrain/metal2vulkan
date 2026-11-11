@@ -990,7 +990,8 @@ fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
             (e2 - s0) * 1e3,
             (ss - s0) * 1e3,
             (se - s0) * 1e3,
-            (s1 - e0.max(se)) * 1e3,
+            // The unshared one ends the first gap only where it ran in it.
+            (s1 - if se <= s1 { e0.max(se) } else { e0 }) * 1e3,
             (s2 - e1) * 1e3,
         );
         match isolation {
