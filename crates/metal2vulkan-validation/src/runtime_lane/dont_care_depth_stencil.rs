@@ -255,7 +255,6 @@ impl Lane {
         };
         Textures {
             arrangement,
-            side,
             color,
             depth,
             stencil,
@@ -293,7 +292,6 @@ impl Lane {
 /// One arrangement's textures.
 struct Textures {
     arrangement: Arrangement,
-    side: u64,
     color: Texture,
     depth: Texture,
     stencil: Option<Texture>,
