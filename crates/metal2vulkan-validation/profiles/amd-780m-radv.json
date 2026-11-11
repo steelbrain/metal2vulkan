@@ -3,24 +3,24 @@
   "provenance": {
     "source": "vulkaninfo",
     "command": "vulkaninfo --json",
-    "sha256": "7a95a457cbb9811a7a65bad8a4fa1ccd63bebe64cdaa8296e662baa4ba5fcd79",
-    "source_profile": "VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_4",
+    "sha256": "f109b309ae26d97339bb5b26f4ed5d6aa60c16dd8affeec6c5719bcda4d90601",
+    "source_profile": "VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_6",
     "device_name": "AMD Radeon 780M Graphics (RADV PHOENIX)",
     "vendor_id": 4098,
     "device_id": 5567,
     "driver_name": "radv",
-    "driver_info": "Mesa 26.2.4-arch3.1",
-    "driver_version": "109060100",
+    "driver_info": "Mesa 26.2.6-arch3.1",
+    "driver_version": "109060102",
     "api_version": "1.4.354",
-    "host": "AMD Radeon 780M (Phoenix), CachyOS: mesa and vulkan-radeon 26.2.4, vulkan-icd-loader and vulkan-tools 1.4.363.0",
-    "captured": "2026-10-6",
+    "host": "AMD Radeon 780M (Phoenix), CachyOS: mesa and vulkan-radeon 26.2.6, vulkan-icd-loader and vulkan-tools 1.4.363.0",
+    "captured": "2026-11-11",
     "transforms": [],
     "unmapped": [
       "device.properties.VkPhysicalDeviceLayeredApiPropertiesListKHR.pLayeredApis (pointer member written as NULL)"
     ],
     "formats": {
       "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-      "sha256": "d06d4b4c3ebbdd56252670ddffae10dac01d2090a71e3ffae5c0fbdba26b78d2",
+      "sha256": "987f79dcaea1d8ac4e1f7565377e81d656e15af810dee851a4b14d8515969387",
       "queried": 240,
       "stated": 169,
       "color_attachment_sample_counts": 70
@@ -885,7 +885,7 @@
           "deviceID": 5567,
           "deviceName": "AMD Radeon 780M Graphics (RADV PHOENIX)",
           "deviceType": "VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU",
-          "driverVersion": 109060100,
+          "driverVersion": 109060102,
           "limits": {
             "maxImageDimension1D": 16384,
             "maxImageDimension2D": 16384,
@@ -1243,8 +1243,8 @@
             "height": 2
           },
           "maxFragmentSizeAspectRatio": 2,
-          "maxFragmentShadingRateCoverageSamples": 32,
-          "maxFragmentShadingRateRasterizationSamples": "VK_SAMPLE_COUNT_8_BIT",
+          "maxFragmentShadingRateCoverageSamples": 16,
+          "maxFragmentShadingRateRasterizationSamples": "VK_SAMPLE_COUNT_4_BIT",
           "fragmentShadingRateWithShaderDepthStencilWrites": true,
           "fragmentShadingRateWithSampleMask": true,
           "fragmentShadingRateWithShaderSampleMask": false,
@@ -1447,7 +1447,7 @@
         "VkPhysicalDeviceVulkan12Properties": {
           "driverID": "VK_DRIVER_ID_MESA_RADV",
           "driverName": "radv",
-          "driverInfo": "Mesa 26.2.4-arch3.1",
+          "driverInfo": "Mesa 26.2.6-arch3.1",
           "conformanceVersion": {
             "major": 1,
             "minor": 4,
@@ -18015,13 +18015,13 @@
     "VP_M2V_amd_780m_radv": {
       "version": 1,
       "api-version": "1.4.354",
-      "label": "AMD Radeon 780M Graphics (RADV PHOENIX) driver 26.2.4",
-      "description": "Local capture of VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_4; see provenance. Exported from vulkaninfo",
+      "label": "AMD Radeon 780M Graphics (RADV PHOENIX) driver 26.2.6",
+      "description": "Local capture of VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_6; see provenance. Exported from vulkaninfo",
       "contributors": {},
       "history": [
         {
           "revision": 1,
-          "date": "2026-10-6",
+          "date": "2026-11-11",
           "author": "Automated export from vulkaninfo",
           "comment": ""
         }

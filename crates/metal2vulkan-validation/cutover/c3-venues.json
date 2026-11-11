@@ -63,8 +63,8 @@
             "vendor_id": 4098,
             "device_id": 5567,
             "driver_id": 3,
-            "driver_version": 109060100,
-            "driver_info": "Mesa 26.2.4-arch3.1"
+            "driver_version": 109060102,
+            "driver_info": "Mesa 26.2.6-arch3.1"
           }
         }
       ]

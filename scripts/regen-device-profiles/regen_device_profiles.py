@@ -425,14 +425,14 @@ SOURCES = [
     {
         "name": "amd-780m-radv",
         "kind": "vulkaninfo",
-        "sha256": "7a95a457cbb9811a7a65bad8a4fa1ccd63bebe64cdaa8296e662baa4ba5fcd79",
-        "profile": "VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_4",
+        "sha256": "f109b309ae26d97339bb5b26f4ed5d6aa60c16dd8affeec6c5719bcda4d90601",
+        "profile": "VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_6",
         "command": "vulkaninfo --json",
-        "host": ("AMD Radeon 780M (Phoenix), CachyOS: mesa and vulkan-radeon 26.2.4, "
+        "host": ("AMD Radeon 780M (Phoenix), CachyOS: mesa and vulkan-radeon 26.2.6, "
                  "vulkan-icd-loader and vulkan-tools 1.4.363.0"),
         "formats": {
             "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-            "sha256": "d06d4b4c3ebbdd56252670ddffae10dac01d2090a71e3ffae5c0fbdba26b78d2",
+            "sha256": "987f79dcaea1d8ac4e1f7565377e81d656e15af810dee851a4b14d8515969387",
         },
     },
     {
