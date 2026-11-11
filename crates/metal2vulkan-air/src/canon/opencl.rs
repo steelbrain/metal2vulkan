@@ -602,8 +602,9 @@ fn rewrite(
 /// Entry point `ep` as a pipeline of OpenCL mode binds it, the three hidden buffers its parameters
 /// `first` to `first + 2`: each argument bound at a buffer index 3 past its own (an argument
 /// buffer, a function table and an acceleration structure as a buffer), threadgroup memory,
-/// textures and samplers at theirs, a 1D image's texture of the 2D type Metal's OpenCL binds
-/// ([`bound_texture`]), and the buffers' bindings after the entry's own.
+/// textures and samplers at theirs, a 1D image's texture of the 2D type Metal's OpenCL binds for
+/// it (`texture1d` as `texture2d`, `texture1d_array` as `texture2d_array`), and the buffers'
+/// bindings after the entry's own.
 pub fn entry(mut ep: EntryPoint, first: u32) -> Result<EntryPoint, Error> {
     for p in &mut ep.params {
         if let ParamRole::Texture(_) = p.role {
@@ -657,7 +658,7 @@ pub fn entry(mut ep: EntryPoint, first: u32) -> Result<EntryPoint, Error> {
 
 /// The MSL type of the texture Metal's OpenCL binds for an image argument whose type AIR names
 /// `name`, where that is another: a 1D image's texture is 2D (`texture1d<..>` a `texture2d<..>`,
-/// `texture1d_array<..>` a `texture2d_array<..>`), as [`opencl_1d`](super::opencl_1d) reads it,
+/// `texture1d_array<..>` a `texture2d_array<..>`), as `canon::opencl_1d` reads it,
 /// and as a pipeline of OpenCL mode reflects it (`MTLTextureType2D` and `MTLTextureType2DArray`,
 /// measured on an M3 Max under macOS 27.0.1 and a Radeon Pro 5300M under macOS 26.7.1).
 fn bound_texture(name: &str) -> Option<String> {
