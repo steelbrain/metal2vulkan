@@ -366,7 +366,9 @@ fn copied_256_bench() {
 /// before the merge back; (c) every byte, each side; (d) one byte on each side in each of 1% of
 /// its pages, the same block, both before the merge back, which reads those blocks' base; (e)
 /// every float of the copy rewritten by the GPU as `copied_pass_bench`'s kernel rewrites it
-/// (`x + i`: some bytes of each float change), the pages unchanged.
+/// (`x + i`: some bytes of each float change), the pages unchanged; (f) as (e), and the CPU's
+/// write of a byte of every 1 KiB block of the pages before the merge back, which merges every
+/// block byte by byte, reading its base.
 pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseBytes>) {
     const LENGTH: usize = 256 << 20;
     let buffers = Arc::new(CopiedBuffers::default());
@@ -475,6 +477,21 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
             // As `copied_pass_bench`'s kernel writes it: `x + i` for float `i`, which changes
             // some bytes of each float and leaves others.
             if !cpu {
+                let floats = pair.copy.as_chunks_mut::<4>().0.iter_mut();
+                for (index, float) in floats.enumerate() {
+                    *float = (f32::from_le_bytes(*float) + index as f32).to_le_bytes();
+                }
+            }
+        },
+    );
+    report(
+        "(f) every float rewritten by the GPU, a byte of every block by the CPU",
+        &mut pair,
+        &mut |pair, cpu| {
+            if !cpu {
+                for block in pair.pages.as_chunks_mut::<1024>().0 {
+                    block[1] = block[1].wrapping_add(1);
+                }
                 let floats = pair.copy.as_chunks_mut::<4>().0.iter_mut();
                 for (index, float) in floats.enumerate() {
                     *float = (f32::from_le_bytes(*float) + index as f32).to_le_bytes();
