@@ -643,6 +643,11 @@ fn every_rounding_is_exact_on_the_interpreter() {
         }
     }
     assert!(checked > 0);
+    eprintln!(
+        "checked {checked} results of {} conversions on {} profiles",
+        conversions().len(),
+        profiles.len()
+    );
 }
 
 /// The control of [`every_rounding_is_exact_on_the_interpreter`]: for every directed rounding of a
@@ -778,4 +783,5 @@ fn nearest_even_declares_the_mode_or_records_the_note() {
         declared > 0 && noted > 0,
         "declared {declared}, noted {noted}"
     );
+    eprintln!("RoundingModeRTE declared on {declared} profiles, noted on {noted}");
 }
