@@ -445,9 +445,20 @@ impl FamilyStrategy for ArithStrategy {
             S::Fma(f) => f.name(),
             S::FastFmod { .. } => FAST_FMOD,
             S::Convert {
+                kind: ConvertKind::ToInt { round: Some(_), .. },
+                ..
+            } => "arith.convert.saturating.rounded",
+            S::Convert {
                 kind: ConvertKind::ToInt { .. },
                 ..
             } => "arith.convert.saturating",
+            S::Convert {
+                kind:
+                    ConvertKind::ToFloat {
+                        directed: Some(_), ..
+                    },
+                ..
+            } => "arith.convert.directed",
             S::Convert {
                 kind: ConvertKind::FromFp8(_),
                 ..
@@ -536,7 +547,9 @@ impl FamilyStrategy for ArithStrategy {
                 from,
                 to,
             } => 320 + 160 + conversion_words(from.with(Held::Float(FloatFmt::F32)), *to),
-            S::Convert { from, to, .. } => 160 + conversion_words(*from, *to),
+            S::Convert { kind, from, to } => {
+                160 + conversion_words(*from, *to) + suffix_words(*kind, *from)
+            }
             S::Pack {
                 dir,
                 format,
@@ -581,6 +594,19 @@ impl FamilyStrategy for ArithStrategy {
     /// An aggregate that holds a pointer has no value.
     fn yields_value(&self) -> bool {
         !matches!(self, ArithStrategy::PointerAggregate)
+    }
+}
+
+/// The words a conversion's honored suffix adds ([`honored`]): the rounding to an integral value;
+/// the conversion back, its comparisons and the step of a directed one.
+fn suffix_words(kind: ConvertKind, from: Form) -> u32 {
+    let lanes = u32::from(from.lanes);
+    match kind {
+        ConvertKind::ToInt { round: Some(_), .. } => 8,
+        ConvertKind::ToFloat {
+            directed: Some(_), ..
+        } => 160 + 128 + 16 * lanes,
+        _ => 0,
     }
 }
 
@@ -2750,14 +2776,17 @@ fn select_convert(
         (NumKind::Float, NumKind::Float) => ConvertKind::Float,
         (NumKind::Float, s) => ConvertKind::ToFloat {
             signed: s == NumKind::Signed,
+            directed: None,
         },
         (d, NumKind::Float) => ConvertKind::ToInt {
             signed: d == NumKind::Signed,
+            round: None,
         },
         (_, s) => ConvertKind::Int {
             signed: s == NumKind::Signed,
         },
     };
+    let kind = honored(cx.inputs.open_cl_mode, c, kind, from, to);
     let consistent = match kind {
         ConvertKind::Float => from.is_float() && to.is_float(),
         ConvertKind::ToFloat { .. } => !from.is_float() && to.is_float(),
@@ -2782,6 +2811,37 @@ fn select_convert(
         _ => None,
     };
     Ok(with_nan(cx, s, nan))
+}
+
+/// `kind`, the conversion `c`'s types name, with the suffix `c` spells where the pipeline honors
+/// it: in a compute pipeline of OpenCL mode (`open_cl_mode`), as Metal's does there, an integer
+/// to `float` by `.rtz`, `.rtp` or `.rtn`, and a `float` to an integer by `.rte`, `.rtp` or `.rtn`
+/// (measured on a Radeon Pro 5300M and a UHD Graphics 630:
+/// docs/API.md, "Conversions"). Elsewhere, and where a side is a `half` (Metal creates no pipeline
+/// for one in OpenCL mode), the conversion its types name.
+pub(super) fn honored(
+    open_cl_mode: bool,
+    c: &Convert,
+    kind: ConvertKind,
+    from: Form,
+    to: Form,
+) -> ConvertKind {
+    use crate::air::intrinsics::Rounding;
+    if !open_cl_mode {
+        return kind;
+    }
+    let f32_lanes = |f: Form| f.float_fmt() == Some(FloatFmt::F32);
+    match kind {
+        ConvertKind::ToFloat { signed, .. } if f32_lanes(to) => ConvertKind::ToFloat {
+            signed,
+            directed: c.rounding.filter(|r| *r != Rounding::Even),
+        },
+        ConvertKind::ToInt { signed, .. } if f32_lanes(from) => ConvertKind::ToInt {
+            signed,
+            round: c.rounding.filter(|r| *r != Rounding::Zero),
+        },
+        kind => kind,
+    }
 }
 
 // ---- Emission ----

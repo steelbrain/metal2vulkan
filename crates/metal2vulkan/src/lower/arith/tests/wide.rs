@@ -615,7 +615,18 @@ fn float_to_wide_truncates_and_saturates() {
                 &format!("convert saturating f32 -> wide i{bits} signed={signed}"),
                 &[float(32)],
                 to,
-                &|fb, x| w::convert(fb, ConvertKind::ToInt { signed }, float(32), to, x[0]),
+                &|fb, x| {
+                    w::convert(
+                        fb,
+                        ConvertKind::ToInt {
+                            signed,
+                            round: None,
+                        },
+                        float(32),
+                        to,
+                        x[0],
+                    )
+                },
                 &cases,
                 &|c| {
                     let x = f64::from(f32v(arg(c, 0)));
@@ -1510,5 +1521,60 @@ fn a_fragment_shuffle_bounds_its_emission() {
             "{lane:?}: {} words above the kernel, bound {bound}",
             with - without
         );
+    }
+}
+
+/// The roundings a pipeline of OpenCL mode honors, with a wide side: a wide integer to `f32`
+/// toward zero, up and down; and an `f32` to a wide integer to nearest even, up and down,
+/// saturating (`convert_suffix.rs` holds the native forms').
+#[test]
+fn wide_conversions_honor_their_suffixes() {
+    use super::convert_suffix::{
+        clamped, f32_of, integral_of, rounding_floats, rounding_ints, value_of, DIRECTED, INTEGRAL,
+    };
+    let f32f = float(32);
+    for bits in [40u8, 64] {
+        let from = wide(bits);
+        let cases: Vec<Case> = rounding_ints(bits).iter().map(|v| vec![vec![*v]]).collect();
+        for signed in [true, false] {
+            for mode in DIRECTED {
+                check_wide(
+                    &format!("wide i{bits} signed={signed} to f32 {mode:?}"),
+                    &[from],
+                    f32f,
+                    &|fb, x| {
+                        let kind = ConvertKind::ToFloat {
+                            signed,
+                            directed: Some(mode),
+                        };
+                        w::convert(fb, kind, from, f32f, x[0])
+                    },
+                    &cases,
+                    &|c| Some(vec![f32_of(value_of(arg(c, 0), bits, signed), mode)]),
+                );
+            }
+        }
+    }
+    let floats: Vec<Case> = rounding_floats().iter().map(|v| vec![vec![*v]]).collect();
+    for signed in [true, false] {
+        for mode in INTEGRAL {
+            check_wide(
+                &format!("f32 to wide i64 signed={signed} {mode:?}"),
+                &[f32f],
+                wide(64),
+                &|fb, x| {
+                    let kind = ConvertKind::ToInt {
+                        signed,
+                        round: Some(mode),
+                    };
+                    w::convert(fb, kind, f32f, wide(64), x[0])
+                },
+                &floats,
+                &|c| {
+                    let x = f64::from(f32v(arg(c, 0)));
+                    Some(vec![saturated(integral_of(x, mode), 64, signed)])
+                },
+            );
+        }
     }
 }

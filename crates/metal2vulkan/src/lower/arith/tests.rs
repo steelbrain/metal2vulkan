@@ -3789,7 +3789,10 @@ fn saturating_float_to_integer_convert_matches_metal() {
                     &|fb, x| {
                         math::convert(
                             fb,
-                            ConvertKind::ToInt { signed },
+                            ConvertKind::ToInt {
+                                signed,
+                                round: None,
+                            },
                             ff,
                             tf,
                             x[0],
@@ -3893,7 +3896,10 @@ fn saturating_converts_saturate_at_every_bound() {
                     &|fb, x| {
                         math::convert(
                             fb,
-                            ConvertKind::ToInt { signed },
+                            ConvertKind::ToInt {
+                                signed,
+                                round: None,
+                            },
                             ff,
                             int(ibits),
                             x[0],
@@ -3918,7 +3924,10 @@ fn saturating_converts_saturate_at_every_bound() {
                 &|fb, x| {
                     math::convert(
                         fb,
-                        ConvertKind::ToInt { signed },
+                        ConvertKind::ToInt {
+                            signed,
+                            round: None,
+                        },
                         half,
                         int(ibits),
                         x[0],
@@ -3980,7 +3989,10 @@ fn integer_and_float_converts_follow_their_source_kind() {
             &|fb, x| {
                 math::convert(
                     fb,
-                    ConvertKind::ToFloat { signed },
+                    ConvertKind::ToFloat {
+                        signed,
+                        directed: None,
+                    },
                     i16f,
                     f32f,
                     x[0],
@@ -4105,6 +4117,7 @@ mod blend16;
 mod blend8;
 mod blend_packed;
 mod color_write;
+mod convert_suffix;
 mod divide;
 mod fast;
 mod fused;

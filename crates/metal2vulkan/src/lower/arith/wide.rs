@@ -878,7 +878,8 @@ pub fn cast(
     }
 }
 
-/// `air.convert` with a wide side (saturating from a float, as `math::convert`).
+/// `air.convert` with a wide side (saturating from a float, and its honored suffixes, as
+/// `math::convert`).
 pub fn convert(
     fb: &mut FunctionBuilder<'_>,
     kind: ConvertKind,
@@ -892,8 +893,36 @@ pub fn convert(
             let p = to_pair(fb, from, x, signed)?;
             from_pair(fb, to, p)
         }
-        ConvertKind::ToFloat { signed } => pair_to_float(fb, from, to, x, signed),
-        ConvertKind::ToInt { signed } => {
+        ConvertKind::ToFloat { signed, directed } => {
+            let r = pair_to_float(fb, from, to, x, signed)?;
+            match directed {
+                Some(mode) => {
+                    let back = |fb: &mut FunctionBuilder<'_>, r: SValue| {
+                        let kind = ConvertKind::ToInt {
+                            signed,
+                            round: None,
+                        };
+                        convert(fb, kind, to, from, r)
+                    };
+                    let cmp =
+                        |fb: &mut FunctionBuilder<'_>, pred: IntPredicate, a: SValue, b: SValue| {
+                            int_compare(fb, pred, from, a, b)
+                        };
+                    let d = math::Directed {
+                        mode,
+                        signed,
+                        from,
+                        to,
+                    };
+                    math::directed_to_float(fb, d, x, r, (&back, &cmp))
+                }
+                None => Ok(r),
+            }
+        }
+        ConvertKind::ToInt { signed, round } => {
+            // The NaN test reads `x`; the clamp, the bounds and the conversion read its integral
+            // value.
+            let xr = math::integral(fb, round, x)?;
             let nb = u32::from(to.bits());
             let fw = from.container();
             let kk = if signed { nb - 1 } else { nb };
@@ -911,15 +940,15 @@ pub fn convert(
                 ops::fsplat(fb, from, 0.0)?
             };
             let hi = ops::splat(fb, from, math::below_pow2_bits(fw, kk))?;
-            let c = fb.glsl(GlslOp::NClamp, &[x, lo, hi])?;
+            let c = fb.glsl(GlslOp::NClamp, &[xr, lo, hi])?;
             let n = to.lanes;
             let mut p = float_to_pair(fb, from, to, c, signed)?;
             let limit = ops::splat(fb, from, math::pow2_bits(fw, kk))?;
-            let over = bin(fb, BinOp::FOrdGreaterThanEqual, x, limit)?;
+            let over = bin(fb, BinOp::FOrdGreaterThanEqual, xr, limit)?;
             let max = pk(fb, n, ops::ones(kk as u8))?;
             p = sel(fb, over, max, p)?;
             if signed {
-                let under = bin(fb, BinOp::FOrdLessThan, x, lo)?;
+                let under = bin(fb, BinOp::FOrdLessThan, xr, lo)?;
                 let min = pk(fb, n, (!0u64) << (nb - 1))?;
                 p = sel(fb, under, min, p)?;
                 let nan = fb.unary(UnOp::IsNan, x)?;
@@ -938,7 +967,11 @@ pub fn convert(
         ConvertKind::Fp8ToInt { fp8, signed } => {
             let f = from.with(Held::Float(FloatFmt::F32));
             let v = narrow::fp8_to_f32(fb, fp8, narrow::u32_form(from), f, x)?;
-            convert(fb, ConvertKind::ToInt { signed }, f, to, v)
+            let kind = ConvertKind::ToInt {
+                signed,
+                round: None,
+            };
+            convert(fb, kind, f, to, v)
         }
         ConvertKind::Float | ConvertKind::FromFp8(_) | ConvertKind::ToBool => Err(arity_error()),
     }
@@ -1563,6 +1596,14 @@ impl WideOp {
             }
             WideOp::Bin { .. } => 192,
             WideOp::Compare { .. } => 96,
+            // A directed conversion to `f32` adds the conversion back and the step.
+            WideOp::Convert {
+                kind:
+                    ConvertKind::ToFloat {
+                        directed: Some(_), ..
+                    },
+                ..
+            } => 2048,
             WideOp::Cast { .. } | WideOp::Convert { .. } => {
                 // The float paths: the collapse to 32 bits (two shifts, a compare) and rounding.
                 1024
@@ -2101,14 +2142,17 @@ fn select_convert(
         (NumKind::Float, NumKind::Float) => return Err(not_lowered()),
         (NumKind::Float, s) => ConvertKind::ToFloat {
             signed: s == NumKind::Signed,
+            directed: None,
         },
         (d, NumKind::Float) => ConvertKind::ToInt {
             signed: d == NumKind::Signed,
+            round: None,
         },
         (_, s) => ConvertKind::Int {
             signed: s == NumKind::Signed,
         },
     };
+    let kind = super::honored(cx.inputs.open_cl_mode, c, kind, from, to);
     let int_like = |f: Form| f.is_bool() || f.is_wide() || (f.is_int() && f.container() == 32);
     let ok = match kind {
         ConvertKind::ToFloat { .. } => from.is_wide() && to.is_float(),

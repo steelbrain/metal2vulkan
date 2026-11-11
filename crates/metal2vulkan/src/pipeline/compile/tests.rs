@@ -525,6 +525,13 @@ fn function_keys_cover_their_inputs() {
     let replay = a.function_compile_key(&fd, &replay);
     assert_ne!(with_true, replay);
     assert_ne!(multisampled, replay);
+    // So is OpenCL mode, which binds the hidden buffers and honors `air.convert`'s suffixes: a
+    // pipeline of either mode never takes the other's translation.
+    let mut cl = LoweringInputs::new();
+    cl.open_cl_mode = true;
+    let cl = a.function_compile_key(&fd, &cl);
+    assert_ne!(with_true, cl);
+    assert_ne!(replay, cl);
     // So is the interlocked framebuffer fetch's pipeline state, by its attachments' state.
     let fetch = |format| {
         let mut i = LoweringInputs::new();

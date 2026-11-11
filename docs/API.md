@@ -4985,11 +4985,35 @@ each item named states the rule in full.
 **Conversions**
 
 - **`air.convert` with a rounding (`.rte`, `.rtz`, `.rtp`, `.rtn`) and `.sat` after its types is
-  the conversion its types name.** Apple's OpenCL compiler spells these on every
-  `convert_<type>[_sat][_<mode>]`, and Metal's compilers do not answer them alike. Measured over the
-  owned fixture `kernel_convert_rounding_modes`'s edge values, one kernel per form (probe jobs
-  m3-max-14380 on a Radeon Pro 5300M and m3-max-14381 on a UHD Graphics 630, both macOS 26.7.1;
-  m3-max-14382 on the M3 Max, macOS 27.0.1), the runtime differs from a Mac in three places:
+  honored in a compute pipeline of OpenCL mode and is the conversion its types name elsewhere.**
+  Apple's OpenCL compiler spells these on every `convert_<type>[_sat][_<mode>]`.
+
+  In OpenCL mode (`ComputePipelineDescriptor::open_cl_mode_enabled`) Metal honors them. Measured
+  over OpenCL C of our own, one work-item per operand (probe jobs m3-max-15651 on a Radeon Pro
+  5300M and m3-max-15652 on a UHD Graphics 630, both macOS 26.7.1):
+
+  | Form, OpenCL mode | Radeon Pro 5300M | UHD Graphics 630 | Runtime |
+  |---|---|---|---|
+  | integer of 8 to 64 bits to `float`, `.rtz`, `.rtp`, `.rtn` | rounded as named | rounded as named | rounded as named |
+  | `float` to an integer of 8 to 64 bits, `.rte`, `.rtp`, `.rtn` | rounded as named, then clamped where `.sat` | as the 5300M, but a `uint` of 2^31 or more is `0x7fffffff` and a `uchar` with `.sat` above 127 is 127 | rounded as named, then saturated (the 5300M's answer) |
+  | a `half` side, any suffix | no pipeline | no pipeline | the conversion its types name |
+
+  An integer to `float` by `.rte`, a `float` to an integer by `.rtz`, and an integer to an integer
+  with a rounding and no `.sat` are the conversion their types name on both, as on the runtime.
+  Both clamp an integer to an integer with `.sat` to the destination's range, where the runtime
+  wraps.
+  Neither creates a pipeline of OpenCL mode for a conversion with a `half` side (its library
+  compiles), so no Metal answer exists for one, and the runtime makes the pipeline. The device has
+  no directed conversion (Vulkan's integer-to-float conversion rounds in a direction of its own,
+  its float-to-integer one truncates), so the runtime builds each exactly: a `float` is rounded to
+  an integral value (`RoundEven`, `Ceil`, `Floor`) before the conversion, and the device's
+  conversion of an integer to `float` moves one unit in the last place where it lies on the wrong
+  side of the integer.
+
+  Outside OpenCL mode Metal's compilers do not answer them alike. Measured over the owned fixture
+  `kernel_convert_rounding_modes`'s edge values, one kernel per form (probe jobs m3-max-14380 on a
+  Radeon Pro 5300M and m3-max-14381 on a UHD Graphics 630, both macOS 26.7.1; m3-max-14382 on the
+  M3 Max, macOS 27.0.1), the runtime differs from a Mac in three places:
 
   | Form | M3 Max | Radeon Pro 5300M | UHD Graphics 630 | Runtime |
   |---|---|---|---|---|

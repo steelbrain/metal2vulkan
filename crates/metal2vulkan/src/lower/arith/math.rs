@@ -23,7 +23,8 @@
 //! zero's sign, a NaN's bits, an `f32` denormal) are the device's, recorded as precision notes at
 //! selection, and so is every function whose Vulkan precision is looser than Metal's.
 
-use crate::air::intrinsics::PackFormat;
+use crate::air::intrinsics::{PackFormat, Rounding};
+use crate::air::ir::IntPredicate;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::libm::{self, Lib};
 use crate::lower::arith::nan::{self, NanTest};
@@ -2366,10 +2367,21 @@ pub(super) fn below_pow2_bits(bits: u8, k: u32) -> u64 {
 pub enum ConvertKind {
     /// Float to float (`FConvert`, or the value itself at one width).
     Float,
-    /// Integer (`signed` source) to float.
-    ToFloat { signed: bool },
-    /// Float to integer, saturating: NaN to 0, out-of-range to the destination's bound.
-    ToInt { signed: bool },
+    /// Integer (`signed` source) to float: the device's rounding, or, where `directed` names
+    /// toward zero, up, or down (the conversion's suffix, honored in OpenCL mode), that rounding
+    /// exactly ([`directed_to_float`]). A `directed` conversion is to `f32`.
+    ToFloat {
+        signed: bool,
+        directed: Option<Rounding>,
+    },
+    /// Float to integer, saturating: NaN to 0, out-of-range to the destination's bound. The value
+    /// is truncated, or, where `round` names to nearest even, up, or down (the conversion's
+    /// suffix, honored in OpenCL mode), first rounded to an integral value that way
+    /// ([`integral`]).
+    ToInt {
+        signed: bool,
+        round: Option<Rounding>,
+    },
     /// Integer (`signed` source) to integer.
     Int { signed: bool },
     /// An 8-bit float (carried in an `i8`) to a float: exact.
@@ -2418,7 +2430,11 @@ pub fn convert(
         ConvertKind::Fp8ToInt { fp8, signed } => {
             let f = from.with(Held::Float(FloatFmt::F32));
             let v = narrow::fp8_to_f32(fb, fp8, narrow::u32_form(from), f, x)?;
-            convert(fb, ConvertKind::ToInt { signed }, f, to, v, test)
+            let kind = ConvertKind::ToInt {
+                signed,
+                round: None,
+            };
+            convert(fb, kind, f, to, v, test)
         }
         ConvertKind::Float => cast(fb, CastKind::FpResize, from, to, x),
         // A held integer is zero-extended in its container, so the container is zero exactly
@@ -2436,17 +2452,37 @@ pub fn convert(
             let zero = splat(fb, u, 0)?;
             bin(fb, BinOp::INotEqual, e, zero)
         }
-        ConvertKind::ToFloat { signed } => cast(
-            fb,
-            if signed {
+        ConvertKind::ToFloat { signed, directed } => {
+            let c = if signed {
                 CastKind::SiToFp
             } else {
                 CastKind::UiToFp
-            },
-            from,
-            to,
-            x,
-        ),
+            };
+            let r = cast(fb, c, from, to, x)?;
+            match directed {
+                Some(mode) => {
+                    let back = |fb: &mut FunctionBuilder<'_>, r: Value| {
+                        let kind = ConvertKind::ToInt {
+                            signed,
+                            round: None,
+                        };
+                        convert(fb, kind, to, from, r, test)
+                    };
+                    let compare =
+                        |fb: &mut FunctionBuilder<'_>, pred: IntPredicate, a: Value, b: Value| {
+                            crate::lower::arith::ops::int_compare(fb, pred, from, a, b)
+                        };
+                    let d = Directed {
+                        mode,
+                        signed,
+                        from,
+                        to,
+                    };
+                    directed_to_float(fb, d, x, r, (&back, &compare))
+                }
+                None => Ok(r),
+            }
+        }
         ConvertKind::Int { signed } => {
             if from.is_bool() {
                 return cast(fb, CastKind::ZExt, from, to, x);
@@ -2462,8 +2498,10 @@ pub fn convert(
             }
             cast(fb, c, from, to, x)
         }
-        ConvertKind::ToInt { signed } => {
+        ConvertKind::ToInt { signed, round } => {
             let n = u32::from(to.bits());
+            // The NaN test below reads `x`; the clamp and the conversion read its integral value.
+            let xr = integral(fb, round, x)?;
             // A narrow float is exactly its container's value: clamp in the container.
             let fw = from.container();
             let k = if signed { n - 1 } else { n };
@@ -2477,7 +2515,7 @@ pub fn convert(
             };
             let hi_bits = below_pow2_bits(fw, k);
             let hi = splat(fb, from, hi_bits)?;
-            let c = glsl(fb, GlslOp::NClamp, &[x, lo, hi])?;
+            let c = glsl(fb, GlslOp::NClamp, &[xr, lo, hi])?;
             let t = ty(fb, to)?;
             let op = if signed {
                 ConvOp::ConvertFToS
@@ -2490,7 +2528,7 @@ pub fn convert(
             // to it); otherwise it is selected.
             if float_value(fw, hi_bits).trunc() < (2f64.powi(k as i32) - 1.0) {
                 let limit = splat(fb, from, pow2_bits(fw, k))?;
-                let over = bin(fb, BinOp::FOrdGreaterThanEqual, x, limit)?;
+                let over = bin(fb, BinOp::FOrdGreaterThanEqual, xr, limit)?;
                 let max = splat(fb, to, ones(if signed { to.bits() - 1 } else { to.bits() }))?;
                 r = fb.select(over, max, r)?;
             }
@@ -2505,6 +2543,123 @@ pub fn convert(
             mask(fb, to, r)
         }
     }
+}
+
+/// `x` rounded to an integral value as `round` names: to nearest even (`RoundEven`), up (`Ceil`),
+/// or down (`Floor`), each exact; toward zero, or none, is the conversion's own truncation.
+pub fn integral(fb: &mut FunctionBuilder<'_>, round: Option<Rounding>, x: Value) -> BResult<Value> {
+    let op = match round {
+        Some(Rounding::Even) => GlslOp::RoundEven,
+        Some(Rounding::Up) => GlslOp::Ceil,
+        Some(Rounding::Down) => GlslOp::Floor,
+        Some(Rounding::Zero) | None => return Ok(x),
+    };
+    glsl(fb, op, &[x])
+}
+
+/// The integer conversion back of [`directed_to_float`]'s `r` (saturating, as
+/// [`ConvertKind::ToInt`]), and the integer comparison of two values of the source's form.
+pub type DirectedOps<'a> = (
+    &'a dyn Fn(&mut FunctionBuilder<'_>, Value) -> BResult<Value>,
+    &'a dyn Fn(&mut FunctionBuilder<'_>, IntPredicate, Value, Value) -> BResult<Value>,
+);
+
+/// A directed conversion of an integer to `f32`: the rounding it names (toward zero, up, or
+/// down), the integer's form and whether it is read as signed, and the `f32` form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Directed {
+    pub mode: Rounding,
+    pub signed: bool,
+    pub from: Form,
+    pub to: Form,
+}
+
+/// Integer `x` converted as `d` says, from `r`, the device's conversion of `x`.
+///
+/// The device rounds correctly in a direction of its own (Vulkan's precision for the conversion),
+/// so `r` is `x` or one of the two `f32` values around it, and one comparison with `x` decides
+/// whether `r` lies on the side `mode` asks for. `r` is integral, so it converts back exactly
+/// (`ops.0`), save at `2^k` (a signed source's `k` is its width less one), which is above every
+/// value of the source and is told by a float comparison. Where `r` is on the wrong side it moves
+/// one unit in the last place ([`step_f32`]). An integer of at most 24 bits is an `f32`: `r` is
+/// exact.
+pub fn directed_to_float(
+    fb: &mut FunctionBuilder<'_>,
+    d: Directed,
+    x: Value,
+    r: Value,
+    ops: DirectedOps<'_>,
+) -> BResult<Value> {
+    let Directed {
+        mode,
+        signed,
+        from,
+        to,
+    } = d;
+    if from.bits() <= 24 || mode == Rounding::Even {
+        return Ok(r);
+    }
+    let k = u32::from(from.bits()) - u32::from(signed);
+    let back = (ops.0)(fb, r)?;
+    let limit = splat(fb, to, pow2_bits(32, k))?;
+    let over = bin(fb, BinOp::FOrdGreaterThanEqual, r, limit)?;
+    let (gt, lt) = if signed {
+        (IntPredicate::Sgt, IntPredicate::Slt)
+    } else {
+        (IntPredicate::Ugt, IntPredicate::Ult)
+    };
+    let gt = (ops.1)(fb, gt, back, x)?;
+    let lt = (ops.1)(fb, lt, back, x)?;
+    let above = bin(fb, BinOp::LogicalOr, over, gt)?;
+    let in_range = fb.unary(UnOp::LogicalNot, over)?;
+    let below = bin(fb, BinOp::LogicalAnd, in_range, lt)?;
+    step_f32(fb, mode, to, r, above, below)
+}
+
+/// `f32` lanes `r` (form `to`) moved one unit in the last place toward `mode` (zero, up, or down)
+/// where `above` says the lane is above the value it rounds and `below` that it is below. A move
+/// toward zero is the bits less one and away from zero the bits plus one, of either sign; neither
+/// crosses zero here (a lane that moves is nonzero, and a nonzero integer's `f32` is at least 1).
+pub fn step_f32(
+    fb: &mut FunctionBuilder<'_>,
+    mode: Rounding,
+    to: Form,
+    r: Value,
+    above: Value,
+    below: Value,
+) -> BResult<Value> {
+    let u = to.with(Held::Int {
+        bits: 32,
+        container: 32,
+    });
+    let ut = ty(fb, u)?;
+    let bits = fb.convert(ConvOp::Bitcast, r, ut)?;
+    let sign = splat(fb, u, 0x8000_0000)?;
+    let s = bin(fb, BinOp::BitwiseAnd, bits, sign)?;
+    let zero = splat(fb, u, 0)?;
+    let neg = bin(fb, BinOp::INotEqual, s, zero)?;
+    let pos = fb.unary(UnOp::LogicalNot, neg)?;
+    let and = |fb: &mut FunctionBuilder<'_>, a, b| bin(fb, BinOp::LogicalAnd, a, b);
+    // The lanes whose magnitude goes down, and those whose magnitude goes up.
+    let (toward, away) = match mode {
+        Rounding::Zero => {
+            let p = and(fb, above, pos)?;
+            let n = and(fb, below, neg)?;
+            (bin(fb, BinOp::LogicalOr, p, n)?, None)
+        }
+        Rounding::Up => (and(fb, below, neg)?, Some(and(fb, below, pos)?)),
+        Rounding::Down => (and(fb, above, pos)?, Some(and(fb, above, neg)?)),
+        Rounding::Even => return Ok(r),
+    };
+    let minus_one = splat(fb, u, 0xFFFF_FFFF)?;
+    let mut d = fb.select(toward, minus_one, zero)?;
+    if let Some(away) = away {
+        let one = splat(fb, u, 1)?;
+        d = fb.select(away, one, d)?;
+    }
+    let moved = bin(fb, BinOp::IAdd, bits, d)?;
+    let t = ty(fb, to)?;
+    fb.convert(ConvOp::Bitcast, moved, t)
 }
 
 /// The packed-channel layout of a normalized `air.pack`/`air.unpack` format: each channel's
