@@ -604,7 +604,7 @@
         "metal2vulkan-degrade-host-replayed-indirect-commands"
       ],
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "argument_objects_retained": 6,
         "argument_tables_retained": 3,
@@ -635,10 +635,11 @@
         "completion_arms": 4,
         "completion_arms_after_a_wake": 4,
         "completion_waiter_parks": 4,
-        "creation_pipelines_made": 1,
+        "creation_pipelines_made": 0,
         "device_memory_allocated": 205520896,
         "dispatches_planned_as_before": 5,
         "encoder_command_buffers_begun": 16,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 4,
         "finales_apart": 4,
         "functions_shared": 2,
@@ -685,7 +686,7 @@
         "stage_entries_specialized": 1,
         "submit_infos": 8,
         "trail_waits": 1,
-        "variant_pipelines_made": 2,
+        "variant_pipelines_made": 1,
         "variants_taken_back": 2,
         "wakes_completion_waiters": 4,
         "wakes_spared": 13
@@ -711,12 +712,11 @@
         "variant_pipelines_made": 1
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
-        "creation_pipelines_made": 1,
+        "addressable_buffers_made": 1,
         "pipeline_layouts_made": 2,
         "pooled_memory_blocks_made": 3,
         "shader_modules_made": 2,
-        "variant_pipelines_made": 2
+        "variant_pipelines_made": 1
       },
       "per_state": {
         "pipelines": 0,

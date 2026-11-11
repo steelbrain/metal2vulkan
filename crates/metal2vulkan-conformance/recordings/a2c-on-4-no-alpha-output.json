@@ -268,7 +268,7 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "argument_objects_retained": 1,
         "argument_samplers_taken": 1,
@@ -277,6 +277,7 @@
         "batches_submitted_by_waiters": 1,
         "batches_with_none_pending": 1,
         "blocks_ahead_hurried": 1,
+        "blocks_ahead_unused": 1,
         "blocks_ahead_waited_for": 2,
         "bound_notices_made": 1,
         "command_buffers_begun": 3,
@@ -346,19 +347,25 @@
         "image_blocks_made_ahead": 2,
         "images_started_on_the_host": 1,
         "linked_use_questions_asked": 2,
+        "memory_frees.blocks": 1,
+        "memory_frees.kept_stale": 1,
+        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 16,
         "object_churn.buffers_parked": 1,
         "object_churn.buffers_recycled": 1,
         "object_churn.images_own_memory": 2,
         "object_churn.images_parked": 1,
         "object_churn.textures_image": 2,
+        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_image_bindings": 2,
         "object_churn.vk_image_views_made": 2,
         "object_churn.vk_images_destroyed": 9,
         "object_churn.vk_images_made": 10,
+        "object_churn.vk_memory_freed": 1,
         "passes_not_inline_layouts": 1,
         "pipeline_layouts_made": 1,
         "plain_buffer_blocks_made": 2,
+        "pooled_memory_blocks_freed": 1,
         "pooled_memory_blocks_made": 4,
         "queue_submissions": 1,
         "queues_sharing_a_vk_queue": 1,
@@ -385,7 +392,8 @@
         "wakes_spared": 7
       },
       "moving": {
-        "gate_waits_slept": 0
+        "gate_waits_slept": 0,
+        "pooled_memory_blocks_made": 0
       },
       "composed": {
         "addressable_buffers_made": 1,
@@ -405,7 +413,7 @@
         "stage_entries_specialized": 2
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "pooled_memory_blocks_made": 4,
         "shader_modules_made": 2

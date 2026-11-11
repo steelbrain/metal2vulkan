@@ -336,7 +336,7 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "argument_objects_retained": 3,
         "argument_samplers_taken": 1,
@@ -396,6 +396,7 @@
         "creation_render_pipelines_drawn": 1,
         "creation_render_pipelines_made": 1,
         "descriptor_keys_built": 1,
+        "device_memory_allocated": 276824064,
         "draw_shapes_made": 1,
         "draw_states_recorded": 19,
         "draws_settled": 1,
@@ -403,6 +404,7 @@
         "draws_unkept_writing": 1,
         "driver_diagnostics_withheld": 2,
         "encoder_command_buffers_begun": 6,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "functions_translated": 2,
@@ -452,7 +454,7 @@
         "stage_tables_read": 4,
         "submit_infos": 2,
         "trail_waits": 1,
-        "variant_pipelines_made": 2,
+        "variant_pipelines_made": 1,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
@@ -475,6 +477,7 @@
         "creation_pipelines_drawn": 1,
         "creation_render_pipelines_drawn": 1,
         "creation_render_pipelines_made": 1,
+        "device_memory_allocated": 276824064,
         "draw_shapes_made": 1,
         "driver_diagnostics_withheld": 1,
         "encoder_command_buffers_begun": 2,
@@ -496,13 +499,13 @@
         "variant_pipelines_made": 1
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "creation_pipelines_made": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 4,
         "shader_modules_made": 2,
-        "variant_pipelines_made": 2
+        "variant_pipelines_made": 1
       },
       "per_state": {
         "pipelines": 0,

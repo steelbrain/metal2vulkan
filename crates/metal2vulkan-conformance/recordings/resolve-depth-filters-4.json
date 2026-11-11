@@ -872,7 +872,7 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "argument_samplers_taken": 1,
         "argument_tables_held_at_bind": 264,
@@ -959,7 +959,7 @@
         "new_buffer_bytes_cleared": 4848,
         "object_churn.buffers_evicted": 21,
         "object_churn.buffers_parked": 8,
-        "object_churn.buffers_recycled": 1,
+        "object_churn.buffers_recycled": 2,
         "object_churn.images_own_memory": 8,
         "object_churn.images_parked": 8,
         "object_churn.textures_image": 8,
@@ -997,6 +997,7 @@
         "stage_tables_read": 288,
         "stage_tables_read_in_part": 264,
         "submit_infos": 1,
+        "submit_stalls_on_work": 1,
         "trail_waits": 1,
         "variant_pipelines_made": 1,
         "wakes_completion_waiters": 1,
@@ -1090,7 +1091,7 @@
         "stage_entries_specialized": 2
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,

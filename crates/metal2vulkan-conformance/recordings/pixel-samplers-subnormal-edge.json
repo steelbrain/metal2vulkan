@@ -701,7 +701,7 @@
         "functions_translated": 3,
         "gate_waits": 4,
         "gate_waits_slept": 4,
-        "heads_held_for_host_steps": 10,
+        "heads_held_for_host_steps": 9,
         "heap_tables_worked_out": 3,
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 1,
@@ -743,7 +743,7 @@
         "variant_pipelines_made": 3,
         "variants_taken_back": 3,
         "wakes_completion_waiters": 4,
-        "wakes_spared": 30
+        "wakes_spared": 31
       },
       "moving": {
         "host_steps_recorded": 2

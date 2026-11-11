@@ -681,7 +681,9 @@
         "completion_arms": 10,
         "completion_arms_after_a_wake": 10,
         "completion_waiter_parks": 10,
+        "device_memory_allocated": 205520896,
         "encoder_command_buffers_begun": 10,
+        "encoder_primaries_begun_ahead": 2,
         "fence_waits": 10,
         "finales_folded": 10,
         "gate_waits": 10,
@@ -700,9 +702,11 @@
         "object_churn.vk_images_made": 12,
         "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3,
+        "primaries_begun_ahead": 2,
         "queue_submissions": 10,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 10,
+        "scheduler_passes": 2,
         "scheduler_passes_by_waiters": 10,
         "scheduler_sleeps": 10,
         "scheduler_wakes_commit": 10,
@@ -714,12 +718,13 @@
         "wakes_spared": 70
       },
       "moving": {
-        "gate_waits_slept": 9
+        "gate_waits_slept": 8
       },
       "composed": {
         "blocks_ahead_waited_for": 3,
         "buffer_blocks_made_ahead": 2,
         "buffer_blocks_made_in_place": 0,
+        "device_memory_allocated": 205520896,
         "image_blocks_made_ahead": 1,
         "image_blocks_made_in_place": 0,
         "plain_buffer_blocks_made": 2,

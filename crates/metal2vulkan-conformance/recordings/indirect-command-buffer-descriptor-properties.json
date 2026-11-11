@@ -506,15 +506,19 @@
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
         "addressable_buffers_made": 1,
+        "device_memory_allocated": 67108864,
         "new_buffer_bytes_cleared": 22800,
+        "object_churn.buffers_evicted": 2,
         "object_churn.buffers_parked": 11,
         "object_churn.buffers_recycled": 2,
         "object_churn.vk_buffer_bindings": 9,
+        "object_churn.vk_buffers_destroyed": 2,
         "object_churn.vk_buffers_made": 9,
         "plain_buffer_blocks_made": 1,
         "pooled_memory_blocks_made": 1
       },
       "composed": {
+        "device_memory_allocated": 67108864,
         "plain_buffer_blocks_made": 1
       },
       "ceilings": {

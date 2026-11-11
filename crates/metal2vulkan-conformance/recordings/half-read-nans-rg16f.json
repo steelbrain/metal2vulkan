@@ -400,12 +400,13 @@
         "completion_arms": 2,
         "completion_arms_after_a_wake": 2,
         "completion_waiter_parks": 2,
-        "creation_pipelines_made": 2,
+        "creation_pipelines_made": 0,
         "device_memory_allocated": 276824192,
         "dispatch_pipelines_pooled": 2,
         "dispatch_shapes_made": 2,
         "dispatch_used_resources_listed": 1,
         "encoder_command_buffers_begun": 6,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 2,
         "finales_folded": 2,
         "functions_shared": 2,
@@ -446,7 +447,7 @@
         "stage_entries_specialized": 2,
         "submit_infos": 4,
         "trail_waits": 2,
-        "variant_pipelines_made": 4,
+        "variant_pipelines_made": 2,
         "variants_taken_back": 2,
         "wakes_completion_waiters": 2,
         "wakes_spared": 14
@@ -489,11 +490,10 @@
       "ceilings": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 2,
-        "creation_pipelines_made": 2,
         "pipeline_layouts_made": 2,
         "pooled_memory_blocks_made": 4,
         "shader_modules_made": 2,
-        "variant_pipelines_made": 4
+        "variant_pipelines_made": 2
       },
       "per_state": {
         "pipelines": 0,

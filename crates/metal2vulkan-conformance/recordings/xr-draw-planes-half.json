@@ -430,6 +430,7 @@
         "draws_unkept_other": 1,
         "driver_diagnostics_withheld": 2,
         "encoder_command_buffers_begun": 5,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "functions_shared": 3,
@@ -443,17 +444,19 @@
         "image_blocks_made_in_place": 1,
         "linked_use_questions_asked": 2,
         "new_buffer_bytes_cleared": 196624,
+        "object_churn.buffers_evicted": 21,
         "object_churn.buffers_parked": 3,
         "object_churn.buffers_recycled": 3,
         "object_churn.images_own_memory": 1,
         "object_churn.images_parked": 1,
         "object_churn.textures_image": 1,
+        "object_churn.vk_buffers_destroyed": 21,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 2,
         "object_churn.vk_images_destroyed": 2,
         "object_churn.vk_images_made": 3,
         "passes_not_inline_layouts": 1,
-        "pipeline_layouts_made": 3,
+        "pipeline_layouts_made": 2,
         "pipeline_layouts_shared": 1,
         "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3,
@@ -513,7 +516,7 @@
         "submit_infos": 2
       },
       "ceilings": {
-        "pipeline_layouts_made": 3,
+        "pipeline_layouts_made": 2,
         "variant_pipelines_made": 2
       },
       "per_state": {

@@ -441,11 +441,13 @@
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
-        "creation_pipelines_made": 1,
+        "creation_pipelines_made": 0,
+        "device_memory_allocated": 205520896,
         "dispatch_pipelines_pooled": 2,
         "dispatch_shapes_made": 2,
         "dispatch_used_resources_listed": 1,
         "encoder_command_buffers_begun": 5,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "functions_shared": 1,
@@ -474,7 +476,7 @@
         "stage_entries_specialized": 1,
         "submit_infos": 2,
         "trail_waits": 1,
-        "variant_pipelines_made": 3,
+        "variant_pipelines_made": 2,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
@@ -491,6 +493,7 @@
         "commands_recorded.cmd_pipeline_barrier": 1,
         "commands_recorded.end_command_buffer": 6,
         "creation_pipelines_made": 0,
+        "device_memory_allocated": 205520896,
         "dispatch_pipelines_pooled": 2,
         "dispatch_used_resources_listed": 1,
         "encoder_command_buffers_begun": 5,
@@ -506,11 +509,10 @@
       "ceilings": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
-        "creation_pipelines_made": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 3,
         "shader_modules_made": 1,
-        "variant_pipelines_made": 3
+        "variant_pipelines_made": 2
       },
       "per_state": {
         "pipelines": 0,

@@ -2218,7 +2218,7 @@
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
         "addressable_buffers_made": 2,
-        "arena_pools_made": 3,
+        "arena_pools_made": 1,
         "argument_objects_retained": 90,
         "argument_samplers_taken": 8,
         "argument_tables_retained": 45,
@@ -2272,6 +2272,7 @@
         "draws_unkept_writing": 45,
         "driver_diagnostics_withheld": 45,
         "encoder_command_buffers_begun": 90,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "functions_shared": 44,
@@ -2284,10 +2285,10 @@
         "image_blocks_made_in_place": 1,
         "linked_use_questions_asked": 135,
         "new_buffer_bytes_cleared": 17280,
-        "object_churn.buffers_evicted": 2,
+        "object_churn.buffers_evicted": 44,
         "object_churn.buffers_parked": 2,
         "object_churn.vk_buffer_bindings": 2,
-        "object_churn.vk_buffers_destroyed": 2,
+        "object_churn.vk_buffers_destroyed": 44,
         "object_churn.vk_buffers_made": 2,
         "passes_not_inline_layouts": 45,
         "pipeline_layouts_made": 2,
@@ -2342,7 +2343,7 @@
       },
       "ceilings": {
         "addressable_buffers_made": 2,
-        "arena_pools_made": 3,
+        "arena_pools_made": 1,
         "pipeline_layouts_made": 2,
         "pooled_memory_blocks_made": 3,
         "shader_modules_made": 2

@@ -156,7 +156,7 @@
         "command_buffers_begun": 1,
         "command_buffers_begun_encoders": 1,
         "command_buffers_submitted": 1,
-        "commands_recorded.begin_command_buffer": 1,
+        "commands_recorded.begin_command_buffer": 2,
         "commands_recorded.cmd_fill_buffer": 1,
         "commands_recorded.cmd_pipeline_barrier": 1,
         "commands_recorded.end_command_buffer": 1,
@@ -166,7 +166,9 @@
         "completion_arms": 1,
         "completion_arms_after_a_wake": 1,
         "completion_waiter_parks": 1,
+        "device_memory_allocated": 205520896,
         "encoder_command_buffers_begun": 1,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "fills_recorded": 1,
         "finales_folded": 1,
@@ -178,11 +180,14 @@
         "memory_frees.blocks": 1,
         "memory_frees.host_import": 1,
         "no_copy_lies_read": 8,
+        "object_churn.buffers_evicted": 1,
+        "object_churn.buffers_parked": 1,
         "object_churn.making_sites_dropped": 3,
         "object_churn.vk_buffer_bindings": 2,
-        "object_churn.vk_buffers_destroyed": 1,
+        "object_churn.vk_buffers_destroyed": 2,
         "object_churn.vk_buffers_made": 2,
         "object_churn.vk_memory_allocations": 1,
+        "object_churn.vk_memory_freed": 1,
         "plain_buffer_blocks_made": 2,
         "pooled_memory_blocks_made": 3,
         "primaries_begun_ahead": 1,
@@ -199,7 +204,7 @@
         "submit_infos": 1,
         "wakes_completion_waiters": 1,
         "wakes_handler_threads": 1,
-        "wakes_spared": 5
+        "wakes_spared": 6
       },
       "moving": {
         "no_copy_lies_read": 7
@@ -207,6 +212,7 @@
       "composed": {
         "blocks_ahead_waited_for": 3,
         "buffer_blocks_made_ahead": 2,
+        "device_memory_allocated": 205520896,
         "image_blocks_made_ahead": 1,
         "no_copy_lies_read": 7,
         "plain_buffer_blocks_made": 2,

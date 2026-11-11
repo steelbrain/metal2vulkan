@@ -179,6 +179,7 @@
         "completion_waiter_parks": 1,
         "device_memory_allocated": 205520896,
         "encoder_command_buffers_begun": 1,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "gate_waits": 1,

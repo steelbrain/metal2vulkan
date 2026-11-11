@@ -357,7 +357,7 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "argument_objects_retained": 4,
         "argument_samplers_taken": 1,
@@ -475,6 +475,9 @@
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
       },
+      "moving": {
+        "gate_waits_slept": 0
+      },
       "composed": {
         "addressable_buffers_made": 1,
         "argument_samplers_taken": 1,
@@ -493,7 +496,7 @@
         "stage_entries_specialized": 2
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "pooled_memory_blocks_made": 4,
         "shader_modules_made": 2

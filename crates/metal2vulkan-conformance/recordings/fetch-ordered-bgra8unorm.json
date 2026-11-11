@@ -778,7 +778,7 @@
         "metal2vulkan-degrade-render-pass-split"
       ],
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "argument_objects_retained": 3,
         "argument_samplers_taken": 1,
@@ -787,6 +787,7 @@
         "batches_submitted_by_waiters": 1,
         "batches_with_none_pending": 1,
         "blocks_ahead_hurried": 1,
+        "blocks_ahead_unused": 1,
         "blocks_ahead_waited_for": 2,
         "bound_notices_made": 1,
         "command_buffers_begun": 22,
@@ -840,7 +841,7 @@
         "creation_render_pipelines_made": 1,
         "dedicated_memory_blocks_live": 1,
         "descriptor_keys_built": 1,
-        "device_memory_allocated": 16512,
+        "device_memory_allocated": 276840576,
         "draw_shapes_carried": 4,
         "draw_shapes_made": 1,
         "draw_shapes_reused": 5,
@@ -867,7 +868,11 @@
         "images_started_on_the_host": 3,
         "instance_splits_interlocked_writes": 3,
         "linked_use_questions_asked": 2,
+        "memory_frees.blocks": 1,
+        "memory_frees.kept_stale": 1,
+        "memory_frees_posted": 1,
         "new_buffer_bytes_cleared": 147472,
+        "object_churn.buffers_evicted": 3,
         "object_churn.buffers_parked": 7,
         "object_churn.buffers_recycled": 7,
         "object_churn.images_evicted": 5,
@@ -875,14 +880,19 @@
         "object_churn.images_parked": 6,
         "object_churn.images_recycled": 1,
         "object_churn.textures_image": 9,
-        "object_churn.vk_image_bindings": 9,
+        "object_churn.vk_buffer_bindings": 6,
+        "object_churn.vk_buffers_destroyed": 3,
+        "object_churn.vk_buffers_made": 6,
+        "object_churn.vk_image_bindings": 10,
         "object_churn.vk_image_views_made": 7,
         "object_churn.vk_images_destroyed": 10,
-        "object_churn.vk_images_made": 11,
+        "object_churn.vk_images_made": 12,
         "object_churn.vk_memory_allocations": 1,
+        "object_churn.vk_memory_freed": 1,
         "passes_not_inline_stand_ins": 3,
         "pipeline_layouts_made": 1,
         "plain_buffer_blocks_made": 2,
+        "pooled_memory_blocks_freed": 1,
         "pooled_memory_blocks_made": 4,
         "queue_submissions": 1,
         "queues_sharing_a_vk_queue": 1,
@@ -910,7 +920,8 @@
         "wakes_spared": 7
       },
       "moving": {
-        "gate_waits_slept": 0
+        "gate_waits_slept": 0,
+        "pooled_memory_blocks_made": 0
       },
       "composed": {
         "addressable_buffers_made": 1,
@@ -947,6 +958,7 @@
         "commands_recorded.cmd_set_stencil_write_mask": 0,
         "commands_recorded.cmd_set_viewport": 0,
         "commands_recorded.end_command_buffer": 0,
+        "device_memory_allocated": 276840576,
         "draw_shapes_made": 1,
         "functions_translated": 2,
         "host_copy_blocks_made_in_place": 0,
@@ -954,10 +966,11 @@
         "image_blocks_made_ahead": 2,
         "plain_buffer_blocks_made": 2,
         "queues_sharing_a_vk_queue": 0,
+        "stage_entries_shared": 5,
         "stage_entries_specialized": 2
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "pooled_memory_blocks_made": 4,
         "shader_modules_made": 2

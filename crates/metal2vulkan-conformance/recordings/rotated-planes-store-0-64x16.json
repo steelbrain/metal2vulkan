@@ -325,7 +325,7 @@
         "metal2vulkan-degrade-shadowed-texture"
       ],
       "bounds": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "argument_objects_retained": 2,
         "argument_samplers_taken": 1,
@@ -389,6 +389,7 @@
         "draws_settled": 1,
         "driver_diagnostics_withheld": 1,
         "encoder_command_buffers_begun": 2,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "functions_shared": 1,
@@ -499,7 +500,7 @@
         "stage_entries_shared": 5
       },
       "ceilings": {
-        "addressable_buffers_made": 2,
+        "addressable_buffers_made": 1,
         "arena_pools_made": 1,
         "pooled_memory_blocks_made": 4
       },

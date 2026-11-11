@@ -19151,8 +19151,10 @@
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
         "addressable_buffers_made": 2,
+        "blocks_ahead_hurried": 1,
         "blocks_ahead_waited_for": 4,
         "buffer_blocks_made_ahead": 2,
+        "device_memory_allocated": 276824064,
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 1,
         "host_texel_copies": 27,
@@ -19160,6 +19162,7 @@
         "image_blocks_made_in_place": 1,
         "images_started_on_the_host": 54,
         "new_buffer_bytes_cleared": 1920,
+        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 18,
         "object_churn.buffers_recycled": 18,
         "object_churn.images_evicted": 342,
@@ -19167,6 +19170,7 @@
         "object_churn.images_parked": 342,
         "object_churn.textures_image": 396,
         "object_churn.textures_texels": 18,
+        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_image_bindings": 396,
         "object_churn.vk_images_destroyed": 396,
         "object_churn.vk_images_made": 396,
@@ -19174,8 +19178,10 @@
         "pooled_memory_blocks_made": 4
       },
       "composed": {
+        "blocks_ahead_hurried": 1,
         "blocks_ahead_waited_for": 4,
         "buffer_blocks_made_ahead": 2,
+        "device_memory_allocated": 276824064,
         "host_copy_blocks_made_in_place": 1,
         "host_copy_blocks_readied": 1,
         "image_blocks_made_ahead": 2,
