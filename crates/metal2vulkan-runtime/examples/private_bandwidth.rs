@@ -18,7 +18,8 @@
 //! ```
 //!
 //! GB/s is read plus written over the median command buffer: `wall` from commit to its wait's end,
-//! `gpu` from its GPU start and end times. The memory counts are those the two buffers' making
+//! `gpu` from its GPU start and end times. A `PASSES` line after it gives each timed command
+//! buffer's two times in milliseconds, `wall/gpu`. The memory counts are those the two buffers' making
 //! moved: `vkAllocateMemory` and `vkBindBufferMemory` calls, live dedicated blocks, live empty
 //! blocks, overflows into system memory. With `METAL2VULKAN_LOG_MEMORY=1` the memory log names
 //! the block and memory type each buffer took.
@@ -298,12 +299,20 @@ fn run_pair(
         }
     }
     check(device, queue, &output, &pair)?;
+    let passes: Vec<String> = (walls.iter().zip(&gpus))
+        .map(|(wall, gpu)| format!("{:.2}/{:.2}", wall * 1e3, gpu * 1e3))
+        .collect();
     println!(
         "BANDWIDTH {sequence} {} wall {:.1} gpu {:.1} made: {made} {}",
         pair.name(),
         rate(walls),
         rate(gpus),
         device.name()
+    );
+    println!(
+        "PASSES {sequence} {} wall/gpu ms: {}",
+        pair.name(),
+        passes.join(" ")
     );
     Ok(())
 }
