@@ -1,44 +1,51 @@
-//! The order of framebuffer fetches across the primitives of one draw, on the device the cfg
-//! selects, under the validation layer. Metal orders a fragment function's read of its color
-//! attachment after every earlier fragment of the pixel, those of its own draw's earlier
-//! primitives included. In the pixel interlock (`metal2vulkan_runtime`'s `framebuffer_fetch`) the
-//! runtime records nothing between the primitives of a draw: Vulkan orders them by the interlock
-//! alone, its ordered interlock's operations happening "before interlocked operations in fragment
-//! shader invocations that execute later in rasterization order and cover at least one sample in
-//! the same pixel" (Fragment Operations, "Interlocked Operations"), rasterization order following
-//! the order of a draw's primitives ("Primitive Order"). This test is that measurement, the
-//! within-draw counterpart of `interlocked_draw_order`'s.
+//! The order of interlocked read-modify-writes across the primitives of one draw, on the device
+//! the cfg selects, under the validation layer. Metal orders a fragment function's read of its
+//! color attachment, and its accesses in a raster order group, after every earlier fragment of the
+//! pixel, those of its own draw's earlier primitives included. Both run in the pixel interlock
+//! where a device has no rasterization-order color access (`metal2vulkan_runtime`'s
+//! `framebuffer_fetch`, the translator's `lower/fragment/rog.rs`), and the runtime records nothing
+//! between the primitives of a draw: Vulkan orders them by the interlock alone, its ordered
+//! interlock's operations happening "before interlocked operations in fragment shader invocations
+//! that execute later in rasterization order and cover at least one sample in the same pixel"
+//! (Fragment Operations, "Interlocked Operations"), rasterization order following the order of a
+//! draw's primitives ("Primitive Order"). This test is that measurement, the within-draw
+//! counterpart of `interlocked_draw_order`'s.
 //!
-//! Each pass clears an `R32Uint` target to [`CLEAR`] and makes one draw of [`PRIMITIVES`]
-//! overlapping primitives (`ipo_primitive_order`), each fragment `ipo_mix`'s: `3c + 1` or `5c + 3`
-//! by the parity of the bits set in its primitive's number. The draw takes one of four [`Shape`]s:
-//! `ipo_fan`'s fullscreen triangles or `ipo_steps`' rectangles (each from a corner that steps
-//! with its number, [`corner`], to the target's right and bottom edges, two triangles sharing a
-//! diagonal), each as one instance of every primitive or as one instance per primitive. The maps
-//! do not commute, so a texel holds [`expected`] only where each fragment read what the fragment
-//! of the primitive before it wrote there. [`RUNS`] passes of each shape over 1920x1080, 64x36
-//! and 61x37, each read back whole. Every texel of every pass must hold its composition; the
-//! wrong ones are counted and printed per pass, with the 8x4 groups (8 columns by 4 rows from the
-//! target's top left, the last ones cut by its edges) they fall in, how many of those are wrong
-//! in every texel, and the first of them; and per target, the framebuffer attachments that took a
-//! storage placeholder (`WorkCounts::storage_placeholder_attachments`), which a device whose fetch
-//! takes the storage form (the pixel interlock without rasterization-order color access) must
-//! count: its passes left the target out of their subpass and read and wrote it in the interlock.
+//! Each pass makes one draw of [`PRIMITIVES`] overlapping primitives (`ipo_primitive_order`) whose
+//! fragments apply `3c + 1` or `5c + 3`, by the parity of the bits set in their primitive's number,
+//! to the pixel's `c` in one of three places ([`Access`]), first set to [`CLEAR`]: an `R32Uint`
+//! color attachment by framebuffer fetch (`ipo_mix`), an `R32Uint` texture's texel in raster order
+//! group 0 (`ipo_rog_texture`), or a buffer's word in it (`ipo_rog_buffer`). The draw takes one of
+//! four [`Shape`]s: `ipo_fan`'s fullscreen triangles or `ipo_steps`' rectangles (each from a corner
+//! that steps with its number, [`corner`], to the target's right and bottom edges, two triangles
+//! sharing a diagonal), each as one instance of every primitive or as one instance per primitive.
+//! The maps do not commute, so a pixel holds [`expected`] only where each fragment read what the
+//! fragment of the primitive before it wrote there. [`RUNS`] passes of each access and shape over
+//! 1920x1080, 64x36 and 61x37, each read back whole. Every pixel of every pass must hold its
+//! composition; the wrong ones are counted and printed per pass, with the 8x4 groups (8 columns by
+//! 4 rows from the top left, the last ones cut by the edges) they fall in, how many of those are
+//! wrong in every pixel, and the first of them; and per target, the framebuffer attachments that
+//! took a storage placeholder (`WorkCounts::storage_placeholder_attachments`), which a device whose
+//! fetch takes the storage form (the pixel interlock without rasterization-order color access) must
+//! count: its fetching passes left the target out of their subpass and read and wrote it in the
+//! interlock. A device without the pixel interlock must refuse the raster order groups, typed
+//! (`Unsupported` of `Feature::RasterOrderGroups`), printed as a `ROG-SKIP` line.
 
 use super::framebuffer_fetch::fetches;
 use super::{
-    at_plan, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
-    ScratchCache, WAIT,
+    at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, Device, Library, LoadAction, Origin, PipelineOptions,
-    RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction, Texture,
-    TextureDescriptor,
+    BlitOption, Buffer, ClearColor, CommandBuffer, Device, Error, Library, LoadAction, Origin,
+    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
+    Texture, TextureDescriptor,
 };
 use std::collections::BTreeMap;
 
@@ -48,7 +55,7 @@ const PRIMITIVES: u32 = 64;
 /// The passes of each shape and size.
 const RUNS: usize = 8;
 
-/// The target's clear value.
+/// Every pixel's value before a pass's draw.
 const CLEAR: u32 = 7;
 
 /// The groups a wrong pass names, at most.
@@ -101,6 +108,28 @@ const SHAPES: [Shape; 4] = [
     },
 ];
 
+/// Where a draw's fragments read, modify and write their pixel's value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Access {
+    /// Color attachment 0, by framebuffer fetch (`ipo_mix`).
+    Fetch,
+    /// A texture's texel, in raster order group 0 (`ipo_rog_texture`).
+    RogTexture,
+    /// A buffer's word, in raster order group 0 (`ipo_rog_buffer`).
+    RogBuffer,
+}
+
+impl Access {
+    /// The fragment function's name.
+    fn fragment(self) -> &'static str {
+        match self {
+            Access::Fetch => "ipo_mix",
+            Access::RogTexture => "ipo_rog_texture",
+            Access::RogBuffer => "ipo_rog_buffer",
+        }
+    }
+}
+
 /// `ipo_corner`: the top left corner of rectangle `k`, in pixels from the target's top left.
 fn corner(k: u32) -> (u64, u64) {
     (u64::from((k * 37 + 1) % 61), u64::from((k * 11 + 1) % 23))
@@ -120,8 +149,8 @@ fn expected(shape: Shape, (x, y): (u64, u64)) -> u32 {
         })
 }
 
-/// `shape`'s pipeline, `ipo_mix` into an `R32Uint` attachment.
-fn pipeline(device: &Device, library: &Library, shape: Shape) -> RenderPipelineState {
+/// The descriptor of `shape`'s draws through `access`, into an `R32Uint` attachment.
+fn descriptor(library: &Library, shape: Shape, access: Access) -> RenderPipelineDescriptor {
     let function = |name: &str| {
         StageSource::Function(
             library
@@ -131,37 +160,97 @@ fn pipeline(device: &Device, library: &Library, shape: Shape) -> RenderPipelineS
         )
     };
     let mut descriptor = RenderPipelineDescriptor::new(function(shape.vertex()));
-    descriptor.fragment = Some(function("ipo_mix"));
+    descriptor.fragment = Some(function(access.fragment()));
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
-    device
-        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-        .unwrap()
+    descriptor
 }
 
-/// A private `R32Uint` render target of `sides`.
-fn target(device: &Device, (width, height): (u64, u64)) -> Texture {
+/// Whether `device` draws through the raster order groups: where it has the pixel interlock it
+/// must, and elsewhere it must refuse them, typed, printed as a `ROG-SKIP` line.
+fn orders_groups(device: &Device, library: &Library) -> bool {
+    let fragment = device.compile_device().profile().fragment();
+    if fragment.pixel_interlock {
+        return true;
+    }
+    let descriptor = descriptor(library, SHAPES[0], Access::RogTexture);
+    let name = device.name();
+    match device.new_render_pipeline_state(&descriptor, &PipelineOptions::default()) {
+        Err(Error::Unsupported(refusal)) if refusal.feature == Feature::RasterOrderGroups => {
+            println!("ROG-SKIP on {name}: no pixel interlock, refused: {refusal}");
+            false
+        }
+        Ok(_) => panic!("{name}: a raster order group's pipeline was made with no interlock"),
+        Err(error) => {
+            panic!("{name}: a raster order group's pipeline was refused otherwise: {error}")
+        }
+    }
+}
+
+/// A private `R32Uint` texture of `sides` and `usage`.
+fn texture(device: &Device, (width, height): (u64, u64), usage: TextureUsage) -> Texture {
     let mut d = TextureDescriptor::texture_2d(PixelFormat::R32Uint, width, height, false);
-    d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+    d.usage = usage;
     d.resource_options = ResourceOptions::private();
     device.new_texture(&d).unwrap()
 }
 
-/// One pass over `target`: its clear, then one draw of `shape`; and its GPU time in milliseconds.
-fn draw(device: &Device, target: &Texture, pipeline: &RenderPipelineState, shape: Shape) -> f64 {
-    let queue = device.new_command_queue().unwrap();
-    let command_buffer = queue.command_buffer().unwrap();
+/// A render pass over `texture` that clears it to [`CLEAR`] and stores it.
+fn cleared(texture: &Texture) -> RenderPassDescriptor {
     let mut descriptor = RenderPassDescriptor::new();
     let color = &mut descriptor.color_attachments[0];
-    color.texture = Some(target.clone());
+    color.texture = Some(texture.clone());
     color.load_action = LoadAction::Clear;
     color.clear_color = ClearColor::new(f64::from(CLEAR), 0.0, 0.0, 0.0);
     color.store_action = StoreAction::Store;
-    let size = [target.width() as f32, target.height() as f32];
-    let mut encoder = command_buffer.render_command_encoder(&descriptor).unwrap();
+    descriptor
+}
+
+/// The textures of a size the passes reach.
+struct Targets {
+    /// Each pass's color attachment, which `ipo_mix` fetches.
+    target: Texture,
+    /// The texture `ipo_rog_texture` reads and writes.
+    groups: Texture,
+}
+
+/// One pass of `shape`'s draw through `access` over `targets` of `sides`, the place it reaches set
+/// to [`CLEAR`] first; its GPU time in milliseconds, and every value that place holds after it.
+fn pass(
+    device: &Device,
+    targets: &Targets,
+    pipeline: &RenderPipelineState,
+    (shape, access): (Shape, Access),
+    sides: (u64, u64),
+) -> (f64, Vec<u32>) {
+    let words = (access == Access::RogBuffer).then(|| {
+        let clear = CLEAR.to_le_bytes().repeat((sides.0 * sides.1) as usize);
+        buffer_with(device, &clear).unwrap()
+    });
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    if access == Access::RogTexture {
+        let clear = command_buffer.render_command_encoder(&cleared(&targets.groups));
+        clear.unwrap().end_encoding().unwrap();
+    }
+    let size = [sides.0 as f32, sides.1 as f32];
+    let mut encoder = command_buffer
+        .render_command_encoder(&cleared(&targets.target))
+        .unwrap();
     encoder.set_render_pipeline_state(pipeline).unwrap();
     encoder
         .set_vertex_bytes(&size.map(f32::to_le_bytes).concat(), 0)
         .unwrap();
+    match (access, &words) {
+        (Access::RogTexture, _) => encoder
+            .set_fragment_texture(Some(&targets.groups), 0)
+            .unwrap(),
+        (Access::RogBuffer, Some(words)) => {
+            encoder.set_fragment_buffer(Some(words), 0, 0).unwrap();
+            let width = (sides.0 as u32).to_le_bytes();
+            encoder.set_fragment_bytes(&width, 1).unwrap();
+        }
+        _ => {}
+    }
     let (vertices, instances) = match shape.instanced {
         true => (shape.vertices(), PRIMITIVES),
         false => (shape.vertices() * PRIMITIVES, 1),
@@ -171,9 +260,35 @@ fn draw(device: &Device, target: &Texture, pipeline: &RenderPipelineState, shape
         .unwrap();
     encoder.end_encoding().unwrap();
     command_buffer.commit().unwrap();
+    let gpu = completed(&command_buffer);
+    let values = match (access, words) {
+        (Access::RogBuffer, Some(words)) => words_of(&words, sides),
+        (Access::RogTexture, _) => texels(device, &targets.groups, sides),
+        _ => texels(device, &targets.target, sides),
+    };
+    (gpu, values)
+}
+
+/// The GPU time of `command_buffer` in milliseconds, once it completed without error.
+fn completed(command_buffer: &CommandBuffer) -> f64 {
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.error(), None);
     (command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap()) * 1e3
+}
+
+/// Every word of `buffer`, a pixel's of `sides` each.
+fn words_of(buffer: &Buffer, (width, height): (u64, u64)) -> Vec<u32> {
+    words(&read_buffer(buffer, 0, width * height * 4).unwrap())
+}
+
+/// `bytes` as little-endian words.
+fn words(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
+        .collect()
 }
 
 /// Every texel of `target` of `sides`, read back through a buffer.
@@ -198,14 +313,8 @@ fn texels(device: &Device, target: &Texture, (width, height): (u64, u64)) -> Vec
     .unwrap();
     blit.end_encoding().unwrap();
     command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    read_buffer(&buffer, 0, bytes)
-        .unwrap()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|word| u32::from_le_bytes(*word))
-        .collect()
+    completed(&command_buffer);
+    words_of(&buffer, (width, height))
 }
 
 /// The 8x4 groups of a target of `sides` that hold a wrong texel, by their top left texel, with
@@ -224,7 +333,7 @@ fn wrong_groups(wrong: &[bool], (width, height): (u64, u64)) -> BTreeMap<(u64, u
     groups
 }
 
-/// Every pass's texels hold the composition of its draw's primitives in order (the module docs).
+/// Every pass's pixels hold the composition of its draw's primitives in order (the module docs).
 #[test]
 fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
     let cache = ScratchCache::new().unwrap();
@@ -245,51 +354,72 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
         fragment.rasterization_order_color_access,
         fragment.pixel_interlock,
     );
+    let accesses = match orders_groups(&device, &library) {
+        true => vec![Access::Fetch, Access::RogTexture, Access::RogBuffer],
+        false => vec![Access::Fetch],
+    };
     let mut wrong_passes = Vec::new();
     for sides in [(1920u64, 1080u64), (64, 36), (61, 37)] {
-        let target = target(&device, sides);
+        let targets = Targets {
+            target: texture(
+                &device,
+                sides,
+                TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+            ),
+            groups: texture(
+                &device,
+                sides,
+                TextureUsage::RENDER_TARGET
+                    | TextureUsage::SHADER_READ
+                    | TextureUsage::SHADER_WRITE,
+            ),
+        };
         let mut placeholders = 0;
-        for shape in SHAPES {
-            // Every corner lies within the first 61 columns and 23 rows, so a texel past them
-            // holds what the last of them holds.
-            let reach: Vec<u32> = (0..23)
-                .flat_map(|y| (0..61).map(move |x| expected(shape, (x, y))))
-                .collect();
-            let want: Vec<u32> = (0..sides.1)
-                .flat_map(|y| (0..sides.0).map(move |x| (x.min(60), y.min(22))))
-                .map(|(x, y)| reach[(y * 61 + x) as usize])
-                .collect();
-            let pipeline = pipeline(&device, &library, shape);
-            for run in 0..RUNS {
-                let counted = device.work_counts();
-                let gpu = draw(&device, &target, &pipeline, shape);
-                let texels = texels(&device, &target, sides);
-                let counts = device.work_counts();
-                placeholders += counts.storage_placeholder_attachments
-                    - counted.storage_placeholder_attachments;
-                assert_eq!(
-                    counts.instance_splits_interlocked_writes,
-                    counted.instance_splits_interlocked_writes,
-                    "{}: a pass of one draw split",
-                    device.name()
-                );
-                let wrong: Vec<bool> = texels.iter().zip(&want).map(|(t, w)| t != w).collect();
-                let count = wrong.iter().filter(|&&w| w).count();
-                let groups = wrong_groups(&wrong, sides);
-                let whole = groups.values().filter(|&&whole| whole).count();
-                let named: Vec<_> = groups.keys().take(NAMED).collect();
-                eprintln!(
-                    "PRIMITIVE-ORDER on {}: {}x{} {shape:?}, pass {run}: {count} of {} texels \
-                     wrong, in {} 8x4 groups ({whole} wrong whole), first {named:?}; GPU {gpu:.2} \
-                     ms",
-                    device.name(),
-                    sides.0,
-                    sides.1,
-                    texels.len(),
-                    groups.len(),
-                );
-                if count > 0 {
-                    wrong_passes.push((sides, shape, run, count, groups.len(), whole));
+        for &access in &accesses {
+            for shape in SHAPES {
+                // Every corner lies within the first 61 columns and 23 rows, so a pixel past them
+                // holds what the last of them holds.
+                let reach: Vec<u32> = (0..23)
+                    .flat_map(|y| (0..61).map(move |x| expected(shape, (x, y))))
+                    .collect();
+                let want: Vec<u32> = (0..sides.1)
+                    .flat_map(|y| (0..sides.0).map(move |x| (x.min(60), y.min(22))))
+                    .map(|(x, y)| reach[(y * 61 + x) as usize])
+                    .collect();
+                let descriptor = descriptor(&library, shape, access);
+                let pipeline = device
+                    .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+                    .unwrap();
+                for run in 0..RUNS {
+                    let counted = device.work_counts();
+                    let (gpu, values) = pass(&device, &targets, &pipeline, (shape, access), sides);
+                    let counts = device.work_counts();
+                    placeholders += counts.storage_placeholder_attachments
+                        - counted.storage_placeholder_attachments;
+                    assert_eq!(
+                        counts.instance_splits_interlocked_writes,
+                        counted.instance_splits_interlocked_writes,
+                        "{}: a pass of one draw split",
+                        device.name()
+                    );
+                    let wrong: Vec<bool> = values.iter().zip(&want).map(|(v, w)| v != w).collect();
+                    let count = wrong.iter().filter(|&&w| w).count();
+                    let groups = wrong_groups(&wrong, sides);
+                    let whole = groups.values().filter(|&&whole| whole).count();
+                    let named: Vec<_> = groups.keys().take(NAMED).collect();
+                    eprintln!(
+                        "PRIMITIVE-ORDER on {}: {}x{} {access:?} {shape:?}, pass {run}: {count} \
+                         of {} texels wrong, in {} 8x4 groups ({whole} wrong whole), first \
+                         {named:?}; GPU {gpu:.2} ms",
+                        device.name(),
+                        sides.0,
+                        sides.1,
+                        values.len(),
+                        groups.len(),
+                    );
+                    if count > 0 {
+                        wrong_passes.push((sides, access, shape, run, count, groups.len(), whole));
+                    }
                 }
             }
         }
@@ -310,8 +440,8 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
     }
     assert!(
         wrong_passes.is_empty(),
-        "{}: passes whose primitives did not read each other's writes (sides, shape, pass, \
-         texels, groups, whole groups): {wrong_passes:?}",
+        "{}: passes whose primitives did not read each other's writes (sides, access, shape, \
+         pass, texels, groups, whole groups): {wrong_passes:?}",
         device.name()
     );
     drop(device);
