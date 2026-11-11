@@ -413,9 +413,10 @@ fn every_later_level_is_made_from_the_one_above() {
         write_rows(&target, ((width, height), SQUARE_PITCH), gradient);
         let (got, _) = rig.levels(&texture, SQUARE);
         assert_eq!(got[0], packed((width, height), gradient), "{case}: level 0");
-        for level in 1..levels as usize {
+        for (above, pair) in got.windows(2).enumerate() {
+            let level = above + 1;
             let size = level_extent((width, height), level as u64);
-            let off = off_the_box(&got[level - 1], &got[level], size);
+            let off = off_the_box(&pair[0], &pair[1], size);
             assert_eq!(off, None, "{case}: level {level}");
         }
         let last = &got[levels as usize - 1];
@@ -524,8 +525,9 @@ fn a_blit_into_the_first_level_reaches_neither_the_bytes_nor_the_later_levels() 
         near_each(&got[0], [0x20; 4]),
         "level 0 as the blit wrote it"
     );
-    for level in 1..levels as usize {
-        assert!(near_each(&got[level], [0x40; 4]), "level {level} as taken");
+    assert_eq!(got.len(), levels as usize);
+    for (level, bytes) in got.iter().enumerate().skip(1) {
+        assert!(near_each(bytes, [0x40; 4]), "level {level} as taken");
     }
     assert!(
         read(&target).iter().all(|&b| b == 0x40),
