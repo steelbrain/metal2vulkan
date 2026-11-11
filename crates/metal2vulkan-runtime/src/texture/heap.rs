@@ -233,7 +233,7 @@ use crate::buffer_texture::{
 };
 use crate::chroma_pairs;
 use crate::copy_plan::{CopyProblem, HostLayout, ImageRegion};
-use crate::degradation::Degradation;
+use crate::degradation::{Degradation, Told};
 use crate::device::lock;
 use crate::error::{internal, invalid, nil, vulkan, Error, MemoryKind, Nil, Problem, RuntimeGap};
 use crate::heap::{Heap, HeapProblem, HeapType, SizeAndAlign, WeakHeap};
@@ -2634,7 +2634,8 @@ impl Device {
 
     /// A texture of `descriptor` in `heap`: at `offset` of a placement heap, or where an
     /// automatic heap has room when `None`. Where a placement heap makes none (`Nil` or
-    /// `OutOfMemory`) at an offset inside it, the device says so ([`HEAP_TEXTURE_REFUSED`]).
+    /// `OutOfMemory`) at an offset inside it, the device says so ([`HEAP_TEXTURE_REFUSED`]) the
+    /// first time, and counts each later one (`WorkCounts::heap_texture_refused_withheld`).
     pub(crate) fn new_heap_texture(
         &self,
         heap: &Heap,
@@ -2645,8 +2646,9 @@ impl Device {
         let made = self.planned_heap_texture(heap, descriptor, offset, &mut planned);
         if let (Err(e @ (Error::Nil(_) | Error::OutOfMemory(_))), Some(offset)) = (&made, offset) {
             if offset < heap.size() {
-                let text = refused_text(self, heap, descriptor, offset, planned, e);
-                self.inform(HEAP_TEXTURE_REFUSED, text);
+                self.inform_once(Told::HeapTextureRefused, HEAP_TEXTURE_REFUSED, || {
+                    refused_text(self, heap, descriptor, offset, planned, e)
+                });
             }
         }
         made

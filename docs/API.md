@@ -1668,7 +1668,8 @@ Whatever the variables, a placement heap's `newTextureWithDescriptor:offset:` th
 `metal2vulkan-heap-texture-refused`, `Info` severity): the descriptor, the offset, the heap's size,
 options and memory, the size and alignment the size query answers the descriptor, what the making
 planned (the size and alignment it places the texture by, its image's route, tiling and memory
-requirements) and the refusal. A device's self-check that the driver does not make (the one
+requirements) and the refusal; for the device's first such refusal alone, each later one counted
+(`WorkCounts::heap_texture_refused_withheld`). A device's self-check that the driver does not make (the one
 pipeline it creates to ask whether a set-0 buffer binding of several variables may be a dynamic
 descriptor, `FAST-PATHS.md`) hands the sink one line saying so, with the driver's result and the
 messages it reported inside that creation (id name `metal2vulkan-self-check-refused`, `Info`

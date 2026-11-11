@@ -4587,7 +4587,8 @@ impl Heap {
     /// so in an informational message (id name `metal2vulkan-heap-texture-refused`, `Info`
     /// severity) naming the descriptor, the offset, the heap, the size and alignment
     /// [`Device::heap_texture_size_and_align`] answers, what the making planned and the refusal: a
-    /// diagnostic, as Metal says nothing.
+    /// diagnostic, as Metal says nothing. The device says it for its first such refusal alone,
+    /// and counts each later one (`WorkCounts::heap_texture_refused_withheld`).
     pub fn new_texture_at_offset(
         &self,
         descriptor: &TextureDescriptor,

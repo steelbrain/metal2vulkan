@@ -2833,6 +2833,7 @@ field	metal2vulkan-runtime::WorkCounts.heap_slots_rewritten	pub heap_slots_rewri
 field	metal2vulkan-runtime::WorkCounts.heap_tables_worked_out	pub heap_tables_worked_out: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_block_compressed_layouts	pub heap_texture_block_compressed_layouts: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_lossless_layouts	pub heap_texture_lossless_layouts: u64
+field	metal2vulkan-runtime::WorkCounts.heap_texture_refused_withheld	pub heap_texture_refused_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.heap_texture_untiled_layouts	pub heap_texture_untiled_layouts: u64
 field	metal2vulkan-runtime::WorkCounts.heap_textures_refit	pub heap_textures_refit: u64
 field	metal2vulkan-runtime::WorkCounts.heap_textures_tiled	pub heap_textures_tiled: u64
@@ -2974,6 +2975,7 @@ field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_layout	pub kept_
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_under	pub kept_draws_carry_dropped_under: u64
 field	metal2vulkan-runtime::WorkCounts.kept_resident_keys_compared	pub kept_resident_keys_compared: u64
 field	metal2vulkan-runtime::WorkCounts.kept_texels_passes	pub kept_texels_passes: u64
+field	metal2vulkan-runtime::WorkCounts.late_reservation_withheld	pub late_reservation_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.line_band_draws	pub line_band_draws: u64
 field	metal2vulkan-runtime::WorkCounts.linear_alignments_probed	pub linear_alignments_probed: u64
 field	metal2vulkan-runtime::WorkCounts.linear_alignments_recalled	pub linear_alignments_recalled: u64
@@ -3048,6 +3050,7 @@ field	metal2vulkan-runtime::WorkCounts.provoking_listed_draws	pub provoking_list
 field	metal2vulkan-runtime::WorkCounts.query_result_copies_recorded	pub query_result_copies_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.queue_drains	pub queue_drains: u64
 field	metal2vulkan-runtime::WorkCounts.queue_joins	pub queue_joins: u64
+field	metal2vulkan-runtime::WorkCounts.queue_limits_reached_withheld	pub queue_limits_reached_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.queue_moves	pub queue_moves: u64
 field	metal2vulkan-runtime::WorkCounts.queue_moves_off_unshared	pub queue_moves_off_unshared: u64
 field	metal2vulkan-runtime::WorkCounts.queue_sharing_untimed	pub queue_sharing_untimed: u64
@@ -3292,6 +3295,7 @@ field	metal2vulkan-runtime::WorkCounts.timestamp_slots_reset_on_host	pub timesta
 field	metal2vulkan-runtime::WorkCounts.timestamp_slots_taken	pub timestamp_slots_taken: u64
 field	metal2vulkan-runtime::WorkCounts.trail_waits	pub trail_waits: u64
 field	metal2vulkan-runtime::WorkCounts.trail_waits_blocked	pub trail_waits_blocked: u64
+field	metal2vulkan-runtime::WorkCounts.twin_decode_failed_withheld	pub twin_decode_failed_withheld: u64
 field	metal2vulkan-runtime::WorkCounts.two_plane_draws	pub two_plane_draws: u64
 field	metal2vulkan-runtime::WorkCounts.uncached_host_images	pub uncached_host_images: u64
 field	metal2vulkan-runtime::WorkCounts.unlisted_argument_sampler_buffers	pub unlisted_argument_sampler_buffers: u64

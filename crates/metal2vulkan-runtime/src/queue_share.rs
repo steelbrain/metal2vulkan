@@ -869,15 +869,15 @@ impl Device {
         let Some((taken, planned)) = self.shared().queues_limited() else {
             return;
         };
-        let what = format!(
-            "its queue sharing was read ({call}) with {} VkQueue(s) for the round robin and {} \
-             for presenting queues, where the plan gives {} and {}",
-            taken.0, taken.1, planned.0, planned.1
-        );
-        self.inform(
-            crate::device::QUEUE_LIMITS_REACHED,
-            crate::device::queue_limits_reached(self.name(), &what),
-        );
+        let told = crate::degradation::Told::QueueLimitsReached;
+        self.inform_once(told, crate::device::QUEUE_LIMITS_REACHED, || {
+            let what = format!(
+                "its queue sharing was read ({call}) with {} VkQueue(s) for the round robin and \
+                 {} for presenting queues, where the plan gives {} and {}",
+                taken.0, taken.1, planned.0, planned.1
+            );
+            crate::device::queue_limits_reached(self.name(), &what)
+        });
     }
 
     /// [`Device::queue_switch_check_report`] on the generation that serves (`device/line.rs`).

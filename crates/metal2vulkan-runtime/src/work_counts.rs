@@ -8,7 +8,7 @@
 use super::buffer::{KeptBecause, ReadApart};
 use super::churn_counts::{VkMaking, VkRelease};
 use super::command_buffer::GroupEnd;
-use super::degradation::Degradation;
+use super::degradation::{Degradation, Told};
 use super::device::lock;
 use super::heap_sets::Unkept;
 use super::memory::FreeCause;
@@ -131,6 +131,10 @@ pub(crate) struct Counters {
     color_resolve_passes_kept: AtomicU64,
     ahead_nanos: AtomicU64,
     driver_diagnostics_withheld: AtomicU64,
+    heap_texture_refused_withheld: AtomicU64,
+    twin_decode_failed_withheld: AtomicU64,
+    late_reservation_withheld: AtomicU64,
+    queue_limits_reached_withheld: AtomicU64,
     stand_ins_made: AtomicU64,
     stand_in_bytes: AtomicU64,
     stale_detached_reaches: AtomicU64,
@@ -2368,6 +2372,18 @@ impl Counters {
     pub(crate) fn driver_diagnostics_withheld(&self, withheld: u64) {
         self.driver_diagnostics_withheld
             .fetch_add(withheld, Ordering::Relaxed);
+    }
+
+    /// A message of kind `told` was not said, since the device said one of that kind before
+    /// (`Device::tell`).
+    pub(crate) fn told_withheld(&self, told: Told) {
+        let count = match told {
+            Told::HeapTextureRefused => &self.heap_texture_refused_withheld,
+            Told::TwinDecodeFailed => &self.twin_decode_failed_withheld,
+            Told::LateReservation => &self.late_reservation_withheld,
+            Told::QueueLimitsReached => &self.queue_limits_reached_withheld,
+        };
+        count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// An internal submission was made (`device/submit.rs`): one a host call waits for.
@@ -5025,6 +5041,21 @@ pub struct WorkCounts {
     /// call the runtime made, reported there (`driver_facts.rs`). MoltenVK 1.4.1's warning of a
     /// pipeline whose restart is dynamic, once per such pipeline it makes.
     pub driver_diagnostics_withheld: u64,
+    /// Placement heaps' textures not made at an offset inside the heap whose message
+    /// (`metal2vulkan-heap-texture-refused`) was withheld: each after the device's first, which
+    /// it said (`Heap::new_texture_at_offset`). The refusal is answered as before.
+    pub heap_texture_refused_withheld: u64,
+    /// Decoded twins' failed CPU decodes whose message (`metal2vulkan-twin-decode-failed`) was
+    /// withheld: each after the device's first, which it said.
+    pub twin_decode_failed_withheld: u64,
+    /// Late reservations of resource IDs, ignored, whose message
+    /// (`metal2vulkan-late-reservation`) was withheld: each after the device's first, which it
+    /// said (`Device::reserve_resource_ids`).
+    pub late_reservation_withheld: u64,
+    /// Placements and reads of the queue sharing the device's queue limits changed from its queue
+    /// plan's whose message (`metal2vulkan-queue-limits-reached`) was withheld: each after the
+    /// device's first, which it said (`DeviceOptions::queue_limits`).
+    pub queue_limits_reached_withheld: u64,
     /// Bytes of `VkDeviceMemory` the runtime allocated so far for memory of its own (its
     /// blocks, pooled or dedicated, freed since or not): none for host memory it imports. A
     /// detach allocates none for the bytes it detaches (`detach.rs`).
@@ -8210,6 +8241,16 @@ impl Device {
             ahead_nanos: counters.ahead_nanos.load(Ordering::Relaxed),
             driver_diagnostics_withheld: counters
                 .driver_diagnostics_withheld
+                .load(Ordering::Relaxed),
+            heap_texture_refused_withheld: counters
+                .heap_texture_refused_withheld
+                .load(Ordering::Relaxed),
+            twin_decode_failed_withheld: counters
+                .twin_decode_failed_withheld
+                .load(Ordering::Relaxed),
+            late_reservation_withheld: counters.late_reservation_withheld.load(Ordering::Relaxed),
+            queue_limits_reached_withheld: counters
+                .queue_limits_reached_withheld
                 .load(Ordering::Relaxed),
             device_memory_allocated: allocated,
             device_memory_overflows: overflows,

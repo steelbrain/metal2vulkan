@@ -2892,11 +2892,13 @@ impl DegradeNotice {
 const WORDS: usize = Degradation::ALL.len().div_ceil(64);
 
 /// The kinds a device announced, a bit each, and those it announces at every occurrence
-/// (`DeviceOptions::announce_each`), a bit each.
+/// (`DeviceOptions::announce_each`), a bit each; and the kinds of the messages it says once
+/// that are no degradation ([`Told`]) it said, a bit each.
 #[derive(Debug, Default)]
 pub(super) struct Announced {
     seen: [AtomicU64; WORDS],
     each: [u64; WORDS],
+    told: AtomicU64,
 }
 
 impl Announced {
@@ -2910,7 +2912,16 @@ impl Announced {
         Announced {
             seen: Default::default(),
             each: words,
+            told: AtomicU64::new(0),
         }
+    }
+
+    /// Whether a message of kind `told` is said now: for the first time on the device, once per
+    /// kind, whatever `DeviceOptions::announce_each` says (which names degradations alone).
+    fn first(&self, told: Told) -> bool {
+        let bit = 1 << told as u32;
+        let said = &self.told;
+        said.load(Ordering::Relaxed) & bit == 0 && said.fetch_or(bit, Ordering::Relaxed) & bit == 0
     }
 
     /// Whether `degradation` is announced now: at each occurrence of a kind the device announces
@@ -2967,6 +2978,30 @@ impl Announced {
             .zip(&kinds.0)
             .any(|(each, kinds)| each & kinds != 0)
     }
+}
+
+/// A message the runtime says that is no degradation (a refusal Metal makes silently, a failure
+/// of the runtime's own work, a call Metal ignores, a change the device's options made), said once
+/// per device and kind as a degradation is: the first occurrence of its kind on the device is
+/// said ([`Device::tell`]), and each later one is counted in the kind's `WorkCounts` field
+/// instead, never said. The message itself (its id name, severity and text) is the call site's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Told {
+    /// A placement heap's texture it does not make at an offset inside it
+    /// (`metal2vulkan-heap-texture-refused`, `Device::new_heap_texture`):
+    /// `WorkCounts::heap_texture_refused_withheld`.
+    HeapTextureRefused,
+    /// A decoded twin's CPU decode that failed (`metal2vulkan-twin-decode-failed`,
+    /// `texture/decoded_twin.rs`): `WorkCounts::twin_decode_failed_withheld`.
+    TwinDecodeFailed,
+    /// A reservation of resource IDs made too late, which is ignored
+    /// (`metal2vulkan-late-reservation`, `resource_ids.rs`):
+    /// `WorkCounts::late_reservation_withheld`.
+    LateReservation,
+    /// A placement, or a read of the queue sharing, that the device's queue limits changed from
+    /// its queue plan's (`metal2vulkan-queue-limits-reached`, `DeviceOptions::queue_limits`):
+    /// `WorkCounts::queue_limits_reached_withheld`.
+    QueueLimitsReached,
 }
 
 thread_local! {
@@ -3439,6 +3474,22 @@ impl super::encoder::EncoderCore {
 }
 
 impl Device {
+    /// Say the message `message` makes, of kind `told`, unless the device said one of that kind
+    /// before: through the device's message sink, else on stderr, on the calling thread. A later
+    /// one is counted ([`Told`]) and not made.
+    pub(crate) fn tell(&self, told: Told, message: impl FnOnce() -> DebugMessage) {
+        let shared = self.shared();
+        if !shared.announced.first(told) {
+            shared.counts.told_withheld(told);
+            return;
+        }
+        let message = message();
+        match shared.instance.sink() {
+            Some(sink) => sink.deliver(&message),
+            None => eprintln!("{}", message.text),
+        }
+    }
+
     /// Announce `degradation` unless the device announced it before (but a kind its options ask
     /// for at each occurrence, `DeviceOptions::announce_each`), `describe` giving the object and
     /// the reason: through the device's message sink, else on stderr, on the calling thread (the

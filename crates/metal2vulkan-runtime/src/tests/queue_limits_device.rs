@@ -1,9 +1,11 @@
-//! A device's queue limits (`DeviceOptions::queue_limits`) on a device: it sends its
-//! informational message (`metal2vulkan-queue-limits-reached`) exactly where the limits change a
-//! placement from what the queue plan gives, each case as many times as the plan of the device's
-//! own families says (`queue_limits.rs`): the reserved and the extra queues as it is made, a
-//! command queue, an unshared one, a presenting one, and a read of its queue sharing; and without
-//! limits it sends none, whatever it makes.
+//! A device's queue limits (`DeviceOptions::queue_limits`) on a device: it meets its
+//! informational message's case (`metal2vulkan-queue-limits-reached`) exactly where the limits
+//! change a placement from what the queue plan gives, each case as many times as the plan of the
+//! device's own families says (`queue_limits.rs`): the reserved and the extra queues as it is
+//! made, a command queue, an unshared one, a presenting one, and a read of its queue sharing. It
+//! sends the first it meets alone and counts each later one
+//! (`WorkCounts::queue_limits_reached_withheld`); without limits it sends none and counts none,
+//! whatever it makes.
 //!
 //! On a device whose families have no queue to spare (RADV's and lavapipe's one graphics queue)
 //! the limits change nothing and none is expected; on one with queues to spare (NVIDIA's graphics
@@ -96,6 +98,29 @@ struct Cases {
 }
 
 impl Cases {
+    /// How many messages of every case.
+    fn total(&self) -> usize {
+        self.reserved + self.extra + self.command + self.unshared + self.presenting + self.read
+    }
+
+    /// The first case met, in the order the runs meet them, once: what the device sends.
+    fn first(&self) -> Cases {
+        let mut met = false;
+        let mut once = |count: usize| {
+            let first = usize::from(count > 0 && !met);
+            met |= count > 0;
+            first
+        };
+        Cases {
+            reserved: once(self.reserved),
+            extra: once(self.extra),
+            command: once(self.command),
+            unshared: once(self.unshared),
+            presenting: once(self.presenting),
+            read: once(self.read),
+        }
+    }
+
     /// `texts` counted by case, by the words each case's message says.
     fn of(texts: &[String]) -> Cases {
         let count = |words: &str| texts.iter().filter(|text| text.contains(words)).count();
@@ -166,9 +191,11 @@ fn run(device: &Device) -> Vec<CommandQueue> {
     queues
 }
 
-/// Under the lane's limits, the device sends the message exactly where its own families' plan
-/// says the limits changed a placement: each case as many times as expected, none for the staging
-/// queue, which it keeps where the plan reserves one.
+/// Under the lane's limits, the device meets the message's cases exactly where its own families'
+/// plan says the limits changed a placement, each as many times as expected, none for the staging
+/// queue, which it keeps where the plan reserves one: it sends the first case it meets, and counts
+/// every later one. A second read of its queue sharing, where the limits changed it, sends nothing
+/// and counts one more.
 #[test]
 fn each_placement_the_limits_change_is_noted_and_no_other() {
     let scratch = Scratch::new("queue-limits");
@@ -182,9 +209,11 @@ fn each_placement_the_limits_change_is_noted_and_no_other() {
     let _queues = run(&device);
     let texts = noted.lock().unwrap().clone();
     let got = Cases::of(&texts);
+    let withheld = device.work_counts().queue_limits_reached_withheld;
     eprintln!(
         "QUEUE-LIMITS: {}: families {:?}; host-cached texture memory {cached}, staging queue {:?} \
-         (the plan's {:?}); expected {expected:?}, got {got:?}; {} message(s): {texts:#?}",
+         (the plan's {:?}); expected {expected:?}, got {got:?}; {} message(s), {withheld} \
+         withheld: {texts:#?}",
         device.name(),
         (families.iter())
             .map(|f| (f.queue_flags.as_raw(), f.queue_count))
@@ -198,17 +227,18 @@ fn each_placement_the_limits_change_is_noted_and_no_other() {
         plan.staging.is_some(),
         "the limits keep the plan's staging queue"
     );
-    assert_eq!(got, expected);
+    assert_eq!(got, expected.first());
     assert_eq!(
         texts.len(),
-        expected.reserved
-            + expected.extra
-            + expected.command
-            + expected.unshared
-            + expected.presenting
-            + expected.read,
+        expected.total().min(1),
         "every message is one of the cases"
     );
+    assert_eq!(withheld as usize, expected.total().saturating_sub(1));
+    // A second read of the queue sharing: the case met again, counted, not sent.
+    device.queue_switch_check_report();
+    assert_eq!(noted.lock().unwrap().len(), texts.len());
+    let again = device.work_counts().queue_limits_reached_withheld;
+    assert_eq!(again, withheld + u64::from(expected.read > 0));
 }
 
 /// Without limits the device sends none, whatever it makes and reads.
@@ -219,10 +249,12 @@ fn without_limits_nothing_is_noted() {
     let device = device(&scratch.0, None, &noted);
     let _queues = run(&device);
     let texts = noted.lock().unwrap().clone();
+    let withheld = device.work_counts().queue_limits_reached_withheld;
     eprintln!(
-        "QUEUE-LIMITS: {}: no limits, {} message(s)",
+        "QUEUE-LIMITS: {}: no limits, {} message(s), {withheld} withheld",
         device.name(),
         texts.len()
     );
     assert!(texts.is_empty(), "{texts:#?}");
+    assert_eq!(withheld, 0);
 }

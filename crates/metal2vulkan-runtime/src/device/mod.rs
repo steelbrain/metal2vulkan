@@ -52,7 +52,7 @@ use super::color_resolve::ColorResolveObjects;
 use super::command_buffer::fences::Fences;
 use super::command_buffer::{Completion, Item};
 use super::contexts::{Contexts, THREADS};
-use super::degradation::{Announced, Degradation};
+use super::degradation::{Announced, Degradation, Told};
 use super::depth_copy::DepthCopyObjects;
 use super::depth_stencil_resolve::DepthStencilResolveObjects;
 use super::draw_source::{sized_index_bind, SizedIndexBind};
@@ -1607,7 +1607,8 @@ impl Device {
     /// robin (`DeviceOptions::queue_limits`) and this is a queue the program made, `noted` naming
     /// it (`None` for the runtime's own and for a presenting queue's, which
     /// `Device::next_presenting_queue` notes), the device says so where the program's queues
-    /// made so far reach past the limits' `VkQueue`s and the plan gives this one its own.
+    /// made so far reach past the limits' `VkQueue`s and the plan gives this one its own: once
+    /// per device ([`Told::QueueLimitsReached`]).
     pub(super) fn next_queue(&self, noted: Option<&str>) -> (u64, usize) {
         let id = self.shared().contexts.fresh();
         let made = self
@@ -1621,16 +1622,19 @@ impl Device {
         if let (Some(queue), Some((planned, _))) = (noted, self.shared().planned) {
             let program = (self.shared().program_queues_made).fetch_add(1, Ordering::Relaxed);
             if create::shares_past_limit(program, self.shared().round_robin, planned) {
-                let what = format!(
-                    "{queue}, the program's command queue {} on a round robin of {} VkQueue(s), \
-                     took VkQueue {vk_queue}, which another took, where the plan's {planned} give \
-                     it one of its own",
-                    program + 1,
-                    self.shared().round_robin
-                );
-                self.inform(
+                self.inform_once(
+                    Told::QueueLimitsReached,
                     create::QUEUE_LIMITS_REACHED,
-                    create::queue_limits_reached(self.name(), &what),
+                    || {
+                        let what = format!(
+                            "{queue}, the program's command queue {} on a round robin of {} \
+                         VkQueue(s), took VkQueue {vk_queue}, which another took, where the \
+                         plan's {planned} give it one of its own",
+                            program + 1,
+                            self.shared().round_robin
+                        );
+                        create::queue_limits_reached(self.name(), &what)
+                    },
                 );
             }
         }
@@ -1650,14 +1654,18 @@ impl Device {
         if let Some((_, planned)) = self.shared().planned {
             let asked = (self.shared().presenting_asked).fetch_add(1, Ordering::Relaxed);
             if create::shares_past_limit(asked, reserved, planned) {
-                let what = format!(
-                    "presenting queue {} shares a VkQueue, the device's queue limits reserving \
-                     {reserved} for presenting queues, where the plan reserves {planned}",
-                    asked + 1
-                );
-                self.inform(
+                self.inform_once(
+                    Told::QueueLimitsReached,
                     create::QUEUE_LIMITS_REACHED,
-                    create::queue_limits_reached(self.name(), &what),
+                    || {
+                        let what = format!(
+                            "presenting queue {} shares a VkQueue, the device's queue limits \
+                         reserving {reserved} for presenting queues, where the plan reserves \
+                         {planned}",
+                            asked + 1
+                        );
+                        create::queue_limits_reached(self.name(), &what)
+                    },
                 );
             }
         }

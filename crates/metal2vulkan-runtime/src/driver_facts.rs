@@ -19,6 +19,17 @@ impl super::Device {
     pub(crate) fn inform(&self, id_name: &str, text: String) {
         inform_through(self.shared().instance.sink(), id_name, text);
     }
+
+    /// [`inform`](Self::inform) the message `text` gives, of kind `told`, unless the device said
+    /// one of that kind before: then it is counted, not said (`Device::tell`).
+    pub(crate) fn inform_once(
+        &self,
+        told: crate::degradation::Told,
+        id_name: &str,
+        text: impl FnOnce() -> String,
+    ) {
+        self.tell(told, || informational(id_name, text()));
+    }
 }
 
 /// [`Device::inform`](crate::Device::inform) through `sink`, else on stderr, where the device is

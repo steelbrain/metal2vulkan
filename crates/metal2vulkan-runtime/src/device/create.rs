@@ -34,7 +34,7 @@ use super::keeper::keep_drivers_loaded;
 use super::line::{Line, Recipe};
 use super::properties::{DeviceKind, PhysicalDeviceIdentity};
 use super::{device_error, holds, lock, Device, InstanceShared, Parts};
-use crate::degradation::{Degradation, DegradeNotice};
+use crate::degradation::{Degradation, DegradeNotice, Told};
 use crate::enables::{host_image_copy_names, listed_reported, listed_structures, Enables};
 use crate::error::{vulkan, Error, InstanceApiVersion, LoaderNotFound};
 use crate::exit_guard;
@@ -330,7 +330,9 @@ pub struct DeviceOptions {
     /// (`shared-present-queue`) or with an earlier presenting queue. The reserved and extra
     /// queues take the queues the limits leave. Wherever the limits change a placement from what
     /// the plan gives, the device says so in an informational message
-    /// (`metal2vulkan-queue-limits-reached`, through [`messages`](Self::messages) or on stderr):
+    /// (`metal2vulkan-queue-limits-reached`, through [`messages`](Self::messages) or on stderr),
+    /// at the first such change alone, each later one counted
+    /// (`WorkCounts::queue_limits_reached_withheld`):
     /// a command queue the program makes, unshared or not, that takes a `VkQueue` another took
     /// where the plan gives it one of its own (counted among the program's queues: the runtime's
     /// own, its in-place check's, shares as it does on a device of one queue); a presenting queue past the limit's where the plan reserves it one;
@@ -2219,26 +2221,24 @@ pub(super) fn create_on(
     }
     if let Some(planned) = &planned {
         if planned.reserved != reserved_places {
-            let what = format!(
-                "the queues reserved for the caller are {reserved_places:?} (family, index), \
-                 where the plan reserves {:?}",
-                planned.reserved
-            );
-            device.inform(
-                QUEUE_LIMITS_REACHED,
-                queue_limits_reached(device.name(), &what),
-            );
+            device.inform_once(Told::QueueLimitsReached, QUEUE_LIMITS_REACHED, || {
+                let what = format!(
+                    "the queues reserved for the caller are {reserved_places:?} (family, index), \
+                     where the plan reserves {:?}",
+                    planned.reserved
+                );
+                queue_limits_reached(device.name(), &what)
+            });
         }
         if planned.extra != extra_places {
-            let what = format!(
-                "the extra queues are at {extra_places:?} (family, index), where the plan places \
-                 them at {:?}",
-                planned.extra
-            );
-            device.inform(
-                QUEUE_LIMITS_REACHED,
-                queue_limits_reached(device.name(), &what),
-            );
+            device.inform_once(Told::QueueLimitsReached, QUEUE_LIMITS_REACHED, || {
+                let what = format!(
+                    "the extra queues are at {extra_places:?} (family, index), where the plan \
+                     places them at {:?}",
+                    planned.extra
+                );
+                queue_limits_reached(device.name(), &what)
+            });
         }
     }
     if let Some(why) = cache_kept {

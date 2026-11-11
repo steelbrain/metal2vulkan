@@ -99,10 +99,11 @@
 //!   4 and 5) keep IDs from plain allocation for good, whether a resource placed at one lives or
 //!   not. Only a space's first call with an ID counts: one once the space handed out an ID,
 //!   placed or plain, or took a reservation is ignored whatever it holds, with a diagnostic
-//!   line, as Metal's is (its pool logs "reserve() must be called before any allocation takes
-//!   place" for both; an M3 Max, macOS 27.0.1, so ignored IDs of 2^31, 2^32 - 1, 2^32 + 5 and
-//!   0 alone of indirect command buffers, and 2^28 + 5 of textures, each refused or dropped in
-//!   a first call). A
+//!   line for the device's first such call (each later one counted,
+//!   `WorkCounts::late_reservation_withheld`), as Metal's is (its pool logs "reserve() must be
+//!   called before any allocation takes place" for both; an M3 Max, macOS 27.0.1, so ignored
+//!   IDs of 2^31, 2^32 - 1, 2^32 + 5 and 0 alone of indirect command buffers, and 2^28 + 5 of
+//!   textures, each refused or dropped in a first call). A
 //!   call of no ID changes nothing, and 0 beside other IDs is no ID (0 and 5 reserve 5). A call
 //!   of 0 alone reserves nothing, but leaves the pool made, as a texture pool is by the device's
 //!   first queue ([`Pool::make`]): a later reservation keeps the pool's first range beside the
@@ -199,6 +200,7 @@
 //!   of the runtime's own work. A making on a thread inside one does not wait for it, and a
 //!   making waits holding none of the runtime's locks.
 
+use super::degradation::Told;
 use super::device::{lock, DebugMessage, Device, MessageKind, MessageSeverity, MessageSink};
 use super::error::{invalid, Error, Problem};
 use super::exit_guard;
@@ -1336,7 +1338,9 @@ impl Device {
     /// call of `kind` with an ID counts: a later one, or one once the device handed out an ID of
     /// `kind`, is ignored whatever it holds (an ID of 2^32 or more, 0 alone, or one refused
     /// below), as Metal's is, and the device says so in one diagnostic line (through its message
-    /// sink, else on stderr), as Metal logs it. A call of no ID changes nothing.
+    /// sink, else on stderr), as Metal logs it: for the device's first such call alone, each
+    /// later one counted (`WorkCounts::late_reservation_withheld`). A call of no ID changes
+    /// nothing.
     ///
     /// Before that, a call holding an ID of 2^32 or more is dropped whole, silently, and leaves
     /// the kind's reservation to a later call, as Metal's is; 0, the null handle, reserves nothing. A call
@@ -1431,16 +1435,11 @@ impl Device {
         }
     }
 
-    /// Say that a late reservation call of `count` IDs of `kind` is ignored, as Metal logs it.
+    /// Say that a late reservation call of `count` IDs of `kind` is ignored, as Metal logs it:
+    /// the device's first such call, each later one counted
+    /// (`WorkCounts::late_reservation_withheld`).
     fn ignore_late_reservation(&self, kind: ResourceIdKind, count: usize) {
-        const CALL: &str = "reserve_resource_ids";
-        self.diagnose(
-            "metal2vulkan-late-reservation",
-            format!(
-                "metal2vulkan: {CALL}: reserve() must be called before any allocation takes \
-                 place; the reservation of {count} {kind:?} IDs is ignored, as Metal ignores it"
-            ),
-        );
+        self.tell(Told::LateReservation, || late_reservation(kind, count));
     }
 
     /// How many sampler IDs the device holds now: one for each holder of one (the module docs'
@@ -1560,25 +1559,26 @@ impl Device {
     pub(super) fn sampler_array(&self) -> u32 {
         metal2vulkan::pipeline::heap_sampler_capacity(self.compile_device().profile())
     }
+}
 
-    /// Say `text`, a general warning `code` names: through the device's message sink, else on
-    /// stderr. Not a degradation: the answer is Metal's, and Metal says it too.
-    fn diagnose(&self, code: &str, text: String) {
-        let message = DebugMessage {
-            severity: MessageSeverity::Warning,
-            kind: MessageKind {
-                general: true,
-                ..MessageKind::default()
-            },
-            id_name: code.to_owned(),
-            id: 0,
-            text,
-            degradation: None,
-        };
-        match self.shared().instance.sink() {
-            Some(sink) => sink.deliver(&message),
-            None => eprintln!("{}", message.text),
-        }
+/// The general warning that a late reservation call of `count` IDs of `kind` is ignored
+/// (`metal2vulkan-late-reservation`). Not a degradation: the answer is Metal's, and Metal says it
+/// too.
+fn late_reservation(kind: ResourceIdKind, count: usize) -> DebugMessage {
+    const CALL: &str = "reserve_resource_ids";
+    DebugMessage {
+        severity: MessageSeverity::Warning,
+        kind: MessageKind {
+            general: true,
+            ..MessageKind::default()
+        },
+        id_name: "metal2vulkan-late-reservation".to_owned(),
+        id: 0,
+        text: format!(
+            "metal2vulkan: {CALL}: reserve() must be called before any allocation takes place; \
+             the reservation of {count} {kind:?} IDs is ignored, as Metal ignores it"
+        ),
+        degradation: None,
     }
 }
 
