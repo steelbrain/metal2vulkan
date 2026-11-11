@@ -240,7 +240,7 @@ use gpu::Gpu;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use workloads::Sizes;
 
 const WORKLOADS: [&str; 21] = [
@@ -406,7 +406,7 @@ fn child(side: &str, options: &Options) {
         #[cfg(target_os = "macos")]
         "native" => {
             let native = native::Native::open();
-            run(&native, t, metallib, options);
+            run(&native, t.elapsed(), metallib, options);
         }
         "runtime" => {
             let cache = options
@@ -415,7 +415,9 @@ fn child(side: &str, options: &Options) {
                 .unwrap_or_else(|| scratch_default().join("cache"));
             let runtime =
                 runtime::Runtime::open(&cache, &options.announce_each, options.sink_least);
-            run(&runtime, t, metallib, options);
+            let opened = t.elapsed();
+            runtime.settle_checks();
+            run(&runtime, opened, metallib, options);
             let c = runtime.device().work_counts();
             eprintln!(
                 "runtime work counts: queue_submissions {} command_buffers_submitted {} \
@@ -487,12 +489,13 @@ fn child(side: &str, options: &Options) {
     }
 }
 
-fn run<G: Gpu>(g: &G, opened: Instant, metallib: &Path, options: &Options) {
+/// Run the selected workloads on `g`, whose device took `opened` to open.
+fn run<G: Gpu>(g: &G, opened: Duration, metallib: &Path, options: &Options) {
     workloads::emit(
         "meta",
         "device_open",
         "ms",
-        &mut [opened.elapsed().as_secs_f64() * 1e3],
+        &mut [opened.as_secs_f64() * 1e3],
     );
     eprintln!("{}", g.label());
     let sizes = &options.sizes;

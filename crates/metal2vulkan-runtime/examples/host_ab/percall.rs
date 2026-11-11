@@ -5,7 +5,9 @@
 //! times; then drains the state, committing and waiting where the calls encoded work. Three
 //! warm windows run first, and every pipeline state, library and texture the groups bind is made
 //! before any of them, so no making falls inside a timed window (the `variant_pipelines_made`
-//! count a group reports is the proof).
+//! count a group reports is the proof); and the runtime's device's own checks answered before
+//! any workload (`runtime.rs`'s `Runtime::settle_checks`), so none of their work, which the
+//! device counts as its own, falls inside one either.
 //!
 //! Per call a group reports
 //!

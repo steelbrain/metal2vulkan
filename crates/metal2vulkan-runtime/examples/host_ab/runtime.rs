@@ -2,7 +2,9 @@
 //! finds (MoltenVK on a Mac). The device is opened as the consumer opens it (reims-vgpu's
 //! `device_options`): GPU times from the host's clock, the exact completion and uncompressed heap
 //! textures, the rest of the policy at its defaults, the shader cache in a directory of the
-//! bench's own.
+//! bench's own. It is then held until the device's own checks answered
+//! ([`Runtime::settle_checks`]), as a consumer's device that reads their verdicts from its cache's
+//! records knows them as it is made.
 
 use crate::gpu::{Format, Gpu};
 use metal2vulkan::bind::SamplerDescriptor;
@@ -19,12 +21,16 @@ use metal2vulkan_runtime as rt;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// The degradation notices the runtime's device announced.
 pub static NOTICES: AtomicU64 = AtomicU64::new(0);
 
 /// The other messages the runtime's device's sink heard.
 pub static MESSAGES: AtomicU64 = AtomicU64::new(0);
+
+/// How long [`Runtime::settle_checks`] waits for each of the device's checks to answer.
+const SETTLE: Duration = Duration::from_secs(30);
 
 pub struct Runtime {
     device: rt::Device,
@@ -57,6 +63,40 @@ impl Runtime {
         let device = rt::Device::system_default_with(&options).expect("open the runtime's device");
         let queue = device.new_command_queue().expect("new_command_queue");
         Runtime { device, queue }
+    }
+
+    /// Wait until the device's own checks answered: of textures over host pages in place, of its
+    /// submissions and of its queue switch. Each runs once per driver on a thread of its own, its
+    /// verdicts kept in the shader cache's records, and the bench's cache is a new directory of
+    /// each run's unless `--cache` names one, so each would else run beside the workloads: its
+    /// work, which the device counts as its own, in whichever call's window it fell (the in-place
+    /// check, which the first texture over a buffer in exported memory starts, makes and binds
+    /// its images on its thread for as long as it runs), and the calls before its verdicts taking
+    /// another path than those after. A consumer's device that read the verdicts from its cache's
+    /// records runs none of them, and so is the device every workload is measured on. How long
+    /// they took is reported apart from the device's opening (`meta device_checks`, ms); a check
+    /// that did not answer within [`SETTLE`] is named on stderr, and the run goes on.
+    pub fn settle_checks(&self) {
+        let started = Instant::now();
+        let settled = [
+            ("in-place", self.device.settle_in_place_checks(SETTLE)),
+            ("submission", self.device.settle_submit_checks(SETTLE)),
+            (
+                "queue switch",
+                self.device.settle_queue_switch_check(SETTLE),
+            ),
+        ];
+        crate::workloads::emit(
+            "meta",
+            "device_checks",
+            "ms",
+            &mut [started.elapsed().as_secs_f64() * 1e3],
+        );
+        for (check, answered) in settled {
+            if !answered {
+                eprintln!("runtime: the device's {check} check did not answer within {SETTLE:?}");
+            }
+        }
     }
 
     pub fn device(&self) -> &rt::Device {
