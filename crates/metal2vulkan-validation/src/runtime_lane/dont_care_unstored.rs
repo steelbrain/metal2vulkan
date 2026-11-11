@@ -33,6 +33,19 @@
 //! Every arm is run twice over the same textures, so a second run reads what an earlier pass
 //! left in the device's memory, which a first run over new textures may not show. No arm names
 //! `dont-care-load-tiles`: the attachments it covers are stored.
+//!
+//! **Separate depth and stencil textures** (a `Depth32Float` and a `Stencil8`, which the runtime
+//! renders through a scratch image of the combined format, `depth_stencil_scratch.rs`): a pass
+//! loads [`Unstored`]'s textures `DontCare` and stores neither, and loads and stores the other
+//! (and both colors); `dcs_mark` writes [`MARK`] (the stencil replaced by 1, the depth
+//! [`MARK_DEPTH`]), then `dcs_flag` draws over the whole target under a [`Test`] of the stencil or
+//! the depth (the draw's depth its viewport's). Metal's answer (the M3 Max under macOS 27.0.1, the
+//! same passes through Metal itself, with and without API validation, probe job m3-max-16522):
+//! an aspect loaded `DontCare` and not stored reads the pass's clear value, one loaded reads the
+//! poison pass's ([`expected_separate`]), whichever the other aspect does. The runtime's answer
+//! follows the same policy, per aspect: Metal's under `exact_answers()` and on a driver with the
+//! fact; elsewhere the scratch image's `DONT_CARE` load, announced, its reads printed, not checked
+//! (the scratch image is the pass's own, so not even lavapipe reads the textures' earlier texels).
 
 use super::split_fetch_order::{completed, encode_readback, texture};
 use super::{at_plan, read_buffer, validated_device_with, Messages, ScratchCache};
@@ -49,7 +62,7 @@ use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     ClearColor, CommandBuffer, Degradation, DepthStencilState, Device, LoadAction, PipelineOptions,
     RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, StoreAction,
-    Texture,
+    Texture, Viewport,
 };
 use std::collections::BTreeMap;
 
@@ -67,6 +80,12 @@ const POISON: [f64; 4] = [0.2, 0.133, 0.067, 0.267];
 /// The stencil's poison, and the arms' pass's clear value, which no `DontCare` load names.
 const POISON_STENCIL: u32 = 0xAB;
 const CLEAR_STENCIL: u32 = 0x5C;
+
+/// The separate case's depths: the poison pass's clear value, the pass's clear value and what
+/// `dcs_mark` writes (each draw's depth its viewport's `znear` and `zfar`).
+const POISON_DEPTH: f64 = 0.625;
+const CLEAR_DEPTH: f64 = 0.375;
+const MARK_DEPTH: f64 = 0.125;
 
 /// The runs of each arm, policy and size.
 const RUNS: usize = 2;
@@ -102,6 +121,38 @@ const ARMS: [Arm; 7] = [
     Arm::PlainCleared,
 ];
 
+/// Which of the separate depth and stencil textures the separate case's pass loads `DontCare` and
+/// does not store; it loads and stores the other.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Unstored {
+    Both,
+    Stencil,
+    Depth,
+}
+
+/// What the separate case's `dcs_flag` tests, after `dcs_mark` over [`MARK`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Test {
+    /// The stencil `Equal` 0, neither the clear value nor the poison's.
+    StencilZero,
+    /// The stencil `Equal` the poison's.
+    StencilKept,
+    /// The stencil `Equal` the pass's clear value.
+    StencilCleared,
+    /// The depth `Equal` the poison's.
+    DepthKept,
+    /// The depth `Equal` the pass's clear value.
+    DepthCleared,
+}
+
+const TESTS: [Test; 5] = [
+    Test::StencilZero,
+    Test::StencilKept,
+    Test::StencilCleared,
+    Test::DepthKept,
+    Test::DepthCleared,
+];
+
 /// What the arms' draws read of the attachments loaded `DontCare` (the module docs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Answer {
@@ -130,7 +181,32 @@ fn expected(arm: Arm, answer: Answer, (x, y): (u64, u64)) -> char {
     }
 }
 
-/// The pipelines and stencil states.
+/// Metal's class at pixel (`x`, `y`) after the separate case's pass loading `unstored`'s textures
+/// `DontCare` and testing `test` (the module docs): inside [`MARK`] `dcs_mark`'s color, which
+/// replaced the stencil by 1 and wrote [`MARK_DEPTH`]; outside it `dcs_flag`'s where the aspect
+/// tested holds the value tested for (the clear value where it is loaded `DontCare`, else the
+/// poison's), else the poison.
+fn expected_separate(unstored: Unstored, test: Test, (x, y): (u64, u64)) -> char {
+    if (x as f32) < MARK[2] && (y as f32) < MARK[3] {
+        return 'M';
+    }
+    let stencil = matches!(unstored, Unstored::Both | Unstored::Stencil);
+    let depth = matches!(unstored, Unstored::Both | Unstored::Depth);
+    let passes = match test {
+        Test::StencilZero => false,
+        Test::StencilKept => !stencil,
+        Test::StencilCleared => stencil,
+        Test::DepthKept => !depth,
+        Test::DepthCleared => depth,
+    };
+    match passes {
+        true => 'F',
+        false => 'P',
+    }
+}
+
+/// The pipelines and depth/stencil states, of a pass with a depth texture of `depth`'s format
+/// where it names one.
 struct Draws {
     mark: RenderPipelineState,
     read: RenderPipelineState,
@@ -138,10 +214,11 @@ struct Draws {
     write_one: DepthStencilState,
     always: DepthStencilState,
     equal: DepthStencilState,
+    depth_equal: DepthStencilState,
 }
 
 impl Draws {
-    fn new(device: &Device, air: &[u8]) -> Draws {
+    fn new(device: &Device, air: &[u8], depth: Option<PixelFormat>) -> Draws {
         let library = device.new_library_with_air(air).unwrap();
         let function = |name: &str| {
             StageSource::Function(
@@ -159,13 +236,19 @@ impl Draws {
             let mut color = ColorAttachmentDescriptor::new(PixelFormat::RG16Float);
             color.write_mask = second;
             descriptor.color_attachments[1] = Some(color);
+            descriptor.depth_format = depth;
             descriptor.stencil_format = Some(PixelFormat::Stencil8);
             device
                 .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
                 .unwrap()
         };
-        let state = |compare: CompareFunction, pass: StencilOperation| {
+        // A depth test and writes, and a stencil test and pass operation.
+        let tested = |depth: (CompareFunction, bool), compare: CompareFunction, pass| {
             let mut descriptor = DepthStencilDescriptor::default();
+            (
+                descriptor.depth_compare_function,
+                descriptor.depth_write_enabled,
+            ) = depth;
             for face in [
                 &mut descriptor.front_face_stencil,
                 &mut descriptor.back_face_stencil,
@@ -175,13 +258,24 @@ impl Draws {
             }
             device.new_depth_stencil_state(&descriptor).unwrap()
         };
+        let state = |compare, pass| tested((CompareFunction::Always, false), compare, pass);
         Draws {
             mark: pipeline("dcs_mark", ColorWriteMask::ALL),
             read: pipeline("dcs_read", ColorWriteMask::NONE),
             flag: pipeline("dcs_flag", ColorWriteMask::NONE),
-            write_one: state(CompareFunction::Always, StencilOperation::Replace),
+            // `dcs_mark` writes the depth where the pass has one.
+            write_one: tested(
+                (CompareFunction::Always, depth.is_some()),
+                CompareFunction::Always,
+                StencilOperation::Replace,
+            ),
             always: state(CompareFunction::Always, StencilOperation::Keep),
             equal: state(CompareFunction::Equal, StencilOperation::Keep),
+            depth_equal: tested(
+                (CompareFunction::Equal, false),
+                CompareFunction::Always,
+                StencilOperation::Keep,
+            ),
         }
     }
 }
@@ -278,6 +372,88 @@ fn encode_run(
     encode_readback(command_buffer, textures.0, sides)
 }
 
+/// The separate case's textures: the first and second colors, the depth and the stencil.
+type SeparateTextures<'a> = (&'a Texture, &'a Texture, &'a Texture, &'a Texture);
+
+/// A descriptor of the separate case's textures: both colors loaded as `colors` and stored, the
+/// depth and the stencil each loaded and stored as `actions` gives, cleared to its clear value.
+fn separate_targets(
+    (color, second, depth, stencil): SeparateTextures,
+    colors: LoadAction,
+    actions: [(LoadAction, StoreAction); 2],
+    (clear_depth, clear_stencil): (f64, u32),
+) -> RenderPassDescriptor {
+    let loads = [colors, colors, actions[1].0];
+    let stores = [StoreAction::Store, StoreAction::Store, actions[1].1];
+    let mut descriptor = targets((color, second, stencil), loads, stores, clear_stencil);
+    let attachment = &mut descriptor.depth_attachment;
+    attachment.texture = Some(depth.clone());
+    (attachment.load_action, attachment.store_action) = actions[0];
+    attachment.clear_depth = clear_depth;
+    descriptor
+}
+
+/// Encode a run of the separate case into `command_buffer`: the poison pass, the pass that loads
+/// `unstored`'s textures `DontCare` and does not store them, `dcs_mark` over [`MARK`] and
+/// `dcs_flag` over all under `test`, and the first color's readback.
+fn encode_separate_run(
+    command_buffer: &CommandBuffer,
+    draws: &Draws,
+    textures: SeparateTextures,
+    (unstored, test, sides): (Unstored, Test, (u64, u64)),
+) -> metal2vulkan_runtime::Buffer {
+    let cleared = (LoadAction::Clear, StoreAction::Store);
+    let poison = separate_targets(
+        textures,
+        LoadAction::Clear,
+        [cleared; 2],
+        (POISON_DEPTH, POISON_STENCIL),
+    );
+    let encoder = command_buffer.render_command_encoder(&poison).unwrap();
+    encoder.end_encoding().unwrap();
+    let (dont_care, kept) = (
+        (LoadAction::DontCare, StoreAction::DontCare),
+        (LoadAction::Load, StoreAction::Store),
+    );
+    let actions = match unstored {
+        Unstored::Both => [dont_care, dont_care],
+        Unstored::Stencil => [kept, dont_care],
+        Unstored::Depth => [dont_care, kept],
+    };
+    let probe = separate_targets(
+        textures,
+        LoadAction::Load,
+        actions,
+        (CLEAR_DEPTH, CLEAR_STENCIL),
+    );
+    let mut encoder = command_buffer.render_command_encoder(&probe).unwrap();
+    // Each draw's depth: its viewport's `znear` and `zfar`, of a target-wide viewport.
+    let at_depth = |encoder: &mut RenderCommandEncoder, depth: f64| {
+        let (width, height) = (sides.0 as f64, sides.1 as f64);
+        let viewport = Viewport::new(0.0, 0.0, width, height, depth, depth);
+        encoder.set_viewport(viewport).unwrap();
+    };
+    at_depth(&mut encoder, MARK_DEPTH);
+    draw(
+        &mut encoder,
+        (&draws.mark, &draws.write_one, 1),
+        sides,
+        MARK,
+    );
+    let (state, reference, depth) = match test {
+        Test::StencilZero => (&draws.equal, 0, CLEAR_DEPTH),
+        Test::StencilKept => (&draws.equal, POISON_STENCIL, CLEAR_DEPTH),
+        Test::StencilCleared => (&draws.equal, CLEAR_STENCIL, CLEAR_DEPTH),
+        Test::DepthKept => (&draws.depth_equal, 0, POISON_DEPTH),
+        Test::DepthCleared => (&draws.depth_equal, 0, CLEAR_DEPTH),
+    };
+    at_depth(&mut encoder, depth);
+    let all = [0.0, 0.0, sides.0 as f32, sides.1 as f32];
+    draw(&mut encoder, (&draws.flag, state, reference), sides, all);
+    encoder.end_encoding().unwrap();
+    encode_readback(command_buffer, textures.0, sides)
+}
+
 /// What a pixel's first color says (`BGRA8Unorm` bytes in memory order): `P` the poison (no draw
 /// wrote it), `M` `dcs_mark`'s, `Z` a read of a zero second color, `S` a read of the poison's
 /// second color, `K` a read of `dcs_mark`'s, `F` `dcs_flag`'s, `?` anything else.
@@ -293,11 +469,11 @@ fn class(bgra: &[u8]) -> char {
     }
 }
 
-/// Each pixel of `bytes` of a target of `sides` whose class is not [`expected`]'s under `answer`,
+/// Each pixel of `bytes` of a target of `sides` whose class is not `expected`'s at its (`x`, `y`),
 /// counted by (expected, found), and a map of 16x16 cells, each the class of its first such pixel
 /// or `.`.
 fn mismatches(
-    (arm, answer): (Arm, Answer),
+    expected: impl Fn((u64, u64)) -> char,
     bytes: &[u8],
     (width, height): (u64, u64),
 ) -> (BTreeMap<(char, char), usize>, Vec<String>) {
@@ -305,7 +481,7 @@ fn mismatches(
     let mut map = vec![vec!['.'; width.div_ceil(16) as usize]; height.div_ceil(16) as usize];
     for (at, bgra) in bytes.chunks(4).enumerate() {
         let (x, y) = (at as u64 % width, at as u64 / width);
-        let (want, found) = (expected(arm, answer, (x, y)), class(bgra));
+        let (want, found) = (expected((x, y)), class(bgra));
         if want != found {
             *counts.entry((want, found)).or_default() += 1;
             let cell = &mut map[(y / 16) as usize][(x / 16) as usize];
@@ -347,7 +523,7 @@ fn dont_care_loads_the_pass_does_not_store_read_the_policy_s_answer() {
             (false, Some(DriverId::MESA_LLVMPIPE)) => Some(Answer::Earlier),
             (false, _) => None,
         };
-        let draws = Draws::new(&device, &air);
+        let draws = Draws::new(&device, &air, None);
         let queue = device.new_command_queue().unwrap();
         for sides in [(224u64, 128u64), (128, 128)] {
             let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
@@ -366,8 +542,9 @@ fn dont_care_loads_the_pass_does_not_store_read_the_policy_s_answer() {
                     command_buffer.commit().unwrap();
                     completed(&command_buffer);
                     let bytes = read_buffer(&out, 0, sides.0 * sides.1 * 4).unwrap();
-                    let (wrong, map) =
-                        mismatches((arm, answer.unwrap_or(Answer::Metals)), &bytes, sides);
+                    let answer_or_metals = answer.unwrap_or(Answer::Metals);
+                    let expect = |at| expected(arm, answer_or_metals, at);
+                    let (wrong, map) = mismatches(expect, &bytes, sides);
                     let case = format!("{arm:?} {policy} {}x{} run {run}", sides.0, sides.1);
                     eprintln!(
                         "DONT-CARE-UNSTORED on {}: {case}: render pass instances {}, splits {}; \
@@ -407,6 +584,90 @@ fn dont_care_loads_the_pass_does_not_store_read_the_policy_s_answer() {
     assert!(
         failures.is_empty(),
         "pixels not the setting's answer:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// The separate case (the module docs): each [`Unstored`] and [`Test`], under the default policy
+/// and `exact_answers()`, at a 224x128 and a 128x128 target, twice each. Under `exact_answers()`
+/// and on a driver with the fact, Metal's answer pixel by pixel and no
+/// `dont-care-unstored-load`; elsewhere the notice, the reads printed.
+#[test]
+fn separate_depth_and_stencil_loaded_dont_care_and_not_stored_read_the_policy_s_answer() {
+    let air = llvm_assemble(&engine_dir().join("dcs_dont_care_split.ll")).unwrap();
+    let mut failures = Vec::new();
+    for (policy, exact) in [("default", false), ("exact", true)] {
+        let cache = ScratchCache::new().unwrap();
+        let messages = Messages::default();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            at_plan(options);
+            options.policy = match exact {
+                true => DevicePolicy::default().exact_answers(),
+                false => DevicePolicy::default(),
+            };
+        })
+        .unwrap();
+        let cleared = exact
+            || device
+                .properties()
+                .driver_facts
+                .contains(&DriverFact::UnstoredClearNoSlower);
+        let draws = Draws::new(&device, &air, Some(PixelFormat::Depth32Float));
+        let queue = device.new_command_queue().unwrap();
+        for sides in [(224u64, 128u64), (128, 128)] {
+            let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            let private = ResourceOptions::private();
+            let color = texture(&device, PixelFormat::BGRA8Unorm, sides, (usage, private));
+            let target = (TextureUsage::RENDER_TARGET, private);
+            let second = texture(&device, PixelFormat::RG16Float, sides, target);
+            let depth = texture(&device, PixelFormat::Depth32Float, sides, target);
+            let stencil = texture(&device, PixelFormat::Stencil8, sides, target);
+            for unstored in [Unstored::Both, Unstored::Stencil, Unstored::Depth] {
+                for test in TESTS {
+                    for run in 0..RUNS {
+                        let command_buffer = queue.command_buffer().unwrap();
+                        let textures = (&color, &second, &depth, &stencil);
+                        let arm = (unstored, test, sides);
+                        let out = encode_separate_run(&command_buffer, &draws, textures, arm);
+                        command_buffer.commit().unwrap();
+                        completed(&command_buffer);
+                        let bytes = read_buffer(&out, 0, sides.0 * sides.1 * 4).unwrap();
+                        let expect = |at| expected_separate(unstored, test, at);
+                        let (wrong, map) = mismatches(expect, &bytes, sides);
+                        let case = format!(
+                            "{unstored:?} unstored, {test:?}, {policy} {}x{} run {run}",
+                            sides.0, sides.1
+                        );
+                        eprintln!(
+                            "DONT-CARE-UNSTORED-SEPARATE on {}: {case}: Metal's answer checked \
+                             {cleared}; pixels not Metal's (expected, found) {wrong:?}, cells \
+                             {map:?}",
+                            device.name(),
+                        );
+                        if cleared && !wrong.is_empty() {
+                            failures.push(format!("{case}: {wrong:?}, cells {map:?}"));
+                        }
+                    }
+                }
+            }
+        }
+        let notices = messages.take_notices();
+        let announced = notices.iter().any(|m| {
+            m.degradation
+                .as_ref()
+                .is_some_and(|d| d.degradation == UNSTORED_LOADS[0])
+        });
+        if announced == cleared {
+            failures.push(format!(
+                "{policy} on {}: `dont-care-unstored-load` announced {announced} where the \
+                 runtime cleared the scratch image {cleared}",
+                device.name()
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "not the setting's answer or notice:\n{}",
         failures.join("\n")
     );
 }
