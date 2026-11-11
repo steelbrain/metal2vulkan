@@ -937,11 +937,11 @@ pub(super) fn dma_buf_candidates(
     ranked
 }
 
-/// `ranked` (a dma-buf import's types, [`dma_buf_candidates`]) with `worked`, the type the
-/// device's last import of its kind succeeded as, moved first where it is among them; the others
-/// keep their order, so a type refused once is still tried ([`import_dma_buf`]).
-pub(super) fn worked_first(mut ranked: Vec<u32>, worked: Option<u32>) -> Vec<u32> {
-    if let Some(at) = worked.and_then(|worked| ranked.iter().position(|&index| index == worked)) {
+/// `ranked` (a dma-buf import's attempts, each a form and a type, [`import_dma_buf`]) with
+/// `worked`, the attempt the device's last import of its kind succeeded as, moved first where it
+/// is among them; the others keep their order, so an attempt refused once is still tried.
+pub(super) fn worked_first<T: PartialEq>(mut ranked: Vec<T>, worked: Option<T>) -> Vec<T> {
+    if let Some(at) = worked.and_then(|worked| ranked.iter().position(|tried| *tried == worked)) {
         let worked = ranked.remove(at);
         ranked.insert(0, worked);
     }
@@ -2122,11 +2122,12 @@ pub(super) struct Memory {
     /// The placements so far that lie past their class's own memory types, in one they
     /// overflowed into ([`overflow_candidates`], `WorkCounts::device_memory_overflows`).
     overflows: u64,
-    /// The memory type each kind of dma-buf import (what it backs, and its class) last succeeded
-    /// as on this device, which the next of its kind tries first ([`import_dma_buf`]).
+    /// The form (dedicated or not) and memory type each kind of dma-buf import (what it backs, and
+    /// its class) last succeeded as on this device, which the next of its kind tries first
+    /// ([`import_dma_buf`]).
     #[cfg(unix)]
     dma_buf_imported_as:
-        std::collections::HashMap<(std::mem::Discriminant<DmaBufFor>, MemoryClass), u32>,
+        std::collections::HashMap<(std::mem::Discriminant<DmaBufFor>, MemoryClass), (bool, u32)>,
     /// Held through its attempts by each dma-buf import of a kind that no import has yet
     /// succeeded as on this device, so that such imports run one at a time ([`import_dma_buf`]).
     #[cfg(unix)]
@@ -2988,16 +2989,17 @@ impl Memory {
     }
 
     /// Record, for the crate's tests, that a dma-buf import of `purpose`'s kind of `class`
-    /// succeeded as `type_index` ([`import_dma_buf`]).
+    /// succeeded as `type_index`, dedicated or not ([`import_dma_buf`]).
     #[cfg(all(test, unix))]
     pub(crate) fn dma_buf_imported(
         &mut self,
-        purpose: DmaBufFor,
-        class: MemoryClass,
+        (purpose, class): (DmaBufFor, MemoryClass),
+        dedicated: bool,
         type_index: u32,
     ) {
         let kind = (std::mem::discriminant(&purpose), class);
-        self.dma_buf_imported_as.insert(kind, type_index);
+        self.dma_buf_imported_as
+            .insert(kind, (dedicated, type_index));
     }
 
     /// The memory types of `class` among those `allowed` names, as bits.
@@ -4260,18 +4262,19 @@ pub(super) enum DmaBufFor {
     /// type first, as a shared import is; where the driver refuses every one of those, dedicated
     /// to the buffer in each type again, the form Vulkan documents for memory of one buffer
     /// (`VkMemoryDedicatedAllocateInfo`), which a driver may take where it refuses the other
-    /// (NVIDIA's 615.71.09, measured: a dma-buf of one 4 KiB page refused dedicated to nothing,
-    /// `ERROR_OUT_OF_DEVICE_MEMORY`, and imported dedicated to its buffer).
+    /// (NVIDIA's 615.71.09, measured: a dma-buf of one 4 KiB page, and most of scattered pages,
+    /// refused dedicated to nothing, `ERROR_OUT_OF_DEVICE_MEMORY`, and imported dedicated to its
+    /// buffer). Once an import of its kind succeeded dedicated, that form goes first
+    /// ([`import_dma_buf`]).
     Buffer(vk::Buffer),
 }
 
 /// Import the dma-buf `fd`, `size` bytes, as memory of `memory`'s best type among `allowed` (the
 /// types both the dma-buf and what is bound in it take) for `class`, those of the class first and
-/// then the dma-buf's others ([`dma_buf_candidates`]), but the type the device's last import of
-/// the same kind (what it backs, and its class) succeeded as first ([`worked_first`]), dedicated
-/// as `purpose` has it: the memory,
-/// its type and whether it is a buffer's dedicated allocation made after the driver refused the
-/// import dedicated to nothing ([`DmaBufFor::Buffer`]), the caller's to free (`dma_buf.rs`'s
+/// then the dma-buf's others ([`dma_buf_candidates`]), in each form `purpose` takes
+/// ([`DmaBufFor`]), but the form and type the device's last import of the same kind (what it
+/// backs, and its class) succeeded as first ([`worked_first`]): the memory, its type and whether
+/// it is dedicated to its buffer ([`DmaBufFor::Buffer`]), the caller's to free (`dma_buf.rs`'s
 /// `DmaBufPages`), in no block and never mapped. Allocated with the device-address flag where the
 /// device enables `bufferDeviceAddress`, as every block of the runtime's is
 /// (`BlockMaker::make_as`): every import of one dma-buf, a buffer's and its textures' images', and
@@ -4284,20 +4287,22 @@ pub(super) enum DmaBufFor {
 /// the device's other placements, imports and frees, all under that lock, would wait for it.
 /// Refused when no type is among `allowed`, else with the failure of the last import tried.
 ///
-/// The type that worked goes first because a driver may list a type for the dma-buf that it then
-/// refuses: NVIDIA lists a udmabuf of host pages as types 0 and 4 (host-visible, coherent and
-/// cached, the class's first) and refuses 4 as out of device memory (620.70.06 on an RTX 2080 and
-/// an RTX 3090, measured), so every import made one failed import first, and a failed import there
-/// is where the driver's faults lie (below). Every type stays among those tried, so a refusal that
-/// passes is tried again.
+/// The form and type that worked go first because a driver may list a type for the dma-buf that
+/// it then refuses, or refuse a form: NVIDIA lists a udmabuf of host pages as types 0 and 4
+/// (host-visible, coherent and cached, the class's first) and refuses 4 as out of device memory
+/// (620.70.06 on an RTX 2080 and an RTX 3090, measured), and 615.71.09 refuses most udmabufs of
+/// scattered pages dedicated to nothing, of 16 KiB to 63 MiB, and imports them dedicated to their
+/// buffer (measured on an RTX 5080 Laptop GPU: 4346 of the leak probe's 6000 imports). So every
+/// import made a failed import first, and a failed import there is where the driver's faults lie
+/// (below). Every form and type stays among those tried, so a refusal that passes is tried again.
 ///
 /// An import of a kind that no import has yet succeeded as on the device holds the device's lock
 /// of such first imports through its attempts (`Memory::dma_buf_first_imports`), so those imports,
-/// the ones that try a type the driver may refuse, run one at a time; one that waited asks again
-/// for its kind's type once it holds the lock. Once an import of a kind succeeded, the kind's
-/// imports take no lock and run side by side. A failed import of NVIDIA's at times spins inside
-/// `vkAllocateMemory` holding the driver's lock where other imports run beside it
-/// (`docs/FAST-PATHS.md`'s known gaps).
+/// the ones that try a form and type the driver may refuse, run one at a time; one that waited
+/// asks again for its kind's form and type once it holds the lock. Once an import of a kind
+/// succeeded, the kind's imports take no lock and run side by side. A failed import of NVIDIA's at
+/// times spins inside `vkAllocateMemory` holding the driver's lock where other imports run beside
+/// it (`docs/FAST-PATHS.md`'s known gaps).
 ///
 /// Each attempt hands the driver a **clone** of `fd`, never `fd` itself, at a number no other
 /// descriptor of the process takes while the import runs ([`Handed`]). Vulkan takes a
@@ -4322,9 +4327,19 @@ pub(super) fn import_dma_buf(
 ) -> Result<(vk::DeviceMemory, u32, bool), ImportFailure> {
     use std::os::fd::AsFd;
     let kind = (std::mem::discriminant(&purpose), class);
-    let (types, device_address, first_imports) = {
+    // The forms of the import, each tried in every type: a buffer's memory dedicated to nothing
+    // first, then to the buffer.
+    let dedications: &[bool] = match purpose {
+        DmaBufFor::Buffer(_) => &[false, true],
+        DmaBufFor::Image(_) => &[true],
+        DmaBufFor::Shared => &[false],
+    };
+    let (ranked, device_address, first_imports) = {
         let memory = lock(memory);
-        let ranked = dma_buf_candidates(&memory.types, allowed, class, memory.unified);
+        let types = dma_buf_candidates(&memory.types, allowed, class, memory.unified);
+        let ranked: Vec<(bool, u32)> = (dedications.iter())
+            .flat_map(|&dedicated| types.iter().map(move |&type_index| (dedicated, type_index)))
+            .collect();
         let worked = memory.dma_buf_imported_as.get(&kind).copied();
         let first_imports = worked
             .is_none()
@@ -4336,18 +4351,18 @@ pub(super) fn import_dma_buf(
         )
     };
     // A first import of its kind waits for any other first import, then asks again: the one
-    // before it may have found the kind's type, and then this one runs beside the others.
+    // before it may have found the kind's form and type, and then this one runs beside the others.
     let first = first_imports
         .as_ref()
         .map(|first_imports| lock(first_imports));
     let worked =
         (first.as_ref()).and_then(|_| lock(memory).dma_buf_imported_as.get(&kind).copied());
-    let (types, _first) = match worked {
+    let (attempts, _first) = match worked {
         Some(worked) => {
             drop(first);
-            (worked_first(types, Some(worked)), None)
+            (worked_first(ranked, Some(worked)), None)
         }
-        None => (types, first),
+        None => (ranked, first),
     };
     #[cfg(test)]
     let (hold, refusal, undedicated_refusal) = {
@@ -4358,16 +4373,12 @@ pub(super) fn import_dma_buf(
             memory.undedicated_import_refusal,
         )
     };
-    // The forms of the import, each tried in every type: a buffer's memory dedicated to nothing
-    // first, then to the buffer.
-    let forms = match purpose {
-        DmaBufFor::Buffer(_) => [Some(DmaBufFor::Shared), Some(purpose)],
-        DmaBufFor::Image(_) | DmaBufFor::Shared => [Some(purpose), None],
-    };
-    let attempts = (forms.into_iter().flatten())
-        .flat_map(|form| types.iter().map(move |&type_index| (form, type_index)));
     let mut failure = ImportFailure::NoMemoryType;
-    for (form, type_index) in attempts {
+    for (dedicated, type_index) in attempts {
+        let form = match dedicated {
+            true => purpose,
+            false => DmaBufFor::Shared,
+        };
         // The descriptor the driver takes, which it owns once the import succeeds and may
         // close even when it fails (the doc above): never `fd`.
         let handed = match Handed::of(fd.as_fd()) {
@@ -4382,7 +4393,7 @@ pub(super) fn import_dma_buf(
             .fd(handed.number());
         let mut flags =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-        let mut dedicated = match form {
+        let mut dedication = match form {
             DmaBufFor::Image(image) => {
                 Some(vk::MemoryDedicatedAllocateInfo::default().image(image))
             }
@@ -4395,8 +4406,8 @@ pub(super) fn import_dma_buf(
             .allocation_size(size)
             .memory_type_index(type_index)
             .push_next(&mut import);
-        if let Some(dedicated) = &mut dedicated {
-            info = info.push_next(dedicated);
+        if let Some(dedication) = &mut dedication {
+            info = info.push_next(dedication);
         }
         if device_address {
             info = info.push_next(&mut flags);
@@ -4427,7 +4438,9 @@ pub(super) fn import_dma_buf(
                 // A successful import owns the descriptor: Vulkan closes it with the memory.
                 handed.imported();
                 let mut memory = lock(memory);
-                memory.dma_buf_imported_as.insert(kind, type_index);
+                memory
+                    .dma_buf_imported_as
+                    .insert(kind, (dedicated, type_index));
                 if let Some(log) = &memory.log {
                     let what = match form {
                         DmaBufFor::Image(_) => "imported a dma-buf for an image",
@@ -4436,8 +4449,8 @@ pub(super) fn import_dma_buf(
                     };
                     log.say(what, raw, type_index, size, None);
                 }
-                let retried = matches!(form, DmaBufFor::Buffer(_));
-                return Ok((raw, type_index, retried));
+                let to_its_buffer = matches!(form, DmaBufFor::Buffer(_));
+                return Ok((raw, type_index, to_its_buffer));
             }
             Err(error) => {
                 // Closed where the driver left it open (the doc above).

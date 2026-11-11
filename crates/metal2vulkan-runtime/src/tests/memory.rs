@@ -97,10 +97,12 @@ fn dma_buf_imports_try_the_class_s_types_then_the_dma_buf_s_others() {
     );
 }
 
-/// The type the device's last import of a kind succeeded as goes first, the others keep their
-/// order and stay tried: NVIDIA's udmabuf types ranked 4, 0, its imports succeeding as 0 alone.
+/// The form and type the device's last import of a kind succeeded as go first, the others keep
+/// their order and stay tried: NVIDIA's udmabuf types ranked 4, 0, its imports succeeding as 0
+/// alone (620.70.06), and a buffer's imports of scattered pages refused dedicated to nothing and
+/// taken dedicated to the buffer (615.71.09).
 #[test]
-fn a_dma_buf_import_tries_the_type_its_kind_last_imported_as_first() {
+fn a_dma_buf_import_tries_the_form_and_type_its_kind_last_imported_as_first() {
     assert_eq!(worked_first(vec![4, 0], Some(0)), [0, 4]);
     assert_eq!(
         worked_first(vec![4, 5, 3, 0, 1, 2], Some(3)),
@@ -110,7 +112,22 @@ fn a_dma_buf_import_tries_the_type_its_kind_last_imported_as_first() {
     // A type the dma-buf or its resource does not take is not added.
     assert_eq!(worked_first(vec![4, 0], Some(7)), [4, 0]);
     assert_eq!(worked_first(vec![4, 0], None), [4, 0]);
-    assert!(worked_first(Vec::new(), Some(0)).is_empty());
+    assert!(worked_first(Vec::<u32>::new(), Some(0)).is_empty());
+    // A buffer's attempts, dedicated to nothing in each type and then dedicated to the buffer.
+    let buffer = vec![(false, 3), (false, 0), (true, 3), (true, 0)];
+    assert_eq!(
+        worked_first(buffer.clone(), Some((true, 0))),
+        [(true, 0), (false, 3), (false, 0), (true, 3)]
+    );
+    assert_eq!(
+        worked_first(buffer, Some((false, 0))),
+        [(false, 0), (false, 3), (true, 3), (true, 0)]
+    );
+    // A shared import has no dedicated form to put first.
+    assert_eq!(
+        worked_first(vec![(false, 3), (false, 0)], Some((true, 0))),
+        [(false, 3), (false, 0)]
+    );
 }
 
 /// A class that requires device-local memory (`Private`, `Memoryless`) overflows, where none of

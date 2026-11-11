@@ -103,7 +103,7 @@ fn a_kind_s_first_imports_run_one_at_a_time_until_one_succeeded() {
 fn a_kind_s_imports_run_side_by_side_once_one_succeeded() {
     let most = Arc::default();
     let memory = memory(&most);
-    lock(&memory).dma_buf_imported(DmaBufFor::Shared, MemoryClass::Shared, 0);
+    lock(&memory).dma_buf_imported((DmaBufFor::Shared, MemoryClass::Shared), false, 0);
     assert!(
         imports_at_once(&memory, &most) >= 2,
         "imports of a kind one has succeeded as ran one at a time"
