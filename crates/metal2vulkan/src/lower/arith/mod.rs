@@ -1207,8 +1207,10 @@ fn record(cx: &mut SelectCx<'_>, notes: OpNotes) {
 /// fast-math flag is the device's `OpFRem`, `x - y · trunc(x / y)` at its precision, as Metal
 /// computes it of its precise quotient. Beside these, an addition, subtraction, or multiply whose
 /// flags let the device fuse or regroup it with an operand's definition records
-/// `FastMathRewrites`, which the operands decide (`note_rewrites`). `None` for an integer
-/// operator.
+/// `FastMathRewrites`, which the operands decide (`note_rewrites`); a `half` one whose flags
+/// allow contraction records it whatever its operands where the profile takes
+/// `DriverDeviation::MetalHalfArithmetic` (MoltenVK), whose compiler answers the device's 16-bit
+/// instruction left undecorated as the unrounded `float` result. `None` for an integer operator.
 ///
 /// [`select`] records exactly these for such an operator (a `half` result's rounding is noted from
 /// the emitted module); validation reads them to tell which operations the product computes as a
@@ -1270,6 +1272,17 @@ pub fn float_binop_notes(
         notes.insert(PrecisionNote::DeviceArithmetic);
     }
     notes.extend(native_nan(answer.is_some()));
+    // The device's 16-bit `half` `+ - *` left to its compiler on the measured basis: Metal's fast
+    // compile folds its conversions away and answers the `float` result unrounded ([`select`]).
+    let lane = Form {
+        held: Held::Float(fmt),
+        lanes: 1,
+    };
+    if contraction(fmf) == Contraction::Allowed
+        && f16_arithmetic(p, op, lane) == Some(F16Basis::Measured)
+    {
+        notes.insert(PrecisionNote::FastMathRewrites);
+    }
     Some(OpNotes::everywhere(notes))
 }
 
