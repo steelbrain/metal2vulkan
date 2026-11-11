@@ -88,13 +88,12 @@ fn a_placement_heap_names_a_texture_it_does_not_make_inside_it() {
     let size = heap.size();
     // Made at the heap's start: nothing said.
     assert!(heap.new_texture_at_offset(&d, 0).is_ok());
+    let named = || lock(&heard).len();
     refused(&heap, &d, 1);
-    assert_eq!(lock(&heard).len(), 1, "{:?}", lock(&heard));
-    assert_eq!(withheld(&device), 0);
+    assert_eq!((named(), withheld(&device)), (1, 0));
     // A second refusal: counted, not named.
     refused(&heap, &d, last);
-    assert_eq!(lock(&heard).len(), 1, "{:?}", lock(&heard));
-    assert_eq!(withheld(&device), 1);
+    assert_eq!((named(), withheld(&device)), (1, 1));
     // Outside the heap: neither.
     refused(&heap, &d, size);
     assert_eq!(withheld(&device), 1);

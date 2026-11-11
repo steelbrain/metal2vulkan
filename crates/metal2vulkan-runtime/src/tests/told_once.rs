@@ -73,7 +73,7 @@ fn withheld(counts: &WorkCounts, told: Told) -> u64 {
 fn message(told: Told, name: &str) -> DebugMessage {
     if told == Told::TwinDecodeFailed {
         let failed = crate::error::internal("a decode that failed");
-        return twin_decode_failed(PixelFormat::ETC2_RGB8, [8, 8, 1], &failed);
+        return twin_decode_failed(PixelFormat::ETC2RGB8, [8, 8, 1], &failed);
     }
     DebugMessage {
         severity: MessageSeverity::Info,
@@ -131,7 +131,7 @@ fn a_second_late_reservation_is_counted_not_said() {
     };
     let late = || device.work_counts().late_reservation_withheld;
     reserve(2);
-    assert!(lock(&heard).is_empty(), "{:?}", lock(&heard));
+    assert_eq!(*lock(&heard), Vec::<String>::new());
     reserve(4);
     assert_eq!(*lock(&heard), ["metal2vulkan-late-reservation"]);
     assert_eq!(late(), 0);
