@@ -19,7 +19,8 @@
 //!
 //! GB/s is read plus written over the median command buffer: `wall` from commit to its wait's end,
 //! `gpu` from its GPU start and end times. A `PASSES` line after it gives each timed command
-//! buffer's two times in milliseconds, `wall/gpu`. The memory counts are those the two buffers' making
+//! buffer's two times in milliseconds, `wall/gpu`, and a `COUNTS` line every `WorkCounts` field
+//! the last pass moved. The memory counts are those the two buffers' making
 //! moved: `vkAllocateMemory` and `vkBindBufferMemory` calls, live dedicated blocks, live empty
 //! blocks, overflows into system memory. With `METAL2VULKAN_LOG_MEMORY=1` the memory log names
 //! the block and memory type each buffer took.
@@ -148,15 +149,15 @@ const SEQUENCES: [(&str, &[Pair]); 5] = [
             Pair(StorageMode::Private, Made::Pinned, 0),
         ],
     ),
-    // As a guest's buffers come: `Shared` and `Managed` ones over its pages, then `Private` ones
-    // at its addresses, each with bit 20.
+    // As a guest's buffers come: `Shared` and `Managed` ones over its pages with bit 20, as its
+    // no-copy calls pass it, then `Private` ones at its addresses, of its plain options.
     (
         "no-copy-then-private",
         &[
             Pair(StorageMode::Shared, Made::NoCopy, BIT_20),
             Pair(StorageMode::Managed, Made::NoCopy, BIT_20),
+            Pair(StorageMode::Private, Made::Pinned, 0),
             Pair(StorageMode::Private, Made::Pinned, BIT_20),
-            Pair(StorageMode::Private, Made::New, BIT_20),
         ],
     ),
 ];
@@ -213,6 +214,17 @@ fn moved(before: &WorkCounts, after: &WorkCounts) -> String {
             before.device_memory_overflows
         ),
     )
+}
+
+/// Every `WorkCounts` field that moved from `before` to `after`, as `after` names it: the lines
+/// of the two counts' debug forms that differ.
+fn changed(before: &WorkCounts, after: &WorkCounts) -> String {
+    let (before, after) = (format!("{before:#?}"), format!("{after:#?}"));
+    let lines: Vec<&str> = (before.lines().zip(after.lines()))
+        .filter(|(was, now)| was != now)
+        .map(|(_, now)| now.trim().trim_end_matches(','))
+        .collect();
+    lines.join(" ")
 }
 
 /// One command buffer of the kernel from `input` to `output`: its wall time from commit to its
@@ -291,14 +303,20 @@ fn run_pair(
     blit.end_encoding()?;
     common::run(&command_buffer)?;
     let (mut walls, mut gpus) = (Vec::new(), Vec::new());
+    let mut last_counts = String::new();
     for index in 0..PASSES {
+        let before = device.work_counts();
         let (wall, gpu) = pass(queue, state, &input, &output)?;
         if index >= PASSES - TIMED {
             walls.push(wall);
             gpus.push(gpu);
         }
+        if index == PASSES - 1 {
+            last_counts = changed(&before, &device.work_counts());
+        }
     }
     check(device, queue, &output, &pair)?;
+    println!("COUNTS {sequence} {} last pass: {last_counts}", pair.name());
     let passes: Vec<String> = (walls.iter().zip(&gpus))
         .map(|(wall, gpu)| format!("{:.2}/{:.2}", wall * 1e3, gpu * 1e3))
         .collect();
