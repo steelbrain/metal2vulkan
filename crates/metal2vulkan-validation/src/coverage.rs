@@ -316,7 +316,11 @@ impl ModuleCensus {
     /// The census of each module of a linked pipeline's `modules` (in pipeline order) that runs
     /// a Metal function, compiled for `profile`. A tessellation pipeline's synthesized vertex and
     /// control stages run none and are left out: the pipeline is tessellated exactly when it has an
-    /// evaluation stage. `Err` names a module of a stage no Metal function has.
+    /// evaluation stage. So are a render pipeline's geometry stages: Metal has no geometry
+    /// function, so every one is a stage link synthesizes between the vertex and fragment
+    /// functions (`metal2vulkan::pipeline::link::geometry`: the barycentric weights, or the slice
+    /// and viewport a vertex function selects). `Err` names a module of a stage no Metal function
+    /// has.
     pub fn of_pipeline_modules(
         modules: &[StageModule],
         profile: &DeviceProfile,
@@ -336,6 +340,7 @@ impl ModuleCensus {
             .any(|m| m.stage == vk::ShaderStage::TESSELLATION_EVALUATION);
         modules
             .iter()
+            .filter(|m| m.stage != vk::ShaderStage::GEOMETRY)
             .filter(|m| {
                 !tessellated
                     || (m.stage != vk::ShaderStage::VERTEX

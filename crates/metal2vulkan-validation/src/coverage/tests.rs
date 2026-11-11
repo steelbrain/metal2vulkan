@@ -240,6 +240,79 @@ fn a_tessellation_pipeline_census_is_its_functions() {
     assert!(error.contains("TESSELLATION_CONTROL"), "{error}");
 }
 
+/// A render pipeline's census leaves out its geometry stages, which run no Metal function: a
+/// vertex function whose slice and viewport differ among a primitive's vertices
+/// (`engine/rt6_first_vertex`) stores them through the synthesized geometry stage of each topology
+/// class on a device whose driver does not take Metal's first-vertex indices (the Radeon 780M's
+/// committed capture), so the pipeline's modules are its vertex function's, three geometry stages
+/// and its fragment function's, and its census is the two functions'.
+#[test]
+fn a_render_pipeline_census_leaves_out_its_geometry_stages() {
+    use metal2vulkan::device::{Device, DevicePolicy};
+    use metal2vulkan::library::Library;
+    use metal2vulkan::metal::PixelFormat;
+    use metal2vulkan::pipeline::{
+        ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
+    };
+    use metal2vulkan::Budget;
+    use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
+    let bitcode = match llvm_assemble(&engine_dir().join("rt6_first_vertex.ll")) {
+        Ok(bytes) => bytes,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected rt6_first_vertex.ll: {why}"),
+    };
+    let path = crate::engine::profiles_dir().join("amd-780m-radv.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let device = Device::new(
+        DeviceDescription::from_khronos_json(&text, None).unwrap(),
+        DevicePolicy::default(),
+    )
+    .unwrap();
+    let library = Library::from_air(&bitcode).unwrap();
+    let stage = |name: &str| {
+        StageSource::Function(FunctionDescriptor::new(library.function(name).unwrap()))
+    };
+    let mut d = RenderPipelineDescriptor::new(stage("rt6_first_vertex"));
+    d.fragment = Some(stage("rt6_first_vertex_read"));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
+    let pipeline = device
+        .compile_render_pipeline(&d, &Budget::standard())
+        .unwrap();
+    let stages: Vec<vk::ShaderStage> = pipeline.stages.iter().map(|m| m.stage).collect();
+    assert_eq!(
+        stages,
+        [
+            vk::ShaderStage::VERTEX,
+            vk::ShaderStage::GEOMETRY,
+            vk::ShaderStage::GEOMETRY,
+            vk::ShaderStage::GEOMETRY,
+            vk::ShaderStage::FRAGMENT
+        ]
+    );
+    let profile = device.profile();
+    let census = ModuleCensus::of_pipeline_modules(&pipeline.stages, profile).unwrap();
+    assert_eq!(
+        census,
+        [
+            ModuleCensus::of_stage_module_under(&pipeline.stages[0], profile, None).unwrap(),
+            ModuleCensus::of_stage_module_under(&pipeline.stages[4], profile, None).unwrap()
+        ]
+    );
+    assert_eq!(
+        census.iter().map(|m| m.stage).collect::<Vec<_>>(),
+        [Stage::Vertex, Stage::Fragment]
+    );
+    for geometry in &pipeline.stages[1..4] {
+        assert_eq!(
+            ModuleCensus::of_stage_module_under(geometry, profile, None),
+            None
+        );
+    }
+}
+
 /// The tier table holds every committed profile as stated and, where it states a robustness
 /// feature, in its robustness-off leg (validation runs both): the stated leg compiles the robust
 /// encodings the profile states, the off leg the in-shader ones, on the same device class and
