@@ -732,8 +732,8 @@ fn device_without(stem: &str, features: &[&str]) -> Device {
 }
 
 /// Assert that pipeline `p` draws its logic operation in its fragment function: no Vulkan
-/// operation or requirement of it, the function compiled under xor; where `operated`, attachment
-/// 0 is unblended and the function notes the device's conversion of its codes.
+/// operation or requirement of it; where `operated`, attachment 0 is unblended and the function
+/// notes the device's conversion of its codes.
 fn shader_operated(p: &RenderPipeline, operated: bool, what: &str) {
     use crate::device::requirements::VkFeature;
     use crate::pipeline::artifact::PrecisionNote;
@@ -752,8 +752,10 @@ fn shader_operated(p: &RenderPipeline, operated: bool, what: &str) {
             .precision_notes
             .contains(&PrecisionNote::DeviceColorConversion);
         assert!(noted, "{what}");
-        let a = p.graphics.color_attachments[0].expect("attachment 0");
-        assert!(a.blend.is_none(), "{what} blends");
+        // Attachment 0 is a color attachment of the subpass over an input attachment, and none
+        // in the storage form, which writes it as a storage image.
+        let a = p.graphics.color_attachments[0];
+        assert!(a.is_none_or(|a| a.blend.is_none()), "{what} blends");
     }
 }
 
