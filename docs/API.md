@@ -343,7 +343,9 @@ default `HostPageTexturePolicy::InPlace` the runtime relies on the driver there,
 over host pages whose declared usage samples, reads, renders into it or writes it through a shader
 (`ShaderWrite` or `ShaderAtomic`, of texels of 1, 2, 4, 8 or 16 bytes) is a linear image aliasing
 the pages (one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired
-from `VK_QUEUE_FAMILY_FOREIGN_EXT`) wherever the device makes such an image and its own check
+from `VK_QUEUE_FAMILY_FOREIGN_EXT`, its plane at the texels' offset in their first page, or, where
+the driver lays such a plane out at another offset, at offset 0 of an image bound at the texels'
+offset, `WorkCounts::dma_buf_images_at_offset`) wherever the device makes such an image and its own check
 passed for that kind of pages and each of its accesses (`WorkCounts::host_textures_in_place`,
 `dma_buf_textures_in_place`, `fresh_page_textures_in_place`, and `host_textures_in_place_written`
 for one a shader writes), on a discrete GPU as on any other. A texture that renders takes the
@@ -403,7 +405,10 @@ a width the check's kernel stores none of (none of 1, 2, 4, 8 and 16 bytes); one
 check for an access of its answered, or where it failed or made no image; and one no image in
 place serves (its format or
 usage the device makes no linear image of, the bytes' pitch, placement or memory, or over dma-buf
-pages no dma-buf of the texture's own pages). `WorkCounts::host_texture_shadows_*` counts each
+pages no dma-buf of the texture's own pages, or, where the driver lays a plane at the texels'
+offset in their page out at another offset, no image of a plane at offset 0 that binds at that
+offset of an import of the pages: one that requires a dedicated allocation, as RADV's does, or
+whose memory's alignment does not divide the offset). `WorkCounts::host_texture_shadows_*` counts each
 reason apart (the texel width, `_store_width`), and of them all those whose usage renders into
 them (`_render_target`) and those a shader writes (`_shader_write`). A shadow
 is an optimal image of the runtime's own memory, whose texels the encoders copy in from the pages

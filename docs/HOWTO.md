@@ -259,10 +259,16 @@ A texture over such memory is an image over a dma-buf of its own pages where the
 and 26.0.8) lays such an image's plane only at an offset in its page that is a multiple of 256
 bytes, with rows a multiple of 256 bytes apart: keep a texture's offset and `bytes_per_row` so (a
 4 KiB-aligned surface with 256-byte-aligned rows always is), with no byte between its rows (below).
-Elsewhere the texture takes a shadow of the bytes, announced (`shadowed-texture`, naming why), and a
-rebind that cannot make the image again is refused (`NotImplemented(RebindTextures)`).
-`WorkCounts::dma_buf_imports`, `dma_buf_sparse_buffers`, `dma_buf_images` and
-`dma_buf_image_fallbacks` count what the route did.
+A driver that lays such a plane out at another offset than its texels' in their page (Honeykrisp,
+Mesa 25.3.6 on Apple's M2 Pro, answers offset 0 for a plane 8192 bytes into a 16 KiB page) gets an
+image whose plane starts at offset 0, bound at the texels' offset of an import of the pages that
+is no dedicated allocation, where it takes such a binding: the image requires no dedicated
+allocation (RADV requires one of every such image) and its memory's alignment divides the offset
+(`dma_buf_images_at_offset`). Elsewhere the texture takes a shadow of the bytes, announced
+(`shadowed-texture`, naming why), and a rebind that cannot make the image again is refused
+(`NotImplemented(RebindTextures)`). `WorkCounts::dma_buf_imports`, `dma_buf_sparse_buffers`,
+`dma_buf_images`, `dma_buf_images_at_offset` and `dma_buf_image_fallbacks` count what the route
+did.
 
 RADV lists every memory a device imported in every kernel submission, and amdgpu's work for a
 submission grows with each entry, whether a command uses it or not; ANV on i915 lists every memory

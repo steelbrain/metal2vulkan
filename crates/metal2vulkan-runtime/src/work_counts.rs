@@ -6808,9 +6808,11 @@ pub struct WorkCounts {
     /// imported memory, in every kernel submission of the device (Mesa 26.2.4's global BO list),
     /// and amdgpu's work per submission grows with them (`runtime_lane::submit_per_import`).
     pub dma_buf_memories_live: u64,
-    /// The dedicated dma-buf imports of images over such memory live now (`dma_buf_images`), and
-    /// of images over the runtime's memory exported as a dma-buf (`exported_dma_buf_images`): one
-    /// per live image, listed in every kernel submission as those above, freed after the image.
+    /// The dma-buf imports of images over such memory live now (`dma_buf_images`: each image's
+    /// own, a dedicated one, or one bound at its texels' offset, `dma_buf_images_at_offset`), and
+    /// the dedicated ones of images over the runtime's memory exported as a dma-buf
+    /// (`exported_dma_buf_images`): one per live image, listed in every kernel submission as those
+    /// above, freed after the image.
     pub dma_buf_image_memories_live: u64,
     /// No-copy buffers' imports of dma-bufs released while idle, their `VkBuffer` destroyed and
     /// their memory freed, the dma-bufs kept: a runtime-internal residency, which nothing of
