@@ -8,169 +8,169 @@ target triple = "air64_v28-apple-macosx26.0.0"
 define void @kernel_convert_rounding_int_to_float(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2, i32 noundef %3) local_unnamed_addr #0 {
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %5
-  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !25, !alias.scope !29, !noalias !32
+  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !32, !alias.scope !36, !noalias !39
   %8 = add i32 %2, 5
   %9 = urem i32 %8, %3
   %10 = zext i32 %9 to i64
   %11 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %10
-  %12 = load i32, ptr addrspace(1) %11, align 4, !tbaa !25, !alias.scope !29, !noalias !32
+  %12 = load i32, ptr addrspace(1) %11, align 4, !tbaa !32, !alias.scope !36, !noalias !39
   %13 = insertelement <2 x i32> undef, i32 %12, i64 0
   %14 = insertelement <2 x i32> %13, i32 %7, i64 1
   %15 = bitcast <2 x i32> %14 to i64
   %16 = mul i32 %2, 31
   %17 = zext i32 %16 to i64
   %18 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %17
-  %19 = tail call fast float @air.convert.f.f32.s.i32.rte(i32 noundef %7) #2
+  %19 = tail call float @air.convert.f.f32.s.i32.rte(i32 noundef %7) #2
   %20 = bitcast ptr addrspace(1) %18 to ptr addrspace(1)
-  store float %19, ptr addrspace(1) %20, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %21 = tail call fast float @air.convert.f.f32.s.i32.rtz(i32 noundef %7) #2
+  store float %19, ptr addrspace(1) %20, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %21 = tail call float @air.convert.f.f32.s.i32.rtz(i32 noundef %7) #2
   %22 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 1
   %23 = bitcast ptr addrspace(1) %22 to ptr addrspace(1)
-  store float %21, ptr addrspace(1) %23, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %24 = tail call fast float @air.convert.f.f32.s.i32.rtp(i32 noundef %7) #2
+  store float %21, ptr addrspace(1) %23, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %24 = tail call float @air.convert.f.f32.s.i32.rtp(i32 noundef %7) #2
   %25 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 2
   %26 = bitcast ptr addrspace(1) %25 to ptr addrspace(1)
-  store float %24, ptr addrspace(1) %26, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %27 = tail call fast float @air.convert.f.f32.s.i32.rtn(i32 noundef %7) #2
+  store float %24, ptr addrspace(1) %26, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %27 = tail call float @air.convert.f.f32.s.i32.rtn(i32 noundef %7) #2
   %28 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 3
   %29 = bitcast ptr addrspace(1) %28 to ptr addrspace(1)
-  store float %27, ptr addrspace(1) %29, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %30 = tail call fast float @air.convert.f.f32.u.i32.rte(i32 noundef %7) #2
+  store float %27, ptr addrspace(1) %29, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %30 = tail call float @air.convert.f.f32.u.i32.rte(i32 noundef %7) #2
   %31 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 4
   %32 = bitcast ptr addrspace(1) %31 to ptr addrspace(1)
-  store float %30, ptr addrspace(1) %32, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %33 = tail call fast float @air.convert.f.f32.u.i32.rtz(i32 noundef %7) #2
+  store float %30, ptr addrspace(1) %32, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %33 = tail call float @air.convert.f.f32.u.i32.rtz(i32 noundef %7) #2
   %34 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 5
   %35 = bitcast ptr addrspace(1) %34 to ptr addrspace(1)
-  store float %33, ptr addrspace(1) %35, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %36 = tail call fast float @air.convert.f.f32.u.i32.rtp(i32 noundef %7) #2
+  store float %33, ptr addrspace(1) %35, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %36 = tail call float @air.convert.f.f32.u.i32.rtp(i32 noundef %7) #2
   %37 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 6
   %38 = bitcast ptr addrspace(1) %37 to ptr addrspace(1)
-  store float %36, ptr addrspace(1) %38, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %39 = tail call fast float @air.convert.f.f32.u.i32.rtn(i32 noundef %7) #2
+  store float %36, ptr addrspace(1) %38, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %39 = tail call float @air.convert.f.f32.u.i32.rtn(i32 noundef %7) #2
   %40 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 7
   %41 = bitcast ptr addrspace(1) %40 to ptr addrspace(1)
-  store float %39, ptr addrspace(1) %41, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %42 = tail call fast half @air.convert.f.f16.s.i32.rte(i32 noundef %7) #2
+  store float %39, ptr addrspace(1) %41, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %42 = tail call half @air.convert.f.f16.s.i32.rte(i32 noundef %7) #2
   %43 = bitcast half %42 to i16
   %44 = zext i16 %43 to i32
   %45 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 8
-  store i32 %44, ptr addrspace(1) %45, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %46 = tail call fast half @air.convert.f.f16.s.i32.rtz(i32 noundef %7) #2
+  store i32 %44, ptr addrspace(1) %45, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %46 = tail call half @air.convert.f.f16.s.i32.rtz(i32 noundef %7) #2
   %47 = bitcast half %46 to i16
   %48 = zext i16 %47 to i32
   %49 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 9
-  store i32 %48, ptr addrspace(1) %49, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %50 = tail call fast half @air.convert.f.f16.s.i32.rtp(i32 noundef %7) #2
+  store i32 %48, ptr addrspace(1) %49, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %50 = tail call half @air.convert.f.f16.s.i32.rtp(i32 noundef %7) #2
   %51 = bitcast half %50 to i16
   %52 = zext i16 %51 to i32
   %53 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 10
-  store i32 %52, ptr addrspace(1) %53, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %54 = tail call fast half @air.convert.f.f16.s.i32.rtn(i32 noundef %7) #2
+  store i32 %52, ptr addrspace(1) %53, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %54 = tail call half @air.convert.f.f16.s.i32.rtn(i32 noundef %7) #2
   %55 = bitcast half %54 to i16
   %56 = zext i16 %55 to i32
   %57 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 11
-  store i32 %56, ptr addrspace(1) %57, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %56, ptr addrspace(1) %57, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %58 = trunc i32 %7 to i16
-  %59 = tail call fast half @air.convert.f.f16.u.i16.rte(i16 noundef zeroext %58) #2
+  %59 = tail call half @air.convert.f.f16.u.i16.rte(i16 noundef zeroext %58) #2
   %60 = bitcast half %59 to i16
   %61 = zext i16 %60 to i32
   %62 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 12
-  store i32 %61, ptr addrspace(1) %62, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %63 = tail call fast half @air.convert.f.f16.u.i16.rtz(i16 noundef zeroext %58) #2
+  store i32 %61, ptr addrspace(1) %62, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %63 = tail call half @air.convert.f.f16.u.i16.rtz(i16 noundef zeroext %58) #2
   %64 = bitcast half %63 to i16
   %65 = zext i16 %64 to i32
   %66 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 13
-  store i32 %65, ptr addrspace(1) %66, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %67 = tail call fast half @air.convert.f.f16.u.i16.rtp(i16 noundef zeroext %58) #2
+  store i32 %65, ptr addrspace(1) %66, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %67 = tail call half @air.convert.f.f16.u.i16.rtp(i16 noundef zeroext %58) #2
   %68 = bitcast half %67 to i16
   %69 = zext i16 %68 to i32
   %70 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 14
-  store i32 %69, ptr addrspace(1) %70, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %71 = tail call fast half @air.convert.f.f16.u.i16.rtn(i16 noundef zeroext %58) #2
+  store i32 %69, ptr addrspace(1) %70, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %71 = tail call half @air.convert.f.f16.u.i16.rtn(i16 noundef zeroext %58) #2
   %72 = bitcast half %71 to i16
   %73 = zext i16 %72 to i32
   %74 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 15
-  store i32 %73, ptr addrspace(1) %74, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %75 = tail call fast float @air.convert.f.f32.s.i64.rte(i64 noundef %15) #2
+  store i32 %73, ptr addrspace(1) %74, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %75 = tail call float @air.convert.f.f32.s.i64.rte(i64 noundef %15) #2
   %76 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 16
   %77 = bitcast ptr addrspace(1) %76 to ptr addrspace(1)
-  store float %75, ptr addrspace(1) %77, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %78 = tail call fast float @air.convert.f.f32.s.i64.rtz(i64 noundef %15) #2
+  store float %75, ptr addrspace(1) %77, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %78 = tail call float @air.convert.f.f32.s.i64.rtz(i64 noundef %15) #2
   %79 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 17
   %80 = bitcast ptr addrspace(1) %79 to ptr addrspace(1)
-  store float %78, ptr addrspace(1) %80, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %81 = tail call fast float @air.convert.f.f32.s.i64.rtp(i64 noundef %15) #2
+  store float %78, ptr addrspace(1) %80, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %81 = tail call float @air.convert.f.f32.s.i64.rtp(i64 noundef %15) #2
   %82 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 18
   %83 = bitcast ptr addrspace(1) %82 to ptr addrspace(1)
-  store float %81, ptr addrspace(1) %83, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %84 = tail call fast float @air.convert.f.f32.s.i64.rtn(i64 noundef %15) #2
+  store float %81, ptr addrspace(1) %83, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %84 = tail call float @air.convert.f.f32.s.i64.rtn(i64 noundef %15) #2
   %85 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 19
   %86 = bitcast ptr addrspace(1) %85 to ptr addrspace(1)
-  store float %84, ptr addrspace(1) %86, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %87 = tail call fast float @air.convert.f.f32.s.i16.rtz(i16 noundef signext %58) #2
+  store float %84, ptr addrspace(1) %86, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %87 = tail call float @air.convert.f.f32.s.i16.rtz(i16 noundef signext %58) #2
   %88 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 20
   %89 = bitcast ptr addrspace(1) %88 to ptr addrspace(1)
-  store float %87, ptr addrspace(1) %89, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store float %87, ptr addrspace(1) %89, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %90 = trunc i32 %7 to i8
-  %91 = tail call fast half @air.convert.f.f16.u.i8.rtp(i8 noundef zeroext %90) #2
+  %91 = tail call half @air.convert.f.f16.u.i8.rtp(i8 noundef zeroext %90) #2
   %92 = bitcast half %91 to i16
   %93 = zext i16 %92 to i32
   %94 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 21
-  store i32 %93, ptr addrspace(1) %94, align 4, !tbaa !25, !alias.scope !32, !noalias !29
-  %95 = tail call fast half @air.convert.f.f16.s.i8.rtn(i8 noundef signext %90) #2
+  store i32 %93, ptr addrspace(1) %94, align 4, !tbaa !32, !alias.scope !39, !noalias !36
+  %95 = tail call half @air.convert.f.f16.s.i8.rtn(i8 noundef signext %90) #2
   %96 = bitcast half %95 to i16
   %97 = zext i16 %96 to i32
   %98 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 22
-  store i32 %97, ptr addrspace(1) %98, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %97, ptr addrspace(1) %98, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %99 = bitcast i32 %7 to <4 x i8>
-  %100 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i8.rte(<4 x i8> noundef %99) #2
+  %100 = tail call <4 x float> @air.convert.f.v4f32.u.v4i8.rte(<4 x i8> noundef %99) #2
   %101 = insertelement <4 x i32> undef, i32 %7, i64 0
   %102 = add i32 %2, 1
   %103 = urem i32 %102, %3
   %104 = zext i32 %103 to i64
   %105 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %104
-  %106 = load i32, ptr addrspace(1) %105, align 4, !tbaa !25, !alias.scope !29, !noalias !32
+  %106 = load i32, ptr addrspace(1) %105, align 4, !tbaa !32, !alias.scope !36, !noalias !39
   %107 = insertelement <4 x i32> %101, i32 %106, i64 1
   %108 = add i32 %2, 2
   %109 = urem i32 %108, %3
   %110 = zext i32 %109 to i64
   %111 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %110
-  %112 = load i32, ptr addrspace(1) %111, align 4, !tbaa !25, !alias.scope !29, !noalias !32
+  %112 = load i32, ptr addrspace(1) %111, align 4, !tbaa !32, !alias.scope !36, !noalias !39
   %113 = insertelement <4 x i32> %107, i32 %112, i64 2
   %114 = add i32 %2, 3
   %115 = urem i32 %114, %3
   %116 = zext i32 %115 to i64
   %117 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %116
-  %118 = load i32, ptr addrspace(1) %117, align 4, !tbaa !25, !alias.scope !29, !noalias !32
+  %118 = load i32, ptr addrspace(1) %117, align 4, !tbaa !32, !alias.scope !36, !noalias !39
   %119 = insertelement <4 x i32> %113, i32 %118, i64 3
-  %120 = tail call fast <4 x float> @air.convert.f.v4f32.s.v4i32.rte(<4 x i32> noundef %119) #2
+  %120 = tail call <4 x float> @air.convert.f.v4f32.s.v4i32.rte(<4 x i32> noundef %119) #2
   %121 = bitcast <4 x float> %100 to <4 x i32>
   %122 = extractelement <4 x i32> %121, i64 0
   %123 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 23
-  store i32 %122, ptr addrspace(1) %123, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %122, ptr addrspace(1) %123, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %124 = extractelement <4 x i32> %121, i64 1
   %125 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 24
-  store i32 %124, ptr addrspace(1) %125, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %124, ptr addrspace(1) %125, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %126 = extractelement <4 x i32> %121, i64 2
   %127 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 25
-  store i32 %126, ptr addrspace(1) %127, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %126, ptr addrspace(1) %127, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %128 = extractelement <4 x i32> %121, i64 3
   %129 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 26
-  store i32 %128, ptr addrspace(1) %129, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %128, ptr addrspace(1) %129, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %130 = bitcast <4 x float> %120 to <4 x i32>
   %131 = extractelement <4 x i32> %130, i64 0
   %132 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 27
-  store i32 %131, ptr addrspace(1) %132, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %131, ptr addrspace(1) %132, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %133 = extractelement <4 x i32> %130, i64 1
   %134 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 28
-  store i32 %133, ptr addrspace(1) %134, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %133, ptr addrspace(1) %134, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %135 = extractelement <4 x i32> %130, i64 2
   %136 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 29
-  store i32 %135, ptr addrspace(1) %136, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %135, ptr addrspace(1) %136, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   %137 = extractelement <4 x i32> %130, i64 3
   %138 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 30
-  store i32 %137, ptr addrspace(1) %138, align 4, !tbaa !25, !alias.scope !32, !noalias !29
+  store i32 %137, ptr addrspace(1) %138, align 4, !tbaa !32, !alias.scope !39, !noalias !36
   ret void
 }
 
@@ -254,111 +254,111 @@ define void @kernel_convert_rounding_float_to_int(ptr addrspace(1) noundef reado
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %5
   %7 = bitcast ptr addrspace(1) %6 to ptr addrspace(1)
-  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !25, !alias.scope !34, !noalias !37
+  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !32, !alias.scope !41, !noalias !44
   %9 = fptrunc float %8 to half
   %10 = mul i32 %2, 24
   %11 = zext i32 %10 to i64
   %12 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %11
   %13 = tail call i32 @air.convert.s.i32.f.f32.rte(float noundef %8) #2
-  store i32 %13, ptr addrspace(1) %12, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %13, ptr addrspace(1) %12, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %14 = tail call i32 @air.convert.s.i32.f.f32.rtz(float noundef %8) #2
   %15 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 1
-  store i32 %14, ptr addrspace(1) %15, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %14, ptr addrspace(1) %15, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %16 = tail call i32 @air.convert.s.i32.f.f32.rtp(float noundef %8) #2
   %17 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 2
-  store i32 %16, ptr addrspace(1) %17, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %16, ptr addrspace(1) %17, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %18 = tail call i32 @air.convert.s.i32.f.f32.rtn(float noundef %8) #2
   %19 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 3
-  store i32 %18, ptr addrspace(1) %19, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %18, ptr addrspace(1) %19, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %20 = tail call i32 @air.convert.s.i32.f.f32.rte.sat(float noundef %8) #2
   %21 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 4
-  store i32 %20, ptr addrspace(1) %21, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %20, ptr addrspace(1) %21, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %22 = tail call i32 @air.convert.s.i32.f.f32.rtz.sat(float noundef %8) #2
   %23 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 5
-  store i32 %22, ptr addrspace(1) %23, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %22, ptr addrspace(1) %23, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %24 = tail call i32 @air.convert.s.i32.f.f32.rtp.sat(float noundef %8) #2
   %25 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 6
-  store i32 %24, ptr addrspace(1) %25, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %24, ptr addrspace(1) %25, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %26 = tail call i32 @air.convert.s.i32.f.f32.rtn.sat(float noundef %8) #2
   %27 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 7
-  store i32 %26, ptr addrspace(1) %27, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %26, ptr addrspace(1) %27, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %28 = tail call i32 @air.convert.u.i32.f.f32.rtz(float noundef %8) #2
   %29 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 8
-  store i32 %28, ptr addrspace(1) %29, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %28, ptr addrspace(1) %29, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %30 = tail call i32 @air.convert.u.i32.f.f32.rtz.sat(float noundef %8) #2
   %31 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 9
-  store i32 %30, ptr addrspace(1) %31, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %30, ptr addrspace(1) %31, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %32 = tail call i32 @air.convert.u.i32.f.f32.rte.sat(float noundef %8) #2
   %33 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 10
-  store i32 %32, ptr addrspace(1) %33, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %32, ptr addrspace(1) %33, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %34 = tail call zeroext i8 @air.convert.u.i8.f.f32.rte.sat(float noundef %8) #2
   %35 = zext i8 %34 to i32
   %36 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 11
-  store i32 %35, ptr addrspace(1) %36, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %35, ptr addrspace(1) %36, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %37 = tail call signext i8 @air.convert.s.i8.f.f32.rtn.sat(float noundef %8) #2
   %38 = sext i8 %37 to i32
   %39 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 12
-  store i32 %38, ptr addrspace(1) %39, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %38, ptr addrspace(1) %39, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %40 = tail call signext i16 @air.convert.s.i16.f.f16.rtp.sat(half noundef %9) #2
   %41 = sext i16 %40 to i32
   %42 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 13
-  store i32 %41, ptr addrspace(1) %42, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %41, ptr addrspace(1) %42, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %43 = tail call zeroext i16 @air.convert.u.i16.f.f16.rte(half noundef %9) #2
   %44 = zext i16 %43 to i32
   %45 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 14
-  store i32 %44, ptr addrspace(1) %45, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %44, ptr addrspace(1) %45, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %46 = tail call i64 @air.convert.s.i64.f.f32.rtz.sat(float noundef %8) #2
   %47 = bitcast i64 %46 to <2 x i32>
   %48 = extractelement <2 x i32> %47, i64 0
   %49 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 15
-  store i32 %48, ptr addrspace(1) %49, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %48, ptr addrspace(1) %49, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %50 = extractelement <2 x i32> %47, i64 1
   %51 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 16
-  store i32 %50, ptr addrspace(1) %51, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %50, ptr addrspace(1) %51, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %52 = insertelement <4 x float> undef, float %8, i64 0
   %53 = add i32 %2, 1
   %54 = urem i32 %53, %3
   %55 = zext i32 %54 to i64
   %56 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %55
   %57 = bitcast ptr addrspace(1) %56 to ptr addrspace(1)
-  %58 = load float, ptr addrspace(1) %57, align 4, !tbaa !25, !alias.scope !34, !noalias !37
+  %58 = load float, ptr addrspace(1) %57, align 4, !tbaa !32, !alias.scope !41, !noalias !44
   %59 = insertelement <4 x float> %52, float %58, i64 1
   %60 = add i32 %2, 2
   %61 = urem i32 %60, %3
   %62 = zext i32 %61 to i64
   %63 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %62
   %64 = bitcast ptr addrspace(1) %63 to ptr addrspace(1)
-  %65 = load float, ptr addrspace(1) %64, align 4, !tbaa !25, !alias.scope !34, !noalias !37
+  %65 = load float, ptr addrspace(1) %64, align 4, !tbaa !32, !alias.scope !41, !noalias !44
   %66 = insertelement <4 x float> %59, float %65, i64 2
   %67 = add i32 %2, 3
   %68 = urem i32 %67, %3
   %69 = zext i32 %68 to i64
   %70 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %69
   %71 = bitcast ptr addrspace(1) %70 to ptr addrspace(1)
-  %72 = load float, ptr addrspace(1) %71, align 4, !tbaa !25, !alias.scope !34, !noalias !37
+  %72 = load float, ptr addrspace(1) %71, align 4, !tbaa !32, !alias.scope !41, !noalias !44
   %73 = insertelement <4 x float> %66, float %72, i64 3
   %74 = tail call <4 x i32> @air.convert.s.v4i32.f.v4f32.rte(<4 x float> noundef %73) #2
   %75 = extractelement <4 x i32> %74, i64 0
   %76 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 17
-  store i32 %75, ptr addrspace(1) %76, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %75, ptr addrspace(1) %76, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %77 = extractelement <4 x i32> %74, i64 1
   %78 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 18
-  store i32 %77, ptr addrspace(1) %78, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %77, ptr addrspace(1) %78, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %79 = extractelement <4 x i32> %74, i64 2
   %80 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 19
-  store i32 %79, ptr addrspace(1) %80, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %79, ptr addrspace(1) %80, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %81 = extractelement <4 x i32> %74, i64 3
   %82 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 20
-  store i32 %81, ptr addrspace(1) %82, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %81, ptr addrspace(1) %82, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %83 = bitcast half %9 to i16
   %84 = zext i16 %83 to i32
   %85 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 21
-  store i32 %84, ptr addrspace(1) %85, align 4, !tbaa !25, !alias.scope !37, !noalias !34
-  %86 = load i32, ptr addrspace(1) %6, align 4, !tbaa !25, !alias.scope !34, !noalias !37
+  store i32 %84, ptr addrspace(1) %85, align 4, !tbaa !32, !alias.scope !44, !noalias !41
+  %86 = load i32, ptr addrspace(1) %6, align 4, !tbaa !32, !alias.scope !41, !noalias !44
   %87 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 22
-  store i32 %86, ptr addrspace(1) %87, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 %86, ptr addrspace(1) %87, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   %88 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 23
-  store i32 1515870810, ptr addrspace(1) %88, align 4, !tbaa !25, !alias.scope !37, !noalias !34
+  store i32 1515870810, ptr addrspace(1) %88, align 4, !tbaa !32, !alias.scope !44, !noalias !41
   ret void
 }
 
@@ -417,12 +417,12 @@ declare <4 x i32> @air.convert.s.v4i32.f.v4f32.rte(<4 x float> noundef) local_un
 define void @kernel_convert_rounding_int_to_int(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2, i32 noundef %3) local_unnamed_addr #0 {
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %5
-  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !25, !alias.scope !39, !noalias !42
+  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !32, !alias.scope !46, !noalias !49
   %8 = add i32 %2, 7
   %9 = urem i32 %8, %3
   %10 = zext i32 %9 to i64
   %11 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %10
-  %12 = load i32, ptr addrspace(1) %11, align 4, !tbaa !25, !alias.scope !39, !noalias !42
+  %12 = load i32, ptr addrspace(1) %11, align 4, !tbaa !32, !alias.scope !46, !noalias !49
   %13 = insertelement <2 x i32> undef, i32 %12, i64 0
   %14 = insertelement <2 x i32> %13, i32 %7, i64 1
   %15 = bitcast <2 x i32> %14 to i64
@@ -431,94 +431,94 @@ define void @kernel_convert_rounding_int_to_int(ptr addrspace(1) noundef readonl
   %18 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %17
   %19 = tail call zeroext i8 @air.convert.u.i8.s.i32.rtz.sat(i32 noundef %7) #2
   %20 = zext i8 %19 to i32
-  store i32 %20, ptr addrspace(1) %18, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %20, ptr addrspace(1) %18, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %21 = tail call signext i8 @air.convert.s.i8.s.i32.rtz.sat(i32 noundef %7) #2
   %22 = sext i8 %21 to i32
   %23 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 1
-  store i32 %22, ptr addrspace(1) %23, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %22, ptr addrspace(1) %23, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %24 = tail call zeroext i8 @air.convert.u.i8.u.i32.rtz.sat(i32 noundef %7) #2
   %25 = zext i8 %24 to i32
   %26 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 2
-  store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %27 = tail call signext i8 @air.convert.s.i8.u.i32.rtz.sat(i32 noundef %7) #2
   %28 = sext i8 %27 to i32
   %29 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 3
-  store i32 %28, ptr addrspace(1) %29, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %28, ptr addrspace(1) %29, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %30 = tail call zeroext i16 @air.convert.u.i16.s.i32.rtz.sat(i32 noundef %7) #2
   %31 = zext i16 %30 to i32
   %32 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 4
-  store i32 %31, ptr addrspace(1) %32, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %31, ptr addrspace(1) %32, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %33 = tail call signext i16 @air.convert.s.i16.u.i32.rtz.sat(i32 noundef %7) #2
   %34 = sext i16 %33 to i32
   %35 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 5
-  store i32 %34, ptr addrspace(1) %35, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %34, ptr addrspace(1) %35, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %36 = tail call i32 @air.convert.u.i32.s.i32.rtz.sat(i32 noundef %7) #2
   %37 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 6
-  store i32 %36, ptr addrspace(1) %37, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %36, ptr addrspace(1) %37, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %38 = tail call i32 @air.convert.s.i32.u.i32.rtz.sat(i32 noundef %7) #2
   %39 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 7
-  store i32 %38, ptr addrspace(1) %39, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %38, ptr addrspace(1) %39, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %40 = tail call signext i16 @air.convert.s.i16.s.i32.rtz(i32 noundef %7) #2
   %41 = sext i16 %40 to i32
   %42 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 8
-  store i32 %41, ptr addrspace(1) %42, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %41, ptr addrspace(1) %42, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %43 = tail call zeroext i8 @air.convert.u.i8.u.i32.rte(i32 noundef %7) #2
   %44 = zext i8 %43 to i32
   %45 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 9
-  store i32 %44, ptr addrspace(1) %45, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %44, ptr addrspace(1) %45, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %46 = tail call i32 @air.convert.s.i32.s.i64.rtz.sat(i64 noundef %15) #2
   %47 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 10
-  store i32 %46, ptr addrspace(1) %47, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %46, ptr addrspace(1) %47, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %48 = tail call i64 @air.convert.u.i64.s.i32.rtz.sat(i32 noundef %7) #2
   %49 = bitcast i64 %48 to <2 x i32>
   %50 = extractelement <2 x i32> %49, i64 0
   %51 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 11
-  store i32 %50, ptr addrspace(1) %51, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %50, ptr addrspace(1) %51, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %52 = extractelement <2 x i32> %49, i64 1
   %53 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 12
-  store i32 %52, ptr addrspace(1) %53, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %52, ptr addrspace(1) %53, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %54 = tail call i64 @air.convert.s.i64.u.i64.rtz.sat(i64 noundef %15) #2
   %55 = bitcast i64 %54 to <2 x i32>
   %56 = extractelement <2 x i32> %55, i64 0
   %57 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 13
-  store i32 %56, ptr addrspace(1) %57, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %56, ptr addrspace(1) %57, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %58 = extractelement <2 x i32> %55, i64 1
   %59 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 14
-  store i32 %58, ptr addrspace(1) %59, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %58, ptr addrspace(1) %59, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %60 = trunc i32 %7 to i8
   %61 = tail call i32 @air.convert.u.i32.s.i8.rtz.sat(i8 noundef signext %60) #2
   %62 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 15
-  store i32 %61, ptr addrspace(1) %62, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %61, ptr addrspace(1) %62, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %63 = tail call i32 @air.convert.s.i32.u.i8.rtz.sat(i8 noundef zeroext %60) #2
   %64 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 16
-  store i32 %63, ptr addrspace(1) %64, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %63, ptr addrspace(1) %64, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %65 = insertelement <4 x i32> undef, i32 %7, i64 0
   %66 = add i32 %2, 1
   %67 = urem i32 %66, %3
   %68 = zext i32 %67 to i64
   %69 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %68
-  %70 = load i32, ptr addrspace(1) %69, align 4, !tbaa !25, !alias.scope !39, !noalias !42
+  %70 = load i32, ptr addrspace(1) %69, align 4, !tbaa !32, !alias.scope !46, !noalias !49
   %71 = insertelement <4 x i32> %65, i32 %70, i64 1
   %72 = add i32 %2, 2
   %73 = urem i32 %72, %3
   %74 = zext i32 %73 to i64
   %75 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %74
-  %76 = load i32, ptr addrspace(1) %75, align 4, !tbaa !25, !alias.scope !39, !noalias !42
+  %76 = load i32, ptr addrspace(1) %75, align 4, !tbaa !32, !alias.scope !46, !noalias !49
   %77 = insertelement <4 x i32> %71, i32 %76, i64 2
   %78 = add i32 %2, 3
   %79 = urem i32 %78, %3
   %80 = zext i32 %79 to i64
   %81 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %80
-  %82 = load i32, ptr addrspace(1) %81, align 4, !tbaa !25, !alias.scope !39, !noalias !42
+  %82 = load i32, ptr addrspace(1) %81, align 4, !tbaa !32, !alias.scope !46, !noalias !49
   %83 = insertelement <4 x i32> %77, i32 %82, i64 3
   %84 = tail call <4 x i8> @air.convert.u.v4i8.s.v4i32.rtz.sat(<4 x i32> noundef %83) #2
   %85 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 17
   %86 = bitcast ptr addrspace(1) %85 to ptr addrspace(1)
-  store <4 x i8> %84, ptr addrspace(1) %86, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store <4 x i8> %84, ptr addrspace(1) %86, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %87 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 18
-  store i32 %7, ptr addrspace(1) %87, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 %7, ptr addrspace(1) %87, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   %88 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 19
-  store i32 -1515870811, ptr addrspace(1) %88, align 4, !tbaa !25, !alias.scope !42, !noalias !39
+  store i32 -1515870811, ptr addrspace(1) %88, align 4, !tbaa !32, !alias.scope !49, !noalias !46
   ret void
 }
 
@@ -575,66 +575,66 @@ define void @kernel_convert_rounding_float_to_float(ptr addrspace(1) noundef rea
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %5
   %7 = bitcast ptr addrspace(1) %6 to ptr addrspace(1)
-  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !25, !alias.scope !44, !noalias !47
+  %8 = load float, ptr addrspace(1) %7, align 4, !tbaa !32, !alias.scope !51, !noalias !54
   %9 = shl i32 %2, 3
   %10 = zext i32 %9 to i64
   %11 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %10
-  %12 = tail call fast half @air.convert.f.f16.f.f32.rte(float noundef %8) #2
+  %12 = tail call half @air.convert.f.f16.f.f32.rte(float noundef %8) #2
   %13 = bitcast half %12 to i16
   %14 = zext i16 %13 to i32
-  store i32 %14, ptr addrspace(1) %11, align 4, !tbaa !25, !alias.scope !47, !noalias !44
-  %15 = tail call fast half @air.convert.f.f16.f.f32.rtz(float noundef %8) #2
+  store i32 %14, ptr addrspace(1) %11, align 4, !tbaa !32, !alias.scope !54, !noalias !51
+  %15 = tail call half @air.convert.f.f16.f.f32.rtz(float noundef %8) #2
   %16 = bitcast half %15 to i16
   %17 = zext i16 %16 to i32
   %18 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 1
-  store i32 %17, ptr addrspace(1) %18, align 4, !tbaa !25, !alias.scope !47, !noalias !44
-  %19 = tail call fast half @air.convert.f.f16.f.f32.rtp(float noundef %8) #2
+  store i32 %17, ptr addrspace(1) %18, align 4, !tbaa !32, !alias.scope !54, !noalias !51
+  %19 = tail call half @air.convert.f.f16.f.f32.rtp(float noundef %8) #2
   %20 = bitcast half %19 to i16
   %21 = zext i16 %20 to i32
   %22 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 2
-  store i32 %21, ptr addrspace(1) %22, align 4, !tbaa !25, !alias.scope !47, !noalias !44
-  %23 = tail call fast half @air.convert.f.f16.f.f32.rtn(float noundef %8) #2
+  store i32 %21, ptr addrspace(1) %22, align 4, !tbaa !32, !alias.scope !54, !noalias !51
+  %23 = tail call half @air.convert.f.f16.f.f32.rtn(float noundef %8) #2
   %24 = bitcast half %23 to i16
   %25 = zext i16 %24 to i32
   %26 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 3
-  store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !25, !alias.scope !47, !noalias !44
-  %27 = tail call fast float @air.convert.f.f32.f.f16.rtz(half noundef %12) #2
+  store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !32, !alias.scope !54, !noalias !51
+  %27 = tail call float @air.convert.f.f32.f.f16.rtz(half noundef %12) #2
   %28 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 4
   %29 = bitcast ptr addrspace(1) %28 to ptr addrspace(1)
-  store float %27, ptr addrspace(1) %29, align 4, !tbaa !25, !alias.scope !47, !noalias !44
+  store float %27, ptr addrspace(1) %29, align 4, !tbaa !32, !alias.scope !54, !noalias !51
   %30 = insertelement <4 x float> undef, float %8, i64 0
   %31 = add i32 %2, 1
   %32 = urem i32 %31, %3
   %33 = zext i32 %32 to i64
   %34 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %33
   %35 = bitcast ptr addrspace(1) %34 to ptr addrspace(1)
-  %36 = load float, ptr addrspace(1) %35, align 4, !tbaa !25, !alias.scope !44, !noalias !47
+  %36 = load float, ptr addrspace(1) %35, align 4, !tbaa !32, !alias.scope !51, !noalias !54
   %37 = insertelement <4 x float> %30, float %36, i64 1
   %38 = add i32 %2, 2
   %39 = urem i32 %38, %3
   %40 = zext i32 %39 to i64
   %41 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %40
   %42 = bitcast ptr addrspace(1) %41 to ptr addrspace(1)
-  %43 = load float, ptr addrspace(1) %42, align 4, !tbaa !25, !alias.scope !44, !noalias !47
+  %43 = load float, ptr addrspace(1) %42, align 4, !tbaa !32, !alias.scope !51, !noalias !54
   %44 = insertelement <4 x float> %37, float %43, i64 2
   %45 = add i32 %2, 3
   %46 = urem i32 %45, %3
   %47 = zext i32 %46 to i64
   %48 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %47
   %49 = bitcast ptr addrspace(1) %48 to ptr addrspace(1)
-  %50 = load float, ptr addrspace(1) %49, align 4, !tbaa !25, !alias.scope !44, !noalias !47
+  %50 = load float, ptr addrspace(1) %49, align 4, !tbaa !32, !alias.scope !51, !noalias !54
   %51 = insertelement <4 x float> %44, float %50, i64 3
-  %52 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32.rtz(<4 x float> noundef %51) #2
+  %52 = tail call <4 x half> @air.convert.f.v4f16.f.v4f32.rtz(<4 x float> noundef %51) #2
   %53 = bitcast <4 x half> %52 to <2 x i32>
   %54 = extractelement <2 x i32> %53, i64 0
   %55 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 5
-  store i32 %54, ptr addrspace(1) %55, align 4, !tbaa !25, !alias.scope !47, !noalias !44
+  store i32 %54, ptr addrspace(1) %55, align 4, !tbaa !32, !alias.scope !54, !noalias !51
   %56 = extractelement <2 x i32> %53, i64 1
   %57 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 6
-  store i32 %56, ptr addrspace(1) %57, align 4, !tbaa !25, !alias.scope !47, !noalias !44
-  %58 = load i32, ptr addrspace(1) %6, align 4, !tbaa !25, !alias.scope !44, !noalias !47
+  store i32 %56, ptr addrspace(1) %57, align 4, !tbaa !32, !alias.scope !54, !noalias !51
+  %58 = load i32, ptr addrspace(1) %6, align 4, !tbaa !32, !alias.scope !51, !noalias !54
   %59 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 7
-  store i32 %58, ptr addrspace(1) %59, align 4, !tbaa !25, !alias.scope !47, !noalias !44
+  store i32 %58, ptr addrspace(1) %59, align 4, !tbaa !32, !alias.scope !54, !noalias !51
   ret void
 }
 
@@ -656,16 +656,134 @@ declare float @air.convert.f.f32.f.f16.rtz(half noundef) local_unnamed_addr #1
 ; Function Attrs: convergent
 declare <4 x half> @air.convert.f.v4f16.f.v4f32.rtz(<4 x float> noundef) local_unnamed_addr #1
 
-attributes #0 = { convergent mustprogress nounwind "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #1 = { convergent "approx-func-fp-math"="true" "frame-pointer"="all" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+; Function Attrs: convergent mustprogress nounwind
+define void @kernel_convert_rounding_apple_gpu(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %2, i32 noundef %3, i32 noundef %4) local_unnamed_addr #0 {
+  %6 = zext i32 %3 to i64
+  %7 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %6
+  %8 = load i32, ptr addrspace(1) %7, align 4, !tbaa !32, !alias.scope !56, !noalias !59
+  %9 = add i32 %3, 5
+  %10 = urem i32 %9, %4
+  %11 = zext i32 %10 to i64
+  %12 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %11
+  %13 = load i32, ptr addrspace(1) %12, align 4, !tbaa !32, !alias.scope !56, !noalias !59
+  %14 = insertelement <2 x i32> undef, i32 %13, i64 0
+  %15 = insertelement <2 x i32> %14, i32 %8, i64 1
+  %16 = bitcast <2 x i32> %15 to i64
+  %17 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %6
+  %18 = bitcast ptr addrspace(1) %17 to ptr addrspace(1)
+  %19 = load float, ptr addrspace(1) %18, align 4, !tbaa !32, !alias.scope !62, !noalias !63
+  %20 = mul i32 %3, 21
+  %21 = zext i32 %20 to i64
+  %22 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %21
+  %23 = tail call float @air.convert.f.f32.s.i32.rte(i32 noundef %8) #2
+  %24 = bitcast ptr addrspace(1) %22 to ptr addrspace(1)
+  store float %23, ptr addrspace(1) %24, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %25 = tail call float @air.convert.f.f32.u.i32.rte(i32 noundef %8) #2
+  %26 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 1
+  %27 = bitcast ptr addrspace(1) %26 to ptr addrspace(1)
+  store float %25, ptr addrspace(1) %27, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %28 = tail call float @air.convert.f.f32.s.i64.rte(i64 noundef %16) #2
+  %29 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 2
+  %30 = bitcast ptr addrspace(1) %29 to ptr addrspace(1)
+  store float %28, ptr addrspace(1) %30, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %31 = tail call half @air.convert.f.f16.s.i32.rte(i32 noundef %8) #2
+  %32 = bitcast half %31 to i16
+  %33 = zext i16 %32 to i32
+  %34 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 3
+  store i32 %33, ptr addrspace(1) %34, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %35 = trunc i32 %8 to i16
+  %36 = tail call half @air.convert.f.f16.u.i16.rte(i16 noundef zeroext %35) #2
+  %37 = bitcast half %36 to i16
+  %38 = zext i16 %37 to i32
+  %39 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 4
+  store i32 %38, ptr addrspace(1) %39, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %40 = bitcast i32 %8 to <4 x i8>
+  %41 = tail call <4 x float> @air.convert.f.v4f32.u.v4i8.rte(<4 x i8> noundef %40) #2
+  %42 = insertelement <4 x i32> undef, i32 %8, i64 0
+  %43 = add i32 %3, 1
+  %44 = urem i32 %43, %4
+  %45 = zext i32 %44 to i64
+  %46 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %45
+  %47 = load i32, ptr addrspace(1) %46, align 4, !tbaa !32, !alias.scope !56, !noalias !59
+  %48 = insertelement <4 x i32> %42, i32 %47, i64 1
+  %49 = add i32 %3, 2
+  %50 = urem i32 %49, %4
+  %51 = zext i32 %50 to i64
+  %52 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %51
+  %53 = load i32, ptr addrspace(1) %52, align 4, !tbaa !32, !alias.scope !56, !noalias !59
+  %54 = insertelement <4 x i32> %48, i32 %53, i64 2
+  %55 = add i32 %3, 3
+  %56 = urem i32 %55, %4
+  %57 = zext i32 %56 to i64
+  %58 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %57
+  %59 = load i32, ptr addrspace(1) %58, align 4, !tbaa !32, !alias.scope !56, !noalias !59
+  %60 = insertelement <4 x i32> %54, i32 %59, i64 3
+  %61 = tail call <4 x float> @air.convert.f.v4f32.s.v4i32.rte(<4 x i32> noundef %60) #2
+  %62 = bitcast <4 x float> %41 to <4 x i32>
+  %63 = extractelement <4 x i32> %62, i64 0
+  %64 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 5
+  store i32 %63, ptr addrspace(1) %64, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %65 = extractelement <4 x i32> %62, i64 1
+  %66 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 6
+  store i32 %65, ptr addrspace(1) %66, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %67 = extractelement <4 x i32> %62, i64 2
+  %68 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 7
+  store i32 %67, ptr addrspace(1) %68, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %69 = extractelement <4 x i32> %62, i64 3
+  %70 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 8
+  store i32 %69, ptr addrspace(1) %70, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %71 = bitcast <4 x float> %61 to <4 x i32>
+  %72 = extractelement <4 x i32> %71, i64 0
+  %73 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 9
+  store i32 %72, ptr addrspace(1) %73, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %74 = extractelement <4 x i32> %71, i64 1
+  %75 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 10
+  store i32 %74, ptr addrspace(1) %75, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %76 = extractelement <4 x i32> %71, i64 2
+  %77 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 11
+  store i32 %76, ptr addrspace(1) %77, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %78 = extractelement <4 x i32> %71, i64 3
+  %79 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 12
+  store i32 %78, ptr addrspace(1) %79, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %80 = tail call i32 @air.convert.s.i32.f.f32.rtz(float noundef %19) #2
+  %81 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 13
+  store i32 %80, ptr addrspace(1) %81, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %82 = tail call i32 @air.convert.s.i32.f.f32.rtz.sat(float noundef %19) #2
+  %83 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 14
+  store i32 %82, ptr addrspace(1) %83, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %84 = tail call i32 @air.convert.u.i32.f.f32.rtz(float noundef %19) #2
+  %85 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 15
+  store i32 %84, ptr addrspace(1) %85, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %86 = tail call i32 @air.convert.u.i32.f.f32.rtz.sat(float noundef %19) #2
+  %87 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 16
+  store i32 %86, ptr addrspace(1) %87, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %88 = tail call half @air.convert.f.f16.f.f32.rte(float noundef %19) #2
+  %89 = bitcast half %88 to i16
+  %90 = zext i16 %89 to i32
+  %91 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 17
+  store i32 %90, ptr addrspace(1) %91, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %92 = tail call float @air.convert.f.f32.f.f16.rtz(half noundef %88) #2
+  %93 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 18
+  %94 = bitcast ptr addrspace(1) %93 to ptr addrspace(1)
+  store float %92, ptr addrspace(1) %94, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %95 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 19
+  store i32 %8, ptr addrspace(1) %95, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  %96 = load i32, ptr addrspace(1) %17, align 4, !tbaa !32, !alias.scope !62, !noalias !63
+  %97 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 20
+  store i32 %96, ptr addrspace(1) %97, align 4, !tbaa !32, !alias.scope !64, !noalias !65
+  ret void
+}
+
+attributes #0 = { convergent mustprogress nounwind "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" }
+attributes #1 = { convergent "frame-pointer"="all" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" }
 attributes #2 = { convergent nobuiltin nounwind "no-builtins" }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.kernel = !{!9, !16, !17, !18}
-!air.compile_options = !{!19, !20, !21}
-!llvm.ident = !{!22}
-!air.version = !{!23}
-!air.language_version = !{!24}
+!air.kernel = !{!9, !16, !17, !18, !19}
+!air.compile_options = !{!26, !27, !28}
+!llvm.ident = !{!29}
+!air.version = !{!30}
+!air.language_version = !{!31}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -686,33 +804,50 @@ attributes #2 = { convergent nobuiltin nounwind "no-builtins" }
 !16 = !{ptr @kernel_convert_rounding_float_to_int, !10, !11}
 !17 = !{ptr @kernel_convert_rounding_int_to_int, !10, !11}
 !18 = !{ptr @kernel_convert_rounding_float_to_float, !10, !11}
-!19 = !{!"air.compile.denorms_disable"}
-!20 = !{!"air.compile.fast_math_enable"}
-!21 = !{!"air.compile.framebuffer_fetch_enable"}
-!22 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!23 = !{i32 2, i32 8, i32 0}
-!24 = !{!"Metal", i32 4, i32 0, i32 0}
-!25 = !{!26, !26, i64 0}
-!26 = !{!"int", !27, i64 0}
-!27 = !{!"omnipotent char", !28, i64 0}
-!28 = !{!"Simple C++ TBAA"}
-!29 = !{!30}
-!30 = distinct !{!30, !31, !"air-alias-scope-arg(0)"}
-!31 = distinct !{!31, !"air-alias-scopes(kernel_convert_rounding_int_to_float)"}
-!32 = !{!33}
-!33 = distinct !{!33, !31, !"air-alias-scope-arg(1)"}
-!34 = !{!35}
-!35 = distinct !{!35, !36, !"air-alias-scope-arg(0)"}
-!36 = distinct !{!36, !"air-alias-scopes(kernel_convert_rounding_float_to_int)"}
-!37 = !{!38}
-!38 = distinct !{!38, !36, !"air-alias-scope-arg(1)"}
+!19 = !{ptr @kernel_convert_rounding_apple_gpu, !10, !20}
+!20 = !{!21, !22, !23, !24, !25}
+!21 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"ints"}
+!22 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"floats"}
+!23 = !{i32 2, !"air.buffer", !"air.location_index", i32 2, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!24 = !{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"i"}
+!25 = !{i32 4, !"air.threads_per_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"n"}
+!26 = !{!"air.compile.denorms_disable"}
+!27 = !{!"air.compile.fast_math_disable"}
+!28 = !{!"air.compile.framebuffer_fetch_enable"}
+!29 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!30 = !{i32 2, i32 8, i32 0}
+!31 = !{!"Metal", i32 4, i32 0, i32 0}
+!32 = !{!33, !33, i64 0}
+!33 = !{!"int", !34, i64 0}
+!34 = !{!"omnipotent char", !35, i64 0}
+!35 = !{!"Simple C++ TBAA"}
+!36 = !{!37}
+!37 = distinct !{!37, !38, !"air-alias-scope-arg(0)"}
+!38 = distinct !{!38, !"air-alias-scopes(kernel_convert_rounding_int_to_float)"}
 !39 = !{!40}
-!40 = distinct !{!40, !41, !"air-alias-scope-arg(0)"}
-!41 = distinct !{!41, !"air-alias-scopes(kernel_convert_rounding_int_to_int)"}
-!42 = !{!43}
-!43 = distinct !{!43, !41, !"air-alias-scope-arg(1)"}
+!40 = distinct !{!40, !38, !"air-alias-scope-arg(1)"}
+!41 = !{!42}
+!42 = distinct !{!42, !43, !"air-alias-scope-arg(0)"}
+!43 = distinct !{!43, !"air-alias-scopes(kernel_convert_rounding_float_to_int)"}
 !44 = !{!45}
-!45 = distinct !{!45, !46, !"air-alias-scope-arg(0)"}
-!46 = distinct !{!46, !"air-alias-scopes(kernel_convert_rounding_float_to_float)"}
-!47 = !{!48}
-!48 = distinct !{!48, !46, !"air-alias-scope-arg(1)"}
+!45 = distinct !{!45, !43, !"air-alias-scope-arg(1)"}
+!46 = !{!47}
+!47 = distinct !{!47, !48, !"air-alias-scope-arg(0)"}
+!48 = distinct !{!48, !"air-alias-scopes(kernel_convert_rounding_int_to_int)"}
+!49 = !{!50}
+!50 = distinct !{!50, !48, !"air-alias-scope-arg(1)"}
+!51 = !{!52}
+!52 = distinct !{!52, !53, !"air-alias-scope-arg(0)"}
+!53 = distinct !{!53, !"air-alias-scopes(kernel_convert_rounding_float_to_float)"}
+!54 = !{!55}
+!55 = distinct !{!55, !53, !"air-alias-scope-arg(1)"}
+!56 = !{!57}
+!57 = distinct !{!57, !58, !"air-alias-scope-arg(0)"}
+!58 = distinct !{!58, !"air-alias-scopes(kernel_convert_rounding_apple_gpu)"}
+!59 = !{!60, !61}
+!60 = distinct !{!60, !58, !"air-alias-scope-arg(1)"}
+!61 = distinct !{!61, !58, !"air-alias-scope-arg(2)"}
+!62 = !{!60}
+!63 = !{!57, !61}
+!64 = !{!61}
+!65 = !{!57, !60}
