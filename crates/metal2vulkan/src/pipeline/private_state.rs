@@ -57,18 +57,21 @@
 //!   every operation, blended and not). [`logic_operation`] draws copy and no-op on every device
 //!   by the attachments' blends and masks, and the rest through Vulkan's `logicOp`
 //!   ([`GraphicsState::logic_op`]), which applies the same operation to the same codes of a
-//!   normalized or integer attachment. A device without it that orders framebuffer fetch (the
+//!   normalized or integer attachment, but for a 10-bit format's, which Metal widens to 16 bits
+//!   first (a known gap, `docs/FAST-PATHS.md`). A device without it that orders framebuffer fetch (the
 //!   pixel interlock, or rasterization-order input attachments) has the fragment function compute
 //!   the operation itself, over the texel its first output's write reads (`lower::fragment`'s
 //!   `logic`; probe `logic_operation` on an Apple M3 Max, macOS 27.0.1: every operation into
-//!   `R8Unorm`, `A8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`, `R16Unorm`, `RGBA16Unorm`, `RG8Snorm`,
+//!   `R8Unorm`, `A8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`, `R16Unorm`, `RGBA16Unorm`, `RGB10A2Unorm`,
+//!   `BGR10A2Unorm`, `RG8Snorm`,
 //!   `RGBA8Snorm`, `RG16Snorm`, `RGBA16Snorm`, `RGBA8Uint`, `R16Uint`, `R32Uint`, `RGBA8Sint`,
 //!   `RG16Sint` and `R32Sint`, some under write masks, at 4 samples and over overlapping
 //!   fragments): a NaN takes the channel's low end (0, or -1 signed), a signed
 //!   normalized channel's lowest code reads and stores as the code above it, and an integer output
-//!   saturates to the channel's range before the operation. It refuses formats outside that rule
-//!   (`RGB10A2Unorm`, `RGB10A2Uint` and the packed 16-bit formats, whose operation Metal computes
-//!   otherwise), color 0 under alpha to coverage, and a function that writes the attachment
+//!   saturates to the channel's range before the operation; `RGB10A2Unorm` and `BGR10A2Unorm`
+//!   operate on their codes widened to 16 bits, the result narrowed back. It refuses formats
+//!   outside that rule (`RGB10A2Uint` and the packed 16-bit formats, whose operation Metal
+//!   computes otherwise), color 0 under alpha to coverage, and a function that writes the attachment
 //!   through a shadow stencil, an imageblock or a merged word ([`logic_operated`]). A device that
 //!   orders fetch in neither form refuses the operation naming the features. So is an operation
 //!   other than copy and no-op refused where Vulkan's form is not Metal's: an sRGB attachment

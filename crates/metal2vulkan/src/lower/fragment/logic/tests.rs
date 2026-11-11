@@ -2,9 +2,9 @@
 
 use super::*;
 
-/// Every channel an 8- or 16-bit unorm or snorm one, or an 8-, 16- or 32-bit integer one, in
-/// Metal's channel order; a 10-bit, packed 16-bit, packed integer, sRGB or float format is not
-/// served.
+/// Every channel an 8-, 10- or 16-bit unorm one (a 10-bit format's codes operated on at 16 bits),
+/// an 8- or 16-bit snorm one, or an 8-, 16- or 32-bit integer one, in Metal's channel order; a
+/// packed 16-bit, packed integer, sRGB or float format is not served.
 #[test]
 fn the_operation_serves_the_per_channel_formats() {
     use LogicNumeric::{Sint, Snorm, Uint, Unorm};
@@ -29,6 +29,8 @@ fn the_operation_serves_the_per_channel_formats() {
             [Some(16), Some(16), None, None],
         ),
         (PixelFormat::RGBA32Sint, Sint, [Some(32); 4]),
+        (PixelFormat::RGB10A2Unorm, Unorm, [Some(16); 4]),
+        (PixelFormat::BGR10A2Unorm, Unorm, [Some(16); 4]),
     ];
     for (pf, numeric, bits) in served {
         assert_eq!(
@@ -38,8 +40,6 @@ fn the_operation_serves_the_per_channel_formats() {
         );
     }
     for pf in [
-        PixelFormat::RGB10A2Unorm,
-        PixelFormat::BGR10A2Unorm,
         PixelFormat::RGB10A2Uint,
         PixelFormat::B5G6R5Unorm,
         PixelFormat::A1BGR5Unorm,

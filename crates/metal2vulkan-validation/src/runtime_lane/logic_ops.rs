@@ -12,10 +12,11 @@
 //! Copy and no-op draw on every device; the others through Vulkan's `logicOp` where the device has
 //! it, and through the fragment function where it does not and orders framebuffer fetch (MoltenVK
 //! through the pixel interlock; lavapipe, its `logicOp` withheld, through rasterization-order input
-//! attachments), each run here both ways where the device has the feature. `RGB10A2Unorm`, whose
-//! operation is not Metal's per-channel rule in general, is refused under the function's
-//! operation; on a device that orders fetch in neither form every other operation is refused
-//! naming the three features.
+//! attachments), each run here both ways where the device has the feature; on a device that
+//! orders fetch in neither form every other operation is refused naming the three features.
+//! Metal operates on `RGB10A2Unorm`'s codes widened to 16 bits and narrows the result back (the
+//! `logic_operation` probe), as the fragment function does; Vulkan's `logicOp` operates on the
+//! 10-bit codes themselves, a known gap (`docs/FAST-PATHS.md`) whose texels the lane counts apart.
 //!
 //! Where the device converts a color its own way, the operation takes the device's code: a drawn
 //! channel's where the pipeline's fragment stage records `PrecisionNote::DeviceColorConversion`
@@ -175,15 +176,56 @@ fn codes(x: f64, bits: u32, signed: bool, either: bool) -> Vec<u32> {
     both
 }
 
-/// Whether `got` is a texel Metal's rule allows in normalized format `pf` under operation `raw`:
-/// each channel the operation of a drawn code and a stored one, each Metal's or, where the device
-/// converts it its own way (`drawn_either`, `cleared_either`), either code nearest its value.
+/// How an operation takes a channel's codes: Metal's, which widens a 10-bit format's codes to 16
+/// bits, operates there and narrows the result back (probe `logic_operation`), or per channel, on
+/// each channel's own codes, as Vulkan's `logicOp` does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rule {
+    Metal,
+    PerChannel,
+}
+
+/// The codes a channel of `bits` (two's complement where `signed`) may hold under operation `raw`
+/// of the drawn value `x` over the cleared value `cleared`, by `rule`: each conversion Metal's, or,
+/// where the device converts the drawn value (`drawn_either`, the result too where Metal narrows
+/// one) or the clear (`cleared_either`) its own way, either code nearest.
+fn results(
+    raw: u64,
+    (x, cleared): (f64, f64),
+    (bits, signed): (u32, bool),
+    rule: Rule,
+    (drawn_either, cleared_either): (bool, bool),
+) -> Vec<u32> {
+    let stored = codes(cleared, bits, signed, cleared_either);
+    let mut out = Vec::new();
+    if rule == Rule::Metal && matches!(bits, 10 | 2) {
+        let max = f64::from((1u32 << bits) - 1);
+        for s in codes(x, 16, false, drawn_either) {
+            for &d in &stored {
+                let d16 = (f64::from(d) * 65535.0 / max).round() as u32;
+                let r = f64::from(operate(raw, s, d16, 16)) * max / 65535.0;
+                match drawn_either {
+                    true => out.extend([r.floor() as u32, r.ceil() as u32]),
+                    false => out.push(r.round() as u32),
+                }
+            }
+        }
+        return out;
+    }
+    for s in codes(x, bits, signed, drawn_either) {
+        out.extend(stored.iter().map(|&d| operate(raw, s, d, bits)));
+    }
+    out
+}
+
+/// Whether `got` is a texel `rule` allows in normalized format `pf` under operation `raw`: each
+/// channel's code one of [`results`]'s.
 fn allowed(
     pf: PixelFormat,
-    raw: u64,
+    (raw, rule): (u64, Rule),
     drawn: [f32; 4],
     got: &[u8],
-    (drawn_either, cleared_either): (bool, bool),
+    either: (bool, bool),
 ) -> bool {
     let (channels, bytes) = layout(pf).expect("a normalized format");
     let mut word = 0u64;
@@ -194,23 +236,21 @@ fn allowed(
     channels.iter().all(|&(bits, signed, channel)| {
         let held = ((word >> shift) & ((1u64 << bits) - 1)) as u32;
         shift += bits;
-        let sources = codes(f64::from(drawn[channel]), bits, signed, drawn_either);
-        let stored = codes(CLEARED[channel], bits, signed, cleared_either);
-        sources
-            .iter()
-            .any(|&s| stored.iter().any(|&d| operate(raw, s, d, bits) == held))
+        let values = (f64::from(drawn[channel]), CLEARED[channel]);
+        results(raw, values, (bits, signed), rule, either).contains(&held)
     })
 }
 
-/// The bytes Metal stores in a texel of normalized format `pf` under operation `raw`.
-fn expected(pf: PixelFormat, raw: u64, drawn: [f32; 4]) -> Vec<u8> {
+/// The bytes `rule` stores in a texel of normalized format `pf` under operation `raw`, each
+/// conversion Metal's.
+fn expected(pf: PixelFormat, (raw, rule): (u64, Rule), drawn: [f32; 4]) -> Vec<u8> {
     let (channels, bytes) = layout(pf).expect("a normalized format");
     let mut word = 0u64;
     let mut shift = 0;
     for &(bits, signed, channel) in channels {
-        let s = code(f64::from(drawn[channel]), bits, signed);
-        let d = code(CLEARED[channel], bits, signed);
-        word |= u64::from(operate(raw, s, d, bits)) << shift;
+        let values = (f64::from(drawn[channel]), CLEARED[channel]);
+        let code = results(raw, values, (bits, signed), rule, (false, false))[0];
+        word |= u64::from(code) << shift;
         shift += bits;
     }
     word.to_le_bytes()[..bytes].to_vec()
@@ -407,8 +447,10 @@ fn unordered() -> metal2vulkan::error::Unsupported {
 /// blended by one and one and not, on the device and, where it has `logicOp`, on the device with
 /// the feature withheld: a normalized target stores Metal's operation of the codes, a float one
 /// the draw without the operation (the module docs). Without `logicOp`, copy and no-op draw so;
-/// every other operation is the fragment function's where the device orders fetch, but into
-/// `RGB10A2Unorm`, refused `NotImplemented`, and refused naming the three features elsewhere.
+/// every other operation is the fragment function's where the device orders fetch, and refused
+/// naming the three features elsewhere. Vulkan's `logicOp` operates on `RGB10A2Unorm`'s own
+/// codes, where Metal widens them to 16 bits: such a draw may store exactly the per-channel
+/// rule's texel instead (a known gap), counted apart.
 /// Where the device converts a drawn color (the pipeline's note) or the clears (their
 /// announcement, taken from a pass of each normalized format's clear alone, before any pipeline
 /// is made) its own way, that channel's code is either one nearest its value (the module docs).
@@ -443,8 +485,9 @@ fn run(lane: &Lane, messages: &Messages) -> String {
         .taken_kinds()
         .contains(&Degradation::DeviceColorConversion);
     let (mut wrong, mut checked, mut refused) = (Vec::new(), 0usize, 0usize);
-    // The draws whose texel is not Metal's, each where the device converts its own way.
-    let (mut theirs, mut noted) = (0usize, 0usize);
+    // The draws whose texel is not Metal's, each where the device converts its own way, and those
+    // of Vulkan's operation on a 10-bit format's own codes.
+    let (mut theirs, mut noted, mut per_channel) = (0usize, 0usize, 0usize);
     for pf in FORMATS {
         let drawn = match signed(pf) {
             true => DRAWN_SIGNED,
@@ -478,14 +521,6 @@ fn run(lane: &Lane, messages: &Messages) -> String {
                         refused += 1;
                         continue;
                     }
-                    // A format whose Metal operation is not the rule the function computes.
-                    Err(Error::Unsupported(u))
-                        if shader && pf == PixelFormat::RGB10A2Unorm && !blendless =>
-                    {
-                        not_implemented(&u);
-                        refused += 1;
-                        continue;
-                    }
                     Err(Error::Unsupported(u)) if !has && !shader && !blendless => {
                         assert_eq!(u, unordered(), "{name}: {pf:?} {raw}");
                         refused += 1;
@@ -496,16 +531,26 @@ fn run(lane: &Lane, messages: &Messages) -> String {
                 let got = lane.draw(pf, Some(&pipeline), drawn);
                 let want = match &without {
                     Some(without) => without.clone(),
-                    None => expected(pf, raw, drawn),
+                    None => expected(pf, (raw, Rule::Metal), drawn),
                 };
                 checked += 1;
                 if got == want {
                     continue;
                 }
+                // Vulkan's operation on a 10-bit format's own codes, where Metal's widens them
+                // (a known gap, `docs/FAST-PATHS.md`): exactly the per-channel rule's texel.
+                let rule = match has {
+                    true => Rule::PerChannel,
+                    false => Rule::Metal,
+                };
+                if !float && has && got == expected(pf, (raw, rule), drawn) {
+                    per_channel += 1;
+                    continue;
+                }
                 let drawn_either = !float && lane.converts(pf, blended, raw);
                 noted += usize::from(drawn_either);
                 let either = (drawn_either, cleared_either);
-                if !float && allowed(pf, raw, drawn, &got, either) {
+                if !float && allowed(pf, (raw, rule), drawn, &got, either) {
                     theirs += 1;
                     continue;
                 }
@@ -531,7 +576,8 @@ fn run(lane: &Lane, messages: &Messages) -> String {
     format!(
         "{name} ({form}): {checked} logic-operated draws store Metal's texels or the device's \
          conversion's ({theirs} the device's: {noted} of them through a pipeline noted \
-         DeviceColorConversion, clears announced {cleared_either}), {refused} refused"
+         DeviceColorConversion, clears announced {cleared_either}; {per_channel} Vulkan's \
+         operation on a 10-bit format's own codes), {refused} refused"
     )
 }
 

@@ -1344,15 +1344,22 @@ driver's. Each is open work.
 - **A private logic operation other than copy and no-op outside the forms built.** On a device
   without `logicOp`, the fragment function computes the operation through framebuffer fetch
   (MoltenVK's pixel interlock, or rasterization-order input attachments), but a pipeline is
-  refused (`PrivateRenderField::LogicOperation`) where an attachment is `RGB10A2Unorm`,
-  `BGR10A2Unorm`, `RGB10A2Uint` or a packed 16-bit format (whose Metal operation is not the
-  per-channel rule), color 0 is operated under alpha to coverage, an integer output is narrower
+  refused (`PrivateRenderField::LogicOperation`) where an attachment is `RGB10A2Uint` or a packed
+  16-bit format (whose Metal operation is not a per-channel rule of either width), color 0 is
+  operated under alpha to coverage, an integer output is narrower
   than 32 bits, or, through an input attachment, the attachment holds its channels rotated or
   Metal's alpha in red; on a device that orders fetch in neither form, every such pipeline. On
   any device it is refused where an attachment is sRGB, a float attachment blends under Vulkan's
   operation, a format's operation was not measured, or the function writes an attachment itself
   beside Vulkan's operation (a storage attachment, a shadow stencil, an imageblock or a merged
   word) or the function's (a shadow stencil, an imageblock or a merged word).
+- **Vulkan's logic operation on a 10-bit format's own codes.** Metal operates on an
+  `RGB10A2Unorm` or `BGR10A2Unorm` channel's codes widened to 16 bits and narrows the result
+  back (probe `logic_operation` on an Apple M3 Max, macOS 27.0.1, every texel of every
+  operation), as the fragment function's operation does; Vulkan's `logicOp`, which a device that
+  has it draws with, operates on the 10-bit codes themselves, so such a draw can store another
+  code (the logic-operation lane on lavapipe: xor's green 938 where Metal stores 937). No note
+  records it.
 
 - **A reset compute pipeline descriptor keeps its thread shape on Metal and not here.**
   `MTLComputePipelineDescriptor.reset` restores the label, the buffer mutability,

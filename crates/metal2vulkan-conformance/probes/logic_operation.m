@@ -31,9 +31,12 @@
 // lowest code read and stored as the code above it, and an integer output saturated to the
 // channel's range before the operation. The device's native conversion (the `float` product
 // rounded to nearest even, the "native form" counts) takes another code only near a half-code
-// tie: 220 of 4,096 RGBA8Unorm texels, where the case's values hug the ties. RGB10A2Unorm (about a
-// quarter of its texels under every operation that reads the source), BGR10A2Unorm, the packed
-// 16-bit formats and RGB10A2Uint (which saturates the operation's 32-bit result) do not hold it.
+// tie: 220 of 4,096 RGBA8Unorm texels, where the case's values hug the ties. RGB10A2Unorm and
+// BGR10A2Unorm hold it on 16-bit codes (kind W16: the stored code widened, the operation at 16
+// bits, the result narrowed back) at all 12,800 texels of `formats` and `masks` (the native form
+// at 12,779), and the per-channel rule on their 10-bit codes at about three quarters. The packed
+// 16-bit formats and RGB10A2Uint (which saturates the operation's 32-bit result) do not hold the
+// per-channel rule; the 16-bit one was not tried there.
 // Two triangles of one draw operate in primitive order; at 4 samples each sample operates on its
 // own stored code; a discarded fragment and one the depth test fails store nothing; a write mask
 // keeps its channels, but for a signed channel's lowest code, which a kept channel too stores as

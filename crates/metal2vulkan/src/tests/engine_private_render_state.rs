@@ -522,9 +522,10 @@ fn each_property_not_built_refuses_a_value_other_than_metals_default() {
 /// another operation (xor, raw 10, and raw 26, whose low four bits are xor's) is Vulkan's
 /// `logicOp` on lavapipe, its requirements naming the feature. On MoltenVK, which lacks it, the
 /// fragment function computes it through the storage form, and on lavapipe without it over the
-/// attachment's input attachment, noting the device's conversion of the codes; `RGB10A2Unorm`,
-/// whose operation is not Metal's per-channel rule, is refused there, and on a device that orders
-/// fetch in neither form the operation is refused naming the three features. A float attachment
+/// attachment's input attachment, noting the device's conversion of the codes (`RGB10A2Unorm`'s
+/// on 16-bit codes, as Metal's); `B5G6R5Unorm`, whose operation is not a per-channel rule, is
+/// refused there, and on a device that orders fetch in neither form the operation is refused
+/// naming the three features. A float attachment
 /// keeps its blend under copy and no-op and takes Vulkan's operation unblended, or keeps its blend
 /// beside the function's; an sRGB attachment under xor, a blended float attachment under Vulkan's
 /// xor and a format whose operation Metal was not measured with are refused `NotImplemented`.
@@ -602,11 +603,7 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
                         assert!(p.requirements.features.contains(&VkFeature::LogicOp));
                     }
                     // MoltenVK lacks Vulkan's operation and orders fetch through the pixel
-                    // interlock: the fragment function computes it, but where Metal's operation
-                    // is not the per-channel rule.
-                    (false, PixelFormat::RGB10A2Unorm, Err(e)) => {
-                        assert_eq!(e, not_built(0), "{stem} {pf:?}")
-                    }
+                    // interlock: the fragment function computes it.
                     (false, _, Ok(p)) => {
                         let what = format!("{stem} {pf:?} xor");
                         shader_operated(&p, pf != PixelFormat::RGBA16Float, &what);
@@ -666,6 +663,7 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
     for pf in [
         PixelFormat::RGBA8Unorm,
         PixelFormat::RGBA8Snorm,
+        PixelFormat::RGB10A2Unorm,
         PixelFormat::R16Unorm,
         PixelFormat::RGBA16Float,
     ] {
@@ -680,6 +678,12 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
             .iter()
             .any(|i| i.color_index == 0);
         assert_eq!(read, operated, "{what}");
+    }
+    // A packed 16-bit format's operation is not a per-channel rule: refused at the attachment.
+    let packed = with(PixelFormat::B5G6R5Unorm, false, Some(10));
+    match inputs.compile_render_pipeline(&packed, &Budget::standard()) {
+        Err(e) => assert_eq!(e, not_built(0), "lavapipe without logicOp B5G6R5Unorm"),
+        Ok(_) => panic!("lavapipe without logicOp B5G6R5Unorm xor compiled"),
     }
     let unordered = device_without(
         "lavapipe",

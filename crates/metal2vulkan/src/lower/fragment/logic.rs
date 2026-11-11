@@ -26,10 +26,18 @@
 //! above it, and stores a result of the lowest code as -1, the code above: so does Metal's logic
 //! operation (probe `logic_operation`, an Apple M3 Max under macOS 27.0.1).
 //!
-//! The formats this serves ([`channels`]): every channel an 8- or 16-bit unorm or snorm one, or an
-//! 8-, 16- or 32-bit integer one. Metal's operation into a 10-bit or a packed 16-bit format is not
-//! its per-channel rule (the same probe: a `RGB10A2Unorm` copy stores a code beside the rounded
-//! product, a `B5G6R5Unorm` one past it, and `RGB10A2Uint` saturates the operation's 32-bit
+//! A 10-bit unorm format (`RGB10A2Unorm`, `BGR10A2Unorm`) operates on 16-bit codes: Metal widens
+//! each stored code to 16 bits (`round(d * 65535 / max)`), operates on it and the output's 16-bit
+//! code, and stores the result narrowed back to the channel's code, rounded to nearest (the same
+//! probe: every texel of every operation into both formats, written whole and under masks). The
+//! function computes it as a 16-bit channel's: the read's value times 65535, the output's code at
+//! 16 bits, and the result over 65535, which the device's write narrows (the device's conversion
+//! again, `PrecisionNote::DeviceColorConversion`).
+//!
+//! The formats this serves ([`channels`]): every channel an 8-, 10- or 16-bit unorm one, an 8- or
+//! 16-bit snorm one, or an 8-, 16- or 32-bit integer one. Metal's operation into a packed 16-bit
+//! format is not a per-channel rule of either width (the same probe: a `B5G6R5Unorm` copy stores a
+//! code past the rounded product), nor is `RGB10A2Uint`'s (it saturates the operation's 32-bit
 //! result), and is refused there (`pipeline::private_state::logic_operation`). So is a write the
 //! operation would read otherwise than as the format's codes: a narrower integer output than 32
 //! bits ([`takes`]), an attachment held through a word view, under alpha to coverage in the storage
@@ -77,7 +85,9 @@ pub enum LogicNumeric {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LogicChannels {
     pub numeric: LogicNumeric,
-    /// The bits of Metal's red, green, blue and alpha; `None` where the format lacks one.
+    /// The bits of the codes the operation takes in Metal's red, green, blue and alpha: each
+    /// channel's own, but 16 for a 10-bit format's (see the module docs); `None` where the format
+    /// lacks one.
     pub bits: [Option<u32>; 4],
 }
 
@@ -89,8 +99,8 @@ const CHANNEL_WORDS: u64 = 64;
 pub(crate) const WRITE_WORDS: u64 = 4 * CHANNEL_WORDS + 24;
 
 /// The channels of a color attachment of `pf` whose logic operation the function computes (see
-/// the module docs): every channel an 8- or 16-bit unorm or snorm one, or an 8-, 16- or 32-bit
-/// integer one; `None` for another format.
+/// the module docs): every channel an 8-, 10- or 16-bit unorm one (a 10-bit format's alpha 2-bit),
+/// an 8- or 16-bit snorm one, or an 8-, 16- or 32-bit integer one; `None` for another format.
 pub(crate) fn channels(pf: PixelFormat) -> Option<LogicChannels> {
     match write_conversion(pf)? {
         WriteConversion::Rules(rules) => {
@@ -103,6 +113,8 @@ pub(crate) fn channels(pf: PixelFormat) -> Option<LogicChannels> {
             for (b, rule) in bits.iter_mut().zip(rules) {
                 *b = match (numeric, rule) {
                     (_, None) => None,
+                    // A 10-bit format's channels, its 2-bit alpha too, operate on 16-bit codes.
+                    (LogicNumeric::Unorm, Some(ChannelWrite::Unorm { bits: 10 | 2 })) => Some(16),
                     (LogicNumeric::Unorm, Some(ChannelWrite::Unorm { bits: n @ (8 | 16) }))
                     | (
                         LogicNumeric::Snorm,
