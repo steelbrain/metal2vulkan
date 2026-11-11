@@ -183,7 +183,8 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
 /// sampler, compute cube route and the rest of the seventeen), with the graphics cube route and the
 /// per-sample depth of macOS 27's Apple9 identity, that identity's normalized
 /// storage writes, full quads, normalized vertex fetch, alpha to coverage, moved NaNs, pack conversions, half conversions, small-float NaN stores and unary denormals, and every Apple GPU's 16-bit unorm depth stores, interpolation
-/// and first-vertex indices; lavapipe's `float` color NaNs and half-float storage writes; RADV's
+/// and first-vertex indices; lavapipe's `float` color NaNs, half-float storage writes and
+/// small-float NaN stores; RADV's
 /// half-float storage writes on every GPU and its others on the Radeon 780M, ANV's on the Iris Xe
 /// of RPL-P and the UHD 770 of RPL-S, and NVIDIA's on the RTX 3090 and the RTX 5080 Laptop GPU, as
 /// measured there; the 8-bit linear filter's bound where measured. Every other committed profile
@@ -277,7 +278,11 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
             (true, _) => want_all,
             (false, "nvidia-rtx5080-laptop") => nvidia_measured.clone(),
             (false, "lavapipe" | "gate-lavapipe" | "gate-lavapipe-x86_64") => {
-                vec![D::MetalFloatColorNans, D::MetalHalfStorageWrites]
+                vec![
+                    D::MetalFloatColorNans,
+                    D::MetalHalfStorageWrites,
+                    D::MetalSmallFloatNans,
+                ]
             }
             // The per-sample `FragCoord.z` last, in `taken`'s order. The 780M under Phoenix's
             // `deviceID` and Hawk Point's alike.

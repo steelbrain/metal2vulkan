@@ -964,10 +964,11 @@ pub enum PrecisionNote {
     /// plain color fill to a NaN of a half or small-float texture the device's clear writes: the
     /// device converts the NaN as it likes, where Metal's fill keeps a half NaN's sign and payload
     /// and makes a small float's all ones. Not recorded by a texture write of a constant texel none
-    /// of whose lanes is a NaN, nor where the write's stored NaN is measured to be Metal's (MoltenVK
-    /// on the Apple M3 Max's macOS 27 identity): a `half` texel's write to a 32-bit float format on
-    /// a profile that takes `DriverDeviation::MetalNanMoves`, and a `float` or `half` texel's write
-    /// to `RG11B10Float` on one that takes `DriverDeviation::MetalSmallFloatNans` (the module then
+    /// of whose lanes is a NaN, nor where the write's stored NaN is measured to be Metal's: a
+    /// `half` texel's write to a 32-bit float format on a profile that takes
+    /// `DriverDeviation::MetalNanMoves` (MoltenVK on the Apple M3 Max's macOS 27 identity), and a
+    /// `float` or `half` texel's write to `RG11B10Float` on one that takes
+    /// `DriverDeviation::MetalSmallFloatNans` (that identity and lavapipe) (the module then
     /// requires the matching `VkProperty`). Validation derives no tolerance and no explanation from
     /// it, as for `DeviceDenormals`.
     DeviceNanEncoding,

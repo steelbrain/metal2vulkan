@@ -24,8 +24,11 @@
 //! Metal's on a device with `VkProperty::MetalSmallFloatNans`; elsewhere the NaN is the device's,
 //! and a pipeline whose stores differ announces `device-nan-encoding`. On a device with those
 //! properties a write into such a texture, through a texture slot or an argument buffer whose
-//! command makes no texture of another family resident (`SpecKey::HeapNanFamilies`), announces
-//! neither `device-nan-encoding` nor `native-nan-encoding`.
+//! command makes no texture of another family resident (`SpecKey::HeapNanFamilies`), announces no
+//! `device-nan-encoding`, nor `native-nan-encoding` where the device's widening is measured
+//! (`VkProperty::MetalNanMoves`). Where it is not (lavapipe), the kernel's making announces
+//! `native-nan-encoding` for its widening of the half, whatever texture it writes: a packed small
+//! float store of Metal's hides that NaN's bits, a 32-bit float one does not.
 
 use super::degrade_notices::{counts, on_device_with};
 use super::{at_plan, buffer_with, layer_reported_nothing, read_buffer, WAIT};
@@ -250,22 +253,28 @@ fn nan_word(f: &Format, w: u32) -> bool {
     }
 }
 
-/// The words texel by texel that `state` (of `access`) stored into a `Private` texture of `f`.
+/// The words texel by texel that `state` (of `access`) stored into a `Private` texture of `f`, one
+/// texel a thread for each of `texels`: at most 64 of them, or a whole number of threadgroups of 64.
 fn stored(
     device: &Device,
     (state, access): (&ComputePipelineState, &str),
     f: &Format,
+    texels: &[[u16; 4]],
 ) -> Vec<Vec<u32>> {
-    let mut d = TextureDescriptor::texture_2d(f.format, N, 1, false);
+    let n = texels.len() as u64;
+    let group = n.min(64);
+    assert_eq!(n % group, 0, "{n} texels in threadgroups of {group}");
+    let mut d = TextureDescriptor::texture_2d(f.format, n, 1, false);
     d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
     d.resource_options = ResourceOptions::private();
     let texture = device.new_texture(&d).unwrap();
-    let row = N * f.bytes;
+    let row = n * f.bytes;
     let fill = buffer_with(device, &vec![FILL; row as usize]).unwrap();
     let out = buffer_with(device, &vec![0; row as usize]).unwrap();
-    let bits: Vec<u8> = (0..V.len())
-        .flat_map(texel)
-        .flat_map(u16::to_le_bytes)
+    let bits: Vec<u8> = texels
+        .iter()
+        .flatten()
+        .flat_map(|h| h.to_le_bytes())
         .collect();
     let input = buffer_with(device, &bits).unwrap();
     let queue = device.new_command_queue().unwrap();
@@ -276,7 +285,7 @@ fn stored(
         0,
         row,
         row,
-        Size::new(N, 1, 1),
+        Size::new(n, 1, 1),
         &texture,
         0,
         0,
@@ -298,7 +307,7 @@ fn stored(
         encoder.set_texture(Some(&texture), 0).unwrap();
     }
     encoder
-        .dispatch_threads(Size::new(N, 1, 1), Size::new(N, 1, 1))
+        .dispatch_threads(Size::new(n, 1, 1), Size::new(group, 1, 1))
         .unwrap();
     encoder.end_encoding().unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -307,7 +316,7 @@ fn stored(
         0,
         0,
         Origin::new(0, 0, 0),
-        Size::new(N, 1, 1),
+        Size::new(n, 1, 1),
         &out,
         0,
         row,
@@ -364,7 +373,8 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
                 for f in &FORMATS {
                     {
                         let state = kernel(device, access);
-                        let texels = stored(device, (&state, access), f);
+                        let lanes: Vec<[u16; 4]> = (0..N as usize).map(texel).collect();
+                        let texels = stored(device, (&state, access), f, &lanes);
                         let announced = counts(&messages.take_notices());
                         let properties = &device.compile_device().profile().enabled().properties;
                         let keeps = properties.contains(&VkProperty::MetalHalfTexelWrites);
@@ -421,9 +431,12 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
                             f.name,
                             differ.len()
                         );
+                        // The widening's note, the making's whatever texture the kernel writes,
+                        // stands where the device's widening is not measured to be Metal's.
+                        let moves = properties.contains(&VkProperty::MetalNanMoves);
                         if measured {
                             assert!(
-                                differ.is_empty() && !noted && !widened_own,
+                                differ.is_empty() && !noted && !(widened_own && moves),
                                 "{access} {}: {} lanes differ from Metal's, device-nan-encoding \
                                  {noted}, native-nan-encoding {widened_own}",
                                 f.name,
@@ -453,4 +466,67 @@ fn half_writes_store_their_nans_as_metal_or_announce() {
         },
     );
     eprintln!("half write NaNs: {report:#?}");
+}
+
+/// Every `half` NaN (each payload of both signs: 2,046) that a kernel writes, in all four lanes of
+/// a texel, to an `RG11B10Float` storage texture through `write`, `read_write` and `held`. Metal
+/// stores each field as its canonical NaN (`0x7e0`, `0x3f0`: [`METAL_RG11B10`]'s first texel, whose
+/// lanes are all NaNs); on a device that takes `DriverDeviation::MetalSmallFloatNans` every texel
+/// is so and no write announces `device-nan-encoding`, the deviation's gate on each driver it
+/// lists. Elsewhere the texels stored otherwise are printed, and a write that stores one announces
+/// `device-nan-encoding`.
+#[test]
+fn every_half_nan_written_to_a_small_float_texture_is_metal_s_where_measured() {
+    let mut nans: Vec<u16> = (0..=u16::MAX)
+        .filter(|h| h & 0x7c00 == 0x7c00 && h & 0x3ff != 0)
+        .collect();
+    assert_eq!(nans.len(), 2046);
+    // Whole threadgroups of 64, the first NaN again past the last.
+    nans.resize(nans.len().div_ceil(64) * 64, nans[0]);
+    let lanes: Vec<[u16; 4]> = nans.iter().map(|&h| [h; 4]).collect();
+    let rg11b10f = FORMATS
+        .iter()
+        .find(|f| f.format == PixelFormat::RG11B10Float)
+        .unwrap();
+    let mut failed = Vec::new();
+    on_device_with(
+        |options| {
+            options.announce_each.insert(Degradation::DeviceNanEncoding);
+            at_plan(options)
+        },
+        |device, messages| {
+            let properties = &device.compile_device().profile().enabled().properties;
+            let measured = properties.contains(&VkProperty::MetalSmallFloatNans);
+            for access in ["write", "read_write", "held"] {
+                let state = kernel(device, access);
+                let texels = stored(device, (&state, access), rg11b10f, &lanes);
+                let noted =
+                    counts(&messages.take_notices()).contains_key(&Degradation::DeviceNanEncoding);
+                let mut other: Vec<String> = texels
+                    .iter()
+                    .zip(&nans)
+                    .filter(|(words, _)| words[0] != METAL_RG11B10[0])
+                    .map(|(words, h)| format!("{h:04x}->{:x}", words[0]))
+                    .collect();
+                let differ = other.len();
+                other.truncate(8);
+                eprintln!(
+                    "every half NaN {access} rg11b10f on {}: {differ} of {} texels not Metal's \
+                     {other:?}; MetalSmallFloatNans {measured}, device-nan-encoding {noted}",
+                    device.name(),
+                    nans.len()
+                );
+                if (measured && (differ > 0 || noted)) || (differ > 0 && !noted) {
+                    failed.push(format!(
+                        "{access}: {differ} texels, measured {measured}, announced {noted}"
+                    ));
+                }
+                layer_reported_nothing(messages, &format!("every half NaN {access} rg11b10f"));
+            }
+        },
+    );
+    assert!(
+        failed.is_empty(),
+        "half NaN writes to RG11B10Float against MetalSmallFloatNans: {failed:#?}"
+    );
 }

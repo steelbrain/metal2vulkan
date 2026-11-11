@@ -450,3 +450,73 @@ fn kernel_writes_store_metals_small_floats() {
         "kernel small-float writes not Metal's: {differ:#?}"
     );
 }
+
+/// Every NaN class of a `float` that a kernel writes to an `RG11B10Float` storage texture, through
+/// every form: each of the 8,192 patterns of a NaN's top 13 payload bits, its 10 low bits clear and
+/// set (pattern 0 with them set alone, which is no infinity), of both signs, every channel of a
+/// texel the same NaN. Metal stores each field as its canonical NaN (`0x7e0`, `0x3f0`), whatever
+/// the NaN's sign and payload (`DriverDeviation::MetalSmallFloatNans`'s measurement on the M3
+/// Max). On a device that takes that deviation every field is Metal's and nothing announces
+/// `device-nan-encoding`: the deviation's gate on each driver it lists. Elsewhere the fields
+/// stored as another code are counted and printed, and where any is, the case announces
+/// `device-nan-encoding`.
+#[test]
+fn every_nan_a_kernel_writes_to_a_small_float_texture_is_metal_s_where_measured() {
+    let mut values = Vec::new();
+    for sign in [0, 0x8000_0000u32] {
+        for top in 0..1u32 << 13 {
+            for low in [0, 0x3ff] {
+                if top << 10 | low != 0 {
+                    values.push(f32::from_bits(sign | 0x7f80_0000 | top << 10 | low));
+                }
+            }
+        }
+    }
+    let mut failed = Vec::new();
+    for form in Form::ALL {
+        on_device(|device, messages| {
+            let name = device.name().to_owned();
+            let label = format!("RG11B10Float by {}", form.kernel());
+            messages.take_notices();
+            let Some(stored) = written(device, form, PixelFormat::RG11B10Float, 4, &values) else {
+                return;
+            };
+            let noted = messages.take_notices().iter().any(|m| {
+                m.degradation
+                    .as_ref()
+                    .is_some_and(|n| n.degradation == Degradation::DeviceNanEncoding)
+            });
+            let measured = device
+                .compile_device()
+                .profile()
+                .takes_driver_deviation(DriverDeviation::MetalSmallFloatNans);
+            // Each code stored in place of the field's canonical NaN, and how many times.
+            let mut other = BTreeMap::new();
+            for (i, x) in values.iter().enumerate() {
+                assert!(x.is_nan());
+                let texel = u32::from_le_bytes(stored[i * 4..i * 4 + 4].try_into().unwrap());
+                for (offset, mantissa) in SMALL_FLOAT_FIELDS {
+                    let got = (texel >> offset) & ((1 << (mantissa + 5)) - 1);
+                    if got != (0x1f << mantissa | 1 << (mantissa - 1)) {
+                        *other.entry((offset, got)).or_insert(0usize) += 1;
+                    }
+                }
+            }
+            let differ: usize = other.values().sum();
+            let fields = values.len() * SMALL_FLOAT_FIELDS.len();
+            eprintln!(
+                "every small-float NaN {label} on {name}: {differ} of {fields} NaN fields not \
+                 Metal's {other:x?}; MetalSmallFloatNans {measured}, device-nan-encoding {noted}"
+            );
+            if (measured && (differ > 0 || noted)) || (differ > 0 && !noted) {
+                failed.push(format!(
+                    "{label}: {differ} of {fields}, measured {measured}, announced {noted}"
+                ));
+            }
+        });
+    }
+    assert!(
+        failed.is_empty(),
+        "small-float NaN writes against MetalSmallFloatNans: {failed:#?}"
+    );
+}

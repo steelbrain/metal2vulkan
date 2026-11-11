@@ -3706,9 +3706,10 @@ bound.
   `DriverDeviation::MetalNanMoves` (the image stores the widened `float`'s bits, Metal's
   `0x7fc00000`; the module requires `VkProperty::MetalNanMoves`), and a `float` or `half` texel's
   write to a packed small float one (`RG11B10Float`) on a profile that takes
-  `DriverDeviation::MetalSmallFloatNans`, MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27
+  `DriverDeviation::MetalSmallFloatNans`: MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27
   identity, measured byte for byte against plain Metal over every `half` and 33,792 `float` words,
-  16,446 NaNs among them (the module requires `VkProperty::MetalSmallFloatNans`); and a `half`
+  16,446 NaNs among them, and lavapipe, whose stores of 32,766 `float` NaNs and every `half` NaN
+  are Metal's canonical field NaN (the module requires `VkProperty::MetalSmallFloatNans`); and a `half`
   read, sample or gather of a texture slot bound to a 32-bit float or packed small float format
   (`RG11B10Float`, `RGB9E5Float`) on a profile that takes `DriverDeviation::MetalHalfConversion`,
   the same identity, whose `half` of such a texel is Metal's, its NaN `0x7e00` (the module
