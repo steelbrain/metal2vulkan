@@ -34,10 +34,10 @@
 //! Races: "A vkCmdPipelineBarrier inside a subpass can synchronize prior attachment writes in the
 //! subpass with subsequent input attachment reads"), which every pass has
 //! (`render_target::DRAWS_SELF_DEPENDENCY`). So a draw that reads input attachments after an
-//! earlier draw of its render pass instance wrote a color, and a draw that writes a color after an
-//! earlier one read input attachments, records after that barrier (`render.rs`'s
-//! `InterlockedStorage`, `WorkCounts::fetch_draw_barriers`): every draw reads what the draws before
-//! it stored, Metal's answer. Nothing orders the overlapping fragments of one draw there, which the
+//! earlier draw of its render pass instance, or its load operations, wrote a color, and a draw
+//! that writes a color after an earlier one read input attachments, records after that barrier
+//! (`render.rs`'s `InterlockedStorage`, `WorkCounts::fetch_draw_barriers`): every draw reads what
+//! the draws before it stored, Metal's answer. Nothing orders the overlapping fragments of one draw there, which the
 //! fetching fragment stage records (`PrecisionNote::UnorderedFetchWithinDraw`, announced as the
 //! stage's other notes are, where the pipeline is made): such a fragment may read the texel from
 //! before an earlier fragment of its draw wrote it.

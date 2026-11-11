@@ -6,25 +6,28 @@
 //!
 //! The runtime reads each fetched color as the input attachment of its index and records a barrier
 //! of the draws' subpass's dependency on itself, by region, before a draw that reads input
-//! attachments after an earlier draw of its render pass instance wrote a color, and before a draw
-//! that writes a color after an earlier one read them (`WorkCounts::fetch_draw_barriers`). Each
-//! pass draws the fullscreen triangle (`rt6_resolves`'s `rt6_resolve_full`) over a 4² target:
+//! attachments after an earlier draw of its render pass instance, or its load operations, wrote a
+//! color, and before a draw that writes a color after an earlier one read them
+//! (`WorkCounts::fetch_draw_barriers`). Each pass draws the fullscreen triangle (`rt6_resolves`'s
+//! `rt6_resolve_full`) over a 4² target:
 //!
 //! - **Draws in order**: an `R32Float` target cleared to 0.75, then `fetch_scalar`
 //!   (`fragment_fetch`, half what it reads), `rt6_resolve_white` (1), `fetch_scalar` twice: 0.25,
 //!   Metal's answer, which holds only where each draw reads what the draw before it stored (a read
-//!   of the clear in each fetch leaves 0.375; a fetch that missed the white write, 0.09375). Three
-//!   barriers: before the white write (after the first fetch's reads) and before each later fetch
-//!   (after the write before it).
+//!   of the clear in each fetch leaves 0.375; a fetch that missed the white write, 0.09375). Four
+//!   barriers: before the first fetch (after the clear), before the white write (after the first
+//!   fetch's reads) and before each later fetch (after the write before it).
 //! - **Integer read-modify-writes**: an `RGBA32Uint` target cleared to (1, 2, 3, 4), then
 //!   `exf_fetch_count` (three times what it reads, plus `k + 1` in lane `k`) three times:
-//!   `c · 27 + (k + 1) · 13`, exactly. Two barriers.
+//!   `c · 27 + (k + 1) · 13`, exactly, which holds only where the first draw reads the clear (one
+//!   that reads 0 leaves `(k + 1) · 13`, as RADV on the RX 550 did without the first barrier).
+//!   Three barriers.
 //! - **One draw over itself**: `fetch_scalar` drawn as two instances of the fullscreen triangle in
 //!   one draw over the `R32Float` target cleared to 0.75. Metal halves each texel twice (0.1875).
 //!   Nothing orders the second instance's fragments after the first's here, so each texel holds
 //!   0.1875 or 0.375 (the second read before the first's write landed), printed with its count;
-//!   the pipeline's fragment stage records `PrecisionNote::UnorderedFetchWithinDraw`. No barrier:
-//!   one draw.
+//!   the pipeline's fragment stage records `PrecisionNote::UnorderedFetchWithinDraw`. One barrier,
+//!   after the clear: nothing comes between the draw's fragments.
 //!
 //! The runtime announces the note (`unordered-fetch-within-draw`) once, where the first fetching
 //! pipeline is made, as it announces a stage's other notes; no draw announces it again.
@@ -115,7 +118,7 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
     let announced = counts(&messages.take_notices());
     assert_eq!(announced.get(&note()), Some(&1), "{device}: {announced:?}");
 
-    // Draws in order: 0.25, three barriers.
+    // Draws in order: 0.25, four barriers.
     let before = barriers(&lane);
     let target = lane.texture(pf, ONE, TextureUsage::RENDER_TARGET);
     let clear = ClearColor::new(0.75, 0.0, 0.0, 0.0);
@@ -134,12 +137,12 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
     );
     assert_eq!(
         barriers(&lane) - before,
-        3,
+        4,
         "{device}: barriers between the draws"
     );
-    eprintln!("FETCH-BETWEEN-DRAWS draws in order on {device}: 0.25 at every texel, 3 barriers");
+    eprintln!("FETCH-BETWEEN-DRAWS draws in order on {device}: 0.25 at every texel, 4 barriers");
 
-    // Integer read-modify-writes: exact, two barriers.
+    // Integer read-modify-writes: exact, three barriers.
     let integers = [PixelFormat::RGBA32Uint];
     let step = pipeline(&lane, &vertices, (&count, "exf_fetch_count"), &integers, 1).unwrap();
     let before = barriers(&lane);
@@ -155,12 +158,13 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
     );
     assert_eq!(
         barriers(&lane) - before,
-        2,
+        3,
         "{device}: barriers between the draws"
     );
-    eprintln!("FETCH-BETWEEN-DRAWS integer read-modify-writes on {device}: exact, 2 barriers");
+    eprintln!("FETCH-BETWEEN-DRAWS integer read-modify-writes on {device}: exact, 3 barriers");
 
-    // One draw over itself: each texel one of the two orders of its fragments, no barrier.
+    // One draw over itself: each texel one of the two orders of its fragments, the one barrier
+    // after the clear.
     let before = barriers(&lane);
     let target = lane.texture(pf, ONE, TextureUsage::RENDER_TARGET);
     let clear = ClearColor::new(0.75, 0.0, 0.0, 0.0);
@@ -191,7 +195,7 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
     }
     assert_eq!(
         barriers(&lane) - before,
-        0,
+        1,
         "{device}: a barrier inside one draw"
     );
     eprintln!(

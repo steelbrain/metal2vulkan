@@ -845,8 +845,8 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   as an input attachment without rasterization-order access
   (`GraphicsState::rasterization_order_attachment_access` false), and the consumer records a
   barrier of the subpass's dependency on itself, by region, before each draw that reads input
-  attachments after an earlier draw of the subpass wrote a color, and before each draw that writes
-  a color after an earlier one read them: a fetch reads what every earlier draw stored, Metal's
+  attachments after an earlier draw of the subpass, or its load operations, wrote a color, and
+  before each draw that writes a color after an earlier one read them: a fetch reads what every earlier draw stored, Metal's
   answer, but the overlapping fragments of one draw are not ordered, which the fragment stage
   records (`PrecisionNote::UnorderedFetchWithinDraw`; the runtime does all of this itself). A
   raster order group on such a color input, or on a color output of an attachment the function
@@ -3664,8 +3664,8 @@ bound.
   `fragmentShaderPixelInterlock` (Honeykrisp on Apple's M2 Pro; RADV on the RX 550). It reads the
   attachment as an input attachment, and the runtime records a barrier of the draws' subpass's
   dependency on itself, by region, before each draw that reads input attachments after an earlier
-  draw of its render pass instance wrote a color, and before each draw that writes a color after
-  an earlier one read them (`WorkCounts::fetch_draw_barriers`): a fetch reads what every earlier
+  draw of its render pass instance, or its load operations, wrote a color, and before each draw
+  that writes a color after an earlier one read them (`WorkCounts::fetch_draw_barriers`): a fetch reads what every earlier
   draw stored at its pixel, Metal's answer. Vulkan orders nothing between the overlapping
   fragments of one draw there, where Metal orders them in primitive order: a fragment that covers
   a pixel an earlier fragment of its own draw covered may read the texel from before that

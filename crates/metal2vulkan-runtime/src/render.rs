@@ -1037,8 +1037,9 @@ impl DrawStates {
 /// (`framebuffer_fetch::inputs_between_draws`: neither rasterization-order color attachment access
 /// nor the pixel interlock), the colors a pass's draws fetch take two more kinds, which the
 /// barrier of the subpass's whole dependency on itself orders (`render_target::between_draws`):
-/// a draw that reads input attachments after an earlier draw of its instance wrote a color, and
-/// a draw that writes a color after an earlier one read input attachments, records after it. No
+/// a draw that reads input attachments after an earlier draw of its instance, or its load
+/// operations (`BEGUN`), wrote a color, and a draw that writes a color after an
+/// earlier one read input attachments, records after it. No
 /// interlock orders anything there; the barrier orders the draws, as Vulkan's subpass
 /// self-dependency does ("A vkCmdPipelineBarrier inside a subpass can synchronize prior attachment
 /// writes in the subpass with subsequent input attachment reads", the Render Pass chapter's
@@ -1070,6 +1071,18 @@ impl InterlockedStorage {
         depth: false,
         fetch_after_writes: false,
         writes_after_fetch: false,
+    };
+
+    /// What a render pass instance's draws meet before any of them: its colors' load operations'
+    /// writes, which a draw that reads input attachments ordered between draws alone reaches
+    /// (`fetch_after_writes`). Vulkan orders the load operations before every access of the
+    /// instance through the attachment, but RADV on the RX 550 (Polaris) was measured to read a
+    /// load-cleared `RGBA32Uint` attachment's earlier contents at the instance's first fetch
+    /// without the barrier, and the barrier is the one between draws, inside the subpass's
+    /// dependency on itself; no other kind is set, so on every other device it orders nothing.
+    const BEGUN: Self = Self {
+        fetch_after_writes: true,
+        ..Self::NONE
     };
 
     /// Every kind: what an execution of render commands, or the encoder's draws before it, may
@@ -2291,7 +2304,7 @@ impl RenderLowering {
                     shadow: false,
                     shader_tests: false,
                     imageblock: false,
-                    interlocked_writes: InterlockedStorage::NONE,
+                    interlocked_writes: InterlockedStorage::BEGUN,
                     indirect_reads: IndirectReads::new(),
                     geometry_writes: GeometryWrites::new(),
                     tile_memory: false,
@@ -6997,7 +7010,7 @@ impl RenderLowering {
             shadow,
             shader_tests,
             imageblock: false,
-            interlocked_writes: InterlockedStorage::NONE,
+            interlocked_writes: InterlockedStorage::BEGUN,
             indirect_reads: IndirectReads::new(),
             geometry_writes: GeometryWrites::new(),
             tile_memory: false,
@@ -7112,7 +7125,7 @@ impl RenderLowering {
             shadow: false,
             shader_tests: false,
             imageblock: false,
-            interlocked_writes: InterlockedStorage::NONE,
+            interlocked_writes: InterlockedStorage::BEGUN,
             indirect_reads: IndirectReads::new(),
             geometry_writes: GeometryWrites::new(),
             tile_memory: false,

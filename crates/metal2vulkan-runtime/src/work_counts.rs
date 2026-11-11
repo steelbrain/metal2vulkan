@@ -7722,8 +7722,8 @@ pub struct WorkCounts {
     /// Barriers recorded before a draw on a device with neither rasterization-order color
     /// attachment access nor `fragmentShaderPixelInterlock`, whose framebuffer fetch reads input
     /// attachments ordered between draws alone: before a draw that reads them after an earlier
-    /// draw of its render pass instance wrote a color, or that writes a color after an earlier
-    /// one read them, each the draws' subpass's whole dependency on itself
+    /// draw of its render pass instance, or its load operations, wrote a color, or that writes a
+    /// color after an earlier one read them, each the draws' subpass's whole dependency on itself
     /// (`framebuffer_fetch.rs`). 0 on every other device.
     pub fetch_draw_barriers: u64,
     /// Draws that sample a color attachment's texture after a memory barrier of their render
