@@ -135,8 +135,10 @@ pub(super) struct EncoderRecord {
 /// What owns the memory under a key, held without keeping it.
 #[derive(Clone)]
 enum Owner {
-    /// A buffer not placed in a heap, and whether it lies over the caller's host pages (a no-copy
-    /// buffer, which a commit lists among the live buffers once used: [`Reached`]).
+    /// A buffer not placed in a heap, and whether a commit gathers it once used ([`Reached`]): it
+    /// lies over the caller's host pages (a no-copy buffer, which the commit lists among the live
+    /// buffers), or it is a two-copy buffer (`managed_copy.rs`, whose GPU writes the commit may
+    /// have its completion undo).
     Buffer(WeakBuffer, bool),
     Texture(Weak<TextureShared>),
     Heap(WeakHeap),
@@ -149,16 +151,17 @@ impl Owner {
             Some(heap) => Owner::Heap(heap.downgrade()),
             None => Owner::Buffer(
                 buffer.downgrade(),
-                buffer.caller_memory() == Some(CallerMemory::HostPages),
+                buffer.caller_memory() == Some(CallerMemory::HostPages)
+                    || buffer.caller_copy().is_some(),
             ),
         }
     }
 
-    /// Whether a commit lists it among the live buffers once used ([`Reached`]): a buffer over
-    /// the caller's host pages, or a heap.
+    /// Whether a commit gathers it once used ([`Reached`]): a buffer over the caller's host pages,
+    /// a two-copy buffer, or a heap.
     fn reached(&self) -> bool {
         match self {
-            Owner::Buffer(_, host_pages) => *host_pages,
+            Owner::Buffer(_, gathered) => *gathered,
             Owner::Texture(_) => false,
             Owner::Heap(_) => true,
         }
@@ -355,11 +358,13 @@ pub(super) fn names_any<'a>(
 }
 
 /// What the commands of a committing command buffer's encoders that run use and a command reaches
-/// unnamed only once used (`LiveBuffers::reach`): of what [`CommandBuffer::used_resources`] would
-/// list, the buffers over the caller's host pages and the heaps, each as what owns its memory and
-/// held weakly. Gathered under the command buffer's lock ([`Reached::gather`]), and listed without
-/// it ([`Reached::list`]): its commit and its first submission list what this holds among the
-/// live buffers, and nothing else of the listing. A command buffer that uses neither gathers
+/// unnamed only once used (`LiveBuffers::reach`), with the two-copy buffers among them, whose
+/// writes its completion may undo (`managed_copy.rs`'s `AtCompletion::Undo`): of what
+/// [`CommandBuffer::used_resources`] would list, the buffers over the caller's host pages, the
+/// two-copy buffers and the heaps, each as what owns its memory and held weakly. Gathered under
+/// the command buffer's lock ([`Reached::gather`]), and listed without it ([`Reached::list`]):
+/// its commit and its first submission list what this holds over host pages among the live
+/// buffers, and nothing else of the listing. A command buffer that uses none of them gathers
 /// nothing.
 #[derive(Default)]
 pub(super) struct Reached(Vec<Owner>);
@@ -400,8 +405,8 @@ impl Reached {
     }
 
     /// What it holds that lives, listed as [`CommandBuffer::used_resources`] lists it, each once:
-    /// the buffers over host pages and the heaps, no texture. Without the command buffer's lock:
-    /// what it upgrades may be a resource's last hold once let go.
+    /// the buffers over host pages, the two-copy buffers and the heaps, no texture. Without the
+    /// command buffer's lock: what it upgrades may be a resource's last hold once let go.
     pub(super) fn list(self) -> UsedResources {
         let mut used = UsedResources::default();
         for owner in self.0 {
