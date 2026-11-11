@@ -293,6 +293,7 @@ intrinsics GlobalVar use(stage::GlobalVar)
 intrinsics Group use(simd::Group)
 intrinsics GroupOp use(simd::GroupOp)
 intrinsics GroupScope use(simd::GroupScope)
+intrinsics HalfRounding use(vector_data::HalfRounding)
 intrinsics HandleKind use(sig::HandleKind)
 intrinsics ImageDim use(sig::ImageDim)
 intrinsics ImageShape use(sig::ImageShape)
@@ -341,6 +342,8 @@ intrinsics Texture use(texture::Texture)
 intrinsics ThreadScope use(atomic::ThreadScope)
 intrinsics UNDECODED const
 intrinsics UNDECODED_FEATURES const
+intrinsics VectorData use(vector_data::VectorData)
+intrinsics VectorDataOp use(vector_data::VectorDataOp)
 intrinsics WorkItem use(stage::WorkItem)
 intrinsics bind fn
 intrinsics classify fn
