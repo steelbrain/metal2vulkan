@@ -830,6 +830,8 @@ mod snorm_tile_store;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod sparse_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod split_fetch_order;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod srgb_decode;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod srgb_storage;
