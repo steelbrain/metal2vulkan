@@ -107,6 +107,8 @@
 //!   the hook still waited for them. So a section that ends after the first call of a Vulkan
 //!   entry point the runtime calls in sections ([`Call`], a fixed set) registers the hook again,
 //!   after anything that call registered: at most one per entry point of the table at each load.
+//!   The calls a device's priming made before its registration count as made ([`primed`]), so a
+//!   section registers the hook for an entry point the priming did not call.
 //!   Such a registration after an exit handler the program registered runs the hook before that
 //!   handler, closing the guard, so the handler finds its work left pending, where Metal runs it
 //!   (the exits lane's `cpu_work_exit`); so no section registers the hook for its count alone,
@@ -1735,6 +1737,14 @@ pub(crate) fn instance_made() {
 /// No Metal counterpart: Metal has no Vulkan instance.
 pub fn program_instance_made() {
     instance_made();
+}
+
+/// A device's priming (`device/prime.rs`) made the first call of each of `calls` since the last
+/// load of a shared object ([`before_priming`]), on its creating thread, before the device
+/// registers the hook: the statics those calls made have their destructors run after the hook, so
+/// a section's later call of one of them registers nothing again ([`CALLED`]).
+pub(crate) fn primed(calls: Calls) {
+    CALLED.fetch_or(calls);
 }
 
 /// Forget the entry points called so far ([`CALLED`]): the next section that calls each

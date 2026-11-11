@@ -66,8 +66,9 @@
 //! registration, in each of 10.
 //!
 //! Priming makes each entry point once, in the runtime's shapes; it cannot promise that a layer
-//! makes no new static on a code path a later call takes with other parameters. A section's
-//! first call of each entry point registers the hook again; a static a later call makes is the
+//! makes no new static on a code path a later call takes with other parameters. The calls it made
+//! count as the first since the load (`exit_guard::primed`), and a section's first call of an
+//! entry point it did not make registers the hook again; a static a later call makes is the
 //! hook's hole (`exit_guard`, "Registered again").
 
 use crate::draw_source::SizedIndexBind;
@@ -466,6 +467,9 @@ pub(super) unsafe fn prime(
             primer.made(call);
         }
     }
+    // The first calls since the last load, made before the device registers the exit hook: a
+    // section's later call of one registers nothing again.
+    crate::exit_guard::primed(primer.calls);
     if primed.is_ok() && cfg!(debug_assertions) {
         let missing = missing(primer.calls, has);
         assert!(

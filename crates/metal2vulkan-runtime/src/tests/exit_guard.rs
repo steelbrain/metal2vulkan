@@ -3009,6 +3009,44 @@ fn a_device_s_priming_makes_the_first_calls_since_a_load() {
     );
 }
 
+/// The calls a device's priming made outside sections, reported to the guard
+/// (`exit_guard::primed`), count as the first since the load: a later section calling one of them
+/// (after an exit handler the program registered once its device was made, which the destructor
+/// stands for) registers nothing again, and the handler runs before the hook (43; 42 unreported).
+#[cfg(unix)]
+#[test]
+fn a_device_s_primed_calls_register_the_hook_no_more() {
+    extern "C" fn program_handler() {
+        let code = if exit_guard::closed() { 42 } else { 43 };
+        // SAFETY: ends the child at once, from its exit handlers.
+        unsafe { libc::_exit(code) };
+    }
+    // SAFETY: the child primes and registers a device (atomics, locks and the C library's
+    // `atexit`), registers a handler, runs a section, and exits.
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        exit_guard::before_priming();
+        exit_guard::primed(Calls::NONE.with(Call::ALL[0]));
+        exit_guard::register_device(vec![1]);
+        // SAFETY: `program_handler` is a function with no arguments that never unwinds.
+        unsafe { libc::atexit(program_handler) };
+        call_the_first_entry_point();
+        // SAFETY: as above.
+        unsafe { libc::exit(0) };
+    }
+    assert!(child > 0, "fork");
+    let mut status = 0;
+    // SAFETY: `child` is this process's child.
+    let reaped = unsafe { libc::waitpid(child, &mut status, 0) };
+    assert_eq!(reaped, child);
+    assert!(libc::WIFEXITED(status), "the child did not exit: {status}");
+    assert_eq!(
+        libc::WEXITSTATUS(status),
+        43,
+        "a section of an entry point the priming called registered the hook again"
+    );
+}
+
 /// The process's count of loaded shared objects never falls, and rises when one is loaded (where
 /// a library not loaded yet can be found here).
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
