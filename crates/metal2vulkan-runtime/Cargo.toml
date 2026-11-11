@@ -84,6 +84,12 @@ path = "examples/draw_costs.rs"
 name = "managed_bandwidth"
 path = "examples/managed_bandwidth.rs"
 
+# Not a consumer's example: the GPU's bandwidth through 256 MiB buffers of the runtime's own memory,
+# made after other buffers went (examples/private_bandwidth.rs).
+[[example]]
+name = "private_bandwidth"
+path = "examples/private_bandwidth.rs"
+
 [dependencies]
 # The translator, through its public API only: the compiler checks that the runtime
 # reaches nothing else. `ash` gives `ash_interop`'s conversions and `DeviceDescription::query`.

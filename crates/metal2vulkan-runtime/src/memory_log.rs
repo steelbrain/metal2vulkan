@@ -14,7 +14,9 @@
 //!   in a pooled block, as it is placed and as it is returned ([`placement_line`]): whether it is
 //!   an image or a buffer, its memory class where placed, its bytes, its offset and its block's
 //!   handle and memory type, which the block's own lines name. A few such placements fill a block,
-//!   so their comings and goings show what makes and frees blocks.
+//!   so their comings and goings show what makes and frees blocks. A placement that takes a kept
+//!   empty dedicated block (`memory.rs`'s `Pool::place_dedicated`), which makes no block, says so
+//!   too, with the block's handle and memory type.
 //! - **The device address.** A block with a buffer of addresses (`memory.rs`) gives that buffer's.
 //!   Any other memory's line says the address is unknown: the log makes and binds no Vulkan object
 //!   to learn one, as a diagnostic changes no GPU work. A buffer of `SHADER_DEVICE_ADDRESS` usage

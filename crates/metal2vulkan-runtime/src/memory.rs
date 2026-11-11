@@ -3064,7 +3064,15 @@ impl Memory {
             }
         }
         let placement = self.placement((holds, type_index), block, 0, size, addressed.is_some());
-        self.say_placement("placed", &placement, Some(class));
+        if let Some(log) = &self.log {
+            log.line(memory_log::placement_line(
+                "took a kept dedicated block for",
+                size,
+                Some(class),
+                holds == Holds::Images,
+                (placement.memory, 0, type_index),
+            ));
+        }
         Ok(Some(placement))
     }
 
