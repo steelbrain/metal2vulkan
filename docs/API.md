@@ -3696,10 +3696,11 @@ bound.
   a fragment function computes into a 16-bit float attachment through the pixel interlock: a NaN
   of the blend is the device's arithmetic's, which the storage image's store converts, where Metal
   stores every NaN of the blend as `0x7e00`. A texture write records it where the stored NaN is the
-  device's: a constant texel none of whose lanes is a NaN records nothing, and a `half` write
-  through an argument buffer is announced only at a draw or dispatch whose command can name a
-  texture of a format family whose stored NaN is the device's (on MoltenVK on the Apple M3 Max,
-  a 16-bit float one; a 32-bit float or `RG11B10Float` one stores Metal's). So does a fragment
+  device's: a constant texel none of whose lanes is a NaN records nothing, and a `half` or
+  `float` write through an argument buffer is announced only at a draw or dispatch whose command
+  can name a texture of a format family whose stored NaN is the device's (for a `half` write on
+  MoltenVK on the Apple M3 Max, a 16-bit float one; a 32-bit float or `RG11B10Float` one stores
+  Metal's; for a `float` write, a 16-bit float or `RG11B10Float` one). So does a fragment
   function's color output where the device's conversion stores its NaN, but one every return of
   which holds such a constant records nothing. **Exempt:** a `half`
   texel's write to a 32-bit float storage image on a profile that takes

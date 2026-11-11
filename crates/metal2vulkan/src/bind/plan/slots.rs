@@ -377,7 +377,7 @@ fn heap_raw(
 
 /// The `SpecKey::HeapNanFamilies` of `stage` for `shape`: the bit of each family
 /// (`bind::heap::nan_family`) of the heap members of `shape` that reach `stage` (as for
-/// [`heap_ycbcr`]), whose texels a stage's `half` write may store a NaN in.
+/// [`heap_ycbcr`]), whose texels a stage's `half` or `float` write may store a NaN in.
 fn heap_nan_families(
     shape: &BindShape,
     stage: Stage,

@@ -2185,8 +2185,9 @@ pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 /// another NaN's payload bits; a device of `DriverDeviation::MetalSmallFloatNans` stores Metal's
 /// (the module requires its property). A texel that holds no NaN (`nans` false: a constant none
 /// of whose lanes is one) records neither NaN's note. A slot declared without a format records each
-/// note under the format bound there (`m` charged for the clauses), which the runtime announces at
-/// a draw or dispatch that binds such a texture.
+/// note under the format bound there, and a heap element under the families of the textures the
+/// stage's handles can name (`SpecKey::HeapNanFamilies`) (`m` charged for the clauses), which the
+/// runtime announces at a draw or dispatch that binds or makes resident such a texture.
 pub(super) fn half_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
@@ -2246,9 +2247,10 @@ pub(super) fn half_storage_facts(
 
 /// Where a write to texture `image` may store into a packed small float format (`RG11B10Float`;
 /// `RGB9E5Float` is written through its word alias, whose word is Metal's), as the clauses of
-/// [`stored_where`]: a heap element's, whose handle may name one, a slot's whose storage choice
-/// declares one, and a slot's declared without a format where the texture bound there is of the
-/// small floats' class (`metal::texel_format::PackedTexels::SmallFloat`).
+/// [`stored_where`]: a heap element's where the stage's handles can name one
+/// (`bind::heap::NAN_SMALL`), a slot's whose storage choice declares one, and a slot's declared
+/// without a format where the texture bound there is of the small floats' class
+/// (`metal::texel_format::PackedTexels::SmallFloat`).
 fn small_float_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteClause>, Error> {
     use crate::metal::texel_format::{PackedTexels, TexelFormat};
     let small = PackedTexels::SmallFloat.class().0;
@@ -2257,24 +2259,33 @@ fn small_float_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteCla
         image,
         |f| f == crate::vk::Format::B10G11R11_UFLOAT_PACK32,
         |index| NoteTest::equal(NoteOn::Bound(index), TexelFormat::PACKED_MASK, small),
+        crate::bind::heap::NAN_SMALL,
     )
 }
 
 /// Where a write to texture `image` left to the device's conversion stores into a format
-/// `declared` accepts, as clauses for [`SelectCx::note_when`]: always (one clause of no test) for
-/// a heap element, whose handle may name any format; for a slot whose storage choice declares a
-/// format, always where `declared` accepts it, else never (no clause); and for a slot declared
-/// without a format (a formatless choice, or a variant that states no choice, which
-/// `slot::storage_format` declares formatless), where the format bound there passes `bound`'s
-/// test of its class (`NoteOn::Bound`), which the runtime reads at each draw or dispatch.
+/// `declared` accepts, as clauses for [`SelectCx::note_when`]: for a heap element, whose handle
+/// may name any format, where the stage's handles can name a texture of the heap NaN family
+/// `family` (`SpecKey::HeapNanFamilies`, `bind::heap::nan_family`: the formats `declared` and
+/// `bound` accept); for a slot whose storage choice declares a format, always where `declared`
+/// accepts it, else never (no clause); and for a slot declared without a format (a formatless
+/// choice, or a variant that states no choice, which `slot::storage_format` declares formatless),
+/// where the format bound there passes `bound`'s test of its class (`NoteOn::Bound`). The runtime
+/// reads a heap's or a bound format's clause at each draw or dispatch.
 fn stored_where(
     cx: &SelectCx<'_>,
     image: ImageRef,
     declared: impl Fn(crate::vk::Format) -> bool,
     bound: impl Fn(u32) -> NoteTest,
+    family: u32,
 ) -> Result<Vec<NoteClause>, Error> {
     let ImageRef::Slot(index) = image else {
-        return Ok(vec![NoteClause::new()]);
+        return Ok(vec![[NoteTest::equal(
+            NoteOn::HeapNan(cx.stage),
+            family,
+            family,
+        )]
+        .into()]);
     };
     let slot = slot_of(cx, index)?.slot;
     Ok(
@@ -2763,10 +2774,11 @@ fn mode_rounded_write(
 }
 
 /// Where a write to `image` left to the device's conversion may store a half-float texel, as the
-/// clauses of [`stored_where`]: a heap element's may, a slot's whose storage choice declares a
-/// half-float format does, and a slot's declared without a format does where the texture bound
-/// there is of a half-float class (`BicubicTexels::HALF` without a packed field, which the small
-/// floats' class carries).
+/// clauses of [`stored_where`]: a heap element's where the stage's handles can name a 16-bit float
+/// texture (`bind::heap::NAN_SIXTEEN`), a slot's whose storage choice declares a half-float format
+/// does, and a slot's declared without a format does where the texture bound there is of a
+/// half-float class (`BicubicTexels::HALF` without a packed field, which the small floats' class
+/// carries).
 fn may_store_half(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteClause>, Error> {
     use crate::metal::bicubic::BicubicTexels;
     use crate::metal::texel_format::TexelFormat;
@@ -2777,6 +2789,7 @@ fn may_store_half(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteClause>,
         image,
         |f| matches!(f, F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16A16_SFLOAT),
         |index| NoteTest::equal(NoteOn::Bound(index), mask, BicubicTexels::HALF),
+        crate::bind::heap::NAN_SIXTEEN,
     )
 }
 

@@ -1776,10 +1776,12 @@ declare void @air.write_texture_2d.{elem}(ptr addrspace(1), <2 x i32>, {ty}, i32
 /// packed small float texture, whose stored NaN is the device's; but for a `float` texel on a
 /// profile whose stores of a `float` NaN into the half-float and the packed small float formats
 /// are measured to be Metal's (`DriverDeviation::MetalHalfStorageNans` and
-/// `DriverDeviation::MetalSmallFloatNans`: MoltenVK on the M3 Max's identity). A `half` texel's
-/// note holds under the families the heap can name (`SpecKey::HeapNanFamilies`, held in
-/// `tests::engine_extended_range::heap`). Either texel requires `VkProperty::MetalSmallFloatNans`
-/// where the profile takes `DriverDeviation::MetalSmallFloatNans`.
+/// `DriverDeviation::MetalSmallFloatNans`: MoltenVK on the M3 Max's identity). Either texel's note
+/// holds under the families the heap can name (`SpecKey::HeapNanFamilies`; a `half` texel's held
+/// in `tests::engine_extended_range::heap`), never whatever the heap holds: a `float` texel's under
+/// a 16-bit float texture's where the profile lacks `MetalHalfStorageNans` and a packed small
+/// float one's where it lacks `MetalSmallFloatNans`. Either texel requires
+/// `VkProperty::MetalSmallFloatNans` where the profile takes `DriverDeviation::MetalSmallFloatNans`.
 #[test]
 fn a_heap_texel_write_is_the_devices_write() {
     for float in [false, true] {
@@ -1813,6 +1815,32 @@ fn a_heap_texel_write_is_the_devices_write() {
                 "{what}: {:?}",
                 a.precision
             );
+            if float && !metal_s {
+                use crate::bind::heap::{NAN_SIXTEEN, NAN_SMALL};
+                let halves = !takes(crate::error::DriverDeviation::MetalHalfStorageNans);
+                let mut families: Vec<u32> = a
+                    .specialized
+                    .iter()
+                    .filter(|n| n.note == PrecisionNote::DeviceNanEncoding)
+                    .flat_map(|n| &n.when)
+                    .map(|c| match c.all.as_slice() {
+                        [t] if t.key
+                            == crate::pipeline::sym::SpecKey::HeapNanFamilies(Stage::Kernel)
+                            && t.equal
+                            && t.bits == t.mask =>
+                        {
+                            t.mask
+                        }
+                        other => panic!("{what}: a clause of the heap's NaN note: {other:?}"),
+                    })
+                    .collect();
+                families.sort_unstable();
+                let mut want = Vec::new();
+                want.extend(halves.then_some(NAN_SIXTEEN));
+                want.extend((!small).then_some(NAN_SMALL));
+                want.sort_unstable();
+                assert_eq!(families, want, "{what}: {:?}", a.specialized);
+            }
             assert_eq!(
                 a.requirements
                     .properties

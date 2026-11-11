@@ -324,7 +324,9 @@ pub(crate) const HELD: u32 = 1;
 pub(crate) const FILTERED: u32 = 2;
 
 /// The bit of `SpecKey::HeapNanFamilies` of a 16-bit float format: its written `half` NaN is
-/// Metal's on a device of `DriverDeviation::MetalHalfTexelWrites`.
+/// Metal's on a device of `DriverDeviation::MetalHalfTexelWrites`, a written `float`'s NaN on one of
+/// `DriverDeviation::MetalHalfStorageNans` and its rounding on one of
+/// `DriverDeviation::MetalHalfStorageWrites`.
 pub(crate) const NAN_SIXTEEN: u32 = 1;
 
 /// The bit of `SpecKey::HeapNanFamilies` of a 32-bit float format: its written `half` NaN is
