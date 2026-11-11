@@ -888,9 +888,27 @@ pub fn convert(
     x: SValue,
 ) -> BResult<SValue> {
     match kind {
-        ConvertKind::Int { signed } => {
+        ConvertKind::Int { signed, saturate } => {
             let signed = signed && !from.is_bool();
-            let p = to_pair(fb, from, x, signed)?;
+            let mut p = to_pair(fb, from, x, signed)?;
+            // `.sat`: the pair (sign-extended to 64 bits where signed) clamped to the
+            // destination's range, each bound as its 64-bit two's complement.
+            if let Some(dst) = saturate {
+                let (lo, hi) =
+                    math::saturation_bounds(signed, from.bits(), dst == Sign::Signed, to.bits());
+                let (lt, gt) = if signed {
+                    (IntPredicate::Slt, IntPredicate::Sgt)
+                } else {
+                    (IntPredicate::Ult, IntPredicate::Ugt)
+                };
+                for (bound, pred) in [(lo, lt), (hi, gt)] {
+                    if let Some(b) = bound {
+                        let c = pk(fb, from.lanes, b as u64)?;
+                        let past = compare(fb, pred, p, c)?;
+                        p = sel(fb, past, c, p)?;
+                    }
+                }
+            }
             from_pair(fb, to, p)
         }
         ConvertKind::ToFloat { signed, directed } => {
@@ -2150,6 +2168,7 @@ fn select_convert(
         },
         (_, s) => ConvertKind::Int {
             signed: s == NumKind::Signed,
+            saturate: None,
         },
     };
     let kind = super::honored(cx.inputs.open_cl_mode, c, kind, from, to);

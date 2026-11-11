@@ -460,6 +460,12 @@ impl FamilyStrategy for ArithStrategy {
                 ..
             } => "arith.convert.directed",
             S::Convert {
+                kind: ConvertKind::Int {
+                    saturate: Some(_), ..
+                },
+                ..
+            } => "arith.convert.clamped",
+            S::Convert {
                 kind: ConvertKind::FromFp8(_),
                 ..
             } => "arith.convert.fp8",
@@ -598,7 +604,7 @@ impl FamilyStrategy for ArithStrategy {
 }
 
 /// The words a conversion's honored suffix adds ([`honored`]): the rounding to an integral value;
-/// the conversion back, its comparisons and the step of a directed one.
+/// the conversion back, its comparisons and the step of a directed one; the two clamps of `.sat`.
 fn suffix_words(kind: ConvertKind, from: Form) -> u32 {
     let lanes = u32::from(from.lanes);
     match kind {
@@ -606,6 +612,9 @@ fn suffix_words(kind: ConvertKind, from: Form) -> u32 {
         ConvertKind::ToFloat {
             directed: Some(_), ..
         } => 160 + 128 + 16 * lanes,
+        ConvertKind::Int {
+            saturate: Some(_), ..
+        } => 64 + 16 * lanes,
         _ => 0,
     }
 }
@@ -2784,6 +2793,7 @@ fn select_convert(
         },
         (_, s) => ConvertKind::Int {
             signed: s == NumKind::Signed,
+            saturate: None,
         },
     };
     let kind = honored(cx.inputs.open_cl_mode, c, kind, from, to);
@@ -2815,8 +2825,8 @@ fn select_convert(
 
 /// `kind`, the conversion `c`'s types name, with the suffix `c` spells where the pipeline honors
 /// it: in a compute pipeline of OpenCL mode (`open_cl_mode`), as Metal's does there, an integer
-/// to `float` by `.rtz`, `.rtp` or `.rtn`, and a `float` to an integer by `.rte`, `.rtp` or `.rtn`
-/// (measured on a Radeon Pro 5300M and a UHD Graphics 630:
+/// to `float` by `.rtz`, `.rtp` or `.rtn`, a `float` to an integer by `.rte`, `.rtp` or `.rtn`, and
+/// an integer to an integer by `.sat` (measured on a Radeon Pro 5300M and a UHD Graphics 630:
 /// docs/API.md, "Conversions"). Elsewhere, and where a side is a `half` (Metal creates no pipeline
 /// for one in OpenCL mode), the conversion its types name.
 pub(super) fn honored(
@@ -2839,6 +2849,14 @@ pub(super) fn honored(
         ConvertKind::ToInt { signed, .. } if f32_lanes(from) => ConvertKind::ToInt {
             signed,
             round: c.rounding.filter(|r| *r != Rounding::Zero),
+        },
+        ConvertKind::Int { signed, .. } if c.saturate => ConvertKind::Int {
+            signed,
+            saturate: Some(if c.dst_kind == NumKind::Signed {
+                math::Sign::Signed
+            } else {
+                math::Sign::Unsigned
+            }),
         },
         kind => kind,
     }

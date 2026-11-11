@@ -4996,12 +4996,11 @@ each item named states the rule in full.
   |---|---|---|---|
   | integer of 8 to 64 bits to `float`, `.rtz`, `.rtp`, `.rtn` | rounded as named | rounded as named | rounded as named |
   | `float` to an integer of 8 to 64 bits, `.rte`, `.rtp`, `.rtn` | rounded as named, then clamped where `.sat` | as the 5300M, but a `uint` of 2^31 or more is `0x7fffffff` and a `uchar` with `.sat` above 127 is 127 | rounded as named, then saturated (the 5300M's answer) |
+  | integer to integer, `.sat` | clamped to the destination's range | clamped to the destination's range | clamped to the destination's range |
   | a `half` side, any suffix | no pipeline | no pipeline | the conversion its types name |
 
   An integer to `float` by `.rte`, a `float` to an integer by `.rtz`, and an integer to an integer
   with a rounding and no `.sat` are the conversion their types name on both, as on the runtime.
-  Both clamp an integer to an integer with `.sat` to the destination's range, where the runtime
-  wraps.
   Neither creates a pipeline of OpenCL mode for a conversion with a `half` side (its library
   compiles), so no Metal answer exists for one, and the runtime makes the pipeline. The device has
   no directed conversion (Vulkan's integer-to-float conversion rounds in a direction of its own,

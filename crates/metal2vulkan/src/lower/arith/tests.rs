@@ -3959,7 +3959,10 @@ fn integer_and_float_converts_follow_their_source_kind() {
                 &|fb, x| {
                     math::convert(
                         fb,
-                        ConvertKind::Int { signed },
+                        ConvertKind::Int {
+                            signed,
+                            saturate: None,
+                        },
                         ff,
                         tf,
                         x[0],

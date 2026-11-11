@@ -1,7 +1,8 @@
 //! `air.convert`'s rounding and `.sat` where a compute pipeline of OpenCL mode honors them
 //! ([`super::super::honored`]), on the CPU interpreter against exact references: an integer to
-//! `f32` toward zero, up and down; and an `f32` to an integer to nearest even, up and down, with
-//! and without saturation. The wide path's (no `shaderInt64`) are in `wide.rs`.
+//! `f32` toward zero, up and down; an `f32` to an integer to nearest even, up and down, with and
+//! without saturation; and an integer to an integer clamped to its destination's range. The wide
+//! path's (no `shaderInt64`) are in `wide.rs`.
 
 use super::super::honored;
 use super::*;
@@ -45,6 +46,17 @@ pub(super) fn integral_of(x: f64, mode: Rounding) -> f64 {
         Rounding::Up => x.ceil(),
         Rounding::Down => x.floor(),
     }
+}
+
+/// `.sat`'s answer: the value `v` (of a source read as its kind says) clamped to the range of a
+/// `dst`-bit integer read as `dst_signed`, as held bits.
+pub(super) fn clamped(v: i128, dst: u8, dst_signed: bool) -> u64 {
+    let (lo, hi) = if dst_signed {
+        (smin(dst), smax(dst))
+    } else {
+        (0, umax(dst))
+    };
+    (v.clamp(lo, hi) as u64) & mask(dst)
 }
 
 /// The value of held integer bits `b` of `bits` bits read as `signed`.
@@ -305,6 +317,58 @@ fn rounded_conversions_to_an_integer_answer_metal_s_words() {
     }
 }
 
+/// Integers of 8 to 64 bits, read as signed or unsigned, clamp to every destination of 8 to 64
+/// bits, signed or unsigned, before converting.
+#[test]
+fn an_integer_saturates_to_every_destination() {
+    let mut rng = Rng(0x5A7);
+    for from_bits in [8u8, 16, 32, 64] {
+        let from = int(from_bits);
+        let mut vals: Vec<u64> = [8u32, 16, 32, 64]
+            .iter()
+            .flat_map(|b| {
+                let p = if *b == 64 { 0 } else { 1u64 << b };
+                let h = 1u64 << (b - 1);
+                [p.wrapping_sub(1), p, p.wrapping_add(1), h - 1, h, h + 1]
+            })
+            .flat_map(|v| [v, v.wrapping_neg()])
+            .map(|v| v & mask(from_bits))
+            .collect();
+        vals.extend(int_values(from_bits, &mut rng, 8));
+        vals.sort_unstable();
+        vals.dedup();
+        let cs = cases(&vals);
+        for to_bits in [8u8, 16, 32, 64] {
+            let to = int(to_bits);
+            for (signed, dst) in [
+                (true, Sign::Signed),
+                (true, Sign::Unsigned),
+                (false, Sign::Signed),
+                (false, Sign::Unsigned),
+            ] {
+                check(
+                    &format!("{from_bits} (signed={signed}) to {to_bits} {dst:?} sat"),
+                    &[from],
+                    to,
+                    &|fb, x| {
+                        let kind = ConvertKind::Int {
+                            signed,
+                            saturate: Some(dst),
+                        };
+                        math::convert(fb, kind, from, to, x[0], NanTest::IsNan)
+                    },
+                    &cs,
+                    &|c| {
+                        let v = value_of(arg(c, 0), from_bits, signed);
+                        Some(vec![clamped(v, to_bits, dst == Sign::Signed)])
+                    },
+                    false,
+                );
+            }
+        }
+    }
+}
+
 /// The conversion of `name` with types `from` and `to` as the arith family selects it in a
 /// pipeline of OpenCL mode or not.
 fn selected(name: &str, open_cl_mode: bool, from: Form, to: Form) -> ConvertKind {
@@ -330,14 +394,15 @@ fn plain_kind(c: &Convert) -> ConvertKind {
         },
         (_, s) => ConvertKind::Int {
             signed: s == NumKind::Signed,
+            saturate: None,
         },
     }
 }
 
-/// OpenCL mode honors a directed rounding to `f32` and a rounding of an `f32` to an integer other
-/// than truncation; it leaves the device's rounding to nearest even, truncation, a `half` side and
-/// a suffix between integers as the types name them, and outside OpenCL mode every suffix is the
-/// conversion its types name.
+/// OpenCL mode honors a directed rounding to `f32`, a rounding of an `f32` to an integer other
+/// than truncation, and `.sat` between integers; it leaves the device's rounding to nearest even,
+/// truncation, a `half` side and a rounding between integers as the types name them, and outside
+/// OpenCL mode every suffix is the conversion its types name.
 #[test]
 fn only_a_pipeline_of_opencl_mode_honors_a_suffix() {
     let (i32f, f32f, h) = (int(32), float(32), float(16));
@@ -378,6 +443,15 @@ fn only_a_pipeline_of_opencl_mode_honors_a_suffix() {
                 round: Some(Rounding::Down),
             },
         ),
+        (
+            "air.convert.u.i8.s.i32.rtz.sat",
+            i32f,
+            int(8),
+            ConvertKind::Int {
+                signed: true,
+                saturate: Some(Sign::Unsigned),
+            },
+        ),
     ];
     for (name, from, to, want) in honored_kinds {
         assert_eq!(
@@ -402,7 +476,6 @@ fn only_a_pipeline_of_opencl_mode_honors_a_suffix() {
         ("air.convert.f.f16.f.f32.rtp", f32f, h),
         ("air.convert.s.i16.f.f16.rtp.sat", h, int(16)),
         ("air.convert.s.i16.s.i32.rtp", i32f, int(16)),
-        ("air.convert.u.i8.s.i32.rtz.sat", i32f, int(8)),
     ] {
         let Some(AirIntrinsic::Convert(c)) = AirIntrinsic::parse(name) else {
             panic!("{name}");

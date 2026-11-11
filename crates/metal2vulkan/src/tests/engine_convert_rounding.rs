@@ -175,9 +175,10 @@ type Measured = (
     [(u64, u64, u64); 4],
 );
 
-/// Every rounding the two honor: an integer of 32 or 64 bits to `float` toward zero, up and down;
-/// and a `float` to an integer of 8 to 64 bits to nearest even, up and down, saturating or not.
-const MEASURED: [Measured; 39] = [
+/// Every form the two honor: an integer of 32 or 64 bits to `float` toward zero, up and down; a
+/// `float` to an integer of 8 to 64 bits to nearest even, up and down, saturating or not; and
+/// `.sat` between integers (and one rounding between integers, which neither honors).
+const MEASURED: [Measured; 58] = [
     (
         "f.f32.s.i32.rtz",
         "float",
@@ -605,6 +606,215 @@ const MEASURED: [Measured; 39] = [
             (0x3fc00000, 0x1, 0x1),
             (0x40200000, 0x2, 0x2),
             (0xbf000000, 0x0, 0x0),
+        ],
+    ),
+    (
+        "u.i8.s.i32.rtz.sat",
+        "i8",
+        "i32",
+        [
+            (0xffffffff, 0x0, 0xff),
+            (0x1000000, 0xff, 0x0),
+            (0x1000001, 0xff, 0x1),
+            (0x1000002, 0xff, 0x2),
+        ],
+    ),
+    (
+        "s.i8.s.i32.rtz.sat",
+        "i8",
+        "i32",
+        [
+            (0x1000000, 0x7f, 0x0),
+            (0x1000001, 0x7f, 0x1),
+            (0x1000002, 0x7f, 0x2),
+            (0x1000003, 0x7f, 0x3),
+        ],
+    ),
+    (
+        "u.i8.u.i32.rtz.sat",
+        "i8",
+        "i32",
+        [
+            (0x1000000, 0xff, 0x0),
+            (0x1000001, 0xff, 0x1),
+            (0x1000002, 0xff, 0x2),
+            (0x1000003, 0xff, 0x3),
+        ],
+    ),
+    (
+        "s.i8.u.i32.rtz.sat",
+        "i8",
+        "i32",
+        [
+            (0xffffffff, 0x7f, 0xff),
+            (0x1000000, 0x7f, 0x0),
+            (0x1000001, 0x7f, 0x1),
+            (0x1000002, 0x7f, 0x2),
+        ],
+    ),
+    (
+        "u.i16.s.i32.rtz.sat",
+        "i16",
+        "i32",
+        [
+            (0xffffffff, 0x0, 0xffff),
+            (0x1000000, 0xffff, 0x0),
+            (0x1000001, 0xffff, 0x1),
+            (0x1000002, 0xffff, 0x2),
+        ],
+    ),
+    (
+        "s.i16.s.i32.rtz.sat",
+        "i16",
+        "i32",
+        [
+            (0x1000000, 0x7fff, 0x0),
+            (0x1000001, 0x7fff, 0x1),
+            (0x1000002, 0x7fff, 0x2),
+            (0x1000003, 0x7fff, 0x3),
+        ],
+    ),
+    (
+        "u.i16.u.i32.rtz.sat",
+        "i16",
+        "i32",
+        [
+            (0x1000000, 0xffff, 0x0),
+            (0x1000001, 0xffff, 0x1),
+            (0x1000002, 0xffff, 0x2),
+            (0x1000003, 0xffff, 0x3),
+        ],
+    ),
+    (
+        "s.i16.u.i32.rtz.sat",
+        "i16",
+        "i32",
+        [
+            (0xffffffff, 0x7fff, 0xffff),
+            (0x1000000, 0x7fff, 0x0),
+            (0x1000001, 0x7fff, 0x1),
+            (0x1000002, 0x7fff, 0x2),
+        ],
+    ),
+    (
+        "u.i32.s.i32.rtz.sat",
+        "i32",
+        "i32",
+        [
+            (0xffffffff, 0x0, 0xffffffff),
+            (0xfeffffff, 0x0, 0xfeffffff),
+            (0xfefffffd, 0x0, 0xfefffffd),
+            (0xfe000001, 0x0, 0xfe000001),
+        ],
+    ),
+    (
+        "s.i32.u.i32.rtz.sat",
+        "i32",
+        "i32",
+        [
+            (0xffffffff, 0x7fffffff, 0xffffffff),
+            (0xfeffffff, 0x7fffffff, 0xfeffffff),
+            (0xfefffffd, 0x7fffffff, 0xfefffffd),
+            (0xfe000001, 0x7fffffff, 0xfe000001),
+        ],
+    ),
+    (
+        "u.i8.s.i32.rte.sat",
+        "i8",
+        "i32",
+        [
+            (0xffffffff, 0x0, 0xff),
+            (0x1000000, 0xff, 0x0),
+            (0x1000001, 0xff, 0x1),
+            (0x1000002, 0xff, 0x2),
+        ],
+    ),
+    (
+        "s.i16.s.i32.rtp",
+        "i16",
+        "i32",
+        [
+            (0x0, 0x0, 0x0),
+            (0x1, 0x1, 0x1),
+            (0xffffffff, 0xffff, 0xffff),
+            (0x1000000, 0x0, 0x0),
+        ],
+    ),
+    (
+        "u.i64.s.i32.rtz.sat",
+        "i64",
+        "i32",
+        [
+            (0xffffffff, 0x0, 0xffffffffffffffff),
+            (0xfeffffff, 0x0, 0xfffffffffeffffff),
+            (0xfefffffd, 0x0, 0xfffffffffefffffd),
+            (0xfe000001, 0x0, 0xfffffffffe000001),
+        ],
+    ),
+    (
+        "s.i32.s.i64.rtz.sat",
+        "i32",
+        "i64",
+        [
+            (0x20000000000001, 0x7fffffff, 0x1),
+            (0x7fffffffffffffff, 0x7fffffff, 0xffffffff),
+            (0x8000000000000000, 0x80000000, 0x0),
+            (0x8000000000000001, 0x80000000, 0x1),
+        ],
+    ),
+    (
+        "u.i32.s.i64.rtz.sat",
+        "i32",
+        "i64",
+        [
+            (0xffffffffffffffff, 0x0, 0xffffffff),
+            (0x20000000000001, 0xffffffff, 0x1),
+            (0x8000000000000001, 0x0, 0x1),
+            (0x4000000000000001, 0xffffffff, 0x1),
+        ],
+    ),
+    (
+        "s.i32.u.i64.rtz.sat",
+        "i32",
+        "i64",
+        [
+            (0xffffffffffffffff, 0x7fffffff, 0xffffffff),
+            (0x20000000000001, 0x7fffffff, 0x1),
+            (0x7fffffffffffffff, 0x7fffffff, 0xffffffff),
+            (0x8000000000000000, 0x7fffffff, 0x0),
+        ],
+    ),
+    (
+        "u.i32.u.i64.rtz.sat",
+        "i32",
+        "i64",
+        [
+            (0x20000000000001, 0xffffffff, 0x1),
+            (0x8000000000000000, 0xffffffff, 0x0),
+            (0x8000000000000001, 0xffffffff, 0x1),
+            (0x4000000000000001, 0xffffffff, 0x1),
+        ],
+    ),
+    (
+        "s.i64.u.i64.rtz.sat",
+        "i64",
+        "i64",
+        [
+            (0xffffffffffffffff, 0x7fffffffffffffff, 0xffffffffffffffff),
+            (0x8000000000000000, 0x7fffffffffffffff, 0x8000000000000000),
+            (0x8000000000000001, 0x7fffffffffffffff, 0x8000000000000001),
+            (0xffffff8000000000, 0x7fffffffffffffff, 0xffffff8000000000),
+        ],
+    ),
+    (
+        "u.i64.s.i64.rtz.sat",
+        "i64",
+        "i64",
+        [
+            (0xffffffffffffffff, 0x0, 0xffffffffffffffff),
+            (0x8000000000000000, 0x0, 0x8000000000000000),
+            (0x8000000000000001, 0x0, 0x8000000000000001),
+            (0xffffff8000000000, 0x0, 0xffffff8000000000),
         ],
     ),
 ];

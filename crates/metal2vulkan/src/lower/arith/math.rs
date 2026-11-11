@@ -2382,8 +2382,13 @@ pub enum ConvertKind {
         signed: bool,
         round: Option<Rounding>,
     },
-    /// Integer (`signed` source) to integer.
-    Int { signed: bool },
+    /// Integer (`signed` source) to integer, wrapping; where `saturate` names the destination's
+    /// signedness (`.sat`, honored in OpenCL mode), clamped to the destination's range first
+    /// ([`saturation_bounds`]).
+    Int {
+        signed: bool,
+        saturate: Option<Sign>,
+    },
     /// An 8-bit float (carried in an `i8`) to a float: exact.
     FromFp8(narrow::Fp8Layout),
     /// An 8-bit float (carried in an `i8`) to an integer: its value as an `f32` (exact, as
@@ -2483,10 +2488,14 @@ pub fn convert(
                 None => Ok(r),
             }
         }
-        ConvertKind::Int { signed } => {
+        ConvertKind::Int { signed, saturate } => {
             if from.is_bool() {
                 return cast(fb, CastKind::ZExt, from, to, x);
             }
+            let x = match saturate {
+                Some(dst) => saturate_int(fb, signed, dst, from, to, x)?,
+                None => x,
+            };
             let widening = to.bits() >= from.bits();
             let c = match (widening, signed) {
                 (true, true) => CastKind::SExt,
@@ -2660,6 +2669,59 @@ pub fn step_f32(
     let moved = bin(fb, BinOp::IAdd, bits, d)?;
     let t = ty(fb, to)?;
     fb.convert(ConvOp::Bitcast, moved, t)
+}
+
+/// The bounds `.sat` clamps an integer of `src_bits` bits (read as `src_signed`) to before it
+/// converts to one of `dst_bits` bits (read as `dst_signed`): the destination's range, each bound
+/// `None` where the source's own range already keeps it.
+pub fn saturation_bounds(
+    src_signed: bool,
+    src_bits: u8,
+    dst_signed: bool,
+    dst_bits: u8,
+) -> (Option<i128>, Option<i128>) {
+    let range = |signed: bool, bits: u8| -> (i128, i128) {
+        let bits = u32::from(bits);
+        if signed {
+            (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+        } else {
+            (0, (1i128 << bits) - 1)
+        }
+    };
+    let (slo, shi) = range(src_signed, src_bits);
+    let (dlo, dhi) = range(dst_signed, dst_bits);
+    ((dlo > slo).then_some(dlo), (dhi < shi).then_some(dhi))
+}
+
+/// Held integer `x` (form `from`, read as `signed`) clamped to the range of integer form `to`
+/// read with signedness `dst` ([`saturation_bounds`]): `.sat`'s answer, which the conversion then
+/// keeps.
+fn saturate_int(
+    fb: &mut FunctionBuilder<'_>,
+    signed: bool,
+    dst: Sign,
+    from: Form,
+    to: Form,
+    x: Value,
+) -> BResult<Value> {
+    use crate::lower::arith::ops::int_compare;
+    let (lo, hi) = saturation_bounds(signed, from.bits(), dst == Sign::Signed, to.bits());
+    let (lt, gt) = if signed {
+        (IntPredicate::Slt, IntPredicate::Sgt)
+    } else {
+        (IntPredicate::Ult, IntPredicate::Ugt)
+    };
+    // A bound as the source's held bits: its two's complement, zero-extended from the width.
+    let held = |v: i128| (v as u64) & ones(from.bits());
+    let mut r = x;
+    for (bound, pred) in [(lo, lt), (hi, gt)] {
+        if let Some(b) = bound {
+            let c = splat(fb, from, held(b))?;
+            let past = int_compare(fb, pred, from, r, c)?;
+            r = fb.select(past, c, r)?;
+        }
+    }
+    Ok(r)
 }
 
 /// The packed-channel layout of a normalized `air.pack`/`air.unpack` format: each channel's
