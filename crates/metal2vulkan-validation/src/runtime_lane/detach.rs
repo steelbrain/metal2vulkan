@@ -63,7 +63,7 @@ use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue,
     ComputePipelineState, Degradation, Device, Error, EventRef, Heap, HeapDescriptor, HeapType,
-    HostBacking, HostMemory, Invalid, LoadAction, PipelineOptions, Problem, RebindProblem, Region,
+    HostMemory, Invalid, LoadAction, PipelineOptions, Problem, RebindProblem, Region,
     RenderPassDescriptor, ResourceOptions, SharedEvent, Size, StoreAction, TextureDescriptor,
 };
 use std::sync::atomic::Ordering;
@@ -792,7 +792,7 @@ fn table_3_a_detach_waits_for_running_work_then_refuses() {
         named.finish();
         assert_ne!(
             member.host_backing(),
-            Some(HostBacking::Detached),
+            Some(metal2vulkan_runtime::HostBacking::Detached),
             "detached though refused"
         );
         // Once its command buffer completed and the wait returned, it detaches.
