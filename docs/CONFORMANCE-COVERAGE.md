@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1277 |
 | distinct SDK items the Metal leg reaches, of any status | 821 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3584 |
+| ledger rows (a case whose gap is recorded) | 3611 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -537,7 +537,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 12 |
 | tolerances in all | 12 |
-| modules declaring a notice (loosening no value) | 130 |
+| modules declaring a notice (loosening no value) | 131 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
@@ -2256,6 +2256,22 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `device-linear-texture-alignments` | lavapipe's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device… |
 | `device-linear-texture-alignments` | lavapipe's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device… |
 | `device-linear-texture-alignments` | lavapipe's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
+| `device-linear-texture-alignments` | RADV's own answer, not a gap of ours: minimumLinearTextureAlignmentForPixelFormat answers, per format, the smallest power of two from 16 at which the device's l… |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
 | `discard-quad-sum-placement` | Metal counts the quads the discard drops whole in a simdgroup sum that sits ahead of the discard for a measured reason -- the discard's condition reads the sum … |
@@ -3506,29 +3522,40 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`): the first differing element is Metal 0x7FC00000 against our 0x7FC02000, the devi… |
 | `blit-generated-mipmaps` | `generateMipmapsForTexture:` of an 8x8 `RGBA8Unorm` texture of four levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`)… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
-| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTE… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgr10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGR10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_fi… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
 | `bc1-rgba` | A BC1 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
 | `bc1-rgba` | A BC1 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
 | `bc1-rgba` | A BC1 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
