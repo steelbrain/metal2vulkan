@@ -89,7 +89,7 @@ attributes #5 = { convergent nounwind willreturn }\n\
 
 /// The node of argument `n`, a buffer at `index` of address space `space` holding `ty`, `access`
 /// one of `read`, `read_write`.
-fn buffer(n: u32, index: u32, access: &str, space: u32, ty: &str, name: &str) -> String {
+pub(super) fn buffer(n: u32, index: u32, access: &str, space: u32, ty: &str, name: &str) -> String {
     format!(
         "!{{i32 {n}, !\"air.buffer\", !\"air.location_index\", i32 {index}, i32 1, !\"air.{access}\", !\"air.address_space\", i32 {space}, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"{ty}\", !\"air.arg_name\", !\"{name}\"}}"
     )
@@ -107,7 +107,7 @@ fn constant(n: u32, index: u32, size: u32, ty: &str, name: &str, layout: Option<
 }
 
 /// The kernel list of `entry` with argument nodes `args`.
-fn kernel_list(entry: &str, args: &[String]) -> String {
+pub(super) fn kernel_list(entry: &str, args: &[String]) -> String {
     kernel_list_with(entry, args, "")
 }
 
@@ -403,7 +403,7 @@ entry:\n\
 }
 
 /// The state of `entry` of the module `text` (after [`HEAD`]), of OpenCL mode.
-fn state(device: &Device, text: &str, entry: &str) -> ComputePipelineState {
+pub(super) fn state(device: &Device, text: &str, entry: &str) -> ComputePipelineState {
     let air = metal2vulkan_devtools::llvm_assemble_text(&format!("{HEAD}{text}")).unwrap();
     let library = metal2vulkan::library::Library::from_air(&air).unwrap();
     let function = device
@@ -419,7 +419,7 @@ fn state(device: &Device, text: &str, entry: &str) -> ComputePipelineState {
 }
 
 /// A shared buffer of `words`.
-fn words_buffer(device: &Device, words: &[u32]) -> Buffer {
+pub(super) fn words_buffer(device: &Device, words: &[u32]) -> Buffer {
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     device
         .new_buffer_with_bytes(&bytes, ResourceOptions::shared())
@@ -427,7 +427,7 @@ fn words_buffer(device: &Device, words: &[u32]) -> Buffer {
 }
 
 /// A shared buffer of `floats`.
-fn floats_buffer(device: &Device, floats: &[f32]) -> Buffer {
+pub(super) fn floats_buffer(device: &Device, floats: &[f32]) -> Buffer {
     words_buffer(
         device,
         &floats.iter().map(|f| f.to_bits()).collect::<Vec<_>>(),
@@ -435,7 +435,7 @@ fn floats_buffer(device: &Device, floats: &[f32]) -> Buffer {
 }
 
 /// The words of `buffer`, which no command uses now.
-fn words(buffer: &Buffer) -> Vec<u32> {
+pub(super) fn words(buffer: &Buffer) -> Vec<u32> {
     let contents = buffer.contents().unwrap();
     // SAFETY: the buffer's bytes, which no command uses now.
     let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), buffer.length() as usize) };
@@ -448,7 +448,7 @@ fn words(buffer: &Buffer) -> Vec<u32> {
 }
 
 /// The floats of `buffer`, which no command uses now.
-fn floats(buffer: &Buffer) -> Vec<f32> {
+pub(super) fn floats(buffer: &Buffer) -> Vec<f32> {
     words(buffer).into_iter().map(f32::from_bits).collect()
 }
 

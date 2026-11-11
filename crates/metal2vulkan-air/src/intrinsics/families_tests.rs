@@ -492,6 +492,10 @@ const OBSERVED: &[(&str, &str)] = &[
     ("air.get_height_depth_cube_array", "i32 (p1, i32)"),
     ("air.is_null_texture_1d", "i1 (p1)"),
     ("air.get_null_texture_3d", "p1 ()"),
+    // OpenCL C's image format queries (Apple's OpenCL compiler, macOS 27.0.1 and 26.7.1).
+    ("air.get_channel_order_texture_2d", "i32 (p1)"),
+    ("air.get_channel_data_type_texture_1d_array", "i32 (p1)"),
+    ("air.get_channel_order_texture_3d", "i32 (p1)"),
     ("air.get_read_sampler", "p2 ()"),
     // Derivatives and boolean reductions.
     ("air.dfdx.v3f16", "v3f16 (v3f16)"),

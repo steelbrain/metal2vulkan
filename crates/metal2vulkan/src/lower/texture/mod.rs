@@ -3758,6 +3758,10 @@ fn select_query(
         }
         Query::NumMipLevels => QueryKind::Levels,
         Query::NumSamples => QueryKind::Samples,
+        // Canonicalization reads each from the third hidden buffer of a kernel compiled in OpenCL
+        // mode (`air::canon::opencl`); no other pipeline has the table, and Metal makes no other
+        // pipeline of a function that queries it.
+        Query::ChannelOrder | Query::ChannelDataType => return Err(refuse()),
     };
     // A size query at a level that is not the constant 0 answers from the image's first level
     // (`emit::level_extent`), as Metal does at every level: it queries no level the image may

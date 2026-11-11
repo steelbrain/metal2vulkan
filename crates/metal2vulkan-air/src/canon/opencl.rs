@@ -24,6 +24,17 @@
 //!   by 2 at offset (3, 5), of two dimensions, answers each value of every thread, for constant
 //!   dimensions and for a dimension the kernel is given.
 //!
+//! - **Image formats.** `get_image_channel_order(image)` is `air.get_channel_order_texture_<kind>`
+//!   and `get_image_channel_data_type(image)` `air.get_channel_data_type_texture_<kind>`
+//!   ([`Query::ChannelOrder`], [`Query::ChannelDataType`]), each of the image argument. The third
+//!   hidden buffer holds two words per texture index: of the image at texture index `t`, word
+//!   `2t` is its data type and word `2t + 1` its order, read as they are. Measured on an M3 Max
+//!   (macOS 27.0.1) and a Radeon Pro 5300M (macOS 26.7.1) with the buffer's word `i` set to
+//!   `i * 0x10000 + 0x1234`, over one image of each kind beside a 2D image at index 0. Two
+//!   queries of one kind's wrapper (`get_image_channel_order` of two read-only 2D images) answer
+//!   the same word on both, the M3 Max's and the 5300M's of different calls; here each query
+//!   answers its own image's.
+//!
 //! `expand` runs after SCCP, whose constants name each read's dimension, and before the global
 //! built-ins (`global_builtin`) take the reads it leaves. It appends the three buffers to the entry
 //! and rewrites each read of a dimension `c` below 3: `get_global_id(c)` becomes the built-in's
@@ -31,7 +42,9 @@
 //! `get_work_dim()` word 3. A read of a dimension past 2 is OpenCL's answer for it, 0 for an id
 //! or an offset and 1 for a size or a count (the M3 Max leaves the store of such a value
 //! unwritten). A read of a dimension no constant names selects among its reads of the three lanes,
-//! with OpenCL's answer past them. [`entry`] then moves the entry's buffer-indexed arguments 3 on
+//! with OpenCL's answer past them. Each image format query of an image argument at a constant
+//! texture index becomes the load of its word of the third buffer; one of any other texture is
+//! left, and lowering refuses it. [`entry`] then moves the entry's buffer-indexed arguments 3 on
 //! and adds the three buffers' bindings.
 
 use crate::abi::{
@@ -39,7 +52,7 @@ use crate::abi::{
 };
 use crate::budget::Meter;
 use crate::error::{DiagName, Error};
-use crate::intrinsics::{AirIntrinsic, Elem, GlobalBuiltin, GlobalVar, WorkItem};
+use crate::intrinsics::{AirIntrinsic, Elem, GlobalBuiltin, GlobalVar, Query, TexOp, WorkItem};
 use crate::ir::{
     AddrSpace, Align, ArgIdx, BinOp, Block, Body, Call, Callee, CastOp, Const, Constant, FastMath,
     FuncId, Idx, Inst, InstId, InstKind, IntFlags, IntPredicate, ModuleParts, Type, TypeId, Value,
@@ -80,6 +93,47 @@ const BUFFERS: [(&str, &str, u32, Access, AddrSpace); 3] = [
 /// The word of the first hidden buffer that holds the dispatch's dimension count.
 const WORK_DIM_WORD: u64 = 3;
 
+/// The hidden buffer that holds the images' formats, after the first.
+const TABLE: u32 = 2;
+
+/// The entry's image arguments: each parameter bound at a constant texture index, with that
+/// index.
+#[derive(Debug, Default)]
+pub(super) struct Images(Vec<(u32, u32)>);
+
+impl Images {
+    /// The image arguments of entry `ep`.
+    pub(super) fn of(ep: &EntryPoint, m: &mut Meter) -> Result<Images, Error> {
+        let mut images = Vec::new();
+        for p in &ep.params {
+            m.tick(1)?;
+            if let ParamRole::Texture(t) = &p.role {
+                if let (AbiInt::Const(index), AbiInt::Const(1)) =
+                    (t.location.index, t.location.count)
+                {
+                    m.reserve(&mut images, 1)?;
+                    images.push((p.param, index));
+                }
+            }
+        }
+        Ok(Images(images))
+    }
+
+    /// The texture index of the image `v` is, where it is an image argument.
+    fn index(&self, v: Value) -> Option<u32> {
+        let Value::Arg(a) = v else {
+            return None;
+        };
+        let param = u32::try_from(a.index()).ok()?;
+        self.0.iter().find(|(p, _)| *p == param).map(|&(_, t)| t)
+    }
+
+    /// The bytes [`Images::of`] charged.
+    fn release(self, m: &mut Meter) {
+        m.release(self.0.capacity() * std::mem::size_of::<(u32, u32)>());
+    }
+}
+
 /// An OpenCL work-item read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Read {
@@ -89,6 +143,9 @@ enum Read {
     Offset,
     /// `get_work_dim()`.
     WorkDim,
+    /// `get_image_channel_order` or `get_image_channel_data_type` of an image argument: word
+    /// `word` of the third hidden buffer.
+    Format { word: u64 },
 }
 
 impl Read {
@@ -96,7 +153,7 @@ impl Read {
     fn elem(self) -> Elem {
         match self {
             Read::Builtin(g) => g.ty,
-            Read::Offset | Read::WorkDim => Elem::I32,
+            Read::Offset | Read::WorkDim | Read::Format { .. } => Elem::I32,
         }
     }
 
@@ -116,13 +173,13 @@ impl Read {
 
     /// Whether the read takes a dimension.
     fn dimensioned(self) -> bool {
-        self != Read::WorkDim
+        matches!(self, Read::Builtin(_) | Read::Offset)
     }
 }
 
-/// The OpenCL work-item read `kind` is, with its call: a read of one of the six built-ins OpenCL C
-/// names, `get_global_offset` or `get_work_dim`.
-fn read(kind: &InstKind) -> Option<(Read, &Call)> {
+/// The OpenCL read `kind` is, with its call: a read of one of the six built-ins OpenCL C names,
+/// `get_global_offset`, `get_work_dim`, or an image format query of one of `images`.
+fn read<'k>(kind: &'k InstKind, images: &Images) -> Option<(Read, &'k Call)> {
     let InstKind::Call(call) = kind else {
         return None;
     };
@@ -144,6 +201,17 @@ fn read(kind: &InstKind) -> Option<(Read, &Call)> {
         ) => Read::Builtin(g),
         AirIntrinsic::WorkItem(WorkItem::GlobalOffset) => Read::Offset,
         AirIntrinsic::WorkItem(WorkItem::WorkDim) => Read::WorkDim,
+        AirIntrinsic::Texture(t) => {
+            let order = match t.op {
+                TexOp::Query(Query::ChannelOrder) => 1,
+                TexOp::Query(Query::ChannelDataType) => 0,
+                _ => return None,
+            };
+            let index = images.index(*call.args.first()?)?;
+            Read::Format {
+                word: 2 * u64::from(index) + order,
+            }
+        }
         _ => return None,
     };
     Some((read, call))
@@ -156,11 +224,13 @@ enum Dim {
     Value(Value),
 }
 
-/// The dimension call `call` of `r` names (`Const(WORK_DIM_WORD)` for `get_work_dim`, which
-/// names none).
+/// The dimension call `call` of `r` names (`Const(WORK_DIM_WORD)` for `get_work_dim` and an image
+/// format's word for its query, which name none).
 fn dim(parts: &ModuleParts, r: Read, call: &Call) -> Result<Dim, Error> {
-    if !r.dimensioned() {
-        return Ok(Dim::Const(WORK_DIM_WORD));
+    match r {
+        Read::WorkDim => return Ok(Dim::Const(WORK_DIM_WORD)),
+        Read::Format { word } => return Ok(Dim::Const(word)),
+        Read::Builtin(_) | Read::Offset => {}
     }
     let [v] = call.args.as_ref() else {
         return Err(invariant("a work-item read without its dimension"));
@@ -180,6 +250,8 @@ struct Sink<'a> {
     parts: &'a mut ModuleParts,
     /// The first hidden buffer's parameter.
     offsets: Value,
+    /// The third hidden buffer's parameter.
+    table: Value,
 }
 
 impl Sink<'_> {
@@ -212,8 +284,8 @@ impl Sink<'_> {
         Ok(Value::Inst(id))
     }
 
-    /// Word `w` of the first hidden buffer, in `e`.
-    fn word(&mut self, w: u64, e: Elem, m: &mut Meter) -> Result<Value, Error> {
+    /// Word `w` of the hidden buffer `base`, in `e`.
+    fn word(&mut self, base: Value, w: u64, e: Elem, m: &mut Meter) -> Result<Value, Error> {
         let i32t = self.elem_ty(Elem::I32, m)?;
         let ptr = self.ty(
             Type::Ptr {
@@ -226,7 +298,7 @@ impl Sink<'_> {
             ptr,
             InstKind::Gep {
                 src_ty: i32t,
-                base: self.offsets,
+                base,
                 indices: Box::new([index]),
                 inbounds: true,
             },
@@ -271,7 +343,8 @@ impl Sink<'_> {
             return self.int(e, r.past(), m);
         }
         match r {
-            Read::Offset | Read::WorkDim => self.word(c, e, m),
+            Read::Offset | Read::WorkDim => self.word(self.offsets, c, e, m),
+            Read::Format { .. } => self.word(self.table, c, e, m),
             Read::Builtin(g) => {
                 let lane = self.int(e, c, m)?;
                 let mut lane_read = call.clone();
@@ -280,7 +353,7 @@ impl Sink<'_> {
                 if g.var != GlobalVar::ThreadPositionInGrid {
                     return Ok(v);
                 }
-                let offset = self.word(c, e, m)?;
+                let offset = self.word(self.offsets, c, e, m)?;
                 self.push(
                     ty,
                     InstKind::BinOp {
@@ -365,7 +438,7 @@ struct Expansion {
 /// emitting it into a scratch body.
 fn measure(
     parts: &mut ModuleParts,
-    offsets: Value,
+    (offsets, table): (Value, Value),
     (r, call, ty, d): (Read, &Call, TypeId, Dim),
     m: &mut Meter,
 ) -> Result<Expansion, Error> {
@@ -374,6 +447,7 @@ fn measure(
         out: &mut scratch,
         parts,
         offsets,
+        table,
     };
     let v = s.emit(r, call, ty, d, m)?;
     let len = u32::try_from(scratch.insts.len()).map_err(|_| invariant("expansion length"))?;
@@ -385,12 +459,26 @@ fn measure(
 }
 
 /// Append the three hidden buffers to the entry `func` and make each OpenCL work-item read of its
-/// solved `body` a read of a built-in or of the first buffer (see the module), returning the new
-/// body and the first buffer's parameter index.
+/// solved `body` a read of a built-in or of the first buffer, and each image format query of one
+/// of its `images` a read of the third (see the module), returning the new body and the first
+/// buffer's parameter index.
 pub(super) fn expand(
     body: Body,
     parts: &mut ModuleParts,
+    (func, images): (FuncId, Images),
+    m: &mut Meter,
+) -> Result<(Body, u32), Error> {
+    let out = rewrite(body, parts, func, &images, m);
+    images.release(m);
+    out
+}
+
+/// [`expand`] over `images`.
+fn rewrite(
+    body: Body,
+    parts: &mut ModuleParts,
     func: FuncId,
+    images: &Images,
     m: &mut Meter,
 ) -> Result<(Body, u32), Error> {
     let [a, b, c] = BUFFERS.map(|(.., space)| Type::Ptr { space });
@@ -401,7 +489,17 @@ pub(super) fn expand(
     ];
     let first = append_params(parts, func, &tys, m)?;
     let offsets = Value::Arg(ArgIdx::new(first));
-    if !body.insts.iter().any(|(_, i)| read(&i.kind).is_some()) {
+    let table = Value::Arg(ArgIdx::new(
+        first
+            .checked_add(TABLE)
+            .ok_or_else(|| invariant("parameter indices"))?,
+    ));
+    let buffers = (offsets, table);
+    if !body
+        .insts
+        .iter()
+        .any(|(_, i)| read(&i.kind, images).is_some())
+    {
         return Ok((body, first));
     }
     // Each old instruction's value in the output: an expansion's last instruction, or its
@@ -411,10 +509,10 @@ pub(super) fn expand(
     let mut next = 0u32;
     for (_, inst) in body.insts.iter() {
         m.tick(1)?;
-        let e = match read(&inst.kind) {
+        let e = match read(&inst.kind, images) {
             Some((r, call)) => {
                 let d = dim(parts, r, call)?;
-                measure(parts, offsets, (r, call, inst.ty, d), m)?
+                measure(parts, buffers, (r, call, inst.ty, d), m)?
             }
             None => Expansion {
                 len: 1,
@@ -458,7 +556,7 @@ pub(super) fn expand(
             if let Some(e) = failed {
                 return Err(e);
             }
-            let found = read(&kind).map(|(r, call)| (r, call.clone()));
+            let found = read(&kind, images).map(|(r, call)| (r, call.clone()));
             let value = match found {
                 Some((r, call)) => {
                     let d = dim(parts, r, &call)?;
@@ -466,6 +564,7 @@ pub(super) fn expand(
                         out: &mut out,
                         parts,
                         offsets,
+                        table,
                     };
                     s.emit(r, &call, inst.ty, d, m)?
                 }

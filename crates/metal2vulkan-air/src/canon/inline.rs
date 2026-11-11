@@ -32,8 +32,8 @@
 use crate::budget::Meter;
 use crate::error::{DiagName, Location};
 use crate::error::{Error, Feature, Limit, Unsupported};
-use crate::ir::Value;
 use crate::ir::{Arena, Block, BlockId, Body, Callee, Const, ConstTable, Constant, FuncId};
+use crate::ir::{Call, FastMath, ModuleParts, TailKind, Value};
 use crate::ir::{Function, Idx, Inst, InstId, InstKind, Symbols, Type, TypeId, TypeTable};
 
 use super::rewrite::{filled, invariant, scoped};
@@ -68,6 +68,60 @@ pub(super) fn inline(
         };
         e.run(entry, m, held).map(Some)
     })
+}
+
+/// The entry `func`'s `body` with each call of `calls` (its instruction, and the function an
+/// expansion built for it, whose parameters are the call's operands) made a direct call of that
+/// function, then inlined: the entry's new body. `calls` was charged to `m` by its capacity;
+/// `what` names the expansion in an invariant's error.
+pub(super) fn inline_calls(
+    mut body: Body,
+    parts: &mut ModuleParts,
+    func: FuncId,
+    calls: Vec<(InstId, FuncId)>,
+    what: &'static str,
+    m: &mut Meter,
+) -> Result<Body, Error> {
+    for &(id, f) in &calls {
+        m.tick(1)?;
+        let inst = body
+            .insts
+            .get_mut(id)
+            .ok_or_else(|| invariant("a planned call out of range"))?;
+        let InstKind::Call(call) = &mut inst.kind else {
+            return Err(invariant("a planned call is not a call"));
+        };
+        let direct = Call {
+            callee: Callee::Direct(f),
+            args: call.args.clone(),
+            fmf: FastMath::NONE,
+            tail: TailKind::None,
+            attrs: None,
+            range: None,
+        };
+        m.charge(direct.heap_bytes())?;
+        m.release(call.heap_bytes());
+        **call = direct;
+    }
+    m.release(calls.capacity() * std::mem::size_of::<(InstId, FuncId)>());
+    drop(calls);
+    if let Some(replaced) = parts
+        .funcs
+        .get_mut(func)
+        .ok_or_else(|| invariant("entry out of range"))?
+        .body
+        .replace(body)
+    {
+        replaced.release(m);
+    }
+    inline(
+        &parts.funcs,
+        (&parts.types, &parts.symbols),
+        &mut parts.consts,
+        func,
+        m,
+    )?
+    .ok_or_else(|| invariant(what))
 }
 
 /// The body of a defined function, or `None`.

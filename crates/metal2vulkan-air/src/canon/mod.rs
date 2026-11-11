@@ -40,7 +40,8 @@
 //!    constant that survives is `Error::NeedsInput(FunctionConstant)`. **Unrolling**: a loop whose
 //!    trip count SCCP made constant, and whose counter decides a branch of its body, is unrolled
 //!    within fixed ceilings, and SCCP runs again over the copies; the result is kept where it is
-//!    no larger than the loops it replaces (`unroll`).
+//!    no larger than the loops it replaces (`unroll`). Before SCCP, in OpenCL mode, each operation
+//!    of a 1D image becomes the 2D texture's that Apple's OpenCL binds for it (`opencl_1d`).
 //! 8. **Post-check**: no unknown or unbound intrinsic, indirect call, or call to an undefined
 //!    non-intrinsic function survives, and no reachable branch tests `undef`. A table call's refused candidate,
 //!    a table call no linked function answers, and a function pointer used as a value are refused
@@ -65,8 +66,8 @@
 //!    (`aggregates`). **Global built-in
 //!    variables**: each `air.get_*` read of a program-scope built-in becomes a read of a built-in
 //!    parameter appended to the entry (`global_builtin`); in OpenCL mode, first, the entry takes
-//!    the three hidden buffers and each OpenCL C work-item read becomes a read of its built-in or
-//!    of the first buffer ([`opencl`]).
+//!    the three hidden buffers, each OpenCL C work-item read becomes a read of its built-in or of
+//!    the first buffer, and each image format query a read of the third ([`opencl`]).
 //! 10. **ABI resolution and pruning**: predicate-gated parameters and outputs that are off
 //!     disappear from the entry point, a read of an absent argument takes its absent value (the
 //!     null reference of a resource argument) or is refused, global-valued ABI integers become
@@ -105,6 +106,7 @@ mod link;
 mod link_tests;
 mod matmul2d;
 pub mod opencl;
+mod opencl_1d;
 mod out;
 mod pieces;
 mod prune;
@@ -610,6 +612,12 @@ pub fn specialize_dynamic(
     let body = async_copy::expand(body, &mut parts, ep, m)?;
     // Metal 4.1's block reads are the reads of their texels.
     let body = block_read::expand(body, &mut parts, ep.func, m)?;
+    // OpenCL mode: a 1D image's operations are the 2D texture's that Apple's OpenCL binds for it.
+    let body = if req.open_cl_mode && matches!(ep.stage, Stage::Kernel { .. }) {
+        opencl_1d::expand(body, &mut parts, ep.func, m)?
+    } else {
+        body
+    };
 
     // SCCP. The body it read is freed as soon as it has run.
     let solved = solve(&body, &mut parts, &fcs, &name, m)?;
@@ -692,10 +700,12 @@ pub fn specialize_dynamic(
     } else {
         body
     };
-    // OpenCL mode: the three hidden buffers appended to the entry, and each OpenCL work-item read
-    // a read of its built-in or of the first buffer, which the global built-ins below take.
+    // OpenCL mode: the three hidden buffers appended to the entry, each OpenCL work-item read a
+    // read of its built-in or of the first buffer, which the global built-ins below take, and each
+    // image format query a read of the third.
     let (body, hidden) = if req.open_cl_mode && matches!(ep.stage, Stage::Kernel { .. }) {
-        let (body, first) = opencl::expand(body, &mut parts, func, m)?;
+        let images = opencl::Images::of(ep, m)?;
+        let (body, first) = opencl::expand(body, &mut parts, (func, images), m)?;
         (body, Some(first))
     } else {
         (body, None)

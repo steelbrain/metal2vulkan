@@ -142,6 +142,15 @@ pub enum Query {
     NumMipLevels,
     /// `get_num_samples`: a multisampled texture's samples per texel.
     NumSamples,
+    /// `get_channel_order`: OpenCL C's `get_image_channel_order`, as Apple's OpenCL compiler
+    /// writes it (`i32 (tex)`, macOS 27.0.1 and 26.7.1). A pipeline of OpenCL mode reads it from
+    /// its third hidden buffer (`canon::opencl`); lowering refuses one any other pipeline keeps.
+    /// Metal makes no pipeline of OpenCL mode that queries a texture buffer or a depth texture
+    /// (measured on an M3 Max and a Radeon Pro 5300M), so those kinds stay undecoded.
+    ChannelOrder,
+    /// `get_channel_data_type`: OpenCL C's `get_image_channel_data_type`, as
+    /// [`Query::ChannelOrder`].
+    ChannelDataType,
 }
 
 /// A texture operation. The bound immediates live in the variant.
@@ -377,6 +386,9 @@ pub(super) const OPS: &[(&str, OpName, &[&str], &[&str])] = {
     const LOD_D: &[&str] = &["2d", "2d_array", "cube", "cube_array"];
     // The textures Metal's atomics take (Apple's metal 32023.921 declares no cube one).
     const ATOMIC_T: &[&str] = &["1d", "1d_array", "2d", "2d_array", "3d", "buffer_1d"];
+    // The images whose format a pipeline of OpenCL mode answers (OpenCL C's image types but the
+    // buffer and depth ones, whose queries Metal refuses).
+    const CL_T: &[&str] = &["1d", "1d_array", "2d", "2d_array", "3d"];
     &[
         (
             "sample",
@@ -581,6 +593,19 @@ pub(super) const OPS: &[(&str, OpName, &[&str], &[&str])] = {
             Query(super::texture::Query::NumSamples),
             &["2d_ms", "2d_ms_array"],
             &["2d_ms", "2d_ms_array"],
+        ),
+        // OpenCL C's image format queries (Apple's OpenCL compiler, macOS 27.0.1 and 26.7.1).
+        (
+            "get_channel_order",
+            Query(super::texture::Query::ChannelOrder),
+            CL_T,
+            &[],
+        ),
+        (
+            "get_channel_data_type",
+            Query(super::texture::Query::ChannelDataType),
+            CL_T,
+            &[],
         ),
         ("is_null", IsNull, ALL_T, ALL_D),
         ("get_null", GetNull, ALL_T, ALL_D),

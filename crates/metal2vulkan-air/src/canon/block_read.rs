@@ -206,48 +206,15 @@ pub(super) fn expand(
     m.release(plans.capacity() * std::mem::size_of::<(InstId, Lowered, FuncId)>());
     drop(plans);
 
-    // The calls rewritten in place to the functions built for them, then inlined.
-    let mut body = body;
-    for &(id, f) in &calls {
-        m.tick(1)?;
-        let inst = body
-            .insts
-            .get_mut(id)
-            .ok_or_else(|| invariant("a planned call out of range"))?;
-        let InstKind::Call(call) = &mut inst.kind else {
-            return Err(invariant("a planned call is not a call"));
-        };
-        let lowered = Call {
-            callee: Callee::Direct(f),
-            args: call.args.clone(),
-            fmf: FastMath::NONE,
-            tail: TailKind::None,
-            attrs: None,
-            range: None,
-        };
-        m.charge(lowered.heap_bytes())?;
-        m.release(call.heap_bytes());
-        **call = lowered;
-    }
-    m.release(calls.capacity() * std::mem::size_of::<(InstId, FuncId)>());
-    drop(calls);
-    if let Some(replaced) = parts
-        .funcs
-        .get_mut(func)
-        .ok_or_else(|| invariant("entry out of range"))?
-        .body
-        .replace(body)
-    {
-        replaced.release(m);
-    }
-    inline::inline(
-        &parts.funcs,
-        (&parts.types, &parts.symbols),
-        &mut parts.consts,
+    // The calls made calls of the functions built for them, then inlined.
+    inline::inline_calls(
+        body,
+        parts,
         func,
+        calls,
+        "an expanded block read was not inlined",
         m,
-    )?
-    .ok_or_else(|| invariant("an expanded block read was not inlined"))
+    )
 }
 
 /// The function `lowered` of the block read declared by `decl`: its parameters are the call's
