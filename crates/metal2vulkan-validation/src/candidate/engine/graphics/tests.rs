@@ -2178,7 +2178,8 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
 /// public framebuffer-fetch case plans its color inputs as input attachments with no
 /// rasterization-order access, which the consumer orders between draws alone, and its fragment
 /// stage notes `PrecisionNote::UnorderedFetchWithinDraw`; or, a multisampled pass, is refused as on
-/// every device (the coverage read beside it, or a sample count the attachments lack).
+/// every device (the coverage read beside it, or a sample count the attachments lack), or for the
+/// sample-rate shading each invocation's read of its own sample needs, where the device lacks it.
 #[test]
 fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form() {
     use crate::air::reflect::ResourceKind;
@@ -2238,12 +2239,24 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
                 };
                 let pipeline = match planned_draw(&unordered, &render, libraries) {
                     Ok((pipeline, _, _)) => pipeline,
-                    // A multisampled pass's refusals of every device's form (the lavapipe test's).
+                    // A multisampled pass's refusals of every device's form (the lavapipe
+                    // test's), and its fetch on a device without sample-rate shading, which each
+                    // invocation's read of its own sample needs.
                     Err(Error::Unsupported(refusal)) if case.raster_sample_count.is_some() => {
-                        use metal2vulkan::error::{Feature, Needs};
+                        use metal2vulkan::device::VkFeature;
+                        use metal2vulkan::error::{Capability, Feature, Needs};
+                        let shading = [vec![Capability::Feature(VkFeature::SampleRateShading)]];
                         match (&refusal.feature, &refusal.needs) {
                             (Feature::PixelCoverageAtSampleRate, Needs::NotRepresentable)
                             | (Feature::RasterSampleCount, Needs::AnyOf(_)) => continue,
+                            (Feature::FramebufferFetch, Needs::AnyOf(needs))
+                                if needs[..] == shading
+                                    && !crate::engine::load_description(stem)
+                                        .unwrap()
+                                        .has(VkFeature::SampleRateShading) =>
+                            {
+                                continue
+                            }
                             _ => panic!("{stem} {}: {refusal:?}", case.name),
                         }
                     }
