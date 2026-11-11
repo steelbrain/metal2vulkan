@@ -150,13 +150,14 @@
 //!   them: it starts at most three, each with a 256 KiB stack, and they end before it returns, so a
 //!   device's comparisons, which its copies' lock keeps one at a time, hold at most three more
 //!   threads at once (`WorkCounts::copied_compare_threads`; a copy without a base is compared on
-//!   the calling thread). On that host a 256 MiB copy with a base that agrees took 5.8-6.0 ms
-//!   each way; where every byte changed on both sides 25.7-26.0 ms in and 25.9-26.3 ms back; where
-//!   every float of it was rewritten as `x + i` (the GPU's side alone), 25.5-25.9 ms back, and
-//!   40.1-40.8 ms without the host's masked stores; with other work running, 680 MiB of copies
+//!   the calling thread). On that host a 256 MiB copy with a base that agrees took 5.8-6.1 ms
+//!   each way; where every byte changed on both sides 25.7-26.4 ms in and 25.9-27.3 ms back; where
+//!   every float of it was rewritten as `x + i` (the GPU's side alone), 25.5-27.5 ms back, and
+//!   40.1-47.4 ms without the host's masked stores; with other work running, 680 MiB of copies
 //!   that agree 29-30 ms each way, their logged copy in 0.2 ms where no page changed and 4.2 ms
-//!   where 1% of the pages changed on each side; a merge back of no copy written, none (`tests/copied_bench.rs`;
-//!   `docs/FAST-PATHS.md` has the snapshot's figures they replaced). Counted:
+//!   where 1% of the pages changed on each side; a merge back of no copy written, none
+//!   (`tests/copied_bench.rs`; `docs/FAST-PATHS.md` has the snapshot's figures they replaced).
+//!   Counted:
 //!   `WorkCounts::copied_copy_in_bytes`, `WorkCounts::copied_merge_back_bytes`,
 //!   `WorkCounts::copied_dropped_bytes`.
 //! - **Heaps and rebinds.** A no-copy heap's own buffer is copied as a buffer is, where the heap's
