@@ -532,6 +532,7 @@ impl Device {
         release: Option<Release>,
     ) -> Result<Side, Error> {
         let pointer = parts.pointer;
+        let vouched = parts.writable;
         let made_of = parts.clone();
         let outside = super::address::AddressPlacement::Outside.into();
         let made = (call, length, options, outside);
@@ -545,10 +546,15 @@ impl Device {
                     .map_or(4096, |importer| importer.page.max(1));
                 let at = pointer.as_ptr() as u64;
                 let reach = (at + length).next_multiple_of(page) - at;
+                // A refusal before the pages' write permission was asked (the caller's gate, the
+                // device's refusal of the pointer, a failed import) asks it here: the GPU's
+                // writes to pages the process cannot write are dropped, never copied out to them.
+                let drops_writes = error == uncopied(true)
+                    || (!vouched && self.unwritable(at..at + reach, page)?);
                 let pages = CallerPages {
                     pointer,
                     reach,
-                    drops_writes: error == uncopied(true),
+                    drops_writes,
                     made_of,
                     release: OnceLock::new(),
                 };
@@ -560,6 +566,23 @@ impl Device {
             side.release_to(release);
         }
         Ok(side)
+    }
+
+    /// Whether the process cannot write the pages of `range` (whole pages of `page` bytes), as
+    /// the import of no-copy memory asks it (`host_memory.rs`'s `refuse_unwritable`); refused
+    /// where the system cannot say, as that import is.
+    fn unwritable(&self, range: Range<u64>, page: u64) -> Result<bool, Error> {
+        let start = range.start / page * page;
+        let window = super::host_memory::ImportWindow {
+            start,
+            offset: range.start - start,
+            size: range.end - start,
+        };
+        match super::host_memory::refuse_unwritable(&window, &self.shared().counts) {
+            Ok(()) => Ok(false),
+            Err(error) if super::host_memory::refused(&error) => Ok(true),
+            Err(error) => Err(error),
+        }
     }
 
     /// A two-copy buffer (the module docs) of `made`'s call, length, options and Metal address
