@@ -235,6 +235,8 @@ fn copied_base_read_scale_bench() {
     }
     let reads = Reads(&base);
     let read = |from: usize, to: usize| {
+        // The whole `Reads`, which the threads share, not its field.
+        let reads = &reads;
         let mut into = [0u8; 1024];
         for at in (from..to).step_by(1024) {
             // SAFETY: a block of the base's bytes, written above.
