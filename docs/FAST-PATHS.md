@@ -1461,20 +1461,39 @@ driver's. Each is open work.
   which the driver takes so (measured: a 64 MiB chunk imported dedicated to nothing on the RTX 5080
   Laptop, its RAM's first page dedicated to its buffer); an object's run alone of a few pages the
   driver may refuse so, and the object then takes the runtime's other paths (`host_ram.rs`'s
-  `bind_in_chunk`). It also **closes the descriptor it was
-  handed**, which the Vulkan specification gives it only on a successful import: `F_GETFD` on the
-  descriptor reads `EBADF` the instant the call returns. Closing it again aborted the process on
-  Rust's I/O safety check, so an import now hands the driver a clone and never closes a clone it
-  has handed over (`memory.rs`), which lets go of one descriptor per failed import. Giving a
-  well-behaved driver its descriptor back would need a measured driver fact. A refusal for want
-  of memory is that import's alone, never remembered: only a refusal that lasts (the driver
+  `bind_in_chunk`). It lists a udmabuf of host pages as two memory types, 0 and 4 (host-visible,
+  coherent and cached, the one the runtime ranks first), and refuses every import as 4 as out of
+  device memory (620.70.06 on an RTX 2080 and an RTX 3090, measured), so an import now tries
+  first the type its kind (what it backs, and its class) last imported as (`memory.rs`'s
+  `worked_first`), every type still tried after it. A failed import is where the driver's defects
+  lie:
+  - it **closes the descriptor it was handed**, which the Vulkan specification gives it only on a
+    successful import: `F_GETFD` on the descriptor reads `EBADF` the instant the call returns
+    (615.71.09 and 620.70.06). 620.70.06 at times closes the number twice within the one failed
+    call (measured on an RTX 2080, eight threads importing: 3 of 10 failed imports), and the
+    second close closed whatever another thread had opened under the number meanwhile. An import
+    hands the driver a clone of the descriptor at a number kept from the process's other
+    descriptors while the import runs (`handed_descriptor.rs`), so neither close reaches another
+    descriptor, and after a failure closes the clone where the driver left it open. Past 64
+    imports in flight at once, or where the process holds the 64 numbers below its descriptor
+    limit (or below 65536) itself, the clone takes the lowest free number, and a failed import
+    lets it go rather than close it: one descriptor per such failure.
+  - with four threads importing, a failed import at times never returns (620.70.06: 3 of 7 runs
+    on an RTX 2080 alone, and on an RTX 3090): it spins inside `vkAllocateMemory` holding the
+    driver's lock, the other threads' frees, buffer releases and dma-buf queries waiting for it,
+    the GPU idle. With no import as type 4 tried, 8 of 8 such runs ended; with the type order
+    above, 8 of 8 ended on the RTX 2080 and 8 of 8 on the RTX 3090. The first imports of each
+    kind on a device still try type 4, so the stall stays **open** for them.
+
+  RADV's imports take the kept numbers too (measured on a Radeon 780M, Mesa 26.2.6, by the
+  dma-buf probes). A refusal for want of memory is that import's alone, never remembered as a
+  refusal (the type that worked goes first, above): only a refusal that lasts (the driver
   refuses the dma-buf itself, `ERROR_INVALID_EXTERNAL_HANDLE`, or imports it as no memory type
   its buffer takes) is counted (`WorkCounts::host_ram_dma_buf_imports_failed`) and remembered
   for the device's life, so that the device's later chunks and copies' lists take their pointer
   without asking the source, and a RAM's use that asks the driver first, by an import of the
   RAM's first page, keeps its 64 MiB chunks imported ahead by their pointer, never the long
-  chunks made for dma-bufs. A device that imports dma-bufs (RADV) is **unaudited** for the
-  clone.
+  chunks made for dma-bufs.
 
 - **A pointer import of pages the kernel cannot pin on NVIDIA** (a dma-buf's mapping, `VM_PFNMAP`)
   fails as out of device memory (615.71.09), where Vulkan requires

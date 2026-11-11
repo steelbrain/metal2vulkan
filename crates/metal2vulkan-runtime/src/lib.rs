@@ -127,6 +127,8 @@ mod generated_execute;
 mod gpu_execute;
 mod gpu_pools;
 mod gpu_time;
+#[cfg(unix)]
+mod handed_descriptor;
 mod heap;
 mod heap_sets;
 mod host_aliases;

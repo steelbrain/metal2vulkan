@@ -1,7 +1,8 @@
 use crate::memory::{
     candidates, dma_buf_candidates, fd_buffer_types, host_cached, host_cached_placement,
     host_image_types, host_incoherent, kept_budget, overflow_candidates, pooled_block_bytes,
-    MemoryClass, Pool, BLOCK_BYTES, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
+    worked_first, MemoryClass, Pool, BLOCK_BYTES, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES,
+    KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -94,6 +95,22 @@ fn dma_buf_imports_try_the_class_s_types_then_the_dma_buf_s_others() {
         dma_buf_candidates(&others, 0b1111, MemoryClass::Shared, false),
         [3]
     );
+}
+
+/// The type the device's last import of a kind succeeded as goes first, the others keep their
+/// order and stay tried: NVIDIA's udmabuf types ranked 4, 0, its imports succeeding as 0 alone.
+#[test]
+fn a_dma_buf_import_tries_the_type_its_kind_last_imported_as_first() {
+    assert_eq!(worked_first(vec![4, 0], Some(0)), [0, 4]);
+    assert_eq!(
+        worked_first(vec![4, 5, 3, 0, 1, 2], Some(3)),
+        [3, 4, 5, 0, 1, 2]
+    );
+    assert_eq!(worked_first(vec![4, 0], Some(4)), [4, 0]);
+    // A type the dma-buf or its resource does not take is not added.
+    assert_eq!(worked_first(vec![4, 0], Some(7)), [4, 0]);
+    assert_eq!(worked_first(vec![4, 0], None), [4, 0]);
+    assert!(worked_first(Vec::new(), Some(0)).is_empty());
 }
 
 /// A class that requires device-local memory (`Private`, `Memoryless`) overflows, where none of
