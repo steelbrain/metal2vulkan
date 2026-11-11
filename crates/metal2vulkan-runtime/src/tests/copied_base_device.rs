@@ -16,7 +16,7 @@ use crate::{
 use std::alloc::Layout;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const WAIT: Duration = Duration::from_secs(60);
 /// The copied buffer's bytes.
@@ -151,4 +151,57 @@ fn copied_256_device_bench() {
         false => format!("{named}, host base (no room on the device)"),
     };
     super::copied_bench::bench_256(&label, &mut |length| device.copied_base(length));
+}
+
+/// The rate of a read of a 1 KiB block of a base in the device's memory, the read a comparison
+/// makes of a block both sides changed: with the host's streaming loads where it has them
+/// (`BaseBytes::read`) and with plain loads, over 1 MiB, the median of five passes
+/// (`COPIED-BASE-READ`). Ignored: run it in release with `--ignored --nocapture`.
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn copied_base_read_bench() {
+    const BYTES: usize = 1 << 20;
+    let Some(device) = device() else {
+        return;
+    };
+    let Some(base) = device.copied_base(BYTES) else {
+        eprintln!("COPIED-BASE-READ: no base in the device's memory here");
+        return;
+    };
+    let named = device.name().to_string();
+    let block = [0x5A_u8; 1024];
+    for at in (0..BYTES).step_by(1024) {
+        // SAFETY: a block of the base's bytes.
+        unsafe { base.write(at, &block) };
+    }
+    let mut into = [0u8; 1024];
+    for streaming in [true, false, true, false] {
+        let mut passes: Vec<f64> = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                for at in (0..BYTES).step_by(1024) {
+                    // SAFETY: as above.
+                    unsafe {
+                        match streaming {
+                            true => base.read(at, &mut into),
+                            false => base.read_plain(at, &mut into),
+                        }
+                    }
+                }
+                started.elapsed().as_secs_f64()
+            })
+            .collect();
+        passes.sort_by(f64::total_cmp);
+        let seconds = passes[2];
+        assert_eq!(into, block);
+        eprintln!(
+            "COPIED-BASE-READ {named}, {}: {:.2} us a 1 KiB block ({:.1} MB/s)",
+            match streaming {
+                true => "read (streaming loads where the host has SSE4.1)",
+                false => "plain loads",
+            },
+            seconds * 1e6 / (BYTES / 1024) as f64,
+            BYTES as f64 / 1e6 / seconds,
+        );
+    }
 }

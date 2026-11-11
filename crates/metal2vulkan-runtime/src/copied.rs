@@ -140,12 +140,14 @@
 //!   them: it starts at most three, each with a 256 KiB stack, and they end before it returns, so a
 //!   device's comparisons, which its copies' lock keeps one at a time, hold at most three more
 //!   threads at once (`WorkCounts::copied_compare_threads`; a copy without a base is compared on
-//!   the calling thread). On that host a 256 MiB copy with a base that agrees took 9.1-9.4 ms each
-//!   way, and where every byte changed on both sides 172 ms in and 218 ms back; 680 MiB of copies
-//!   that agree 27-28 ms each way; their logged copy in 0.2-0.3 ms where no page changed, and
-//!   4.8-6.0 ms where 1% of the pages changed on each side; a merge back of no copy written, none
-//!   (`tests/copied_bench.rs`; `docs/FAST-PATHS.md` has the snapshot's figures they replaced).
-//!   Counted: `WorkCounts::copied_copy_in_bytes`, `WorkCounts::copied_merge_back_bytes`,
+//!   the calling thread). On that host, with other work running, a 256 MiB copy with a base that
+//!   agrees took 5.8-6.6 ms each way; where every byte changed on both sides 26-37 ms in and 26-41
+//!   ms back; where every float of it was rewritten as `x + i` (the GPU's side alone), 26-44 ms
+//!   back, and 43-62 ms without the host's masked stores; 680 MiB of copies that agree 29-30 ms
+//!   each way; their logged copy in 0.2 ms where no page changed, and 4.2 ms where 1% of the pages
+//!   changed on each side; a merge back of no copy written, none (`tests/copied_bench.rs`;
+//!   `docs/FAST-PATHS.md` has the snapshot's figures they replaced). Counted:
+//!   `WorkCounts::copied_copy_in_bytes`, `WorkCounts::copied_merge_back_bytes`,
 //!   `WorkCounts::copied_dropped_bytes`.
 //! - **Heaps and rebinds.** A no-copy heap's own buffer is copied as a buffer is, where the heap's
 //!   textures could lie, with a heap's hazard identity; its buffers lie in the copy at their
@@ -774,7 +776,7 @@ impl BaseBytes {
     /// # Safety
     ///
     /// `offset..offset + into.len()` lies in the bytes.
-    unsafe fn read(&self, offset: usize, into: &mut [u8]) {
+    pub(crate) unsafe fn read(&self, offset: usize, into: &mut [u8]) {
         // SAFETY: the caller's.
         let from = unsafe { self.at.as_ptr().add(offset) };
         #[cfg(target_arch = "x86_64")]
@@ -786,12 +788,30 @@ impl BaseBytes {
         unsafe { std::ptr::copy_nonoverlapping(from, into.as_mut_ptr(), into.len()) };
     }
 
+    /// [`BaseBytes::read`] with plain loads, whatever the memory: a benchmark's measure of the
+    /// streaming loads against them.
+    ///
+    /// # Safety
+    ///
+    /// As [`BaseBytes::read`]'s.
+    #[cfg(test)]
+    pub(crate) unsafe fn read_plain(&self, offset: usize, into: &mut [u8]) {
+        // SAFETY: the caller's; `into` is the caller's own, apart.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.at.as_ptr().add(offset),
+                into.as_mut_ptr(),
+                into.len(),
+            )
+        };
+    }
+
     /// Write `from` into the bytes from `offset`.
     ///
     /// # Safety
     ///
     /// `offset..offset + from.len()` lies in the bytes.
-    unsafe fn write(&self, offset: usize, from: &[u8]) {
+    pub(crate) unsafe fn write(&self, offset: usize, from: &[u8]) {
         // SAFETY: the caller's; `from` is the caller's own, apart.
         unsafe {
             std::ptr::copy_nonoverlapping(from.as_ptr(), self.at.as_ptr().add(offset), from.len())
