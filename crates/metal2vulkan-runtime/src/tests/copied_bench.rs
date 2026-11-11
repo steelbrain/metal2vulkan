@@ -466,7 +466,7 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
 #[test]
 #[ignore = "a release-mode benchmark"]
 fn copied_tag_bench() {
-    use crate::copied::{tag_portable, TAG_BLOCK};
+    use crate::copied::{tag, tag_portable, TAG_BLOCK};
     for length in [64 << 10, 256 << 20] {
         let one: Vec<u8> = (0..length).map(|b: usize| (b ^ (b >> 11)) as u8).collect();
         let two = one.clone();
@@ -498,13 +498,24 @@ fn copied_tag_bench() {
                 .fold(0, u64::wrapping_add)
         });
         #[cfg(target_arch = "x86_64")]
-        if std::is_x86_feature_detected!("avx2") {
-            // SAFETY: the host has AVX2.
-            let avx2 = |b| unsafe { crate::copied::tag_avx2(b) }[0];
-            rate("avx2 tag", &|| {
-                blocks().map(avx2).fold(0, u64::wrapping_add)
+        {
+            use crate::copied::{key, x86};
+            // SAFETY: every x86-64 host has SSE2.
+            let sse2 = |b| unsafe { x86::tag_sse2(b, key()) }[0];
+            rate("sse2 tag", &|| {
+                blocks().map(sse2).fold(0, u64::wrapping_add)
             });
+            if std::is_x86_feature_detected!("avx2") {
+                // SAFETY: the host has AVX2.
+                let avx2 = |b| unsafe { x86::tag_avx2(b, key()) }[0];
+                rate("avx2 tag", &|| {
+                    blocks().map(avx2).fold(0, u64::wrapping_add)
+                });
+            }
         }
+        rate("tag", &|| {
+            blocks().map(|b| tag(b)[0]).fold(0, u64::wrapping_add)
+        });
         rate("two-stream compare", &|| {
             let pairs = one.chunks_exact(4096).zip(two.chunks_exact(4096));
             pairs

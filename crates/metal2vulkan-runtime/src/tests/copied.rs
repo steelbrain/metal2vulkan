@@ -552,7 +552,9 @@ fn a_tag_is_the_same_on_every_path() {
         #[cfg(target_arch = "x86_64")]
         {
             let key = crate::copied::key();
-            assert_eq!(crate::copied::x86::tag_sse2(block, key), portable, "SSE2");
+            // SAFETY: every x86-64 host has SSE2.
+            let sse2 = unsafe { crate::copied::x86::tag_sse2(block, key) };
+            assert_eq!(sse2, portable, "SSE2");
             if std::is_x86_feature_detected!("avx2") {
                 // SAFETY: the host has AVX2.
                 let avx2 = unsafe { crate::copied::x86::tag_avx2(block, key) };

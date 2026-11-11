@@ -370,7 +370,8 @@ pub(crate) fn tag(block: &[u8; TAG_BLOCK]) -> Tag {
             // SAFETY: the host has AVX2.
             return unsafe { x86::tag_avx2(block, key()) };
         }
-        x86::tag_sse2(block, key())
+        // SAFETY: every x86-64 host has SSE2.
+        unsafe { x86::tag_sse2(block, key()) }
     }
     #[cfg(not(target_arch = "x86_64"))]
     tag_portable(block)
@@ -423,6 +424,7 @@ pub(crate) mod x86 {
     };
 
     /// SSE2, which every x86-64 host has: one 32-byte stretch to a step.
+    #[target_feature(enable = "sse2")]
     pub(crate) fn tag_sse2(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
         let words = block.as_ptr().cast::<__m128i>();
         let keys = key.as_ptr().cast::<__m128i>();
@@ -474,12 +476,8 @@ pub(crate) mod x86 {
 
     /// AVX2: two 32-byte stretches to a step, the words `m0` to `m3` of both in one register and
     /// `m4` to `m7` of both in another.
-    ///
-    /// # Safety
-    ///
-    /// The host has AVX2.
     #[target_feature(enable = "avx2")]
-    pub(crate) unsafe fn tag_avx2(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
+    pub(crate) fn tag_avx2(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
         let words = block.as_ptr().cast::<__m128i>();
         let keys = key.as_ptr().cast::<__m128i>();
         let (mut first, mut second) = ([_mm256_setzero_si256(); 2], [_mm256_setzero_si256(); 2]);
@@ -487,7 +485,7 @@ pub(crate) mod x86 {
             let at = 2 * stretch;
             // SAFETY: unaligned loads of the block's 16-byte pieces `at` to three after it (at
             // most its 63rd of 64), and of the key's 4-word pieces `at` to four after it (at
-            // most its 64th of 65: words 256 to 259); the host has AVX2.
+            // most its 64th of 65: words 256 to 259).
             let (low, high, low_key, high_key, next_key) = unsafe {
                 (
                     _mm256_loadu2_m128i(words.add(at + 2), words.add(at)),
@@ -524,7 +522,7 @@ pub(crate) mod x86 {
         }
         let mut sums = [[0u64; 4]; 2];
         for (sum, lanes) in sums.iter_mut().zip([first, second]) {
-            // SAFETY: a 32-byte store into four u64s; the host has AVX2.
+            // SAFETY: a 32-byte store into four u64s.
             unsafe {
                 _mm256_storeu_si256(
                     sum.as_mut_ptr().cast(),
