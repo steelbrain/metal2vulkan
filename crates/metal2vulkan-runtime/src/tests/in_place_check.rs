@@ -352,12 +352,16 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
 
 /// The check's note of a shape it made no image of in place says why in words: the placement's
 /// answer, then the making's refusal (`in_place_check.rs`'s `unmade`, `Error::NotInPlace`), with
-/// no internal error and no value's debug form in it; and its verdict and whether its cause lasts
-/// are as before. On a driver that renders an explicit plane's rows past its height
-/// (`RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`, lavapipe), the dma-buf class's reads of
-/// rows that end inside lines, of which the device makes no image at the pitch (no shape of the
-/// check whose rows end inside lines has a height that is a multiple of 4): unchecked, for a
-/// cause that lasts, which the note names. Printed (`IN-PLACE-NOTE`): each such note.
+/// no internal error and no value's debug form in it; and whether its cause lasts, which decides
+/// whether its verdict is kept, is as before. On a driver that renders an explicit plane's rows
+/// past its height (`RuntimeDriverDefect::ExplicitPlaneRowsPastHeight`, lavapipe), whose linear
+/// image lays rows tight, the device makes no image at the pitch of the check's 20x9
+/// `RGBA32Float` shape at 512-byte rows (a height no multiple of 4), over host pages imported by
+/// their pointer (`Device::host_shadowed` refuses it) or in its pooled memory (refused over the
+/// device's memory): each noted for the pitch, a cause that lasts, as before; and the dma-buf
+/// class's reads of rows that end inside lines (no shape of the check whose rows end inside
+/// lines has a height that is a multiple of 4) stay unchecked. Printed (`IN-PLACE-NOTE`): each
+/// such note.
 #[test]
 fn the_in_place_checks_notes_say_in_words_why_it_made_no_image() {
     let scratch = Scratch::new("in-place-check-notes");
@@ -394,16 +398,16 @@ fn the_in_place_checks_notes_say_in_words_why_it_made_no_image() {
             "the dma-buf class's reads of rows inside lines: {notes:#?}"
         );
         let pitch = crate::InPlaceRefusal::Pitch.words();
-        let named = (unmade.iter()).any(|note| {
-            note.starts_with("DmaBuf reads: no ")
-                && note.contains(pitch)
-                && note.ends_with("(a cause that lasts, kept)")
-        });
-        assert!(
-            named,
-            "the dma-buf class's reads of rows inside lines noted unmade for the pitch, a cause \
-             that lasts: {notes:#?}"
-        );
+        for class in ["Pointer", "Pooled"] {
+            let head = format!(
+                "{class} reads, rows on lines: no RGBA32Float image of 20x9 with rows 512 bytes \
+                 apart: {pitch}: "
+            );
+            let named = (unmade.iter()).any(|note| {
+                note.starts_with(&head) && note.ends_with("(a cause that lasts, kept)")
+            });
+            assert!(named, "noted {head:?}, a cause that lasts: {notes:#?}");
+        }
     }
 }
 
