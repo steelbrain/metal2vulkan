@@ -507,10 +507,11 @@ impl Device {
     /// Refused: a length of 0 or past `max_buffer_length` (`Nil`, as plain Metal answers nil);
     /// `Private` or `Memoryless` storage, as Metal stops them, and an undefined
     /// option (`Invalid`); on a device without `VK_EXT_external_memory_host`, memory that comes
-    /// with no dma-buf source it imports (`Unsupported`, naming it); memory this device
-    /// cannot import exactly, by its pointer or by its dma-bufs (`Unsupported`, `HostMemory`),
-    /// among it on Linux a page this process cannot write ([`HostMemory::new`]); dma-bufs that
-    /// break the source's contract (`Invalid`, `Problem::DmaBuf`); pages past the
+    /// with no dma-buf source it imports and lies in no chunk of a guest RAM it uses
+    /// (`Device::use_host_ram`, `HostMemory::with_runs`) (`Unsupported`, naming it); memory this
+    /// device cannot import exactly, by its pointer or by its dma-bufs (`Unsupported`,
+    /// `HostMemory`), among it on Linux a page this process cannot write ([`HostMemory::new`]);
+    /// dma-bufs that break the source's contract (`Invalid`, `Problem::DmaBuf`); pages past the
     /// device's allocation size (`OutOfMemory`). Pages not mapped, or mapped without access, which
     /// Metal makes no buffer over (nil), are refused here too, typed as the check or the import
     /// answers, though such memory breaks [`HostMemory::new`]'s contract.
@@ -749,6 +750,12 @@ impl Device {
         } = parts;
         let source = (source, dma_buf_only);
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
+        // Pages with no route of their own are refused here, but where their runs may lie in a
+        // guest RAM's chunk (below), refused there where they do not.
+        let no_route = match (host.no_route(importer), &runs) {
+            (Some(refusal), None) => return Err(refusal),
+            (no_route, _) => no_route,
+        };
         let window = host.window;
         if of_heap && window.offset != 0 {
             let alignment = importer.unit();
@@ -849,6 +856,9 @@ impl Device {
                 (buffer, memory, again)
             }
             None => {
+                if let Some(refusal) = no_route {
+                    return Err(refusal);
+                }
                 // A no-copy buffer or heap whose pointer the device would import (not one whose GPU
                 // writes are dropped) may be a copy instead (`copied.rs`): where the caller's gate
                 // refuses the import, asked here with the pages it would map, holding no lock of
@@ -1094,6 +1104,11 @@ impl Device {
         let drops_writes = cell.drops_writes();
         let source = (source, dma_buf_only);
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
+        // As at the buffer's making: refused here, but where the runs may lie in a chunk.
+        let no_route = match (host.no_route(importer), &runs) {
+            (Some(refusal), None) => return Err(refusal),
+            (no_route, _) => no_route,
+        };
         let window = host.window;
         if heap.is_some() && window.offset != 0 {
             let alignment = importer.unit();
@@ -1256,14 +1271,18 @@ impl Device {
                 let imported = match (in_chunk, imports) {
                     (Some(bound), _) => Ok(Ok(bound)),
                     (None, false) => Err(None),
-                    // SAFETY: the window lies in the pages of the caller's bytes, which stay
-                    // mapped (`HostMemory::new`, `HostMemory::with_dma_buf`).
-                    (None, true) => match unsafe {
-                        self.import_by_pointer(importer, pointer, length, host, class)
-                    } {
-                        Ok(imported) => Ok(imported),
-                        Err(error) if copyable && copies_after(&error) => Err(Some(error)),
-                        Err(error) => return Err(error),
+                    // Pages with no route of their own that lie in no chunk (above).
+                    (None, true) => match no_route {
+                        Some(refusal) => return Err(refusal),
+                        // SAFETY: the window lies in the pages of the caller's bytes, which stay
+                        // mapped (`HostMemory::new`, `HostMemory::with_dma_buf`).
+                        None => match unsafe {
+                            self.import_by_pointer(importer, pointer, length, host, class)
+                        } {
+                            Ok(imported) => Ok(imported),
+                            Err(error) if copyable && copies_after(&error) => Err(Some(error)),
+                            Err(error) => return Err(error),
+                        },
                     },
                 };
                 // The heap's images bound to its bytes, and the images in place over them, made
@@ -2410,9 +2429,8 @@ fn source_failure(failed: Error, refusal: Error) -> Error {
 /// source the device can use. A source the device cannot use is dropped uncalled, as is any where
 /// `drops_writes` (imported through a read-only view, `read_only_view.rs`, or a copy where the
 /// system maps none). Refused: memory past the address space's end (`Nil`, as Metal makes no
-/// buffer over it); with no usable source, memory to be imported that a device without
-/// `VK_EXT_external_memory_host` imports no way (`Unsupported`, naming it), and a range the import
-/// alignment cannot cover, or memory imported only as dma-bufs (`Unsupported`, `HostMemory`).
+/// buffer over it). Pages with no route of their own are the caller's to refuse
+/// ([`HostWindow::no_route`]).
 fn host_window(
     call: &'static str,
     importer: &Importer,
@@ -2429,22 +2447,31 @@ fn host_window(
         && (importer.pointers()).is_some_and(|pointers| {
             import_window(at, length, importer.page, pointers.alignment).is_ok()
         });
-    // Memory whose GPU writes are dropped where the system maps no read-only view of the pages
-    // is a copy of them, imported by no route (`copied.rs`).
-    let copied = drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES;
-    if !by_pointer && source.is_none() && !copied {
-        // A device that imports no pointer refuses as it imports none, naming what it lacks.
-        return Err(match importer.pointer_import() {
-            Ok(_) => not_importable(),
-            Err(refusal) => refusal,
-        });
-    }
     Ok(HostWindow {
         drops_writes,
         window,
         by_pointer,
         source,
     })
+}
+
+impl HostWindow {
+    /// The refusal of pages with no route of their own: not imported by their pointer, with no
+    /// usable source, and no copy (memory whose GPU writes are dropped is one where the system
+    /// maps no read-only view of the pages, `copied.rs`). On a device without
+    /// `VK_EXT_external_memory_host`, `Unsupported` naming it; elsewhere a range the import
+    /// alignment cannot cover, or memory imported only as dma-bufs (`Unsupported`, `HostMemory`).
+    /// `None` where they have a route. Such pages may still lie in a guest RAM's chunk
+    /// (`HostMemory::with_runs`), which takes no import of their own.
+    fn no_route(&self, importer: &Importer) -> Option<Error> {
+        let copied = self.drops_writes && !crate::read_only_view::VIEWS_DROP_WRITES;
+        (!self.by_pointer && self.source.is_none() && !copied).then(|| {
+            match importer.pointer_import() {
+                Ok(_) => not_importable(),
+                Err(refusal) => refusal,
+            }
+        })
+    }
 }
 
 /// A no-copy buffer's unbound `VkBuffer` (`Device::host_buffer`): `size` bytes, its bytes from
