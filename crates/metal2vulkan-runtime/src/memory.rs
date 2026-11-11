@@ -2127,6 +2127,10 @@ pub(super) struct Memory {
     #[cfg(unix)]
     dma_buf_imported_as:
         std::collections::HashMap<(std::mem::Discriminant<DmaBufFor>, MemoryClass), u32>,
+    /// Held through its attempts by each dma-buf import of a kind that no import has yet
+    /// succeeded as on this device, so that such imports run one at a time ([`import_dma_buf`]).
+    #[cfg(unix)]
+    dma_buf_first_imports: Arc<Mutex<()>>,
     /// A test's stand-in for a driver slow to import a dma-buf ([`import_dma_buf`]), called with
     /// the lock released where the driver's import runs.
     #[cfg(test)]
@@ -2347,6 +2351,8 @@ impl Memory {
             overflows: 0,
             #[cfg(unix)]
             dma_buf_imported_as: std::collections::HashMap::new(),
+            #[cfg(unix)]
+            dma_buf_first_imports: Arc::default(),
             zero_images: false,
             host_copy_pool: None,
             readying: Vec::new(),
@@ -2979,6 +2985,19 @@ impl Memory {
     /// The memory types a dma-buf may be imported as, as bits ([`dma_buf_candidates`]).
     pub(super) fn dma_buf_importable(&self) -> u32 {
         importable_types(&self.types)
+    }
+
+    /// Record, for the crate's tests, that a dma-buf import of `purpose`'s kind of `class`
+    /// succeeded as `type_index` ([`import_dma_buf`]).
+    #[cfg(all(test, unix))]
+    pub(crate) fn dma_buf_imported(
+        &mut self,
+        purpose: DmaBufFor,
+        class: MemoryClass,
+        type_index: u32,
+    ) {
+        let kind = (std::mem::discriminant(&purpose), class);
+        self.dma_buf_imported_as.insert(kind, type_index);
     }
 
     /// The memory types of `class` among those `allowed` names, as bits.
@@ -4272,6 +4291,14 @@ pub(super) enum DmaBufFor {
 /// is where the driver's faults lie (below). Every type stays among those tried, so a refusal that
 /// passes is tried again.
 ///
+/// An import of a kind that no import has yet succeeded as on the device holds the device's lock
+/// of such first imports through its attempts (`Memory::dma_buf_first_imports`), so those imports,
+/// the ones that try a type the driver may refuse, run one at a time; one that waited asks again
+/// for its kind's type once it holds the lock. Once an import of a kind succeeded, the kind's
+/// imports take no lock and run side by side. A failed import of NVIDIA's at times spins inside
+/// `vkAllocateMemory` holding the driver's lock where other imports run beside it
+/// (`docs/FAST-PATHS.md`'s known gaps).
+///
 /// Each attempt hands the driver a **clone** of `fd`, never `fd` itself, at a number no other
 /// descriptor of the process takes while the import runs ([`Handed`]). Vulkan takes a
 /// descriptor's ownership only on a successful import ("Importing memory from a file descriptor
@@ -4295,11 +4322,32 @@ pub(super) fn import_dma_buf(
 ) -> Result<(vk::DeviceMemory, u32, bool), ImportFailure> {
     use std::os::fd::AsFd;
     let kind = (std::mem::discriminant(&purpose), class);
-    let (types, device_address) = {
+    let (types, device_address, first_imports) = {
         let memory = lock(memory);
         let ranked = dma_buf_candidates(&memory.types, allowed, class, memory.unified);
         let worked = memory.dma_buf_imported_as.get(&kind).copied();
-        (worked_first(ranked, worked), memory.device_address)
+        let first_imports = worked
+            .is_none()
+            .then(|| Arc::clone(&memory.dma_buf_first_imports));
+        (
+            worked_first(ranked, worked),
+            memory.device_address,
+            first_imports,
+        )
+    };
+    // A first import of its kind waits for any other first import, then asks again: the one
+    // before it may have found the kind's type, and then this one runs beside the others.
+    let first = first_imports
+        .as_ref()
+        .map(|first_imports| lock(first_imports));
+    let worked =
+        (first.as_ref()).and_then(|_| lock(memory).dma_buf_imported_as.get(&kind).copied());
+    let (types, _first) = match worked {
+        Some(worked) => {
+            drop(first);
+            (worked_first(types, Some(worked)), None)
+        }
+        None => (types, first),
     };
     #[cfg(test)]
     let (hold, refusal, undedicated_refusal) = {
