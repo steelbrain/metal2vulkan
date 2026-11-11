@@ -72,7 +72,9 @@ pub const REGISTRY: &[EnvVar] = &[
                  fault's address; and one line per placement of \
                  4 MiB or more in a pooled block as it is placed and returned: image or buffer, \
                  its memory class (placed), bytes, offset and block, to show what makes and \
-                 frees blocks; set to anything but empty or 0",
+                 frees blocks; and one line per placement that takes a kept empty dedicated \
+                 block: its memory class, bytes, block and memory type; set to anything but \
+                 empty or 0",
     },
     EnvVar {
         name: "METAL2VULKAN_PENDING_AUDIT",

@@ -1778,7 +1778,9 @@ block holds buffers that take device addresses (its own buffer of addresses give
 log makes no Vulkan object to ask one). On NVIDIA that range is the GPU virtual address a fault
 report names. It
 also logs each placement of 4 MiB or more in a pooled block as it is placed and returned: an image
-or a buffer, its memory class where placed, its bytes, its offset and its block's handle and type.
+or a buffer, its memory class where placed, its bytes, its offset and its block's handle and type;
+and each placement that takes a kept empty dedicated block, which allocates nothing: its class,
+bytes, block and memory type.
 With `METAL2VULKAN_LOG_SHADOWS` set, a device logs one line per shadow it makes of a texture (id
 name `metal2vulkan-shadows`, `Info` severity): the call (an IOSurface plane's among them, or the
 binding's or pass's call for a shadow made at its first use), the texture's format, size, levels
