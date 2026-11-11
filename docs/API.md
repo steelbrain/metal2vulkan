@@ -2396,8 +2396,11 @@ bound.
   with `DontCare` and stored, in a pass that draws, is cleared before the draws to zero (a color) or
   its clear value (depth, stencil) over the render area and the tiles past it a clear reaches, where
   Metal clears only the tiles a draw's primitives touch and keeps the texels of the others. Cost:
-  the tiles no draw touches hold zero or the clear value where Metal keeps their texels. Not an
-  attachment the pass does not store (`dont-care-unstored-load`).
+  the tiles no draw touches hold zero or the clear value where Metal keeps their texels. Also an
+  aspect of separate depth and stencil textures that cannot be copied into the scratch image the
+  pass renders them through (a multisampled aspect copied by draws), cleared over the render area
+  in a pass whose draws do not reach every tile, one without a draw included. Not an attachment
+  the pass does not store (`dont-care-unstored-load`).
 - `metal2vulkan-degrade-dont-care-unstored-load` (precision). `DontCareUnstoredLoad`: An attachment
   loaded with `DontCare` and not stored (not memoryless; an aspect of separate depth and stencil
   textures in the scratch image the pass renders them through), in a pass whose draws reach a
@@ -3444,7 +3447,8 @@ bound.
   (`DriverFact::DepthTestComparesMagnitudes`, MoltenVK's, were it to enable the extension), it is
   announced at a pass that loads and stores the depth and sets a state with depth writes but draws
   under none, whose pass keeps the signs.
-  Also announced for a NaN clear depth the device does not write before the pass. Cost: a depth test
+  Also announced for a NaN clear depth the device does not write before the pass, a `DontCare`
+  load's the pass clears among them. Cost: a depth test
   against the stored value, or the value a pass with depth writes stores, can differ from Metal's in
   the pass or target named: the device compares a negative value below zero and a NaN by its own
   rule and keeps the value's sign, where Metal compares the value's magnitude, orders a NaN above

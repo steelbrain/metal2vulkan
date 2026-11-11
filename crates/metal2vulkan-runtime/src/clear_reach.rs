@@ -23,7 +23,21 @@
 //!   (32x32 pixels at 1 and 2 samples, 32x16 at 4, color and depth alike on both chips), the
 //!   tile holds zero before the draws (a color, every color attachment of the pass) or the
 //!   attachment's clear value (depth, stencil); the tiles no primitive touches keep their texels.
-//!   Which tiles those are depends on where the GPU places the vertices.
+//!   Which tiles those are depends on where the GPU places the vertices. Separate depth and
+//!   stencil textures alike, each aspect apart, as one `Depth32Float_Stencil8` texture (an M3
+//!   Max, macOS 27.0.1: a `Depth32Float` and a `Stencil8` texture of 128x128, either or both
+//!   loaded `DontCare` and stored, the other loaded and stored, under draws writing both over
+//!   small rectangles): 32x32 tiles for both aspects. A draw that neither tests nor writes the
+//!   depth and stencil (a depth test `Always` without writes, the default stencil state) leaves
+//!   them their texels in every tile it touches, one texture or separate ones, where the runtime
+//!   clears them (`docs/FAST-PATHS.md`'s known gaps).
+//! - **A `DontCare` load's clear depth** is clamped to `[0, 1]` as a `Clear` load's is (2.0
+//!   reads 1.0, -1.0 reads 0), and a NaN one is Metal's NaN clear (`nan_clear.rs`): the tiles
+//!   hold `0x7fc00000` (a 32-bit float depth) or 0 (`Depth16Unorm`), and a draw tests against it
+//!   as Metal's test orders a NaN, above every value (the M3 Max, macOS 27.0.1, a 32-bit float
+//!   and a 16-bit depth, one texture and separate ones, stored and not, without API validation;
+//!   API validation stops such a pass, as one whose `Clear` load holds it: "clear depth (nan) is
+//!   outside of the range [0..1]").
 //! - **A `DontCare` load** of an attachment the pass does not store (`DontCare`) reads the same
 //!   wherever a fragment reads it: zero (a color) or the pass's clear value (a stencil), never its
 //!   earlier texels (an M3 Max, macOS 27.0.1, lane `dont_care_unstored`: an `RG16Float` second
@@ -43,8 +57,8 @@
 //! command buffer's render commands, or a tile dispatch, is taken as a draw call that draws (both
 //! unmeasured).
 //!
-//! - A `DontCare`-loaded attachment the pass stores (but separate depth and stencil textures, and
-//!   memoryless ones) loads in a pass whose draws reach no tile, and clears to zero (a color) or
+//! - A `DontCare`-loaded attachment the pass stores (but memoryless ones) loads in a pass whose
+//!   draws reach no tile, and clears to zero (a color) or
 //!   its clear value (depth, stencil) in one whose draws reach every tile, both Metal's answer
 //!   ([`PassReach`]). In a pass whose draws reach the tiles their primitives touch, it clears
 //!   too: Metal's answer in each tile a draw touches, and in a tile none touches, where Metal
@@ -54,6 +68,16 @@
 //!   pass's `tileWidth` and `tileHeight`, which set Metal's grid, as measured), a clear before the
 //!   pass, and loads: every other tile keeps its texels, Metal's answer (a draw writes no pixel
 //!   outside them), and a pass whose draws reach no pixel loads, as one whose draws draw nothing.
+//!   An aspect of separate depth and stencil textures takes the same answers in the scratch image
+//!   the pass renders them through (`depth_stencil_scratch.rs`): it loads by the copy into that
+//!   image, and its tiles are cleared after the copy. Where it cannot be copied in (a multisampled
+//!   aspect copied by draws) the scratch clears it over the render area, the near-equivalent
+//!   wherever the draws do not reach every tile, announced (`Degradation::DontCareLoadTiles`).
+//! - A depth whose `DontCare` load clears, at a NaN clear depth, which a Vulkan clear value does
+//!   not hold: a `Depth16Unorm` clears to 0, Metal's answer, and a 32-bit float depth to 1.0, the
+//!   value Metal's test orders a NaN nearest, where a fragment at exactly 1.0 tests otherwise and
+//!   the depth stored holds 1.0, announced (`Degradation::SignedDepthTest`). A clear depth out of
+//!   `[0, 1]` is clamped, Metal's answer (`render_pass.rs`).
 //! - A `DontCare`-loaded attachment the pass does not store (but memoryless ones), in a pass whose
 //!   draws reach a tile, clears to zero (a color) or its clear value (depth, stencil) over the
 //!   render area under `UnstoredDontCarePolicy::Cleared`, and under the default `Driver` on a
@@ -295,10 +319,22 @@ pub(super) fn dont_care_clear(pf: PixelFormat) -> vk::ClearColorValue {
 /// `DontCare`, and is named for its notice. Which stored attachments took it, and whether the
 /// pass took the near-equivalent (its draws reach the tiles their primitives touch): the
 /// attachment it names, for the notice.
+///
+/// An aspect of separate depth and stencil textures, which the pass renders through its scratch
+/// image (`depth_stencil_scratch.rs`), takes the same answers in that image, each aspect apart.
+/// One the pass stores loads by a copy into the image where `copies_in` holds for it (depth,
+/// stencil); where it does not, it takes `Clear` over the render area, Metal's answer in a pass
+/// whose draws reach every tile and elsewhere the near-equivalent, named for its notice.
+///
+/// A depth that takes `Clear` here whose clear depth is a NaN (only a `Clear` load's NaN is
+/// written, `nan_clear.rs`) clears to Metal's answer where the device can hold it, 0 for a
+/// `Depth16Unorm`, and elsewhere to 1.0, the value Metal's depth test orders a NaN nearest
+/// ([`DontCareLoads::cleared_depth`]).
 pub(super) fn dont_care_loads(
     layout: &mut PassLayout,
     reach: PassReach,
     unstored: UnstoredLoads,
+    copies_in: [bool; 2],
 ) -> DontCareLoads {
     let load = match reach {
         PassReach::Nothing => LoadAction::Load,
@@ -308,6 +344,7 @@ pub(super) fn dont_care_loads(
     let mut loads = DontCareLoads {
         named: None,
         unstored: None,
+        cleared_depth: None,
         colors: Vec::new(),
         depth: false,
         stencil: false,
@@ -355,13 +392,20 @@ pub(super) fn dont_care_loads(
     }
     if let Some(ds) = layout.depth_stencil.as_mut() {
         // Separate depth and stencil textures render through the pass's own scratch image
-        // (`depth_stencil_scratch.rs`), whose load operation is each aspect's: one the pass does
-        // not store takes the same answer there, per aspect; one it stores stays `DontCare`.
+        // (`depth_stencil_scratch.rs`), whose load operation is each aspect's: each takes the
+        // same answer there, an aspect the pass stores where it is copied in.
         let separate = ds.separate.is_some();
-        for (name, aspect, taken) in [
+        let depth_dont_care = ds
+            .depth
+            .as_ref()
+            .is_some_and(|depth| depth.load == LoadAction::DontCare);
+        for ((name, aspect, taken), copies_in) in [
             ("depth", ds.depth.as_mut(), &mut loads.depth),
             ("stencil", ds.stencil.as_mut(), &mut loads.stencil),
-        ] {
+        ]
+        .into_iter()
+        .zip(copies_in)
+        {
             let Some(aspect) = aspect else {
                 continue;
             };
@@ -379,7 +423,15 @@ pub(super) fn dont_care_loads(
                 }
                 continue;
             }
-            if separate {
+            // A separate texture's aspect that cannot be copied into the scratch image clears
+            // over the render area, which the draws do not bound.
+            if separate && !copies_in {
+                aspect.load = LoadAction::Clear;
+                if reach != PassReach::Every {
+                    loads
+                        .named
+                        .get_or_insert_with(|| format!("the {name} attachment"));
+                }
                 continue;
             }
             aspect.load = load;
@@ -388,6 +440,22 @@ pub(super) fn dont_care_loads(
                 loads
                     .named
                     .get_or_insert_with(|| format!("the {name} attachment"));
+            }
+        }
+        // A depth this took `Clear` for, at a NaN clear depth: 0 for a `Depth16Unorm` (Metal's
+        // code), 1.0 for a float depth, which Vulkan's clear cannot hold the NaN of.
+        if let Some(depth) = ds
+            .depth
+            .as_mut()
+            .filter(|depth| depth_dont_care && depth.load == LoadAction::Clear)
+        {
+            let nan = matches!(depth.clear, AspectClear::Depth(value) if value.is_nan());
+            let float = ds.depth_format != Some(PixelFormat::Depth16Unorm);
+            if nan {
+                depth.clear = AspectClear::Depth(if float { 1.0 } else { 0.0 });
+            }
+            if let AspectClear::Depth(value) = depth.clear {
+                loads.cleared_depth = Some((value, nan && float));
             }
         }
     }
@@ -426,6 +494,10 @@ impl UnstoredLoads {
 pub(super) struct DontCareLoads {
     pub(super) named: Option<String>,
     pub(super) unstored: Option<String>,
+    /// The depth's clear value where its `DontCare` load took `Clear`, and whether that value
+    /// stands for a NaN clear depth Metal's tile holds and the device's clear cannot: 1.0, which a
+    /// fragment at exactly 1.0 tests otherwise than Metal's NaN (`signed-depth-test`).
+    pub(super) cleared_depth: Option<(f32, bool)>,
     colors: Vec<usize>,
     depth: bool,
     stencil: bool,
@@ -894,11 +966,15 @@ impl ReachClears {
         let positioned_depth = |ds: &super::render_pass::DepthStencilTarget| {
             positioned && ds.depth.is_some_and(|a| a.load == LoadAction::Clear)
         };
-        if let Some(ds) = layout
-            .depth_stencil
-            .as_ref()
-            .filter(|ds| ds.separate.is_none() && (!memoryless(&ds.target) || positioned_depth(ds)))
-        {
+        // Separate depth and stencil textures' scratch image (`depth_stencil_scratch.rs`): only
+        // the tiles of a bounded `DontCare` load, over the render area its copies cover.
+        if let Some(ds) = layout.depth_stencil.as_ref().filter(|ds| {
+            let bounded = bounded.is_some_and(|(loads, _)| loads.depth || loads.stencil);
+            match ds.separate {
+                Some(_) => bounded,
+                None => !memoryless(&ds.target) || positioned_depth(ds),
+            }
+        }) {
             let cleared_aspect = |aspect: Option<&super::render_pass::AspectTarget>| {
                 aspect.is_some_and(|a| {
                     a.load == LoadAction::Clear && !a.memoryless && stores(a.store)
@@ -929,10 +1005,22 @@ impl ReachClears {
                 Some((loads, tiles)) => (Some(tiles), [loads.depth, loads.stencil]),
                 None => (None, [false, false]),
             };
-            let forced = positioned_depth(ds);
+            let separate = ds.separate.is_some();
+            let forced = positioned_depth(ds) && !separate;
             let parts = [
-                ([depth && !bound[0], stencil && !bound[1]], None, reached),
-                ([depth && bound[0], stencil && bound[1]], tiles, reached),
+                (
+                    [
+                        depth && !bound[0] && !separate,
+                        stencil && !bound[1] && !separate,
+                    ],
+                    None,
+                    reached,
+                ),
+                (
+                    [depth && bound[0], stencil && bound[1]],
+                    tiles,
+                    if separate { area } else { reached },
+                ),
                 ([forced && !depth, false], None, area),
             ];
             let overreaches = own_clear_overreaches(area, ds.target.extent, called);

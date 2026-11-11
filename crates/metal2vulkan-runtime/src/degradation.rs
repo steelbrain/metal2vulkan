@@ -840,8 +840,12 @@ degradations! {
         /// An attachment loaded with `DontCare` and stored, in a pass that draws, is cleared
         /// before the draws to zero (a color) or its clear value (depth, stencil) over the render
         /// area and the tiles past it a clear reaches (`clear_reach.rs`), where Metal clears only
-        /// the tiles a draw's primitives touch and keeps the texels of the others. Not one the
-        /// pass does not store (`dont-care-unstored-load`).
+        /// the tiles a draw's primitives touch and keeps the texels of the others. An aspect of
+        /// separate depth and stencil textures the scratch image the pass renders them through
+        /// cannot load by a copy in (a multisampled aspect copied by draws,
+        /// `depth_stencil_scratch.rs`) is cleared over the render area in a pass whose draws do
+        /// not reach every tile, also one without a draw. Not one the pass does not store
+        /// (`dont-care-unstored-load`).
         DontCareLoadTiles = "dont-care-load-tiles", Precision,
             "the tiles no draw touches hold zero or the clear value where Metal keeps their \
              texels";
@@ -2232,7 +2236,8 @@ degradations! {
         /// loaded (`nan_clear.rs`); where the device writes no such word (a memoryless depth, a
         /// multisampled one without maintenance8's colour copies or an exact `FragDepth`, a pass
         /// that does not store it on a device that keeps the earlier texels there), it is cleared
-        /// to 1.0, announced here.
+        /// to 1.0, announced here; so is a `DontCare` load's NaN clear depth where the pass clears
+        /// that load (`clear_reach.rs`).
         SignedDepthTest = "signed-depth-test", Precision,
             "a depth test against the stored value, or the value a pass with depth writes stores, \
              can differ from Metal's in the pass or target named: the device compares a negative \

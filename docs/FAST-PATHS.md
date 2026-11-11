@@ -1642,3 +1642,11 @@ compares with Metal's.
   reads the levels as the loop left them, where Metal's takes the copy of the bytes as they are
   then. A recording of a run again carries no take, so a failure of the loop's command buffer gives
   none back.
+
+- **A depth or stencil loaded `DontCare` and stored holds its clear value in the tiles a draw
+  touches even where no draw of the pass tests or writes it** (`clear_reach.rs`), where Metal keeps
+  its texels there: a draw over the whole target under a depth test `Always` without depth writes
+  and the default stencil state left a `Depth32Float`, a `Depth32Float_Stencil8` and separate
+  `Depth32Float` and `Stencil8` textures their earlier texels in every tile (an M3 Max under macOS
+  27.0.1, with and without API validation). Which tiles Metal clears follows which draws access
+  the aspect; the runtime's clear follows the draws' rectangles alone.

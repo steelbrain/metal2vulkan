@@ -275,6 +275,7 @@ use super::binding;
 use super::blit::TRANSFER;
 use super::buffer::Buffer;
 use super::clear_reach::{self, ReachClears};
+use super::clear_value;
 use super::color_list::ColorList;
 use super::color_reformat::{self, Routing};
 use super::color_resolve::ShaderResolves;
@@ -286,7 +287,7 @@ use super::degradation::{
 use super::depth_stand_in::DepthStandIn;
 use super::depth_stencil::{DepthStencilState, FailingDraw};
 use super::depth_stencil_resolve::DrawnResolve;
-use super::depth_stencil_scratch::{ScratchCopy, Separate};
+use super::depth_stencil_scratch::{self, ScratchCopy, Separate};
 use super::device::Device;
 use super::draw_source::{CopySteps, DrawSource, IndexBind};
 use super::dynamic_state::ExtendedDynamicState;
@@ -4758,7 +4759,46 @@ impl RenderLowering {
             device.compile_device().policy().unstored_dont_care_loads,
             &device.properties().driver_facts,
         );
-        let dont_care = clear_reach::dont_care_loads(&mut layout, reach, unstored);
+        // Separate depth and stencil textures: which aspects the scratch image can load by a copy in
+        // (`depth_stencil_scratch.rs`).
+        let copies_in = match layout.depth_stencil.as_ref() {
+            Some(ds) => match &ds.separate {
+                Some(separate) => depth_stencil_scratch::copies_in(&device, separate),
+                None => [true; 2],
+            },
+            None => [true; 2],
+        };
+        let dont_care = clear_reach::dont_care_loads(&mut layout, reach, unstored, copies_in);
+        // A depth whose `DontCare` load took a clear: at a NaN clear depth, which the device's
+        // clear cannot hold (`clear_reach::dont_care_loads`), and of a `Depth16Unorm` at a depth
+        // a device rounding to nearest takes above Metal's truncation (`clear_value.rs`), as a
+        // `Clear` load's (`render_pass.rs`).
+        let depth_format = layout.depth_stencil.as_ref().and_then(|ds| ds.depth_format);
+        if let (Some((value, nan)), Some(format)) = (dont_care.cleared_depth, depth_format) {
+            if nan {
+                device.degrade(Degradation::SignedDepthTest, || {
+                    (
+                        format!("a {format:?} texture"),
+                        "a render pass's NaN clear depth of a `DontCare` load, which Metal's tile \
+                         holds as 0x7fc00000 and its depth test orders above every value, is \
+                         cleared to 1.0, which a fragment at exactly 1.0 tests otherwise: the \
+                         device's clear takes no NaN"
+                            .to_owned(),
+                    )
+                });
+            }
+            if clear_value::depth16_rounded(format, f64::from(value)) {
+                device.degrade(Degradation::UnormDepthRounding, || {
+                    (
+                        format!("a {format:?} depth attachment's clear to {value}"),
+                        "the device converts the clear depth to its 16-bit code its own way, \
+                         where Metal's clear truncates the depth scaled by 65535: the code can be \
+                         the one above Metal's"
+                            .to_owned(),
+                    )
+                });
+            }
+        }
         // The tiles the draws reach, which only those loads' clears read: none made for a pass
         // without one.
         let tiles = match reach {
@@ -4924,30 +4964,6 @@ impl RenderLowering {
             (None, _) => None,
         };
         let clear_values = render_target::clear_values(&layout);
-        // Separate depth and stencil textures: the copies into the scratch image the pass
-        // renders, and back (`depth_stencil_scratch.rs`).
-        let (copy_in, copy_out) = match &layout.depth_stencil {
-            Some(DepthStencilTarget {
-                target,
-                depth,
-                stencil: Some(stencil),
-                separate: Some(separate),
-                ..
-            }) => {
-                let plan = |into_scratch| {
-                    ScratchCopy::plan(
-                        core.command_buffer(),
-                        separate,
-                        target,
-                        [depth.as_ref(), Some(stencil)],
-                        layout.extent,
-                        into_scratch,
-                    )
-                };
-                (plan(true)?, plan(false)?)
-            }
-            _ => (None, None),
-        };
         // Fetched textures' scratch images: copied in where Metal loads the texture, and back
         // where it stores it (`attachment_stand_in.rs`).
         // Each over the render area, but the copy back of a stand-in its pass clears past the
@@ -5482,6 +5498,32 @@ impl RenderLowering {
         if let Some(reach_clears) = &reach_clears {
             reach_clears.load_in_pass(&mut layout);
         }
+        // Separate depth and stencil textures: the copies into the scratch image the pass
+        // renders, and back (`depth_stencil_scratch.rs`). After the reach clears' loads: an
+        // aspect whose `DontCare` load the draws' tiles bound is loaded, copied in, and its
+        // tiles cleared after the copy.
+        let (copy_in, copy_out) = match &layout.depth_stencil {
+            Some(DepthStencilTarget {
+                target,
+                depth,
+                stencil: Some(stencil),
+                separate: Some(separate),
+                ..
+            }) => {
+                let plan = |into_scratch| {
+                    ScratchCopy::plan(
+                        core.command_buffer(),
+                        separate,
+                        target,
+                        [depth.as_ref(), Some(stencil)],
+                        layout.extent,
+                        into_scratch,
+                    )
+                };
+                (plan(true)?, plan(false)?)
+            }
+            _ => (None, None),
+        };
         // The tile dispatches' cells past their attachments, as Metal's tile memory holds them
         // when the pass begins (`render/tile_dispatch.rs`): of the layout as the pass's clears
         // ahead of it leave its loads.
