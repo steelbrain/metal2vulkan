@@ -728,6 +728,7 @@ fn a_radv_gpu_no_row_names_takes_radv_s_driver_wide_fact_alone() {
     let answers = BTreeSet::from([
         FETCH,
         SPLIT,
+        UNSTORED_CLEAR,
         COLOR_BLOCKS,
         BC6H,
         BC7,
