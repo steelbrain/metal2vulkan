@@ -33,7 +33,6 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 const SIDE: u64 = 1024;
 
 /// What a device answers of exporting memory of one handle type from a resource.
-#[derive(Debug)]
 struct Dedication {
     /// The handle type is exportable from such a resource's memory.
     exportable: bool,
@@ -49,6 +48,17 @@ impl Dedication {
     /// Whether the resource must take a dedicated allocation of its own.
     fn needed(&self) -> bool {
         self.only || self.requires
+    }
+}
+
+/// Every answer, as the test prints it.
+impl std::fmt::Display for Dedication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "exportable {}, dedicated only {}, prefers dedicated {}, requires dedicated {}",
+            self.exportable, self.only, self.prefers, self.requires
+        )
     }
 }
 
@@ -247,8 +257,8 @@ fn an_exportable_buffer_is_dedicated_only_where_required_and_its_texture_lies_in
         let buffer_asked = buffer_dedication(&device, handle(export));
         let image_asked = image_dedication(&device, handle(export));
         eprintln!(
-            "EXPORT-DEDICATION on {name}: {export:?}: buffer {buffer_asked:?}; linear R8 image \
-             {image_asked:?}"
+            "EXPORT-DEDICATION on {name}: {export:?}: buffer: {buffer_asked}; linear R8 image: \
+             {image_asked}"
         );
         let exported = match export {
             MemoryExport::OpaqueFd => buffer.export_memory_fd(),
