@@ -2457,6 +2457,86 @@ fn copied_buffer_over_read_only_pages_drops_the_gpu_s_writes() {
     drop(buffer);
 }
 
+/// A kernel's stores into a copy of read-only pages whose import the gate refused (the gate asked
+/// before the pages' write permission is), through the buffer's address loaded from memory (a
+/// write no use names, so every copy is compared at the merge back), are dropped: the pages keep
+/// their bytes, the stores counted as dropped, and a later command buffer reads the pages' bytes.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_kernel_s_stores_into_a_copy_of_read_only_pages_the_gate_refused_are_dropped() {
+    let host = ReadOnlyHost::new(30);
+    let Some((device, _)) = device() else {
+        return;
+    };
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let calls: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+    // SAFETY: the view outlives the buffer and the device (dropped after both).
+    let buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            host.memory(gate(&asked, false), &calls),
+            LENGTH as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .expect("a buffer over read-only pages the gate refuses is a copy");
+    assert!(buffer.copied(), "the buffer is a copy");
+    assert_eq!(asked.lock().unwrap().len(), 1, "the gate was asked");
+    // A command buffer's use of it: the device's live buffers list it, reached unnamed from here.
+    assert_eq!(gpu_bytes(&device, &buffer), host.pattern());
+    let function = super::encoder_holds::library(&device, "engine/ob2_loaded_pointer.ll")
+        .new_function_with_name("ob2_loaded_pointer")
+        .unwrap();
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &crate::PipelineOptions::default())
+        .unwrap();
+    let indices: Vec<u8> = (0..16u32).flat_map(u32::to_le_bytes).collect();
+    let out = device.new_buffer(32, ResourceOptions::shared()).unwrap();
+    let before = device.work_counts();
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_bytes(&indices, 0).unwrap();
+    encoder
+        .set_bytes(&buffer.gpu_address().0.to_le_bytes(), 1)
+        .unwrap();
+    encoder.set_buffer(Some(&out), 0, 2).unwrap();
+    encoder
+        .dispatch_threads(crate::Size::new(8, 1, 1), crate::Size::new(8, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let after = device.work_counts();
+    let stored: Vec<u8> = (0..8u32)
+        .flat_map(|t| (0xB000_0000 | t).to_le_bytes())
+        .collect();
+    let pattern = host.pattern();
+    let dropped = (stored.iter().zip(&pattern[32..64]))
+        .filter(|(stored, was)| stored != was)
+        .count() as u64;
+    assert_eq!(host.bytes(), pattern, "the pages keep their bytes");
+    assert_eq!(
+        after.copied_merge_back_bytes - before.copied_merge_back_bytes,
+        0,
+        "nothing is merged back"
+    );
+    assert_eq!(
+        after.copied_dropped_bytes - before.copied_dropped_bytes,
+        dropped,
+        "the kernel's stores are dropped"
+    );
+    assert_eq!(
+        gpu_bytes(&device, &buffer),
+        pattern,
+        "a later command buffer reads the pages' bytes"
+    );
+    eprintln!("COPIED-READ-ONLY: a kernel's {dropped} stored bytes dropped");
+    drop((buffer, out, state, queue));
+}
+
 /// A buffer's rebind to read-only pages (the consumer's `replaceBackingWithRanges:readOnly:`)
 /// whose import the gate refuses gives it a copy of them, the source never called, whose GPU
 /// writes are dropped; the old pages stay as they were.
