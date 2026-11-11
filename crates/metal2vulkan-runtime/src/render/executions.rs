@@ -2588,6 +2588,9 @@ impl RenderExecution {
             // (`render/snapshot.rs`).
             pinned_through: 0,
             pins_frozen: false,
+            // The replay is no pass of the program's: the pass log's line is the executing
+            // encoder's (`pass_log.rs`).
+            pass_notes: None,
         }
     }
 
