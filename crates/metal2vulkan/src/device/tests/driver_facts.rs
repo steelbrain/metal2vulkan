@@ -358,7 +358,11 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     let p = profile_of(lavapipe);
     assert_eq!(
         taken(&p),
-        [D::MetalFloatColorNans, D::MetalHalfStorageWrites]
+        [
+            D::MetalFloatColorNans,
+            D::MetalHalfStorageWrites,
+            D::MetalSmallFloatNans
+        ]
     );
     assert_eq!(p.fields().cube_gradients, vulkan);
     assert!(centered(&p));
