@@ -1705,12 +1705,12 @@ pub enum PrecisionNote {
     /// conversion round once, where this rounds the output to `half` first, so a channel whose format
     /// converts the `float` and its `half` to different codes may store a value apart from Metal's.
     /// It is the cause [`PrecisionNote::HalfOutputPrecision`] records for a module naming no math
-    /// mode, under a name that reads as a blend's alone. **Unmeasured**: no sweep has made an
-    /// unblended fast-math store differ. The 12 `xr-draw-*` conformance cases are the closest
-    /// reading of it and all 12 store Metal's codes, so for those shapes the note is a may-differ
-    /// and not a measured difference. Narrowing it to a blend would stop announcing a class the
-    /// `HalfOutputPrecision` measurement says exists, so it stays where it fires until a sweep over
-    /// the formats whose two conversions disagree says otherwise.
+    /// mode, under a name that reads as a blend's alone. Measured in the interlocked storage form,
+    /// whose write stores the output's `half`: into `BGRA8Unorm`, one code apart from Metal's in
+    /// 2.2 to 2.5% of pixels for an output computed through one division or one `fwidth`, and in
+    /// 2.1 to 4.5% for a coverage computed through both, where the same arithmetic with a `float`
+    /// output stores Metal's codes (MoltenVK 1.4.2 on an Apple M3 Max, macOS 27.0.1). The 12
+    /// `xr-draw-*` conformance cases, through an output variable, store Metal's codes.
     ///
     /// Validation derives no tolerance from it; C3 takes a row it leaves unbounded as showing
     /// the fast-math regrouping cause.
