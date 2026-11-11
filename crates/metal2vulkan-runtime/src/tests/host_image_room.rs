@@ -18,7 +18,7 @@
 
 use super::blit_holds::{device, Scratch};
 use crate::device::lock;
-use crate::memory::{BLOCK_BYTES, IMAGE_BLOCK_SLACK};
+use crate::memory::BLOCK_BYTES;
 use crate::{Region, ResourceOptions, Texture, TextureDescriptor};
 use ash::vk::MemoryPropertyFlags;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -82,7 +82,7 @@ fn shared_depth_textures_past_their_host_transfer_heap_lie_in_device_local_memor
         return;
     }
     let bytes = SIDE * SIDE * 4;
-    let blocks = 2 * (BLOCK_BYTES + BLOCK_BYTES / IMAGE_BLOCK_SLACK);
+    let blocks = 2 * BLOCK_BYTES;
     let count = (heap + blocks).div_ceil(bytes) + 1;
     let before = device.work_counts().device_memory_overflows;
     let mut textures = vec![first];
