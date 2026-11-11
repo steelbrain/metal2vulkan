@@ -502,8 +502,9 @@ const ROUNDS: usize = 2;
 /// `pooled_backings_taken`) and those taken while another command buffer that took them had not
 /// completed (`pooled_backings_taken_in_flight`), its counts read once it was encoded (a read of
 /// the counts lowers what its encoders left); a round prints them beside each pass's wrong pixels
-/// and 8x4 groups. Every pixel of every pass must hold its code, and the queues' passes must have
-/// taken kept backings.
+/// and 8x4 groups. Every pixel of every pass must hold its code, and on a device that fetches
+/// through the pixel interlock without rasterization-order color access, whose passes split, the
+/// queues' passes must have taken kept backings.
 #[test]
 fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
     let cache = ScratchCache::new().unwrap();
@@ -565,6 +566,7 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
                             Route::InPlace => in_place.clone(),
                         };
                         let mut encoded = Vec::with_capacity(IN_FLIGHT);
+                        let mut round_splits = 0;
                         for (k, (target, attachments)) in
                             targets.iter().zip(&attachments).enumerate()
                         {
@@ -586,6 +588,7 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
                                 "{}: a pass fetching through the interlock did not split",
                                 device.name()
                             );
+                            round_splits += splits;
                             let backings = [
                                 counts.pooled_backings_made - counted.pooled_backings_made,
                                 counts.pooled_backings_taken - counted.pooled_backings_taken,
@@ -637,8 +640,9 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
                         taken += round_backings[1];
                         eprintln!(
                             "IN-FLIGHT on {}: {}x{} {storage:?} {route:?} {on:?} {commit:?}, \
-                             round {round}: wrong pixels per pass {wrong_counts:?}; backings \
-                             made, taken, taken in flight {round_backings:?}",
+                             round {round}: wrong pixels per pass {wrong_counts:?}; instance \
+                             splits {round_splits}; backings made, taken, taken in flight \
+                             {round_backings:?}",
                             device.name(),
                             sides.0,
                             sides.1,
@@ -648,9 +652,14 @@ fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
             }
         }
     }
+    // A pass split for a fetch through the pixel interlock backs its memoryless second color with
+    // a backing its queue keeps (`render.rs`), so such a device's passes take kept ones. A device
+    // with rasterization-order color access fetches in the draw's own subpass (lavapipe): its
+    // passes do not split, and their second color renders in place.
     assert!(
-        taken > 0,
-        "{}: no pass took a backing its queue kept",
+        !interlocked || taken > 0,
+        "{}: passes split for a fetch through the pixel interlock, and none took a backing its \
+         queue kept",
         device.name()
     );
     assert!(
