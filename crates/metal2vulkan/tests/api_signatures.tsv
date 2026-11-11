@@ -2779,6 +2779,7 @@ field	metal2vulkan-runtime::WorkCounts.feedback_loop_alias_images	pub feedback_l
 field	metal2vulkan-runtime::WorkCounts.feedback_loop_shadow_images	pub feedback_loop_shadow_images: u64
 field	metal2vulkan-runtime::WorkCounts.fence_waits	pub fence_waits: u64
 field	metal2vulkan-runtime::WorkCounts.fences_made	pub fences_made: u64
+field	metal2vulkan-runtime::WorkCounts.fetch_draw_barriers	pub fetch_draw_barriers: u64
 field	metal2vulkan-runtime::WorkCounts.fills_recorded	pub fills_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.finales_apart	pub finales_apart: u64
 field	metal2vulkan-runtime::WorkCounts.finales_folded	pub finales_folded: u64
@@ -5594,6 +5595,7 @@ macro-member	metal2vulkan-runtime::Degradation::UnnamedShadowedTexture	UnnamedSh
 macro-member	metal2vulkan-runtime::Degradation::UnnamedTextureUnviewable	UnnamedTextureUnviewable = "unnamed-texture-unviewable", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnnamedTexturesPastCapacity	UnnamedTexturesPastCapacity = "unnamed-textures-past-capacity", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnorderedDrawBytes	UnorderedDrawBytes = "unordered-draw-bytes", Performance,
+macro-member	metal2vulkan-runtime::Degradation::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw = "unordered-fetch-within-draw";
 macro-member	metal2vulkan-runtime::Degradation::UnormDepthBias	UnormDepthBias = "unorm-depth-bias", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnormDepthRounding	UnormDepthRounding = "unorm-depth-rounding", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnpackedFillColor	UnpackedFillColor = "unpacked-fill-color", Precision,
@@ -14309,6 +14311,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::TessellationTriangleOrder	Tessell
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationWinding	TessellationWinding
 variant	metal2vulkan::pipeline::PrecisionNote::UnmeasuredFetchBlend	UnmeasuredFetchBlend
 variant	metal2vulkan::pipeline::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGroupSpeculation
+variant	metal2vulkan::pipeline::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
 variant	metal2vulkan::pipeline::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan::pipeline::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan::pipeline::PushField::AlphaTestReference	AlphaTestReference

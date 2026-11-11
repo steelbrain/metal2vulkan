@@ -841,9 +841,15 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   tile's finer values (`word-resolve`). A device whose word's format renders one sample at that
   count refuses the texture (`TextureSampleCount`).
 - A fragment function that reads a color attachment (framebuffer fetch) reads it in an ordered
-  form wherever the device has one, and is refused (`Unsupported{FramebufferFetch}`) where it has
-  none: an unordered read could see a pixel before an earlier fragment's write, which Metal never
-  shows. The ordered forms are rasterization-order attachment access, or the interlocked
+  form wherever the device has one. On a device with neither ordered form it reads the attachment
+  as an input attachment without rasterization-order access
+  (`GraphicsState::rasterization_order_attachment_access` false), and the consumer records a
+  barrier of the subpass's dependency on itself, by region, before each draw that reads input
+  attachments after an earlier draw of the subpass wrote a color, and before each draw that writes
+  a color after an earlier one read them: a fetch reads what every earlier draw stored, Metal's
+  answer, but the overlapping fragments of one draw are not ordered, which the fragment stage
+  records (`PrecisionNote::UnorderedFetchWithinDraw`; the runtime does all of this itself).
+  The ordered forms are rasterization-order attachment access, or the interlocked
   storage form, which binds the attachment as a storage image viewed in
   `StorageAttachmentUse::view_format()`: its own format, an 8-bit sRGB format's unsigned-integer
   view, or, where the device declares a BGRA-order format neither typed nor without a format, its
@@ -3649,6 +3655,20 @@ bound.
   missing lane zero), and stores the result by the device's sRGB encode (`DevicePackConversion`),
   Metal's blend without fast math at four lanes; under fast math Metal regroups the blend,
   unmeasured.
+- `metal2vulkan-degrade-unordered-fetch-within-draw` (precision).
+  `PrecisionNote::UnorderedFetchWithinDraw`: A fragment function reads a color attachment
+  (framebuffer fetch) on a device with neither rasterization-order color attachment access nor
+  `fragmentShaderPixelInterlock` (Honeykrisp on Apple's M2 Pro; RADV on the RX 550). It reads the
+  attachment as an input attachment, and the runtime records a barrier of the draws' subpass's
+  dependency on itself, by region, before each draw that reads input attachments after an earlier
+  draw of its render pass instance wrote a color, and before each draw that writes a color after
+  an earlier one read them (`WorkCounts::fetch_draw_barriers`): a fetch reads what every earlier
+  draw stored at its pixel, Metal's answer. Vulkan orders nothing between the overlapping
+  fragments of one draw there, where Metal orders them in primitive order: a fragment that covers
+  a pixel an earlier fragment of its own draw covered may read the texel from before that
+  fragment's write. Exact for a draw whose primitives do not overlap at a pixel; otherwise each
+  such pixel holds the result of some order of the draw's fragments there. Announced at the first
+  draw that binds such a pipeline.
 - `metal2vulkan-degrade-fp8-value` (precision). `PrecisionNote::Fp8Value`: An 8-bit float converts
   to an integer from the format's documented value with Metal's saturating float-to-integer rule,
   where Metal's device here answers otherwise: Metal on Apple M3 compiles these reads but extends
