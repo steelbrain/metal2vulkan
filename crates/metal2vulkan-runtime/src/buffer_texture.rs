@@ -481,43 +481,47 @@ impl Buffer {
     /// `newTiledTextureWithDescriptor:offset:bytesPerRow:` (SPI; the device's
     /// `newTiledTextureWithBytesNoCopy:length:descriptor:offset:bytesPerRow:` makes its texture
     /// over a no-copy buffer through it): as [`new_texture`](Self::new_texture), and also a 2D
-    /// texture of more than one level, its first level's texels the buffer's bytes from `offset`,
-    /// rows `bytes_per_row` apart, as a one-level texture's are, and its other levels apart from
-    /// the buffer. A texture of one level is the one `new_texture` makes, in place where that is.
+    /// texture of more than one level, a copy of the buffer's bytes from `offset`, rows
+    /// `bytes_per_row` apart, taken at its first use. A texture of one level is the one
+    /// `new_texture` makes, in place where that is.
     ///
-    /// A texture of more levels is one image of its own holding every level, in the
-    /// `GENERAL` layout like every image here: no Vulkan image lays its first level over the
-    /// buffer's rows and its others elsewhere (a linear image has one level, and a sparse one is
-    /// laid out by the driver). Its first level is a copy of the buffer's bytes, held as a shadow
-    /// of a one-level texture's are (`shadow.rs`): the encoders copy the bytes in before a
-    /// command buffer's commands that use the texture, wherever the CPU or another command wrote
-    /// them since, and copy back what their commands wrote through it by the end of the encoder
-    /// that wrote it, so a write of the first level reaches the buffer's bytes once that work
-    /// completes, as on a Mac. Its other levels are the image's own memory, zero when made in a
-    /// `Shared` or `Managed` texture, as Metal's new texture's, which nothing copies. Every level is
-    /// a blit's source and destination (`generate_mipmaps` included: the texture is an image to a
-    /// blit, its first level copied in from the bytes first), its functions sample it with mip
-    /// filtering, and `get_bytes` and `replace_region` reach its first level in the buffer's bytes
-    /// and the others in the image. It takes the buffer's resource options, as `new_texture`'s
-    /// texture does: over a `Managed` buffer, `synchronize_resource` moves the first level's
-    /// bytes as the buffer's, and the other levels need none, as the runtime's own `Managed`
-    /// textures need none (the CPU reads what the GPU last wrote there, synchronized or not).
-    /// What differs from a Mac, where the first level aliases the bytes: a CPU write of the bytes
-    /// made while a command buffer that uses the texture runs reaches it at the next copy in, not
-    /// at once; a view in a format the image takes no Vulkan view of, and a binding beyond the
-    /// texture's usage, are refused (`Unsupported`), where a texture of one level over a buffer
-    /// takes them through a shadow of the bytes; and while the buffer's bytes are detached
-    /// (`detach_backing`) its first level reads their last texels, which the detach loads into
-    /// its image, where a texture over the bytes alone presents a stand-in of zeros: an unnamed
-    /// read reads them, and so does `get_bytes`, whose write of that level, `replace_region`, is
-    /// refused meanwhile (`NotImplemented(DetachedTexelAccess)`), as a one-level texture's is. Its
-    /// other levels keep their texels through the detach, read and written as before, as a Mac's
-    /// texture's own memory holds them. Announced once (`shadowed-texture`, naming the levels),
-    /// counted in `WorkCounts::shadowed_textures`, its copies in
-    /// `WorkCounts::shadow_texels_copied_in` and `shadow_texels_copied_back` (its first level's
-    /// texels alone). A command's use of its other levels alone takes no copy (a blit into or
-    /// out of one, a pass into one, `generate_mipmaps`' writes), and its copies back and merges
-    /// dispatch and fetch through views of its first level as a one-level texture's do.
+    /// A texture of more levels is one image of its own holding every level, in the `GENERAL`
+    /// layout like every image here, as an x86 Mac's is (an AMD Radeon Pro 5300M and an Intel UHD
+    /// Graphics 630 under macOS 26.7.1, which agreed on both SPI forms, `Shared` and `Managed`
+    /// descriptors, and `RGBA8Unorm` and `BGRA8Unorm`):
+    ///
+    /// - **Taken at use.** The first command of an encoder that uses any of its levels after its
+    ///   making, or after [`Texture::did_modify_data`](crate::Texture::did_modify_data), takes the
+    ///   copy: before that command, the bytes are copied into its first level and every later
+    ///   level is made from the one above by the device's blit chain, as `generate_mipmaps` makes
+    ///   them (announced as `device-filtered-mipmaps`). The copy is taken as that command is
+    ///   encoded and runs on the GPU in its command buffer's order, so it reads the bytes as they
+    ///   are when the command buffer runs: a CPU write made after the making and before then is in
+    ///   every level (on the Macs, at once or 100 ms after the making). Between takes nothing
+    ///   moves: a CPU write of the bytes reaches no level, nor does a GPU write of them (not
+    ///   measured on a Mac), and what the GPU writes into any level (a blit, a pass, a function's
+    ///   write) stays in the texture and never reaches the bytes or, written into the first, the
+    ///   later levels.
+    /// - **CPU calls.** `get_bytes` and `replace_region` read and write every level in the image,
+    ///   the first too. Before the first use a read gives what the image holds, zeros in a
+    ///   `Shared` or `Managed` texture, as a new texture of the runtime's own; Metal's answer
+    ///   there is not measured. A `replace_region` before a take is overwritten by it.
+    /// - **Formats.** For a format the device's blits do not filter (one `generate_mipmaps` makes
+    ///   by the integer picks or the compute filter), the copy moves the first level alone and the
+    ///   later levels keep what they hold (docs/FAST-PATHS.md, known gaps).
+    /// - **What else differs.** It takes the buffer's resource options, as `new_texture`'s
+    ///   texture does, so a texture over a `Shared` buffer answers `Shared`, as the Macs do. A
+    ///   view in a format the image takes no Vulkan view of, and a binding beyond the texture's
+    ///   usage, are refused (`Unsupported`), where a texture of one level over a buffer takes them
+    ///   through a shadow of the bytes. While the buffer's bytes are detached (`detach_backing`)
+    ///   it keeps its image, every level of which its commands and CPU calls read and write, as a
+    ///   Mac's texture's own memory; a take while they are detached is a copy out of them, a
+    ///   command that names the buffer (`detach.rs`).
+    ///
+    /// Announced once (`shadowed-texture`, naming the levels), counted in
+    /// `WorkCounts::shadowed_textures`, each take's copy in `WorkCounts::shadow_texels_copied_in`
+    /// (its first level's texels alone); nothing is ever counted in
+    /// `WorkCounts::shadow_texels_copied_back`.
     ///
     /// Refused as [`new_texture`](Self::new_texture) is, but for the levels: more levels than the
     /// extent's full chain (`Invalid`, `TextureProblem`), and a texture buffer of more than one
@@ -760,8 +764,9 @@ impl Buffer {
     /// Where a texture [`new_tiled_texture`](Self::new_tiled_texture) makes of the same arguments
     /// lies if made now, as [`texture_placement`](Self::texture_placement) answers it for
     /// [`new_texture`](Self::new_texture): for a texture of more than one level,
-    /// `Shadow(TextureShadowReason::Mipmapped)` over any buffer. Refused as that call refuses its
-    /// arguments. A runtime extension: Metal has no such query.
+    /// `Shadow(TextureShadowReason::Mipmapped)` over any buffer, its own copy of the bytes taken at
+    /// use. Refused as that call refuses its arguments. A runtime extension: Metal has no such
+    /// query.
     pub fn tiled_texture_placement(
         &self,
         descriptor: &TextureDescriptor,
@@ -1618,6 +1623,7 @@ impl Texels {
             },
             tracked: self.tracked(),
             drops_writes: false,
+            levels: None,
             backing: self.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),
@@ -1939,6 +1945,7 @@ impl Texels {
             shadow_range,
             tracked: texels.tracked(),
             drops_writes: false,
+            levels: None,
             backing: texels.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),
@@ -2085,6 +2092,7 @@ impl Texels {
             },
             tracked: self.tracked(),
             drops_writes: false,
+            levels: None,
             backing: self.backing(),
             merge_scratch: ScratchSpares::default(),
             stood: AtomicU64::new(0),

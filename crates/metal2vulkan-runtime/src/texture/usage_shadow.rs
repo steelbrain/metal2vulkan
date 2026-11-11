@@ -23,8 +23,8 @@
 //!   another way is refused as `shadow.rs` refuses it for an image's shadow.
 //! - **Not served.** A texture made resident for a function reading handles (the device's heap
 //!   sets bind its own image), a sparse texture, a heap's, a tiled texture of more than one level
-//!   over a buffer (`Buffer::new_tiled_texture`: the bytes hold its first level alone, and its
-//!   image is a shadow of them already), and a pair the copies cannot serve stay
+//!   over a buffer (`Buffer::new_tiled_texture`: its image is a shadow of the bytes already, a copy
+//!   taken at use), and a pair the copies cannot serve stay
 //!   `NotImplemented(UndeclaredTextureUsage)`.
 //! - **Announced** once per device as `undeclared-usage-shadow` (performance), at a shadow's first
 //!   binding beyond the texture's usage.
@@ -304,7 +304,7 @@ impl Texture {
                 };
                 (image.shared(), copies, "its image")
             }
-            // A tiled texture's bytes hold its first level alone (the module docs).
+            // A tiled texture's image is a shadow of the bytes already (the module docs).
             Storage::Shadow { image, .. } if image.plan().levels > 1 => return Err(refused()),
             Storage::Alias { texels, .. } | Storage::Shadow { texels, .. } => {
                 let layout = TextureLayout {

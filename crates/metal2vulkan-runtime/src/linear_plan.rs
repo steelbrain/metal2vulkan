@@ -19,8 +19,9 @@
 //!   buffers; the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:` also
 //!   makes 2D arrays. Each has one mip level. The SPI
 //!   `newTiledTextureWithDescriptor:offset:bytesPerRow:` makes what the first makes, and a 2D
-//!   texture of more levels too, its first over the buffer's rows at the offset and the
-//!   `bytesPerRow` (`Buffer::new_tiled_texture`); its other rules are the first's.
+//!   texture of more levels too, a copy of the buffer's rows at the offset and the `bytesPerRow`
+//!   taken at its first use, its later levels made from them (`Buffer::new_tiled_texture`); its
+//!   other rules are the first's.
 //! - **Options.** The texture's options are the buffer's, whatever the descriptor names (probe
 //!   9d, every pair of six buffer and nine descriptor options): Metal's validation alone stops a
 //!   storage or CPU cache mode other than the buffer's, or a hazard tracking mode other than the

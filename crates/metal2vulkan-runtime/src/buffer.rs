@@ -265,8 +265,7 @@ pub(super) struct NotedTexture {
     /// storage-class element there reads what an unnamed write left (`Device::note_stale`).
     sink: bool,
     /// Whether its image keeps its own texels while the bytes are detached, presenting no
-    /// stand-in: a tiled texture's, whose first level a detach loads with the bytes' last texels
-    /// (`Texture::keep_first_level`).
+    /// stand-in: a tiled texture's, a copy of the bytes taken at use (`shadow.rs`).
     keeps: bool,
 }
 
@@ -333,13 +332,6 @@ impl TexturesOver {
     /// The live textures.
     pub(super) fn textures(&self) -> impl Iterator<Item = &NotedTexture> {
         self.noted.iter().filter(|noted| noted.lives())
-    }
-
-    /// The live textures whose images keep their own texels while the bytes are detached
-    /// (`NotedTexture::keeps`), by type erased.
-    pub(super) fn keeping(&self) -> Vec<Arc<dyn Any + Send + Sync>> {
-        let keeps = self.textures().filter(|noted| noted.keeps);
-        keeps.filter_map(|noted| noted.texture.upgrade()).collect()
     }
 }
 

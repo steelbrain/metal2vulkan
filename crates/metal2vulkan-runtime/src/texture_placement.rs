@@ -108,8 +108,9 @@ pub enum TextureShadowReason {
     Refused(InPlaceRefusal),
     /// A tiled texture of `levels` levels, more than one
     /// ([`Buffer::new_tiled_texture`](crate::Buffer::new_tiled_texture)), over any buffer: one
-    /// image of its own holds every level, its first a copy of the buffer's bytes kept in step
-    /// with them, as no image over the buffer's memory holds levels past the first.
+    /// image of its own holds every level, a copy of the buffer's bytes taken at its first use and
+    /// after each [`Texture::did_modify_data`](crate::Texture::did_modify_data), as no image over
+    /// the buffer's memory holds levels past the first.
     Mipmapped {
         /// The texture's level count.
         levels: u32,

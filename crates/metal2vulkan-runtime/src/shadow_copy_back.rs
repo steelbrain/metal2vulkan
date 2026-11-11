@@ -44,9 +44,6 @@
 //! host (`tracker::Barrier::to_host`, `ALL_COMMANDS`/`MEMORY_WRITE` to `HOST`/`HOST_READ`, or
 //! `Barrier::to_all`, which adds every later command of its `VkQueue`: `batch_order.rs`).
 //!
-//! **Levels.** A tiled texture's shadow holds every level, and its copies move its first alone
-//! (`Buffer::new_tiled_texture`): the view is of that level, as the copies' one region is.
-//!
 //! **Where the copy stays.** A device without the fact, a texel of another width, a texture of
 //! more slices, bytes copied through a staging buffer, a region past the device's
 //! storage buffer range or workgroup counts, a buffer whose `VkBuffer` went, or a set the device

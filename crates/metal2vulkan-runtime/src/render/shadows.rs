@@ -810,9 +810,8 @@ fn attachment_shadows(
 }
 
 /// The shadow of `target`'s texture, where the attachment renders a level and layers of its
-/// image that the shadow holds a copy of its truth in ([`ShadowCopies::holds`]); `None` for a
-/// texture with no shadow, and for a tiled texture's level past its first, which lies in its image
-/// alone and which no copy moves (`Buffer::new_tiled_texture`).
+/// image that the shadow holds a copy of its truth in ([`ShadowCopies::holds`]: every level of a
+/// tiled texture's, `Buffer::new_tiled_texture`); `None` for a texture with no shadow.
 fn held_shadow(target: &Target) -> Option<&Arc<ShadowCopies>> {
     let copies = target.texture.shadow()?;
     let (levels, layers) = (

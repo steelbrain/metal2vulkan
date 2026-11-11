@@ -25,7 +25,7 @@ use metal2vulkan::metal::TextureUsage;
 pub(crate) enum Route {
     /// A tiled texture of this many levels, more than one (`Buffer::new_tiled_texture`): no image
     /// over the buffer's memory holds its levels past the first, so the shadow, one image of every
-    /// level, which its copies keep its first level's texels in step with the bytes in.
+    /// level, a copy of the bytes taken at use (`shadow.rs`'s **Copies taken at use**).
     Levels(u32),
     /// Its texels run past the buffer's length, which no image over the buffer's memory reaches:
     /// the shadow, its tail holding them.

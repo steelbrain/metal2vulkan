@@ -17,10 +17,11 @@
 //!   texture of more than one level over a buffer's bytes (`Buffer::new_tiled_texture`), is an
 //!   image to a blit: a command that uses its image copies it in from the bytes first where the
 //!   encoder has not, and what a command writes through it is copied back by `shadow.rs`'s rules,
-//!   as the encoder ends at the latest. A copy that writes every texel such a texture's bytes
-//!   hold (of a one-level, one-slice one, or a tiled one's first level) replaces them
-//!   (`shadow::overwritten`): it takes no copy in and no keep. A blit writes one destination, so
-//!   none writes such a texture's bytes two ways.
+//!   as the encoder ends at the latest; a tiled texture's copy is taken at use and never copied
+//!   back (`shadow.rs`'s **Copies taken at use**). A copy that writes every texel such a texture's
+//!   bytes hold (of a one-level, one-slice one) replaces them (`shadow::overwritten`): it takes no
+//!   copy in and no keep. A blit writes one destination, so none writes such a texture's bytes
+//!   two ways.
 
 use super::blit_fill::FillTiles;
 use super::buffer::Buffer;

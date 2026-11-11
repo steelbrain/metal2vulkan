@@ -7220,8 +7220,9 @@ pub struct WorkCounts {
     pub shadowed_textures: u64,
     /// Of `shadowed_textures`, those whose image started as a new texture of its storage mode
     /// does (zero but in a `Private` one) as it was made: its copies leave an aspect out (a depth
-    /// texture over a surface's plane, whose image's stencil reads zero) or levels out (a tiled
-    /// texture's past its first, `Buffer::new_tiled_texture`). Every other shadow's copy in writes
+    /// texture over a surface's plane, whose image's stencil reads zero) or is copied in at its
+    /// first use alone (a tiled texture's, `Buffer::new_tiled_texture`, whose CPU calls read it
+    /// before then). Every other shadow's copy in writes
     /// each texel before any command reads it, so its image starts as its memory lies.
     pub shadows_zeroed: u64,
     /// Of `shadowed_textures`, those over a buffer that lies in fresh pages it imported

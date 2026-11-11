@@ -8759,6 +8759,7 @@ method	metal2vulkan-runtime::Texture::as_resource	pub fn as_resource(&self) -> R
 method	metal2vulkan-runtime::Texture::cpu_cache_mode	pub fn cpu_cache_mode(&self) -> CpuCacheMode
 method	metal2vulkan-runtime::Texture::depth	pub fn depth(&self) -> u64
 method	metal2vulkan-runtime::Texture::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::Texture::did_modify_data	pub fn did_modify_data(&self)
 method	metal2vulkan-runtime::Texture::first_mipmap_in_tail	pub fn first_mipmap_in_tail(&self) -> Option<u64>
 method	metal2vulkan-runtime::Texture::framebuffer_only	pub fn framebuffer_only(&self) -> bool
 method	metal2vulkan-runtime::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u64, slice: u64) -> Result<(), Error>

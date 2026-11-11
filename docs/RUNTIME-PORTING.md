@@ -483,7 +483,7 @@ narrow refusal that the call's rustdoc describes.
 | `length` | `length` | `Buffer::length` |
 | `new_linear_texture` | `newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:` (SPI) | `Buffer::new_linear_texture` (an aliasing image, or a shadow image where Vulkan cannot alias) *(partial)* |
 | `new_texture` | `newTextureWithDescriptor:offset:bytesPerRow:` | `Buffer::new_texture`, as `new_linear_texture` *(partial)* |
-| `new_tiled_texture` | `newTiledTextureWithDescriptor:offset:bytesPerRow:` (SPI) | `Buffer::new_tiled_texture`: one level as `new_texture`; more, one image of every level whose first is a copy of the bytes kept in step at command boundaries (`shadowed-texture`) *(partial)* |
+| `new_tiled_texture` | `newTiledTextureWithDescriptor:offset:bytesPerRow:` (SPI) | `Buffer::new_tiled_texture`: one level as `new_texture`; more, one image of every level, a copy of the bytes taken at the first use and after each `Texture::did_modify_data`, its later levels made by the device's blit chain (`shadowed-texture`) *(partial)* |
 
 ### `Texture`: `MTLTexture`
 
@@ -491,6 +491,7 @@ narrow refusal that the call's rustdoc describes.
 |---|---|---|
 | `array_length` | `arrayLength` | `Texture::array_length` |
 | `depth` | `depth` | `Texture::depth` |
+| `did_modify_data` | `didModifyData` (SPI) | `Texture::did_modify_data`: a tiled texture of more than one level takes its copy of the bytes again at its next use; nothing on another texture |
 | `gpu_resource_id` | `gpuResourceID` | `Texture::gpu_resource_id` |
 | `height` | `height` | `Texture::height` |
 | `is_shareable` | `isShareable` | `Texture::is_shareable` |

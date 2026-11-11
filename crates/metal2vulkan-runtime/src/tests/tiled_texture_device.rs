@@ -1,55 +1,49 @@
 //! `Buffer::new_tiled_texture`, Metal's private `newTiledTextureWithDescriptor:offset:bytesPerRow:`,
-//! as the x86 macOS guests' WindowServer asks for it: a `BGRA8Unorm` 2D texture of 54x54 and 6
-//! levels, and one of 64x60 and 7, `ShaderRead` alone, its descriptor `Managed`, over a new
-//! 16384-byte `Shared` buffer from offset 0 at 256 bytes a row. On a Mac its first level aliases
-//! the bytes and its others lie in its own memory; here it is one image of every level whose
-//! first is a copy of the bytes (`shadowed-texture`):
+//! of more than one level: one image of every level, a copy of the buffer's bytes taken at the
+//! texture's first use and again at the first use after `Texture::did_modify_data`
+//! (`shadow.rs`'s **Copies taken at use**), as two x86 Macs take it (an AMD Radeon Pro 5300M and an
+//! Intel UHD Graphics 630 under macOS 26.7.1). The shapes: the x86 macOS guests' compositor's
+//! `BGRA8Unorm` 2D textures of 54x54 and 6 levels and of 64x60 and 7, `ShaderRead` alone, the
+//! descriptor `Managed`, over a new 16384-byte `Shared` buffer from offset 0 at 256 bytes a row;
+//! and the Macs' probe's 256x256 of 9 levels, `RGBA8Unorm` and `BGRA8Unorm`, rows packed:
 //!
-//! - **CPU writes reach the first level.** Bytes the CPU wrote before a command buffer are what
-//!   its blit out of the first level reads, texel for texel at the buffer's pitch, and what its
-//!   kernel samples there, a later command buffer reading a later write.
-//! - **GPU writes reach the bytes.** A blit into the first level leaves its texels in the
-//!   buffer's rows once the command buffer completed, and the bytes between the rows as they
-//!   were.
-//! - **Mipmaps.** `generate_mipmaps` fills the later levels from the first (a checkerboard's
-//!   red averages to 127 or 128 a texel at level 1, read back on the CPU), and a kernel's sample
-//!   at a level-1 LOD through a sampler with a nearest mip filter reads level 1's texels.
-//! - **The later levels.** Blits into and out of each level past the first, and the CPU's
-//!   `replace_region` and `get_bytes` there, round-trip, and leave the buffer's bytes as they
-//!   were.
+//! - **The first use takes the bytes written after the making.** Bytes written after the making
+//!   are what the first command buffer's blits read out of the first level, and every later
+//!   level is made from the one above (a uniform grey in every level; a gradient's level each the
+//!   2x2 box of the one above, to within one a byte), the one copy in counted
+//!   (`WorkCounts::shadow_texels_copied_in`: the first level's texels once, nothing copied back).
+//!   So does a first use that is a kernel's sample at LOD 1, the case that read zeros before.
+//! - **No later write reaches a level.** A CPU write after the first use reaches no level, and the
+//!   next use copies nothing in.
+//! - **`did_modify_data`** takes the copy again at the next use, not at the call: a write after
+//!   the call is in every level, and a later write without one is in none.
+//! - **A blit into the first level** reaches neither the bytes nor the later levels.
+//! - **Mipmaps and the later levels.** `generate_mipmaps` makes level 1 from the first; blits into
+//!   and out of each level past the first, and the CPU's `replace_region` and `get_bytes` there,
+//!   round-trip, and leave the buffer's bytes as they were.
+//! - **A pass into a later level** as the first use takes the copy first and clears that level.
 //! - **One level** is `new_texture`'s: the same placement and the same path over a no-copy
 //!   buffer, in place where the device's check passed.
 //! - **Announced and counted.** Each texture is announced (`shadowed-texture`, at every
 //!   occurrence where the device's options ask), the notice naming its levels, counted in
 //!   `WorkCounts::shadowed_textures` and `shadows_zeroed`, and its placement query answers
-//!   `Shadow(Mipmapped)`; its copies in move its first level's texels alone
-//!   (`WorkCounts::shadow_texels_copied_in`, a multiple of them).
-//! - **The later levels alone copy nothing.** A blit into level 1 and a render pass into it take
-//!   no copy of the first level (`WorkCounts::shadow_copies`), and `generate_mipmaps` copies the
-//!   first level in, which it reads, and nothing back, keeps nothing and merges nothing, as its
-//!   writes are the later levels'.
-//! - **Merges fetch.** A blit into part of the first level over a `Shared` buffer merges back
-//!   through a view of the first level (`WorkCounts::shadow_merges_fetched`), the bytes outside
-//!   the part kept.
+//!   `Shadow(Mipmapped)`.
 //! - **Detached.** Over a no-copy buffer's pages, detached (`detach_backing`), the texture keeps
-//!   its own image (its `VkImage` the same): `get_bytes` of the first level reads the bytes the
-//!   CPU last wrote before the detach (after the last copy in), the later levels read and take
-//!   writes, and a write of the first level is refused (`NotImplemented(DetachedTexelAccess)`), as
-//!   a one-level texture's CPU access is. A rebind to new pages gives the first level their bytes
-//!   and leaves the later levels as written.
+//!   its own image (its `VkImage` the same): every level reads what the last take left, and takes
+//!   writes. A rebind to new pages changes no level until a `did_modify_data`, after which the
+//!   next use takes their bytes.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TILED-TEXTURE`): each
-//! shape's sampled and counted values.
+//! shape's read and counted values.
 
 use super::blit_holds::{device, over_host, Host, Scratch, WAIT};
 use super::draw_again::{device as hearing_device, Heard};
 use super::encoder_holds::{library, pass};
 use crate::{
     BlitOption, Buffer, ClearColor, CommandQueue, ComputePipelineState, CpuCacheMode, Degradation,
-    Device, Error, HazardTrackingMode, Origin, PipelineOptions, Region, ResourceOptions,
-    RuntimeGap, SamplerState, Size, StorageMode, Texture, TextureDescriptor, TexturePlacement,
-    TextureShadowReason,
+    Device, HazardTrackingMode, Origin, PipelineOptions, Region, ResourceOptions, SamplerState,
+    Size, StorageMode, Texture, TextureDescriptor, TexturePlacement, TextureShadowReason,
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, SamplerMipFilter, TextureUsage};
@@ -57,23 +51,27 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// The guest's shapes: level 0's width and height, and the level count.
-const SHAPES: [((u64, u64), u64); 2] = [((54, 54), 6), ((64, 60), 7)];
+/// A texture's level 0 width and height, and its level count.
+type Shape = ((u64, u64), u64);
+
+/// The guest's compositor's shapes.
+const SHAPES: [Shape; 2] = [((54, 54), 6), ((64, 60), 7)];
 
 /// The guest's buffer: its length and the texture's `bytesPerRow`.
 const LENGTH: u64 = 16384;
 const PITCH: u64 = 256;
 
-/// The byte the buffer holds before a test writes its texels' rows.
-const BETWEEN: u8 = 0xee;
+/// The Macs' probe's shape, rows packed.
+const SQUARE: Shape = ((256, 256), 9);
+const SQUARE_PITCH: u64 = 256 * 4;
 
 /// How long the device's in-place check may take to settle.
 const SETTLE: Duration = Duration::from_secs(120);
 
-/// The guest's descriptor of `shape`: `BGRA8Unorm`, `ShaderRead`, `Managed` (the texture takes
-/// the buffer's options, as `new_texture`'s does), GPU-optimized contents allowed.
-fn descriptor(((width, height), levels): ((u64, u64), u64)) -> TextureDescriptor {
-    let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, width, height, false);
+/// A descriptor of `shape` in `format`: `ShaderRead`, `Managed` (the texture takes the buffer's
+/// options, as `new_texture`'s does), GPU-optimized contents allowed.
+fn descriptor_of(format: PixelFormat, ((width, height), levels): Shape) -> TextureDescriptor {
+    let mut d = TextureDescriptor::texture_2d(format, width, height, false);
     d.mipmap_level_count = levels;
     d.usage = TextureUsage::SHADER_READ;
     d.resource_options = ResourceOptions::new(
@@ -85,12 +83,17 @@ fn descriptor(((width, height), levels): ((u64, u64), u64)) -> TextureDescriptor
     d
 }
 
-/// A new `Shared` buffer of the guest's length, every byte [`BETWEEN`].
-fn buffer(device: &Device) -> Buffer {
+/// The guest's descriptor of `shape`: `BGRA8Unorm`.
+fn descriptor(shape: Shape) -> TextureDescriptor {
+    descriptor_of(PixelFormat::BGRA8Unorm, shape)
+}
+
+/// A new `Shared` buffer of `length` bytes, every byte zero.
+fn zeroed(device: &Device, length: u64) -> Buffer {
     let buffer = device
-        .new_buffer(LENGTH, ResourceOptions::shared())
+        .new_buffer(length, ResourceOptions::shared())
         .unwrap();
-    write(&buffer, |bytes| bytes.fill(BETWEEN));
+    write(&buffer, |bytes| bytes.fill(0));
     buffer
 }
 
@@ -120,7 +123,7 @@ fn read(buffer: &Buffer) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(contents.as_ptr(), buffer.length() as usize) }.to_vec()
 }
 
-/// The texel `(x, y)` of a pattern seeded `seed`, its bytes in `BGRA8Unorm`'s order.
+/// The texel `(x, y)` of a pattern seeded `seed`.
 fn texel(seed: u8, x: u64, y: u64) -> [u8; 4] {
     let (x, y) = (x as u8, y as u8);
     [
@@ -131,12 +134,21 @@ fn texel(seed: u8, x: u64, y: u64) -> [u8; 4] {
     ]
 }
 
-/// Write `of(x, y)` into the `width` x `height` texels at `PITCH` bytes a row of `buffer`.
-fn write_rows(buffer: &Buffer, (width, height): (u64, u64), of: impl Fn(u64, u64) -> [u8; 4]) {
+/// The Macs' probe's gradient: `(x, y, 0x80, 0xff)`.
+fn gradient(x: u64, y: u64) -> [u8; 4] {
+    [x as u8, y as u8, 0x80, 0xff]
+}
+
+/// Write `of(x, y)` into the `width` x `height` texels at `pitch` bytes a row of `buffer`.
+fn write_rows(
+    buffer: &Buffer,
+    ((width, height), pitch): ((u64, u64), u64),
+    of: impl Fn(u64, u64) -> [u8; 4],
+) {
     write(buffer, |bytes| {
         for y in 0..height {
             for x in 0..width {
-                let at = (y * PITCH + x * 4) as usize;
+                let at = (y * pitch + x * 4) as usize;
                 bytes[at..at + 4].copy_from_slice(&of(x, y));
             }
         }
@@ -151,13 +163,46 @@ fn packed((width, height): (u64, u64), of: impl Fn(u64, u64) -> [u8; 4]) -> Vec<
         .collect()
 }
 
-/// The level-0 pattern whose level 1 `generate_mipmaps` makes known: blue the
-/// checkerboard of 0 and 255 a texel, which a 2x2 box averages to 127 or 128; green one value a 2x2
-/// block, which it keeps; red 0x40 and alpha 255.
+/// The level-0 pattern whose level 1 the device's filter makes known: blue the checkerboard of 0
+/// and 255 a texel, which a 2x2 box averages to 127 or 128; green one value a 2x2 block, which it
+/// keeps; red 0x40 and alpha 255.
 fn checker(x: u64, y: u64) -> [u8; 4] {
     let blue = if (x + y).is_multiple_of(2) { 0 } else { 0xff };
     let green = ((x / 2) * 9 + (y / 2) * 5) as u8;
     [blue, green, 0x40, 0xff]
+}
+
+/// The width and height of `level` of a level 0 of `(width, height)`.
+fn level_extent((width, height): (u64, u64), level: u64) -> (u64, u64) {
+    ((width >> level).max(1), (height >> level).max(1))
+}
+
+/// Whether every byte of `got` lies within one of `expected`'s byte at its place in a texel.
+fn near_each(got: &[u8], expected: [u8; 4]) -> bool {
+    (got.chunks(4)).all(|t| t.iter().zip(expected).all(|(&g, e)| g.abs_diff(e) <= 1))
+}
+
+/// Where `below` (of `size`, each axis half `above`'s) is not the 2x2 box of `above` to within one
+/// a byte: the first texel and its two values.
+fn off_the_box(above: &[u8], below: &[u8], (w, h): (u64, u64)) -> Option<String> {
+    let aw = 2 * w;
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..4 {
+                let at = |xx: u64, yy: u64| u32::from(above[((yy * aw + xx) * 4 + c) as usize]);
+                let sum = at(2 * x, 2 * y)
+                    + at(2 * x + 1, 2 * y)
+                    + at(2 * x, 2 * y + 1)
+                    + at(2 * x + 1, 2 * y + 1);
+                let got = u32::from(below[((y * w + x) * 4 + c) as usize]);
+                // Within one of the box's mean, sum / 4, either way.
+                if 4 * got + 4 < sum || 4 * got > sum + 4 {
+                    return Some(format!("texel {x},{y} channel {c}: {got}, box {sum}/4"));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The device's queue, the sampling kernels, and a sampler with a nearest mip filter.
@@ -166,21 +211,16 @@ struct Rig {
     queue: CommandQueue,
     /// `sample_level`: `t.sample(s, float2(gid) * 0.25, level(1.0))` into `out[gid]`.
     level_one: ComputePipelineState,
-    /// `sample_base`: an implicit-LOD sample outside a fragment function, which reads level 0.
-    base: ComputePipelineState,
     sampler: SamplerState,
 }
 
 impl Rig {
     fn new(device: Device) -> Rig {
         let sampling = library(&device, "engine/sampling.ll");
-        let state = |name: &str| {
-            let function = sampling.new_function_with_name(name).unwrap();
-            (device
-                .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default()))
-            .unwrap()
-        };
-        let (level_one, base) = (state("sample_level"), state("sample_base"));
+        let function = sampling.new_function_with_name("sample_level").unwrap();
+        let level_one = (device
+            .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default()))
+        .unwrap();
         let mut d = SamplerDescriptor::new();
         d.mip_filter = SamplerMipFilter::Nearest;
         let sampler = device.new_sampler_state(&d).unwrap();
@@ -188,7 +228,6 @@ impl Rig {
             queue: device.new_command_queue().unwrap(),
             device,
             level_one,
-            base,
             sampler,
         }
     }
@@ -232,6 +271,44 @@ impl Rig {
     fn out(&self) -> Buffer {
         (self.device.new_buffer(64, ResourceOptions::shared())).unwrap()
     }
+
+    /// Every level of `texture`, of `shape`, read out by one command buffer's blits, and what
+    /// that command buffer copied of the device's shadows.
+    fn levels(
+        &self,
+        texture: &Texture,
+        ((width, height), levels): Shape,
+    ) -> (Vec<Vec<u8>>, Copies) {
+        let outs: Vec<(Buffer, (u64, u64))> = (0..levels)
+            .map(|level| {
+                let (w, h) = level_extent((width, height), level);
+                let out = self.device.new_buffer(w * h * 4, ResourceOptions::shared());
+                (out.unwrap(), (w, h))
+            })
+            .collect();
+        let copies = copies_of(&self.device, || {
+            self.run(|command_buffer| {
+                let mut blit = command_buffer.blit_command_encoder().unwrap();
+                for (level, (out, (w, h))) in outs.iter().enumerate() {
+                    blit.copy_from_texture_to_buffer(
+                        texture,
+                        0,
+                        level as u64,
+                        Origin::new(0, 0, 0),
+                        Size::new(*w, *h, 1),
+                        out,
+                        0,
+                        w * 4,
+                        0,
+                        BlitOption::None,
+                    )
+                    .unwrap();
+                }
+                blit.end_encoding().unwrap();
+            });
+        });
+        (outs.iter().map(|(out, _)| read(out)).collect(), copies)
+    }
 }
 
 /// The `BGRA8Unorm` texel a sample read, its channels red, green, blue, alpha over 255 each.
@@ -244,124 +321,250 @@ fn rig(scratch: &Scratch) -> Rig {
     Rig::new(device(&scratch.0))
 }
 
+/// What a run of commands copied of a shadow (`WorkCounts`, after less before).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Copies {
+    /// `shadow_copies`: every copy in, copy back, keep and merge.
+    copies: u64,
+    /// `shadow_texels_copied_in`.
+    texels_in: u64,
+    /// `shadow_texels_copied_back`.
+    texels_back: u64,
+}
+
+/// What `run` copied of the device's shadows.
+fn copies_of(device: &Device, run: impl FnOnce()) -> Copies {
+    let before = device.work_counts();
+    run();
+    let after = device.work_counts();
+    Copies {
+        copies: after.shadow_copies - before.shadow_copies,
+        texels_in: after.shadow_texels_copied_in - before.shadow_texels_copied_in,
+        texels_back: after.shadow_texels_copied_back - before.shadow_texels_copied_back,
+    }
+}
+
+/// The copies of one take of a texture whose first level is `first` texels: its texels in once,
+/// nothing back.
+fn one_take(first: u64) -> Copies {
+    Copies {
+        copies: 1,
+        texels_in: first,
+        texels_back: 0,
+    }
+}
+
+/// No copy.
+const NONE: Copies = Copies {
+    copies: 0,
+    texels_in: 0,
+    texels_back: 0,
+};
+
+/// The cases of the uniform grey: the compositor's shapes over the guest's buffer, and the probe's
+/// square in both formats over a buffer of its packed rows.
+fn grey_cases() -> Vec<(PixelFormat, Shape, u64, u64)> {
+    let mut cases: Vec<_> = SHAPES
+        .iter()
+        .map(|&shape| (PixelFormat::BGRA8Unorm, shape, PITCH, LENGTH))
+        .collect();
+    for format in [PixelFormat::RGBA8Unorm, PixelFormat::BGRA8Unorm] {
+        cases.push((format, SQUARE, SQUARE_PITCH, SQUARE_PITCH * 256));
+    }
+    cases
+}
+
 #[test]
-fn cpu_writes_reach_the_first_level() {
-    let scratch = Scratch::new("tiled-texture-cpu-writes");
+fn the_first_use_takes_the_bytes_written_after_the_making_into_every_level() {
+    let scratch = Scratch::new("tiled-texture-first-use");
     let rig = rig(&scratch);
-    for shape in SHAPES {
+    let grey = [128, 128, 128, 255];
+    for (format, shape, pitch, length) in grey_cases() {
         let ((width, height), levels) = shape;
-        let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&rig.device);
+        let case = format!("{format:?} {width}x{height} of {levels} levels");
+        let target = zeroed(&rig.device, length);
         let texture = target
-            .new_tiled_texture(&descriptor(shape), 0, PITCH)
+            .new_tiled_texture(&descriptor_of(format, shape), 0, pitch)
             .unwrap();
         assert_eq!(texture.mipmap_level_count(), levels, "{case}");
-        assert!(texture.shadow().is_some(), "{case}: a shadow");
-        // A blit out of the first level reads the bytes the CPU wrote, texel for texel.
-        write_rows(&target, (width, height), |x, y| texel(1, x, y));
-        let row = width * 4;
-        let read_back = (rig
-            .device
-            .new_buffer(row * height, ResourceOptions::shared()))
-        .unwrap();
-        let before = rig.device.work_counts();
-        rig.run(|command_buffer| {
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            let size = Size::new(width, height, 1);
-            let origin = Origin::new(0, 0, 0);
-            blit.copy_from_texture_to_buffer(
-                &texture,
-                0,
-                0,
-                origin,
-                size,
-                &read_back,
-                0,
-                row,
-                0,
-                BlitOption::None,
-            )
-            .unwrap();
-            blit.end_encoding().unwrap();
-        });
-        let after = rig.device.work_counts();
-        let copied_in = after.shadow_texels_copied_in - before.shadow_texels_copied_in;
-        assert!(
-            copied_in > 0 && copied_in.is_multiple_of(width * height),
-            "{case}: {copied_in} texels copied in, of a first level of {}",
-            width * height
-        );
-        let expected = packed((width, height), |x, y| texel(1, x, y));
-        assert_eq!(
-            read(&read_back),
-            expected,
-            "{case}: the blit out of level 0"
-        );
-        // A kernel samples the bytes the CPU wrote before its command buffer, and a later one
-        // a later write. One value over the level: a sample's texel is the level's at any point.
-        let out = rig.out();
-        for color in [[0x10, 0x80, 0xf0, 0xff], [0xc0, 0x30, 0x08, 0x7f]] {
-            write_rows(&target, (width, height), |_, _| color);
-            rig.run(|command_buffer| rig.sample(command_buffer, &rig.base, (&texture, &out)));
-            let samples = Rig::samples(&out);
-            eprintln!("TILED-TEXTURE: {case}: level 0 sampled {samples:?} after {color:?}");
-            for sample in samples {
-                assert_eq!(texel_of(sample), color, "{case}: level 0 of {color:?}");
-            }
+        // Written after the making, before any use.
+        write_rows(&target, ((width, height), pitch), |_, _| grey);
+        let (got, copies) = rig.levels(&texture, shape);
+        eprintln!("TILED-TEXTURE: {case}: the first use {copies:?}");
+        for (level, bytes) in got.iter().enumerate() {
+            let first = bytes.get(..4);
+            eprintln!("TILED-TEXTURE: {case}: level {level} starts {first:?}");
+            assert!(near_each(bytes, grey), "{case}: level {level} {first:?}");
         }
-        eprintln!("TILED-TEXTURE: {case}: {copied_in} texels copied in for the blit out");
+        assert_eq!(copies, one_take(width * height), "{case}");
     }
 }
 
 #[test]
-fn a_blit_into_the_first_level_reaches_the_buffer() {
-    let scratch = Scratch::new("tiled-texture-first-level-blit");
+fn every_later_level_is_made_from_the_one_above() {
+    let scratch = Scratch::new("tiled-texture-gradient");
+    let rig = rig(&scratch);
+    for format in [PixelFormat::RGBA8Unorm, PixelFormat::BGRA8Unorm] {
+        let ((width, height), levels) = SQUARE;
+        let case = format!("{format:?} {width}x{height} of {levels} levels");
+        let target = zeroed(&rig.device, SQUARE_PITCH * height);
+        let texture =
+            (target.new_tiled_texture(&descriptor_of(format, SQUARE), 0, SQUARE_PITCH)).unwrap();
+        write_rows(&target, ((width, height), SQUARE_PITCH), gradient);
+        let (got, _) = rig.levels(&texture, SQUARE);
+        assert_eq!(got[0], packed((width, height), gradient), "{case}: level 0");
+        for level in 1..levels as usize {
+            let size = level_extent((width, height), level as u64);
+            let off = off_the_box(&got[level - 1], &got[level], size);
+            assert_eq!(off, None, "{case}: level {level}");
+        }
+        let last = &got[levels as usize - 1];
+        eprintln!("TILED-TEXTURE: {case}: the gradient's last level {last:?}");
+    }
+}
+
+#[test]
+fn a_first_sample_at_level_one_reads_the_level_made_from_the_bytes() {
+    let scratch = Scratch::new("tiled-texture-first-sample");
     let rig = rig(&scratch);
     for shape in SHAPES {
         let ((width, height), levels) = shape;
         let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&rig.device);
+        let target = zeroed(&rig.device, LENGTH);
         let texture = target
             .new_tiled_texture(&descriptor(shape), 0, PITCH)
             .unwrap();
-        let row = width * 4;
-        let pattern = packed((width, height), |x, y| texel(2, x, y));
-        let source = holding(&rig.device, row * height, &pattern);
-        let before = rig.device.work_counts();
-        rig.run(|command_buffer| {
-            let mut blit = command_buffer.blit_command_encoder().unwrap();
-            blit.copy_from_buffer_to_texture(
-                &source,
-                0,
-                row,
-                0,
-                Size::new(width, height, 1),
-                &texture,
-                0,
-                0,
-                Origin::new(0, 0, 0),
-                BlitOption::None,
-            )
-            .unwrap();
-            blit.end_encoding().unwrap();
+        write_rows(&target, ((width, height), PITCH), checker);
+        let out = rig.out();
+        let copies = copies_of(&rig.device, || {
+            rig.run(|command_buffer| rig.sample(command_buffer, &rig.level_one, (&texture, &out)));
         });
-        let after = rig.device.work_counts();
-        let back = after.shadow_texels_copied_back - before.shadow_texels_copied_back;
-        let got = read(&target);
-        for y in 0..height {
-            for x in 0..PITCH / 4 {
-                let at = (y * PITCH + x * 4) as usize;
-                let expected = match x < width {
-                    true => texel(2, x, y),
-                    false => [BETWEEN; 4],
-                };
-                assert_eq!(got[at..at + 4], expected, "{case}: bytes {at}");
-            }
+        // A sample at LOD 1 reads level 1's averaged blue, which level 0 holds nowhere.
+        let samples = Rig::samples(&out);
+        eprintln!("TILED-TEXTURE: {case}: level 1 sampled {samples:?}, {copies:?}");
+        for sample in samples {
+            let [blue, _, red, alpha] = texel_of(sample);
+            assert!((127..=128).contains(&blue), "{case}: blue {blue}");
+            assert_eq!([red, alpha], [0x40, 0xff], "{case}");
         }
-        let end = (height * PITCH) as usize;
-        assert!(got[end..].iter().all(|&b| b == BETWEEN), "{case}: past");
-        eprintln!("TILED-TEXTURE: {case}: the blit into level 0 copied back {back} texels");
+        assert_eq!(copies, one_take(width * height), "{case}");
     }
+}
+
+#[test]
+fn a_cpu_write_after_the_first_use_reaches_no_level() {
+    let scratch = Scratch::new("tiled-texture-later-write");
+    let rig = rig(&scratch);
+    let ((width, height), _) = SQUARE;
+    let target = zeroed(&rig.device, SQUARE_PITCH * height);
+    let d = descriptor_of(PixelFormat::RGBA8Unorm, SQUARE);
+    let texture = target.new_tiled_texture(&d, 0, SQUARE_PITCH).unwrap();
+    write_rows(&target, ((width, height), SQUARE_PITCH), gradient);
+    let (first, _) = rig.levels(&texture, SQUARE);
+    write(&target, |bytes| bytes.fill(0x40));
+    let (again, copies) = rig.levels(&texture, SQUARE);
+    eprintln!("TILED-TEXTURE: a use after a CPU write {copies:?}");
+    assert_eq!(copies, NONE, "the use after the first");
+    for (level, (a, b)) in first.iter().zip(&again).enumerate() {
+        assert_eq!(a, b, "level {level}");
+    }
+}
+
+#[test]
+fn did_modify_data_takes_the_copy_again_at_the_next_use() {
+    let scratch = Scratch::new("tiled-texture-did-modify");
+    let rig = rig(&scratch);
+    let ((width, height), _) = SQUARE;
+    let rows = ((width, height), SQUARE_PITCH);
+    let target = zeroed(&rig.device, SQUARE_PITCH * height);
+    let d = descriptor_of(PixelFormat::RGBA8Unorm, SQUARE);
+    let texture = target.new_tiled_texture(&d, 0, SQUARE_PITCH).unwrap();
+    // The Macs' probe's steps: the first use over 0x40 bytes; rows written, the call, then 0x20
+    // everywhere with no call; then 0x10 with no call.
+    write(&target, |bytes| bytes.fill(0x40));
+    let (made, _) = rig.levels(&texture, SQUARE);
+    assert!(made.iter().all(|level| near_each(level, [0x40; 4])), "made");
+    write_rows(&target, rows, gradient);
+    texture.did_modify_data();
+    write(&target, |bytes| bytes.fill(0x20));
+    let (taken, copies) = rig.levels(&texture, SQUARE);
+    eprintln!("TILED-TEXTURE: the use after did_modify_data {copies:?}");
+    for (level, bytes) in taken.iter().enumerate() {
+        assert!(near_each(bytes, [0x20; 4]), "level {level} after the call");
+    }
+    assert_eq!(copies, one_take(width * height), "the use after the call");
+    write(&target, |bytes| bytes.fill(0x10));
+    let (kept, copies) = rig.levels(&texture, SQUARE);
+    assert_eq!(copies, NONE, "a use after a write with no call");
+    assert_eq!(kept, taken, "a write with no call");
+}
+
+#[test]
+fn a_blit_into_the_first_level_reaches_neither_the_bytes_nor_the_later_levels() {
+    let scratch = Scratch::new("tiled-texture-first-level-blit");
+    let rig = rig(&scratch);
+    let ((width, height), levels) = SQUARE;
+    let target = zeroed(&rig.device, SQUARE_PITCH * height);
+    let d = descriptor_of(PixelFormat::RGBA8Unorm, SQUARE);
+    let texture = target.new_tiled_texture(&d, 0, SQUARE_PITCH).unwrap();
+    write(&target, |bytes| bytes.fill(0x40));
+    rig.levels(&texture, SQUARE);
+    let source = holding(
+        &rig.device,
+        width * height * 4,
+        &vec![0x20; (width * height * 4) as usize],
+    );
+    let at = (Origin::new(0, 0, 0), Size::new(width, height, 1));
+    let copies = copies_of(&rig.device, || {
+        rig.run(|command_buffer| blit_into(command_buffer, (&source, &texture), 0, at));
+    });
+    assert_eq!(copies, NONE, "the blit into level 0");
+    let (got, _) = rig.levels(&texture, SQUARE);
+    assert!(
+        near_each(&got[0], [0x20; 4]),
+        "level 0 as the blit wrote it"
+    );
+    for level in 1..levels as usize {
+        assert!(near_each(&got[level], [0x40; 4]), "level {level} as taken");
+    }
+    assert!(
+        read(&target).iter().all(|&b| b == 0x40),
+        "the buffer's bytes"
+    );
+}
+
+/// Encode a blit of `source`'s packed rows into `size` of `texture`'s `level` at `origin`.
+fn blit_into(
+    command_buffer: &crate::CommandBuffer,
+    (source, texture): (&Buffer, &Texture),
+    level: u64,
+    (origin, size): (Origin, Size),
+) {
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    let row = size.width * 4;
+    blit.copy_from_buffer_to_texture(
+        source,
+        0,
+        row,
+        0,
+        size,
+        texture,
+        0,
+        level,
+        origin,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+}
+
+/// `level`'s texels of `texture` (of the level-0 extent `(width, height)`), read on the CPU.
+fn level_bytes(texture: &Texture, (width, height): (u64, u64), level: u64) -> Vec<u8> {
+    let (w, h) = level_extent((width, height), level);
+    let mut bytes = vec![0u8; (w * h * 4) as usize];
+    let region = Region::new_2d(0, 0, w, h);
+    (texture.get_bytes(&mut bytes, w * 4, 0, region, level, 0)).unwrap();
+    bytes
 }
 
 #[test]
@@ -371,11 +574,11 @@ fn generated_mipmaps_fill_the_level_a_level_one_sample_reads() {
     for shape in SHAPES {
         let ((width, height), levels) = shape;
         let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&rig.device);
+        let target = zeroed(&rig.device, LENGTH);
         let texture = target
             .new_tiled_texture(&descriptor(shape), 0, PITCH)
             .unwrap();
-        write_rows(&target, (width, height), checker);
+        write_rows(&target, ((width, height), PITCH), checker);
         let out = rig.out();
         rig.run(|command_buffer| {
             let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -385,9 +588,7 @@ fn generated_mipmaps_fill_the_level_a_level_one_sample_reads() {
         });
         // Level 1 as the CPU reads it: each texel the 2x2 box of level 0's.
         let (w, h) = (width / 2, height / 2);
-        let mut level_one = vec![0u8; (w * h * 4) as usize];
-        let region = Region::new_2d(0, 0, w, h);
-        (texture.get_bytes(&mut level_one, w * 4, 0, region, 1, 0)).unwrap();
+        let level_one = level_bytes(&texture, (width, height), 1);
         for y in 0..h {
             for x in 0..w {
                 let at = ((y * w + x) * 4) as usize;
@@ -400,9 +601,8 @@ fn generated_mipmaps_fill_the_level_a_level_one_sample_reads() {
                 assert_eq!([green, red, alpha], [kept, 0x40, 0xff], "{case}: {x},{y}");
             }
         }
-        // A sample at LOD 1 reads level 1's averaged blue, which level 0 holds nowhere.
         let samples = Rig::samples(&out);
-        eprintln!("TILED-TEXTURE: {case}: level 1 sampled {samples:?}");
+        eprintln!("TILED-TEXTURE: {case}: level 1 sampled after generate_mipmaps {samples:?}");
         for sample in samples {
             let [blue, _, red, alpha] = texel_of(sample);
             assert!((127..=128).contains(&blue), "{case}: blue {blue}");
@@ -418,14 +618,14 @@ fn the_later_levels_round_trip_apart_from_the_buffer() {
     for shape in SHAPES {
         let ((width, height), levels) = shape;
         let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&rig.device);
+        let target = zeroed(&rig.device, LENGTH);
         let texture = target
             .new_tiled_texture(&descriptor(shape), 0, PITCH)
             .unwrap();
-        write_rows(&target, (width, height), |x, y| texel(3, x, y));
+        write_rows(&target, ((width, height), PITCH), |x, y| texel(3, x, y));
         let kept = read(&target);
         for level in 1..levels {
-            let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+            let (w, h) = level_extent((width, height), level);
             let row = w * 4;
             let seed = 0x40 + level as u8;
             let pattern = packed((w, h), |x, y| texel(seed, x, y));
@@ -433,21 +633,8 @@ fn the_later_levels_round_trip_apart_from_the_buffer() {
             let read_back = (rig.device.new_buffer(row * h, ResourceOptions::shared())).unwrap();
             let size = Size::new(w, h, 1);
             let origin = Origin::new(0, 0, 0);
-            rig.run(|command_buffer| {
+            let out = |command_buffer: &crate::CommandBuffer| {
                 let mut blit = command_buffer.blit_command_encoder().unwrap();
-                blit.copy_from_buffer_to_texture(
-                    &source,
-                    0,
-                    row,
-                    0,
-                    size,
-                    &texture,
-                    0,
-                    level,
-                    origin,
-                    BlitOption::None,
-                )
-                .unwrap();
                 blit.copy_from_texture_to_buffer(
                     &texture,
                     0,
@@ -462,38 +649,65 @@ fn the_later_levels_round_trip_apart_from_the_buffer() {
                 )
                 .unwrap();
                 blit.end_encoding().unwrap();
+            };
+            rig.run(|command_buffer| {
+                blit_into(command_buffer, (&source, &texture), level, (origin, size));
+                out(command_buffer);
             });
             assert_eq!(read(&read_back), pattern, "{case}: level {level} by blits");
-            let mut cpu = vec![0u8; pattern.len()];
-            let region = Region::new_2d(0, 0, w, h);
-            (texture.get_bytes(&mut cpu, row, 0, region, level, 0)).unwrap();
+            let cpu = level_bytes(&texture, (width, height), level);
             assert_eq!(cpu, pattern, "{case}: level {level} read on the CPU");
             // The CPU's write there, read back by a blit.
             let written: Vec<u8> = pattern.iter().map(|b| !b).collect();
+            let region = Region::new_2d(0, 0, w, h);
             (texture.replace_region(region, level, 0, &written, row, 0)).unwrap();
-            rig.run(|command_buffer| {
-                let mut blit = command_buffer.blit_command_encoder().unwrap();
-                blit.copy_from_texture_to_buffer(
-                    &texture,
-                    0,
-                    level,
-                    origin,
-                    size,
-                    &read_back,
-                    0,
-                    row,
-                    0,
-                    BlitOption::None,
-                )
-                .unwrap();
-                blit.end_encoding().unwrap();
-            });
-            assert_eq!(
-                read(&read_back),
-                written,
-                "{case}: level {level} written on the CPU"
-            );
+            rig.run(out);
+            let got = read(&read_back);
+            assert_eq!(got, written, "{case}: level {level} written on the CPU");
         }
+        assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
+    }
+}
+
+#[test]
+fn a_render_pass_into_a_later_level_takes_the_copy_first() {
+    let scratch = Scratch::new("tiled-texture-later-level-pass");
+    let rig = rig(&scratch);
+    for shape in SHAPES {
+        let ((width, height), levels) = shape;
+        let case = format!("{width}x{height} of {levels} levels");
+        let target = zeroed(&rig.device, LENGTH);
+        let mut d = descriptor(shape);
+        d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        let texture = target.new_tiled_texture(&d, 0, PITCH).unwrap();
+        write_rows(&target, ((width, height), PITCH), |x, y| texel(7, x, y));
+        let kept = read(&target);
+        let mut into_one = pass(&texture);
+        into_one.color_attachments[0].level = 1;
+        into_one.color_attachments[0].clear_color = ClearColor::new(1.0, 0.0, 1.0, 1.0);
+        let passes = || {
+            copies_of(&rig.device, || {
+                rig.run(|command_buffer| {
+                    let encoder = command_buffer.render_command_encoder(&into_one).unwrap();
+                    encoder.end_encoding().unwrap();
+                });
+            })
+        };
+        let (first, second) = (passes(), passes());
+        eprintln!("TILED-TEXTURE: {case}: passes into level 1 {first:?}, then {second:?}");
+        assert_eq!(first, one_take(width * height), "{case}: the first pass");
+        assert_eq!(second, NONE, "{case}: the second pass");
+        let level_zero = level_bytes(&texture, (width, height), 0);
+        assert_eq!(
+            level_zero,
+            packed((width, height), |x, y| texel(7, x, y)),
+            "{case}"
+        );
+        let level_one = level_bytes(&texture, (width, height), 1);
+        assert!(
+            level_one.chunks(4).all(|t| t == [0xff, 0, 0xff, 0xff]),
+            "{case}: level 1 cleared"
+        );
         assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
     }
 }
@@ -538,7 +752,7 @@ fn each_tiled_texture_is_announced_and_counted() {
     for shape in SHAPES {
         let ((width, height), levels) = shape;
         let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&device);
+        let target = zeroed(&device, LENGTH);
         let d = descriptor(shape);
         let placement = target.tiled_texture_placement(&d, 0, PITCH).unwrap();
         let levels = levels as u32;
@@ -583,207 +797,8 @@ fn each_tiled_texture_is_announced_and_counted() {
     }
 }
 
-/// What a run of commands copied of a shadow (`WorkCounts`, after less before).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Copies {
-    /// `shadow_copies`: every copy in, copy back, keep and merge.
-    copies: u64,
-    /// `shadow_texels_copied_in`.
-    texels_in: u64,
-    /// `shadow_texels_copied_back`.
-    texels_back: u64,
-    /// `shadow_texels_kept`.
-    texels_kept: u64,
-    /// `shadow_merges_fetched`.
-    fetched: u64,
-}
-
-/// What `run` copied of the device's shadows.
-fn copies_of(device: &Device, run: impl FnOnce()) -> Copies {
-    let before = device.work_counts();
-    run();
-    let after = device.work_counts();
-    Copies {
-        copies: after.shadow_copies - before.shadow_copies,
-        texels_in: after.shadow_texels_copied_in - before.shadow_texels_copied_in,
-        texels_back: after.shadow_texels_copied_back - before.shadow_texels_copied_back,
-        texels_kept: after.shadow_texels_kept - before.shadow_texels_kept,
-        fetched: after.shadow_merges_fetched - before.shadow_merges_fetched,
-    }
-}
-
-/// `level`'s texels of `texture` (of the level-0 extent `(width, height)`), read on the CPU.
-fn level_bytes(texture: &Texture, (width, height): (u64, u64), level: u64) -> Vec<u8> {
-    let (w, h) = ((width >> level).max(1), (height >> level).max(1));
-    let mut bytes = vec![0u8; (w * h * 4) as usize];
-    let region = Region::new_2d(0, 0, w, h);
-    (texture.get_bytes(&mut bytes, w * 4, 0, region, level, 0)).unwrap();
-    bytes
-}
-
-/// Encode a blit of `source`'s packed rows into `size` of `texture`'s `level` at `origin`.
-fn blit_into(
-    command_buffer: &crate::CommandBuffer,
-    (source, texture): (&Buffer, &Texture),
-    level: u64,
-    (origin, size): (Origin, Size),
-) {
-    let mut blit = command_buffer.blit_command_encoder().unwrap();
-    let row = size.width * 4;
-    blit.copy_from_buffer_to_texture(
-        source,
-        0,
-        row,
-        0,
-        size,
-        texture,
-        0,
-        level,
-        origin,
-        BlitOption::None,
-    )
-    .unwrap();
-    blit.end_encoding().unwrap();
-}
-
 #[test]
-fn uses_of_the_later_levels_alone_copy_nothing_of_the_first() {
-    let scratch = Scratch::new("tiled-texture-later-levels-alone");
-    let rig = rig(&scratch);
-    // Each shape's counts, printed before any is asserted.
-    let mut counted = Vec::new();
-    for shape in SHAPES {
-        let ((width, height), levels) = shape;
-        let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&rig.device);
-        let texture = target
-            .new_tiled_texture(&descriptor(shape), 0, PITCH)
-            .unwrap();
-        write_rows(&target, (width, height), checker);
-        let kept = read(&target);
-        // A blit into level 1 alone.
-        let (w, h) = (width / 2, height / 2);
-        let pattern = packed((w, h), |x, y| texel(6, x, y));
-        let source = holding(&rig.device, w * h * 4, &pattern);
-        let at = (Origin::new(0, 0, 0), Size::new(w, h, 1));
-        let one = copies_of(&rig.device, || {
-            rig.run(|command_buffer| blit_into(command_buffer, (&source, &texture), 1, at));
-        });
-        assert_eq!(level_bytes(&texture, (width, height), 1), pattern, "{case}");
-        // `generate_mipmaps`, which reads level 0 and writes the later levels alone.
-        let mips = copies_of(&rig.device, || {
-            rig.run(|command_buffer| {
-                let mut blit = command_buffer.blit_command_encoder().unwrap();
-                blit.generate_mipmaps(&texture).unwrap();
-                blit.end_encoding().unwrap();
-            });
-        });
-        eprintln!("TILED-TEXTURE: {case}: a level-1 blit {one:?}");
-        eprintln!("TILED-TEXTURE: {case}: generate_mipmaps {mips:?}");
-        // Level 1 as `generate_mipmaps` left it: its first texel's blue the checkerboard's 2x2
-        // average.
-        let blue = level_bytes(&texture, (width, height), 1)[0];
-        assert!((127..=128).contains(&blue), "{case}: level 1 blue {blue}");
-        assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
-        counted.push((case, width * height, one, mips));
-    }
-    let none = Copies {
-        copies: 0,
-        texels_in: 0,
-        texels_back: 0,
-        texels_kept: 0,
-        fetched: 0,
-    };
-    for (case, first, one, mips) in counted {
-        // The level-1 blit: no copy of level 0 in, back, kept or merged.
-        assert_eq!(one, none, "{case}: the level-1 blit");
-        // `generate_mipmaps`: level 0 copied in, which it reads; nothing back, kept or merged.
-        assert!(
-            mips.texels_in > 0 && mips.texels_in.is_multiple_of(first),
-            "{case}: generate_mipmaps copied in {mips:?}"
-        );
-        assert_eq!(
-            (mips.texels_back, mips.texels_kept, mips.fetched),
-            (0, 0, 0),
-            "{case}: generate_mipmaps {mips:?}"
-        );
-    }
-}
-
-#[test]
-fn a_render_pass_into_a_later_level_copies_nothing_of_the_first() {
-    let scratch = Scratch::new("tiled-texture-later-level-pass");
-    let rig = rig(&scratch);
-    for shape in SHAPES {
-        let ((width, height), levels) = shape;
-        let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&rig.device);
-        let mut d = descriptor(shape);
-        d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
-        let texture = target.new_tiled_texture(&d, 0, PITCH).unwrap();
-        write_rows(&target, (width, height), |x, y| texel(7, x, y));
-        let kept = read(&target);
-        let mut into_one = pass(&texture);
-        into_one.color_attachments[0].level = 1;
-        into_one.color_attachments[0].clear_color = ClearColor::new(1.0, 0.0, 1.0, 1.0);
-        let copied = copies_of(&rig.device, || {
-            rig.run(|command_buffer| {
-                let encoder = command_buffer.render_command_encoder(&into_one).unwrap();
-                encoder.end_encoding().unwrap();
-            });
-        });
-        eprintln!("TILED-TEXTURE: {case}: a pass into level 1 {copied:?}");
-        assert_eq!(copied.copies, 0, "{case}: the pass into level 1 {copied:?}");
-        let level_one = level_bytes(&texture, (width, height), 1);
-        assert!(
-            level_one.chunks(4).all(|t| t == [0xff, 0, 0xff, 0xff]),
-            "{case}: level 1 cleared"
-        );
-        assert_eq!(read(&target), kept, "{case}: the buffer's bytes");
-    }
-}
-
-#[test]
-fn a_merge_of_the_first_level_fetches_through_its_view() {
-    let scratch = Scratch::new("tiled-texture-merge-fetches");
-    let rig = rig(&scratch);
-    for shape in SHAPES {
-        let ((width, height), levels) = shape;
-        let case = format!("{width}x{height} of {levels} levels");
-        let target = buffer(&rig.device);
-        let texture = target
-            .new_tiled_texture(&descriptor(shape), 0, PITCH)
-            .unwrap();
-        write_rows(&target, (width, height), |x, y| texel(8, x, y));
-        // A blit into an 8x8 part of level 0: kept and merged back, the `Shared` buffer's bytes
-        // being another writer's (`shadow.rs`, **Merged back**).
-        let (x0, y0, side) = (4, 6, 8);
-        let pattern = packed((side, side), |x, y| texel(9, x, y));
-        let source = holding(&rig.device, side * side * 4, &pattern);
-        let at = (Origin::new(x0, y0, 0), Size::new(side, side, 1));
-        let merged = copies_of(&rig.device, || {
-            rig.run(|command_buffer| blit_into(command_buffer, (&source, &texture), 0, at));
-        });
-        eprintln!("TILED-TEXTURE: {case}: a blit into part of level 0 {merged:?}");
-        assert_eq!(merged.fetched, 1, "{case}: {merged:?}");
-        let got = read(&target);
-        for y in 0..height {
-            for x in 0..PITCH / 4 {
-                let byte = (y * PITCH + x * 4) as usize;
-                let inside = (x0..x0 + side).contains(&x) && (y0..y0 + side).contains(&y);
-                let expected = match (x < width, inside) {
-                    (true, true) => texel(9, x - x0, y - y0),
-                    (true, false) => texel(8, x, y),
-                    (false, _) => [BETWEEN; 4],
-                };
-                assert_eq!(got[byte..byte + 4], expected, "{case}: bytes {byte}");
-            }
-        }
-    }
-}
-
-#[test]
-fn detached_bytes_leave_the_first_level_s_last_texels_and_the_later_levels() {
+fn detached_bytes_leave_every_level_as_taken() {
     // The pages, declared before the device that uses them, so dropped after it.
     let (host, other) = (Host::new(), Host::new());
     let scratch = Scratch::new("tiled-texture-detached");
@@ -794,123 +809,49 @@ fn detached_bytes_leave_the_first_level_s_last_texels_and_the_later_levels() {
     };
     let shape = SHAPES[0];
     let ((width, height), levels) = shape;
+    let rows = ((width, height), PITCH);
     let mut d = descriptor(shape);
     d.resource_options = no_copy.resource_options();
     let texture = no_copy.new_tiled_texture(&d, 0, PITCH).unwrap();
-    // A one-level texture over the same bytes, whose CPU access a detach refuses.
-    let mut one = descriptor(((width, height), 1));
-    one.resource_options = no_copy.resource_options();
-    let plain = no_copy.new_texture(&one, 0, PITCH).unwrap();
-    // The later levels, written on the CPU; level 0 copied in by a blit out of it, then written
-    // again on the CPU: its last texels are those.
-    for level in 1..levels {
-        let (w, h) = ((width >> level).max(1), (height >> level).max(1));
-        let pattern = packed((w, h), |x, y| texel(0x20 + level as u8, x, y));
-        let region = Region::new_2d(0, 0, w, h);
-        (texture.replace_region(region, level, 0, &pattern, w * 4, 0)).unwrap();
-    }
-    write_rows(&no_copy, (width, height), |x, y| texel(10, x, y));
-    let row = width * 4;
-    let read_back = (rig
-        .device
-        .new_buffer(row * height, ResourceOptions::shared()))
-    .unwrap();
-    rig.run(|command_buffer| {
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        blit.copy_from_texture_to_buffer(
-            &texture,
-            0,
-            0,
-            Origin::new(0, 0, 0),
-            Size::new(width, height, 1),
-            &read_back,
-            0,
-            row,
-            0,
-            BlitOption::None,
-        )
-        .unwrap();
-        blit.end_encoding().unwrap();
-    });
-    assert_eq!(
-        read(&read_back),
-        packed((width, height), |x, y| texel(10, x, y))
-    );
-    let last = packed((width, height), |x, y| texel(11, x, y));
-    write_rows(&no_copy, (width, height), |x, y| texel(11, x, y));
+    // Taken at the first use, then written again on the CPU, which no level sees.
+    write_rows(&no_copy, rows, |x, y| texel(10, x, y));
+    let (taken, _) = rig.levels(&texture, shape);
+    let first = packed((width, height), |x, y| texel(10, x, y));
+    assert_eq!(taken[0], first, "level 0 taken");
+    write_rows(&no_copy, rows, |x, y| texel(11, x, y));
     let image = texture.raw_image().unwrap();
     assert_eq!(no_copy.detach_backing(), Ok(true), "the detach");
-    assert_eq!(
-        texture.raw_image().unwrap(),
-        image,
-        "its own image, no stand-in"
-    );
-    assert_eq!(
-        level_bytes(&texture, (width, height), 0),
-        last,
-        "level 0's last texels"
-    );
-    let refused = Err(Error::NotImplemented(RuntimeGap::DetachedTexelAccess));
-    let whole = Region::new_2d(0, 0, width, height);
-    assert_eq!(
-        texture.replace_region(whole, 0, 0, &last, row, 0),
-        refused,
-        "a write of level 0"
-    );
-    let mut plain_bytes = vec![0u8; last.len()];
-    assert_eq!(
-        plain.get_bytes(&mut plain_bytes, row, 0, whole, 0, 0),
-        refused,
-        "the one-level texture"
-    );
-    for level in 1..levels {
-        let (w, h) = ((width >> level).max(1), (height >> level).max(1));
-        let pattern = packed((w, h), |x, y| texel(0x20 + level as u8, x, y));
-        let got = level_bytes(&texture, (width, height), level);
-        assert_eq!(got, pattern, "level {level} kept");
-        let written: Vec<u8> = pattern.iter().map(|b| !b).collect();
+    assert_eq!(texture.raw_image().unwrap(), image, "its own image");
+    for (level, bytes) in taken.iter().enumerate() {
+        let got = level_bytes(&texture, (width, height), level as u64);
+        assert_eq!(&got, bytes, "level {level} as taken, read while detached");
+    }
+    // Every level takes a CPU write while detached.
+    for level in 0..levels {
+        let (w, h) = level_extent((width, height), level);
+        let written = packed((w, h), |x, y| texel(0x20 + level as u8, x, y));
         let region = Region::new_2d(0, 0, w, h);
         (texture.replace_region(region, level, 0, &written, w * 4, 0)).unwrap();
         let got = level_bytes(&texture, (width, height), level);
         assert_eq!(got, written, "level {level} written while detached");
     }
-    // Pages again: level 0 their bytes, the later levels as written.
-    let moved = packed((width, height), |x, y| texel(12, x, y));
+    // Pages again: no level changes until the call, and the next use after it takes their bytes.
     // SAFETY: `other` outlives the buffer (dropped after the device), which alone uses it.
     unsafe { no_copy.rebind_bytes_no_copy(other.memory(), None, None) }.unwrap();
-    write_rows(&no_copy, (width, height), |x, y| texel(12, x, y));
-    let level_one = (width / 2, height / 2);
-    let one_back = (rig.device)
-        .new_buffer(level_one.0 * level_one.1 * 4, ResourceOptions::shared())
-        .unwrap();
-    rig.run(|command_buffer| {
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        for (level, (w, h), out) in [(0, (width, height), &read_back), (1, level_one, &one_back)] {
-            blit.copy_from_texture_to_buffer(
-                &texture,
-                0,
-                level,
-                Origin::new(0, 0, 0),
-                Size::new(w, h, 1),
-                out,
-                0,
-                w * 4,
-                0,
-                BlitOption::None,
-            )
-            .unwrap();
-        }
-        blit.end_encoding().unwrap();
-    });
-    assert_eq!(read(&read_back), moved, "level 0 over the new pages");
-    let one_pattern = packed(level_one, |x, y| texel(0x21, x, y));
-    let one_written: Vec<u8> = one_pattern.iter().map(|b| !b).collect();
-    assert_eq!(read(&one_back), one_written, "level 1 through the rebind");
+    write_rows(&no_copy, rows, |x, y| texel(12, x, y));
+    let (rebound, copies) = rig.levels(&texture, shape);
+    assert_eq!(copies, NONE, "a use after the rebind");
+    let written = packed((width, height), |x, y| texel(0x20, x, y));
+    assert_eq!(rebound[0], written, "level 0 through the rebind");
+    texture.did_modify_data();
+    let (again, copies) = rig.levels(&texture, shape);
+    assert_eq!(copies, one_take(width * height), "the use after the call");
+    let moved = packed((width, height), |x, y| texel(12, x, y));
+    assert_eq!(again[0], moved, "level 0 over the new pages");
     eprintln!(
-        "TILED-TEXTURE on {}: detached, level 0 read its last texels and levels 1 to {} kept",
-        rig.device.name(),
-        levels - 1
+        "TILED-TEXTURE on {}: detached, every level of {levels} read as taken",
+        rig.device.name()
     );
-    drop((texture, plain, no_copy));
+    drop((texture, no_copy));
     drop(rig);
 }

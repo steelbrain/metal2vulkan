@@ -143,8 +143,8 @@ impl Texture {
             Storage::Shadow { .. } if record.presented.rotation != 0 => {
                 self.rotated_view(call, record)
             }
-            // A tiled texture's bytes hold its first level alone, and its image is their shadow
-            // already (`Buffer::new_tiled_texture`): no second shadow holds its other levels.
+            // A tiled texture's image is a shadow of the bytes already, a copy taken at use
+            // (`Buffer::new_tiled_texture`): no second shadow holds its levels.
             Storage::Shadow { image, .. } if image.plan().levels > 1 => {
                 Err(refused(Some(image.as_ref())))
             }
@@ -497,6 +497,7 @@ impl Device {
                     shadow_range,
                     tracked: identity.tracked,
                     drops_writes: false,
+                    levels: None,
                     backing: Backing::Image,
                     merge_scratch: ScratchSpares::default(),
                     stood: AtomicU64::new(0),

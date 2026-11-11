@@ -443,22 +443,22 @@ check and says when the verdicts are known (a zero timeout waits for nothing). T
 once per `VkDevice`: a GPU recovery's new one reads them from the record as it is made, or checks
 again where the lost one's check left none.
 `Buffer::new_tiled_texture` (Metal's private `newTiledTextureWithDescriptor:offset:bytesPerRow:`)
-makes what `new_texture` makes, and a 2D texture of more than one level, whose first level is the
-buffer's rows at the offset and pitch and whose other levels lie apart from the buffer, as on a Mac.
-No Vulkan image lays one level over the buffer's rows and the others elsewhere, so over any buffer
-such a texture is one image of its own holding every level, a shadow of its first level's texels
-(`shadowed-texture`, naming the levels; `TextureShadowReason::Mipmapped`): the encoders copy the
-bytes in before a command buffer's commands that use it and copy back what they wrote through it
-by the end of the encoder that wrote it, so the first level is a copy of the bytes kept in step at
-command boundaries, not an alias, and a CPU write made while a command buffer that uses it runs
-reaches it at the next copy in. Its other levels are its image's own memory, zero when made in a
-`Shared` or `Managed` texture; blits (`generate_mipmaps` among them) and functions use every level,
-and `get_bytes` and `replace_region` reach the first level in the bytes and the others in the
-image. A command that uses its other levels alone copies nothing. While the buffer's bytes are
-detached (`detach_backing`) it keeps its own image: its first level holds the bytes' last texels,
-which the detach loads into it and which an unnamed read and `get_bytes` read (a `replace_region`
-of that level is refused, `NotImplemented(DetachedTexelAccess)`), where a texture over the bytes
-alone presents a stand-in of zeros; its other levels keep their texels, read and written as before.
+makes what `new_texture` makes, and a 2D texture of more than one level, which is a copy of the
+buffer's rows at the offset and pitch, taken at its first use, as on an x86 Mac (an AMD Radeon Pro
+5300M and an Intel UHD Graphics 630 under macOS 26.7.1). Over any buffer such a texture is one
+image of its own holding every level (`shadowed-texture`, naming the levels;
+`TextureShadowReason::Mipmapped`). The first command of an encoder that uses any of its levels
+after its making, or after `Texture::did_modify_data` (Metal's private `didModifyData`), takes the
+copy before that command: the bytes into its first level, then every later level made from the one
+above by the device's blit chain, as `generate_mipmaps` makes them (`device-filtered-mipmaps`). The
+copy is taken as that command is encoded and runs in its command buffer's order on the GPU, so it
+reads the bytes as they are when the command buffer runs. Between takes no write of the bytes
+reaches a level, and nothing the GPU writes into a level reaches the bytes or the other levels.
+`get_bytes` and `replace_region` reach every level in the image; before the first use they read
+what the image holds (zeros in a `Shared` or `Managed` texture; not measured on a Mac). While the
+buffer's bytes are detached (`detach_backing`) it keeps its own image, every level read and written
+as before. A format the device's blits do not filter has its first level copied and its later levels
+left as they are (docs/FAST-PATHS.md, known gaps).
 A texture of one level is `new_texture`'s, in place where that is.
 On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface plane's)
 that only samples or reads, whose policy takes the image in place, over memory that carries a log
@@ -1797,8 +1797,8 @@ bound.
   or the buffer is over the caller's
   `VkBuffer`, whose memory backs no image of the runtime's; or it is a tiled texture of more than
   one level (`Buffer::new_tiled_texture`), over any buffer: no image over the buffer's memory holds
-  levels past the first, so one image of its own holds every level, its first level's texels
-  copied from the bytes and back (the notice names the levels). Also a heap's texture over host
+  levels past the first, so one image of its own holds every level, a copy of the bytes taken at
+  its first use and after each `did_modify_data` (the notice names the levels). Also a heap's texture over host
   pages imported as dma-bufs where the device makes no image over a dma-buf of the texture's own
   pages (the notice names why; `WorkCounts::dma_buf_image_fallbacks` counts it). A heap's texture
   is a shadow of the heap's bytes in its range in three more shapes, each announced with its own

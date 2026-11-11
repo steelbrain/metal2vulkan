@@ -223,10 +223,32 @@
 //!   between the two. The rules above are the same; a command writing the bytes two ways merges as
 //!   a buffer's texture does, the shadow's elements copied out tiled, each other byte as the last
 //!   copy in left it.
+//! - **Copies taken at use** ([`ShadowCopies::levels`]): a tiled texture of more than one level
+//!   over a buffer's bytes (`Buffer::new_tiled_texture`) is one image of every level, a copy of the
+//!   bytes that the GPU takes once, at the texture's first use, and again at the first use after
+//!   each `Texture::did_modify_data`, as an x86 Mac's does (an AMD Radeon Pro 5300M and an Intel
+//!   UHD Graphics 630 under macOS 26.7.1 agreed on every form, storage mode and format measured: a
+//!   CPU write of the bytes made after the making, or after the call, and before the first use is
+//!   in every level that use reads; one made after it reaches none; and a blit into the first
+//!   level reaches neither the bytes nor the later levels. A GPU write of the bytes is not
+//!   measured: here it reaches no level either, as a CPU write). The
+//!   first command of an encoder that uses any of its levels after a making or a call takes the
+//!   copy ([`LevelsCopy`], at that command's encoding): before the command, a copy in of every
+//!   texel of the first level, and the device's blit chain, which makes each later level from the
+//!   one above as `generate_mipmaps` makes it (`mipmap_plan.rs`). It runs on the GPU in its command
+//!   buffer's order, so it reads the bytes as they are when the command buffer runs, after its
+//!   commit. Every other use copies nothing in, whatever wrote the bytes, and nothing written
+//!   through the image is copied back or merged: it stays in the image, as a Mac's texture's own
+//!   memory keeps it. A use whose encoding is left out of its command buffer's work
+//!   ([`ShadowSync::forget`]) leaves the copy to the next use. For a format the device's blits do
+//!   not filter, the copy in moves the first level alone and the later levels keep what they hold
+//!   (docs/FAST-PATHS.md, known gaps).
 
 use super::buffer::{Buffer, CallerMemory, WeakBuffer};
 use super::dirty_pages::{CopyInGate, ShadowLog};
 use super::error::{Error, RuntimeGap};
+use super::mipmap::record_blit;
+use super::mipmap_plan::MipBlit;
 use super::residency::Residency;
 use super::resource::ResourceKey;
 use super::rotated::{RotatedCopies, Turn};
@@ -248,7 +270,7 @@ use ash::vk;
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::PixelFormat;
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// What a shadowed texture's copies need: its truth, its shadow, and the copies between them.
@@ -278,6 +300,72 @@ pub(super) struct ShadowCopies {
     /// Where only the runtime's commands write the truth, the image's standing across command
     /// buffers (`shadow_standing.rs`).
     pub(super) standing: StandingAcross,
+    /// Where the shadow is a copy taken at use (a tiled texture's of more than one level,
+    /// `Buffer::new_tiled_texture`): when it is taken and how its later levels are made. `None`
+    /// for every other shadow.
+    pub(super) levels: Option<LevelsCopy>,
+}
+
+/// A tiled texture's image of every level over a buffer's bytes (`Buffer::new_tiled_texture`), a
+/// copy of them taken at use, as an x86 Mac's GPU takes it (the module's **Copies taken at
+/// use**): the first command of an encoder that uses any of its levels after the texture was made,
+/// or after `Texture::did_modify_data`, copies the bytes into its first level and makes every
+/// later level from the first by the device's blit chain, before that command; no other command
+/// copies anything in, and nothing it writes is copied back.
+pub(super) struct LevelsCopy {
+    /// Whether the next use takes the copy: set as the texture is made and by
+    /// `Texture::did_modify_data`, taken by the encoder whose command uses the texture first
+    /// after.
+    stale: AtomicBool,
+    /// The blit chain that makes each later level from the one above after the copy
+    /// (`mipmap_plan.rs`); empty for a format the device's blits do not filter, whose later
+    /// levels keep what they hold (docs/FAST-PATHS.md, known gaps).
+    blits: Vec<MipBlit>,
+    /// The image's aspects.
+    aspects: vk::ImageAspectFlags,
+}
+
+impl LevelsCopy {
+    /// A copy to take at the texture's first use, its later levels made by `blits` over
+    /// `aspects`.
+    pub(super) fn new(blits: Vec<MipBlit>, aspects: vk::ImageAspectFlags) -> LevelsCopy {
+        LevelsCopy {
+            stale: AtomicBool::new(true),
+            blits,
+            aspects,
+        }
+    }
+
+    /// Take the copy at the next use again (`Texture::did_modify_data`).
+    pub(super) fn mark_stale(&self) {
+        self.stale.store(true, Ordering::Release);
+    }
+
+    /// Whether this use takes the copy: once after each [`mark_stale`](Self::mark_stale) (and
+    /// the making).
+    fn take(&self) -> bool {
+        self.stale.swap(false, Ordering::AcqRel)
+    }
+
+    /// Record the later levels' blit chain after the copy into the first, on `image`.
+    ///
+    /// # Safety
+    ///
+    /// `command_buffer` is recording outside a render pass, right after the copy into the first
+    /// level; the image is live until it completes, in the `GENERAL` layout, with the transfer
+    /// usages and its format's blit and linear-filter features (`plan_mipmaps` planned the chain).
+    unsafe fn record_levels(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        image: vk::Image,
+    ) {
+        for blit in &self.blits {
+            // SAFETY: the caller's contract; each blit reads the level the one before wrote.
+            unsafe { Barrier::everything().record(device, command_buffer) };
+            record_blit(device, command_buffer, image, self.aspects, blit);
+        }
+    }
 }
 
 /// The texels of a texture over an IOSurface's plane from which its shadow's copies in count
@@ -573,6 +661,30 @@ impl ShadowStaging {
 }
 
 impl ShadowCopies {
+    /// The shadow of an image of `levels` levels whose copies in copy its first, as a copy taken
+    /// at use ([`LevelsCopy`]): its range every level, which the first use after a take writes,
+    /// its later levels made by `blits`.
+    pub(super) fn taken_at_use(self, levels: u32, blits: Vec<MipBlit>) -> ShadowCopies {
+        let (shadow_range, aspects) = match self.shadow_range {
+            UseRange::Image {
+                aspects, layers, ..
+            } => (
+                UseRange::Image {
+                    aspects,
+                    levels: 0..levels,
+                    layers,
+                },
+                aspects,
+            ),
+            range => (range, vk::ImageAspectFlags::COLOR),
+        };
+        ShadowCopies {
+            shadow_range,
+            levels: Some(LevelsCopy::new(blits, aspects)),
+            ..self
+        }
+    }
+
     /// Make what its copies in record where they record more than the texture holds from its
     /// making: a conversion's staging buffer, sets and refresh (`ycbcr.rs`,
     /// `YCbCrConversion::make`), which a texture whose planes every function reads in place never
@@ -587,8 +699,12 @@ impl ShadowCopies {
     /// The image a clear in of the shadow clears ([`ShadowCopy::clear`]): an image's shadow of
     /// its own format (one copied image to image, not through a buffer), or a 2D texture's image
     /// over a buffer's bytes; `None` for every other shadow (a staging buffer, a rotated, tiled or
-    /// planar image, a conversion's).
+    /// planar image, a conversion's, a copy taken at use).
     pub(super) fn cleared_image(&self) -> Option<vk::Image> {
+        // A copy taken at use keeps what its image holds between its takes.
+        if self.levels.is_some() {
+            return None;
+        }
         match &self.source {
             ShadowSource::Image {
                 shadow,
@@ -834,7 +950,7 @@ impl ShadowCopies {
     pub(super) fn left_untouched(&self) -> bool {
         match &self.source {
             ShadowSource::Bytes { target, .. } => {
-                matches!(target, ShadowTarget::Image { .. }) && !self.drops_writes
+                matches!(target, ShadowTarget::Image { .. }) && self.writes_reach_truth()
             }
             ShadowSource::YCbCrWrite { write_back, .. } => write_back.loads(),
             ShadowSource::Image { .. } | ShadowSource::Converted { .. } => false,
@@ -849,7 +965,8 @@ impl ShadowCopies {
 
     /// Whether the texture is tracked and its truth lies in host pages a consumer logs the writes
     /// to (`HostMemory::with_dirty_pages`): its copies in of every texel are gated
-    /// (`dirty_pages.rs`), so none is cut to a rectangle.
+    /// (`dirty_pages.rs`), so none is cut to a rectangle. Not a copy taken at use, whose every copy
+    /// in moves every texel.
     pub(super) fn logged(&self) -> bool {
         let ShadowSource::Bytes {
             buffer: ShadowBuffer::Rebound(buffer),
@@ -859,7 +976,8 @@ impl ShadowCopies {
             return false;
         };
         let pages = || buffer.upgrade().and_then(|buffer| buffer.host_pages());
-        self.tracked && pages().is_some_and(|pages| pages.dirty().is_some())
+        let logged = pages().is_some_and(|pages| pages.dirty().is_some());
+        self.tracked && self.levels.is_none() && logged
     }
 
     /// Whether the rectangle `area` (`None` every texel) covers every texel of a one-region 2D
@@ -893,9 +1011,8 @@ impl ShadowCopies {
     }
 
     /// Whether `used` names the shadow where it holds a copy of the truth: its key, in a range
-    /// that meets [`shadow_range`](Self::shadow_range). A tiled texture's image holds every level
-    /// but copies its first alone (`Buffer::new_tiled_texture`): a use of its other levels reads
-    /// and writes the image's own texels, which no copy moves.
+    /// that meets [`shadow_range`](Self::shadow_range). A copy taken at use holds every level
+    /// (the module's **Copies taken at use**): a use of any of them takes it.
     pub(super) fn holds(&self, used: &Use<ResourceKey>) -> bool {
         used.key == self.shadow_key && used.range.overlaps(&self.shadow_range)
     }
@@ -939,7 +1056,10 @@ impl ShadowCopies {
     /// buffer of the runtime's own whose `VkBuffer` was never handed out.
     pub(super) fn stands_across(&self) -> bool {
         let bytes = matches!(self.source, ShadowSource::Bytes { .. });
-        bytes && self.only_commands_write() && !self.drops_writes && self.standing.may_stand()
+        bytes
+            && self.only_commands_write()
+            && self.writes_reach_truth()
+            && self.standing.may_stand()
     }
 
     /// The keys a write of which lets go of the image's standing across command buffers: the
@@ -959,11 +1079,18 @@ impl ShadowCopies {
     /// (a `Shared` or `Managed` buffer's, host pages, the caller's own `VkBuffer`'s memory), and
     /// another queue's commands an untracked buffer's, which the tracker leaves to the program. An
     /// image's shadow, a turned one and two planes take no merge ([`unmerged`](Self::unmerged)),
-    /// and writes Metal drops go back no way.
+    /// and writes Metal drops, and those through a copy taken at use, go back no way.
     pub(super) fn merges_back(&self) -> bool {
         let bytes = matches!(&self.source, ShadowSource::Bytes { .. });
         let other_writer = !self.only_commands_write();
-        bytes && other_writer && !self.drops_writes && self.unmerged().is_none()
+        bytes && other_writer && self.writes_reach_truth() && self.unmerged().is_none()
+    }
+
+    /// Whether what the commands write through the shadow goes back into its truth: not where
+    /// Metal drops those writes ([`drops_writes`](Self::drops_writes)), nor for a copy taken at
+    /// use ([`levels`](Self::levels)), whose writes stay in its image.
+    pub(super) fn writes_reach_truth(&self) -> bool {
+        !self.drops_writes && self.levels.is_none()
     }
 
     /// Whether two shadowed textures copy some of the same truth.
@@ -1479,6 +1606,11 @@ impl ShadowCopy {
         let c = &self.copies;
         let first = matches!(self.cause, Some(CopyCause::First));
         if !matches!(self.step, Step::Into) || !c.covers(self.area) || !first || !c.tracked {
+            return None;
+        }
+        // A copy taken at use moves every texel: the image holds what its commands wrote since
+        // the last, which no log of the bytes reports.
+        if c.levels.is_some() {
             return None;
         }
         let ShadowSource::Bytes {
@@ -2170,6 +2302,10 @@ impl ShadowCopy {
                     vk::ImageLayout::GENERAL,
                     &regions,
                 );
+                // A copy taken at use makes its later levels from the first it just copied.
+                if let Some(levels) = &c.levels {
+                    levels.record_levels(device, command_buffer, image);
+                }
             } else {
                 device.cmd_copy_image_to_buffer(
                     command_buffer,
@@ -2413,8 +2549,8 @@ fn overwrites_unkept(shadow: &ShadowUse) -> bool {
 /// of `shadows[i]` two ways: through it, and through `uses` or another shadowed texture over
 /// them (the module's rules).
 fn two_ways(shadows: &[ShadowUse], i: usize, uses: &[Use<ResourceKey>]) -> bool {
-    // A shadow whose writes Metal drops writes the bytes no way.
-    let writes = |shadow: &ShadowUse| shadow.writes && !shadow.copies.drops_writes;
+    // A shadow whose writes Metal drops, or a copy taken at use, writes the bytes no way.
+    let writes = |shadow: &ShadowUse| shadow.writes && shadow.copies.writes_reach_truth();
     let Some(shadow) = shadows.get(i).filter(|shadow| writes(shadow)) else {
         return false;
     };
@@ -2447,7 +2583,7 @@ fn writes_truth_apart(
         .any(|used| !used.write.is_empty() && shadow.copies.meets(used));
     let shadow_written = shadows.iter().any(|other| {
         other.writes
-            && !other.copies.drops_writes
+            && other.copies.writes_reach_truth()
             && other.copies.shadow_key != shadow.copies.shadow_key
             && other.copies.shares_truth(&shadow.copies)
     });
@@ -2650,6 +2786,10 @@ struct Entry<M> {
     /// reads only inside a rectangle and writes none, the rest left here. `None` where none
     /// changed.
     stale: Option<[u32; 4]>,
+    /// The encoder took the copy at use of a texture whose shadow is one
+    /// ([`ShadowCopies::levels`]): given back where what it recorded is left out
+    /// ([`ShadowSync::forget`]).
+    took: bool,
 }
 
 impl<M> Entry<M> {
@@ -2664,9 +2804,10 @@ impl<M> Entry<M> {
     }
 
     /// Note a change of the truth for `lost`: the image no longer holds it. One not copied in
-    /// yet stays so, and one that lost it already keeps the first reason.
+    /// yet stays so, and one that lost it already keeps the first reason. A copy taken at use
+    /// still holds what it took: no change of the truth reaches it.
     fn lose(&mut self, lost: Lost) {
-        if self.standing == Standing::Current {
+        if self.standing == Standing::Current && self.copies.levels.is_none() {
             self.standing = Standing::Lost(lost);
         }
     }
@@ -2675,6 +2816,9 @@ impl<M> Entry<M> {
     /// anywhere where `area` is `None`, for `lost`: the image is stale there, or no longer
     /// current.
     fn changed(&mut self, texels: &ShadowCopies, area: Option<[u32; 4]>, lost: Lost) {
+        if self.copies.levels.is_some() {
+            return;
+        }
         match area.filter(|_| self.stale_within(texels)) {
             Some(area) => {
                 self.stale = Some(match self.stale {
@@ -3119,6 +3263,14 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     Some(carried) => (Standing::Current, carried.held, carried.stale),
                     None => (Standing::Unread, None, None),
                 };
+                // A copy taken at use is copied in at the first use after its making or its
+                // `did_modify_data`, wherever it is; else its image holds what it took.
+                let took = copies.levels.as_ref().is_some_and(LevelsCopy::take);
+                let (standing, held, stale) = match &copies.levels {
+                    Some(_) if took => (Standing::Unread, None, None),
+                    Some(_) => (Standing::Current, None, None),
+                    None => (standing, held, stale),
+                };
                 self.entries.push(Entry {
                     copies: Arc::clone(copies),
                     standing,
@@ -3131,6 +3283,7 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                     stale,
                     carried: carried.is_some(),
                     run: false,
+                    took,
                 });
                 self.entries.len() - 1
             }
@@ -3389,7 +3542,10 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             let two_ways = kept
                 .iter()
                 .any(|(copies, _)| copies.shadow_key == shadow.copies.shadow_key);
-            let overwrites = overwrites_unkept(shadow) && !two_ways;
+            // A copy taken at use copies every texel in and makes its later levels whatever the
+            // command overwrites.
+            let taken_at_use = shadow.copies.levels.is_some();
+            let overwrites = overwrites_unkept(shadow) && !two_ways && !taken_at_use;
             // The texels the command needs as the buffer holds them: those it reads, and those
             // it writes (which a copy back moves), where it bounds both and the copies are cut to
             // a rectangle; every texel where it writes through a shadow whose copies back move
@@ -3407,7 +3563,11 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             let standing = first_use
                 && shadow.copies.stands_across()
                 && !writes_truth_apart(shadows, shadow, uses);
-            let whole = two_ways || !shadow.copies.cuts() || shadow.copies.logged() || standing;
+            let whole = two_ways
+                || !shadow.copies.cuts()
+                || shadow.copies.logged()
+                || standing
+                || taken_at_use;
             let needs = match whole {
                 true => None,
                 false if shadow.writes && !shadow.copies.cuts_back() => None,
@@ -3593,7 +3753,9 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
                 }
             }
         }
-        for shadow in shadows.iter().filter(|shadow| shadow.writes) {
+        // A copy taken at use keeps what is written through it: nothing goes back.
+        let written = |shadow: &&ShadowUse| shadow.writes && shadow.copies.levels.is_none();
+        for shadow in shadows.iter().filter(written) {
             let i = self.entry(&shadow.copies);
             // Writes Metal drops are not copied back, and the image no longer holds the bytes.
             let entry = &mut self.entries[i];
@@ -3626,6 +3788,12 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
     /// copy in there moved, and nothing written through one there ran. A later command copies in
     /// again.
     pub(super) fn forget(&mut self) {
+        // A copy taken at use whose copy in is left out is taken at the next use instead.
+        for entry in self.entries.iter().filter(|entry| entry.took) {
+            if let Some(levels) = &entry.copies.levels {
+                levels.mark_stale();
+            }
+        }
         self.drop_entries();
         self.carry.clear();
     }

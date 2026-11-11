@@ -1509,3 +1509,13 @@ compares with Metal's.
   clears: such a command buffer of more than about 14,100 encoders can end the process there,
   where Metal runs it. The spare command pools keep at most 4,096 command buffers (`spares.rs`),
   which leaves the rest to the command buffers committed and in recording.
+
+- **A tiled texture's later levels in a format the device's blits do not filter**
+  (`Buffer::new_tiled_texture`, more than one level, `shadow.rs`'s **Copies taken at use**): its
+  copy taken at use moves the bytes into its first level alone, and its later levels keep what they
+  hold (zero from the making, or what was written into them), where Metal makes them from the
+  first. Such a format is one `generate_mipmaps` makes by the integer picks or the compute filter
+  (`mipmap_plan.rs`: an integer format, an extended-range one, an 8-bit sRGB one held as its UNORM
+  twin, one without blits or linear filtering on the device); neither is recorded at the copy's
+  place yet. `RGBA8Unorm` and `BGRA8Unorm` take the blit chain on every device: Vulkan requires
+  their blits and linear filtering.

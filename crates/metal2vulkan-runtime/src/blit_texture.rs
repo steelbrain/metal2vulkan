@@ -2164,8 +2164,8 @@ impl BlitCommandEncoder {
         const CALL: &str = "generate_mipmaps";
         // One level, of any format, or a depth or stencil texture: Metal's plain call leaves the
         // texture as it is, over a buffer or not, and its API validation asserts. Every texture
-        // over a buffer has one level but a tiled one, which is an image to a blit
-        // (`Texture::blit_texels`).
+        // over a buffer has one level but a tiled one, which is an image to a blit, its own copy
+        // of the bytes (`Texture::blit_texels`).
         self.core().check_device(CALL, texture.device())?;
         texture.check_rotated_reach()?;
         let record = texture.record();
@@ -2506,8 +2506,9 @@ fn through_buffer(
 
 /// Announce `generate_mipmaps` of a texture presenting `record` made by `how` (the device's blit
 /// chain or the runtime's compute filter) as the device's filter, not Apple's
-/// (`device-filtered-mipmaps`).
-fn announce_mipmaps(device: &super::Device, record: &ViewRecord, how: &str) {
+/// (`device-filtered-mipmaps`); and so a tiled texture's levels its copies taken at use make
+/// (`Buffer::new_tiled_texture`).
+pub(super) fn announce_mipmaps(device: &super::Device, record: &ViewRecord, how: &str) {
     let (pixel_format, texture_type) = (record.pixel_format, record.texture_type);
     device.degrade(Degradation::DeviceFilteredMipmaps, || {
         (
