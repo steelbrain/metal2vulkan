@@ -405,7 +405,8 @@ fn opencl_mode_1d_images_write_their_2d_bindings_row_0() {
     let device = device(&scratch.0);
     let wlines = state(&device, &wlines(), "__entry_wlines");
     let zeros = vec![0.0; (2 * WIDTH * 4) as usize];
-    let a = texture(&device, TextureType::Type2D, (WIDTH, 1, 1), Some(&zeros));
+    let one_layer = &zeros[..(WIDTH * 4) as usize];
+    let a = texture(&device, TextureType::Type2D, (WIDTH, 1, 1), Some(one_layer));
     let b = texture(
         &device,
         TextureType::Type2DArray,
