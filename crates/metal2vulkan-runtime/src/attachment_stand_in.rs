@@ -88,7 +88,7 @@
 
 use super::blit::TRANSFER;
 use super::color_resolve;
-use super::command_buffer::{CommandBuffer, Completion};
+use super::command_buffer::{CommandBuffer, Finished};
 use super::device::lock;
 use super::encoder::EncoderCore;
 use super::error::{internal, Error, RuntimeGap};
@@ -278,7 +278,7 @@ struct PooledBacking {
     bytes: u64,
     taken: u64,
     /// Whether the command buffer that took it last completed.
-    taker: Completion,
+    taker: Finished,
     backing: Target,
 }
 
@@ -361,7 +361,7 @@ pub(super) fn pooled_backing(
             // Taken while another command buffer that took it has not completed: the hazard
             // tracker orders their uses of it (counted).
             let in_flight = !found.taker.of(maker) && !found.taker.completed();
-            found.taker = maker.completion();
+            found.taker = maker.finished();
             drop(pool);
             maker
                 .device()
@@ -389,7 +389,7 @@ pub(super) fn pooled_backing(
         copies,
         bytes: made.texture.placed_bytes().unwrap_or(0),
         taken: takes,
-        taker: maker.completion(),
+        taker: maker.finished(),
         backing: made.clone(),
     });
     pool.bound();

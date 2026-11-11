@@ -221,10 +221,10 @@ impl WeakCommandBuffer {
 }
 
 /// Whether a command buffer completed, a handle that holds neither it nor what it holds
-/// ([`CommandBuffer::completion`]).
-pub(crate) struct Completion(Arc<Gate>);
+/// ([`CommandBuffer::finished`]).
+pub(crate) struct Finished(Arc<Gate>);
 
-impl Completion {
+impl Finished {
     /// Whether its command buffer completed: the gate `wait_until_completed` waits for opened.
     pub(crate) fn completed(&self) -> bool {
         self.0.is_open()
@@ -2458,8 +2458,8 @@ impl CommandBuffer {
     }
 
     /// A handle that tells whether it completed, holding nothing else of it.
-    pub(crate) fn completion(&self) -> Completion {
-        Completion(Arc::clone(&self.0.gate))
+    pub(crate) fn finished(&self) -> Finished {
+        Finished(Arc::clone(&self.0.gate))
     }
 
     /// Hold `ending`, the open render encoder's end, which its call left to the device's
