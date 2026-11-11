@@ -410,11 +410,12 @@ fn by_identity(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
         // An `f32` operation fused into the conversion of its result to `half`, on every GPU it
         // drives.
         Some(vk::DriverId::MESA_RADV) => vec![DriverWorkaround::HalfConversionFusedWithArithmetic],
-        // A register allocator that faults compiling a module past a word bound, on every GPU it
-        // drives.
-        Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA) => {
-            vec![DriverWorkaround::RegisterAllocatorOverflowsLargeModules]
-        }
+        // A register allocator that faults compiling a module past a word bound, and products of
+        // one value by zeros of opposite sign kept as one, on every GPU it drives.
+        Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA) => vec![
+            DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
+            DriverWorkaround::OppositeZeroProductsMerged,
+        ],
         _ => Vec::new(),
     }
 }

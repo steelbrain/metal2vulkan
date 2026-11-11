@@ -1130,6 +1130,35 @@ fn register_allocator_overflow_is_keyed_on_anv() {
     }
 }
 
+/// `DriverWorkaround::OppositeZeroProductsMerged` is keyed on ANV, whatever its GPU and release:
+/// every committed ANV profile carries it, no other profile does, and the Iris Xe's description
+/// under RADV or NVIDIA's driver loses it (`tests::engine_zero_factors` checks the products of the
+/// profiles that carry it).
+#[test]
+fn opposite_zero_products_merged_is_keyed_on_anv() {
+    use crate::device::profile::DriverWorkaround;
+    let fact = DriverWorkaround::OppositeZeroProductsMerged;
+    let profile_of = |desc: &DeviceDescription| {
+        Device::new(desc.clone(), DevicePolicy::default())
+            .unwrap()
+            .profile()
+            .clone()
+    };
+    for (stem, text) in committed_profiles() {
+        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+        let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
+        let p = profile_of(&desc);
+        assert_eq!(p.workarounds().contains(&fact), anv, "{stem}");
+    }
+    let mut desc = profile("intel-irisxe-rplp-anv");
+    assert!(profile_of(&desc).workarounds().contains(&fact));
+    for other in [vk::DriverId::MESA_RADV, vk::DriverId::NVIDIA_PROPRIETARY] {
+        desc.driver_id = Some(other);
+        let p = profile_of(&desc);
+        assert!(!p.workarounds().contains(&fact), "{other:?}");
+    }
+}
+
 /// The Function storage a thread holds is the measured value of the device's identity, and on every
 /// committed profile of a device not measured the assumed floor, 16 KiB. It is keyed on the driver,
 /// the vendor, and the device ID together: the Radeon 780M's description under the RX 7900 XTX's

@@ -210,6 +210,13 @@ impl FunctionBuilder<'_> {
         if let Some(r) = self.fold_binary(op, a, b, ty)? {
             return Ok(r);
         }
+        if matches!(op, BinOp::FMul | BinOp::VectorTimesScalar)
+            && self.mb().product_form == ProductForm::PositiveZeroFactors
+        {
+            if let Some(r) = self.product_by_positive_zeros(op, a, b, contract, ty)? {
+                return Ok(r);
+            }
+        }
         if op == BinOp::FMul
             && contract == Contraction::Forbidden
             && self.mb().product_form == ProductForm::NegativeZeroFma
@@ -218,6 +225,108 @@ impl FunctionBuilder<'_> {
             return self.glsl_with(GlslOp::Fma, &[a, b, z], Contraction::Forbidden);
         }
         self.emit(Inst::Binary { op, a, b, contract }, ty)
+    }
+
+    /// Under [`ProductForm::PositiveZeroFactors`], the product `op` of `a` and `b` where one of them
+    /// is an `f32` constant with a `-0.0` component: the product by that constant with each such
+    /// component `+0.0`, negated in those components of the result (`OpFNegate`, and an
+    /// `OpVectorShuffle` of the product and its negation where only some components are). `-(x ·
+    /// +0)` is `x · (−0)` for every `x`. `None` where neither factor is such a constant.
+    fn product_by_positive_zeros(
+        &mut self,
+        op: BinOp,
+        a: Value,
+        b: Value,
+        contract: Contraction,
+        ty: TypeId,
+    ) -> BResult<Option<Value>> {
+        for (index, factor) in [(1, b), (0, a)] {
+            let Some(negative) = self.negative_zero_components(factor)? else {
+                continue;
+            };
+            let positive = self.positive_zeros(factor, &negative)?;
+            let (x, y) = if index == 1 {
+                (a, positive)
+            } else {
+                (positive, b)
+            };
+            let product = self.emit(
+                Inst::Binary {
+                    op,
+                    a: x,
+                    b: y,
+                    contract,
+                },
+                ty,
+            )?;
+            let negated = self.unary(UnOp::FNegate, product)?;
+            // A scalar factor of `OpVectorTimesScalar` scales every component.
+            if negative.iter().all(|n| *n) {
+                return Ok(Some(negated));
+            }
+            let len = negative.len() as u32;
+            let pick: Vec<u32> = (0..len)
+                .map(|i| if negative[i as usize] { len + i } else { i })
+                .collect();
+            return self.vector_shuffle(product, negated, &pick).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Which components of `v` are `-0.0`, when `v` is a plain `f32` scalar or vector constant
+    /// with at least one; `None` otherwise.
+    fn negative_zero_components(&self, v: Value) -> BResult<Option<Vec<bool>>> {
+        const NEGATIVE_ZERO: u64 = 0x8000_0000;
+        let ValueOrigin::Const(c) = self.origin(v)? else {
+            return Ok(None);
+        };
+        let Some(n) = self.num(v)? else {
+            return Ok(None);
+        };
+        if !n.is_float() || n.width != 32 {
+            return Ok(None);
+        }
+        let consts = self.mb().consts();
+        let negative = match &consts.get(c)?.kind {
+            ConstKind::Plain(Constant::Scalar { bits, .. }) => vec![bits.0 == NEGATIVE_ZERO],
+            ConstKind::Plain(Constant::Composite { parts, .. }) => parts
+                .iter()
+                .map(|p| consts.scalar_bits(*p).is_some_and(|b| b.0 == NEGATIVE_ZERO))
+                .collect(),
+            _ => return Ok(None),
+        };
+        Ok(negative.contains(&true).then_some(negative))
+    }
+
+    /// The constant `v` (a plain `f32` scalar or vector constant) with its components where
+    /// `negative` holds made `+0.0`.
+    fn positive_zeros(&mut self, v: Value, negative: &[bool]) -> BResult<Value> {
+        let ValueOrigin::Const(c) = self.origin(v)? else {
+            return Ok(v);
+        };
+        let def = self.mb().consts().get(c)?.clone();
+        let positive = match def.kind {
+            ConstKind::Plain(Constant::Scalar { ty, .. }) => Constant::Scalar {
+                ty,
+                bits: ConstBits(0),
+            },
+            ConstKind::Plain(Constant::Composite { ty, parts }) => {
+                let elem = self.want(crate::spv::Op::FMul, 0, v, Num::is_float)?.elem;
+                let zero = self.module().constant(Constant::Scalar {
+                    ty: elem,
+                    bits: ConstBits(0),
+                })?;
+                let parts = parts
+                    .iter()
+                    .zip(negative)
+                    .map(|(p, n)| if *n { zero } else { *p })
+                    .collect();
+                Constant::Composite { ty, parts }
+            }
+            _ => return Ok(v),
+        };
+        let id = self.module().constant(positive)?;
+        self.module().const_value(id)
     }
 
     /// The `-0.0` of `v`'s float scalar or vector type: the sign bit alone in each component.

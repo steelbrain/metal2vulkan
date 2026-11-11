@@ -13132,6 +13132,7 @@ variant	metal2vulkan::device::DriverWorkaround::LocalizedLoadsForwardedPastAtomi
 variant	metal2vulkan::device::DriverWorkaround::MemoryWritingFragmentsRunPerSample	MemoryWritingFragmentsRunPerSample
 variant	metal2vulkan::device::DriverWorkaround::MeshIndexComponentStoresMisplaced	MeshIndexComponentStoresMisplaced
 variant	metal2vulkan::device::DriverWorkaround::NarrowMaskAfterSignedClamp	NarrowMaskAfterSignedClamp
+variant	metal2vulkan::device::DriverWorkaround::OppositeZeroProductsMerged	OppositeZeroProductsMerged
 variant	metal2vulkan::device::DriverWorkaround::PerspectiveReadsExtrapolated	PerspectiveReadsExtrapolated
 variant	metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules	RegisterAllocatorOverflowsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals

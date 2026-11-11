@@ -181,8 +181,9 @@ pub struct ModuleBuilder {
 }
 
 /// How a float multiply the device must round on its own and never fuse is emitted
-/// ([`FunctionBuilder::binary_no_contraction`]). Lowering takes it from the profile's `float`
-/// functions fact (`ArithPlan::product`).
+/// ([`FunctionBuilder::binary_no_contraction`]), and an `f32` product by a constant with a `-0.0`
+/// component. Lowering takes it from the profile's `float` functions fact and its driver
+/// workarounds (`ArithPlan::product`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ProductForm {
     /// `OpFMul` decorated `NoContraction`, for a device whose driver compiles the SPIR-V itself:
@@ -198,6 +199,15 @@ pub enum ProductForm {
     /// as Metal treats its own multiply. `a · b + (-0.0)` is `a · b` exactly whether the device
     /// fuses it or not.
     NegativeZeroFma,
+    /// [`ProductForm::Multiply`], but every `f32` product (`OpFMul`, `OpVectorTimesScalar`, with
+    /// or without contraction) by a constant with a `-0.0` component multiplies by `+0.0` there
+    /// and negates that component of the product: `OpFNegate`, and an `OpVectorShuffle` of the
+    /// product and its negation where only some components are `-0.0`. For a driver whose
+    /// compiler keeps one multiply for products of one value by zeros of opposite sign
+    /// (`DriverWorkaround::OppositeZeroProductsMerged`), so no product it compiles has a `-0.0`
+    /// factor beside a `+0.0` one. `-(a · +0)` is `a · (−0)` for every `a`; a NaN's sign is the
+    /// device's either way.
+    PositiveZeroFactors,
 }
 
 /// How the lowering clears the bits above a narrow integer's width `N` in a 32-bit container
@@ -280,9 +290,10 @@ impl ModuleBuilder {
         ModuleBuilder::default()
     }
 
-    /// Emit every float multiply the device must round on its own in `form`. Emission sets it
-    /// before any instruction, from the profile's `float` functions fact; a builder that never sets
-    /// it emits [`ProductForm::Multiply`].
+    /// Emit every float multiply the device must round on its own, and every `f32` product by a
+    /// constant with a `-0.0` component, in `form`. Emission sets it before any instruction, from
+    /// the profile's `float` functions fact and driver workarounds; a builder that never sets it
+    /// emits [`ProductForm::Multiply`].
     pub fn product_form(&mut self, form: ProductForm) {
         self.product_form = form;
     }

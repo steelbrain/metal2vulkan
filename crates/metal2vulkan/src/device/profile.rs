@@ -1482,6 +1482,21 @@ pub enum DriverWorkaround {
     /// driver whatever its GPU, whatever its release, in `device::derive`. Recorded on the profile
     /// alone: it changes no leaf encoding, refuses nothing and reduces no module.
     RegisterAllocatorOverflowsLargeModules,
+    /// The driver's compiler keeps one multiply for two `f32` products of one value by constant
+    /// zeros of opposite sign in one block, so both answer the zero of the one it keeps: an
+    /// `OpFMul` by `+0.0` and one by `-0.0`, each decorated `NoContraction`, in an entry declaring
+    /// `SignedZeroInfNanPreserve` for 32 bits, under which Vulkan keeps the sign IEEE gives a
+    /// product ("Precision and Operation of SPIR-V Instructions"). Measured on the Iris Xe of
+    /// RPL-P under ANV (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, with a bare Vulkan
+    /// program over `-2.5`, `2.5`, `-0` and `+0`: NIR keeps both multiplies, and the `brw` backend
+    /// emits the first one's `mul` alone (by `0x00000000:f`, or by `0x80000000:f` where that one
+    /// comes first) and stores its result for both. Split across blocks, both multiplies stay
+    /// and answer right; so do products of one value by `2.0` and `-2.0`, `half` products by
+    /// `±0`, a product by `-0.0` alone, and the negation of a product by `+0.0` beside that
+    /// product. Keyed on the driver whatever its GPU, in `device::derive`. There a product by an
+    /// `f32` constant with a `-0.0` component multiplies by `+0.0` in that component and negates
+    /// it (`ProductForm::PositiveZeroFactors`), the same value on every device.
+    OppositeZeroProductsMerged,
 }
 
 #[cfg(test)]
