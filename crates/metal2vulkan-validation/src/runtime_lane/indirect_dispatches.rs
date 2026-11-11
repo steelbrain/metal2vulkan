@@ -178,8 +178,21 @@ impl Fixture {
 
 /// Commit `command_buffer`, wait for it, and check it completed.
 fn complete(command_buffer: &CommandBuffer, what: &str) {
+    complete_within(command_buffer, what, WAIT);
+}
+
+/// How long a dispatch past 2^32 threads may take to complete. Every one of its 4.3 billion
+/// threads runs, so a CPU device spends all its threads on it: lavapipe (llvmpipe, LLVM 23.1.4) on
+/// a 16-thread Ryzen 7 7840HS completed each of the two such dispatches here in 24 s alone, past
+/// [`WAIT`] beside a parallel runtime lane on 20 threads, and a runner with a quarter of the
+/// threads takes about four times as long. A GPU completes them well inside a second. The tests run
+/// alone (`.config/nextest.toml`).
+const PAST_2_32_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// [`complete`], waiting at most `wait`.
+fn complete_within(command_buffer: &CommandBuffer, what: &str, wait: std::time::Duration) {
     command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    command_buffer.wait_until_completed_for(wait).unwrap();
     assert_eq!(
         command_buffer.status(),
         CommandBufferStatus::Completed,
@@ -861,7 +874,11 @@ fn edges_counted_once(grid: [u32; 3], group: [u32; 3]) {
         encoder.set_buffer(Some(&out), 0, 0).unwrap();
         encoder.dispatch_threads(size(grid), size(group)).unwrap();
         encoder.end_encoding().unwrap();
-        complete(&command_buffer, &format!("past 2^32 {grid:?} {group:?}"));
+        complete_within(
+            &command_buffer,
+            &format!("past 2^32 {grid:?} {group:?}"),
+            PAST_2_32_WAIT,
+        );
         let flat = command_buffer
             .executions()
             .iter()

@@ -69,6 +69,15 @@ threads-required = 'num-test-threads'
 filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::mesh_draws::object_grids_run_as_metal_runs_them$/)'
 threads-required = 'num-test-threads'
 
+# The two dispatches past 2^32 threads run alone. Each runs all of its 4.3 billion threads, so on a
+# CPU device it takes every CPU thread: lavapipe (LLVM 23.1.4) on a 16-thread Ryzen 7 7840HS
+# completed each in 24 s alone, and one passed the lane's 60 s wait beside a parallel runtime lane
+# on 20 threads (Iris Xe host, round 6898863f3f). Their wait for completion is their own
+# (`PAST_2_32_WAIT`).
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::indirect_dispatches::(a_direct_dispatch_past_2_32_threads_keeps_the_flat_variant_s_64_bit_count|a_flat_dispatch_switches_to_its_64_bit_count_at_the_workgroup_that_passes_2_32)$/)'
+threads-required = 'num-test-threads'
+
 # The runtime's isolation tests of command queues sharing `VkQueue`s run alone. Each holds a
 # compositor's 99th percentile of commit-to-completion latency under 5 ms, and its stalls over
 # 10 ms to at most one, beside an application's 30 ms command buffers: a bound of the GPU's time,
