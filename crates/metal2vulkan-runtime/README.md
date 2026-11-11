@@ -446,8 +446,9 @@ the record the pass is making.
 Calls Metal does not have, for a consumer that emulates a Metal device:
 
 - `Device::new_command_queue_unshared(count)` makes a command queue that shares its `VkQueue` with
-  no other, for one whose command buffers must never wait behind another queue's (a
-  compositor's). Under `QueueSharingPolicy::Adaptive` (the default), where the device's own check
+  no other where the device has `VkQueue`s to share, for one whose command buffers must never wait
+  behind another queue's (a compositor's); a device with one graphics queue (RADV, ANV, lavapipe)
+  has none to spare, so it waits there (docs/FAST-PATHS.md, known gaps). Under `QueueSharingPolicy::Adaptive` (the default), where the device's own check
   finds its GPU idle between consecutive work of two `VkQueue`s (NVIDIA's driver), the other
   command queues move among the `VkQueue`s of their family at their idle points and share them
   ([docs/API.md](../../docs/API.md#the-policy)); this one keeps the `VkQueue` it takes for its

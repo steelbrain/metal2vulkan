@@ -700,6 +700,16 @@ driver's. Each is open work.
   exact form exists once the pages are gone, and `Device::host_range_remapped` does not release such
   an import. An import of dma-bufs (`HostMemory::with_dma_buf`) keeps its pages on every driver, but
   is taken only where the device refuses the pointer.
+- **On a device with one graphics queue, a compositor's command buffers wait behind another
+  queue's long one**: RADV, ANV and lavapipe expose a single graphics `VkQueue` (MoltenVK four
+  families of one), so every command queue, `Device::new_command_queue_unshared`'s included,
+  submits to it, in order. A command buffer committed behind another queue's 200 ms one starts
+  after it, where Metal runs the compositor's beside it. On the Iris Xe (ANV, Mesa 26.2.6, i915)
+  work of another `VkDevice` (its own kernel context) ran only between submissions, never inside
+  one, whatever its global priority (`HIGH` is refused without privilege; `MEDIUM` against `LOW`
+  answered as equal priorities did): a light submission waited the whole of a 440 ms command
+  buffer, and 14 ms where the same work was 32 submissions. Neither a second `VkDevice` for such
+  queues nor splitting long command buffers into submissions is built.
 - **On Asahi Linux, the kernel can keep a freed dma-buf import, and its pages, past the process's
   exit**: the asahi DRM driver (its source at tag `asahi-6.19.14-2`; Honeykrisp in Mesa 25.3.6)
   makes an imported object without the driver's close callback, so a freed import stays mapped in
