@@ -31,7 +31,8 @@
 //! calls, because the thread and process CPU clocks answer in microseconds.
 //!
 //! The counts are also the table's **gate**: [`HELD`] holds named calls to what they were
-//! measured making, and the run fails where one makes more: after its last group, naming every
+//! measured making ([`HELD_ON_PATH`] a call on a path of its own that inherently makes more), and
+//! the run fails where one makes more: after its last group, naming every
 //! call that did, so a call over its bound leaves none of the groups after it unmeasured. A count
 //! is deterministic, so it holds in CI under any load, where none of the times above can.
 
@@ -403,7 +404,8 @@ pub fn group<G: Gpu, S>(
 /// allocations are the runtime's own on the calling thread, a few more or fewer where its path
 /// differs: a heap texture made 12.25 a call under lavapipe, and as many on an RTX 5080, where
 /// its image is linear because the device's optimal image takes none of the heap's memory types;
-/// on macOS the first lock of each of its mutexes allocates too (std's).
+/// on macOS the first lock of each of its mutexes allocates too (std's). A path that inherently
+/// makes more of a count is held to its own measure there ([`HELD_ON_PATH`]).
 const HELD: [(&str, &str, f64); 47] = [
     // A draw records exactly one draw command, at the call, and makes no driver object: the cost
     // it pays there is planning and recording, which is settled work and nothing a driver
@@ -501,24 +503,62 @@ const HELD: [(&str, &str, f64); 47] = [
     ("commit_no_copy_dispatch", "allocs", 9.0),
 ];
 
-/// The calls the groups run so far made more work than [`HELD`] allows them, as [`hold`] words
-/// each; [`percall`] fails on them all after its last group.
+/// What a call may make on a path of its own that inherently makes more of a count than
+/// [`HELD`]'s row of it holds on every other path, per call: the group, the count whose moving
+/// marks the path (as [`HELD`] names its counts), the count held, and the most a call of that path
+/// may make. Where the call moved its mark, the row holds the count in place of [`HELD`]'s row of
+/// it; where it did not, [`HELD`]'s row holds it.
+const HELD_ON_PATH: [(&str, &str, &str, f64); 1] = [
+    // A heap texture the device holds as a shadow of Metal's tiles (`texture/heap_tiled.rs`,
+    // counted as `heap_textures_tiled`): where its image does not fit Metal's answer, which the
+    // program places it by, Metal's bytes stay in the heap and the image lies in memory of its
+    // own. On the Radeon 780M (RADV PHOENIX) the group's optimal 256x256 BGRA8 image takes 262144
+    // bytes at an alignment of 65536, where Metal answers 262144 at 128. There it makes 28.25
+    // allocations a call: 11.25 for its plan and its texture object, and 17 for the route: its
+    // moves' planes and levels (2), the image (1), one staging buffer for the texture's bytes,
+    // the image's elements and the kernel's shapes (3) and its copies back (1), the kernel's two
+    // descriptor sets from a pool of their own (5), its copies into the image (1), and the
+    // shadow's state (4).
+    (
+        "heap_texture_256",
+        "rt_heap_textures_tiled_at_call",
+        "allocs",
+        28.25,
+    ),
+];
+
+/// The calls the groups run so far made more work than [`HELD`] or [`HELD_ON_PATH`] allows them,
+/// as [`hold`] words each; [`percall`] fails on them all after its last group.
 static BREACHED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Note, for [`percall`] to fail on, where a group's call made more work than [`HELD`] allows it,
-/// naming the call, the count, what it made and what it is held to. A count the group never moved
-/// reads zero: the call made none of it on this device, where it may take another path than on
-/// the M3 Max ([`HELD`]).
+/// or [`HELD_ON_PATH`] on a path whose mark it moved, naming the call, the count, what it made and
+/// what it is held to. A count the group never moved reads zero: the call made none of it on this
+/// device, where it may take another path than on the M3 Max ([`HELD`]).
 fn hold(name: &str, measured: &[(String, f64)]) {
     let made = |what: &str| {
         let made = measured.iter().find(|(counted, _)| counted == what);
         made.map_or(0.0, |(_, value)| *value)
     };
+    // The rows of the paths this group's call took.
+    let taken = (HELD_ON_PATH.iter())
+        .filter(|&&(group, mark, ..)| group == name && made(mark) > 0.0)
+        .map(|&(_, mark, what, most)| (mark, what, most));
     let mut breached = vec![];
     for (group, what, most) in HELD {
-        if group == name && made(what) > most {
+        let on_path = taken.clone().any(|(_, counted, _)| counted == what);
+        if group == name && !on_path && made(what) > most {
             breached.push(format!(
                 "{name}: {what} is {} a call, where it is held to at most {most}",
+                made(what)
+            ));
+        }
+    }
+    for (mark, what, most) in taken {
+        if made(what) > most {
+            breached.push(format!(
+                "{name}: {what} is {} a call on the path {mark} marks, where it is held to at \
+                 most {most}",
                 made(what)
             ));
         }
@@ -527,12 +567,13 @@ fn hold(name: &str, measured: &[(String, f64)]) {
     noted.extend(breached);
 }
 
-/// Fail where a row of [`HELD`] could hold nothing on any device: its group has no entry in
-/// [`TIMED`], or its count is none the table prints, `allocs` or one of the side's own counts
-/// `kept` ([`Gpu::work_counts`], every one whatever its value) under `rt_`, with `_at_call` or
-/// `_at_commit` after it or nothing. A count that moved nowhere is not printed and reads zero
-/// ([`hold`]), so a misspelled one would pass whatever the call made: checked by name, before any
-/// group runs, on every device, whichever path its calls take.
+/// Fail where a row of [`HELD`] or [`HELD_ON_PATH`] could hold nothing on any device: its group
+/// has no entry in [`TIMED`], or a count it names is none the table prints, `allocs` or one of the
+/// side's own counts `kept` ([`Gpu::work_counts`], every one whatever its value) under `rt_`, with
+/// `_at_call` or `_at_commit` after it or nothing. A count that moved nowhere is not printed and
+/// reads zero ([`hold`]), so a misspelled one would pass whatever the call made, and a misspelled
+/// mark would hold no call to its path: checked by name, before any group runs, on every device,
+/// whichever path its calls take.
 fn check_held(kept: &[(&'static str, f64)]) {
     let keeps = |count: &str| counted(count) && kept.iter().any(|(name, _)| *name == count);
     let printed = |what: &str| {
@@ -560,6 +601,10 @@ fn check_held(kept: &[(&'static str, f64)]) {
         );
     };
     for (group, what, _) in HELD {
+        check(group, what);
+    }
+    for (group, mark, what, _) in HELD_ON_PATH {
+        check(group, mark);
         check(group, what);
     }
 }
