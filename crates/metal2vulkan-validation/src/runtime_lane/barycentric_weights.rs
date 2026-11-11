@@ -23,13 +23,13 @@
 //! a flat `uint` and a `float2`), the weights and the primitive ID, reads of the rest with what
 //! `bv_plain`, which reads no weights and so has no geometry stage, reads at every pixel. A device
 //! with neither way, such as the `vk12-floor` profile's, refuses the functions as needing either
-//! `fragmentShaderBarycentric` or `geometryShader`.
+//! `fragmentShaderBarycentric` or `geometryShader`: every device is checked so with both features
+//! withheld.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
-use crate::candidate::LaneRestriction;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::error::{Capability, Feature, Needs};
@@ -669,38 +669,24 @@ fn a_pipeline_with_a_geometry_stage_announces_it_and_one_without_does_not() {
     }
 }
 
-/// On the device restricted to `vk12-floor` (Vulkan 1.2 and nothing optional: neither
-/// `fragmentShaderBarycentric` nor `geometryShader`), the weight functions are refused as needing
-/// either ([`pipelines`]' check), or, where the restricted device keeps a way, read Metal's
-/// weights. Skipped, visibly, where the profiles layer is not installed or the device lacks a
-/// capability the profile states.
+/// With both ways to read the weights withheld (`fragmentShaderBarycentric` and `geometryShader`,
+/// which the Vulkan 1.2 floor lacks too), the weight functions are refused as needing either
+/// ([`pipelines`]' check), on every device.
 #[test]
-fn on_vk12_floor_the_weights_are_metal_s_or_refused_needing_either_way() {
-    let restriction = match crate::candidate::lane_restriction("vk12-floor", TEST_DEVICE).unwrap() {
-        LaneRestriction::Takes(restriction) => restriction,
-        LaneRestriction::Lacks { device, gaps } => {
-            println!(
-                "SKIPPED {device}: cannot take vk12-floor: lacks {}",
-                gaps.join(", ")
-            );
-            return;
-        }
-        LaneRestriction::NoLayer => {
-            println!("SKIPPED: VK_LAYER_KHRONOS_profiles is not installed");
-            return;
-        }
-    };
+fn with_neither_way_the_weight_functions_are_refused_needing_either() {
     on_lane(
-        |options: &mut DeviceOptions| restriction.restrict(options).unwrap(),
+        |options| {
+            options.withheld_features.extend([
+                VkFeature::FragmentShaderBarycentric,
+                VkFeature::GeometryShader,
+            ]);
+        },
         |lane| {
-            let restricted = restriction.check(&lane.device).unwrap();
-            println!(
-                "RESTRICTED {}: {}, kept {:?}",
-                lane.device.name(),
-                restricted.record,
-                restricted.kept
+            assert!(
+                pipelines(lane).is_none(),
+                "the weight functions were made on {} with neither way to read the weights",
+                lane.device.name()
             );
-            third_weight_is_metal_s(lane);
         },
     );
 }

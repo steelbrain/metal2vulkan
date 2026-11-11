@@ -166,14 +166,6 @@ pub(crate) mod unsupported_set;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform;
-/// The runtime path's restriction to a committed profile for a lane test
-/// (`runtime_lane/absent_reads.rs`).
-#[cfg(all(
-    test,
-    any(m2v_gpu, m2v_cpu_icd),
-    any(target_os = "linux", target_os = "macos")
-))]
-pub(crate) use platform::{lane_restriction, LaneRestriction};
 pub(crate) use platform::{runtime_restriction, Restricting, RuntimeRestriction};
 
 /// What the runtime path's second check of a profile restriction found on its device

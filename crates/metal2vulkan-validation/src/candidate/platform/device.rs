@@ -1394,58 +1394,6 @@ pub(crate) fn runtime_restriction(
     restricting(restriction, device_type, executor).map(Some)
 }
 
-/// What [`lane_restriction`] finds for a lane test's committed profile.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) enum LaneRestriction {
-    /// `VK_LAYER_KHRONOS_profiles` is not installed.
-    NoLayer,
-    /// The device lacks capabilities the profile states (the first check's refusal, which a
-    /// restricted context records as a typed refusal): the device's name and the members it
-    /// lacks.
-    Lacks { device: String, gaps: Vec<String> },
-    /// The device takes the profile: what the runtime device's options and its second check need.
-    Takes(Box<RuntimeRestriction>),
-}
-
-/// The runtime path's restriction to committed profile `stem` for a lane test, whatever this
-/// process's own restriction is (a test does not restrict its process), on the device
-/// `device_type` selects. Every failure other than the first check's refusal is an error.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) fn lane_restriction(
-    stem: &str,
-    device_type: DeviceType,
-) -> Result<LaneRestriction, String> {
-    if !profiles_layer_installed()? {
-        return Ok(LaneRestriction::NoLayer);
-    }
-    // A restriction lives as long as the process, as this process's own would.
-    let restriction: &'static ProfileRestriction =
-        Box::leak(Box::new(profiles::presentable(stem)?));
-    Ok(match first_check(restriction, device_type)? {
-        FirstCheck::Takes(restriction) => LaneRestriction::Takes(restriction),
-        FirstCheck::Lacks(refused) => LaneRestriction::Lacks {
-            device: refused.identity["device"]
-                .as_str()
-                .unwrap_or("the device")
-                .to_owned(),
-            gaps: refused.gaps,
-        },
-    })
-}
-
-/// Whether `VK_LAYER_KHRONOS_profiles` is installed, for a lane test that restricts its device
-/// through it.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-pub(crate) fn profiles_layer_installed() -> Result<bool, String> {
-    let entry = load_entry()?;
-    // SAFETY: a global command of a loaded entry.
-    let layers = unsafe { entry.enumerate_instance_layer_properties() }
-        .map_err(|error| format!("enumerate Vulkan instance layers: {error}"))?;
-    Ok(layers
-        .iter()
-        .any(|layer| extension_name(&layer.layer_name) == PROFILES_LAYER))
-}
-
 /// [`runtime_restriction`]'s steps for `restriction`: the first check decides between a typed
 /// refusal, recorded as `executor`'s context records it, and a restriction the device takes.
 fn restricting(

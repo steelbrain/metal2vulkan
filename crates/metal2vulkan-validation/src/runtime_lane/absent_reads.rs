@@ -14,15 +14,13 @@
 //! report stating the read (it failed before). The kernel marks the command buffer's status by the
 //! status buffer's device address where the device addresses buffers, and through its binding of
 //! the buffer (`SyntheticBinding::ExecutionStatus`) where it does not: the device as it is, the
-//! device without `shaderInt64`, and the device restricted to `vk12-floor` (where the profiles
-//! layer is installed) run the same kernels.
+//! device without `shaderInt64` and the device without `bufferDeviceAddress` run the same kernels.
 
 use super::degrade_notices::{assert_once, counts, made_compute_kinds, on_device_with};
 use super::shared_kinds;
 use super::Messages;
 use super::{at_plan, buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
-use crate::candidate::LaneRestriction;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{DataType, PixelFormat, TextureUsage};
@@ -32,8 +30,7 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     CommandBufferError, CommandBufferStatus, ComputePipelineState, Degradation, Device,
-    DeviceOptions, ExecutedPipeline, PipelineOptions, Region, ResourceOptions, Size, Texture,
-    TextureDescriptor,
+    ExecutedPipeline, PipelineOptions, Region, ResourceOptions, Size, Texture, TextureDescriptor,
 };
 
 /// What one run of a kernel left: the command buffer's status and error, whether its execution
@@ -272,42 +269,18 @@ fn without_buffer_addresses_a_removed_arguments_read_marks_through_the_status_bi
     );
 }
 
-/// [`reads_zero_and_completes`] on the device restricted to `vk12-floor` through the profiles
-/// layer (Vulkan 1.2 and nothing optional: no buffer device address, no 64-bit integers, 4 storage
-/// buffers a stage): the kernels mark the status through their binding of it. Skipped, visibly,
-/// where the profiles layer is not installed or the device lacks a capability the profile states
-/// (the restricted context's first check refuses it); every other failure fails.
+/// [`reads_zero_and_completes`] on the device without `bufferDeviceAddress`, which then addresses
+/// no buffer (as on the Vulkan 1.2 floor, which lacks it): the kernels mark the status through
+/// their binding of it.
 #[test]
-fn on_vk12_floor_a_removed_arguments_read_marks_through_the_status_binding() {
-    let restriction =
-        match crate::candidate::lane_restriction("vk12-floor", crate::gpu::TEST_DEVICE).unwrap() {
-            LaneRestriction::Takes(restriction) => restriction,
-            LaneRestriction::Lacks { device, gaps } => {
-                println!(
-                    "SKIPPED {device}: cannot take vk12-floor: lacks {}",
-                    gaps.join(", ")
-                );
-                return;
-            }
-            LaneRestriction::NoLayer => {
-                println!("SKIPPED: VK_LAYER_KHRONOS_profiles is not installed");
-                return;
-            }
-        };
+fn without_buffer_device_addresses_a_removed_arguments_read_marks_through_the_status_binding() {
     on_device_with(
-        |options: &mut DeviceOptions| {
-            restriction.restrict(options).unwrap();
+        |options| {
+            options
+                .withheld_features
+                .insert(VkFeature::BufferDeviceAddress);
             at_plan(options)
         },
-        |device, messages| {
-            let restricted = restriction.check(device).unwrap();
-            println!(
-                "RESTRICTED {}: {}, kept {:?}",
-                device.name(),
-                restricted.record,
-                restricted.kept
-            );
-            reads_zero_and_completes(device, messages, Reach::Binding);
-        },
+        |device, messages| reads_zero_and_completes(device, messages, Reach::Binding),
     );
 }
