@@ -1593,7 +1593,7 @@ fn submit_ready(
         // next completion ([`await_unshared_room`]), and whether one was.
         let (mut unshared_wake, mut isolating) = (None, false);
         let behind = |order: &Order<Held>, sequence| is_behind(order, binary, &mut memo, sequence);
-        let next = state.order.next(behind, |held| {
+        let next = state.order.next(goes_first, behind, |held| {
             if !binary.ready(&held.binary_needs) {
                 held.held_for(HeldFor::BinarySemaphore);
                 return None;
@@ -1772,6 +1772,14 @@ fn submit_ready(
     }
 }
 
+/// Whether a pass asks `held` before the heads committed before it ([`Order::next`]'s `first`):
+/// an unshared queue's batch on a `VkQueue` whose other queues' work is held back for it
+/// (`unshared_hold.rs`), so a pass that finds that work let go and it ready together sends it
+/// first, as the hold would have, had the pass come before the room did.
+fn goes_first(held: &Held) -> bool {
+    held.buffer.goes_ahead_of_held_work()
+}
+
 /// A head held back from `VkQueue` `queue` for an unshared queue there (`unshared_hold.rs`), the
 /// work left ahead falling under the budget in `after` nanoseconds where it does before the next
 /// completion: the thread waits for that `VkQueue`'s next completion (`awaits`), and until then at
@@ -1922,6 +1930,7 @@ fn submit_plain_ready(
             let (binary, decodes, untracked) = (&*binary, &*decodes, *untracked_decodes);
             let mut memo = Behind::default();
             order.next(
+                goes_first,
                 |order, sequence| is_behind(order, binary, &mut memo, sequence),
                 |held| plain_ready(held, binary, decodes, untracked, passer),
             )

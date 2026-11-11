@@ -101,6 +101,7 @@ fn schedule(
     loop {
         let ready = &*table;
         let Some((_, _, (name, needs, signals), ())) = order.next(
+            |_| false,
             |_, _| false,
             |(name, needs, _)| (ready.ready(needs) && !events_unmet.contains(name)).then_some(()),
         ) else {

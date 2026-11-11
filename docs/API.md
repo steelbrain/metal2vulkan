@@ -265,7 +265,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   no run seen yet is in flight, no other goes until it completes. The next batch goes in before
   the one ahead ends, so the GPU is not left idle between them where the scheduler's thread runs
   in time, and the unshared queue's command buffer waits behind about one batch of theirs: the
-  whole of one, however long, as a submission runs to its end. Beside an application keeping three
+  whole of one, however long, as a submission runs to its end. A scheduler pass that finds a held
+  batch let go and the unshared queue's command buffer ready together (a pass the host ran late)
+  sends the unshared one first. Beside an application keeping three
   30 ms command buffers in flight, a compositor's median wait fell from 75 to 17.5 ms on the Iris
   Xe and from 71-84 to 18 ms on the Radeon 780M, with no throughput lost on a quiet host; under
   the host's CPU load the GPU idles more (docs/FAST-PATHS.md has the numbers). Counted:

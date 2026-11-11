@@ -4,8 +4,9 @@
 //! A logical queue runs its command buffers in commit order, and a command buffer its batches in
 //! encoded order, so only the head of each line may be submitted. Among the heads that are ready
 //! (each of their waits satisfied by work already submitted, or by the host), the one committed
-//! first goes next. A head that is not ready holds back its own line, and the heads of other lines
-//! committed after it that it conflicts with:
+//! first goes next, of those the caller puts first where one is ready (below). A head that is not
+//! ready holds back its own line, and the heads of other lines committed after it that it
+//! conflicts with:
 //!
 //! - **Tracked order across queues is commit order.** Metal tracks a resource across queues in
 //!   the order it schedules the command buffers, which is their commit order unless one waits
@@ -22,6 +23,12 @@
 //! - **No deadlock.** A head waits behind batches committed before it that keep their place
 //!   only; the first of those waits for no batch but its line's earlier ones, or for the runtime
 //!   (a host step's gate or pipelines, its checks), which never waits for a later commit.
+//! - **Heads put first.** The caller may put heads first ([`next`](Order::next)'s `first`): a
+//!   ready one goes before the others, still behind any batch it conflicts with that keeps its
+//!   place, as every head. The scheduler puts first an unshared queue's head on a `VkQueue` whose
+//!   other queues' work is held back for it (`unshared_hold.rs`): a pass that finds that work let
+//!   go and the unshared queue's command buffer ready together, as the pass of a scheduler thread
+//!   the host ran late does, would otherwise send the whole of that work ahead of it.
 //!
 //! Since a batch is submitted only once every wait it has is satisfied by submitted work, the
 //! batches on a `VkQueue` never wait for a signal not yet submitted, and no `VkQueue` stalls on
@@ -30,7 +37,7 @@
 //!
 //! **Found as asked**. Whether a head waits behind an earlier batch is answered for the heads that
 //! would otherwise go ([`is_behind`](Order::is_behind)), not for every head on every pass:
-//! [`next`](Order::next) asks it of the ready heads in commit order until one goes, and the
+//! [`next`](Order::next) asks it of the ready heads in its order until one goes, and the
 //! scheduler of the heads whose host step or checks would otherwise start. Each line's batches that
 //! keep their place and each footprint are taken once a pass ([`Behind`]), as far as an asking head
 //! needs them. A pass over many lines whose heads wait for events, or go in commit order, so takes
@@ -59,8 +66,9 @@ pub(crate) struct Order<B> {
     next: u64,
     /// Emptied lines, kept for lines made later (the module docs).
     spare: Vec<VecDeque<(u64, B)>>,
-    /// The heads [`next`](Order::next) orders, by commit sequence number and line.
-    heads: Vec<(u64, usize)>,
+    /// The heads [`next`](Order::next) orders: those not put first after the others, each by
+    /// commit sequence number, with its line.
+    heads: Vec<(bool, u64, usize)>,
 }
 
 impl<B> Default for Order<B> {
@@ -215,28 +223,29 @@ impl<B> Order<B> {
     }
 
     /// Take the batch to submit next: of the line heads that `ready` prepares and that are not
-    /// `behind` (asked of those, in commit order, until one goes), the one committed first, with
-    /// its line's queue, its commit sequence number (for [`put_back`](Self::put_back)) and what
-    /// `ready` made of it. `None` when no head is ready.
+    /// `behind` (asked of those, those `first` puts first in commit order, then the others in
+    /// commit order, until one goes), the first asked, with its line's queue, its commit sequence
+    /// number (for [`put_back`](Self::put_back)) and what `ready` made of it. `None` when no head
+    /// is ready.
     ///
     /// `ready` takes each head it looks at mutably, so a caller may note on a head it holds back
     /// why it did (`scheduler/mod.rs`'s [`HeldFor`](crate::scheduler::HeldFor)); it is asked of
-    /// each head in commit order until one is both ready and not `behind`.
+    /// each head in that order until one is both ready and not `behind`.
     pub(crate) fn next<T>(
         &mut self,
+        first: impl Fn(&B) -> bool,
         mut behind: impl FnMut(&Self, u64) -> bool,
         mut ready: impl FnMut(&mut B) -> Option<T>,
     ) -> Option<(u64, u64, B, T)> {
         let Order { lines, heads, .. } = self;
         heads.clear();
-        heads.extend(
-            (lines.iter().enumerate())
-                .filter_map(|(at, (_, line))| line.front().map(|(sequence, _)| (*sequence, at))),
-        );
+        heads.extend((lines.iter().enumerate()).filter_map(|(at, (_, line))| {
+            (line.front()).map(|(sequence, head)| (!first(head), *sequence, at))
+        }));
         heads.sort_unstable();
         let mut found = None;
         for index in 0..self.heads.len() {
-            let (sequence, at) = self.heads[index];
+            let (_, sequence, at) = self.heads[index];
             let Some((_, head)) = self.lines[at].1.front_mut() else {
                 continue;
             };

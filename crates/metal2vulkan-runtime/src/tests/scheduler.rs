@@ -129,6 +129,7 @@ impl Model {
         loop {
             let events = &self.events;
             let next = self.order.next(
+                |_| false,
                 |_, _| false,
                 |(_, spec)| {
                     let mut waits = Vec::new();
@@ -253,15 +254,15 @@ fn the_heads_update_in_place() {
         *head = head.to_ascii_uppercase();
     }
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((1, 0, 'A', ()))
     );
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((1, 1, 'b', ()))
     );
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((2, 2, 'C', ()))
     );
 }
@@ -274,18 +275,49 @@ fn the_order_takes_the_ready_head_committed_first() {
     order.push(1, ['d']);
     let ready = |held: &mut char| (*held != 'a').then_some(());
     // Queue 1's head is held: queue 2's goes, and queue 1's later batches wait behind its head.
-    assert_eq!(order.next(|_, _| false, ready), Some((2, 2, 'c', ())));
-    assert_eq!(order.next(|_, _| false, ready), None);
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, ready),
+        Some((2, 2, 'c', ()))
+    );
+    assert_eq!(order.next(|_| false, |_, _| false, ready), None);
+    assert_eq!(
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((1, 0, 'a', ()))
     );
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((1, 1, 'b', ()))
     );
     assert_eq!(order.drop_head(1, |held| *held == 'd'), ['d']);
     assert_eq!(order.len(), 0);
+}
+
+/// A head put first (an unshared queue's on a `VkQueue` whose other work is held back for it)
+/// goes before a ready head committed before it; not while it is not ready itself, nor while it
+/// waits behind an earlier batch; and the others then go in commit order.
+#[test]
+fn a_head_put_first_goes_before_the_ready_heads_committed_before_it() {
+    let mut order = Order::default();
+    order.push(1, ['a']);
+    order.push(2, ['b']);
+    order.push(3, ['U', 'V']);
+    let first = |head: &char| head.is_ascii_uppercase();
+    let all = |_: &mut char| Some(());
+    // Not ready: the others go in commit order.
+    let unready = |head: &mut char| (*head != 'U').then_some(());
+    assert_eq!(
+        order.next(first, |_, _| false, unready),
+        Some((1, 0, 'a', ()))
+    );
+    // Behind an earlier batch: the same.
+    let u_behind = |_: &Order<char>, sequence| sequence == 2;
+    assert_eq!(order.next(first, u_behind, all), Some((2, 1, 'b', ())));
+    order.push(1, ['c']);
+    // Ready: it goes, then its line's next, also put first, then the rest.
+    assert_eq!(order.next(first, |_, _| false, all), Some((3, 2, 'U', ())));
+    assert_eq!(order.next(first, |_, _| false, all), Some((3, 3, 'V', ())));
+    assert_eq!(order.next(first, |_, _| false, all), Some((1, 4, 'c', ())));
+    assert!(order.is_empty());
 }
 
 /// A batch taken and put back (its first submission waits for encoders a rebind encodes again)
@@ -297,25 +329,25 @@ fn a_batch_put_back_keeps_its_place() {
     let mut order = Order::default();
     order.push(1, ['a', 'b']);
     order.push(2, ['c']);
-    let (queue, sequence, held, ()) = order.next(|_, _| false, |_| Some(())).unwrap();
+    let (queue, sequence, held, ()) = order.next(|_| false, |_, _| false, |_| Some(())).unwrap();
     assert_eq!((queue, sequence, held), (1, 0, 'a'));
     order.put_back(queue, sequence, held);
     assert_eq!(order.len(), 3);
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((1, 0, 'a', ()))
     );
     let (queue, sequence, held, ()) = order
-        .next(|_, _| false, |head| (*head == 'c').then_some(()))
+        .next(|_| false, |_, _| false, |head| (*head == 'c').then_some(()))
         .unwrap();
     assert_eq!((queue, sequence, held), (2, 2, 'c'));
     order.put_back(queue, sequence, held);
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((1, 1, 'b', ()))
     );
     assert_eq!(
-        order.next(|_, _| false, |_| Some(())),
+        order.next(|_| false, |_, _| false, |_| Some(())),
         Some((2, 2, 'c', ()))
     );
     assert!(order.is_empty());
@@ -613,7 +645,11 @@ fn take(order: &mut Order<Work>) -> Option<char> {
         )
     };
     order
-        .next(behind, |work| (!work.step && !work.event).then_some(()))
+        .next(
+            |_| false,
+            behind,
+            |work| (!work.step && !work.event).then_some(()),
+        )
         .map(|(_, _, work, ())| work.name)
 }
 
@@ -669,7 +705,11 @@ fn take_and_behind(order: &mut Order<Work>) -> (Option<char>, Vec<char>) {
             )
         };
         order
-            .next(behind, |work| (!work.step && !work.event).then_some(()))
+            .next(
+                |_| false,
+                behind,
+                |work| (!work.step && !work.event).then_some(()),
+            )
             .map(|(_, _, work, ())| work.name)
     };
     let mut held: Vec<char> = Vec::new();
@@ -762,7 +802,12 @@ fn take_counted(order: &mut Order<Work>, footprints: &Cell<usize>, keeps: &Cell<
             ),
         )
     };
-    (order.next(behind, |work| (!work.step && !work.event).then_some(()))).is_some()
+    (order.next(
+        |_| false,
+        behind,
+        |work| (!work.step && !work.event).then_some(()),
+    ))
+    .is_some()
 }
 
 /// Whether a head waits behind an earlier batch is asked of the heads that would go alone: over

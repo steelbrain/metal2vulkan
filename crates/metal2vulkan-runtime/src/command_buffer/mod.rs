@@ -4358,6 +4358,13 @@ impl CommandBufferShared {
         }
     }
 
+    /// Whether a batch of it goes before other queues' batches a pass finds ready with it
+    /// (`scheduler/order.rs`, "Heads put first"): its queue is unshared, and its `VkQueue` holds
+    /// other queues' work back for it (`unshared_hold.rs`).
+    pub(crate) fn goes_ahead_of_held_work(&self) -> bool {
+        self.queue.unshared() && self.device.holds_back_for_unshared(self.queue.vk_queue())
+    }
+
     /// This thread doing the command buffer's work until the guard goes
     /// ([`CommandBuffer::notices_for`]).
     pub(super) fn notices_for(&self) -> NoticesFor {

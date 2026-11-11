@@ -38,7 +38,10 @@
 //!   `VkQueue`'s next completion (a gate, `scheduler/mod.rs`'s `Awaits`), and, where the oldest
 //!   batch's expected run still covers it, for the time the work left ahead falls under the
 //!   budget. A committing or waiting thread's own pass leaves such a batch to the scheduler's
-//!   thread, which it wakes.
+//!   thread, which it wakes. A pass that finds such a batch let go and an unshared queue's
+//!   command buffer ready together on its `VkQueue` sends the unshared one first
+//!   (`scheduler/order.rs`, "Heads put first"): a pass the host ran late, after the room came,
+//!   would otherwise put the whole batch ahead of it.
 //! - **What it costs.** A batch longer than its queue's recent ones still holds the unshared
 //!   queue's command buffer for its whole length: one command buffer's batch is one submission,
 //!   which the GPU runs to its end. The next batch goes in about [`BUDGET`] before the one ahead
