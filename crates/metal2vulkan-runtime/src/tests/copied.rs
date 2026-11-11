@@ -531,9 +531,8 @@ fn a_tag_changes_with_any_bit_of_its_block() {
     assert_ne!(tag(&zero), zero_tag, "the last word counts");
 }
 
-/// The SIMD forms of a block's tag (on x86-64: SSE2, and AVX2 where the host has it) answer as
-/// the portable form does, over random blocks, a block of all ones (the most every sum can
-/// carry) and one of zeros.
+/// The SSE2 form of a block's tag (on x86-64) answers as the portable form does, over random
+/// blocks, a block of all ones (the most every sum can carry) and one of zeros.
 #[test]
 fn a_tag_is_the_same_on_every_path() {
     use crate::copied::tag_portable;
@@ -547,20 +546,7 @@ fn a_tag_is_the_same_on_every_path() {
         blocks.push(block);
     }
     for block in &blocks {
-        let portable = tag_portable(block);
-        assert_eq!(tag(block), portable);
-        #[cfg(target_arch = "x86_64")]
-        {
-            let key = crate::copied::key();
-            // SAFETY: every x86-64 host has SSE2.
-            let sse2 = unsafe { crate::copied::x86::tag_sse2(block, key) };
-            assert_eq!(sse2, portable, "SSE2");
-            if std::is_x86_feature_detected!("avx2") {
-                // SAFETY: the host has AVX2.
-                let avx2 = unsafe { crate::copied::x86::tag_avx2(block, key) };
-                assert_eq!(avx2, portable, "AVX2");
-            }
-        }
+        assert_eq!(tag(block), tag_portable(block));
     }
 }
 

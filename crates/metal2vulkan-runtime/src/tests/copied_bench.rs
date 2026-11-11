@@ -460,9 +460,9 @@ pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseB
     drop(copied);
 }
 
-/// The rate of a copy's block tags (`copied::tag`), portable and (on an x86-64 host with it) AVX2,
-/// against comparing two equal streams 4 KiB at a time, over 256 MiB and over 64 KiB that stays in
-/// the first-level cache, printed as GB/s, the best of [`RUNS`] (`COPIED-TAG`).
+/// The rate of a copy's block tags (`copied::tag`, SSE2 on an x86-64 host) and of their portable
+/// form, against comparing two equal streams 4 KiB at a time, over 256 MiB and over 64 KiB that
+/// stays in the first-level cache, printed as GB/s, the best of [`RUNS`] (`COPIED-TAG`).
 #[test]
 #[ignore = "a release-mode benchmark"]
 fn copied_tag_bench() {
@@ -497,22 +497,6 @@ fn copied_tag_bench() {
                 .map(|b| tag_portable(b)[0])
                 .fold(0, u64::wrapping_add)
         });
-        #[cfg(target_arch = "x86_64")]
-        {
-            use crate::copied::{key, x86};
-            // SAFETY: every x86-64 host has SSE2.
-            let sse2 = |b| unsafe { x86::tag_sse2(b, key()) }[0];
-            rate("sse2 tag", &|| {
-                blocks().map(sse2).fold(0, u64::wrapping_add)
-            });
-            if std::is_x86_feature_detected!("avx2") {
-                // SAFETY: the host has AVX2.
-                let avx2 = |b| unsafe { x86::tag_avx2(b, key()) }[0];
-                rate("avx2 tag", &|| {
-                    blocks().map(avx2).fold(0, u64::wrapping_add)
-                });
-            }
-        }
         rate("tag", &|| {
             blocks().map(|b| tag(b)[0]).fold(0, u64::wrapping_add)
         });
