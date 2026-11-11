@@ -1197,6 +1197,80 @@ fn an_exit_runs_the_handlers_before_the_hook_once_the_work_ended() {
     }
 }
 
+/// A device's slot among those its commands go through (`recorder`), let go of once the process
+/// is exiting, stays as it was: a command recorded through it after reaches the driver's entry
+/// point. A device whose last handle drops once the guard closed (or whose teardown the exit cut
+/// short) leaves its threads' sections in progress running, and one recording through its slot
+/// meanwhile (the queue-switch check's thread making its objects) once found the slot's driver
+/// entry points cleared, its entry point ended the process (`SIGABRT`, a panic that cannot unwind
+/// out of an `extern "system"` function) after a GPU recovery's test failed (RTX 5080 Laptop GPU,
+/// NVIDIA 615.71.09). The child routes a stand-in device's functions through a slot, registers the
+/// hook, and from an exit handler that runs after it lets go of the slot and records through it.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_slot_let_go_of_while_the_process_exits_keeps_its_commands() {
+    use ash::vk;
+    /// The routed functions and their slot, until the exit handler takes them.
+    static ROUTED: Mutex<Option<(ash::Device, crate::recorder::Slot)>> = Mutex::new(None);
+    /// The stand-in's resets recorded.
+    static RESETS: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "system" fn reset(_: vk::CommandBuffer, _: vk::QueryPool, _: u32, _: u32) {
+        RESETS.fetch_add(1, Ordering::SeqCst);
+    }
+    /// After the hook: the guard closed, the slot let go of, a reset recorded through it; 44 where
+    /// it reached the stand-in, 45 where the guard was open.
+    extern "C" fn after_the_hook() {
+        let taken = ROUTED.lock().map(|mut routed| routed.take());
+        let Ok(Some((routed, slot))) = taken else {
+            // SAFETY: ends the child at once, from its exit handlers.
+            unsafe { libc::_exit(46) };
+        };
+        let closed = exit_guard::closed();
+        drop(slot);
+        // SAFETY: the stand-in reads none of its parameters.
+        unsafe {
+            routed.cmd_reset_query_pool(vk::CommandBuffer::null(), vk::QueryPool::null(), 0, 1)
+        };
+        let status = match closed && RESETS.load(Ordering::SeqCst) == 2 {
+            true => 44,
+            false => 45,
+        };
+        // SAFETY: as above.
+        unsafe { libc::_exit(status) };
+    }
+    fn child() {
+        let none = |_: &std::ffi::CStr| std::ptr::null::<std::ffi::c_void>();
+        let mut v1_0 = ash::DeviceFnV1_0::load(none);
+        v1_0.cmd_reset_query_pool = reset;
+        let device = ash::Device::from_parts_1_3(
+            vk::Device::null(),
+            v1_0,
+            ash::DeviceFnV1_1::load(none),
+            ash::DeviceFnV1_2::load(none),
+            ash::DeviceFnV1_3::load(none),
+        );
+        // SAFETY: the stand-in's functions are not routed yet; no Vulkan call reaches a device.
+        let (routed, slot) = unsafe { crate::recorder::route(device) };
+        let slot = slot.expect("a slot free in the child");
+        // SAFETY: as above.
+        unsafe {
+            routed.cmd_reset_query_pool(vk::CommandBuffer::null(), vk::QueryPool::null(), 0, 1)
+        };
+        assert_eq!(RESETS.load(Ordering::SeqCst), 1, "the routed reset");
+        *ROUTED.lock().unwrap() = Some((routed, slot));
+        // Registered before the hook, so it runs after it.
+        // SAFETY: a function with no arguments that never unwinds (it ends the child).
+        unsafe { libc::atexit(after_the_hook) };
+        exit_guard::register();
+    }
+    let exit = child_exit(child, 0);
+    assert_eq!(
+        exit.status, 44,
+        "45: the guard was open after the hook; 46: nothing to let go of; its standard error: {}",
+        exit.stderr
+    );
+}
+
 /// Where the hook learns the exit's status, an exit while the driver still runs the runtime's work
 /// once the hook's wait reached its bound (a section that never ends: a driver deadlocked inside a
 /// submission, as the GPU-assisted validation layer 1.4.357 was; a CPU device's work that never

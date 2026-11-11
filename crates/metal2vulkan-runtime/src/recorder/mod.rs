@@ -8,8 +8,10 @@
 //!   (`device/functions.rs`, the exit guard's table among them) and the extension commands it loads
 //!   ([`Slot::route`]) hold the slot's entry points. Each is generic over its slot, so it finds its
 //!   device's command with one load, without a lock or a lookup by handle; a slot is let go of
-//!   with its device, after `vkDestroyDevice`. A source test fails when a file outside this module
-//!   names a command that is not routed.
+//!   with its device, after `vkDestroyDevice`, and never once the process is exiting: then it
+//!   stays with the device the exit leaves to the process's end, whose threads' sections may
+//!   still record through it ([`Slot`]'s drop). A source test fails when a file outside this
+//!   module names a command that is not routed.
 //! - **Counted by kind.** Each command recorded through a slot counts once for its kind, one
 //!   relaxed increment into a fixed array of the slot's indexed by the command, whatever the
 //!   command buffer (`WorkCounts::commands_recorded`). Each slot keeps its counts in shards, one a
@@ -116,7 +118,16 @@ impl Slot {
 }
 
 impl Drop for Slot {
+    /// Let go of the slot, its device destroyed: a release, made in a section of the exit guard
+    /// (`exit_guard.rs`). Once the process is exiting the slot is left as it is, its driver's
+    /// entry points stored, as the device is left to the process's end: a device whose teardown
+    /// the exit cut short, or one that drops once the guard closed, leaves its threads' sections
+    /// in progress running (a section started runs to its end), and one of them recording through
+    /// a cleared slot would end the process inside the slot's entry point (`thunks::missing`).
     fn drop(&mut self) {
+        let Some(_busy) = crate::exit_guard::enter() else {
+            return;
+        };
         thunks::clear(self.index);
         TAKEN[self.index].store(false, Ordering::Release);
     }
