@@ -2433,6 +2433,33 @@ impl Memory {
         (flags, self.heaps[self.heap_of(type_index)].0)
     }
 
+    /// Each memory heap's size and the bytes of the live blocks in it, in the device's order, for
+    /// the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn heaps_live(&self) -> Vec<(u64, u64)> {
+        self.heaps.clone()
+    }
+
+    /// Each pool that holds a live pooled block, with the bytes of its pooled blocks, for the
+    /// crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn pooled_by_pool(&self) -> Vec<((Holds, u32), Vec<u64>)> {
+        let count = self.types.len() as u32;
+        let pools = (Holds::ALL.into_iter())
+            .flat_map(|holds| (0..count).map(move |type_index| (holds, type_index)));
+        pools
+            .map(|(holds, type_index)| {
+                let pool = self.pool_ref(holds, type_index);
+                let blocks = (pool.blocks.iter().flatten()).filter(|block| !block.dedicated);
+                (
+                    (holds, type_index),
+                    blocks.map(|block| block.size).collect(),
+                )
+            })
+            .filter(|(_, sizes): &(_, Vec<u64>)| !sizes.is_empty())
+            .collect()
+    }
+
     /// The memory heap of memory type `type_index`.
     fn heap_of(&self, type_index: u32) -> usize {
         self.types[type_index as usize].heap_index as usize
