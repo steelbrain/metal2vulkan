@@ -717,6 +717,9 @@ fn an_indirect_threadgroup_dispatch_runs_on_the_gpu() {
 fn a_ragged_direct_dispatch_runs_each_thread_once_on_the_flat_variant() {
     on_device(|device, messages| {
         let kernel = flat_state(device);
+        // One queue for every grid: a queue a grid made, past the device's plan of queues,
+        // announces the queue limits (on the 5080), which this test does not test.
+        let queue = device.new_command_queue().unwrap();
         for (grid, group) in [
             ([1206u32, 2622, 1], [32u32, 32, 1]),
             ([1206, 2622, 1], [32, 8, 1]),
@@ -726,7 +729,6 @@ fn a_ragged_direct_dispatch_runs_each_thread_once_on_the_flat_variant() {
             let slots = u64::from(grid[0] * grid[1] * grid[2]);
             let params = buffer_with(device, &bytes(&[1000])).unwrap();
             let out = buffer_with(device, &vec![0; slots as usize * 4]).unwrap();
-            let queue = device.new_command_queue().unwrap();
             let command_buffer = queue.command_buffer().unwrap();
             let mut encoder = command_buffer.compute_command_encoder().unwrap();
             encoder.set_compute_pipeline_state(&kernel).unwrap();
