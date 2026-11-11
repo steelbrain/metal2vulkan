@@ -45,14 +45,9 @@
 //!   keeps that step's recording.
 //! - **Copies taken at use.** A tiled texture's copy of its bytes taken at use (`shadow.rs`) is
 //!   taken by the first use encoded after its mark was set, which clears it. An encoder encoded
-//!   again, its segments recorded again among it, takes it where the use in its place in its
-//!   first encoding or that encoding's segments took it, keeping that take, whose recording is
+//!   again takes it where the use in its place in its first encoding took it, whose recording is
 //!   never submitted, and leaves the mark as it finds it: set by a `did_modify_data` since, it is
-//!   the next use's to take (`State::replaced_takes`, `shadow::ShadowSync::over`). So does work
-//!   recorded again on the GPU alone, where its first recording took it. A take of the first
-//!   recordings the encoding again does not meet is given back as it takes their place, and one
-//!   of its own the first recordings did not hold is given back where it is refused
-//!   (`shadow::Takes::give_back_unheld`).
+//!   the next use's to take (`shadow::Takes`).
 //! - **Runs of passes.** An encoder encoded again that was a pass of a run of passes merged once
 //!   (a shadowed texture's or a linear attachment's, `pass_runs.rs`) leaves the run once it is
 //!   put in place: the merge of the run's pass before it, which it took over, records after all,
@@ -77,7 +72,6 @@ use crate::pipeline::budget::Urgency;
 use crate::replay::Replay;
 use crate::residency::Residency;
 use crate::resource::ResourceKey;
-use crate::shadow::{Replaced, Takes};
 use crate::used_resources::EncoderKind;
 use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
@@ -157,7 +151,7 @@ impl CommandBufferShared {
             // (`Predication::replaying`).
             // The merges its first encoding left to runs of passes (`pass_runs.rs`): encoded again,
             // it leaves them, and keeps after itself what a later pass of a run went on over.
-            let (residency, runs, first) = {
+            let (residency, runs) = {
                 let mut state = lock(&self.state);
                 state.replaying_predication = match state.predicated {
                     true => state.predication.replaying(at),
@@ -172,18 +166,16 @@ impl CommandBufferShared {
                     })
                     .collect();
                 state.replaying_keeps = runs.iter().filter_map(|run| run.keep_after()).collect();
-                // Its first encoding's takes of copies taken at use, its segments' among them,
-                // kept where the encoding again meets them: that encoding's recordings are never
-                // submitted (`shadow::ShadowSync::over`).
-                let first = state.takes_of(at);
-                state.replaced_takes = Some(Replaced::new(first.clone()));
-                (state.residency_before(at, replay.kind()), runs, first)
+                // Its first encoding's takes of copies taken at use, taken again where they were:
+                // that encoding's recording is never submitted (`shadow::Takes`).
+                state.replaying_takes = state.ended[at].takes.clone();
+                (state.residency_before(at, replay.kind()), runs)
             };
             let run = replay.run(&handle, residency);
             {
                 let mut state = lock(&self.state);
                 state.replaying_keeps.clear();
-                state.replaced_takes = None;
+                state.replaying_takes.clear();
             }
             // Its steps' gates listed as the commit lists the first encoding's.
             let run = {
@@ -236,8 +228,6 @@ impl CommandBufferShared {
                 }
                 Err(unspliced) => {
                     counts.reencode_refused();
-                    // Its first recordings stay: a take of its own they did not hold goes back.
-                    unspliced.0.all_takes().give_back_unheld(&first);
                     let refusal = "its place holds other parts or work than its encoding again's";
                     let reset = {
                         let mut state = lock(&self.state);
@@ -279,7 +269,7 @@ impl CommandBufferShared {
         // hold through this turn: only the first submission places segments, and
         // it waits for the turn; a host step, which records one, takes the turn too. What it
         // reaches through its resident set its first submission points it at as it lies then.
-        let alone: Vec<((usize, usize), Deferred, Takes)> = {
+        let alone: Vec<((usize, usize), Deferred)> = {
             let state = lock(&self.state);
             match state.submitted {
                 true => Vec::new(),
@@ -294,26 +284,18 @@ impl CommandBufferShared {
                         .filter(|(_, recorded)| !spliced.contains(&recorded.encoder))
                         .flat_map(|(part, recorded)| {
                             let segments = recorded.segments.iter().enumerate();
-                            segments.filter(|(_, segment)| moved(segment)).map(
-                                move |(at, segment)| {
-                                    let takes = (segment.recorded.as_ref())
-                                        .map(|done| done.takes.clone())
-                                        .unwrap_or_default();
-                                    ((part, at), segment.work.clone(), takes)
-                                },
-                            )
+                            segments
+                                .filter(|(_, segment)| moved(segment))
+                                .map(move |(at, segment)| ((part, at), segment.work.clone()))
                         })
                         .collect()
                 }
             }
         };
-        for (place, work, first) in alone {
+        for (place, work) in alone {
             // Its notices were announced as it committed (`replay::is_replaying`), and its
-            // commands take what they use without holding it. It keeps its first recording's
-            // takes of copies taken at use where it meets them (`shadow::ShadowSync::over`).
-            lock(&self.state).replaced_takes = Some(Replaced::new(first.clone()));
+            // commands take what they use without holding it.
             let again = crate::replay::replaying(|| work.record_on_gpu(&handle));
-            lock(&self.state).replaced_takes = None;
             let counts = &device.shared().counts;
             let Ok(Some((recorded, inputs))) = again else {
                 counts.reencode_refused();
@@ -324,8 +306,6 @@ impl CommandBufferShared {
                 Ok(()) => counts.segment_recorded_again(),
                 Err(unspliced) => {
                     counts.reencode_refused();
-                    // The first recording stays: a take of its own it did not hold goes back.
-                    unspliced.0.takes.give_back_unheld(&first);
                     drop(unspliced);
                 }
             }
@@ -342,19 +322,6 @@ impl CommandBufferShared {
 }
 
 impl State {
-    /// What ended encoder `at`'s recordings decided of their copies taken at use
-    /// (`shadow::Takes`): its own, then its parts' segments' recordings' in order.
-    pub(super) fn takes_of(&self, at: usize) -> Takes {
-        let mut takes = self.ended[at].takes.clone();
-        let segments = (self.recorded.iter())
-            .filter(|part| part.encoder == at)
-            .flat_map(|part| &part.segments);
-        for done in segments.filter_map(|segment| segment.recorded.as_ref()) {
-            takes.join(done.takes.clone());
-        }
-        takes
-    }
-
     /// The residency an ended encoder `at` of `kind` started with, as the command buffer's
     /// encoders ended before it leave it (`CommandBuffer::inherited_residency`): none for a blit
     /// encoder, which makes nothing resident.
@@ -376,11 +343,10 @@ impl State {
     /// Put `replayed`, ended encoder `at` encoded again, and what it made resident in its place,
     /// before the submission of its event group: each of its parts' recordings, uses and segments
     /// (recorded on the GPU alone), its executions (the later encoders' and segments' places
-    /// among them moved by the difference), its keys, what its commands and its segments' took
-    /// (held weakly until that submission), and its takes of copies taken at use, a take of the
-    /// first recordings it did not meet given back. What its first recording retained stays
-    /// retained, and so does what its first segments recorded and what their host steps needed;
-    /// its `VkCommandBuffer`s go with the pool unsubmitted. Refused, changing nothing and giving
+    /// among them moved by the difference), its keys, and what its commands and its segments'
+    /// took (held weakly until that submission). What its first recording retained stays retained,
+    /// and so does what its first segments recorded and what their host steps needed; its
+    /// `VkCommandBuffer`s go with the pool unsubmitted. Refused, changing nothing and giving
     /// `replayed` back, where its place holds other parts than the encoding again's, or a segment
     /// but one whose pipelines are being made (which goes, the encoding again having left one of
     /// its own in its place), work its commit recorded on the GPU alone, a run's merge (which
@@ -421,9 +387,6 @@ impl State {
         if !fits {
             return Err(Box::new((replayed, residency)));
         }
-        // A take of copies taken at use of its first recordings the encoding again did not meet
-        // goes back: they are never submitted (`shadow::ShadowSync::over`).
-        self.takes_of(at).give_back_unheld(&replayed.all_takes());
         let Replayed {
             parts: mut replayed_parts,
             held,
@@ -432,7 +395,6 @@ impl State {
             keys,
             mut taken,
             heaps,
-            takes,
         } = replayed;
         // Held weakly until its group's submission, as the commit held what the first recording
         // and its segments took.
@@ -494,7 +456,6 @@ impl State {
         record.keys = keys;
         record.held = held;
         record.taken = taken;
-        record.takes = takes;
         if let Some(residency) = residency {
             if let Some(first) = record.residency.replace(residency) {
                 self.retained.push(Box::new(first));
@@ -509,9 +470,8 @@ impl State {
     /// before the first submission, with `inputs`, what its host step needs now: what its
     /// commands took held weakly until the first submission, as the commit holds them. What the first
     /// recording retained, its executions and its host step's inputs stay retained; its
-    /// `VkCommandBuffer`s go with the pool unsubmitted, what its commands took, held weakly,
-    /// goes, and so does a take of copies taken at use of its that `recorded` did not meet, given
-    /// back. Refused, changing nothing and giving `recorded` and `inputs` back, where the place
+    /// `VkCommandBuffer`s go with the pool unsubmitted, and what its commands took, held weakly,
+    /// goes. Refused, changing nothing and giving `recorded` and `inputs` back, where the place
     /// holds no such segment, or the command buffer was submitted.
     pub(super) fn splice_segment(
         &mut self,
@@ -531,11 +491,6 @@ impl State {
         let first = segment.recorded.replace(recorded);
         let before = segment.inputs.replace(inputs);
         if let Some(first) = first {
-            // A take of copies taken at use of the first recording this one did not meet goes
-            // back (`shadow::ShadowSync::over`).
-            if let Some(now) = &segment.recorded {
-                first.takes.give_back_unheld(&now.takes);
-            }
             let RecordedSegment {
                 retained,
                 executions,

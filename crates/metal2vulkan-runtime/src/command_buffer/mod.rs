@@ -98,7 +98,7 @@ use super::replay::Replay;
 use super::residency::Residency;
 use super::resource::{ObjectId, ResourceKey};
 use super::scheduler::{BatchSync, Hand, StepWaits};
-use super::shadow::{Replaced, ShadowCarry, Takes};
+use super::shadow::{ShadowCarry, Takes};
 use super::spares::CommandPool;
 use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
@@ -855,15 +855,16 @@ pub(super) struct State {
     /// The keeps the encoder being encoded again records after itself, where it leaves a run of
     /// passes another pass went on in (`pass_runs.rs`, `command_buffer/reencode.rs`).
     pub(super) replaying_keeps: Vec<RunKeep>,
-    /// What the recordings never submitted that a host step or a rebind records work again in
-    /// place of decided of their copies taken at use, while it records, that no core recorded in
-    /// their place met yet (`shadow::Replaced`): a host step's segment's, an encoder's first
-    /// encoding's, its segments' among it, which a rebind encodes again, and a segment's that a
-    /// rebind records again on the GPU alone. Each core recorded meanwhile takes from them where
-    /// it meets them (`shadow::ShadowSync::over`, `EncoderCore::segment`). None otherwise. The
-    /// step and the rebind hold the turn (`reencoding`), so no other recording into the command
-    /// buffer's pool meets them.
-    pub(super) replaced_takes: Option<Replaced>,
+    /// What the first encoding of the encoder being encoded again decided of its copies taken at
+    /// use, which its encoding again takes as they did (`shadow::Takes`,
+    /// `command_buffer/reencode.rs`).
+    pub(super) replaying_takes: Takes,
+    /// What the recording a host step records a segment again in place of decided of its copies
+    /// taken at use, while the step records it: each core the step records into keeps those
+    /// takes where it meets them (`shadow::ShadowSync::over`, `EncoderCore::segment`). None
+    /// otherwise. The step holds the turn (`reencoding`), so no other recording into the command
+    /// buffer's pool meets it.
+    pub(super) step_takes: Takes,
     /// The pools of its commands' set 0 (`descriptor_arena.rs`), given back or released with
     /// the uploads.
     pub(super) descriptors: DescriptorArena,
@@ -2268,7 +2269,8 @@ impl CommandBuffer {
                 carry_batches: 1,
                 pass_runs: PassRuns::default(),
                 replaying_keeps: Vec::new(),
-                replaced_takes: None,
+                replaying_takes: Takes::default(),
+                step_takes: Takes::default(),
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,
@@ -4627,7 +4629,7 @@ impl CommandBufferShared {
                 let mut state = lock(&self.state);
                 let segment = &state.recorded[encoder].segments[at];
                 let replaced = segment.recorded.as_ref().map(|done| done.takes.clone());
-                state.replaced_takes = replaced.map(Replaced::new);
+                state.step_takes = replaced.unwrap_or_default();
             }
             let recorded = work.step(&buffer, &inputs);
             // A device test's failure of the recording (`CommandBuffer::fail_host_step`), the
@@ -4641,7 +4643,7 @@ impl CommandBufferShared {
                 }
             };
             let mut state = lock(&self.state);
-            state.replaced_takes = None;
+            state.step_takes.clear();
             match recorded {
                 Ok(done) => {
                     let segment = &mut state.recorded[encoder].segments[at];

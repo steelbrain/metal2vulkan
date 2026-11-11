@@ -5,9 +5,9 @@ use super::super::host_aliases::{self, Alias};
 use super::super::key_hash::KeyMap;
 use super::super::resource::ResourceKey;
 use super::super::shadow::{
-    self, Backing, CopyCause, ImageTruth, KeptArea, LaterLevels, LevelsCopy, Lost, Replaced,
-    ShadowBuffer, ShadowCarry, ShadowCopies, ShadowCopy, ShadowSource, ShadowSync, ShadowTarget,
-    ShadowUse, Step, Within,
+    self, Backing, CopyCause, ImageTruth, KeptArea, LaterLevels, LevelsCopy, Lost, ShadowBuffer,
+    ShadowCarry, ShadowCopies, ShadowCopy, ShadowSource, ShadowSync, ShadowTarget, ShadowUse, Step,
+    Within,
 };
 use super::super::shadow_merge::ScratchSpares;
 use super::super::tracker::{Access, Use, UseRange};
@@ -2416,18 +2416,15 @@ fn taken_at_use(buffer: ResourceKey, bytes: Range<u64>) -> Arc<ShadowCopies> {
 }
 
 /// A copy taken at use is taken by the first use encoded after its mark, which clears it. An
-/// encoding of an encoder again (`command_buffer/reencode.rs`, `ShadowSync::over`) takes it where
-/// its first encoding took it, keeping that take, and not where it did not, whatever the mark,
-/// which it leaves as it finds it: a `did_modify_data` after the first encoding is the next use's
-/// to take. The cores recorded in place of the first share its decisions (`Replaced`): the first
-/// use of the texture among them meets its take, and another decides by the mark.
+/// encoding of an encoder again (`command_buffer/reencode.rs`) takes it where its first encoding
+/// took it and not where it did not, whatever the mark, which it leaves as it finds it: a
+/// `did_modify_data` after the first encoding is the next use's to take.
 #[test]
 fn an_encoding_again_takes_a_copy_taken_at_use_where_its_first_encoding_took_it() {
     let t = taken_at_use(ResourceKey::new(), 0..4096);
     let k = t.shadow_key;
     let levels = t.levels.as_ref().expect("a copy taken at use");
     let first_use = |sync: &mut ShadowSync<u32>| moved(&planned(sync, &mut 0, &[(&t, false)], &[]));
-    let again = |takes| ShadowSync::over(Replaced::new(takes));
     // The first encoding takes it at its first use alone.
     let mut first = ShadowSync::default();
     assert_eq!(first_use(&mut first), [Moved::Into(k)]);
@@ -2438,24 +2435,17 @@ fn an_encoding_again_takes_a_copy_taken_at_use_where_its_first_encoding_took_it(
     assert_eq!(first_use(&mut later), []);
     let took_none = later.into_takes();
     // Encoded again, the first takes it again, and the mark stays clear.
-    let mut once = again(took.clone());
-    assert_eq!(first_use(&mut once), [Moved::Into(k)]);
-    assert_eq!(first_use(&mut once), []);
-    // It keeps the take: encoded again in its turn, it takes the copy there too.
-    assert_eq!(first_use(&mut again(once.into_takes())), [Moved::Into(k)]);
+    let mut again = ShadowSync::again(took.clone());
+    assert_eq!(first_use(&mut again), [Moved::Into(k)]);
+    assert_eq!(first_use(&mut again), []);
+    // An encoding again notes no take of its own.
+    assert_eq!(first_use(&mut ShadowSync::again(again.into_takes())), []);
     assert_eq!(first_use(&mut ShadowSync::default()), []);
-    // Two cores in place of the first meet its take once.
-    let shared = Replaced::new(took.clone());
-    assert_eq!(
-        first_use(&mut ShadowSync::over(shared.clone())),
-        [Moved::Into(k)]
-    );
-    assert_eq!(first_use(&mut ShadowSync::over(shared)), []);
     // After a `did_modify_data`, the later one encoded again takes nothing and the first takes it,
     // as each did; the mark stays for the next use encoded.
     levels.mark_stale();
-    assert_eq!(first_use(&mut again(took_none)), []);
-    assert_eq!(first_use(&mut again(took)), [Moved::Into(k)]);
+    assert_eq!(first_use(&mut ShadowSync::again(took_none)), []);
+    assert_eq!(first_use(&mut ShadowSync::again(took)), [Moved::Into(k)]);
     assert_eq!(first_use(&mut ShadowSync::default()), [Moved::Into(k)]);
     assert_eq!(first_use(&mut ShadowSync::default()), []);
 }
@@ -2527,7 +2517,7 @@ fn a_recording_in_place_of_another_keeps_its_takes() {
     assert_eq!(first_use(&mut commit, &t), [Moved::Into(kt)]);
     let took = commit.into_takes();
     // The step's takes t's where the commit's took it, the mark clear, and u's by its mark.
-    let mut step = ShadowSync::over(Replaced::new(took.clone()));
+    let mut step = ShadowSync::over(took.clone());
     assert_eq!(first_use(&mut step, &t), [Moved::Into(kt)]);
     assert_eq!(first_use(&mut step, &u), [Moved::Into(ku)]);
     let kept = step.into_takes();
@@ -2544,7 +2534,7 @@ fn a_recording_in_place_of_another_keeps_its_takes() {
     let mut commit = ShadowSync::default();
     assert_eq!(first_use(&mut commit, &t), [Moved::Into(kt)]);
     let took = commit.into_takes();
-    let step = ShadowSync::<u32>::over(Replaced::new(took.clone()));
+    let step = ShadowSync::<u32>::over(took.clone());
     took.give_back_unheld(&step.into_takes());
     assert_eq!(first_use(&mut ShadowSync::default(), &t), [Moved::Into(kt)]);
     // A use the commit's met and took nothing at takes nothing after a `did_modify_data`, which
@@ -2553,9 +2543,6 @@ fn a_recording_in_place_of_another_keeps_its_takes() {
     assert_eq!(first_use(&mut commit, &t), []);
     let took_none = commit.into_takes();
     levels.mark_stale();
-    assert_eq!(
-        first_use(&mut ShadowSync::over(Replaced::new(took_none)), &t),
-        []
-    );
+    assert_eq!(first_use(&mut ShadowSync::over(took_none), &t), []);
     assert_eq!(first_use(&mut ShadowSync::default(), &t), [Moved::Into(kt)]);
 }

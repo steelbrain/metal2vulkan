@@ -510,22 +510,6 @@ pub(super) struct Replayed {
     pub(super) keys: BTreeSet<ResourceKey>,
     pub(super) taken: Taken,
     pub(super) heaps: Vec<Heap>,
-    /// What its first uses of copies taken at use decided (`shadow::Takes`), its segments'
-    /// apart: the first encoding's takes kept where it met them.
-    pub(super) takes: Takes,
-}
-
-impl Replayed {
-    /// What it decided of copies taken at use, its segments' recordings' after its own
-    /// (`shadow::Takes`).
-    pub(super) fn all_takes(&self) -> Takes {
-        let mut takes = self.takes.clone();
-        let segments = self.parts.iter().flat_map(|part| &part.segments);
-        for done in segments.filter_map(|segment| segment.recorded.as_ref()) {
-            takes.join(done.takes.clone());
-        }
-        takes
-    }
 }
 
 /// One part of an encoder encoded again ([`Replayed::parts`]): its `VkCommandBuffer`s, what they
@@ -747,6 +731,10 @@ impl EncoderCore {
     ) -> Result<EncoderCore, Error> {
         let mut core = EncoderCore::segment_raw(command_buffer, ordered)?;
         core.replaying = true;
+        // Its first uses of copies taken at use take them where its first encoding's did, whose
+        // recording is never submitted (`shadow::Takes`, `command_buffer/reencode.rs`).
+        let first = command_buffer.state().replaying_takes.clone();
+        core.shadows = ShadowSync::again(first);
         Ok(core)
     }
 
@@ -756,7 +744,7 @@ impl EncoderCore {
         let (raw, keeping, replaced) = {
             let mut state = command_buffer.state();
             let raw = command_buffer.allocate_raw(&mut state)?;
-            (raw, state.keeping(), state.replaced_takes.clone())
+            (raw, state.keeping(), state.step_takes.clone())
         };
         let device = command_buffer.device().shared().vk();
         // A chunk kept for later command buffers (`kept_commands.rs`) may run in several at once.
@@ -774,12 +762,9 @@ impl EncoderCore {
             .counts
             .encoder_command_buffer_begun(Begun::Segment);
         let mut core = EncoderCore::over(command_buffer, raw, ordered);
-        // Work recorded again keeps the takes of copies taken at use of the recordings it
-        // replaces, which are never submitted (`State::replaced_takes`): a host step's, a
-        // rebind's encoding again (`command_buffer/reencode.rs`).
-        if let Some(replaced) = replaced {
-            core.shadows = ShadowSync::over(replaced);
-        }
+        // A host step's recording keeps the takes of the recording it replaces
+        // (`State::step_takes`); none elsewhere.
+        core.shadows = ShadowSync::over(replaced);
         Ok(core)
     }
 
@@ -2974,7 +2959,6 @@ impl EncoderCore {
             taken,
             fails_command_buffer,
             faults,
-            shadows,
             ..
         } = self;
         if fails_command_buffer.is_some() || faults.is_some() || taken.dead() {
@@ -3033,7 +3017,6 @@ impl EncoderCore {
             keys,
             taken,
             heaps,
-            takes: shadows.into_takes(),
         })
     }
 }
