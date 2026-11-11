@@ -215,13 +215,15 @@ impl Lane {
             .unwrap()
     }
 
-    /// A depth/stencil state testing the depth with `compare` and writing it where `write`, its
-    /// stencil test `Always` and replacing where `write`.
-    fn state(&self, compare: CompareFunction, write: bool) -> DepthStencilState {
+    /// A depth/stencil state testing the depth with `compare` and writing it where `write`, and
+    /// where the pass has a `stencil` too, its stencil test `Always` and replacing: a state that
+    /// writes a stencil the pass lacks is not this lane's (the runtime renders it through a
+    /// hidden attachment it does not make).
+    fn state(&self, compare: CompareFunction, write: bool, stencil: bool) -> DepthStencilState {
         let mut descriptor = DepthStencilDescriptor::default();
         descriptor.depth_compare_function = compare;
         descriptor.depth_write_enabled = write;
-        if write {
+        if write && stencil {
             for face in [
                 &mut descriptor.front_face_stencil,
                 &mut descriptor.back_face_stencil,
@@ -458,7 +460,7 @@ fn separate_depth_and_stencil_loaded_dont_care_and_stored_hold_metal_s_tiles() {
     let mut failures = Vec::new();
     for arrangement in [SEPARATE, COMBINED] {
         let pipeline = lane.pipeline(arrangement);
-        let writes = lane.state(CompareFunction::Always, true);
+        let writes = lane.state(CompareFunction::Always, true, true);
         let textures = lane.textures(arrangement, 128);
         let rects = RECTS
             .iter()
@@ -584,7 +586,7 @@ fn a_dont_care_load_s_clear_depth_outside_0_1_or_nan_is_clamped_or_announced() {
     let mut failures = Vec::new();
     for arrangement in [D32, D16, COMBINED, SEPARATE] {
         let pipeline = lane.pipeline(arrangement);
-        let writes = lane.state(CompareFunction::Always, true);
+        let writes = lane.state(CompareFunction::Always, true, arrangement.stencil.is_some());
         let textures = lane.textures(arrangement, side);
         for (name, value) in values {
             // Metal's held depth, and the runtime's word for it in a stored texel.
@@ -655,7 +657,7 @@ fn a_dont_care_load_s_clear_depth_outside_0_1_or_nan_is_clamped_or_announced() {
             // Not stored, under each depth test.
             let mut outcomes = Vec::new();
             for (test, compare, z) in TESTS {
-                let state = lane.state(compare, false);
+                let state = lane.state(compare, false, false);
                 let command_buffer = textures.poison(&lane);
                 let descriptor = textures.pass(
                     LoadAction::Load,
@@ -719,7 +721,7 @@ fn a_dont_care_load_s_depth16_clear_announces_the_device_s_rounding() {
     let messages = Messages::default();
     let lane = Lane::new(true, &messages, &cache);
     let pipeline = lane.pipeline(D16);
-    let untested = lane.state(CompareFunction::Always, false);
+    let untested = lane.state(CompareFunction::Always, false, false);
     let textures = lane.textures(D16, 64);
     for (clear, rounds) in [(0.0, false), (0.5, true)] {
         let command_buffer = textures.poison(&lane);
