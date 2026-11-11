@@ -22,13 +22,13 @@
 //! | per vertex, stride 4 | indices 0 to 3, base vertex `2^30` | the same | the same |
 //! | per vertex, stride 4 | indices `2^30` to `2^30 + 3` | the same | the same |
 //! | per vertex, stride 12 | vertex start 0 (the control) | 0 to 3 | the same |
-//! | per vertex, stride 12 | vertex start [`WRAP_12`] | from `WRAP_12` | 8, 20, 32, 44 |
+//! | per vertex, stride 12 | vertex start `WRAP_12` (357 913 942) | from `WRAP_12` | 8, 20, 32, 44 |
 //! | per vertex, stride 6 | vertex start 0 (the control) | 0 to 3 | the same |
-//! | per vertex, stride 6 | vertex start [`WRAP_6`] | from `WRAP_6` | 2, 8, 14, 20 |
+//! | per vertex, stride 6 | vertex start `WRAP_6` (715 827 883) | from `WRAP_6` | 2, 8, 14, 20 |
 //! | per instance, stride 4, 12, 6 | base instance 0 (the controls) | 0 to 3 | the same |
 //! | per instance, stride 4 | base instance `2^30` | `2^30` to `2^30 + 3` | 0, 4, 8, 12 |
-//! | per instance, stride 12 | base instance [`WRAP_12`] | from `WRAP_12` | 8, 20, 32, 44 |
-//! | per instance, stride 6 | base instance [`WRAP_6`] | from `WRAP_6` | 2, 8, 14, 20 |
+//! | per instance, stride 12 | base instance `WRAP_12` (357 913 942) | from `WRAP_12` | 8, 20, 32, 44 |
+//! | per instance, stride 6 | base instance `WRAP_6` (715 827 883) | from `WRAP_6` | 2, 8, 14, 20 |
 //!
 //! A 64-bit displacement puts every far element past the buffer; a 32-bit one reads inside it,
 //! at a word a 4-byte stride never starts at where the stride is 6.
