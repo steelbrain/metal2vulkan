@@ -8,8 +8,8 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy,
-    QueueSharingPolicy, RenderLoweringPolicy, UnstoredDontCarePolicy, VertexReachPolicy,
-    WideLinePolicy, YCbCrInPlacePolicy,
+    QueueSharingPolicy, RenderLoweringPolicy, UnsharedIsolationPolicy, UnstoredDontCarePolicy,
+    VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -65,9 +65,10 @@ fn choices() -> Vec<Choice> {
         // how long a pipeline being made is waited for (the bounds' values:
         // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, what a
         // blit through a compressed extended-range texture writes, which `VkQueue` a command
-        // queue submits to, what a colour attachment stored `DontCare` keeps, what a pass reads of
-        // an attachment it loads `DontCare` and does not store, and which draws pull a vertex
-        // layout past a wrapping fixed-function input.
+        // queue submits to, how much of other queues' work goes ahead of an unshared queue's, what
+        // a colour attachment stored `DontCare` keeps, what a pass reads of an attachment it loads
+        // `DontCare` and does not store, and which draws pull a vertex layout past a wrapping
+        // fixed-function input.
         heap_compression: _,
         completion: _,
         batch_order: _,
@@ -79,6 +80,7 @@ fn choices() -> Vec<Choice> {
         wide_lines: _,
         extended_range_blits: _,
         queue_sharing: _,
+        unshared_isolation: _,
         dont_care_colors: _,
         unstored_dont_care_loads: _,
         vertex_reach: _,
@@ -99,6 +101,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.wide_lines: WideLinePolicy { Device, Exact }),
         choice!(p.extended_range_blits: ExtendedRangeBlitPolicy { Kept, Canonical }),
         choice!(p.queue_sharing: QueueSharingPolicy { Adaptive, PerQueue }),
+        choice!(p.unshared_isolation: UnsharedIsolationPolicy { Bounded, Off }),
         choice!(p.dont_care_colors: DontCareColorPolicy { Driver, Kept }),
         choice!(p.unstored_dont_care_loads: UnstoredDontCarePolicy { Driver, Cleared }),
         choice!(p.vertex_reach: VertexReachPolicy { Bounded, Exact }),

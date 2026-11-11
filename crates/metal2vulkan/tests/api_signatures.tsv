@@ -1455,6 +1455,7 @@ enum	metal2vulkan::device::SpirvExtension	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan::device::StageCreateFlag	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StageCreateFlag
 enum	metal2vulkan::device::SubgroupOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SubgroupOp
 enum	metal2vulkan::device::Tier	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Tier
+enum	metal2vulkan::device::UnsharedIsolationPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum UnsharedIsolationPolicy
 enum	metal2vulkan::device::UnstoredDontCarePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum UnstoredDontCarePolicy
 enum	metal2vulkan::device::VertexReachPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VertexReachPolicy
 enum	metal2vulkan::device::VkExtension	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkExtension
@@ -2845,6 +2846,7 @@ field	metal2vulkan-runtime::WorkCounts.heads_held_for_earlier_commits	pub heads_
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_event_values	pub heads_held_for_event_values: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_host_steps	pub heads_held_for_host_steps: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_reencodes	pub heads_held_for_reencodes: u64
+field	metal2vulkan-runtime::WorkCounts.heads_held_for_unshared_isolation	pub heads_held_for_unshared_isolation: u64
 field	metal2vulkan-runtime::WorkCounts.heads_waiting_at_their_gate	pub heads_waiting_at_their_gate: u64
 field	metal2vulkan-runtime::WorkCounts.heap_arrays_copied	pub heap_arrays_copied: u64
 field	metal2vulkan-runtime::WorkCounts.heap_sample_move_images_lent	pub heap_sample_move_images_lent: u64
@@ -4140,6 +4142,7 @@ field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: Pipe
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
+field	metal2vulkan::device::DevicePolicy.unshared_isolation	pub unshared_isolation: UnsharedIsolationPolicy
 field	metal2vulkan::device::DevicePolicy.unstored_dont_care_loads	pub unstored_dont_care_loads: UnstoredDontCarePolicy
 field	metal2vulkan::device::DevicePolicy.vertex_reach	pub vertex_reach: VertexReachPolicy
 field	metal2vulkan::device::DevicePolicy.wide_lines	pub wide_lines: WideLinePolicy
@@ -13311,6 +13314,8 @@ variant	metal2vulkan::device::Tier::Emulated	Emulated
 variant	metal2vulkan::device::Tier::Linear	Linear
 variant	metal2vulkan::device::Tier::NoSubgroup	NoSubgroup
 variant	metal2vulkan::device::Tier::PartialFragment	PartialFragment
+variant	metal2vulkan::device::UnsharedIsolationPolicy::Bounded	Bounded
+variant	metal2vulkan::device::UnsharedIsolationPolicy::Off	Off
 variant	metal2vulkan::device::UnstoredDontCarePolicy::Cleared	Cleared
 variant	metal2vulkan::device::UnstoredDontCarePolicy::Driver	Driver
 variant	metal2vulkan::device::VertexReachPolicy::Bounded	Bounded

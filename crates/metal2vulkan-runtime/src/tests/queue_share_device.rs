@@ -24,6 +24,12 @@
 //!   waited for, beside an application's command buffers of about 30 ms each: once the
 //!   application's queue went long, the compositor's 99th percentile over 2 s stays under 5 ms
 //!   with at most one stall over 10 ms; on an unshared queue, from the start, with none.
+//! - **Other queues' work held back** (`unshared_hold.rs`). On a `VkQueue` an unshared queue
+//!   shares with another queue, three long command buffers of that queue committed at once:
+//!   under `UnsharedIsolationPolicy::Bounded` the second is held until the first is nearly done,
+//!   so the unshared queue's command buffer committed meanwhile runs before it; under `Off` all
+//!   three go at once and it runs after the third. Every device, a `VkQueue` shared on purpose
+//!   (`PerQueue`, the round robin wrapped).
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
@@ -37,7 +43,7 @@ use crate::{
     Buffer, CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
     ShaderCacheOptions, WorkCounts,
 };
-use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy};
+use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy, UnsharedIsolationPolicy};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -76,7 +82,18 @@ fn options(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> DeviceOptions 
 
 /// That device, its check settled.
 fn device(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> Device {
-    let device = Device::system_default_with(&options(cache, queue_sharing)).unwrap();
+    isolated(cache, queue_sharing, UnsharedIsolationPolicy::Bounded)
+}
+
+/// That device under `isolation`, its check settled.
+fn isolated(
+    cache: &Scratch,
+    queue_sharing: QueueSharingPolicy,
+    isolation: UnsharedIsolationPolicy,
+) -> Device {
+    let mut options = options(cache, queue_sharing);
+    options.policy.unshared_isolation = isolation;
+    let device = Device::system_default_with(&options).unwrap();
     assert!(device.settle_queue_switch_check(WAIT), "the check settles");
     println!("{queue_sharing:?}: {}", device.queue_switch_check_report());
     device
@@ -820,26 +837,31 @@ impl Behind {
     }
 }
 
+/// A queue `make` makes on `queue`'s `VkQueue`, made until the round robin wraps (`PerQueue`).
+fn beside(queue: &CommandQueue, make: &dyn Fn() -> CommandQueue) -> CommandQueue {
+    let at = queue.vk_queue_sharing().0;
+    let found = (0..64)
+        .map(|_| make())
+        .find(|queue| queue.vk_queue_sharing().0 == at);
+    found.expect("a queue on the other queue's VkQueue")
+}
+
 /// Two command queues on one `VkQueue` (`PerQueue`: no queue moves), a long command buffer of
 /// about 30 ms of GPU time, then a short one (`queue_wait.rs`). From the same queue the short one
 /// waits behind nothing of another's; from another queue it counts one wait, as long as the long
 /// one's work left at its submission at least and the host's time around it at most, over 16 and
-/// 33 ms as it is; from an unshared queue, one in the unshared tallies too.
+/// 33 ms as it is; from an unshared queue, one in the unshared tallies too. Under
+/// `UnsharedIsolationPolicy::Off`: the short ones go at once, behind the whole long one.
 #[test]
 fn a_command_buffer_behind_another_queue_s_long_one_counts_its_wait() {
     let scratch = Scratch::new("queue-wait");
-    let device = device(&scratch, QueueSharingPolicy::PerQueue);
+    let off = UnsharedIsolationPolicy::Off;
+    let device = isolated(&scratch, QueueSharingPolicy::PerQueue, off);
     let long_queue = device.new_command_queue().unwrap();
-    let at = long_queue.vk_queue_sharing().0;
-    // Queues made until one is on the long queue's `VkQueue`: the round robin wraps.
-    let beside = |make: &dyn Fn() -> CommandQueue| {
-        let queue = (0..64)
-            .map(|_| make())
-            .find(|queue| queue.vk_queue_sharing().0 == at);
-        queue.expect("a queue on the long queue's VkQueue")
-    };
-    let other = beside(&|| device.new_command_queue().unwrap());
-    let unshared = beside(&|| device.new_command_queue_unshared(64).unwrap());
+    let other = beside(&long_queue, &|| device.new_command_queue().unwrap());
+    let unshared = beside(&long_queue, &|| {
+        device.new_command_queue_unshared(64).unwrap()
+    });
     let big = device
         .new_buffer(FILL_BYTES, ResourceOptions::private())
         .unwrap();
@@ -904,4 +926,82 @@ fn a_command_buffer_behind_another_queue_s_long_one_counts_its_wait() {
         longest,
         wait.max(run.before.wait_behind_other_queues_longest_nanos)
     );
+}
+
+/// Under `UnsharedIsolationPolicy::Bounded` (the default), three long command buffers of about
+/// 30 ms committed at once on a `VkQueue` an unshared queue shares with theirs go one at a time,
+/// each held until the one ahead is nearly done (`unshared_hold.rs`), so the unshared queue's
+/// small command buffer committed once the first was scheduled runs before the second; under
+/// `Off` all three go at once, and it runs after the third. Their queue's expected run is a long
+/// one's first: four run one at a time beforehand.
+#[test]
+fn an_unshared_queue_s_command_buffer_goes_ahead_of_other_queues_held_work() {
+    for isolation in [
+        UnsharedIsolationPolicy::Bounded,
+        UnsharedIsolationPolicy::Off,
+    ] {
+        let scratch = Scratch::new(&format!("unshared-hold-{isolation:?}"));
+        let device = isolated(&scratch, QueueSharingPolicy::PerQueue, isolation);
+        let app = device.new_command_queue().unwrap();
+        let unshared = beside(&app, &|| device.new_command_queue_unshared(64).unwrap());
+        let big = device
+            .new_buffer(FILL_BYTES, ResourceOptions::private())
+            .unwrap();
+        let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let fills = long_fills(&app, &big);
+        let warm = long(&app, &big, fills);
+        warm.commit().unwrap();
+        warm.wait_until_completed_for(WAIT).unwrap();
+        let before = device.work_counts();
+        let longs: Vec<CommandBuffer> = (0..3)
+            .map(|_| {
+                let command_buffer = long(&app, &big, fills);
+                command_buffer.commit().unwrap();
+                command_buffer
+            })
+            .collect();
+        longs[0].wait_until_scheduled().unwrap();
+        let short = unshared.command_buffer().unwrap();
+        let mut blit = short.blit_command_encoder().unwrap();
+        blit.fill_buffer(&small, 0..256, 1).unwrap();
+        blit.end_encoding().unwrap();
+        short.commit().unwrap();
+        short.wait_until_completed_for(WAIT).unwrap();
+        for command_buffer in &longs {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+        }
+        let after = device.work_counts();
+        let times = |command_buffer: &CommandBuffer| {
+            let start = command_buffer.gpu_start_time().unwrap();
+            (start, command_buffer.gpu_end_time().unwrap())
+        };
+        let ((s0, e0), (s1, e1), (s2, e2)) = (times(&longs[0]), times(&longs[1]), times(&longs[2]));
+        let (ss, se) = times(&short);
+        let held =
+            after.heads_held_for_unshared_isolation - before.heads_held_for_unshared_isolation;
+        println!(
+            "{isolation:?}: long ones {:.1}-{:.1}, {:.1}-{:.1}, {:.1}-{:.1} ms, the unshared one \
+             {:.1}-{:.1} ms; GPU idle between the long ones {:.2} and {:.2} ms; {held} looks held",
+            0.0,
+            (e0 - s0) * 1e3,
+            (s1 - s0) * 1e3,
+            (e1 - s0) * 1e3,
+            (s2 - s0) * 1e3,
+            (e2 - s0) * 1e3,
+            (ss - s0) * 1e3,
+            (se - s0) * 1e3,
+            (s1 - e0.max(se)) * 1e3,
+            (s2 - e1) * 1e3,
+        );
+        match isolation {
+            UnsharedIsolationPolicy::Bounded => {
+                assert!(se <= s1 + 0.001, "the unshared one ran before the second");
+                assert!(held > 0, "a long one was held");
+            }
+            _ => {
+                assert!(ss >= e2 - 0.001, "the unshared one ran after the third");
+                assert_eq!(held, 0, "none held");
+            }
+        }
+    }
 }

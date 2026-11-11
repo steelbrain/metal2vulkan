@@ -5787,7 +5787,7 @@ pub struct WorkCounts {
     pub groups_sent_for_waits: u64,
     /// Times the scheduler looked for the next batch to submit and found a logical queue's first
     /// committed batch held for a binary semaphore it waits for whose signal is not submitted
-    /// (`encode_wait_for_vk_semaphore`). With the five fields after this one, every reason a look
+    /// (`encode_wait_for_vk_semaphore`). With the seven fields after this one, every reason a look
     /// of the scheduler's did not submit a head, each counted at every look that found it, so a
     /// head held through many looks is counted at each: the spread says what holds a device's
     /// submissions back. A head held for more than one reason is counted under each, so these do
@@ -5823,6 +5823,12 @@ pub struct WorkCounts {
     /// resident, the records, and the encoder's bindings its commands inherit), which conflicts
     /// with what shares those.
     pub heads_held_for_earlier_commits: u64,
+    /// Heads found held back from a `VkQueue` that a command queue made with
+    /// `Device::new_command_queue_unshared` shares with theirs, because 2 ms or more of other
+    /// queues' expected GPU work was in flight there (`unshared_hold.rs`,
+    /// `UnsharedIsolationPolicy::Bounded`): the unshared queue's next command buffer goes in
+    /// behind about one batch of theirs.
+    pub heads_held_for_unshared_isolation: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
     /// the GPU may write, so it waits until every `VkQueue` completed what was submitted to it
     /// when the batch was otherwise ready (a predicated loop's check waits for its own `VkQueue`
@@ -8714,6 +8720,7 @@ impl Device {
             heads_held_for_checks: held_for(HeldFor::Check),
             heads_held_for_event_values: held_for(HeldFor::EventValue),
             heads_held_for_earlier_commits: held_for(HeldFor::EarlierCommit),
+            heads_held_for_unshared_isolation: held_for(HeldFor::UnsharedIsolation),
             heads_waiting_at_their_gate: counters
                 .heads_waiting_at_their_gate
                 .load(Ordering::Relaxed),

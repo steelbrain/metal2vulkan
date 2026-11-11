@@ -239,6 +239,7 @@ surface! {
         enum WideLinePolicy N;
         enum ExtendedRangeBlitPolicy N;
         enum QueueSharingPolicy N;
+        enum UnsharedIsolationPolicy N;
         enum DontCareColorPolicy N;
         enum UnstoredDontCarePolicy N;
         enum VertexReachPolicy N;

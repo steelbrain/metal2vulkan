@@ -4340,6 +4340,24 @@ impl CommandBufferShared {
         &self.device
     }
 
+    /// Where a batch of it, otherwise ready, is held back from its `VkQueue` for an unshared
+    /// queue there (`unshared_hold.rs`): that `VkQueue`'s index, and in how many nanoseconds the
+    /// work left ahead there falls under the budget where it does before its next completion;
+    /// `None` where it may go.
+    pub(crate) fn held_for_unshared(&self) -> Option<(usize, Option<u64>)> {
+        if self.queue.unshared() {
+            return None;
+        }
+        let index = self.queue.vk_queue();
+        if !self.device.holds_back_for_unshared(index) {
+            return None;
+        }
+        match self.device.shared().queues[index].waits.hold_ahead() {
+            crate::unshared_hold::Room::Go => None,
+            crate::unshared_hold::Room::Hold { after } => Some((index, after)),
+        }
+    }
+
     /// This thread doing the command buffer's work until the guard goes
     /// ([`CommandBuffer::notices_for`]).
     pub(super) fn notices_for(&self) -> NoticesFor {

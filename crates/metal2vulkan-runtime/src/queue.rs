@@ -229,6 +229,9 @@ struct QueueShared {
     /// Its command buffers Metal's GPU hangs at that are in flight, and those committed with an
     /// event wait meanwhile (`command_buffer/hang.rs`).
     hangs: Arc<QueueHangs>,
+    /// The expected run of its batches, where they are held back from a `VkQueue` an unshared
+    /// queue holds (`unshared_hold.rs`).
+    expected: Arc<crate::unshared_hold::Expected>,
 }
 
 /// A queue's slots: one per uncompleted command buffer, at most `max`.
@@ -583,6 +586,7 @@ impl Device {
             kept_images: KeptImages::default(),
             copy_images: CopyImages::default(),
             hangs: Arc::default(),
+            expected: Arc::default(),
         }))
     }
 }
@@ -887,6 +891,11 @@ impl QueueGen {
     /// Whether it was made with `Device::new_command_queue_unshared`.
     pub(super) fn unshared(&self) -> bool {
         self.0.kind == Kind::Unshared
+    }
+
+    /// The expected run of its batches (`unshared_hold.rs`).
+    pub(super) fn expected(&self) -> &Arc<crate::unshared_hold::Expected> {
+        &self.0.expected
     }
 
     /// The index of the device's `VkQueue` the queue submits to: the same from one of its command

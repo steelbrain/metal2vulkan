@@ -1236,7 +1236,11 @@ impl CommandBufferShared {
             unshared: self.queue.unshared(),
         });
         let completed = || on.completed_value();
-        (on.waits).taken(at.value, self.queue.id(), first, completed, &shared.counts);
+        // Its place in the `VkQueue`'s flight, where an unshared queue holds it
+        // (`unshared_hold.rs`).
+        let flies = device.flies(queue, self.queue.unshared(), self.queue.expected());
+        let taken = (at.value, self.queue.id(), flies);
+        (on.waits).taken(taken, first, completed, &shared.counts);
         for image in &images {
             image.submitted();
             // One that rests in `GENERAL` from now on (an encode-time image after its first

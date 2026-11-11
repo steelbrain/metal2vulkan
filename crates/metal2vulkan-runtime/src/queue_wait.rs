@@ -66,6 +66,9 @@ struct Ahead {
     runs: VecDeque<(u64, u64)>,
     /// The number of the last run kept.
     run: u64,
+    /// Its batches in flight, where an unshared queue holds it: what other queues' batches the
+    /// scheduler holds back are held against (`unshared_hold.rs`).
+    flight: crate::unshared_hold::Flight,
 }
 
 /// A command buffer's wait behind another command queue's batch, being timed.
@@ -110,15 +113,16 @@ impl QueueWaits {
     /// value the host saw the timeline reach, read under this lock: a completion that published a
     /// higher value before this lock was taken is seen here, one after takes the wait), the
     /// command buffer waits behind it: counted, and timed to that batch's completion.
+    /// It enters the `VkQueue`'s flight as `flies` says (`unshared_hold.rs`).
     pub(crate) fn taken(
         &self,
-        value: u64,
-        queue: u64,
+        (value, queue, flies): (u64, u64, crate::unshared_hold::Flies<'_>),
         first: Option<First>,
         completed: impl FnOnce() -> u64,
         counts: &Counters,
     ) {
         let mut ahead = lock(&self.0);
+        ahead.flight.taken(value, flies);
         let through = match ahead.last {
             Some((last, by)) if by != queue => {
                 ahead.other = last;
@@ -150,12 +154,14 @@ impl QueueWaits {
     }
 
     /// The host saw the timeline reach `value`, published before this call: each wait for a batch
-    /// at or below it ends now.
+    /// at or below it ends now, and each batch at or below it leaves the flight, its run seen
+    /// (`unshared_hold.rs`).
     pub(crate) fn completed(&self, value: u64, counts: &Counters) {
         let mut ahead = lock(&self.0);
         let now = crate::gpu_time::host_nanos();
         let length = now.saturating_sub(ahead.head_from);
         ahead.head_from = now;
+        ahead.flight.completed(value, length);
         if !ahead.timed.is_empty() {
             ahead.run += 1;
             let run = ahead.run;
@@ -190,5 +196,13 @@ impl QueueWaits {
         if ahead.timed.is_empty() {
             ahead.runs.clear();
         }
+    }
+
+    /// Whether another command queue's batch may go to this `VkQueue` now, held against its
+    /// flight (`unshared_hold.rs`).
+    pub(crate) fn hold_ahead(&self) -> crate::unshared_hold::Room {
+        let ahead = lock(&self.0);
+        let ran = crate::gpu_time::host_nanos().saturating_sub(ahead.head_from);
+        ahead.flight.ahead(ran)
     }
 }
