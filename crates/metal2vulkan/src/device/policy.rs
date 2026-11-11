@@ -4,18 +4,19 @@
 use crate::device::profile::{GuestIsolation, HandleDomain, PointerDomain};
 use std::time::Duration;
 
-/// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
-/// `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
-/// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
-/// `queue_sharing`, `dont_care_colors` and `unstored_dont_care_loads` can change emitted code, so
+/// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`, `batch_order`,
+/// `render_lowering`, `host_page_textures`, `pipeline_waits`, `pipeline_creation_wait`,
+/// `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`, `queue_sharing`,
+/// `dont_care_colors`, `unstored_dont_care_loads` and `vertex_reach` can change emitted code, so
 /// the profile carries it (containment as the encoding it selects) and its fingerprint covers it;
-/// those thirteen are the runtime's alone (a heap's compressed texture's image, when the host sees a command buffer
-/// complete, how a batch begins after the earlier ones of its queue, where a render encoder's calls
-/// are lowered, what holds a sampled texture over host pages, whether and how long a pipeline the
-/// driver is still making is waited for, which lines draw a wide line, what a blit through a
-/// compressed extended-range texture writes, which `VkQueue` a command queue submits to, what
-/// a colour attachment stored `DontCare` keeps, and what a pass reads of an attachment it loads
-/// `DontCare` and does not store), and no profile carries them.
+/// those fourteen are the runtime's alone (a heap's compressed texture's image, when the host sees
+/// a command buffer complete, how a batch begins after the earlier ones of its queue, where a
+/// render encoder's calls are lowered, what holds a sampled texture over host pages, whether and
+/// how long a pipeline the driver is still making is waited for, which lines draw a wide line, what
+/// a blit through a compressed extended-range texture writes, which `VkQueue` a command queue
+/// submits to, what a colour attachment stored `DontCare` keeps, what a pass reads of an attachment
+/// it loads `DontCare` and does not store, and which draws fetch a vertex layout in the shader
+/// where the device's fixed-function input would wrap past 4 GiB), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -112,6 +113,13 @@ pub struct DevicePolicy {
     /// cleared on every driver, so the pass's draws read Metal's answer wherever they read it.
     /// The runtime's choice alone: no emitted code changes.
     pub unstored_dont_care_loads: UnstoredDontCarePolicy,
+    /// Whether, on a driver whose fixed-function vertex input takes an element's displacement
+    /// modulo `2^32` (`RuntimeDriverDefect::VertexFetchWrapsPast4GiB`), a draw pulls a vertex
+    /// layout in the shader only where its own values may fetch it past `2^32` bytes of its bind
+    /// offset (the default), or also where GPU memory states how far it fetches: an indexed draw
+    /// of 32-bit indices, an indirect draw. The runtime's choice alone: no emitted code of a
+    /// pipeline changes, the pulled layouts being a variant of their own.
+    pub vertex_reach: VertexReachPolicy,
 }
 
 impl DevicePolicy {
@@ -123,8 +131,9 @@ impl DevicePolicy {
     /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit), a
     /// wide line the device's own wherever it draws the width, command queues sharing
     /// `VkQueue`s where the device's GPU idles between work of different ones, a colour stored
-    /// `DontCare` stored as the driver stores it, and an attachment loaded `DontCare` and not
-    /// stored cleared where its driver clears it no slower.
+    /// `DontCare` stored as the driver stores it, an attachment loaded `DontCare` and not stored
+    /// cleared where its driver clears it no slower, and a vertex layout pulled past a wrapping
+    /// fixed-function input only where the draw's own values reach past 4 GiB.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -145,6 +154,7 @@ impl DevicePolicy {
         queue_sharing: QueueSharingPolicy::Adaptive,
         dont_care_colors: DontCareColorPolicy::Driver,
         unstored_dont_care_loads: UnstoredDontCarePolicy::Driver,
+        vertex_reach: VertexReachPolicy::Bounded,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -166,9 +176,11 @@ impl DevicePolicy {
     /// texels ([`ExtendedRangeBlitPolicy::Canonical`]), every command queue on the `VkQueue`
     /// it took at its creation ([`QueueSharingPolicy::PerQueue`]), and every colour attachment of a
     /// texture's own image stored `DontCare` keeping its earlier texels
-    /// ([`DontCareColorPolicy::Kept`]), and every attachment loaded `DontCare` and not stored
-    /// cleared in a pass whose draws reach a tile ([`UnstoredDontCarePolicy::Cleared`]). Every
-    /// other field is kept.
+    /// ([`DontCareColorPolicy::Kept`]), every attachment loaded `DontCare` and not stored cleared
+    /// in a pass whose draws reach a tile ([`UnstoredDontCarePolicy::Cleared`]), and every vertex
+    /// layout a draw may fetch past 4 GiB of its bind offset pulled where the device's
+    /// fixed-function input wraps there, wherever the draw's reach is stated
+    /// ([`VertexReachPolicy::Exact`]). Every other field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -184,6 +196,7 @@ impl DevicePolicy {
             queue_sharing: QueueSharingPolicy::PerQueue,
             dont_care_colors: DontCareColorPolicy::Kept,
             unstored_dont_care_loads: UnstoredDontCarePolicy::Cleared,
+            vertex_reach: VertexReachPolicy::Exact,
             ..self
         }
     }
@@ -578,4 +591,37 @@ pub enum UnstoredDontCarePolicy {
     /// reads it. On lavapipe a 3648x2038 pass of an `RG16Float` colour and a
     /// `Depth32Float_Stencil8` so loaded costs about 3.3 ms more of its CPU's time.
     Cleared,
+}
+
+/// Which draws pull a vertex layout in the shader on a driver whose fixed-function vertex input
+/// takes an element's displacement (`element · stride`) modulo `2^32`
+/// (`RuntimeDriverDefect::VertexFetchWrapsPast4GiB`: lavapipe), where Metal takes it in 64 bits:
+/// an element past `2^32` bytes of the bind offset of a buffer that ends before them reads zero on
+/// Metal (an Apple M3 Max under macOS 27.0.1, the conformance case
+/// `vertex-fetch-past-4gib-small-buffer`) and the bytes at its displacement's low 32 bits there.
+/// The pulled fetch reads the bytes past `2^32` as zero (`lower::stage_io::fetch`), Metal's answer
+/// wherever the buffer ends before them. On every other driver no draw pulls a layout for its
+/// reach under either value. The runtime's choice alone: no emitted code of a pipeline changes,
+/// the pulled layouts being the pulled-vertex-buffer variant (`VariantKey::pulled_vertex_buffers`).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum VertexReachPolicy {
+    /// Pulled where the draw's own values may reach past `2^32` bytes of the bind offset (the
+    /// default): the furthest element a draw without indices fetches (its last vertex), a draw of
+    /// 16-bit indices (`65535` plus its base vertex), and a per-instance layout (its base instance
+    /// plus its last instance over the step rate), times the stride, plus the end of the layout's
+    /// furthest attribute. Such draws are rare, so no other draw pays anything. A layout an
+    /// indexed draw of 32-bit indices fetches per vertex, and one an indirect draw fetches, stays
+    /// in fixed function: an element past `2^32` bytes that its indices or arguments name reads
+    /// its wrapped displacement's bytes. Announced `vertex-fetch-may-wrap` at the first such
+    /// draw.
+    #[default]
+    Bounded,
+    /// Pulled also where GPU memory states the reach: every layout of a nonzero stride that an
+    /// indexed draw of 32-bit indices fetches per vertex, or that an indirect draw fetches, on
+    /// such a driver, so every element reads Metal's bytes. Such a draw runs the pipeline's
+    /// pulled-vertex-buffer variant, one more pipeline beside the fixed-function one where the
+    /// state also draws otherwise, and fetches those layouts in its vertex shader.
+    Exact,
 }

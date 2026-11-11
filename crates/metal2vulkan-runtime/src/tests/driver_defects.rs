@@ -37,6 +37,7 @@ const VOLUME_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::VolumeBlitsUnfilt
 const ALIASED_BLITS: RuntimeDriverDefect = RuntimeDriverDefect::AliasedImportBlitsUnordered;
 const VOLUME_RESOLVES: RuntimeDriverDefect = RuntimeDriverDefect::VolumeResolveFirstPlane;
 const TRIMS: RuntimeDriverDefect = RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission;
+const WRAPS: RuntimeDriverDefect = RuntimeDriverDefect::VertexFetchWrapsPast4GiB;
 
 /// Every committed profile's driver has its defects at every release and GPU but those a probe
 /// found clean: MoltenVK the multisampled depth/stencil colour copies, the inexact depths past
@@ -52,8 +53,8 @@ const TRIMS: RuntimeDriverDefect = RuntimeDriverDefect::TrimmedCommandBufferFail
 /// Vulkan states and the blits through two imports of the same host pages a barrier does not
 /// order; lavapipe the
 /// colour copies, the depth/stencil resolve of the first layer and level, the explicit plane's
-/// rows past its height, the baked samplers lost after a copy and the 10-bit codes its Y′CbCr
-/// conversion reads as words;
+/// rows past its height, the baked samplers lost after a copy, the 10-bit codes its Y′CbCr
+/// conversion reads as words and the fixed-function vertex fetch that wraps past 4 GiB;
 /// RADV the multisampled copies that convert float NaNs, the 10-bit codes its Y′CbCr conversion
 /// reads as words, the color resolve into a 3D image's first plane whatever plane its view begins
 /// at, and the implicit
@@ -103,7 +104,14 @@ fn the_committed_profiles_drivers_have_their_defects() {
                 ]
             }
             Some(DriverId::MESA_LLVMPIPE) => {
-                vec![COPIES, RESOLVES, PAST_HEIGHT, BAKED_SAMPLERS, TEN_BIT_WORDS]
+                vec![
+                    COPIES,
+                    RESOLVES,
+                    PAST_HEIGHT,
+                    BAKED_SAMPLERS,
+                    TEN_BIT_WORDS,
+                    WRAPS,
+                ]
             }
             // The 780M, under Phoenix's `deviceID` and Hawk Point's.
             Some(DriverId::MESA_RADV) if matches!(desc.device_id, 0x15bf | 0x1900) => {

@@ -444,6 +444,8 @@ mod extra_colors;
 mod failed_commits;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod families;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod far_vertex_fetches;
 mod fatal_signals;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod fence_stages;

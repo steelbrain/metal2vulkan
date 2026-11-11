@@ -28,7 +28,10 @@
 //!   bind offset whose alignment class misses an attribute's Vulkan alignment; a per-bind stride
 //!   past `maxVertexInputBindingStride`, not a multiple of the alignment, breaking the portability
 //!   subset's stride rule, or as dynamic state below an element's attributes) names its layout in
-//!   the plan's pulled-vertex-buffer variant, which pulls the layout's attributes; a pipeline
+//!   the plan's pulled-vertex-buffer variant, which pulls the layout's attributes, and so does a
+//!   binding whose layout the shape names among those the device cannot fetch for the draw
+//!   (`BindShape::far_vertex_buffers`: one a draw may fetch past `2^32` bytes of its bind offset
+//!   on a driver whose fixed-function input wraps there); a pipeline
 //!   compiled under such a variant keeps naming its layouts, so the key is a fixed point. Per draw,
 //!   a binding's extent is the bytes its vertex or instance range fetches, and with dynamic strides
 //!   every binding's stride is listed.
@@ -2229,7 +2232,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 fetchable(&planned, &vertex_strides, offset_alignment, per_bind)
             }
         };
-        if !fetchable {
+        // A layout the device cannot fetch for the draw (`BindShape::far_vertex_buffers`) is
+        // pulled as an unfetchable bind's is.
+        if !fetchable || shape.far_vertex_buffers.contains(&vb.buffer_index) {
             pulled_vertex_buffers.insert(vb.buffer_index);
         }
         vertex_buffers.push(VertexBufferBind {

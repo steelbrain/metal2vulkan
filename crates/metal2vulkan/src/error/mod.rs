@@ -1115,6 +1115,17 @@ pub enum RuntimeDriverDefect {
     /// runtime frees command buffers without trimming their pools there, and the driver keeps
     /// what it holds of them for the pools' later command buffers.
     TrimmedCommandBufferFailsResubmission,
+    /// The fixed-function vertex input takes an element's displacement from the bind offset
+    /// (`element · stride`) modulo `2^32`, where Vulkan places the attribute at that displacement
+    /// whole (Vertex Input Address Calculation) and, under `robustBufferAccess2`, reads zero for an
+    /// attribute outside the bound range: an element past `2^32` bytes of a small buffer's bind
+    /// offset reads the bytes at its displacement's low 32 bits. Nothing is refused: a draw whose
+    /// own values may fetch a fixed-function layout past `2^32` bytes pulls that layout in its
+    /// vertex shader there, whose fetch reads the bytes past them as zero, Metal's answer past a
+    /// buffer that ends before them; a draw whose indices or arguments state its reach (32-bit
+    /// indices, an indirect draw) pulls it under `VertexReachPolicy::Exact` and is announced
+    /// otherwise (`vertex-fetch-may-wrap`).
+    VertexFetchWrapsPast4GiB,
 }
 
 /// One device capability a refusal can name.

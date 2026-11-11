@@ -269,7 +269,7 @@ pub enum Policy {
     /// `Uncompressed`, `completion` `Exact`, `batch_order` `Exact`, `render_lowering` `AtCall`,
     /// `host_page_textures` `Shadow`, `half_chains` `EachOperation`, `pipeline_waits` `Exact`,
     /// `wide_lines` `Exact`, `extended_range_blits` `Canonical`, `queue_sharing` `PerQueue`,
-    /// `dont_care_colors` `Kept` and `unstored_dont_care_loads` `Cleared`.
+    /// `dont_care_colors` `Kept`, `unstored_dont_care_loads` `Cleared` and `vertex_reach` `Exact`.
     Exact,
     /// The runtime's own defaults: the fast form of every choice, which is what a consumer runs.
     Default,

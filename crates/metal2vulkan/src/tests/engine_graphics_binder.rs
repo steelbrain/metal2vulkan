@@ -311,6 +311,24 @@ fn a_render_pipeline_plans_and_draws() {
             ),
             "{stem}"
         );
+        // A layout the device cannot fetch for the draw (`BindShape::far_vertex_buffers`) is the
+        // plan's pulled variant too; one the pipeline fetches in no fixed-function binding is
+        // left as it is.
+        let mut far = state.clone();
+        far.far_vertex_buffers = BTreeSet::from([0]);
+        assert_eq!(
+            p.plan(&dev, &far.shape())
+                .expect("plan")
+                .variant
+                .pulled_vertex_buffers,
+            BTreeSet::from([0]),
+            "{stem}"
+        );
+        far.far_vertex_buffers = BTreeSet::from([7]);
+        assert!(
+            p.plan(&dev, &far.shape()).expect("plan").variant.is_empty(),
+            "{stem}"
+        );
         // Every push range of the layout is written once, over its whole range.
         for r in &p.layout.push_constants {
             let w = cmds

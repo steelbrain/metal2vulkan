@@ -952,6 +952,10 @@ struct RoutedDraw {
     shape_token: Option<ShapeToken>,
     /// The index type its de-indexed variant reads ([`primitive_id_indices`]).
     primitive_id_indices: Option<IndexType>,
+    /// Its fixed-function layouts the device cannot fetch for it past 4 GiB, which it pulls
+    /// (`BindState::far_vertex_buffers`), and one it leaves unchecked
+    /// (`render/vertex_reach.rs`).
+    far: vertex_reach::FarLayouts,
 }
 
 /// The render encoder state one draw takes, statically or as dynamic state, in Vulkan's terms
@@ -8308,6 +8312,7 @@ impl RenderLowering {
                     routed.primitive_id_indices,
                     routed.private,
                     routed.provoking_forms,
+                    &routed.far.pulled,
                 ),
                 (&pass_start, &sampler_maps),
                 (&mut argument_samplers, &mut unlisted),
@@ -8345,6 +8350,7 @@ impl RenderLowering {
             settings,
             hidden,
             shape_token,
+            far,
             ..
         } = routed;
         let (topology, primitive_restart) = (settings.topology, settings.primitive_restart);
@@ -8458,6 +8464,28 @@ impl RenderLowering {
                     )
                 });
             }
+        }
+        // A draw that pulls a fixed-function layout the device would fetch past 4 GiB wrapped is
+        // counted; one that leaves such a layout to it where GPU memory states the reach, under
+        // the bounded policy, runs announced (`render/vertex_reach.rs`).
+        if !far.pulled.is_empty() {
+            self.core.counts().far_vertex_fetch_pulled_draw();
+        }
+        if let Some(buffer_index) = far.unchecked {
+            self.core
+                .device()
+                .degrade(Degradation::VertexFetchMayWrap, || {
+                    (
+                        format!(
+                        "{call}: vertex buffer {buffer_index}, fetched in fixed function by a draw \
+                         whose indices or arguments state how far it fetches"
+                    ),
+                        "the device's fixed-function vertex input takes an element's displacement \
+                     modulo 2^32, and the policy pulls a layout only where the draw's own values \
+                     reach past it (VertexReachPolicy::Bounded)"
+                            .to_owned(),
+                    )
+                });
         }
         // The pass's fragment imageblock storage: one cell's and alignment's, and no tile
         // dispatch's aliased layout past the attachments beside it (`fragment_imageblock.rs`).
@@ -11238,6 +11266,12 @@ impl RenderLowering {
             None => primitive_id_indices(pipeline, draw),
             Some(_) => None,
         };
+        // Its fixed-function layouts the device cannot fetch for it past 4 GiB
+        // (`render/vertex_reach.rs`): none in a form that pulls every attribute.
+        let far = match private.private_list || primitive_id_indices.is_some() {
+            true => vertex_reach::FarLayouts::default(),
+            false => self.far_vertex_buffers(pipeline.base(), draw),
+        };
         Ok(RoutedDraw {
             provoking,
             provoking_forms,
@@ -11248,6 +11282,7 @@ impl RenderLowering {
             hidden,
             shape_token,
             primitive_id_indices,
+            far,
         })
     }
 
@@ -11326,7 +11361,9 @@ impl RenderLowering {
     /// Bring `live`, the encoder's kept bind state, to the bind state a draw of `pipeline` under
     /// `settings` binds in, reading its indices as `primitive_id_indices` says (`BindState::
     /// primitive_id_indices`, [`primitive_id_indices`]), a private type's list as `private` says
-    /// (`BindState::quad_primitive_ids` and `private_list`, [`PrivateForm`]),
+    /// (`BindState::quad_primitive_ids` and `private_list`, [`PrivateForm`]), the fixed-function
+    /// layouts it pulls past 4 GiB as `far` says (`BindState::far_vertex_buffers`,
+    /// `render/vertex_reach.rs`),
     /// its triangles' barycentric weights and an emulated mesh's corners as `provoking` says
     /// (`BindState::rotated_weights` and `mesh_last_first`, `render/provoking.rs`),
     /// its vertex, object and mesh tables
@@ -11341,12 +11378,13 @@ impl RenderLowering {
     fn settle_draw(
         &self,
         live: &mut LiveBind,
-        (pipeline, settings, primitive_id_indices, private, provoking): (
+        (pipeline, settings, primitive_id_indices, private, provoking, far): (
             &DrawingState,
             &DrawSettings,
             Option<IndexType>,
             PrivateForm,
             ProvokingForms,
+            &BTreeSet<u32>,
         ),
         (pass_start, sampler_maps): (&PassStartTables, &SamplerMaps),
         (argument_samplers, unlisted): (&mut ArgumentSamplers, &mut Option<(u64, u64)>),
@@ -11388,6 +11426,7 @@ impl RenderLowering {
             reshape.field(&mut state.primitive_id_indices, primitive_id_indices);
             reshape.field(&mut state.quad_primitive_ids, private.quad_primitive_ids);
             reshape.field(&mut state.private_list, private.private_list);
+            reshape.field_from(&mut state.far_vertex_buffers, far);
             reshape.field(&mut state.rotated_weights, provoking.rotated_weights);
             reshape.field(&mut state.mesh_last_first, provoking.mesh_last_first);
             reshape.field_from(&mut state.dropped_colors, &colors.dropped);

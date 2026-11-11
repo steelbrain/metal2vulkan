@@ -1890,6 +1890,8 @@ impl RenderLowering {
         let function_tables = state.function_tables();
         let pass_start = PassStartTables::default();
         let sampler_maps = self.sampler_maps(state, &pass_start)?;
+        // The commands' own arguments, which decide the layouts a draw pulls past 4 GiB
+        // (`render/vertex_reach.rs`), are the step's: none here.
         let settled = self.settle_draw(
             live,
             (
@@ -1898,6 +1900,7 @@ impl RenderLowering {
                 None,
                 PrivateForm::default(),
                 ProvokingForms::default(),
+                &BTreeSet::new(),
             ),
             (&pass_start, &sampler_maps),
             (&mut argument_samplers, &mut None),

@@ -650,6 +650,7 @@ struct CommandCounters {
     device_wide_line_draws: AtomicU64,
     line_band_draws: AtomicU64,
     nearest_width_line_draws: AtomicU64,
+    far_vertex_fetch_pulled_draws: AtomicU64,
     gathered_draws: AtomicU64,
     bounded_run_draws: AtomicU64,
     tile_dispatches_recorded: AtomicU64,
@@ -1061,6 +1062,13 @@ impl Counting<'_> {
     /// they draw (`render/line_width.rs`).
     pub(crate) fn nearest_width_line_draw(&self) {
         self.0.add(|counts| &counts.nearest_width_line_draws, 1);
+    }
+
+    /// A draw pulled a fixed-function layout the device would fetch past 4 GiB wrapped
+    /// (`render/vertex_reach.rs`).
+    pub(crate) fn far_vertex_fetch_pulled_draw(&self) {
+        self.0
+            .add(|counts| &counts.far_vertex_fetch_pulled_draws, 1);
     }
 
     /// A direct indexed draw drawn as a list joined a run of the index gather pass, which writes
@@ -6459,6 +6467,12 @@ pub struct WorkCounts {
     /// and lines and edges without `tessellationShader` or of a pipeline state whose band the
     /// translator refuses among them.
     pub nearest_width_line_draws: u64,
+    /// Draws that pulled a vertex layout their pipeline fetches in fixed function, because they
+    /// may fetch it past `2^32` bytes of its bind offset on a device whose fixed-function vertex
+    /// input takes that displacement modulo `2^32`
+    /// (`metal2vulkan::error::RuntimeDriverDefect::VertexFetchWrapsPast4GiB`): each draw that
+    /// took every step and settled so (`BindState::far_vertex_buffers`).
+    pub far_vertex_fetch_pulled_draws: u64,
     /// Draws drawn as a list (a restarted strip's, a private primitive type's, or one led by its
     /// primitives' last vertices) whose list a run wrote: the index gather pass's (one dispatch
     /// for a run of direct indexed draws over one index buffer, or of indirect draws after one
@@ -8832,6 +8846,7 @@ impl Device {
             device_wide_line_draws: commands(|counts| &counts.device_wide_line_draws),
             line_band_draws: commands(|counts| &counts.line_band_draws),
             nearest_width_line_draws: commands(|counts| &counts.nearest_width_line_draws),
+            far_vertex_fetch_pulled_draws: commands(|counts| &counts.far_vertex_fetch_pulled_draws),
             gathered_draws: commands(|counts| &counts.gathered_draws),
             bounded_run_draws: commands(|counts| &counts.bounded_run_draws),
             bound_notices_made: counters.bound_notices_made.load(Ordering::Relaxed),

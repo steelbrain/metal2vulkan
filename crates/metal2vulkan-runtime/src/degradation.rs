@@ -2437,6 +2437,18 @@ degradations! {
         VisibilityCountPerColor = "visibility-count-per-color", Precision,
             "the result is Metal's count multiplied by the colors the draw writes; a `Boolean` \
              result keeps its contract";
+        /// A draw that fetches a vertex layout in fixed function where its indices or arguments
+        /// state how far it fetches (a per-vertex layout of an indexed draw of 32-bit indices,
+        /// any layout of an indirect draw) and may reach past `2^32` bytes of the bind offset, on
+        /// a device whose fixed-function vertex input takes an element's displacement modulo
+        /// `2^32` ([`metal2vulkan::error::RuntimeDriverDefect::VertexFetchWrapsPast4GiB`]:
+        /// lavapipe), under [`metal2vulkan::device::VertexReachPolicy::Bounded`]
+        /// (`render/vertex_reach.rs`). Announced at the draw; the payload names the draw and the
+        /// buffer.
+        VertexFetchMayWrap = "vertex-fetch-may-wrap", Precision,
+            "an element past 2^32 bytes of the buffer's bind offset reads the bytes at its \
+             displacement's low 32 bits, where Metal reads zero past a buffer that ends before \
+             them";
         /// A draw under a visibility result (`Counting` or `Boolean`) whose fragment function
         /// declares `[[early_fragment_tests]]` and writes the `SampleMask` output
         /// ([`metal2vulkan::pipeline::GraphicsState::writes_sample_mask`]: the render pipeline's

@@ -241,6 +241,7 @@ surface! {
         enum QueueSharingPolicy N;
         enum DontCareColorPolicy N;
         enum UnstoredDontCarePolicy N;
+        enum VertexReachPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;

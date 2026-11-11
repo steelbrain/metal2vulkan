@@ -8,8 +8,8 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapCompressionPolicy, HostPageTexturePolicy, PipelineWaitPolicy,
-    QueueSharingPolicy, RenderLoweringPolicy, UnstoredDontCarePolicy, WideLinePolicy,
-    YCbCrInPlacePolicy,
+    QueueSharingPolicy, RenderLoweringPolicy, UnstoredDontCarePolicy, VertexReachPolicy,
+    WideLinePolicy, YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -65,8 +65,9 @@ fn choices() -> Vec<Choice> {
         // how long a pipeline being made is waited for (the bounds' values:
         // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, what a
         // blit through a compressed extended-range texture writes, which `VkQueue` a command
-        // queue submits to, what a colour attachment stored `DontCare` keeps, and what a pass reads
-        // of an attachment it loads `DontCare` and does not store.
+        // queue submits to, what a colour attachment stored `DontCare` keeps, what a pass reads of
+        // an attachment it loads `DontCare` and does not store, and which draws pull a vertex
+        // layout past a wrapping fixed-function input.
         heap_compression: _,
         completion: _,
         batch_order: _,
@@ -80,6 +81,7 @@ fn choices() -> Vec<Choice> {
         queue_sharing: _,
         dont_care_colors: _,
         unstored_dont_care_loads: _,
+        vertex_reach: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`, and how planes of a
         // two-plane YCbCr texture read in place are sampled.
         half_chains: _,
@@ -99,6 +101,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.queue_sharing: QueueSharingPolicy { Adaptive, PerQueue }),
         choice!(p.dont_care_colors: DontCareColorPolicy { Driver, Kept }),
         choice!(p.unstored_dont_care_loads: UnstoredDontCarePolicy { Driver, Cleared }),
+        choice!(p.vertex_reach: VertexReachPolicy { Bounded, Exact }),
     ]
 }
 
@@ -681,6 +684,21 @@ fn exact_answers_clear_every_unstored_dont_care_load() {
             .exact_answers()
             .unstored_dont_care_loads,
         UnstoredDontCarePolicy::Cleared
+    );
+}
+
+/// `DevicePolicy::exact_answers()` pulls a vertex layout past a wrapping fixed-function input
+/// wherever a draw's reach is stated, GPU memory's too, and the default only where the draw's own
+/// values state it.
+#[test]
+fn exact_answers_pull_every_stated_reach_past_a_wrapping_fetch() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.vertex_reach,
+        VertexReachPolicy::Bounded
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().vertex_reach,
+        VertexReachPolicy::Exact
     );
 }
 

@@ -9,7 +9,7 @@
 //!   through the encoder's shape memo): they must be the kept draw's (by value), with no hidden
 //!   depth or stencil given, no strip listed, a provoking vertex the kept draw's, and the fields
 //!   the settle takes of the route beside them (primitive IDs' indices, private and provoking
-//!   forms) as its bind state holds them, so its settle would find the kept shape: every field of
+//!   forms, the layouts it pulls past 4 GiB) as its bind state holds them, so its settle would find the kept shape: every field of
 //!   the bind state but the values below is a function of those and of its tables. A draw whose
 //!   depth/stencil state fails every fragment (`DrawSettings::failing_state`) takes every step.
 //! - **The bind state's values.** Its viewport count, blend color, alpha test reference, depth
@@ -86,6 +86,7 @@ impl RenderLowering {
             && state.primitive_id_indices == routed.primitive_id_indices
             && state.quad_primitive_ids == routed.private.quad_primitive_ids
             && state.private_list == routed.private.private_list
+            && state.far_vertex_buffers == routed.far.pulled
             && state.rotated_weights == routed.provoking_forms.rotated_weights
             && state.mesh_last_first == routed.provoking_forms.mesh_last_first;
         if !routed_as_kept {

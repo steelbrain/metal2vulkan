@@ -130,6 +130,16 @@ pub struct BindState {
     /// every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_list: bool,
+    /// The Metal vertex buffer indices of the layouts the draw fetches in fixed function that the
+    /// device's fixed-function input cannot fetch for it: the runtime names those a draw may fetch
+    /// past `2^32` bytes of their bind offset, on a driver whose fixed-function vertex input takes
+    /// that displacement modulo `2^32`. The plan pulls them in the pulled-vertex-buffer variant
+    /// (`VariantKey::pulled_vertex_buffers`), as it pulls a layout bound at an offset or stride
+    /// fixed-function input cannot fetch; a layout the pipeline does not fetch in fixed function
+    /// is left as it is. Part of the shape (`BindShape::far_vertex_buffers`); empty for every
+    /// other draw.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub far_vertex_buffers: BTreeSet<u32>,
     /// Where the heap arrays (set 1) hold the command's heap members and argument samplers
     /// ([`HeapPlacement`]). Only the instantiated tables and the elements the consumer writes
     /// ([`BindingPlan::heap_elements`]) depend on it, so it is not part of the shape.
@@ -732,6 +742,7 @@ impl BindState {
             primitive_id_indices: self.primitive_id_indices,
             quad_primitive_ids: self.quad_primitive_ids,
             private_list: self.private_list,
+            far_vertex_buffers: self.far_vertex_buffers.clone(),
         }
     }
 
@@ -833,6 +844,7 @@ impl BindState {
             primitive_id_indices,
             quad_primitive_ids,
             private_list,
+            far_vertex_buffers,
         } = shape;
         let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
         tables.clone().count() == stages.len()
@@ -862,6 +874,7 @@ impl BindState {
             && self.primitive_id_indices == *primitive_id_indices
             && self.quad_primitive_ids == *quad_primitive_ids
             && self.private_list == *private_list
+            && self.far_vertex_buffers == *far_vertex_buffers
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
@@ -1750,6 +1763,11 @@ pub struct BindShape {
     /// list form runs the variant that draws it so (`VariantKey::private_list`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_list: bool,
+    /// `BindState.far_vertex_buffers`: the layouts a draw pulls where the device's fixed-function
+    /// input cannot fetch them for it, in the pulled-vertex-buffer variant
+    /// (`VariantKey::pulled_vertex_buffers`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub far_vertex_buffers: BTreeSet<u32>,
 }
 
 impl BindShape {

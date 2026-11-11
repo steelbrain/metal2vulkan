@@ -606,6 +606,22 @@ pub(super) struct Affected {
 ///   and trimmed, or freed untrimmed: the trim returned none of what the burst grew. Under the
 ///   xe kernel driver ANV names no such objects (`uses_relocs`), but no GPU of it is measured, so
 ///   every ANV GPU takes the path.
+///
+/// `VertexFetchWrapsPast4GiB`:
+/// - Mesa's lavapipe (`MESA_LLVMPIPE`): a `uint` attribute fetched in fixed function at stride 4
+///   or 12 from a 64-byte buffer bound at offset 0 read, for each element past `2^32` bytes (a
+///   vertex start, base vertex, index or base instance past `2^30`), the word at its
+///   displacement's low 32 bits (element `2^30` at stride 4 read word 0), where the device reports
+///   `robustBufferAccess2` and Vulkan reads zero outside the bound range; Metal reads zero there
+///   (an Apple M3 Max under macOS 27.0.1). Measured on Mesa 26.2.6 (LLVM 23.1.4) by the
+///   conformance case `vertex-fetch-past-4gib-small-buffer` (24 elements of the six far draws at
+///   strides 4 and 12, the stride-6 draws pulled reading zero), and by
+///   `runtime_lane::far_vertex_fetches` on every device it runs on (an indexed draw of 32-bit
+///   indices past `2^30` under the default policy reads the wrapped word on lavapipe alone).
+///   RADV on the Radeon 780M and MoltenVK 1.4.2 on the M3 Max read zero. Nothing is refused: a
+///   draw whose own values may fetch a fixed-function layout past `2^32` bytes pulls it
+///   (`render/vertex_reach.rs`), and one whose indices or arguments state the reach pulls it under
+///   `VertexReachPolicy::Exact`, announced otherwise (`vertex-fetch-may-wrap`).
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -782,6 +798,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::VertexFetchWrapsPast4GiB,
+        driver: DriverId::MESA_LLVMPIPE,
         clean: &[],
     },
 ];

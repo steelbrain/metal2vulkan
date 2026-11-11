@@ -530,11 +530,23 @@ impl RenderLowering {
     /// Whether `draw` of `assembly`, of other arguments than the kept draw's alone, is routed as
     /// the kept draw: a draw's route (`RenderLowering::routed_draw`) reads its arguments only
     /// through whether it may draw a primitive (`line_width::draws_primitives`, and the provoking
-    /// vertex's draw of none, its converse), and through how far its vertices run where it is
-    /// drawn as a list (`PrivateForm`), which no kept draw is.
+    /// vertex's draw of none, its converse), through how far its vertices run where it is drawn
+    /// as a list (`PrivateForm`), which no kept draw is, and through the fixed-function layouts
+    /// it pulls past 4 GiB (`render/vertex_reach.rs`), which must be the kept draw's.
     fn routed_as_kept(&self, assembly: Assembly, draw: &DrawCall) -> bool {
         let primitives = |draw: &DrawCall| line_width::draws_primitives(assembly, draw);
-        (self.again.kept.as_ref()).is_some_and(|kept| primitives(&kept.draw) == primitives(draw))
+        let Some(kept) = self.again.kept.as_ref() else {
+            return false;
+        };
+        let far = match self.pipeline.as_ref().map(|p| p.kind()) {
+            Some(RenderStateKind::Graphics(state)) => {
+                let base = state.base();
+                self.far_vertex_buffers(base, draw).pulled
+                    == self.far_vertex_buffers(base, &kept.draw).pulled
+            }
+            _ => true,
+        };
+        primitives(&kept.draw) == primitives(draw) && far
     }
 
     /// Take into the kept draw, rebound with the arguments of `draw` of `buffers`, those

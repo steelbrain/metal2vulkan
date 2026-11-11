@@ -1454,6 +1454,7 @@ enum	metal2vulkan::device::StageCreateFlag	#[derive(Clone, Copy, Debug, PartialE
 enum	metal2vulkan::device::SubgroupOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SubgroupOp
 enum	metal2vulkan::device::Tier	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Tier
 enum	metal2vulkan::device::UnstoredDontCarePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum UnstoredDontCarePolicy
+enum	metal2vulkan::device::VertexReachPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VertexReachPolicy
 enum	metal2vulkan::device::VkExtension	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkExtension
 enum	metal2vulkan::device::VkFeature	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkFeature
 enum	metal2vulkan::device::VkLimit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkLimit
@@ -2788,6 +2789,7 @@ field	metal2vulkan-runtime::WorkCounts.encoders_reencoded	pub encoders_reencoded
 field	metal2vulkan-runtime::WorkCounts.event_signals_behind_merge	pub event_signals_behind_merge: u64
 field	metal2vulkan-runtime::WorkCounts.event_waits_met	pub event_waits_met: u64
 field	metal2vulkan-runtime::WorkCounts.exported_dma_buf_images	pub exported_dma_buf_images: u64
+field	metal2vulkan-runtime::WorkCounts.far_vertex_fetch_pulled_draws	pub far_vertex_fetch_pulled_draws: u64
 field	metal2vulkan-runtime::WorkCounts.fd_blocks_awaited	pub fd_blocks_awaited: u64
 field	metal2vulkan-runtime::WorkCounts.fd_blocks_refused	pub fd_blocks_refused: u64
 field	metal2vulkan-runtime::WorkCounts.fd_buffer_blocks_made	pub fd_buffer_blocks_made: u64
@@ -3406,6 +3408,7 @@ field	metal2vulkan::bind::BindShape.argument_samplers	pub argument_samplers: Arg
 field	metal2vulkan::bind::BindShape.depth_clamp_range	pub depth_clamp_range: bool
 field	metal2vulkan::bind::BindShape.dropped_colors	pub dropped_colors: BTreeSet<u32>
 field	metal2vulkan::bind::BindShape.extended_shadows	pub extended_shadows: BTreeSet<u32>
+field	metal2vulkan::bind::BindShape.far_vertex_buffers	pub far_vertex_buffers: BTreeSet<u32>
 field	metal2vulkan::bind::BindShape.fragment_tests	pub fragment_tests: FragmentTests
 field	metal2vulkan::bind::BindShape.function_tables	pub function_tables: FunctionTablesShape
 field	metal2vulkan::bind::BindShape.imageblock_size	pub imageblock_size: ImageblockSize
@@ -3436,6 +3439,7 @@ field	metal2vulkan::bind::BindState.depth_range	pub depth_range: [f32; 2]
 field	metal2vulkan::bind::BindState.depth_stencil	pub depth_stencil: metal::state::DepthStencilDescriptor
 field	metal2vulkan::bind::BindState.dropped_colors	pub dropped_colors: BTreeSet<u32>
 field	metal2vulkan::bind::BindState.extended_shadows	pub extended_shadows: BTreeSet<u32>
+field	metal2vulkan::bind::BindState.far_vertex_buffers	pub far_vertex_buffers: BTreeSet<u32>
 field	metal2vulkan::bind::BindState.fragment_tests	pub fragment_tests: FragmentTests
 field	metal2vulkan::bind::BindState.function_tables	pub function_tables: Vec<ArgumentFunctionTable>
 field	metal2vulkan::bind::BindState.heap_placement	pub heap_placement: HeapPlacement
@@ -4127,6 +4131,7 @@ field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: Poin
 field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
 field	metal2vulkan::device::DevicePolicy.unstored_dont_care_loads	pub unstored_dont_care_loads: UnstoredDontCarePolicy
+field	metal2vulkan::device::DevicePolicy.vertex_reach	pub vertex_reach: VertexReachPolicy
 field	metal2vulkan::device::DevicePolicy.wide_lines	pub wide_lines: WideLinePolicy
 field	metal2vulkan::device::DevicePolicy.ycbcr_in_place_reads	pub ycbcr_in_place_reads: YCbCrInPlacePolicy
 field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
@@ -5634,6 +5639,7 @@ macro-member	metal2vulkan-runtime::Degradation::UnpackedFillColor	UnpackedFillCo
 macro-member	metal2vulkan-runtime::Degradation::UnreadableHandleTexture	UnreadableHandleTexture = "unreadable-handle-texture", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnsizedPoints	UnsizedPoints = "unsized-points", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UntimedCommandBuffer	UntimedCommandBuffer = "untimed-command-buffer", Precision,
+macro-member	metal2vulkan-runtime::Degradation::VertexFetchMayWrap	VertexFetchMayWrap = "vertex-fetch-may-wrap", Precision,
 macro-member	metal2vulkan-runtime::Degradation::VertexSimdgroupGrouping	VertexSimdgroupGrouping = "vertex-simdgroup-grouping";
 macro-member	metal2vulkan-runtime::Degradation::ViewBaseTexelOffset	ViewBaseTexelOffset = "view-base-texel-offset";
 macro-member	metal2vulkan-runtime::Degradation::VisibilityCountPerColor	VisibilityCountPerColor = "visibility-count-per-color", Precision,
@@ -13296,6 +13302,8 @@ variant	metal2vulkan::device::Tier::NoSubgroup	NoSubgroup
 variant	metal2vulkan::device::Tier::PartialFragment	PartialFragment
 variant	metal2vulkan::device::UnstoredDontCarePolicy::Cleared	Cleared
 variant	metal2vulkan::device::UnstoredDontCarePolicy::Driver	Driver
+variant	metal2vulkan::device::VertexReachPolicy::Bounded	Bounded
+variant	metal2vulkan::device::VertexReachPolicy::Exact	Exact
 variant	metal2vulkan::device::VkExtension::Ext4444Formats	Ext4444Formats
 variant	metal2vulkan::device::VkExtension::ExtAttachmentFeedbackLoopLayout	ExtAttachmentFeedbackLoopLayout
 variant	metal2vulkan::device::VkExtension::ExtBorderColorSwizzle	ExtBorderColorSwizzle
@@ -14109,6 +14117,7 @@ variant	metal2vulkan::error::RuntimeDriverDefect::TenBitCodesReadAsWords	TenBitC
 variant	metal2vulkan::error::RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission	TrimmedCommandBufferFailsResubmission
 variant	metal2vulkan::error::RuntimeDriverDefect::TwoPlaneChromaMisplaced	TwoPlaneChromaMisplaced
 variant	metal2vulkan::error::RuntimeDriverDefect::UnpinnablePagesBreakHostMemory	UnpinnablePagesBreakHostMemory
+variant	metal2vulkan::error::RuntimeDriverDefect::VertexFetchWrapsPast4GiB	VertexFetchWrapsPast4GiB
 variant	metal2vulkan::error::RuntimeDriverDefect::VolumeBlitsUnfiltered	VolumeBlitsUnfiltered
 variant	metal2vulkan::error::RuntimeDriverDefect::VolumeResolveFirstPlane	VolumeResolveFirstPlane
 variant	metal2vulkan::error::RuntimeDriverDefect::WaitForAnyObjectLosesASignal	WaitForAnyObjectLosesASignal

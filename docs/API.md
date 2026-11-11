@@ -3576,6 +3576,14 @@ bound.
   draw counted by a `Counting` visibility result whose fragment function writes more than one color
   attachment, on ANV (`RuntimeDriverDefect::OcclusionCountPerColorOutput`). Cost: the result is
   Metal's count multiplied by the colors the draw writes; a `Boolean` result keeps its contract.
+- `metal2vulkan-degrade-vertex-fetch-may-wrap` (precision). `VertexFetchMayWrap`: A draw that
+  fetches a vertex layout in fixed function where its indices or arguments state how far it
+  fetches (a per-vertex layout of an indexed draw of 32-bit indices, any layout of an indirect
+  draw), on lavapipe, whose fixed-function vertex input takes an element's displacement modulo
+  `2^32` (`RuntimeDriverDefect::VertexFetchWrapsPast4GiB`), under the default
+  `VertexReachPolicy::Bounded`; `VertexReachPolicy::Exact` pulls such a layout instead. Cost: an
+  element past `2^32` bytes of the buffer's bind offset reads the bytes at its displacement's low
+  32 bits, where Metal reads zero past a buffer that ends before them.
 - `metal2vulkan-degrade-visibility-past-early-mask` (precision). `VisibilityPastEarlyMask`: A
   draw under a `Counting` or `Boolean` visibility result whose fragment function declares
   `[[early_fragment_tests]]` and writes its sample mask (the pipeline's private sample mask or

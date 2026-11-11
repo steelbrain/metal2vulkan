@@ -13,7 +13,7 @@
 //! `binary_archives`, in `view_reinterpretation`, in `clear_reach`, in
 //! `resolves`, in `mesh_draws`, in `provoking`, in `provoking_mesh`, in `visibility`, in
 //! `pass_start_reads`, in `unorm_depth_bias`, in `pvrtc_textures`, in `heaps`, in `rate_maps`, in
-//! `rebind_reach`, in `predication` or in `blits` takes, each test checking that
+//! `rebind_reach`, in `predication`, in `far_vertex_fetches` or in `blits` takes, each test checking that
 //! its kinds are announced exactly once: the buffers over
 //! host bytes ([`HOST_BYTES`]), blits ([`BLITS`]),
 //! dispatches ([`DISPATCHES`]), render passes ([`PASSES`]), framebuffer fetch's passes
@@ -128,7 +128,9 @@
 //! predication past their buffer that read memory unrelated to it in `predication`
 //! ([`WORD_PAST_BUFFER`]), render pipeline states whose fragment function writes a buffer in a
 //! raster order group, bound on a driver that orders it only in a pushed set 0, in
-//! `interlocked_primitive_order` ([`BOUND_INTERLOCKS`]),
+//! `interlocked_primitive_order` ([`BOUND_INTERLOCKS`]), draws whose indices or arguments state
+//! how far they fetch a vertex layout in fixed function on a driver whose fixed-function vertex
+//! input wraps past 4 GiB in `far_vertex_fetches` ([`MAY_WRAP`]),
 //! and
 //! pipeline states, whose stages' precision notes and reconvergence are announced where the
 //! runtime makes their objects (one site, which maps every note to its kind; a fragment function's
@@ -182,6 +184,7 @@ use super::dont_care_unstored::UNSTORED_LOADS;
 use super::extended_range_blends::{EXTENDED_RANGE_BITS, STORED_CODES};
 use super::extended_range_resolve::XR_RESOLVE;
 use super::extended_range_two_planes::HEAP_PLANES;
+use super::far_vertex_fetches::MAY_WRAP;
 use super::first_use::FIRST_SPARSE;
 use super::format_copies::MEMMOVES;
 use super::fragment_imageblocks::FRAGMENT_IMAGEBLOCKS;
@@ -616,6 +619,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &MEMORYLESS_TEXEL_BUFFERS,
         &UNWRITTEN_ENTRY,
         &RECOVERED,
+        &MAY_WRAP,
     ];
     for kind in lists.into_iter().flatten().copied().chain(stage_kinds) {
         assert!(listed.insert(kind), "{kind:?} is listed twice");

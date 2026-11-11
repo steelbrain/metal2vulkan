@@ -735,6 +735,13 @@ impl RenderLowering {
         let function_tables = state.function_tables();
         let pass_start = PassStartTables::default();
         let sampler_maps = self.sampler_maps(state, &pass_start)?;
+        // The GPU form's draw, whose arguments GPU memory states: the layouts it pulls past
+        // 4 GiB are those the draw pulls (`render/vertex_reach.rs`).
+        let draw = DrawCall::Indirect {
+            indirect: IndirectRef::new(0, 0),
+            indexed: None,
+        };
+        let far = self.far_vertex_buffers(state.base(), &draw);
         let (Settled { variant, plan, .. }, _) = self.settle_draw(
             live,
             (
@@ -743,15 +750,12 @@ impl RenderLowering {
                 None,
                 PrivateForm::default(),
                 ProvokingForms::default(),
+                &far.pulled,
             ),
             (&pass_start, &sampler_maps),
             (&mut argument_samplers, &mut None),
             (&function_tables, &mut None),
         )?;
-        let draw = DrawCall::Indirect {
-            indirect: IndirectRef::new(0, 0),
-            indexed: None,
-        };
         let commands = plan
             .instantiate_draw(&live.state, &draw)
             .map_err(Error::Bind)?;

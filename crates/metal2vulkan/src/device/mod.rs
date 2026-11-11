@@ -69,7 +69,7 @@ pub use policy::{
     BatchOrderPolicy, CompletionPolicy, ContainmentPolicy, DevicePolicy, DontCareColorPolicy,
     ExtendedRangeBlitPolicy, HalfChainPolicy, HeapCompressionPolicy, HostPageTexturePolicy,
     PipelineWaitPolicy, QueueSharingPolicy, RenderLoweringPolicy, UnstoredDontCarePolicy,
-    WideLinePolicy, YCbCrInPlacePolicy,
+    VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
 };
 pub(crate) use profile::whole_point_size;
 pub use profile::{DeviceProfile, SpirvValidation};
