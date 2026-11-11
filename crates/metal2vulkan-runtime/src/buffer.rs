@@ -14,7 +14,8 @@
 //!
 //! Step 1 makes `Shared` and `Private` buffers, step 2 `Managed` ones (host-coherent memory,
 //! cached where the device has it, and on a device without unified memory a device-local copy
-//! with such a host copy, [`Mirror`]: `managed.rs`), step 4 buffers over host memory and from bytes
+//! with such a host copy, [`Mirror`]: `managed.rs`; a `Managed` no-copy buffer there has the
+//! caller's pages as its host copy, `managed_copy.rs`), step 4 buffers over host memory and from bytes
 //! (`buffer_descriptor.rs`), labels and purgeable state (`attributes.rs`); `Memoryless` is not a
 //! buffer's storage mode in Metal (refused `Invalid`). Step 7 places buffers in heaps
 //! (`heap.rs`): such a buffer is bytes of its heap's own buffer, from its offset there
@@ -38,6 +39,7 @@ use super::host_memory::{HeldBack, HostParts, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
 #[cfg(unix)]
 use super::host_residency::{Again, Residency};
+use super::managed_copy::{CallerCopy, SyncTarget};
 use super::memory::{
     BoundMemory, Holds, Mapped, MemoryClass, Placement, BLOCK_BYTES, FD_BLOCKS_HANDLE,
     HOST_PAGES_HANDLE,
@@ -145,9 +147,9 @@ struct OwnBytes {
     identity: Identity,
     owner: Owner,
     /// A `Managed` buffer's host copy on a device without unified memory: its `VkBuffer` is then
-    /// in device-local memory, and `contents` maps the copy. Shared with the submissions that
-    /// upload from it.
-    mirror: Option<Arc<Mirror>>,
+    /// in device-local memory, and `contents` maps the copy ([`HostCopy`]). Shared with the
+    /// submissions that upload from it.
+    mirror: Option<HostCopy>,
     /// The caller's token for the buffer's range (a buffer's `range_token`, or its heap's when
     /// the buffer is a heap's own), set once as it is made: dropped right after the range is
     /// free and the buffer's teardown leaves its exit section, no runtime lock held, on the
@@ -1256,6 +1258,13 @@ impl HostPages {
         let _ = self.release.set(release);
     }
 
+    /// Hold back their release's deallocator and keep-alive for a recovery that carries their
+    /// buffer to its device's next generation ([`Release::carry_on`]): `None` where it holds
+    /// neither, or they have none.
+    pub(super) fn carry_release(&self) -> Option<Arc<HeldBack>> {
+        self.release.get().and_then(Release::carry_on)
+    }
+
     /// Their import, which a no-copy buffer made over the same bytes shares.
     pub(super) fn import(&self) -> &Arc<HostImport> {
         &self.import
@@ -2062,6 +2071,15 @@ impl OwnBytes {
     }
 }
 
+/// A `Managed` buffer's host copy on a device without unified memory, which `contents` maps and
+/// `did_modify_range` and `synchronize_resource` copy to and from (`managed.rs`): the runtime's
+/// own ([`Mirror`]), for a buffer the runtime makes, or the caller's pages, for a no-copy buffer
+/// (`managed_copy.rs`'s [`CallerCopy`]).
+pub(super) enum HostCopy {
+    Own(Arc<Mirror>),
+    Caller(Arc<CallerCopy>),
+}
+
 /// A `Managed` buffer's host copy on a device without unified memory (`managed.rs`): a
 /// `VkBuffer` of the buffer's padded length in host-visible, coherent memory, cached where the
 /// device has such ([`MemoryClass::Managed`]), which `contents` maps. The GPU uses the buffer's
@@ -2282,7 +2300,7 @@ pub(super) struct BufferParts {
     /// copied, the copy's GPU writes never written back (`copied.rs`), and a rebind's are too.
     pub(super) drops_writes: bool,
     /// A `Managed` buffer's host copy, on a device without unified memory.
-    pub(super) mirror: Option<Arc<Mirror>>,
+    pub(super) mirror: Option<HostCopy>,
     /// What imports a no-copy buffer's dma-bufs again, where the device may release its import
     /// while idle (`host_residency.rs`).
     #[cfg(unix)]
@@ -2294,9 +2312,12 @@ pub(super) struct BufferParts {
 /// Who a buffer being made is ([`Device::buffer_of`], `Device::buffer_over_host_parts`): a new
 /// buffer, with an identity and an `ObjectId` of its own, or a buffer its device's recovery
 /// carries (`Buffer::carry`), the same buffer on the next generation, its identity, `ObjectId`
-/// and attributes the buffer's.
+/// and attributes the buffer's; or the runtime's own buffer over the caller's pages that a
+/// `Managed` no-copy buffer on a device without unified memory copies to and from
+/// (`managed_copy.rs`), new as a new buffer is, which is never a copy of the pages.
 pub(super) enum Naming {
     New,
+    HostCopy,
     Carried {
         object_id: ObjectId,
         identity: Identity,
@@ -2309,7 +2330,7 @@ impl Naming {
     /// carried buffer's.
     fn identity(&self, hazard: HazardTrackingMode, of_heap: bool) -> Identity {
         match self {
-            Naming::New => Identity::new(hazard, of_heap),
+            Naming::New | Naming::HostCopy => Identity::new(hazard, of_heap),
             Naming::Carried { identity, .. } => *identity,
         }
     }
@@ -2756,7 +2777,7 @@ impl Device {
             .ok_or_else(|| nil(call, Problem::BufferLength { length }))?;
         // A heap is never `Managed` (`heap.rs`).
         let mirror = if class == MemoryClass::Managed && !self.properties().has_unified_memory {
-            Some(Arc::new(self.mirror(size)?))
+            Some(HostCopy::Own(Arc::new(self.mirror(size)?)))
         } else {
             None
         };
@@ -2945,6 +2966,60 @@ impl Device {
         let shared = self.shared();
         shared.counts.churn.evicted(Recycled::Buffer, gone.len());
         recycle::destroy(shared.vk(), &mut lock(&shared.memory), gone);
+    }
+
+    /// The device copy of a two-copy buffer (`managed_copy.rs`): a `VkBuffer` of `size` bytes
+    /// bound at the start of device-local memory of the runtime's own, in a plain block, its
+    /// device address its block's (`place_buffer_with`). Refused where no device-local memory has
+    /// room: an allocation refused, or one that overflowed into system memory
+    /// (`memory.rs`'s `overflow_candidates`), which goes again.
+    pub(super) fn managed_device_copy(&self, size: u64) -> Result<(vk::Buffer, Placement), Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(usage(false)),
+        );
+        // SAFETY: the device is live and `info` valid.
+        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+        shared.counts.buffer_made(info.usage);
+        // SAFETY: `raw` is a live buffer of this device.
+        let requirements = placed(unsafe { raw_device.get_buffer_memory_requirements(raw) });
+        let placement = crate::memory::allocate_addressed_in(
+            &shared.memory,
+            raw_device,
+            &requirements,
+            (MemoryClass::Private, Holds::Buffers),
+            &shared.counts,
+        )
+        .and_then(|placement| match placement.overflowed() {
+            true => {
+                lock(&shared.memory).free(raw_device, &placement);
+                Err(Error::OutOfMemory(crate::error::MemoryKind::Device))
+            }
+            false => Ok(placement),
+        });
+        let bound = placement.and_then(|placement| {
+            // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
+            match unsafe {
+                crate::creation::bind_buffer(raw_device, raw, placement.memory, placement.offset)
+            } {
+                Ok(()) => Ok(placement),
+                Err(error) => {
+                    lock(&shared.memory).free(raw_device, &placement);
+                    Err(vulkan(error))
+                }
+            }
+        });
+        match bound {
+            Ok(placement) => Ok((raw, placement)),
+            Err(error) => {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(raw_device, raw) };
+                Err(error)
+            }
+        }
     }
 
     /// A `Managed` buffer's host copy of `size` bytes (its padded length) on a device without
@@ -3223,7 +3298,7 @@ impl Device {
     ) -> Buffer {
         let options = ResourceOptions::new(modes.storage, modes.cache, own.identity.mode());
         let (object_id, attributes) = match naming {
-            Naming::New => (ObjectId::new(), ResourceAttributes::new()),
+            Naming::New | Naming::HostCopy => (ObjectId::new(), ResourceAttributes::new()),
             Naming::Carried {
                 object_id,
                 attributes,
@@ -3989,22 +4064,35 @@ impl Buffer {
         }
     }
 
-    /// A `Managed` buffer's host copy, on a device without unified memory ([`Mirror`]).
-    fn mirror(&self) -> Option<&Arc<Mirror>> {
+    /// A `Managed` buffer's host copy, on a device without unified memory ([`HostCopy`]).
+    pub(super) fn mirror(&self) -> Option<&HostCopy> {
         match &self.s().bytes {
             Bytes::Own(own) => own.mirror.as_ref(),
             Bytes::Heap(_) => None,
         }
     }
 
-    /// The `VkBuffer` of the buffer's host copy, whose byte 0 is the buffer's, where it has one
-    /// ([`Mirror`]): a blit encoder's `synchronize_resource` copies into it.
-    pub(super) fn host_copy(&self) -> Option<vk::Buffer> {
-        self.mirror().map(|mirror| mirror.raw)
+    /// The caller's pages as the host copy of a `Managed` no-copy buffer on a device without
+    /// unified memory (`managed_copy.rs`), where the buffer is one.
+    pub(super) fn caller_copy(&self) -> Option<&Arc<CallerCopy>> {
+        match self.mirror() {
+            Some(HostCopy::Caller(caller)) => Some(caller),
+            Some(HostCopy::Own(_)) | None => None,
+        }
+    }
+
+    /// Where a blit encoder's `synchronize_resource` copies the buffer's bytes to, where it has a
+    /// host copy ([`HostCopy`]): the runtime's own's `VkBuffer`, whose byte 0 is the buffer's,
+    /// or the caller's pages (`managed_copy.rs`'s [`SyncTarget`]).
+    pub(super) fn host_copy(&self) -> Option<SyncTarget> {
+        match self.mirror()? {
+            HostCopy::Own(mirror) => Some(SyncTarget::Own(mirror.raw)),
+            HostCopy::Caller(caller) => caller.sync_target(),
+        }
     }
 
     /// The CPU address of the bytes the GPU uses: [`Buffer::contents`], but `None` for a buffer
-    /// with a host copy ([`Mirror`]), whose `contents` are that copy. A reader of the GPU's
+    /// with a host copy ([`HostCopy`]), whose `contents` are that copy. A reader of the GPU's
     /// writes takes the bytes from here, else through a device copy.
     pub(super) fn device_contents(&self) -> Option<NonNull<u8>> {
         match self.mirror() {
@@ -4022,8 +4110,11 @@ impl Buffer {
     /// buffer without a host copy, nor for an empty range.
     pub(super) fn upload(&self, range: Range<u64>) -> Result<(), Error> {
         let s = self.s();
-        let Some(mirror) = self.mirror() else {
-            return Ok(());
+        let mirror = match self.mirror() {
+            Some(HostCopy::Own(mirror)) => mirror,
+            // The caller's pages, through their import or staging (`managed_copy.rs`).
+            Some(HostCopy::Caller(caller)) => return caller.copy_in(self, range, true),
+            None => return Ok(()),
         };
         if range.is_empty() {
             return Ok(());
@@ -4043,6 +4134,53 @@ impl Buffer {
             true => device.submit_internal(|_, _| {}),
             false => Ok(()),
         }
+    }
+
+    /// Copy `range` of the bytes of `source` (a `VkBuffer`, and where the buffer's byte
+    /// `range.start` lies in it) into the buffer's own, by the device's next submission, before
+    /// any of its commands, after the commands before it on its `VkQueue`, as
+    /// [`upload`](Self::upload) copies, the submission holding `held` until it completed: a
+    /// two-copy buffer's copy in from the caller's pages (`managed_copy.rs`), counted
+    /// (`WorkCounts::managed_bytes_copied_in`). Where `bounded`, past the bound of what is
+    /// staged, a submission waited for makes it now; else it waits for the device's next.
+    pub(super) fn copy_in_from(
+        &self,
+        source: (vk::Buffer, u64),
+        range: Range<u64>,
+        held: Box<dyn Any + Send + Sync>,
+        bounded: bool,
+    ) -> Result<(), Error> {
+        let s = self.s();
+        let device = &s.device;
+        let bytes = range.end - range.start;
+        s.staged.store(true, Ordering::Relaxed);
+        let weak: Weak<BufferShared> = Arc::downgrade(s);
+        let keeper: Weak<dyn Filled> = weak;
+        let past = (device.shared().textures.first_moves).register_bytes(
+            keeper,
+            self.at(range.start),
+            source,
+            bytes,
+            held,
+        );
+        device.shared().counts.managed_copied(bytes, true);
+        match past && bounded {
+            true => device.submit_internal(|_, _| {}),
+            false => Ok(()),
+        }
+    }
+
+    /// Whether the GPU's writes to the buffer's host pages are dropped (Metal's private option
+    /// bit 24, or a read-only rebind: `read_only_view.rs`, `copied.rs`); false for a buffer over
+    /// no host pages.
+    pub(super) fn drops_writes(&self) -> bool {
+        let Some(cell) = self.pages_cell() else {
+            return false;
+        };
+        cell.drops_writes()
+            || cell.current().is_some_and(|pages| {
+                pages.import.drops_writes() || pages.import.copy_drops_writes()
+            })
     }
 
     /// Keep `token` for the buffer's range, dropped once the range is free (`RangeToken`): a
@@ -4479,12 +4617,17 @@ impl Buffer {
         match &self.s().bytes {
             // A host copy holds the buffer's bytes from its start.
             Bytes::Own(OwnBytes {
-                mirror: Some(mirror),
+                mirror: Some(HostCopy::Own(mirror)),
                 ..
             }) => mirror
                 .placement
                 .mapped
                 .and_then(|mapped| NonNull::new(mapped.as_ptr())),
+            // The caller's pages (`managed_copy.rs`): `None` while they are detached.
+            Bytes::Own(OwnBytes {
+                mirror: Some(HostCopy::Caller(caller)),
+                ..
+            }) => caller.contents(),
             // The offset is inside the placement, which the mapping covers.
             Bytes::Own(own) => {
                 let shape = own.shape();
@@ -4659,7 +4802,23 @@ impl Buffer {
             address: last.address,
             held: own.reserved,
         };
-        let (raw, placement, contents) = if modes.storage == StorageMode::Private {
+        // A two-copy buffer's host copy, made again there (`managed_copy.rs`).
+        let mut mirror = None;
+        let (raw, placement, contents) = if let Some(HostCopy::Caller(caller)) = &own.mirror {
+            let carried = caller.carry(to, length, last.options).ok_or(Left::NoCopy)?;
+            let Ok((raw, placement)) = to.managed_device_copy(carried.device_bytes()) else {
+                return Err(Left::Failed);
+            };
+            if to.address_space_for(at).place(at, length).is_err() {
+                let shared = to.shared();
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(shared.vk(), raw) };
+                lock(&shared.memory).free(shared.vk(), &placement);
+                return Err(Left::Failed);
+            }
+            mirror = Some(HostCopy::Caller(Arc::new(carried)));
+            (raw, placement, Contents::Kept)
+        } else if modes.storage == StorageMode::Private {
             // New memory, as a new buffer's: its contents went with the lost `VkDevice`. In a
             // plain block (`Device::place_buffer`), where any of the device's buffers may lie, as
             // they do until its check of exportable blocks answered (`Holds::FdBuffers`).
@@ -4747,7 +4906,7 @@ impl Buffer {
                 reserved: own.reserved,
                 identity: own.identity,
                 owner: Owner::Runtime,
-                mirror: None,
+                mirror,
                 range_token,
             }),
             held_by: HeldBy::default(),
@@ -4758,6 +4917,16 @@ impl Buffer {
             carried: AtomicBool::new(false),
             calls: Mutex::default(),
         }));
+        // A two-copy buffer's device copy takes the pages' bytes, its GPU writes not synchronized
+        // lost with the `VkDevice` (`managed_copy.rs`).
+        if let Some(caller) = carried.caller_copy() {
+            if caller.copy_in(&carried, 0..caller.reach(), true).is_err() {
+                if let Bytes::Own(parts) = &carried.0.bytes {
+                    parts.range_token.hand_to(&own.range_token);
+                }
+                return Err(Left::Failed);
+            }
+        }
         // Zero, as a new buffer's. Dropping it on failure lets go of its parts and range share,
         // and of the range token, which goes back to the buffer left.
         if let Contents::Lost(_) = contents {

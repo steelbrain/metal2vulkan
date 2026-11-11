@@ -30,6 +30,7 @@ use super::degradation::Degradation;
 use super::encoder::{EncoderCore, Replayed};
 use super::error::{invalid, Error, Problem};
 use super::fresh_unwritten::FreshRead;
+use super::managed_copy::{AtCompletion, CopyBack, Staging, SyncTarget};
 use super::replay::{BlitCall, CallLog, Replay, Resource};
 use super::resource::{ResourceKey, ResourceRef};
 use super::shadow::{self, Covered, ShadowCopies};
@@ -636,13 +637,53 @@ impl BlitCommandEncoder {
                     return Ok(());
                 }
                 let (own, start) = buffer.at(range.start);
-                let copy = region(start, range.start, range.end - range.start);
-                this.command(&[reads(buffer, range)], |device, raw| {
-                    // SAFETY: the encoder's command buffer is recording; the buffer and its host
-                    // copy are live and retained until it completes, and the range lies in both
-                    // (the host copy holds the buffer's bytes from its byte 0).
-                    unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
-                })?;
+                let bytes = range.end - range.start;
+                match host {
+                    SyncTarget::Own(host) => {
+                        let copy = region(start, range.start, bytes);
+                        this.command(&[reads(buffer, range)], |device, raw| {
+                            // SAFETY: the encoder's command buffer is recording; the buffer and
+                            // its host copy are live and retained until it completes, and the
+                            // range lies in both (the host copy holds the buffer's bytes from
+                            // its byte 0).
+                            unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
+                        })?;
+                    }
+                    // A blit's copy into the buffer over the caller's pages, their import
+                    // (`managed_copy.rs`): a write of them, as a copy into a no-copy buffer.
+                    SyncTarget::Import(import) => {
+                        let (host, at) = this.core.blit_at(&import, range.start)?;
+                        let copy = region(start, at, bytes);
+                        let uses = [reads(buffer, range.clone()), writes(&import, range)];
+                        this.command(&uses, |device, raw| {
+                            // SAFETY: the encoder's command buffer is recording; the buffer and
+                            // the import are live and retained until it completes, and the range
+                            // lies in both, from the same byte 0.
+                            unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
+                        })?;
+                        (this.core.device().shared().counts).managed_copied(bytes, false);
+                    }
+                    // Pages no import maps: a copy into a staging buffer, which the command
+                    // buffer's completion copies into them (`managed_copy.rs`).
+                    SyncTarget::Pages(pages) => {
+                        let staging = Staging::new(this.core.device(), bytes, false)?;
+                        let (host, at) = staging.buffer.at(0);
+                        let copy = region(start, at, bytes);
+                        let uses = [
+                            reads(buffer, range.clone()),
+                            writes(&staging.buffer, 0..bytes),
+                        ];
+                        this.command(&uses, |device, raw| {
+                            // SAFETY: the encoder's command buffer is recording; the buffer is
+                            // live and retained until it completes, the staging buffer held by
+                            // its completion's copy back, and the range lies in both.
+                            unsafe { device.cmd_copy_buffer(raw, own, host, &[copy]) };
+                        })?;
+                        this.core.retain_shared(staging.buffer.held());
+                        let back = CopyBack::new(staging, pages, range.start);
+                        (this.core.command_buffer()).at_completion(AtCompletion::CopyBack(back));
+                    }
+                }
                 this.core.retain_shared(buffer.held());
                 Ok(())
             },

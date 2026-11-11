@@ -160,6 +160,7 @@ mod live_buffers;
 mod loaded;
 mod loader_word;
 mod managed;
+mod managed_copy;
 mod memory;
 mod memory_log;
 mod merge_scratch;

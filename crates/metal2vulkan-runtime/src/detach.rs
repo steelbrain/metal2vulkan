@@ -122,6 +122,11 @@ impl Buffer {
     pub fn detach_backing(&self) -> Result<bool, Error> {
         const CALL: &str = "detach_backing";
         let Some(cell) = self.host_cell() else {
+            // A two-copy buffer's host copy lets go of its pages; the GPU's copy stays
+            // (`managed_copy.rs`).
+            if let Some(caller) = self.caller_copy() {
+                return caller.detach();
+            }
             return Err(invalid(CALL, Problem::Rebind(RebindProblem::NotHostMemory)));
         };
         self.device().detach_host_pages(self, cell, None)

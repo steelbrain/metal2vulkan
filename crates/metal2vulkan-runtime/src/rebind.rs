@@ -999,6 +999,12 @@ impl Buffer {
     ) -> Result<(), Error> {
         const CALL: &str = "rebind_bytes_no_copy";
         let Some(cell) = self.host_cell() else {
+            // A two-copy buffer's host copy takes the new pages, copied in whole
+            // (`managed_copy.rs`).
+            if let Some(caller) = self.caller_copy() {
+                // SAFETY: the caller's contract.
+                return unsafe { caller.rebind(self, memory, deallocator, keep_alive) };
+            }
             return Err(invalid(CALL, Problem::Rebind(RebindProblem::NotHostMemory)));
         };
         // SAFETY: the caller's contract.

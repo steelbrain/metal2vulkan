@@ -85,6 +85,7 @@ use super::heap::Heap;
 use super::heap_sets::HeapUse;
 use super::kept_commands::KeptContext;
 use super::live_buffers::LiveTable;
+use super::managed_copy::AtCompletion;
 use super::merge_scratch::MergeScratch;
 use super::pass_runs::{PassRuns, RunKeep, RunPoint};
 use super::pipeline::budget::Urgency;
@@ -301,6 +302,10 @@ pub(super) struct CommandBufferShared {
     /// or keeps a copied host buffer. Apart from the state, which no encoder holds while it
     /// records.
     pub(super) dirty: Mutex<DirtyCommit>,
+    /// What its completion does for the two-copy buffers its commands used, before anything sees
+    /// it complete (`managed_copy.rs`, `completion.rs`): copies out into pages no import maps,
+    /// and copies in again of pages that drop the GPU's writes. Apart from the state, as `dirty`.
+    at_completion: Mutex<Vec<AtCompletion>>,
     /// A command's uses went unnoted, nothing collecting them then (no copied host buffer, and
     /// no log of host pages, lived): the merge back of copied host buffers takes every copy as
     /// written by it (`copied.rs`).
@@ -2331,6 +2336,7 @@ impl CommandBuffer {
             reencoding: Mutex::new(()),
             stepping: AtomicU64::new(NOT_STEPPING),
             dirty: Mutex::new(DirtyCommit::default()),
+            at_completion: Mutex::new(Vec::new()),
             unnoted: AtomicBool::new(false),
             raws_ended: AtomicU64::new(0),
             kernel: KernelTimes::default(),
@@ -2363,6 +2369,12 @@ impl CommandBuffer {
     /// meanwhile name it ([`NoticesFor`]).
     pub(crate) fn notices_for(&self) -> NoticesFor {
         self.0.notices_for()
+    }
+
+    /// Do `work` at the command buffer's completion, before anything sees it complete
+    /// (`managed_copy.rs`, `completion.rs`); dropped undone where it never completes.
+    pub(crate) fn at_completion(&self, work: AtCompletion) {
+        lock(&self.0.at_completion).push(work);
     }
 
     /// The state of the generation of its device it was made on, its device's
@@ -3530,6 +3542,17 @@ impl CommandBuffer {
         // the lock: what it upgrades may be a resource's last hold.
         let used = reached.list();
         device.shared().live_buffers.reach(&used);
+        // A two-copy buffer whose pages drop the GPU's writes takes its pages again at its
+        // completion: what its commands wrote reaches no later command buffer
+        // (`managed_copy.rs`).
+        for buffer in &used.buffers {
+            if buffer
+                .caller_copy()
+                .is_some_and(|caller| caller.drops_writes())
+            {
+                self.at_completion(AtCompletion::Undo(buffer.clone()));
+            }
+        }
         let shared = device.shared();
         (shared.counts).commit_used_host_imports(Buffer::distinct_host_imports(&used.buffers));
         // Listed again at its first submission where the list changed since (a rebind ends a
@@ -4321,6 +4344,16 @@ impl CommandBufferShared {
     /// ([`CommandBuffer::notices_for`]).
     pub(super) fn notices_for(&self) -> NoticesFor {
         NoticesFor::new(self.id, &self.generation)
+    }
+
+    /// Do what its completion does for the two-copy buffers its commands used
+    /// ([`CommandBuffer::at_completion`]): its last batch finished, `completed` where no failure
+    /// was relayed for its work.
+    pub(super) fn run_at_completion(&self, completed: bool) {
+        let work: Vec<AtCompletion> = lock(&self.at_completion).drain(..).collect();
+        for work in work {
+            work.run(completed);
+        }
     }
 
     /// This command buffer's address, which names it to [`own`]'s marker.

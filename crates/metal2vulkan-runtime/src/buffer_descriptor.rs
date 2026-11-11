@@ -705,12 +705,46 @@ impl Device {
     /// of its length and options, at its placement) as the buffer `naming` names, given back to
     /// `release`: a new buffer, or one its device's recovery carries to this generation
     /// (`Buffer::carry`). A buffer's pages (not a heap's own) keep what they were made of, which
-    /// a recovery makes the buffer again of ([`HostPages::made_of`]).
+    /// a recovery makes the buffer again of ([`HostPages::made_of`]). A new `Managed` one on a
+    /// device without unified memory is two copies (`managed_copy.rs`).
     ///
     /// # Safety
     ///
     /// The memory of `parts` meets [`HostMemory::new`]'s contract for `length` bytes.
     pub(super) unsafe fn buffer_over_host_parts(
+        &self,
+        made: (&'static str, u64, ResourceOptions, Place),
+        parts: HostParts,
+        release: Option<Release>,
+        of_heap: bool,
+        drops_writes: bool,
+        naming: Naming,
+    ) -> Result<Buffer, Error> {
+        let (call, length, options, _) = made;
+        let modes = Modes::of(options)?;
+        if matches!(naming, Naming::New) && self.two_copies(modes.storage, of_heap, drops_writes) {
+            if length == 0 || length > self.properties().max_buffer_length {
+                return Err(nil(call, Problem::BufferLength { length }));
+            }
+            if self.is_lost() {
+                return Err(self.lost_refusal());
+            }
+            // SAFETY: the caller's contract.
+            return unsafe { self.two_copy_buffer(made, parts, release, naming) };
+        }
+        // SAFETY: the caller's contract.
+        unsafe { self.one_copy_buffer(made, parts, release, of_heap, drops_writes, naming) }
+    }
+
+    /// [`Device::buffer_over_host_parts`] of a buffer that lies in the caller's pages (or a copy
+    /// of them), never two copies: for a buffer made as [`Naming::HostCopy`] (a two-copy
+    /// buffer's host copy, `managed_copy.rs`) it is never a copy of them, refused
+    /// (`managed_copy::uncopied`) where it would be one.
+    ///
+    /// # Safety
+    ///
+    /// The memory of `parts` meets [`HostMemory::new`]'s contract for `length` bytes.
+    pub(super) unsafe fn one_copy_buffer(
         &self,
         (call, length, options, placement): (&'static str, u64, ResourceOptions, Place),
         parts: HostParts,
@@ -773,9 +807,11 @@ impl Device {
         // does one whose GPU writes are dropped (its import is a read-only view of the pages, or
         // its copy drops them).
         let made_over = (pointer.as_ptr() as u64, length);
+        // A two-copy buffer's host copy lies in no copy of the pages (`managed_copy.rs`).
         let shares = (!of_heap && !drops_writes)
             .then(|| shared.aliases.import(made_over, class))
-            .flatten();
+            .flatten()
+            .filter(|import| !(matches!(naming, Naming::HostCopy) && import.copied()));
         if shares.is_none() && !of_heap && shared.aliases.inside_live(made_over, class) {
             shared.counts.churn.import_inside_live();
         }
@@ -2029,6 +2065,11 @@ impl Device {
         naming: Naming,
     ) -> Result<Buffer, Error> {
         let read_only = matches!(why, CopiedFor::ReadOnly);
+        // A two-copy buffer's host copy is the pages alone instead (`managed_copy.rs`).
+        if let Naming::HostCopy = naming {
+            let drops = read_only || matches!(why, CopiedFor::Unwritable);
+            return Err(crate::managed_copy::uncopied(drops));
+        }
         let (cause, failed): (_, Option<FailedImport>) = match why {
             CopiedFor::Refused => (CopiedBecause::Refused, None),
             CopiedFor::DeviceRefused => (CopiedBecause::DeviceRefused, None),
@@ -2156,7 +2197,7 @@ impl Device {
     /// The Metal addresses of a no-copy buffer of `length` bytes `window.offset` bytes into
     /// `window`, placed as `address` asks: the window's pages where the program names no address,
     /// so that the buffer's address keeps its pointer's offset in its page.
-    fn place_window(
+    pub(super) fn place_window(
         &self,
         address: Place,
         window: &ImportWindow,

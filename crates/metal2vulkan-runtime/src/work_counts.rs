@@ -414,6 +414,14 @@ pub(crate) struct Counters {
     host_textures_in_place: AtomicU64,
     host_textures_in_place_written: AtomicU64,
     device_copy_textures: AtomicU64,
+    managed_device_copies: AtomicU64,
+    managed_device_copies_made: AtomicU64,
+    managed_device_copy_bytes: AtomicU64,
+    managed_device_copies_in_place: AtomicU64,
+    managed_bytes_copied_in: AtomicU64,
+    managed_bytes_copied_out: AtomicU64,
+    managed_staging_bytes: AtomicU64,
+    managed_writes_undone: AtomicU64,
     dma_buf_textures_in_place: AtomicU64,
     fresh_page_textures_in_place: AtomicU64,
     copied_textures_in_place: AtomicU64,
@@ -3668,6 +3676,60 @@ impl Counters {
     /// A texture over host pages was made a device copy of them (`texture.rs`).
     pub(crate) fn device_copy_texture(&self) {
         self.device_copy_textures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A two-copy buffer's device copy of `bytes` bytes was made (`made`), or went
+    /// (`managed_copy.rs`).
+    pub(crate) fn managed_device_copy(&self, bytes: u64, made: bool) {
+        match made {
+            true => {
+                self.managed_device_copies.fetch_add(1, Ordering::Relaxed);
+                (self.managed_device_copies_made).fetch_add(1, Ordering::Relaxed);
+                (self.managed_device_copy_bytes).fetch_add(bytes, Ordering::Relaxed);
+            }
+            false => {
+                self.managed_device_copies.fetch_sub(1, Ordering::Relaxed);
+                (self.managed_device_copy_bytes).fetch_sub(bytes, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// A `Managed` no-copy buffer that would be two copies lies in its pages: its device copy
+    /// found no room (`managed_copy.rs`).
+    pub(crate) fn managed_device_copy_in_place(&self) {
+        (self.managed_device_copies_in_place).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `bytes` bytes were copied into a two-copy buffer's device copy (`copied_in`), or out of
+    /// it into its pages (`managed_copy.rs`).
+    pub(crate) fn managed_copied(&self, bytes: u64, copied_in: bool) {
+        match copied_in {
+            true => self
+                .managed_bytes_copied_in
+                .fetch_add(bytes, Ordering::Relaxed),
+            false => self
+                .managed_bytes_copied_out
+                .fetch_add(bytes, Ordering::Relaxed),
+        };
+    }
+
+    /// A staging buffer of `bytes` bytes of a two-copy buffer's copies was made (`made`), or
+    /// went (`managed_copy.rs`).
+    pub(crate) fn managed_staging(&self, bytes: u64, made: bool) {
+        match made {
+            true => self
+                .managed_staging_bytes
+                .fetch_add(bytes, Ordering::Relaxed),
+            false => self
+                .managed_staging_bytes
+                .fetch_sub(bytes, Ordering::Relaxed),
+        };
+    }
+
+    /// A command buffer that used a two-copy buffer whose pages drop the GPU's writes completed,
+    /// and its pages were copied in again (`managed_copy.rs`).
+    pub(crate) fn managed_write_undone(&self) {
+        self.managed_writes_undone.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture over host pages of `class` was made an image in place over them (`in_place.rs`),
@@ -7372,6 +7434,32 @@ pub struct WorkCounts {
     /// copies in take only the rows the log reports changed (`dirty_copies_in_gated` and kin),
     /// announced nowhere. A `Shared` texture and an IOSurface's are in place over the pages.
     pub device_copy_textures: u64,
+    /// `Managed` no-copy buffers on a device without unified memory that are two copies now, the
+    /// caller's pages and the GPU's own in device-local memory (`managed_copy.rs`), as Metal keeps
+    /// a managed resource on a Mac with a discrete GPU.
+    pub managed_device_copies: u64,
+    /// Such buffers made, in all.
+    pub managed_device_copies_made: u64,
+    /// The bytes of device-local memory their device copies hold now.
+    pub managed_device_copy_bytes: u64,
+    /// `Managed` no-copy buffers on a device without unified memory that lie in their pages
+    /// instead, as `Shared` ones do: no device-local memory had room for the device copy
+    /// (announced as `device-memory-overflow`).
+    pub managed_device_copies_in_place: u64,
+    /// The bytes copied from their pages into their device copies: as each is made, by each
+    /// `did_modify_range`, rebind, and copy in again after a write the pages drop.
+    pub managed_bytes_copied_in: u64,
+    /// The bytes copied out of their device copies into their pages, by `synchronize_resource`
+    /// (counted at the command for an import of the pages, at the command buffer's completion for
+    /// pages no import maps).
+    pub managed_bytes_copied_out: u64,
+    /// The bytes of the staging buffers of their copies held now: those of copies into or out of
+    /// pages no import maps, each held until the submission or command buffer that uses it
+    /// completed.
+    pub managed_staging_bytes: u64,
+    /// Command buffers that used such a buffer whose pages drop the GPU's writes (a read-only
+    /// rebind) and completed, its pages then copied in whole again.
+    pub managed_writes_undone: u64,
     /// Of `host_textures_in_place`, those over pages imported as dma-bufs: each a
     /// `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages (also counted in
     /// `dma_buf_images`).
@@ -9140,6 +9228,16 @@ impl Device {
                 .host_textures_in_place_written
                 .load(Ordering::Relaxed),
             device_copy_textures: counters.device_copy_textures.load(Ordering::Relaxed),
+            managed_device_copies: counters.managed_device_copies.load(Ordering::Relaxed),
+            managed_device_copies_made: counters.managed_device_copies_made.load(Ordering::Relaxed),
+            managed_device_copy_bytes: counters.managed_device_copy_bytes.load(Ordering::Relaxed),
+            managed_device_copies_in_place: counters
+                .managed_device_copies_in_place
+                .load(Ordering::Relaxed),
+            managed_bytes_copied_in: counters.managed_bytes_copied_in.load(Ordering::Relaxed),
+            managed_bytes_copied_out: counters.managed_bytes_copied_out.load(Ordering::Relaxed),
+            managed_staging_bytes: counters.managed_staging_bytes.load(Ordering::Relaxed),
+            managed_writes_undone: counters.managed_writes_undone.load(Ordering::Relaxed),
             dma_buf_textures_in_place: counters.dma_buf_textures_in_place.load(Ordering::Relaxed),
             fresh_page_textures_in_place: counters
                 .fresh_page_textures_in_place

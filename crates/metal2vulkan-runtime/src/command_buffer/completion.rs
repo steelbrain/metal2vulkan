@@ -662,6 +662,13 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     else {
         return true;
     };
+    // The copies out of two-copy buffers into pages no import maps land in the pages, and pages
+    // that drop the GPU's writes are copied in again, before anything sees the command buffers
+    // their batches end complete (`managed_copy.rs`).
+    for (_, batch) in finished.iter().filter(|(_, batch)| batch.last) {
+        let buffer = &batch.buffer;
+        buffer.run_at_completion(buffer.relayed.failure().is_none());
+    }
     // The GPU's writes into copied host buffers go back to the caller's pages before anything
     // sees the batches complete: their event signals, the scheduler, a waiter, their completed
     // handlers (`copied.rs`). Only the copies the batches' command buffers may have written are
