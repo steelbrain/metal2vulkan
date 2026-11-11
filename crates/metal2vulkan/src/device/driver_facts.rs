@@ -1900,8 +1900,9 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 ///
 /// Measured not to have it, so not listed: lavapipe (Mesa 26.2.6, llvmpipe on LLVM 23.1.4, x86_64),
 /// 7280 and 7259 against 10480 and 10744 us, its clear a write of every texel; ANV, Mesa 26.2.6, on
-/// the Iris Xe (RPL-P), 1907 and 1151 against 1936 and 1936 us. Every GPU and release not
-/// measured leaves such a load `DONT_CARE`.
+/// the Iris Xe (RPL-P), 1907 and 1151 against 1936 and 1936 us; NVIDIA's 615.71.09 on the RTX 5080
+/// Laptop GPU, 71.2 and 71.4 against 74.4 and 74.6 us. Every GPU and release not measured (the RTX
+/// 3090 among them) leaves such a load `DONT_CARE`.
 ///
 /// `DontCareStoreIsMetals`, read in MoltenVK 1.4.1's source
 /// (`MVKAttachmentDescription::getMTLStoreAction`; the restarts of `MVKCommandEncoder`,
