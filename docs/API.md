@@ -1641,6 +1641,18 @@ texture's image of its stored frame and its twin, a two-plane extended-range tex
 depth or stencil texture's tiled twin over a surface plane, and a YCbCr texture's converted image
 and render shadow. A heap texture's shadow, a view's shadow of an image and a texture buffer's
 staging are not logged.
+With `METAL2VULKAN_LOG_PASSES` set to a comma-separated list of `FORMAT:WIDTHxHEIGHT` (the format
+as the notices print it or as Metal names it, `*` for any format or any size, for example
+`RGBA16Float:128x128`), a device logs a line at the end of each render pass that renders into a
+texture of the list, binds one to its fragment stage or makes one resident (id name
+`metal2vulkan-passes`, `Info` severity): its render area, Vulkan render pass instances and draw
+calls; each attachment's format, size, object ID, label, level, slice, load and store actions,
+whether its texture took its storage form, and the stand-in it renders through with its cause;
+the pipeline states its draws drew with (label and functions); the textures bound to the fragment
+stage at a draw; the watched textures among those it made resident, with their stages; and what
+it watched. A line the same as one printed before is not printed again, and a process prints at
+most 256. Empty or `0` is off; a value the runtime cannot read turns the log off and says why on
+stderr.
 With `METAL2VULKAN_PENDING_AUDIT` set (or `DeviceOptions::pending_audit`), a device checks, at each
 `vkBeginCommandBuffer`, each `vkResetCommandPool` of a spare command pool, each command pool given
 back to its spares and each submission of a command buffer submitted before (one not begun for

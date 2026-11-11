@@ -355,6 +355,7 @@ mod owned_pushes;
 mod padding_unobserved;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod pass_end_tiles;
+mod pass_log;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod passing_holds;
 mod pending_audit;

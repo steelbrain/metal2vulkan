@@ -5207,6 +5207,12 @@ impl Texture {
         }
     }
 
+    /// Whether the texture's image took its storage form (`texture/storage_form.rs`): what the
+    /// pass log names (`pass_log.rs`). A texture buffer, which has no image, took none.
+    pub(crate) fn took_storage_form(&self) -> bool {
+        self.image().is_ok_and(|image| image.form.plan().is_some())
+    }
+
     /// The buffer's bytes a texture buffer is, or `None` for a texture with an image.
     pub(super) fn texels(&self) -> Option<&Texels> {
         match self.storage() {

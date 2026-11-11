@@ -87,6 +87,20 @@ pub const REGISTRY: &[EnvVar] = &[
                  the texels' offset and row pitch, or its own image), and what made it a \
                  shadow; set to anything but empty or 0",
     },
+    EnvVar {
+        name: "METAL2VULKAN_LOG_PASSES",
+        default: "unset (off)",
+        effect: "metal2vulkan-runtime's diagnostics: the textures to watch, a comma-separated \
+                 list of FORMAT:WIDTHxHEIGHT (FORMAT as the notices print it or as Metal names \
+                 it; `*` for any format or any size), for example RGBA16Float:128x128; at the \
+                 end of each render pass that renders into a watched texture, binds one to its \
+                 fragment stage or makes one resident, one line through the device's message \
+                 sink or on stderr: the pass's attachments (format, size, level, slice, object \
+                 ID and label, load and store actions, stand-in, storage form), its Vulkan \
+                 render pass instances and draws, its draws' pipeline states and the textures \
+                 bound to their fragment stage, and what it watched; a line the same as one \
+                 printed before is not printed again, and at most 256 are; empty or 0 is off",
+    },
 ];
 
 /// Multi-line `--help` block listing every registry var.
@@ -135,6 +149,13 @@ pub fn log_memory() -> bool {
 pub fn log_shadows() -> bool {
     std::env::var_os("METAL2VULKAN_LOG_SHADOWS")
         .is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+/// The textures metal2vulkan-runtime's pass log watches, as set (`REGISTRY`): a comma-separated
+/// list of `FORMAT:WIDTHxHEIGHT` the runtime parses, empty or `0` for none. A default-off
+/// diagnostic: it changes no pass, only what is printed.
+pub fn log_passes() -> Option<OsString> {
+    std::env::var_os("METAL2VULKAN_LOG_PASSES")
 }
 
 /// Whether each metal2vulkan-runtime device runs its pending audit (`REGISTRY`): set, and neither

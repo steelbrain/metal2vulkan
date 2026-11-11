@@ -174,6 +174,7 @@ mod nan_clear;
 mod neutral;
 mod noted_apart;
 mod owned_kernel;
+mod pass_log;
 mod pass_runs;
 mod pending_audit;
 mod pending_dispatch;

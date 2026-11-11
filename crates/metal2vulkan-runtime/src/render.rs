@@ -308,6 +308,7 @@ use super::linear_merge::{LinearMerge, MERGE_STAGES};
 use super::live_bind::{Emptied, LiveBind, Reshape, SettledHere};
 use super::nan_clear::{keeps_nan_sign, NanDepthWrite};
 use super::owned_kernel::OwnedModule;
+use super::pass_log;
 use super::pass_runs::{Joined, Joining, RunHeld, RunKey, RunMerge, RunWork};
 use super::pipeline::Settled;
 use super::pipeline::{BufferForms, DrawPipeline};
@@ -1710,6 +1711,9 @@ pub(crate) struct RenderLowering {
     /// A stand-in or the hidden depth and stencil arrived after a pin: no later draw pins
     /// (`render/snapshot.rs`).
     pins_frozen: bool,
+    /// What its draws named, for the pass log's line at its end, while that log is on
+    /// (`pass_log.rs`).
+    pass_notes: Option<Box<pass_log::PassNotes>>,
 }
 
 /// What a render encoder's draws retained of their own (their pipeline states, their variants'
@@ -2345,6 +2349,7 @@ impl RenderLowering {
                 grouped,
                 pinned_through: 0,
                 pins_frozen: false,
+                pass_notes: pass_log::enabled().then(Box::default),
             },
         );
         Lowering::starting_from(lowering, start)
@@ -4363,6 +4368,7 @@ impl RenderLowering {
             bind_memo,
             pass_start,
             pinned_through,
+            pass_notes,
             ..
         } = *self;
         // The views and sampler descriptions its binds made or found, which the device's next
@@ -4444,6 +4450,10 @@ impl RenderLowering {
             if let Some(own) = kept_signs(&layout) {
                 own.texture.degrade_kept_signs();
             }
+        }
+        // The pass's line, where the pass log is on and the pass names a texture it watches.
+        if let Some(notes) = pass_notes {
+            pass_log::ended(core.device(), &notes, &layout, instances.len(), &residency);
         }
         if grouped.is_none() && untouched::changes_nothing(&layout, called, &instances) {
             core.device().shared().counts.untouched_pass_skipped();
@@ -7910,6 +7920,9 @@ impl RenderLowering {
         empty: bool,
     ) -> Result<(), Error> {
         self.sync_heaps();
+        if let Some(notes) = self.pass_notes.as_mut() {
+            notes.drew(self.pipeline.as_ref(), &self.fragment.textures);
+        }
         // The encoder's kept draw again, which no call came between: its Vulkan draw alone
         // (`render/draw_again.rs`), the pipeline state's own where the last draw drew through
         // another. Any other draw keeps itself in its place where it can, and forgets every
