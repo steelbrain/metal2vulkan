@@ -37,6 +37,18 @@ pub(crate) enum Predicted {
     Dispatch,
 }
 
+/// The copied host buffers' counts ([`Counters::copied_tallies`]), for the crate's tests.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CopiedTallies {
+    pub(crate) copy_in_bytes: u64,
+    pub(crate) merge_back_bytes: u64,
+    pub(crate) dropped_bytes: u64,
+    pub(crate) bases_made: u64,
+    pub(crate) bases_refused: u64,
+    pub(crate) base_blocks_read: u64,
+}
+
 /// A device's counters (`DeviceShared::counts`), each only ever added to.
 #[derive(Default)]
 pub(crate) struct Counters {
@@ -372,6 +384,9 @@ pub(crate) struct Counters {
     copied_merges_compared: AtomicU64,
     copied_merges_skipped: AtomicU64,
     copied_dropped_bytes: AtomicU64,
+    copied_bases_made: AtomicU64,
+    copied_bases_refused: AtomicU64,
+    copied_base_blocks_read: AtomicU64,
     host_ram_copies: AtomicU64,
     host_ram_copy_bytes: AtomicU64,
     host_ram_copy_dispatches: AtomicU64,
@@ -3540,6 +3555,30 @@ impl Counters {
     pub(crate) fn copied_merges(&self, compared: u64, skipped: u64) {
         (self.copied_merges_compared).fetch_add(compared, Ordering::Relaxed);
         (self.copied_merges_skipped).fetch_add(skipped, Ordering::Relaxed);
+    }
+
+    /// The copied host buffers' counts so far, as [`Device::work_counts`] reads them: the bytes
+    /// copied in, merged back and dropped, and the bases made, refused and their blocks read.
+    #[cfg(test)]
+    pub(crate) fn copied_tallies(&self) -> CopiedTallies {
+        let load = |count: &AtomicU64| count.load(Ordering::Relaxed);
+        CopiedTallies {
+            copy_in_bytes: load(&self.copied_copy_in_bytes),
+            merge_back_bytes: load(&self.copied_merge_back_bytes),
+            dropped_bytes: load(&self.copied_dropped_bytes),
+            bases_made: load(&self.copied_bases_made),
+            bases_refused: load(&self.copied_bases_refused),
+            base_blocks_read: load(&self.copied_base_blocks_read),
+        }
+    }
+
+    /// Commits' copies in made `made` copied host buffers' bases and found no host memory for
+    /// `refused`, and comparisons read `read` blocks of bases, each a block both sides changed
+    /// (`copied.rs`).
+    pub(crate) fn copied_bases(&self, made: u64, refused: u64, read: u64) {
+        (self.copied_bases_made).fetch_add(made, Ordering::Relaxed);
+        (self.copied_bases_refused).fetch_add(refused, Ordering::Relaxed);
+        (self.copied_base_blocks_read).fetch_add(read, Ordering::Relaxed);
     }
 
     /// A batch's completion dropped `bytes` the GPU changed in copies of pages the process
@@ -7195,6 +7234,26 @@ pub struct WorkCounts {
     /// that batches' completions dropped: taken out of the copies, the pages' bytes in their
     /// place, never written to the pages, as Metal drops the GPU's writes to read-only memory.
     pub copied_dropped_bytes: u64,
+    /// The copied host buffers that took a base: the bytes the pages and the copy last agreed on,
+    /// made at the first commit whose command buffer may write the copy (until then the copy
+    /// holds them, and a copy the GPU only reads never takes one), a 128-bit tag of each 1 KiB
+    /// block in host memory, and the bytes in the device's memory where it has room for them
+    /// (device-local memory the host maps, in a heap a resizable BAR makes as large as the
+    /// device's memory), else in the host's.
+    pub copied_bases_made: u64,
+    /// The commits that found no host memory for a copied host buffer's base: each failed with
+    /// `Error::OutOfMemory` and ran nothing, the copy left with none.
+    pub copied_bases_refused: u64,
+    /// The 1 KiB blocks of copied host buffers' bases that comparisons read: blocks the CPU and
+    /// the GPU both changed since the pages and the copy last agreed. A base in the device's
+    /// memory is read across the bus, uncached.
+    pub copied_base_blocks_read: u64,
+    /// The host bytes the live copied host buffers' bases hold (a gauge): their tags, a 64th of
+    /// each copy's length, and the bytes of those kept in host memory.
+    pub copied_base_host_bytes: u64,
+    /// The device bytes the live copied host buffers' bases hold (a gauge): the bytes of those
+    /// kept in the device's memory.
+    pub copied_base_device_bytes: u64,
     /// The copies between a guest RAM and a buffer blit encoders recorded
     /// (`BlitCommandEncoder::copy_from_host_ram`, `copy_to_host_ram`), each from the device's
     /// imports of the RAM's chunks.
@@ -8312,6 +8371,7 @@ impl Device {
         };
         let group_end = |end: GroupEnd| counters.group_ends[end as usize].load(Ordering::Relaxed);
         let first_work_order = self.shared().textures.first_moves.submissions_waited();
+        let (copied_base_host_bytes, copied_base_device_bytes) = self.shared().copied.base_bytes();
         let held_for =
             |reason: HeldFor| counters.heads_held_for[reason as usize].load(Ordering::Relaxed);
         let pending = |bucket: usize| counters.batches_by_pending[bucket].load(Ordering::Relaxed);
@@ -9165,6 +9225,11 @@ impl Device {
             copied_merges_compared: counters.copied_merges_compared.load(Ordering::Relaxed),
             copied_merges_skipped: counters.copied_merges_skipped.load(Ordering::Relaxed),
             copied_dropped_bytes: counters.copied_dropped_bytes.load(Ordering::Relaxed),
+            copied_bases_made: counters.copied_bases_made.load(Ordering::Relaxed),
+            copied_bases_refused: counters.copied_bases_refused.load(Ordering::Relaxed),
+            copied_base_blocks_read: counters.copied_base_blocks_read.load(Ordering::Relaxed),
+            copied_base_host_bytes,
+            copied_base_device_bytes,
             host_ram_copies: counters.host_ram_copies.load(Ordering::Relaxed),
             host_ram_copy_bytes: counters.host_ram_copy_bytes.load(Ordering::Relaxed),
             host_ram_copy_dispatches: counters.host_ram_copy_dispatches.load(Ordering::Relaxed),

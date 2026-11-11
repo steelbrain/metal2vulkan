@@ -2562,6 +2562,29 @@ impl Memory {
             .collect()
     }
 
+    /// The memory type a copied host buffer's base of `bytes` takes on the device
+    /// ([`allocate_copied_base`]): one that is device-local, host-visible and coherent, which the
+    /// runtime may allocate, of a heap that is not small ([`Memory::small`]: a resizable BAR makes
+    /// its device-local host-visible types' heap the device's memory, where without one they lie
+    /// in a window of about 256 MiB that every process's devices share), where the runtime's
+    /// blocks live in that heap and the base stay within half of it. `None` on a device with
+    /// unified memory, where that memory is the host's.
+    fn copied_base_type(&self, bytes: u64) -> Option<u32> {
+        use vk::MemoryPropertyFlags as P;
+        if self.unified {
+            return None;
+        }
+        let wanted = P::DEVICE_LOCAL | P::HOST_VISIBLE | P::HOST_COHERENT;
+        (0..self.types.len() as u32).find(|&type_index| {
+            let flags = self.types[type_index as usize].property_flags;
+            let (size, live) = self.heaps[self.heap_of(type_index)];
+            flags.contains(wanted)
+                && allocatable(flags)
+                && !self.small(type_index)
+                && live.saturating_add(bytes) <= size / 2
+        })
+    }
+
     /// The memory heap of memory type `type_index`.
     fn heap_of(&self, type_index: u32) -> usize {
         self.types[type_index as usize].heap_index as usize
@@ -4727,6 +4750,40 @@ pub(super) fn allocate_in(
         holds,
         Fit::Pooled,
     )
+}
+
+/// Memory for the bytes of a copied host buffer's base of `bytes` (`copied.rs`), which the host
+/// writes for each block that changed and reads only for a block both sides changed: device-local
+/// memory the host maps and needs no flush for ([`Memory::copied_base_type`]), placed as a
+/// `WriteCombined` buffer's, in a pooled block or one of its own. `None` where the device has no
+/// such memory with room, or the placement failed: the base's bytes then lie in host memory.
+pub(super) fn allocate_copied_base(
+    memory: &Mutex<Memory>,
+    device: &ash::Device,
+    bytes: u64,
+) -> Option<Placement> {
+    let type_index = lock(memory).copied_base_type(bytes)?;
+    let requirements = vk::MemoryRequirements {
+        size: bytes,
+        alignment: 64,
+        memory_type_bits: 1 << type_index,
+    };
+    let class = MemoryClass::WriteCombined;
+    let placed = place(
+        memory,
+        device,
+        &requirements,
+        class,
+        None,
+        Holds::Buffers,
+        Fit::Pooled,
+    );
+    let placement = placed.ok()?;
+    if placement.mapped.is_none() {
+        lock(memory).free(device, &placement);
+        return None;
+    }
+    Some(placement)
 }
 
 /// [`allocate`] for an image: in a block that holds images alone ([`Holds`]).

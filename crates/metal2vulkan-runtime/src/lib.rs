@@ -66,6 +66,7 @@ mod compressed_blit;
 mod compute;
 mod contexts;
 mod copied;
+mod copied_base;
 mod copy_plan;
 mod creation;
 mod deferred;

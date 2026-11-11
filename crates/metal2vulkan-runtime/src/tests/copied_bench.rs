@@ -7,11 +7,15 @@
 //! pages (a guest RAM's, its offsets host addresses, [`BenchLog`]) told of each CPU write, as a
 //! consumer's dirty log would be, likewise; and logged, each merge back taking as written only
 //! the copies the GPU wrote, as their command buffers' uses would name them (`CopiesReached`). Each
-//! prints its median over its runs (`COPIED-BENCH`). Ignored: run it in release,
+//! prints its median over its runs (`COPIED-BENCH`). And one copy of 256 MiB
+//! ([`copied_256_bench`]): its copy in and merge back with no change, with one byte changed in 1%
+//! of its pages, with every byte changed, and with 1% of its blocks changed on both sides (each
+//! such block's base read), its base in host memory (here) or in the device's
+//! (`tests::copied_base_device`). Ignored: run them in release,
 //! `cargo test --release -p metal2vulkan-runtime --lib copied_bench -- --ignored --nocapture`.
 
 use super::copied::add_reading;
-use crate::copied::{CopiedBuffers, CopiesReached};
+use crate::copied::{BaseBytes, CopiedBuffers, CopiesReached};
 use crate::dirty_pages::{hook, DirtySource, DirtyTally, PagesLog};
 use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
@@ -100,6 +104,13 @@ impl DirtyPages for BenchLog {
     }
 }
 
+/// A commit whose command buffer uses the copies `used` names and may write each: each takes its
+/// base at its first, in host memory.
+fn copy_in(buffers: &CopiedBuffers, counts: &Counters, tally: &DirtyTally, used: &CopiesReached) {
+    let copied_in = buffers.copy_in(counts, tally, (used, used), Vec::new, &mut |_| None);
+    assert_eq!(copied_in, Ok(()));
+}
+
 fn median(mut times: Vec<f64>) -> f64 {
     times.sort_by(f64::total_cmp);
     times[times.len() / 2]
@@ -180,7 +191,7 @@ fn bench(logged: bool, named: bool) {
         for _ in 0..RUNS {
             change_cpu(&mut pairs, &mut rng, &tell);
             let started = Instant::now();
-            buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+            copy_in(&buffers, &counts, &tally, &CopiesReached::all());
             ins.push(started.elapsed().as_secs_f64() * 1e3);
             let changed = change_gpu(&mut pairs, &mut rng, &|_| {});
             let written = written(&changed);
@@ -197,9 +208,9 @@ fn bench(logged: bool, named: bool) {
         );
     };
     // Every byte agrees first, and the logged copies hold a stamp.
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in(&buffers, &counts, &tally, &CopiesReached::all());
     buffers.merge_back(&counts, &CopiesReached::all());
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in(&buffers, &counts, &tally, &CopiesReached::all());
     let mut nothing = |_: &mut [Pair], _: &mut Rng, _: &dyn Fn(Range<u64>)| Vec::new();
     let mut nothing_either = |_: &mut [Pair], _: &mut Rng, _: &dyn Fn(Range<u64>)| Vec::new();
     report("(a) nothing changed", &mut nothing, &mut nothing_either);
@@ -307,8 +318,8 @@ fn copied_stitched_bench() {
     }
     // Every byte agrees first, and each copy holds a stamp.
     let every = CopiesReached::all();
-    buffers.copy_in(&counts, &tally, &every, Vec::new);
-    buffers.copy_in(&counts, &tally, &every, Vec::new);
+    copy_in(&buffers, &counts, &tally, &every);
+    copy_in(&buffers, &counts, &tally, &every);
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     // A command buffer that uses 8 of the copies, and one whose commands may reach any.
     let mut eight = CopiesReached::default();
@@ -330,7 +341,7 @@ fn copied_stitched_bench() {
                 log.told(ram_page(c, k)..ram_page(c, k) + PAGE as u64, 0);
             }
             let started = Instant::now();
-            buffers.copy_in(&counts, &tally, used, Vec::new);
+            copy_in(&buffers, &counts, &tally, used);
             ins.push(started.elapsed().as_secs_f64() * 1e3);
         }
         eprintln!(
@@ -340,4 +351,111 @@ fn copied_stitched_bench() {
         );
     }
     drop(kept);
+}
+
+/// One copy of 256 MiB, its base in host memory ([`bench_256`]).
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn copied_256_bench() {
+    bench_256("host base", &mut |_| None);
+}
+
+/// The copy in and merge back of one copy of 256 MiB, its base's bytes where `base` gives them
+/// (`None`: host memory), printed as the median of [`RUNS`] (`COPIED-256`): (a) nothing changed;
+/// (b) one byte in each of 1% of its 4 KiB pages, the CPU's before the copy in and the GPU's
+/// before the merge back; (c) every byte, each side; (d) one byte on each side in each of 1% of
+/// its pages, the same block, both before the merge back, which reads those blocks' base.
+pub(super) fn bench_256(label: &str, base: &mut dyn FnMut(usize) -> Option<BaseBytes>) {
+    const LENGTH: usize = 256 << 20;
+    let buffers = Arc::new(CopiedBuffers::default());
+    let (counts, tally) = (Counters::default(), DirtyTally::default());
+    let mut pair = Pair {
+        pages: (0..LENGTH).map(|b| (b ^ (b >> 11)) as u8).collect(),
+        copy: vec![0; LENGTH],
+    };
+    let pages = NonNull::new(pair.pages.as_mut_ptr()).unwrap();
+    let copy = NonNull::new(pair.copy.as_mut_ptr()).unwrap();
+    let read = |from: NonNull<u8>, into: &mut [u8]| {
+        // SAFETY: the pair's pages, `into.len()` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(from.as_ptr(), into.as_mut_ptr(), into.len()) };
+        true
+    };
+    // SAFETY: both are the pair's own, live while the bench runs.
+    let copied = unsafe { add_reading(&buffers, pages, copy, LENGTH, read, false) }.unwrap();
+    let all = CopiesReached::all();
+    let started = Instant::now();
+    let copied_in = buffers.copy_in(&counts, &tally, (&all, &all), Vec::new, &mut *base);
+    assert_eq!(copied_in, Ok(()));
+    let (host, device) = buffers.base_bytes();
+    eprintln!(
+        "COPIED-256 {label}: base made in {:.1} ms, {} KiB host, {} MiB device",
+        started.elapsed().as_secs_f64() * 1e3,
+        host >> 10,
+        device >> 20,
+    );
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let pages_count = LENGTH / PAGE;
+    // One byte in each of 1% of the pages of `side`, at `offset` into the page (random where
+    // `None`).
+    let percent = |side: &mut [u8], rng: &mut Rng, offset: Option<usize>| {
+        for _ in 0..pages_count / 100 {
+            let page = (rng.next() as usize) % pages_count;
+            let at = page * PAGE + offset.unwrap_or((rng.next() as usize) % PAGE);
+            side[at] = side[at].wrapping_add(1);
+        }
+    };
+    let mut report = |case: &str, pair: &mut Pair, change: &mut dyn FnMut(&mut Pair, bool)| {
+        let (mut ins, mut backs) = (Vec::new(), Vec::new());
+        let read = counts.copied_tallies().base_blocks_read;
+        for _ in 0..RUNS {
+            change(pair, true);
+            let started = Instant::now();
+            let copied_in = buffers.copy_in(&counts, &tally, (&all, &all), Vec::new, &mut *base);
+            assert_eq!(copied_in, Ok(()));
+            ins.push(started.elapsed().as_secs_f64() * 1e3);
+            change(pair, false);
+            let started = Instant::now();
+            buffers.merge_back(&counts, &all);
+            backs.push(started.elapsed().as_secs_f64() * 1e3);
+        }
+        let read = counts.copied_tallies().base_blocks_read - read;
+        eprintln!(
+            "COPIED-256 {label} {case}: copy in {:.2} ms, merge back {:.2} ms (median of {RUNS}), {} base blocks read",
+            median(ins),
+            median(backs),
+            read / RUNS as u64,
+        );
+    };
+    report("(a) nothing changed", &mut pair, &mut |_, _| {});
+    report("(b) 1% of pages changed", &mut pair, &mut |pair, cpu| {
+        let side = match cpu {
+            true => &mut pair.pages,
+            false => &mut pair.copy,
+        };
+        percent(side, &mut rng, None);
+    });
+    report("(c) every byte changed", &mut pair, &mut |pair, cpu| {
+        let side = match cpu {
+            true => &mut pair.pages,
+            false => &mut pair.copy,
+        };
+        for byte in side.iter_mut() {
+            *byte = byte.wrapping_add(3);
+        }
+    });
+    report(
+        "(d) 1% of pages changed on both sides",
+        &mut pair,
+        &mut |pair, cpu| {
+            // Both sides change the same pages before the merge back: byte 8 of each by the CPU,
+            // byte 0 by the GPU, in the same block.
+            if !cpu {
+                let mut both = Rng(rng.next());
+                let mut cpu_side = Rng(both.0);
+                percent(&mut pair.pages, &mut cpu_side, Some(8));
+                percent(&mut pair.copy, &mut both, Some(0));
+            }
+        },
+    );
+    drop(copied);
 }

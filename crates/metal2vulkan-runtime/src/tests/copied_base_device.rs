@@ -1,0 +1,154 @@
+//! A copied host buffer's base on a device (`copied.rs`, `copied_base.rs`): a copy the GPU only
+//! reads holds nothing beyond itself; the first command buffer that writes it gives it a base,
+//! whose bytes lie in the device's memory where it has device-local memory the host maps in a
+//! heap its resizable BAR makes as large as its memory (its tags alone, a 64th of the copy's
+//! length, in host memory), else in the host's; the GPU's writes reach the pages through it and
+//! the CPU's reach the GPU; the base goes with the buffer. And the 256 MiB bench of
+//! `tests/copied_bench.rs` with the device's base (`COPIED-256`), ignored.
+//!
+//! Device tests: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
+//! of device the cfg selects. A device that imports no host memory says so and passes.
+
+use crate::{
+    Buffer, CommandBufferStatus, Device, DeviceKind, DeviceOptions, HostBacking, HostMemory,
+    ImportGate, ResourceOptions,
+};
+use std::alloc::Layout;
+use std::ptr::NonNull;
+use std::sync::Arc;
+use std::time::Duration;
+
+const WAIT: Duration = Duration::from_secs(60);
+/// The copied buffer's bytes.
+const LENGTH: usize = 256 << 20;
+
+/// A device of the cfg's kind; `None` where it imports no host memory.
+fn device() -> Option<Device> {
+    let options = DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Discrete,
+                DeviceKind::Integrated,
+                DeviceKind::Virtual,
+            ],
+        },
+        ..DeviceOptions::default()
+    };
+    let device = Device::system_default_with(&options).unwrap();
+    if device.shared().host_import.is_err() {
+        eprintln!("COPIED-BASE: the device imports no host memory here; nothing to test");
+        return None;
+    }
+    Some(device)
+}
+
+/// Commit one command buffer whose blit encoder `encode` fills, and wait for it.
+fn blit(device: &Device, encode: impl FnOnce(&mut crate::BlitCommandEncoder)) {
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.blit_command_encoder().unwrap();
+    encode(&mut encoder);
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+}
+
+/// The first page of `buffer` as the GPU reads it: copied into one of the device's own.
+fn gpu_page(device: &Device, buffer: &Buffer) -> Vec<u8> {
+    let own = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
+    blit(device, |encoder| {
+        (encoder.copy_from_buffer_to_buffer(buffer, 0, &own, 0, 4096)).unwrap();
+    });
+    let contents = own.contents().unwrap();
+    // SAFETY: the buffer's bytes, which no command writes now.
+    unsafe { std::slice::from_raw_parts(contents.as_ptr(), 4096) }.to_vec()
+}
+
+/// A copied 256 MiB buffer: no base while the GPU only reads it, then a base whose bytes lie in
+/// the device's memory where `Device::copied_base` gives it some (the test says which), its tags
+/// alone in host memory, else in the host's; a fill and a CPU write reach the other side; the
+/// base goes with the buffer.
+#[test]
+fn a_written_copy_takes_its_base_where_the_device_has_room() {
+    let Some(device) = device() else {
+        return;
+    };
+    let on_device = device.copied_base(LENGTH).is_some();
+    let named = device.name().to_string();
+    eprintln!("COPIED-BASE {named}: the base's bytes in the device's memory: {on_device}");
+    let layout = Layout::from_size_align(LENGTH, 1 << 16).unwrap();
+    // SAFETY: the layout's size is not zero.
+    let pointer = NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) }).unwrap();
+    let refuse: ImportGate = Arc::new(|_| false);
+    // SAFETY: the memory outlives the buffer (freed below, after it), and only the buffer's
+    // commands and the test's reads and writes between command buffers use it.
+    let memory = unsafe { HostMemory::new(pointer) }.with_import_gate(refuse);
+    // SAFETY: as above.
+    let buffer = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            memory,
+            LENGTH as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    }
+    .unwrap();
+    assert_eq!(buffer.host_backing(), Some(HostBacking::Copied));
+    let held = |device: &Device| {
+        let counts = device.work_counts();
+        (
+            counts.copied_base_host_bytes,
+            counts.copied_base_device_bytes,
+        )
+    };
+    // SAFETY: the allocation's bytes, which no command buffer uses between command buffers.
+    let pages = unsafe { std::slice::from_raw_parts_mut(pointer.as_ptr(), LENGTH) };
+    pages[7] = 0x77;
+    assert_eq!(gpu_page(&device, &buffer)[7], 0x77, "the CPU's write read");
+    assert_eq!(held(&device), (0, 0), "no base while the GPU only reads it");
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&buffer, 4096..8192, 0x5A).unwrap();
+    });
+    // SAFETY: as above.
+    let pages = unsafe { std::slice::from_raw_parts_mut(pointer.as_ptr(), LENGTH) };
+    assert!(
+        pages[4096..8192].iter().all(|&b| b == 0x5A),
+        "the fill merged back"
+    );
+    let tags = (LENGTH / 64) as u64;
+    let want = match on_device {
+        true => (tags, LENGTH as u64),
+        false => (tags + LENGTH as u64, 0),
+    };
+    assert_eq!(held(&device), want, "the base's bytes");
+    assert!(device.work_counts().copied_bases_made >= 1);
+    pages[9] = 0x99;
+    assert_eq!(
+        gpu_page(&device, &buffer)[9],
+        0x99,
+        "the CPU's write read again"
+    );
+    drop(buffer);
+    assert_eq!(held(&device), (0, 0), "the base went with the buffer");
+    drop(device);
+    // SAFETY: allocated above with this layout; nothing uses it now.
+    unsafe { std::alloc::dealloc(pointer.as_ptr(), layout) };
+}
+
+/// The 256 MiB bench of `tests/copied_bench.rs`, the base's bytes in the device's memory where
+/// it has room for them (`COPIED-256`). Ignored: run it in release with `--ignored --nocapture`.
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn copied_256_device_bench() {
+    let Some(device) = device() else {
+        return;
+    };
+    let named = device.name().to_string();
+    let label = match device.copied_base(1 << 20).is_some() {
+        true => format!("{named}, device base"),
+        false => format!("{named}, host base (no room on the device)"),
+    };
+    super::copied_bench::bench_256(&label, &mut |length| device.copied_base(length));
+}

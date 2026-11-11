@@ -2659,6 +2659,11 @@ field	metal2vulkan-runtime::WorkCounts.completion_turns_where_taken	pub completi
 field	metal2vulkan-runtime::WorkCounts.completion_waiter_parks	pub completion_waiter_parks: u64
 field	metal2vulkan-runtime::WorkCounts.completion_waiter_parks_timed_out	pub completion_waiter_parks_timed_out: u64
 field	metal2vulkan-runtime::WorkCounts.compute_pipeline_create_nanos	pub compute_pipeline_create_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.copied_base_blocks_read	pub copied_base_blocks_read: u64
+field	metal2vulkan-runtime::WorkCounts.copied_base_device_bytes	pub copied_base_device_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.copied_base_host_bytes	pub copied_base_host_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.copied_bases_made	pub copied_bases_made: u64
+field	metal2vulkan-runtime::WorkCounts.copied_bases_refused	pub copied_bases_refused: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes	pub copied_copy_in_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_in_bytes_skipped	pub copied_copy_in_bytes_skipped: u64
 field	metal2vulkan-runtime::WorkCounts.copied_copy_ins_unused	pub copied_copy_ins_unused: u64

@@ -20,33 +20,64 @@
 //! - **One memory, one copy.** A no-copy buffer made over exactly the bytes (the same first byte
 //!   and length) a live copied buffer was made over lies in its copy, of either storage mode, as
 //!   one made over a live import's bytes lies in that import (`host_aliases.rs`): one `VkBuffer`,
-//!   one snapshot, one hazard key, the gate not asked and no page read. So two textures over one
+//!   one base, one hazard key, the gate not asked and no page read. So two textures over one
 //!   surface's pages are ordered as one resource's accesses are, with no trip through the pages.
 //!   A rebind to such bytes lies in the copy too where its textures were planned at the copy's
 //!   offset (its first byte) and no image in place rides on it. Counted:
 //!   `WorkCounts::copied_host_buffers_shared`. A heap's own buffer and a buffer whose GPU writes
 //!   are dropped keep their own (`host_aliases.rs`, "Not joined").
 //! - **Coherence.** The runtime keeps, for each copy, the bytes the pages and the copy last agreed
-//!   on (its snapshot). At each commit, before any of the command buffer's work is submitted,
-//!   every byte the CPU changed in the pages since then is written into each copy its commands
-//!   use, or into every copy where one may reach memory no use names (a function that reaches
-//!   buffers through addresses, work on the GPU alone; [`CopiedBuffers::copy_in`]): a copy the
-//!   command buffer does not use takes the CPU's writes at the first commit that uses it. At each batch's completion, before its events are seen
-//!   signaled, the scheduler is told, its handlers run or a waiter returns, every byte the GPU
-//!   changed in the copy is written back into the pages, where the CPU did not change that byte
-//!   since ([`CopiedBuffers::merge_back`]): a byte both changed keeps the CPU's, which the next
-//!   commit copies in. The completion compares only the copies its batches may have written: one
-//!   whose buffer's (or heap's) key a use of their command buffers' commands wrote, and every
-//!   copy where one of those may have written memory no use names (the loaded addresses of a
-//!   function that may store or update memory atomically, an indirect command buffer's
-//!   executions; `CopiesReached`), or kept its writes not all apart. Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Bytes are compared a page (4 KiB) at a time, and inside a page that
-//!   differs 8 at a time and then one at a time, so a merge writes no byte the GPU did not change
-//!   ([`sync`]). Each batch ends with a barrier that makes its writes visible to the host
-//!   (`tracker::Barrier::to_host`). Where the pages' memory came with a log of the writes to them
-//!   (`HostMemory::with_dirty_pages`, or its guest RAM's, `HostRam::with_dirty_pages`), each merge
-//!   back reports the blocks it wrote to the log as the copy's own writes, in one call
-//!   (`DirtyPages::wrote_runs_as`, a writer of the copy's own) before it returns: the log sees no
-//!   write the runtime makes, and every other copy and shadow of the pages takes them.
+//!   on. At each commit, before any of the command buffer's work is submitted, every byte the
+//!   CPU changed in the pages since then is written into each copy its commands use, or into
+//!   every copy where one may reach memory no use names (a function that reaches buffers through
+//!   addresses, work on the GPU alone; [`CopiedBuffers::copy_in`]): a copy the command buffer does
+//!   not use takes the CPU's writes at the first commit that uses it. At each batch's completion,
+//!   before its events are seen signaled, the scheduler is told, its handlers run or a waiter
+//!   returns, every byte the GPU changed in the copy is written back into the pages, where the CPU
+//!   did not change that byte since ([`CopiedBuffers::merge_back`]): a byte both changed keeps the
+//!   CPU's, which the next commit copies in. The completion compares only the copies its batches
+//!   may have written: one whose buffer's (or heap's) key a use of their command buffers'
+//!   commands wrote, and every copy where one of those may have written memory no use names (the
+//!   loaded addresses of a function that may store or update memory atomically, an indirect
+//!   command buffer's executions; `CopiesReached`), or kept its writes not all apart. Counted:
+//!   `WorkCounts::copied_merges_compared`, `copied_merges_skipped`. Inside a block that differs,
+//!   bytes are compared 8 at a time and then one at a time, so a merge writes no byte the GPU did
+//!   not change and a copy in none the CPU did not (`merge_block`). Each batch ends with a barrier
+//!   that makes its writes visible to the host (`tracker::Barrier::to_host`). Where the pages'
+//!   memory came with a log of the writes to them (`HostMemory::with_dirty_pages`, or its guest
+//!   RAM's, `HostRam::with_dirty_pages`), each merge back reports the blocks of 4 KiB it wrote to
+//!   the log as the copy's own writes, in one call (`DirtyPages::wrote_runs_as`, a writer of the
+//!   copy's own) before it returns: the log sees no write the runtime makes, and every other copy
+//!   and shadow of the pages takes them.
+//! - **The copy is the base until the GPU may write it.** Only copies in write a copy until a
+//!   command buffer that may write it is committed, so until then it holds the bytes its pages
+//!   and it agree on, and a copy in compares the pages with the copy itself, a page (4 KiB) at a
+//!   time, and writes in the bytes that differ. A copy the GPU only reads (no use of a committed
+//!   command buffer wrote one of its keys, and none may have written memory no use names) holds
+//!   nothing beyond itself, and no completion compares it.
+//! - **A base once it may.** At the first commit whose command buffer may write the copy (its
+//!   commands wrote one of its keys, or may write memory no use names), after its copy in and
+//!   before any of its work is submitted, the copy takes a base of the bytes it then holds
+//!   ([`Base`]): a 128-bit tag of each 1 KiB block ([`tag`]: two NH sums keyed by a random key of
+//!   the process's, `TAG_BLOCK`), kept in host memory (a 64th of the copy's length), and the
+//!   bytes themselves, kept in the device's memory where it has room for them, else in the
+//!   host's (`Device::copied_base`): device-local memory the host maps, in a heap the device's
+//!   resizable BAR makes as large as its own memory (not the 256 MiB window of a GPU without it,
+//!   nor any device with unified memory, where that memory is the host's), while the runtime's
+//!   blocks in that heap and the base stay within half of it. From then on each comparison reads
+//!   one side and its tags: a commit's copy in reads the pages' blocks, and only a block whose
+//!   tag changed reads the copy's block; a completion's merge back reads the copy's blocks, and
+//!   only a block whose tag changed reads the pages' block. The base's bytes are the other
+//!   side's block where its tag still agrees, and are read from the base only for a block both
+//!   sides changed since they agreed (a read across the bus the host does not cache, where they
+//!   are in the device's memory). The base then takes each block that changed. A block whose tag
+//!   agrees is taken as unchanged: for a block that changed, that happens with a chance of at
+//!   most 2^-64 at each comparison ([`tag`]), the only place the runtime takes a tag for the
+//!   bytes; a copy without a base compares bytes. Where the host has no memory for a base, the
+//!   commit fails with `Error::OutOfMemory` and runs nothing, as Metal fails a command buffer
+//!   for memory, and the copy keeps none (it holds what its pages and it agree on). Counted:
+//!   `WorkCounts::copied_bases_made`, `copied_bases_refused`, `copied_base_blocks_read`, and the
+//!   gauges `copied_base_host_bytes` and `copied_base_device_bytes`.
 //! - **Copies in the log gates.** Where the pages' memory came with such a log (a copy that drops
 //!   the GPU's writes included: its guest RAM's runs are asked as a writable copy's are), a
 //!   commit's copy in compares only the pages the log reports written since the copy's last copy
@@ -130,11 +161,12 @@ use crate::key_hash::KeyMap;
 use crate::resource::ResourceKey;
 use crate::work_counts::Counters;
 use crate::DirtyStamp;
+use std::hash::BuildHasher;
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// A device's live copied host buffers, compared at each commit and each batch's completion.
 #[derive(Default)]
@@ -147,6 +179,15 @@ pub(crate) struct CopiedBuffers {
     /// A batch finished with no merge back (a failed wait): the next merge back compares every
     /// copy, whatever its batches wrote.
     owed: AtomicBool,
+    /// The host bytes the live copies' bases hold ([`Base`]): their tags, and the agreed bytes
+    /// of those kept in host memory. A gauge (`WorkCounts::copied_base_host_bytes`).
+    base_host_bytes: AtomicU64,
+    /// The device bytes the live copies' bases hold: the agreed bytes of those kept in the
+    /// device's memory. A gauge (`WorkCounts::copied_base_device_bytes`).
+    base_device_bytes: AtomicU64,
+    /// The tests' stand-in for a host with no memory for a base ([`CopiedBuffers::refuse_bases`]).
+    #[cfg(test)]
+    bases_refused: AtomicBool,
 }
 
 /// The copies commands reached, by the keys of their uses, or every copy: what the batches a
@@ -189,10 +230,11 @@ impl CopiesReached {
 }
 
 /// The caller's bytes as a copy's first read of them took them ([`CopiedBuffers::read`]), before
-/// the copy's memory was made: the bytes the copy and the pages first agree on, and whether the
-/// GPU's writes to the copy are dropped.
+/// the copy's memory was made: the bytes the copy and the pages first agree on, written into the
+/// copy and let go of as it is registered ([`CopiedBuffers::add`]), and whether the GPU's writes
+/// to the copy are dropped.
 pub(crate) struct FirstRead {
-    snapshot: Box<[u8]>,
+    bytes: Box<[u8]>,
     drops_writes: bool,
 }
 
@@ -208,17 +250,17 @@ impl FirstRead {
         read: impl FnOnce(NonNull<u8>, &mut [u8]) -> bool,
         drops_writes: bool,
     ) -> Result<FirstRead, NotCopied> {
-        let mut snapshot = Vec::new();
-        if snapshot.try_reserve_exact(length).is_err() {
+        let mut bytes = Vec::new();
+        if bytes.try_reserve_exact(length).is_err() {
             return Err(NotCopied::OutOfHostMemory);
         }
-        snapshot.resize(length, 0u8);
-        let mut snapshot = snapshot.into_boxed_slice();
-        if !read(pages, &mut snapshot) {
+        bytes.resize(length, 0u8);
+        let mut bytes = bytes.into_boxed_slice();
+        if !read(pages, &mut bytes) {
             return Err(NotCopied::Unreadable);
         }
         Ok(FirstRead {
-            snapshot,
+            bytes,
             drops_writes,
         })
     }
@@ -229,7 +271,8 @@ impl FirstRead {
 pub(crate) enum NotCopied {
     /// A page is not mapped, or mapped without read permission: memory Metal makes no buffer over.
     Unreadable,
-    /// The host has no memory for the copy's snapshot.
+    /// The host has no memory for the copy's first read of the pages, or for its base
+    /// ([`CopiedBuffers::copy_in`]).
     OutOfHostMemory,
 }
 
@@ -240,8 +283,12 @@ struct Entry {
     pages: NonNull<u8>,
     /// The copy's bytes, mapped.
     copy: NonNull<u8>,
-    /// The bytes the pages and the copy last agreed on.
-    snapshot: Box<[u8]>,
+    /// How many bytes the pages and the copy are.
+    length: usize,
+    /// The bytes the pages and the copy last agreed on, once a commit whose command buffer may
+    /// write the copy made it ([`CopiedBuffers::copy_in`]). Until then the copy holds them: only
+    /// copies in write it.
+    base: Option<Base>,
     /// The process cannot write the pages: the GPU's writes to the copy are dropped, never merged
     /// back.
     drops_writes: bool,
@@ -282,6 +329,227 @@ struct CopyLog {
 /// consumer answers by a pass over its watches), rather than compare its own writes again
 /// (about 40 µs a MiB on an M3 Max). Both are exact.
 const ASKS_APART: u64 = 1 << 20;
+
+/// The bytes of a block a copy's base tags and compares at once ([`Base`]).
+pub(crate) const TAG_BLOCK: usize = 1024;
+
+/// A block's tag ([`tag`]).
+type Tag = [u64; 2];
+
+/// The words of the key of [`tag`]: one for each word of a block, and four more for its second
+/// sum's key, the first's shifted by four words.
+const KEY_WORDS: usize = TAG_BLOCK / 4 + 4;
+
+/// The key of every [`tag`] in the process: random words, made once, which no caller sees.
+fn key() -> &'static [u32; KEY_WORDS] {
+    static KEY: OnceLock<[u32; KEY_WORDS]> = OnceLock::new();
+    KEY.get_or_init(|| {
+        // The standard library's hasher keyed from the system's randomness, as a keyed function
+        // of each pair of words' place.
+        let random = std::collections::hash_map::RandomState::new();
+        std::array::from_fn(|at| (random.hash_one(at / 2) >> (32 * (at % 2))) as u32)
+    })
+}
+
+/// A block's tag: two NH sums of its bytes (RFC 4418's NH: each 32-byte stretch's little-endian
+/// words `m0` to `m7`, `(m_i + k_i) * (m_{i+4} + k_{i+4})` for `i` from 0 to 3, the words and
+/// their key words added modulo 2^32, the products summed modulo 2^64), the second's key the
+/// first's shifted by four words (RFC 4418's Toeplitz iteration), keyed by the process's random
+/// [`key`]. NH of 32-bit words is 2^-32-almost-universal, and its Toeplitz extension to two sums
+/// 2^-64 (the UMAC paper, Black, Halevi, Krawczyk, Krovetz and Rogaway, 1999): for any two
+/// different blocks, which no key decides, their tags agree with a chance of at most 2^-64. A
+/// block a copy's base takes as unchanged may have changed with that chance.
+pub(crate) fn tag(block: &[u8; TAG_BLOCK]) -> Tag {
+    let key = key();
+    let (mut first, mut second) = ([0u64; 4], [0u64; 4]);
+    for (stretch, bytes) in block.chunks_exact(32).enumerate() {
+        let word = |at: usize| {
+            u32::from_le_bytes([
+                bytes[4 * at],
+                bytes[4 * at + 1],
+                bytes[4 * at + 2],
+                bytes[4 * at + 3],
+            ])
+        };
+        let keys = &key[8 * stretch..8 * stretch + 12];
+        let lanes = first.iter_mut().zip(second.iter_mut()).enumerate();
+        for (lane, (first, second)) in lanes {
+            let (low, high) = (word(lane), word(lane + 4));
+            let one = u64::from(low.wrapping_add(keys[lane]))
+                * u64::from(high.wrapping_add(keys[lane + 4]));
+            let two = u64::from(low.wrapping_add(keys[lane + 4]))
+                * u64::from(high.wrapping_add(keys[lane + 8]));
+            *first = first.wrapping_add(one);
+            *second = second.wrapping_add(two);
+        }
+    }
+    let sum = |lanes: [u64; 4]| lanes.iter().fold(0u64, |sum, &lane| sum.wrapping_add(lane));
+    [sum(first), sum(second)]
+}
+
+/// The bytes the pages and a copy last agreed on, made at the first commit whose command buffer
+/// may write the copy ([`CopiedBuffers::copy_in`]), from the copy, which held them until then:
+/// a tag of each [`TAG_BLOCK`] block, which the comparisons read in place of the bytes, and the
+/// bytes themselves, which a comparison reads only for a block both sides changed since they
+/// agreed, in the device's memory where it has room for them ([`BaseBytes::device`]), else in
+/// the host's.
+struct Base {
+    tags: Box<[Tag]>,
+    bytes: BaseBytes,
+}
+
+impl Base {
+    /// The base of the `length` bytes of the copy at `copy`, which holds the bytes the pages
+    /// and it agree on: its bytes kept in `device`, where the device had room for them, else in
+    /// the host's memory. `None` where the host has no memory for its tags or bytes.
+    ///
+    /// # Safety
+    ///
+    /// `copy` is `length` bytes of mapped memory, and `device` holds as many.
+    unsafe fn of_copy(copy: NonNull<u8>, length: usize, device: Option<BaseBytes>) -> Option<Base> {
+        let blocks = length.div_ceil(TAG_BLOCK);
+        let mut tags = Vec::new();
+        tags.try_reserve_exact(blocks).ok()?;
+        let mut host = Vec::new();
+        if device.is_none() {
+            host.try_reserve_exact(length).ok()?;
+        }
+        let mut block = [0u8; TAG_BLOCK];
+        for index in 0..blocks {
+            let at = index * TAG_BLOCK;
+            let span = (length - at).min(TAG_BLOCK);
+            // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
+            unsafe { read_block(copy.as_ptr().add(at), span, &mut block) };
+            tags.push(tag(&block));
+            match &device {
+                // SAFETY: as above, in the device's bytes.
+                Some(bytes) => unsafe { bytes.write(at, &block[..span]) },
+                None => host.extend_from_slice(&block[..span]),
+            }
+        }
+        let bytes = match device {
+            Some(bytes) => bytes,
+            None => BaseBytes::host(host.into_boxed_slice()),
+        };
+        Some(Base {
+            tags: tags.into_boxed_slice(),
+            bytes,
+        })
+    }
+
+    /// The host's bytes it holds: its tags, and its bytes where they are in the host's memory.
+    fn host_bytes(&self) -> u64 {
+        let tags = (self.tags.len() * size_of::<Tag>()) as u64;
+        match self.bytes.on_device {
+            true => tags,
+            false => tags + self.bytes.length as u64,
+        }
+    }
+
+    /// The device's bytes it holds: its bytes where they are in the device's memory.
+    fn device_bytes(&self) -> u64 {
+        match self.bytes.on_device {
+            true => self.bytes.length as u64,
+            false => 0,
+        }
+    }
+}
+
+/// Where a copy's base keeps the agreed bytes ([`Base`]): memory the host maps, the host's own,
+/// or the device's (`Device::copied_base`), held while the base lives.
+pub(crate) struct BaseBytes {
+    at: NonNull<u8>,
+    length: usize,
+    on_device: bool,
+    _held: Box<dyn Send>,
+}
+
+// SAFETY: `at` names the memory `_held` keeps mapped and nothing else uses, reached only under
+// the copies' lock ([`CopiedBuffers`]).
+unsafe impl Send for BaseBytes {}
+
+impl BaseBytes {
+    /// The host's memory of `bytes`.
+    fn host(bytes: Box<[u8]>) -> BaseBytes {
+        let length = bytes.len();
+        let raw = NonNull::from(Box::leak(bytes));
+        BaseBytes {
+            at: raw.cast(),
+            length,
+            on_device: false,
+            _held: Box::new(HostBaseBytes(raw)),
+        }
+    }
+
+    /// `length` bytes of the device's memory at `at`, which the host maps, held by `held`.
+    ///
+    /// # Safety
+    ///
+    /// `at` is `length` bytes of memory the host reads and writes (coherent, needing no flush),
+    /// which nothing else uses and which stays mapped until `held` goes.
+    pub(crate) unsafe fn device(at: NonNull<u8>, length: usize, held: Box<dyn Send>) -> BaseBytes {
+        BaseBytes {
+            at,
+            length,
+            on_device: true,
+            _held: held,
+        }
+    }
+
+    /// Read `into.len()` of the bytes from `offset` into `into`. Of the device's memory, a read
+    /// across the bus that the host does not cache: slow (`memory::host_cached`), and made only
+    /// for a block both sides changed.
+    ///
+    /// # Safety
+    ///
+    /// `offset..offset + into.len()` lies in the bytes.
+    unsafe fn read(&self, offset: usize, into: &mut [u8]) {
+        // SAFETY: the caller's; `into` is the caller's own, apart.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.at.as_ptr().add(offset),
+                into.as_mut_ptr(),
+                into.len(),
+            )
+        };
+    }
+
+    /// Write `from` into the bytes from `offset`.
+    ///
+    /// # Safety
+    ///
+    /// `offset..offset + from.len()` lies in the bytes.
+    unsafe fn write(&self, offset: usize, from: &[u8]) {
+        // SAFETY: the caller's; `from` is the caller's own, apart.
+        unsafe {
+            std::ptr::copy_nonoverlapping(from.as_ptr(), self.at.as_ptr().add(offset), from.len())
+        };
+    }
+}
+
+/// Host memory of a base's bytes, freed as it goes: reached through [`BaseBytes`]' pointer alone.
+struct HostBaseBytes(NonNull<[u8]>);
+
+// SAFETY: the memory is this value's own, reached only through its base's pointer.
+unsafe impl Send for HostBaseBytes {}
+
+impl Drop for HostBaseBytes {
+    fn drop(&mut self) {
+        // SAFETY: the box `BaseBytes::host` leaked, freed once, here.
+        drop(unsafe { Box::from_raw(self.0.as_ptr()) });
+    }
+}
+
+/// Read `span` bytes at `from` into `into`, the rest of it zero: a block the tags read whole.
+///
+/// # Safety
+///
+/// `from` is `span` bytes of mapped memory, `span` at most [`TAG_BLOCK`].
+unsafe fn read_block(from: *const u8, span: usize, into: &mut [u8; TAG_BLOCK]) {
+    // SAFETY: the caller's; `into` is the caller's own, apart.
+    unsafe { std::ptr::copy_nonoverlapping(from, into.as_mut_ptr(), span) };
+    into[span..].fill(0);
+}
 
 // SAFETY: the pointers name the caller's pages, which stay mapped while the buffer's import lives
 // (`HostMemory::new`), and the copy's mapped memory, which the import holds; both are reached only
@@ -384,7 +652,12 @@ impl Drop for Copied {
             }
             None => None,
         };
-        // Its watches end with no lock of the copies' held: a watch's end is the consumer's call.
+        if let Some(base) = removed.as_ref().and_then(|entry| entry.base.as_ref()) {
+            (self.buffers.base_host_bytes).fetch_sub(base.host_bytes(), Ordering::Relaxed);
+            (self.buffers.base_device_bytes).fetch_sub(base.device_bytes(), Ordering::Relaxed);
+        }
+        // Its watches end, and its base's memory goes, with no lock of the copies' held: a
+        // watch's end is the consumer's call, and the device's memory takes its own lock.
         drop(entries);
         drop(removed);
     }
@@ -429,7 +702,8 @@ impl CopiedBuffers {
     }
 
     /// Register the copy at `copy` of the caller's bytes at `pages` that `first` read, its bytes
-    /// those `first` took.
+    /// those `first` took, which it holds as the bytes the pages and it agree on: it has no base
+    /// until a commit whose command buffer may write it ([`CopiedBuffers::copy_in`]).
     ///
     /// # Safety
     ///
@@ -443,18 +717,21 @@ impl CopiedBuffers {
         copy: NonNull<u8>,
     ) -> Copied {
         let FirstRead {
-            snapshot,
+            bytes,
             drops_writes,
         } = first;
-        let length = snapshot.len();
+        let length = bytes.len();
         // SAFETY: the copy is `length` bytes nothing else uses yet (the caller's).
-        unsafe { std::ptr::copy_nonoverlapping(snapshot.as_ptr(), copy.as_ptr(), length) };
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), copy.as_ptr(), length) };
+        // The copy holds the bytes from here on: no base until a command buffer may write it.
+        drop(bytes);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         lock(&self.entries).push(Entry {
             id,
             pages,
             copy,
-            snapshot,
+            length,
+            base: None,
             drops_writes,
             log: None,
             keys: Vec::new(),
@@ -476,6 +753,21 @@ impl CopiedBuffers {
     /// commands use, as Metal's GPU reaches only those (counted:
     /// `WorkCounts::copied_copy_ins_unused`).
     ///
+    /// A copy with no base yet (no command buffer that may write it was committed) holds the
+    /// bytes its pages and it agree on: its pages are compared with it, and the bytes that differ
+    /// written in. Each copy the command buffer's commands may write (`written`: the keys they
+    /// wrote, `DirtyCommit::copies_written`, or every copy where one may write memory no use
+    /// names), and that has none, then takes its base ([`Base`]), before any of its work is
+    /// submitted: its bytes in the device's memory where `device` gives them (`Device::copied_base`),
+    /// else in the host's. A copy with a base compares its pages' blocks' tags with its base's,
+    /// and only a block whose tag changed reads the copy's, and the base's bytes only where the
+    /// copy's changed too: the bytes the CPU changed are written in, and the base takes the
+    /// block. Counted: `WorkCounts::copied_bases_made`, `copied_base_blocks_read`. Where the
+    /// host has no memory for a base, the copy keeps none and the answer is
+    /// `Err(NotCopied::OutOfHostMemory)`: the command buffer runs nothing
+    /// (`WorkCounts::copied_bases_refused`), and the copy still holds what its pages and it agree
+    /// on, for the next commit.
+    ///
     /// A copy whose pages' memory came with a log of the writes to them ([`Copied::set_log`])
     /// compares only the pages the log reports written since the stamp its last copy in synced
     /// to, and the bytes no log keeps: a stamp of each log is asked now, once for every copy
@@ -495,20 +787,22 @@ impl CopiedBuffers {
         &self,
         counts: &Counters,
         tally: &DirtyTally,
-        used: &CopiesReached,
+        (used, written): (&CopiesReached, &CopiesReached),
         in_flight: impl FnOnce() -> Vec<Range<u64>>,
-    ) {
+        device: &mut dyn FnMut(usize) -> Option<BaseBytes>,
+    ) -> Result<(), NotCopied> {
         if self.live.load(Ordering::Relaxed) == 0 {
-            return;
+            return Ok(());
         }
+        let reaches = |entry: &Entry| used.meets(&entry.keys) || written.meets(&entry.keys);
         let in_flight = in_flight();
         let asked: Vec<Asked> = (lock(&self.entries).iter())
-            .filter(|entry| used.meets(&entry.keys))
+            .filter(|entry| reaches(entry))
             .filter_map(|entry| {
                 let log = entry.log.as_ref()?;
                 Some(Asked {
                     id: entry.id,
-                    length: entry.snapshot.len() as u64,
+                    length: entry.length as u64,
                     pages: Arc::clone(&log.pages),
                     writer: log.writer,
                     unlogged: Arc::clone(&log.unlogged),
@@ -518,9 +812,10 @@ impl CopiedBuffers {
             })
             .collect();
         let plans = planned(asked, tally, &in_flight);
-        let (mut moved, mut skipped, mut unused) = (0u64, 0u64, 0u64);
+        let (mut moved, mut skipped, mut unused, mut read) = (0u64, 0u64, 0u64, 0u64);
+        let (mut made, mut refused) = (0u64, 0u64);
         for entry in lock(&self.entries).iter_mut() {
-            if !used.meets(&entry.keys) {
+            if !reaches(entry) {
                 unused += 1;
                 continue;
             }
@@ -529,37 +824,55 @@ impl CopiedBuffers {
                     .map(|at| &plans[at].1),
                 None => None,
             };
-            let (pages, copy, length) = (entry.pages, entry.copy, entry.snapshot.len());
-            match plan.and_then(|plan| plan.bytes.as_ref()) {
-                Some(bytes) => {
-                    let mut compared = 0u64;
-                    for range in bytes {
-                        let (start, end) = (range.start as usize, range.end as usize);
-                        // SAFETY: the entry's pointers are live while it is registered
-                        // (`Entry`), and `start..end` lies in its bytes (`blocks`).
-                        moved += unsafe {
-                            sync(
-                                NonNull::new_unchecked(pages.as_ptr().add(start)),
-                                NonNull::new_unchecked(copy.as_ptr().add(start)),
-                                &mut entry.snapshot[start..end],
-                                false,
-                            )
-                        };
-                        compared += range.end - range.start;
+            let (pages, copy, length) = (entry.pages, entry.copy, entry.length);
+            let whole = [0..length as u64];
+            let ranges = match plan.and_then(|plan| plan.bytes.as_ref()) {
+                Some(bytes) => &bytes[..],
+                None => &whole[..],
+            };
+            let mut compared = 0u64;
+            for range in ranges {
+                let bytes = range.start as usize..range.end as usize;
+                // SAFETY: the entry's pointers are live while it is registered (`Entry`), and
+                // `bytes` lies in its bytes (`blocks`), from a multiple of `SYNC_BLOCK`.
+                moved += unsafe {
+                    match &mut entry.base {
+                        Some(base) => copy_in_tagged(pages, copy, base, length, bytes, &mut read),
+                        None => copy_in_untagged(pages, copy, bytes),
                     }
-                    skipped += length as u64 - compared;
-                }
-                // SAFETY: the entry's pointers are live while it is registered (`Entry`).
-                None => moved += unsafe { sync(pages, copy, &mut entry.snapshot, false) },
+                };
+                compared += range.end - range.start;
             }
+            skipped += length as u64 - compared;
             if let (Some(log), Some(plan)) = (&mut entry.log, plan) {
                 log.since = plan.stamps.clone();
                 log.merged = 0;
+            }
+            if entry.base.is_none() && written.meets(&entry.keys) {
+                // SAFETY: the entry's copy is live while it is registered (`Entry`), and the
+                // device's bytes are as many as its own.
+                let base = unsafe { Base::of_copy(copy, length, device(length)) };
+                #[cfg(test)]
+                let base = base.filter(|_| !self.bases_refused.load(Ordering::Relaxed));
+                match base {
+                    Some(base) => {
+                        (self.base_host_bytes).fetch_add(base.host_bytes(), Ordering::Relaxed);
+                        (self.base_device_bytes).fetch_add(base.device_bytes(), Ordering::Relaxed);
+                        entry.base = Some(base);
+                        made += 1;
+                    }
+                    None => refused += 1,
+                }
             }
         }
         counts.copied_copied_in(moved);
         counts.copied_copy_in_skipped(skipped);
         counts.copied_copy_ins_unused(unused);
+        counts.copied_bases(made, refused, read);
+        match refused {
+            0 => Ok(()),
+            _ => Err(NotCopied::OutOfHostMemory),
+        }
     }
 
     /// At a batch's completion: write back into each copy's pages the bytes the GPU changed in the
@@ -576,8 +889,14 @@ impl CopiedBuffers {
     /// kept apart. Each batch's writes are done by its own completion turn, which
     /// compares what they reach; a copy no batch wrote since its last comparison holds what its
     /// pages do, but for the CPU's writes, which the next commit copies in. After a batch finished
-    /// with no merge (a failed wait, [`CopiedBuffers::owe`]), the next compares every copy.
-    /// Counted: `WorkCounts::copied_merges_compared`, `copied_merges_skipped`.
+    /// with no merge (a failed wait, [`CopiedBuffers::owe`]), the next compares every copy. A copy
+    /// with no base was written by no command buffer, as its commit would have made one
+    /// ([`CopiedBuffers::copy_in`]), and is not compared. Counted:
+    /// `WorkCounts::copied_merges_compared`, `copied_merges_skipped`.
+    ///
+    /// A copy's blocks' tags are compared with its base's, and only a block whose tag changed
+    /// reads its pages' block, and the base's bytes only where the pages' changed too
+    /// (`WorkCounts::copied_base_blocks_read`); the base takes the copy's block.
     ///
     /// The bytes written into pages whose memory came with a log are reported to it, as the
     /// copy's own writes: the blocks of [`SYNC_BLOCK`] bytes it wrote a byte of, adjacent ones
@@ -590,32 +909,41 @@ impl CopiedBuffers {
             return;
         }
         let owed = self.owed.swap(false, Ordering::AcqRel);
-        let (mut moved, mut dropped) = (0u64, 0u64);
+        let (mut moved, mut dropped, mut read) = (0u64, 0u64, 0u64);
         let (mut compared, mut skipped) = (0u64, 0u64);
         let mut reports = Vec::new();
         for entry in lock(&self.entries).iter_mut() {
+            let Some(base) = entry.base.as_mut() else {
+                skipped += 1;
+                continue;
+            };
             if !owed && !written.meets(&entry.keys) {
                 skipped += 1;
                 continue;
             }
             compared += 1;
-            let (copy, pages) = (entry.copy, entry.pages);
-            match (entry.drops_writes, &mut entry.log) {
-                // SAFETY: the entry's copy is live while it is registered (`Entry`).
-                (true, _) => dropped += unsafe { restore(copy, &entry.snapshot) },
-                (false, Some(log)) => {
-                    let mut blocks = Vec::new();
-                    // SAFETY: the entry's pointers are live while it is registered (`Entry`).
-                    moved +=
-                        unsafe { sync_noting(copy, pages, &mut entry.snapshot, true, &mut blocks) };
-                    if !blocks.is_empty() {
-                        let wrote: u64 = blocks.iter().map(|bytes| bytes.end - bytes.start).sum();
-                        log.merged = log.merged.saturating_add(wrote);
-                        reports.push((Arc::clone(&log.pages), log.writer, blocks));
-                    }
+            let (copy, pages, length) = (entry.copy, entry.pages, entry.length);
+            if entry.drops_writes {
+                // SAFETY: the entry's pointers are live while it is registered (`Entry`).
+                dropped += unsafe { restore_tagged(copy, pages, base, length, &mut read) };
+                continue;
+            }
+            let mut blocks: Vec<Range<u64>> = Vec::new();
+            let mut note = |wrote: Range<usize>| {
+                // The block of `SYNC_BLOCK` bytes the write lies in, cut to the copy.
+                let start = (wrote.start / SYNC_BLOCK * SYNC_BLOCK) as u64;
+                let end = (start + SYNC_BLOCK as u64).min(length as u64);
+                match blocks.last_mut() {
+                    Some(last) if last.end >= start => last.end = last.end.max(end),
+                    _ => blocks.push(start..end),
                 }
-                // SAFETY: as above.
-                (false, None) => moved += unsafe { sync(copy, pages, &mut entry.snapshot, true) },
+            };
+            // SAFETY: as above.
+            moved += unsafe { merge_tagged(copy, pages, base, length, &mut read, &mut note) };
+            if let (Some(log), false) = (&mut entry.log, blocks.is_empty()) {
+                let wrote: u64 = blocks.iter().map(|bytes| bytes.end - bytes.start).sum();
+                log.merged = log.merged.saturating_add(wrote);
+                reports.push((Arc::clone(&log.pages), log.writer, blocks));
             }
         }
         // Reported with no lock of the copies' held.
@@ -625,6 +953,23 @@ impl CopiedBuffers {
         counts.copied_merged_back(moved);
         counts.copied_dropped(dropped);
         counts.copied_merges(compared, skipped);
+        counts.copied_bases(0, 0, read);
+    }
+
+    /// Find no memory for a base from now on where `refused`: a test's stand-in for a host out of
+    /// memory ([`CopiedBuffers::copy_in`]).
+    #[cfg(test)]
+    pub(crate) fn refuse_bases(&self, refused: bool) {
+        self.bases_refused.store(refused, Ordering::Relaxed);
+    }
+
+    /// The host's and the device's bytes the live copies' bases hold
+    /// (`WorkCounts::copied_base_host_bytes`, `copied_base_device_bytes`).
+    pub(crate) fn base_bytes(&self) -> (u64, u64) {
+        (
+            self.base_host_bytes.load(Ordering::Relaxed),
+            self.base_device_bytes.load(Ordering::Relaxed),
+        )
     }
 
     /// A batch finished with no merge back (its queue's wait failed): the next merge back
@@ -765,93 +1110,195 @@ fn blocks(mut bytes: Vec<Range<u64>>, length: u64) -> Vec<Range<u64>> {
     bytes
 }
 
-/// The bytes [`sync`] reads of `from` at once and compares whole with the snapshot's: a host page.
+/// The bytes a copy with no base compares of its pages and itself at once ([`copy_in_untagged`]),
+/// and the unit a merge back reports its writes to a log in: a host page.
 pub(crate) const SYNC_BLOCK: usize = 4096;
 
-/// Write into `to` each byte of `from` that differs from `snapshot`, and take it into `snapshot`;
-/// where `keep_to`, a byte of `to` that differs from `snapshot` already (written since they last
-/// agreed) is kept, though `snapshot` takes `from`'s, so the next copy the other way carries it.
-/// The bytes written.
+/// A copy in of a copy with no base, which holds the bytes its pages and it agree on: write into
+/// `copy` each byte of `pages` that differs from it, in `bytes`. The bytes written.
 ///
-/// Read a block of [`SYNC_BLOCK`] bytes at a time, each read of `from` once and compared whole
-/// with the snapshot's (slice equality, which the compiler vectorizes); only a block that differs
-/// is looked into, 8 bytes at a time and then byte by byte, so no byte the comparison found equal
-/// is written ([`merge_block`]).
+/// Read a block of [`SYNC_BLOCK`] bytes of each at a time, compared whole (slice equality, which
+/// the compiler vectorizes); only a block that differs is looked into ([`merge_block`]), so no
+/// byte the comparison found equal is written.
 ///
 /// # Safety
 ///
-/// `from` and `to` are `snapshot.len()` bytes of mapped memory each.
-pub(crate) unsafe fn sync(
-    from: NonNull<u8>,
-    to: NonNull<u8>,
-    snapshot: &mut [u8],
-    keep_to: bool,
+/// `pages` and `copy` are mapped memory over `bytes`.
+pub(crate) unsafe fn copy_in_untagged(
+    pages: NonNull<u8>,
+    copy: NonNull<u8>,
+    bytes: Range<usize>,
 ) -> u64 {
-    // SAFETY: the caller's.
-    unsafe { sync_blocks(from, to, snapshot, keep_to, |_| {}) }
-}
-
-/// [`sync`], noting in `blocks` the bytes of each block it wrote a byte of, adjacent blocks
-/// joined, in order.
-///
-/// # Safety
-///
-/// As [`sync`]'s.
-pub(crate) unsafe fn sync_noting(
-    from: NonNull<u8>,
-    to: NonNull<u8>,
-    snapshot: &mut [u8],
-    keep_to: bool,
-    blocks: &mut Vec<Range<u64>>,
-) -> u64 {
-    let note = |block: Range<u64>| match blocks.last_mut() {
-        Some(last) if last.end == block.start => last.end = block.end,
-        _ => blocks.push(block),
-    };
-    // SAFETY: the caller's.
-    unsafe { sync_blocks(from, to, snapshot, keep_to, note) }
-}
-
-/// [`sync`], telling `wrote` the bytes of each block it wrote a byte of.
-///
-/// # Safety
-///
-/// As [`sync`]'s.
-unsafe fn sync_blocks(
-    from: NonNull<u8>,
-    to: NonNull<u8>,
-    snapshot: &mut [u8],
-    keep_to: bool,
-    mut wrote: impl FnMut(Range<u64>),
-) -> u64 {
-    let (from, to) = (from.as_ptr(), to.as_ptr());
+    let (pages, copy) = (pages.as_ptr(), copy.as_ptr());
     let mut written = 0u64;
-    let mut block = [0u8; SYNC_BLOCK];
-    let mut at = 0;
-    while at < snapshot.len() {
-        let span = (snapshot.len() - at).min(SYNC_BLOCK);
-        let now = &mut block[..span];
-        // SAFETY: `span` bytes at `at` lie in `from` (the caller's); `block` is this call's own.
-        unsafe { std::ptr::copy_nonoverlapping(from.add(at), now.as_mut_ptr(), span) };
-        let was = &mut snapshot[at..at + span];
-        if now != was {
-            // SAFETY: `span` bytes at `at` lie in `to` (the caller's).
-            let merged = unsafe { merge_block(now, to.add(at), was, keep_to) };
-            if merged > 0 {
-                wrote(at as u64..(at + span) as u64);
-            }
-            written += merged;
+    let (mut now, mut was) = ([0u8; SYNC_BLOCK], [0u8; SYNC_BLOCK]);
+    let mut at = bytes.start;
+    while at < bytes.end {
+        let span = (bytes.end - at).min(SYNC_BLOCK);
+        // SAFETY: `span` bytes at `at` lie in both (the caller's); the blocks are this call's own.
+        unsafe {
+            std::ptr::copy_nonoverlapping(pages.add(at), now.as_mut_ptr(), span);
+            std::ptr::copy_nonoverlapping(copy.add(at), was.as_mut_ptr(), span);
+        }
+        if now[..span] != was[..span] {
+            // SAFETY: as above.
+            written += unsafe { merge_block(&now[..span], copy.add(at), &mut was[..span], false) };
         }
         at += span;
     }
     written
 }
 
-/// [`sync`] inside one block whose bytes `now` (read of `from`) differ from the snapshot's `was`:
-/// 8 bytes at a time, and in each 8 that differ, byte by byte, each byte of `now` that differs
-/// from `was` written into `to` (where `keep_to`, unless `to`'s byte differs from `was` already)
-/// and taken into `was`: eight in one store where all eight differ (and, where `keep_to`, none
-/// of `to`'s does), so no byte that did not change is written. The bytes written.
+/// A copy in of a copy with `base`, over `bytes` (from a multiple of [`TAG_BLOCK`]), of a copy
+/// of `length` bytes: each block of the pages whose tag differs from the base's is compared with
+/// the base's bytes, and each byte that differs written into `copy`. The base's bytes are the
+/// copy's block where its tag still agrees (the GPU did not change it since), else read from the
+/// base (counted in `read`). The base then holds the block as written, the pages' bytes over the
+/// base's. The bytes written.
+///
+/// # Safety
+///
+/// `pages` and `copy` are `length` bytes of mapped memory, and `bytes` lies in them.
+unsafe fn copy_in_tagged(
+    pages: NonNull<u8>,
+    copy: NonNull<u8>,
+    base: &mut Base,
+    length: usize,
+    bytes: Range<usize>,
+    read: &mut u64,
+) -> u64 {
+    let (pages, copy) = (pages.as_ptr(), copy.as_ptr());
+    let mut written = 0u64;
+    let (mut now, mut was) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
+    let (first, end) = (bytes.start / TAG_BLOCK, bytes.end.div_ceil(TAG_BLOCK));
+    let blocks = base.tags.iter_mut().enumerate().take(end).skip(first);
+    for (index, agreed) in blocks {
+        let at = index * TAG_BLOCK;
+        let span = (length - at).min(TAG_BLOCK);
+        // SAFETY: `span` bytes at `at` lie in the pages (the caller's).
+        unsafe { read_block(pages.add(at), span, &mut now) };
+        let changed = tag(&now);
+        if changed == *agreed {
+            continue;
+        }
+        // SAFETY: as above, in the copy.
+        unsafe { read_block(copy.add(at), span, &mut was) };
+        let copy_agrees = tag(&was) == *agreed;
+        if !copy_agrees {
+            // SAFETY: as above, in the base's bytes, which are as many.
+            unsafe { base.bytes.read(at, &mut was[..span]) };
+            *read += 1;
+        }
+        // SAFETY: as above, in the copy.
+        written += unsafe { merge_block(&now[..span], copy.add(at), &mut was[..span], false) };
+        // The pages' block over the base's: the pages' own where the copy's agreed.
+        *agreed = match copy_agrees {
+            true => changed,
+            false => tag(&was),
+        };
+        // SAFETY: as above, in the base's bytes.
+        unsafe { base.bytes.write(at, &was[..span]) };
+    }
+    written
+}
+
+/// A merge back of a copy with `base` (that keeps the GPU's writes) of `length` bytes: each block
+/// of the copy whose tag differs from the base's is compared with the base's bytes, and each byte
+/// that differs written into `pages`, unless the pages' byte differs from the base's already (the
+/// CPU wrote it since: [`merge_block`]), each block it wrote a byte of told to `note`. The base's
+/// bytes are the pages' block where its tag still agrees (the CPU did not change it since), else
+/// read from the base (counted in `read`). The base then holds the copy's block. The bytes
+/// written.
+///
+/// # Safety
+///
+/// `copy` and `pages` are `length` bytes of mapped memory.
+unsafe fn merge_tagged(
+    copy: NonNull<u8>,
+    pages: NonNull<u8>,
+    base: &mut Base,
+    length: usize,
+    read: &mut u64,
+    note: &mut impl FnMut(Range<usize>),
+) -> u64 {
+    let (copy, pages) = (copy.as_ptr(), pages.as_ptr());
+    let mut written = 0u64;
+    let (mut now, mut was) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
+    for (index, agreed) in base.tags.iter_mut().enumerate() {
+        let at = index * TAG_BLOCK;
+        let span = (length - at).min(TAG_BLOCK);
+        // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
+        unsafe { read_block(copy.add(at), span, &mut now) };
+        let changed = tag(&now);
+        if changed == *agreed {
+            continue;
+        }
+        // SAFETY: as above, in the pages.
+        unsafe { read_block(pages.add(at), span, &mut was) };
+        if tag(&was) != *agreed {
+            // SAFETY: as above, in the base's bytes, which are as many.
+            unsafe { base.bytes.read(at, &mut was[..span]) };
+            *read += 1;
+        }
+        // SAFETY: as above, in the pages.
+        let merged = unsafe { merge_block(&now[..span], pages.add(at), &mut was[..span], true) };
+        if merged > 0 {
+            note(at..at + span);
+        }
+        written += merged;
+        *agreed = changed;
+        // SAFETY: as above, in the base's bytes.
+        unsafe { base.bytes.write(at, &now[..span]) };
+    }
+    written
+}
+
+/// A merge back of a copy with `base` whose GPU writes are dropped, of `length` bytes: each block
+/// of the copy whose tag differs from the base's takes back the base's bytes wherever it differs
+/// from them, and nothing is written to `pages` or the base. The base's bytes are the pages'
+/// block where its tag still agrees, else read from the base (counted in `read`). The bytes
+/// written into the copy.
+///
+/// # Safety
+///
+/// `copy` and `pages` are `length` bytes of mapped memory.
+unsafe fn restore_tagged(
+    copy: NonNull<u8>,
+    pages: NonNull<u8>,
+    base: &Base,
+    length: usize,
+    read: &mut u64,
+) -> u64 {
+    let (copy, pages) = (copy.as_ptr(), pages.as_ptr());
+    let mut written = 0u64;
+    let (mut now, mut agreed) = ([0u8; TAG_BLOCK], [0u8; TAG_BLOCK]);
+    for (index, tagged) in base.tags.iter().enumerate() {
+        let at = index * TAG_BLOCK;
+        let span = (length - at).min(TAG_BLOCK);
+        // SAFETY: `span` bytes at `at` lie in the copy (the caller's).
+        unsafe { read_block(copy.add(at), span, &mut now) };
+        if tag(&now) == *tagged {
+            continue;
+        }
+        // SAFETY: as above, in the pages.
+        unsafe { read_block(pages.add(at), span, &mut agreed) };
+        if tag(&agreed) != *tagged {
+            // SAFETY: as above, in the base's bytes, which are as many.
+            unsafe { base.bytes.read(at, &mut agreed[..span]) };
+            *read += 1;
+        }
+        // SAFETY: as above, in the copy.
+        written += unsafe { merge_block(&agreed[..span], copy.add(at), &mut now[..span], false) };
+    }
+    written
+}
+
+/// One block whose bytes `now` (read of one side) differ from the agreed bytes `was`: 8 bytes at
+/// a time, and in each 8 that differ, byte by byte, each byte of `now` that differs from `was`
+/// written into `to` (where `keep_to`, unless `to`'s byte differs from `was` already: the other
+/// side wrote it since) and taken into `was`: eight in one store where all eight differ (and,
+/// where `keep_to`, none of `to`'s does), so no byte that did not change is written. The bytes
+/// written.
 ///
 /// # Safety
 ///
@@ -898,36 +1345,6 @@ unsafe fn merge_block(now: &[u8], to: *mut u8, was: &mut [u8], keep_to: bool) ->
     written
 }
 
-/// Write into `copy` each byte of `snapshot` that `copy` differs from: the GPU's writes to a copy
-/// whose GPU writes are dropped. The bytes written.
-///
-/// Read a block of [`SYNC_BLOCK`] bytes of `copy` at a time and compared whole with the
-/// snapshot's, as [`sync`] reads; only a block that differs is looked into ([`merge_block`]), so
-/// no byte the comparison found equal is written.
-///
-/// # Safety
-///
-/// `copy` is `snapshot.len()` bytes of mapped memory.
-pub(crate) unsafe fn restore(copy: NonNull<u8>, snapshot: &[u8]) -> u64 {
-    let copy = copy.as_ptr();
-    let mut written = 0u64;
-    let mut block = [0u8; SYNC_BLOCK];
-    let mut at = 0;
-    while at < snapshot.len() {
-        let span = (snapshot.len() - at).min(SYNC_BLOCK);
-        let now = &mut block[..span];
-        // SAFETY: `span` bytes at `at` lie in `copy` (the caller's); `block` is this call's own.
-        unsafe { std::ptr::copy_nonoverlapping(copy.add(at), now.as_mut_ptr(), span) };
-        let agreed = &snapshot[at..at + span];
-        if now != agreed {
-            // SAFETY: as above.
-            written += unsafe { merge_block(agreed, copy.add(at), now, false) };
-        }
-        at += span;
-    }
-    written
-}
-
 /// Read the caller's `into.len()` bytes at `pages` into `into`: through the kernel (`kernel`,
 /// [`read_pages`]), and where it fails, with plain loads where every page of them is mapped with
 /// read permission (`readable`, asked for the bytes' addresses, [`mapped_readable`]). Whether
@@ -936,7 +1353,7 @@ pub(crate) unsafe fn restore(copy: NonNull<u8>, snapshot: &[u8]) -> u64 {
 /// The kernel's read is a test that faults on nothing, but on Linux it pins each page, and no
 /// page of a `VM_PFNMAP` or `VM_IO` mapping can be pinned: a mapping of a dma-buf (udmabuf's on
 /// Linux 7.2, measured) is mapped readable and fails it all the same. The plain loads are the
-/// access a copy's comparisons make at each commit ([`sync`]).
+/// access a copy's comparisons make at each commit ([`CopiedBuffers::copy_in`]).
 ///
 /// # Safety
 ///

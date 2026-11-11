@@ -71,7 +71,7 @@ use super::dirty_pages::DirtyCommit;
 use super::encoder::{Recorded, Segment};
 use super::error::{
     internal, invalid, vulkan, CommandBufferError, DeadlockCause, EncoderCall, Error,
-    FailedPipeline, FailedState, MeshRecordsOverflow, PipelineCreationCause, Problem,
+    FailedPipeline, FailedState, MemoryKind, MeshRecordsOverflow, PipelineCreationCause, Problem,
     TessellationRecordsOverflow, TimedOut,
 };
 use super::event::{EventRef, EventShared, SharedEvent};
@@ -3609,19 +3609,36 @@ impl CommandBuffer {
         // copy where its uses went unnoted, or a command may reach memory no use names. Copied
         // in with no lock of the command buffer's held, as a copy over logged pages waits for
         // the log's publication.
+        // Each such copy its commands may write takes a base of the bytes it then holds, before
+        // any of its work is submitted; where the host has no memory for one, the command
+        // buffer runs nothing (`copied.rs`, "A base once it may").
         if shared.copied.any() {
-            let mut used = CopiesReached::default();
+            let (mut used, mut written) = (CopiesReached::default(), CopiesReached::default());
+            let unnoted = self.0.unnoted.load(Ordering::Relaxed);
             // The state's lock goes before the dirty log's is taken.
-            let unnamed = self.0.unnoted.load(Ordering::Relaxed) || self.state().reaches_unnamed;
-            match unnamed {
+            let (reaches, writes) = {
+                let state = self.state();
+                (state.reaches_unnamed, state.writes_unnamed)
+            };
+            match unnoted || reaches {
                 true => used.reached_all(),
                 false => self.dirty().copies_used(&mut used),
             }
-            shared
-                .copied
-                .copy_in(&shared.counts, shared.dirty.tally(), &used, || {
-                    shared.dirty.in_flight()
-                });
+            match unnoted || writes {
+                true => written.reached_all(),
+                false => self.dirty().copies_written(&mut written),
+            }
+            let copied_in = shared.copied.copy_in(
+                &shared.counts,
+                shared.dirty.tally(),
+                (&used, &written),
+                || shared.dirty.in_flight(),
+                &mut |length| device.copied_base(length),
+            );
+            if copied_in.is_err() {
+                self.state().committing = false;
+                return Err(Error::OutOfMemory(MemoryKind::Host));
+            }
         }
         let (waits, away, reaches, unreplayable, reset) = {
             let mut state = self.state();

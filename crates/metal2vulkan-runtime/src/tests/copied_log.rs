@@ -100,6 +100,13 @@ impl DirtyPages for TestLog {
     }
 }
 
+/// A commit whose command buffer may read and write every copy: each takes its base at its first.
+fn copy_in_all(buffers: &CopiedBuffers, counts: &Counters, tally: &DirtyTally) {
+    let all = CopiesReached::all();
+    let copied_in = buffers.copy_in(counts, tally, (&all, &all), Vec::new, &mut |_| None);
+    assert_eq!(copied_in, Ok(()));
+}
+
 /// `bytes` as a pointer the comparisons read or write.
 pub(super) fn at(bytes: &mut [u8]) -> NonNull<u8> {
     NonNull::new(bytes.as_mut_ptr()).unwrap()
@@ -142,6 +149,8 @@ fn a_copy_s_merge_back_reports_the_blocks_it_wrote_as_its_own() {
         unsafe { add_reading(&buffers, at(&mut pages), at(&mut copy), length, read, false) };
     let copied = copied.unwrap();
     copied.set_log(&log);
+    let tally = DirtyTally::default();
+    copy_in_all(&buffers, &counts, &tally);
     // The GPU writes a byte of blocks 0, 1, 2 and 5 (the last, short); in block 3 it writes a
     // byte the CPU wrote too since, which the merge keeps the CPU's of, writing nothing there.
     copy[10] ^= 0xFF;
@@ -192,6 +201,7 @@ fn a_copy_s_merge_back_reports_the_blocks_it_wrote_as_its_own() {
     };
     let other = other.unwrap();
     other.set_log(&log);
+    copy_in_all(&buffers, &counts, &tally);
     other_copy[0] ^= 0xFF;
     buffers.merge_back(&counts, &CopiesReached::all());
     let last = own.named().last().cloned().unwrap();
@@ -213,6 +223,7 @@ fn a_copy_s_merge_back_reports_the_blocks_it_wrote_as_its_own() {
     };
     let dropping = dropping.unwrap();
     dropping.set_log(&log);
+    copy_in_all(&buffers, &counts, &tally);
     let before = (
         own.writes.lock().unwrap().len(),
         ram.writes.lock().unwrap().len(),
@@ -293,7 +304,7 @@ fn a_logged_copy_in_compares_only_the_pages_the_log_reports() {
     let (b, untold) = (BLOCK as usize, 3 * BLOCK as usize + 9);
     // Written before the first copy in, told to no log.
     pair.pages[5 * b + 3] ^= 0xFF;
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     assert_eq!(
         pair.copy[5 * b + 3],
         pair.pages[5 * b + 3],
@@ -303,7 +314,7 @@ fn a_logged_copy_in_compares_only_the_pages_the_log_reports() {
     pair.pages[b + 9] ^= 0xFF;
     own.told(BLOCK..2 * BLOCK, 0);
     pair.pages[untold] ^= 0xFF;
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     assert_eq!(pair.copy[b + 9], pair.pages[b + 9], "the told block taken");
     assert_ne!(
         pair.copy[untold], pair.pages[untold],
@@ -312,17 +323,17 @@ fn a_logged_copy_in_compares_only_the_pages_the_log_reports() {
     // The log cannot say: every byte compared, and again at the next copy in, which has no
     // stamp to count on.
     own.unanswered.store(true, Ordering::SeqCst);
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     assert_eq!(pair.copy[untold], pair.pages[untold], "every byte compared");
     own.unanswered.store(false, Ordering::SeqCst);
     pair.pages[untold] ^= 0xFF;
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     assert_eq!(
         pair.copy[untold], pair.pages[untold],
         "every byte compared again"
     );
     pair.pages[untold] ^= 0xFF;
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     assert_ne!(pair.copy[untold], pair.pages[untold], "gated again");
     drop(copied);
 }
@@ -345,7 +356,7 @@ fn one_stamp_and_one_question_serve_every_copy_of_a_copy_in() {
     for round in 0..3 {
         let stamps = tally.stamps.load(Ordering::SeqCst);
         let asked = own.asked.load(Ordering::SeqCst);
-        buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+        copy_in_all(&buffers, &counts, &tally);
         let stamps = tally.stamps.load(Ordering::SeqCst) - stamps;
         let asked = own.asked.load(Ordering::SeqCst) - asked;
         // Eight memories, each its own source: one stamp of each, the question once each.
@@ -371,7 +382,7 @@ fn one_stamp_and_one_question_serve_every_copy_of_a_copy_in() {
     for round in 0..3 {
         let stamps = tally.stamps.load(Ordering::SeqCst);
         let asked = ram.asked.load(Ordering::SeqCst);
-        buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+        copy_in_all(&buffers, &counts, &tally);
         assert_eq!(tally.stamps.load(Ordering::SeqCst) - stamps, 1, "one stamp");
         let questions = if round == 0 { 0 } else { 1 };
         assert_eq!(
@@ -414,7 +425,7 @@ fn a_copy_takes_another_copy_s_merge_back_over_the_same_pages() {
     };
     let second = second.unwrap();
     second.set_log(&log);
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     for blocks in [1_usize, 256] {
         // The GPU writes a byte of each of `blocks` blocks of the first copy; the completion
         // merges them back.
@@ -430,7 +441,7 @@ fn a_copy_takes_another_copy_s_merge_back_over_the_same_pages() {
             "merged back"
         );
         let except = own.asked_except.load(Ordering::SeqCst);
-        buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+        copy_in_all(&buffers, &counts, &tally);
         assert!(
             written.iter().all(|&b| second_copy[b] == first.pages[b]),
             "{blocks} blocks: the other copy took the merge"
@@ -460,11 +471,11 @@ fn bytes_no_log_keeps_are_compared_at_every_copy_in() {
     let buffers = Arc::new(CopiedBuffers::default());
     let (counts, tally) = (Counters::default(), DirtyTally::default());
     let copied = pair.copied(&buffers, Some(&log));
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     let (logged, unlogged) = (BLOCK as usize + 5, 3 * BLOCK as usize + 5);
     pair.pages[logged] ^= 0xFF;
     pair.pages[unlogged] ^= 0xFF;
-    buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+    copy_in_all(&buffers, &counts, &tally);
     assert_ne!(
         pair.copy[logged], pair.pages[logged],
         "a logged block the log left out"
@@ -491,7 +502,7 @@ fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
         let buffers = Arc::new(CopiedBuffers::default());
         let (counts, tally) = (Counters::default(), DirtyTally::default());
         let copied = pair.copied(&buffers, logged.then_some(&log));
-        buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+        copy_in_all(&buffers, &counts, &tally);
         let cpu_byte = BLOCK as usize + 100;
         let stop = Arc::new(AtomicBool::new(false));
         let pages = pair.pages.as_mut_ptr() as usize;
@@ -520,11 +531,11 @@ fn a_cpu_write_the_gpu_did_not_make_survives_both_ways_logged_or_not() {
                 unsafe { *copy.add(at) = (*copy.add(at)).wrapping_add(1) };
             }
             buffers.merge_back(&counts, &CopiesReached::all());
-            buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+            copy_in_all(&buffers, &counts, &tally);
         }
         stop.store(true, Ordering::SeqCst);
         let last = writer.join().unwrap();
-        buffers.copy_in(&counts, &tally, &CopiesReached::all(), Vec::new);
+        copy_in_all(&buffers, &counts, &tally);
         assert_eq!(
             pair.pages[cpu_byte], last,
             "logged {logged}: the pages keep the CPU's"
