@@ -35,6 +35,7 @@ mod engine_buffer_table;
 mod engine_chosen_pointers;
 mod engine_color_groups;
 mod engine_compute_limits;
+mod engine_convert_rounding;
 mod engine_copy;
 mod engine_coverage_loop;
 mod engine_cross_class;
