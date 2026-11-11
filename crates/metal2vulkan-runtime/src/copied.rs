@@ -360,36 +360,27 @@ fn key() -> &'static [u32; KEY_WORDS] {
 /// different blocks, which no key decides, their tags agree with a chance of at most 2^-64. A
 /// block a copy's base takes as unchanged may have changed with that chance.
 ///
-/// Built for AVX2 too, which an x86-64 host that has it runs ([`tag_avx2`]): the same sums, four
-/// lanes of each to a register.
+///
+/// The sums run as SIMD on an x86-64 host ([`x86`]: AVX2 where the host has it, SSE2 otherwise),
+/// and one word pair at a time elsewhere ([`tag_portable`]): the same tag either way.
 pub(crate) fn tag(block: &[u8; TAG_BLOCK]) -> Tag {
     #[cfg(target_arch = "x86_64")]
-    if std::is_x86_feature_detected!("avx2") {
-        // SAFETY: the host has AVX2.
-        return unsafe { tag_avx2(block) };
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: the host has AVX2.
+            return unsafe { x86::tag_avx2(block, key()) };
+        }
+        x86::tag_sse2(block, key())
     }
+    #[cfg(not(target_arch = "x86_64"))]
     tag_portable(block)
 }
 
-/// [`tag`] for any host of the target.
+/// [`tag`] one word pair at a time: the host's answer where it has no SIMD form, and the
+/// reference the SIMD forms are tested against.
+#[cfg(any(test, not(target_arch = "x86_64")))]
 pub(crate) fn tag_portable(block: &[u8; TAG_BLOCK]) -> Tag {
-    nh(block, key())
-}
-
-/// [`tag`] for an x86-64 host with AVX2.
-///
-/// # Safety
-///
-/// The host has AVX2.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-pub(crate) unsafe fn tag_avx2(block: &[u8; TAG_BLOCK]) -> Tag {
-    nh(block, key())
-}
-
-/// The two NH sums of [`tag`], under `key`.
-#[inline(always)]
-fn nh(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
+    let key = key();
     let (mut first, mut second) = ([0u64; 4], [0u64; 4]);
     for (stretch, bytes) in block.chunks_exact(32).enumerate() {
         let word = |at: usize| {
@@ -414,6 +405,135 @@ fn nh(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
     }
     let sum = |lanes: [u64; 4]| lanes.iter().fold(0u64, |sum, &lane| sum.wrapping_add(lane));
     [sum(first), sum(second)]
+}
+
+/// [`tag`]'s sums as x86-64 SIMD. A stretch's words `m0` to `m3` sit in one register and `m4` to
+/// `m7` in another, each added to its key words; `_mm_mul_epu32` multiplies the even words of
+/// the two (`m0` by `m4`, `m2` by `m6`) into 64-bit lanes, and again after a shift by 32 bits
+/// the odd ones. Each sum keeps its products in two registers' lanes, added together at the end:
+/// the same sums modulo 2^64 as [`tag_portable`]'s, in another order.
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod x86 {
+    use super::{Tag, KEY_WORDS, TAG_BLOCK};
+    use std::arch::x86_64::{
+        __m128i, __m256i, _mm256_add_epi32, _mm256_add_epi64, _mm256_loadu2_m128i,
+        _mm256_mul_epu32, _mm256_setzero_si256, _mm256_srli_epi64, _mm256_storeu_si256,
+        _mm_add_epi32, _mm_add_epi64, _mm_loadu_si128, _mm_mul_epu32, _mm_setzero_si128,
+        _mm_srli_epi64, _mm_storeu_si128,
+    };
+
+    /// SSE2, which every x86-64 host has: one 32-byte stretch to a step.
+    pub(crate) fn tag_sse2(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
+        let words = block.as_ptr().cast::<__m128i>();
+        let keys = key.as_ptr().cast::<__m128i>();
+        let (mut first, mut second) = ([_mm_setzero_si128(); 2], [_mm_setzero_si128(); 2]);
+        for stretch in 0..TAG_BLOCK / 32 {
+            // SAFETY: unaligned loads of the block's 16-byte pieces `2 * stretch` and the next
+            // (at most its 63rd of 64), and of the key's 4-word pieces `2 * stretch` to two
+            // after it (at most its 64th of 65: words 256 to 259).
+            let (low, high, low_key, high_key, next_key) = unsafe {
+                (
+                    _mm_loadu_si128(words.add(2 * stretch)),
+                    _mm_loadu_si128(words.add(2 * stretch + 1)),
+                    _mm_loadu_si128(keys.add(2 * stretch)),
+                    _mm_loadu_si128(keys.add(2 * stretch + 1)),
+                    _mm_loadu_si128(keys.add(2 * stretch + 2)),
+                )
+            };
+            let (low_first, high_first) =
+                (_mm_add_epi32(low, low_key), _mm_add_epi32(high, high_key));
+            let (low_second, high_second) =
+                (_mm_add_epi32(low, high_key), _mm_add_epi32(high, next_key));
+            first[0] = _mm_add_epi64(first[0], _mm_mul_epu32(low_first, high_first));
+            first[1] = _mm_add_epi64(
+                first[1],
+                _mm_mul_epu32(
+                    _mm_srli_epi64::<32>(low_first),
+                    _mm_srli_epi64::<32>(high_first),
+                ),
+            );
+            second[0] = _mm_add_epi64(second[0], _mm_mul_epu32(low_second, high_second));
+            second[1] = _mm_add_epi64(
+                second[1],
+                _mm_mul_epu32(
+                    _mm_srli_epi64::<32>(low_second),
+                    _mm_srli_epi64::<32>(high_second),
+                ),
+            );
+        }
+        let sum = |lanes: [__m128i; 2]| {
+            let mut words = [0u64; 2];
+            // SAFETY: a 16-byte store into two u64s.
+            unsafe {
+                _mm_storeu_si128(words.as_mut_ptr().cast(), _mm_add_epi64(lanes[0], lanes[1]))
+            };
+            words[0].wrapping_add(words[1])
+        };
+        [sum(first), sum(second)]
+    }
+
+    /// AVX2: two 32-byte stretches to a step, the words `m0` to `m3` of both in one register and
+    /// `m4` to `m7` of both in another.
+    ///
+    /// # Safety
+    ///
+    /// The host has AVX2.
+    #[target_feature(enable = "avx2")]
+    pub(crate) unsafe fn tag_avx2(block: &[u8; TAG_BLOCK], key: &[u32; KEY_WORDS]) -> Tag {
+        let words = block.as_ptr().cast::<__m128i>();
+        let keys = key.as_ptr().cast::<__m128i>();
+        let (mut first, mut second) = ([_mm256_setzero_si256(); 2], [_mm256_setzero_si256(); 2]);
+        for stretch in (0..TAG_BLOCK / 32).step_by(2) {
+            let at = 2 * stretch;
+            // SAFETY: unaligned loads of the block's 16-byte pieces `at` to three after it (at
+            // most its 63rd of 64), and of the key's 4-word pieces `at` to four after it (at
+            // most its 64th of 65: words 256 to 259); the host has AVX2.
+            let (low, high, low_key, high_key, next_key) = unsafe {
+                (
+                    _mm256_loadu2_m128i(words.add(at + 2), words.add(at)),
+                    _mm256_loadu2_m128i(words.add(at + 3), words.add(at + 1)),
+                    _mm256_loadu2_m128i(keys.add(at + 2), keys.add(at)),
+                    _mm256_loadu2_m128i(keys.add(at + 3), keys.add(at + 1)),
+                    _mm256_loadu2_m128i(keys.add(at + 4), keys.add(at + 2)),
+                )
+            };
+            let (low_first, high_first) = (
+                _mm256_add_epi32(low, low_key),
+                _mm256_add_epi32(high, high_key),
+            );
+            let (low_second, high_second) = (
+                _mm256_add_epi32(low, high_key),
+                _mm256_add_epi32(high, next_key),
+            );
+            first[0] = _mm256_add_epi64(first[0], _mm256_mul_epu32(low_first, high_first));
+            first[1] = _mm256_add_epi64(
+                first[1],
+                _mm256_mul_epu32(
+                    _mm256_srli_epi64::<32>(low_first),
+                    _mm256_srli_epi64::<32>(high_first),
+                ),
+            );
+            second[0] = _mm256_add_epi64(second[0], _mm256_mul_epu32(low_second, high_second));
+            second[1] = _mm256_add_epi64(
+                second[1],
+                _mm256_mul_epu32(
+                    _mm256_srli_epi64::<32>(low_second),
+                    _mm256_srli_epi64::<32>(high_second),
+                ),
+            );
+        }
+        let mut sums = [[0u64; 4]; 2];
+        for (sum, lanes) in sums.iter_mut().zip([first, second]) {
+            // SAFETY: a 32-byte store into four u64s; the host has AVX2.
+            unsafe {
+                _mm256_storeu_si256(
+                    sum.as_mut_ptr().cast(),
+                    _mm256_add_epi64(lanes[0], lanes[1]),
+                )
+            };
+        }
+        sums.map(|lanes| lanes.iter().fold(0u64, |sum, &lane| sum.wrapping_add(lane)))
+    }
 }
 
 /// The bytes the pages and a copy last agreed on, made at the first commit whose command buffer
