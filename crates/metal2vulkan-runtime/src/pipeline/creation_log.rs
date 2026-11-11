@@ -20,9 +20,9 @@
 //!   census's `fragment.helper-guard`), `helper-fence <stage>` with the number of the stage's
 //!   calls an identity shuffle follows against it (its census's `fragment.helper-fence`), and the
 //!   graphics key's other parts (topology, pass, strides, fixed state, sample positions). A
-//!   state's first pipeline prints every field; a later
-//!   one prints the fields that differ from the state's closest earlier pipeline (the one with the
-//!   fewest differing fields), each as `old -> new` with the parts both share elided.
+//!   state's first pipeline prints every field; a later one prints the fields that differ from the
+//!   state's closest earlier pipeline (the one with the fewest differing fields), each as
+//!   `old -> new` with the parts both share elided.
 //! - **MoltenVK's split.** Where the device's driver is MoltenVK and its performance tracking is
 //!   on (`MVK_CONFIG_PERFORMANCE_TRACKING=1`), the line adds what MoltenVK's own statistics
 //!   (`vkGetPerformanceStatisticsMVK`) gained during the creation, per activity: SPIR-V to MSL,
