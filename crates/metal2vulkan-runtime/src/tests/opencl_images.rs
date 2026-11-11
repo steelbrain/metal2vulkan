@@ -36,21 +36,21 @@ const WIDTH: u64 = 16;
 
 /// The node of argument `n`, a texture at `index` of the MSL type `ty` (`texture1d<unknown,
 /// read>`), its access `access` (`sample` or `write`).
-fn image(n: u32, index: u32, access: &str, ty: &str, name: &str) -> String {
+pub(super) fn image(n: u32, index: u32, access: &str, ty: &str, name: &str) -> String {
     format!(
         "!{{i32 {n}, !\"air.texture\", !\"air.location_index\", i32 {index}, i32 1, !\"air.{access}\", !\"air.arg_type_name\", !\"{ty}\", !\"air.arg_name\", !\"{name}\"}}"
     )
 }
 
 /// The node of argument `n`, a sampler at `index`.
-fn sampler_node(n: u32, index: u32, name: &str) -> String {
+pub(super) fn sampler_node(n: u32, index: u32, name: &str) -> String {
     format!(
         "!{{i32 {n}, !\"air.sampler\", !\"air.location_index\", i32 {index}, i32 1, !\"air.arg_type_name\", !\"sampler\", !\"air.arg_name\", !\"{name}\"}}"
     )
 }
 
 /// The node of argument `n`, a read-write `float4` buffer at `index`.
-fn float4s(n: u32, index: u32, name: &str) -> String {
+pub(super) fn float4s(n: u32, index: u32, name: &str) -> String {
     format!(
         "!{{i32 {n}, !\"air.buffer\", !\"air.location_index\", i32 {index}, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 16, !\"air.arg_type_align_size\", i32 16, !\"air.arg_type_name\", !\"float4\", !\"air.arg_name\", !\"{name}\"}}"
     )
@@ -258,7 +258,7 @@ fn row(texture: &Texture, layer: u64) -> Vec<f32> {
 }
 
 /// A sampler of `filter`, `address` and `normalized` coordinates.
-fn sampler(
+pub(super) fn sampler(
     device: &Device,
     filter: SamplerMinMagFilter,
     address: SamplerAddressMode,
@@ -275,17 +275,17 @@ fn sampler(
 }
 
 /// What `state` binds besides its hidden buffers.
-struct Bound<'a> {
-    textures: &'a [&'a Texture],
-    samplers: &'a [&'a SamplerState],
+pub(super) struct Bound<'a> {
+    pub(super) textures: &'a [&'a Texture],
+    pub(super) samplers: &'a [&'a SamplerState],
     /// The kernel's own buffer at 3 (its index 0), if any.
-    out: Option<&'a Buffer>,
+    pub(super) out: Option<&'a Buffer>,
 }
 
 /// `state` dispatched over `threads` threads, one dimension, its hidden buffers bound as Apple's
 /// OpenCL binds them (the third holding word `i` as `i * 0x10000 + 0x1234`), and `bound`'s textures,
 /// samplers and buffer at their indices.
-fn run(device: &Device, state: &ComputePipelineState, threads: u64, bound: &Bound<'_>) {
+pub(super) fn run(device: &Device, state: &ComputePipelineState, threads: u64, bound: &Bound<'_>) {
     let table: Vec<u32> = (0..64).map(|i| i * 0x10000 + 0x1234).collect();
     let hidden = [
         words_buffer(device, &[0, 0, 0, 1]),

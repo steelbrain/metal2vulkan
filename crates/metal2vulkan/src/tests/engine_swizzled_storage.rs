@@ -13,7 +13,8 @@
 //! - A `ulong` read under the variant is refused (`NotImplemented(TextureSwizzle)`).
 //! - The binder joins a storage slot bound to a swizzled texture to the variant, which plans the
 //!   same key again, views the texture unswizzled (`ImageViewDesc::shader_swizzle`) and
-//!   specializes the slot's swizzle word; a sampled slot keeps its swizzled view. A swizzled
+//!   specializes the slot's swizzle word; a storage slot the function only queries views it
+//!   unswizzled under no variant; a sampled slot keeps its swizzled view. A swizzled
 //!   texture's shape states its level count.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
@@ -861,6 +862,66 @@ fn a_storage_slot_bound_to_a_swizzled_texture_joins_the_variant() {
         planned > 0 && sampled > 0,
         "{planned} planned, {sampled} sampled"
     );
+}
+
+/// A kernel storing texture slot 0's width (`access` `write` or `read_write`), which it neither
+/// reads nor writes, to `out[0]` (buffer 0).
+fn query_kernel(access: &str) -> String {
+    format!(
+        r#"define void @k(ptr addrspace(1) %t, ptr addrspace(1) %out) {{
+  %w = call i32 @air.get_width_texture_2d(ptr addrspace(1) %t, i32 0)
+  store i32 %w, ptr addrspace(1) %out, align 4
+  ret void
+}}
+
+declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
+
+!air.kernel = !{{!0}}
+!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4}}
+!3 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.{access}", !"air.arg_type_name", !"texture2d<float, {access}>", !"air.arg_name", !"t"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
+"#
+    )
+}
+
+/// A storage slot its function only queries, bound to a swizzled view, reads and writes no texel,
+/// and no swizzle reaches its width (Metal answers the view's size: our probe
+/// `opencl_swizzled_images`, job m3-max-16336): its plan joins no variant and binds the view with
+/// no swizzle (`shader_swizzle`, the identity mapping), where a Vulkan storage view could take
+/// none and the consumer refused it. On every committed profile.
+#[test]
+fn a_storage_slot_only_queried_binds_a_swizzled_texture_unswizzled() {
+    let bgra = C::new(S::Blue, S::Green, S::Red, S::Alpha);
+    let mut planned = 0;
+    for access in ["write", "read_write"] {
+        let Some(bc) = assemble(&format!("query {access}"), &query_kernel(access)) else {
+            return;
+        };
+        for (stem, dev) in devices() {
+            let Some(plain) = pipeline(&dev, &bc, &LowerInputs::new()) else {
+                continue;
+            };
+            let what = format!("{access} on {stem}");
+            let plan = plain
+                .plan(&dev, &state(swizzled_facts(bgra)).shape())
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert!(plan.variant.swizzled_storage.is_empty(), "{what}");
+            let view = plan
+                .descriptors
+                .iter()
+                .find_map(|d| match &d.source {
+                    WriteSource::Texture { view, .. } => Some(*view),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{what}: the texture's view"));
+            assert!(view.shader_swizzle, "{what}");
+            assert_eq!(view.components, vk::ComponentMapping::IDENTITY, "{what}");
+            planned += 1;
+        }
+    }
+    assert!(planned > 0);
 }
 
 /// The value `plan` specializes `pipeline`'s constant `key` to.
