@@ -143,6 +143,8 @@ mod dispatch_pending;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod dma_buf_export;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod dma_buf_import_cycles;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_plane_offset;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod draw_again;
