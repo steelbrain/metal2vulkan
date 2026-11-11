@@ -31,6 +31,13 @@
 //!   throughout. The runtime answers each state's own size's threads
 //!   (`ComputePipelineState::max_total_threads_per_threadgroup`), and a tile state's dispatch of
 //!   a size that is not a multiple of 4 runs (docs/API.md, accepted differences).
+//! - **A required size past the kernel's own maximum.** A first compile of a kernel of
+//!   `[[max_total_threads_per_threadgroup(64)]]` (`compute_pipeline_limits.m` with a salt) fails a
+//!   compute creation that requires 128 by 1 by 1 (code 3, "requested required threads per
+//!   threadgroup 128,1,1 but 'count64' expects max threads per threadgroup 64"), and makes one
+//!   that requires 32 by 1 by 1, answering 32. Once the kernel compiled with no size, the state
+//!   requiring 128 by 1 by 1 is made and answers 64. The runtime refuses such a size every time
+//!   (`RequiredThreadsProblem::OverKernelMax`).
 //!
 //! Measured on an M3 Max under macOS 27.0.1 (`binary_function_linking.m`, of libraries compiled
 //! from source and of metallibs alike, plain and with `MTL_DEBUG_LAYER=1`):
@@ -130,6 +137,21 @@ pub enum RequiredThreadsProblem {
         /// The size's threads.
         threads: u64,
         /// The descriptor's `maxTotalThreadsPerThreadgroup`.
+        max: u32,
+    },
+    /// A compute state's size of more threads than its kernel's own
+    /// `[[max_total_threads_per_threadgroup(n)]]`: Metal's first compile of the kernel fails the
+    /// creation, code 3 ("requested required threads per threadgroup 128,1,1 but 'count64'
+    /// expects max threads per threadgroup 64"). Once Metal compiled the kernel under another
+    /// descriptor it makes the state, answering the kernel's maximum, which this refusal does not
+    /// follow.
+    ///
+    /// Basis: metal-measured (an M3 Max, macOS 27.0.1: plain Metal's creation fails on a first
+    /// compile of the kernel, twice over, `compute_pipeline_limits.m` with a salt).
+    OverKernelMax {
+        /// The size's threads.
+        threads: u64,
+        /// The kernel's own maximum.
         max: u32,
     },
 }
@@ -290,6 +312,32 @@ pub(super) fn check_kernel(
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// Check, after compiling, a compute creation of `compiled` (its kernel compiled) in `call`: its
+/// required threads per threadgroup against the kernel's own maximum, as Metal's first compile of
+/// the kernel does (`RequiredThreadsProblem::OverKernelMax`). Here rather than in the compile:
+/// the size is no part of the compiled pipeline's key, so a pipeline of the kernel found compiled
+/// before would skip a check there. A tile function's own maximum beside a required size is
+/// unmeasured, and not checked.
+pub(super) fn check_kernel_maximum(compiled: &Kernel, call: &'static str) -> Result<(), Error> {
+    let (Kernel::Compute(d), StageSource::Compiled(kernel)) = (compiled, compiled.stage()) else {
+        return Ok(());
+    };
+    let (Some(required), Some(max)) = (
+        required_size(d.required_threads_per_threadgroup),
+        kernel.max_total_threads_attribute(),
+    ) else {
+        return Ok(());
+    };
+    let threads: u64 = required.iter().map(|&axis| u64::from(axis)).product();
+    if threads > u64::from(max) {
+        return Err(invalid(
+            call,
+            Problem::RequiredThreads(RequiredThreadsProblem::OverKernelMax { threads, max }),
+        ));
     }
     Ok(())
 }

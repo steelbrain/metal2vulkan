@@ -35,7 +35,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | What a call did wrong | 70 | 70 | 0 | 0 | 0 | 0 | 0 |
-| What a call did wrong, in detail | 167 | 150 | 0 | 0 | 0 | 0 | 0 |
+| What a call did wrong, in detail | 168 | 151 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -49,7 +49,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | What a call did wrong | 22 | 3 | 5 | 0 | 15 | 8 | 17 | 0 |
-| What a call did wrong, in detail | 59 | 26 | 23 | 0 | 33 | 26 | 0 | 0 |
+| What a call did wrong, in detail | 60 | 26 | 23 | 0 | 33 | 26 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -385,7 +385,7 @@ Columns:
 | `IndirectDispatchRange` | An indirect dispatch's `bytes` of arguments at `offset` that run past the bytes the runtime holds at Metal's address in its buffer of `length`... | every device (a public call's own check of its arguments) | `metal-takes`: an Apple M3 Max under macOS 27.0.1: an indirect dispatch whose 12 bytes of arguments run past its buffer of 8 bytes runs and counts right; Metal's API validation alone refuses it. Arguments inside the buffer's allocation are taken now, so what the refusal still reaches past Metal for is the slice past the bytes the runtime holds there | 1: `crates/metal2vulkan-runtime/src/indirect_dispatch.rs (arguments_offset)` | `-` |
 | `Sparse` | A sparse heap's or texture's call Metal stops, or answers nil for | every device (a public call's own check of its arguments) | `delegated`: SparseProblem, section 9 | 5: `crates/metal2vulkan-runtime/src/sparse/encoder.rs (move_texture_mappings)`, `crates/metal2vulkan-runtime/src/sparse/encoder.rs (update_texture_mapping_indirect)` (+2) | `-` |
 | `WrappedBuffer` | A buffer the caller made that cannot be wrapped as a Metal buffer of the length and storage (`new_buffer_with_vk_buffer`) | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal wraps no Vulkan buffer | 1: `crates/metal2vulkan-runtime/src/wrapped_buffer.rs (new_buffer_with_vk_buffer)` | `-` |
-| `RequiredThreads` | A pipeline's `requiredThreadsPerThreadgroup` that Metal refuses at creation | every device (a public call's own check of its arguments) | `delegated`: RequiredThreadsProblem, section 9 | 1: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)` | `-` |
+| `RequiredThreads` | A pipeline's `requiredThreadsPerThreadgroup` that Metal refuses at creation | every device (a public call's own check of its arguments) | `delegated`: RequiredThreadsProblem, section 9 | 2: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)`, `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel_maximum)` | `-` |
 | `BinaryFunctions` | A pipeline's binary functions that Metal refuses | every device (a public call's own check of its arguments) | `delegated`: BinaryFunctionProblem, section 9 | 5: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (added, 2 sites)`, `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_mesh)` (+2) | `-` |
 | `DynamicLibraryFunction` | A function made by name from a dynamic library (`newFunctionWithName:` and its forms) | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max and an M4, plain and under API validation: Metal asserts "type is not a valid MTLFunctionType" | 1: `crates/metal2vulkan-runtime/src/library.rs (function)` | `-` |
 | `Rebind` | `rebind_bytes_no_copy` of a buffer or heap the runtime cannot rebind as asked (a runtime extension; `rebind.rs`) | every device (a public call's own check of its arguments) | `ours`: a runtime extension: Metal rebinds no bytes under a buffer | 5: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)`, `crates/metal2vulkan-runtime/src/detach.rs (detach_backing, 2 sites)` (+1) | `-` |
@@ -565,6 +565,7 @@ Columns:
 | `RequiredThreadsProblem::OverDeviceLimit` | A size of more threads than the device's limit (its `maxTotalThreadsPerThreadgroup` answer) | every device (a public call's own check of its arguments) | `metal-documented`: Metal's creation fails "must be <= 1024 (device limit)", with or without API validation | 1: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)` | `-` |
 | `RequiredThreadsProblem::OverMaxTotal` | A size of more threads than the descriptor's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: Metal's creation fails "must be <= maxTotalThreadsPerThreadgroup (32)", with or without API validation | 1: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)` | `-` |
 | `RequiredThreadsProblem::MaxTotalDiffers` | A descriptor's `maxTotalThreadsPerThreadgroup` above the size's threads | every device (a public call's own check of its arguments) | `metal-documented`: Metal's creation fails "Kernel specified max total threads per threadgroup (64) must match compute pipeline specified max total threads per threadgroup (256)", with or without API validation | 1: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)` | `-` |
+| `RequiredThreadsProblem::OverKernelMax` | A compute state's size of more threads than its kernel's own `[[max_total_threads_per_threadgroup(n)]]` | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal's creation fails on a first compile of the kernel, twice over, `compute_pipeline_limits.m` with a salt | 1: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel_maximum)` | `-` |
 | `BinaryFunctionProblem::NotSupported` | Functions added to any stage of a mesh state, whose descriptor has no support flag | every device (a public call's own check of its arguments) | `metal-measured`: an M4, macOS 27.0.1: plain Metal's process ends at the call for a mesh state — cases `mesh_frag_two`, `mesh_frag_one_add_two`, `mesh_vertex_add` and `mesh_tile_add` | 2: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (added)`, `crates/metal2vulkan-runtime/src/pipeline/additions.rs (new_compute_pipeline_state_with_additional_binary_functions)` | `-` |
 | `BinaryFunctionProblem::NotPrecompiled` | A function not compiled to a binary in a stage's `binary_functions` or among the functions added to a stage of a made state, which plain Metal's... | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal's creation fails with code 2, an addition's with code 1, `binary_function_linking.m` | 1: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (not_precompiled)` | `-` |
 | `BinaryFunctionProblem::ObjectOrMeshStage` | Binary functions in a mesh render pipeline's object or mesh stage (the `binary_functions` of its function's linked functions, Metal's... | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal's process ends at the creation, `binary_function_linking.m` | 1: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_mesh)` | `-` |
@@ -871,7 +872,7 @@ Each refusal's sites, with the function that builds it.
 - `invalid::IndirectDispatchRange`: `crates/metal2vulkan-runtime/src/indirect_dispatch.rs (arguments_offset)`
 - `invalid::Sparse`: `crates/metal2vulkan-runtime/src/sparse/encoder.rs (move_texture_mappings)`; `crates/metal2vulkan-runtime/src/sparse/encoder.rs (update_texture_mapping_indirect)`; `crates/metal2vulkan-runtime/src/sparse/encoder.rs (update_texture_mappings)`; `crates/metal2vulkan-runtime/src/texture.rs (plan_sparse_texture, 2 sites)`
 - `invalid::WrappedBuffer`: `crates/metal2vulkan-runtime/src/wrapped_buffer.rs (new_buffer_with_vk_buffer)`
-- `invalid::RequiredThreads`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)`
+- `invalid::RequiredThreads`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)`; `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel_maximum)`
 - `invalid::BinaryFunctions`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (added, 2 sites)`; `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_mesh)`; `crates/metal2vulkan-runtime/src/pipeline/additions.rs (new_compute_pipeline_state_with_additional_binary_functions)`; `crates/metal2vulkan-runtime/src/pipeline/additions.rs (not_precompiled)`
 - `invalid::DynamicLibraryFunction`: `crates/metal2vulkan-runtime/src/library.rs (function)`
 - `invalid::Rebind`: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)`; `crates/metal2vulkan-runtime/src/detach.rs (detach_backing, 2 sites)`; `crates/metal2vulkan-runtime/src/rebind.rs (rebind_bytes_no_copy, 2 sites)`
@@ -1029,6 +1030,7 @@ Each refusal's sites, with the function that builds it.
 - `subproblem::RequiredThreadsProblem::OverDeviceLimit`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)`
 - `subproblem::RequiredThreadsProblem::OverMaxTotal`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)`
 - `subproblem::RequiredThreadsProblem::MaxTotalDiffers`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel)`
+- `subproblem::RequiredThreadsProblem::OverKernelMax`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_kernel_maximum)`
 - `subproblem::BinaryFunctionProblem::NotSupported`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (added)`; `crates/metal2vulkan-runtime/src/pipeline/additions.rs (new_compute_pipeline_state_with_additional_binary_functions)`
 - `subproblem::BinaryFunctionProblem::NotPrecompiled`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (not_precompiled)`
 - `subproblem::BinaryFunctionProblem::ObjectOrMeshStage`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (check_mesh)`

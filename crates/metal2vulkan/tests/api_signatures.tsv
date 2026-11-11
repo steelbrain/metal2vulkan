@@ -9444,6 +9444,7 @@ method	metal2vulkan::library::CompiledFunction::attribute_fetches	pub fn attribu
 method	metal2vulkan::library::CompiledFunction::from_bytes	pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<CompiledFunction, ArtifactError>
 method	metal2vulkan::library::CompiledFunction::from_bytes_for_key	pub fn from_bytes_for_key(bytes: &[u8], key: &FunctionCompileKey, device: &Device) -> Result<CompiledFunction, ArtifactError>
 method	metal2vulkan::library::CompiledFunction::key	pub fn key(&self) -> &FunctionCompileKey
+method	metal2vulkan::library::CompiledFunction::max_total_threads_attribute	pub fn max_total_threads_attribute(&self) -> Option<u32>
 method	metal2vulkan::library::CompiledFunction::module_stats	pub fn module_stats(&self) -> ModuleStats
 method	metal2vulkan::library::CompiledFunction::numbered_samplers	pub fn numbered_samplers(&self) -> &[crate::pipeline::NumberedSampler]
 method	metal2vulkan::library::CompiledFunction::precision_notes	pub fn precision_notes(&self) -> &[PrecisionNote]
@@ -12545,6 +12546,7 @@ variant	metal2vulkan-runtime::RenderStateProblem::ViewportNotFinite	ViewportNotF
 variant	metal2vulkan-runtime::RequiredThreadsProblem::EmptyAxis	EmptyAxis { required: [u32; 3] }
 variant	metal2vulkan-runtime::RequiredThreadsProblem::MaxTotalDiffers	MaxTotalDiffers { threads: u64, max: u32 }
 variant	metal2vulkan-runtime::RequiredThreadsProblem::OverDeviceLimit	OverDeviceLimit { threads: u64, limit: u32 }
+variant	metal2vulkan-runtime::RequiredThreadsProblem::OverKernelMax	OverKernelMax { threads: u64, max: u32 }
 variant	metal2vulkan-runtime::RequiredThreadsProblem::OverMaxTotal	OverMaxTotal { threads: u64, max: u32 }
 variant	metal2vulkan-runtime::ResourceIdKind::IndirectCommandBuffer	IndirectCommandBuffer
 variant	metal2vulkan-runtime::ResourceIdKind::PipelineState	PipelineState

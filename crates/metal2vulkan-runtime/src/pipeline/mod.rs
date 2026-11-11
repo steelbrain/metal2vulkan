@@ -823,6 +823,7 @@ impl ComputePipelineState {
             Variant::compiled(&sources, function, &kernel, key)
         })
         .map_err(|error| compile_error(device, error))?;
+        additions::check_kernel_maximum(&compiled, call)?;
         // Metal fails the creation over a binary function not compiled to a binary once the
         // stage links, after a reference it leaves unresolved (`additions.rs`).
         let made = match &kernel {

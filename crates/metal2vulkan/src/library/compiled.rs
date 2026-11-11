@@ -295,6 +295,12 @@ impl CompiledFunction {
         self.0.subgroup.full_subgroups
     }
 
+    /// The function's own `[[max_total_threads_per_threadgroup(n)]]` (`air.max_work_group_size`),
+    /// `None` without one: the most threads Metal compiles a threadgroup of the function for.
+    pub fn max_total_threads_attribute(&self) -> Option<u32> {
+        self.0.kernel.max_total_threads.filter(|&n| n > 0)
+    }
+
     /// Whether the function is a vertex function whose module writes its `[[point_size]]`
     /// output, read from its stage's built-in outputs: Metal refuses such a function in a render
     /// pipeline of the line or triangle input primitive topology class.

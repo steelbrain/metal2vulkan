@@ -32,6 +32,22 @@
 //   `dispatchThreadgroups` at 4x4 ran 32 threads of `threads_per_threadgroup` (4, 4, 1), at 16x4
 //   128, at 16x8 256, and `dispatchThreads` of 16x16 at 4x4 256 threads of (4, 4, 1). API
 //   validation stops each (exit 134).
+//
+// Measured on an M3 Max under macOS 27.0.1, plain:
+// - Descriptor validation ends the process for a required size with an axis of 0
+//   (`required-4x0`, "must not be 0"), of more than 1024 threads (`required-2048`, "must be <=
+//   1024 (device limit)") and of more threads than the descriptor's maximum
+//   (`required-64-max-32`, "must be <= maxTotalThreadsPerThreadgroup (32)").
+// - Each a first compile (a salt never used before), and the same again in its salt: refused,
+//   code 3, `required-32-max-64` ("Kernel specified max total threads per threadgroup (32) must
+//   match compute pipeline specified max total threads per threadgroup (64)") and
+//   `required-128-attribute-64` ("requested required threads per threadgroup 128,1,1 but
+//   'count64' expects max threads per threadgroup 64"); made, `required-32-attribute-64`
+//   answering 32, `required-8x8` 64, `attribute-64` and `function-attribute-64` 64, `plain` 1024.
+// - Later compiles of the same kernel answer from what the compiler compiled before, which it
+//   keeps across processes. In one salt, after `required-32-attribute-64`: `attribute-64`,
+//   `required-128-attribute-64` and `function-attribute-64` are made and answer 32. In another,
+//   after `attribute-64`: `required-32-attribute-64` and `required-128-attribute-64` answer 64.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>

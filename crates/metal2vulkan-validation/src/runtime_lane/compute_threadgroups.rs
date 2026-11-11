@@ -197,3 +197,58 @@ fn a_compute_state_with_a_required_size_answers_its_threads() {
         }
     });
 }
+
+/// A compute state whose required size has more threads than its kernel's own
+/// `[[max_total_threads_per_threadgroup(n)]]` is refused, as Metal's first compile of the kernel
+/// refuses it (an M3 Max, macOS 27.0.1, `compute_pipeline_limits.m` with a salt: 128 by 1 by 1
+/// beside 64, code 3), before a state of the kernel is made and after: the size is no part of the
+/// compiled pipeline's key, so the later creations find the pipeline compiled. A size of the
+/// maximum's threads or fewer is made and answers its threads (32 for 32 by 1 by 1, as Metal's
+/// first compile answers), and the kernel without a maximum makes the size refused beside 64.
+#[test]
+fn a_required_size_past_the_kernels_own_maximum_is_refused_every_time() {
+    use metal2vulkan_runtime::{Invalid, Problem, RequiredThreadsProblem};
+    on_device(|device| {
+        let bitcode = llvm_assemble(&engine_dir().join("compute_thread_limit.ll")).unwrap();
+        let library = device.new_library_with_air(&bitcode).unwrap();
+        let create = |name: &str, required: Option<[u32; 3]>| {
+            let function = library.new_function_with_name(name).unwrap();
+            let mut descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                function.function_descriptor(),
+            ));
+            descriptor.required_threads_per_threadgroup = required;
+            device.new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+        };
+        let refused = |required: [u32; 3]| {
+            let error = create("compute_thread_limit_64", Some(required)).err();
+            assert!(
+                matches!(
+                    error,
+                    Some(Error::Invalid(Invalid {
+                        problem: Problem::RequiredThreads(RequiredThreadsProblem::OverKernelMax {
+                            threads: 128,
+                            max: 64
+                        }),
+                        ..
+                    }))
+                ),
+                "{required:?}: {error:?}"
+            );
+        };
+        refused([128, 1, 1]);
+        let plain = create("compute_thread_limit_64", None).unwrap();
+        assert_eq!(plain.max_total_threads_per_threadgroup(), 64);
+        refused([128, 1, 1]);
+        refused([16, 8, 1]);
+        for (required, threads) in [([32, 1, 1], 32), ([8, 8, 1], 64)] {
+            let made = create("compute_thread_limit_64", Some(required)).unwrap();
+            assert_eq!(
+                made.max_total_threads_per_threadgroup(),
+                threads,
+                "{required:?}"
+            );
+        }
+        let unlimited = create("compute_thread_limit_plain", Some([128, 1, 1])).unwrap();
+        assert_eq!(unlimited.max_total_threads_per_threadgroup(), 128);
+    });
+}

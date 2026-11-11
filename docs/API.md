@@ -5254,7 +5254,11 @@ each item named states the rule in full.
     under another size the earlier state's limit, in the same process or a later one. An 8x8
     tile state then answered 16 after a 4x4 one, and its 8x8 dispatch ran no thread. A compute
     state of the same `MTLFunction` answered 16 after a 4x4x1 state, with an 8x8x1 size and with
-    none, where the runtime's answers 64 and the compiled limit.
+    none, where the runtime's answers 64 and the compiled limit. A compute state whose size has
+    more threads than its kernel's own `[[max_total_threads_per_threadgroup(n)]]` is refused
+    every time (`RequiredThreadsProblem::OverKernelMax`), as Metal's first compile of the kernel
+    refuses it; Metal makes it once the kernel compiled under another descriptor, answering the
+    kernel's maximum (128 by 1 by 1 beside 64, `compute_pipeline_limits.m`).
 - **A reset compute pipeline descriptor is a fresh one**, every field at its default:
   `ComputePipelineDescriptor::new` stands for `reset`, as `MTLComputePipeline.h` documents it
   ("Restore all compute pipeline descriptor properties to their default values", and of
