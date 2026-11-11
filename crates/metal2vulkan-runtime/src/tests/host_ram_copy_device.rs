@@ -1398,9 +1398,11 @@ fn a_copy_takes_its_chunks_as_an_object_does_and_the_window_ahead_moves_past_the
         bytes(last_page[0].clone()) == gathered(&first_page),
         "the scattered page"
     );
+    // Waited for by the thread's count alone: its import of a chunk moves
+    // `host_ram_chunks_imported` before `host_ram_chunks_imported_ahead`, so a sum of the two
+    // reaches its mark in between, and the thread's import reads as a copy's there.
     let jumped = settled(&device, |counts| {
-        by_copies(counts) + ahead(counts) == 2 + WINDOW
-            && counts.run_imports_live == before.run_imports_live
+        ahead(counts) == 2 + WINDOW && counts.run_imports_live == before.run_imports_live
     });
     assert_eq!(
         (by_copies(&jumped), ahead(&jumped)),
