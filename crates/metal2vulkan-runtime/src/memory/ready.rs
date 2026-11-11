@@ -4,7 +4,8 @@
 //! it grows, and for the pool a color texture's host-transfer image places in
 //! (`texture/host_copy.rs`). A pool's are allocated right after a burst of the device's
 //! submissions returned, one after another, and every page of each one's mapping is read once by
-//! the host.
+//! the host. None is made ahead for a pool of a small heap (`Memory::small`: a heap under 1 GiB,
+//! such as a GPU's BAR without Resizable BAR), whose blocks its placements make.
 //!
 //! **Why right after a burst.** A block's `vkAllocateMemory` holds the device's submissions
 //! while it runs, on whichever thread it runs. On RADV (a Radeon 780M, kernel 7.3.1) the kernel

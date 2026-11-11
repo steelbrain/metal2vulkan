@@ -61,8 +61,8 @@ use ash::vk;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-/// The length past which a host-visible buffer of the runtime's own lies in fresh pages: half a
-/// pooled block, past which it takes a block of its own (the module docs).
+/// The length past which a host-visible buffer of the runtime's own lies in fresh pages: half the
+/// largest pooled block, past which it takes a block of its own (the module docs).
 pub(super) const FRESH_PAGES_PAST: u64 = BLOCK_BYTES / 2;
 
 /// Whether a buffer of `size` bytes (its padded length) in memory of `class` lies in fresh pages

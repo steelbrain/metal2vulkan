@@ -2369,10 +2369,12 @@ pub(super) const LINEAR_IMAGE_ALIGNMENT: u64 = 256;
 /// pool starts where the last ends: a buffer shorter than the alignment would leave the rest of
 /// its unit free, a gap no buffer takes, and the pool's first-fit search (`range.rs`) walks every
 /// such gap for each later placement, which made each new buffer cost time in proportion to the
-/// buffers before it. A buffer past half a pooled block keeps its own size: it never lies in a
-/// pooled block but takes a block of its own (`memory.rs`'s `place`; a pooled block is
-/// [`BLOCK_BYTES`] on every device, whose `maxMemoryAllocationSize` Vulkan puts at 1 GiB or
-/// more), where nothing follows it.
+/// buffers before it. A buffer past half the largest pooled block keeps its own size: it never
+/// lies in a pooled block but takes a block of its own (`memory.rs`'s `place`; a pooled block is
+/// at most [`BLOCK_BYTES`], and that on every heap of 1 GiB or more,
+/// `memory::pooled_block_bytes`), where nothing follows it. One up to that size takes a block of
+/// its own where its memory type's blocks are smaller (a small heap's), its size rounded as
+/// here.
 /// Rounded up to a heap's 256 KiB (`texture/heap.rs`'s `HEAP_BASE_ALIGNMENT`), the largest heap
 /// would ask past the device's `maxMemoryAllocationSize`: 4 GiB on RADV, whose largest allocation
 /// is 4 GiB less 4 bytes, and 41,747,218,432 bytes on MoltenVK on an M3 Max, whose largest is

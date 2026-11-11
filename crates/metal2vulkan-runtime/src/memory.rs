@@ -5,8 +5,10 @@
 //!   made outside a heap, and later a Metal heap (step 7: a heap is one block, its resources placed
 //!   at offsets).
 //! - **Pooling.** Resources share blocks of [`BLOCK_BYTES`], so `maxMemoryAllocationCount` (4096
-//!   on many devices) stays out of reach; a block of images is one of the same size. A request
-//!   larger than half a block takes a dedicated block of its own size.
+//!   on many devices) stays out of reach; a block of images is one of the same size. A heap
+//!   smaller than 1 GiB has smaller blocks, at most a sixteenth of it
+//!   ([`pooled_block_bytes`]), none made before a placement needs it ([`Memory::small`]). A
+//!   request larger than half its memory type's block takes a dedicated block of its own size.
 //! - **Kept for reuse.** A block that empties is kept for the next placements rather than freed:
 //!   a pooled one while fewer than [`KEPT_EMPTY_BLOCKS`] empty ones are kept in its pool, and
 //!   past that, as a dedicated one of the runtime's own memory, while the empty blocks kept in its
@@ -132,8 +134,9 @@
 //! - **Blocks made ahead** (`memory/ready.rs`). Each pool the encodings and commits place their
 //!   own resources in ([`keep_room`]) and each pool of exportable buffers ([`allocate_exported`])
 //!   gets a block's worth of bytes made off the program's thread while it grows or is near its
-//!   next block (as many of its blocks as one of [`BLOCK_BYTES`] holds), and the pool a color
-//!   texture's host-transfer image places in ([`Memory::host_copy_pool`]) gets its blocks so: each
+//!   next block, and the pool a color texture's host-transfer image places in
+//!   ([`Memory::host_copy_pool`]) gets its blocks so, but a small heap's pools ([`Memory::small`]),
+//!   whose blocks their placements make: each
 //!   made right after a burst of the device's submissions ended, since a block's
 //!   `vkAllocateMemory` holds the device's submissions while it runs on RADV and on NVIDIA's
 //!   driver, then every page of its mapping read once before anything is placed in it, so that no
@@ -168,8 +171,43 @@ use std::time::{Duration, Instant};
 pub(crate) mod making_parts;
 mod ready;
 
-/// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
+/// The size of a pooled block of a heap of 1 GiB or more, at most the device's
+/// `maxMemoryAllocationSize`: the largest pooled block ([`pooled_block_bytes`]); a heap whose
+/// blocks are smaller is small ([`Memory::small`]).
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
+
+/// The most of its heap a pooled block takes: a sixteenth ([`pooled_block_bytes`]).
+const BLOCK_HEAP_SHARE: u64 = 16;
+
+/// The smallest pooled block, of the smallest heaps ([`pooled_block_bytes`]).
+const LEAST_BLOCK_BYTES: u64 = 1 << 20;
+
+/// Whether a pooled block of `bytes` is a small heap's ([`pooled_block_bytes`]): smaller than
+/// [`BLOCK_BYTES`] ([`Memory::small`]).
+fn small_block(bytes: u64) -> bool {
+    bytes < BLOCK_BYTES
+}
+
+/// The size of a pooled block of a memory type whose heap is `heap` bytes, on a device whose
+/// largest allocation is `max_allocation` bytes: the largest power of two within a sixteenth of
+/// the heap ([`BLOCK_HEAP_SHARE`]), at least [`LEAST_BLOCK_BYTES`] and at most [`BLOCK_BYTES`] and
+/// the largest allocation. So a block is [`BLOCK_BYTES`] in every heap of 1 GiB or more
+/// (`maxMemoryAllocationSize` is 1 GiB or more), and in a smaller heap between a 32nd and a
+/// 16th of it (but in one below 16 MiB, whose blocks are 1 MiB): 8 MiB in the 246 MiB
+/// device-local host-visible heap of an RTX 2080 without Resizable BAR (NVIDIA 620.70.06), its
+/// 256 MiB BAR, which every process's devices and the driver's own objects share. A block of
+/// [`BLOCK_BYTES`] there took 67 MiB of BAR1 a device, and the heap held three; the kernel
+/// refused the BAR mappings of later devices (`vkCreateDevice` failing with
+/// `VK_ERROR_INITIALIZATION_FAILED`). More blocks are made of a small heap than of a large one
+/// for the same placements, each a `vkAllocateMemory` (docs/FAST-PATHS.md).
+pub(super) fn pooled_block_bytes(heap: u64, max_allocation: u64) -> u64 {
+    let share = heap / BLOCK_HEAP_SHARE;
+    let power = match share {
+        0 => 0,
+        share => 1 << share.ilog2(),
+    };
+    (power.clamp(LEAST_BLOCK_BYTES, BLOCK_BYTES)).min(max_allocation.max(1))
+}
 
 /// The empty pooled blocks a pool keeps for its next placements whatever its heap's budget
 /// ([`Pool::release`], [`Memory::kept_budget`]). In a pool the encodings place in, one of them is
@@ -1129,8 +1167,8 @@ impl<T> Pool<T> {
     /// pool so far: whether [`Pool::room`] is that long.
     ///
     /// For a `size` above 0, which is every `size` asked -- [`keep_room`] asks half a block, and
-    /// [`BLOCK_BYTES`] is capped by `maxMemoryAllocationSize`, which Vulkan requires to be at
-    /// least a gibibyte -- that is the question exactly. For a `size` of 0 it is whether the pool
+    /// a pooled block is at least 1 MiB ([`pooled_block_bytes`]) -- that is the question
+    /// exactly. For a `size` of 0 it is whether the pool
     /// has any room at all rather than whether it has a pooled block, which is the same answer
     /// wherever a pooled block holds a free byte.
     pub(super) fn has_room(&mut self, size: u64) -> bool {
@@ -1980,7 +2018,8 @@ pub(super) struct Memory {
     types: Vec<vk::MemoryType>,
     /// The buffers' pools by memory type, then the images' ([`Memory::pool`]).
     pools: Vec<Pool<Block>>,
-    block_bytes: u64,
+    /// The size of a pooled block of each memory type, by its heap ([`pooled_block_bytes`]).
+    block_bytes: [u64; vk::MAX_MEMORY_TYPES],
     /// Blocks are allocated with `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT`: the device enabled
     /// `bufferDeviceAddress`, so buffers carry device addresses.
     device_address: bool,
@@ -2227,8 +2266,13 @@ impl Memory {
             pools: (Holds::ALL.iter().flat_map(|_| &types))
                 .map(|_| Pool::default())
                 .collect(),
+            block_bytes: std::array::from_fn(|type_index| {
+                let heap = (types.get(type_index))
+                    .and_then(|ty| properties.memory_heaps.get(ty.heap_index as usize))
+                    .map_or(0, |heap| heap.size);
+                pooled_block_bytes(heap, max_allocation)
+            }),
             types,
-            block_bytes: BLOCK_BYTES.min(max_allocation.max(1)),
             device_address,
             address_types: None,
             fd_address_types: None,
@@ -2463,6 +2507,33 @@ impl Memory {
     /// The memory heap of memory type `type_index`.
     fn heap_of(&self, type_index: u32) -> usize {
         self.types[type_index as usize].heap_index as usize
+    }
+
+    /// The size of a pooled block of memory type `type_index` ([`pooled_block_bytes`]).
+    fn block_bytes(&self, type_index: u32) -> u64 {
+        self.block_bytes[type_index as usize]
+    }
+
+    /// Whether memory type `type_index` is of a small heap, its pooled blocks smaller than
+    /// [`BLOCK_BYTES`] ([`pooled_block_bytes`]: a heap under 1 GiB): no block of its pools is
+    /// made before a placement needs it. [`keep_room`] keeps no room in them, and no block is
+    /// made ahead for them (`memory/ready.rs`); a placement that finds no room makes its block
+    /// itself ([`place`]).
+    fn small(&self, type_index: u32) -> bool {
+        small_block(self.block_bytes(type_index))
+    }
+
+    /// Take pooled blocks of `bytes` of every memory type from now on: a test's stand-in for a
+    /// device whose heaps are all small, their blocks that size ([`pooled_block_bytes`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn small_heaps_stand_in(&mut self, bytes: u64) {
+        self.block_bytes = [bytes; vk::MAX_MEMORY_TYPES];
+    }
+
+    /// The size of a pooled block of memory type `type_index`, for the crate's device tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) fn pooled_block_bytes_of(&self, type_index: u32) -> u64 {
+        self.block_bytes(type_index)
     }
 
     /// The free thread to wait for before a block of `size` bytes of memory type `type_index` is
@@ -2717,11 +2788,12 @@ impl Memory {
     /// Whether blocks are made ahead for `pool` (`memory/ready.rs`): one the encodings and commits
     /// place their own resources in ([`Memory::kept`], once found), a pool of exportable buffers
     /// ([`Holds::Exports`], [`Holds::DmaBufs`]), or the pool host copies place in
-    /// ([`Memory::host_copy_pool`], once found).
+    /// ([`Memory::host_copy_pool`], once found); never one of a small heap ([`Memory::small`]).
     fn makes_ahead(&self, pool: (Holds, u32)) -> bool {
-        self.host_copy_pool == Some(Some(pool))
+        let ahead = self.host_copy_pool == Some(Some(pool))
             || pool.0.handle().is_some()
-            || (self.kept.as_ref()).is_some_and(|kept| kept.contains(&pool))
+            || (self.kept.as_ref()).is_some_and(|kept| kept.contains(&pool));
+        ahead && !self.small(pool.1)
     }
 
     /// The pools of exportable buffers ([`Holds::Exports`], [`Holds::DmaBufs`]) that grew within
@@ -2740,7 +2812,7 @@ impl Memory {
     /// near its next block ([`Pool::near_next`]). A pool's first block is no growth: a pool that
     /// takes one block and stays within it keeps none ahead.
     fn growing(&mut self, pool: (Holds, u32)) -> bool {
-        let bytes = self.block_bytes;
+        let bytes = self.block_bytes(pool.1);
         let pool = self.pool(pool.0, pool.1);
         let grew = (pool.grew(None)).is_some_and(|at| at.elapsed() < KEPT_EMPTY_FOR);
         grew || pool.near_next(bytes)
@@ -2774,8 +2846,12 @@ impl Memory {
 
     /// Keep `pool`'s block made ahead, its blocks of `bytes` (`memory/ready.rs`,
     /// [`lacking`](Self::lacking)): one it lacks made after the blocks its thread still makes, or
-    /// on a new thread, once a burst of the device's queue uses ended.
+    /// on a new thread, once a burst of the device's queue uses ended. None for a pool of a small
+    /// heap ([`Memory::small`]).
     fn keep_ahead(&mut self, pool: (Holds, u32), bytes: u64) {
+        if self.small(pool.1) {
+            return;
+        }
         let held = (self.readying_at(pool)).map_or(0, |at| self.readying[at].outstanding_bytes());
         let lacking = self.lacking(pool, bytes, held);
         if lacking.is_empty() {
@@ -3282,7 +3358,7 @@ impl Memory {
         let spare = self
             .kept_budget(heap)
             .saturating_sub(self.kept_in_heap(heap));
-        let half = self.block_bytes / 2;
+        let half = self.block_bytes(type_index) / 2;
         let reusable = |block: &Block| block.reusable() && block.size > half;
         let pool = self.pool(holds, type_index);
         let freed = pool.release(block, (offset, size), now, spare, reusable);
@@ -3332,7 +3408,7 @@ impl Memory {
         while at < self.readying.len() {
             let (holds, type_index) = self.readying[at].pool();
             let started = self.readying[at].started();
-            let bytes = self.block_bytes;
+            let bytes = self.block_bytes(type_index);
             let pool = self.pool(holds, type_index);
             let room = ahead_room(bytes);
             let since = pool.grew(None).map_or(started, |grew| grew.max(started));
@@ -3705,8 +3781,8 @@ impl Memory {
 /// What making a block of the runtime's memory takes ([`Memory::maker`]): a copy of the memory's
 /// constants, so that the block is made with its lock released.
 struct BlockMaker {
-    /// A pooled block's size ([`BLOCK_BYTES`], or the device's largest allocation).
-    block_bytes: u64,
+    /// The size of a pooled block of each memory type ([`pooled_block_bytes`]).
+    block_bytes: [u64; vk::MAX_MEMORY_TYPES],
     /// The host-visible memory types, as bits: a block of one is mapped whole.
     host_visible: u32,
     /// The memory types whose [`Holds::FdBuffers`] blocks are allocated exportable, as bits.
@@ -3726,6 +3802,11 @@ struct BlockMaker {
 }
 
 impl BlockMaker {
+    /// The size of a pooled block of memory type `type_index` ([`pooled_block_bytes`]).
+    fn block_bytes(&self, type_index: u32) -> u64 {
+        self.block_bytes[type_index as usize]
+    }
+
     /// A new block of `size` bytes of memory type `type_index` that holds `holds`, with a buffer
     /// of addresses where `addressed` gives the counts of such buffers made (its memory then as
     /// long as that buffer requires, if longer), allocated zero-initialized where it holds images
@@ -4711,16 +4792,18 @@ fn place(
     if candidates.is_empty() && overflow.is_empty() {
         return Err(Error::OutOfMemory(MemoryKind::Device));
     }
-    let dedicated = fit == Fit::Apart || size > maker.block_bytes / 2;
     let mut failure = Error::OutOfMemory(MemoryKind::Device);
     // The class's own types first, then those it overflows into where none of them has room.
     let order = (candidates.iter().map(|&type_index| (type_index, false)))
         .chain(overflow.iter().map(|&type_index| (type_index, true)));
     for (type_index, overflowing) in order {
         let pool = (holds, type_index);
+        // Past half of the type's pooled block, a block of its own ([`pooled_block_bytes`]).
+        let pooled = maker.block_bytes(type_index);
+        let dedicated = fit == Fit::Apart || size > pooled / 2;
         let block_size = match dedicated {
             true => size,
-            false => maker.block_bytes,
+            false => pooled,
         };
         if fit == Fit::Pooled {
             let mut guard = lock(memory);
@@ -4846,6 +4929,13 @@ pub(super) fn keep_none(memory: &Mutex<Memory>, device: &ash::Device) {
 /// ended. The kept empty blocks past their quiet period go here too, once a second at most
 /// ([`Memory::sweep_stale`]).
 ///
+/// No room is kept, and no block made ahead, in a pool of a small heap ([`Memory::small`]): its
+/// blocks are made by the placements that need them, so that a device takes no block of the
+/// heap that no resource asked for. On an RTX 2080 without Resizable BAR the `WriteCombined`
+/// pool's room took a 64 MiB block of its 246 MiB device-local host-visible heap at each
+/// device's first command queue: its BAR1 use grew 67 MiB a device, and with three devices live
+/// the heap held no fourth block.
+///
 /// `own` is the kind of block the runtime's own buffers take now ([`Memory::own_buffers`]), and
 /// `pages` whether its host-visible ones take blocks of [`Holds::PageBuffers`]
 /// ([`Memory::page_buffers`]). Their pools keep room first, so that a device near its count of
@@ -4884,8 +4974,12 @@ pub(super) fn keep_room(
     let rest = (kept.iter())
         .filter(|&&(holds, _)| holds != own && holds != Holds::FdBuffers && !page(holds));
     for &pool in first.chain(rest) {
+        // A small heap's pools get no block before a placement needs one ([`Memory::small`]).
+        if small_block(maker.block_bytes(pool.1)) {
+            continue;
+        }
         let addressed = pool.0.buffers().then_some(&**counts);
-        let bytes = maker.block_bytes;
+        let bytes = maker.block_bytes(pool.1);
         keep_pool_room(memory, device, (&maker, addressed), (pool, bytes));
         ready_if_growing(&mut lock(memory), pool);
     }
@@ -4955,7 +5049,7 @@ pub(super) fn ahead_room(bytes: u64) -> u64 {
 /// ([`Memory::lacking`]).
 fn ready_if_growing(memory: &mut Memory, pool: (Holds, u32)) {
     if memory.growing(pool) {
-        let bytes = memory.block_bytes;
+        let bytes = memory.block_bytes(pool.1);
         memory.keep_ahead(pool, bytes);
     }
 }
@@ -4966,7 +5060,7 @@ fn ready_if_growing(memory: &mut Memory, pool: (Holds, u32)) {
 /// there and then ([`ready_if_growing`]), not at the next creation call's [`keep_room`], which
 /// may need the block at once. A smaller placement leaves that to the next creation call.
 fn ready_after_placing(memory: &mut Memory, pool: (Holds, u32), size: u64) {
-    let bytes = memory.block_bytes;
+    let bytes = memory.block_bytes(pool.1);
     if size >= bytes - ahead_room(bytes) && memory.makes_ahead(pool) {
         ready_if_growing(memory, pool);
     }
@@ -4982,7 +5076,7 @@ fn ready_ahead(memory: &Mutex<Memory>, device: &ash::Device, copies: impl FnOnce
     let Some(pool) = memory.host_copy_pool(device, copies) else {
         return;
     };
-    let bytes = memory.block_bytes;
+    let bytes = memory.block_bytes(pool.1);
     if memory.pool(pool.0, pool.1).has_room(bytes / 2) {
         return;
     }

@@ -988,7 +988,7 @@ driver's. Each is open work.
 - **On NVIDIA, a command buffer submitted while the runtime makes or frees a memory block completes
   as that call ends; emptied blocks are kept so that a returning working set makes none again.**
   The runtime's memory blocks (`memory.rs`: pooled blocks of 64 MiB, images' included (the row on
-  plain blocks below), blocks of their own for placements past half of 64 MiB, and the blocks
+  plain blocks below), blocks of their own for placements past half a pooled block, and the blocks
   exportable buffers share) are made with
   `vkAllocateMemory` and freed with `vkFreeMemory`, which hold every submission on NVIDIA's driver
   (the row above has their times). A block that empties is kept for the next placements: past its
@@ -1022,8 +1022,18 @@ driver's. Each is open work.
   its making still waits for that end makes it at once and waits for it, as for a block made in
   place, and one that finds none made waits for the ready thread to make it first. A pool near its
   next block keeps that block at rest for as long as it stays so, 64 MiB a pool at most, counted
-  against the kept empty blocks' budget. Metal's command buffers wait for no
-  allocation. Not announced.
+  against the kept empty blocks' budget. A heap under 1 GiB (an NVIDIA GPU's 246 MiB
+  device-local host-visible heap without Resizable BAR, its BAR) is the exception, so that a
+  device takes none of it that no resource asked for: its pooled blocks are the largest power of
+  two within a sixteenth of it (8 MiB there; `memory::pooled_block_bytes`), none is made before a
+  placement needs it (no room kept at creation calls, none made ahead), and the placement that
+  finds no room makes its block itself, on its own thread, an encoding's or a commit's included
+  (the texture and sampler tables of heap sets, at their first use, are the encodings' own
+  placements there). So the same placements there make about eight times as many blocks, each a
+  `vkAllocateMemory` that holds the device's submissions, and none is made ahead of its need.
+  Where every pooled block of 64 MiB was made for room, each device on an RTX 2080 of 256 MiB of
+  BAR1 (NVIDIA 620.70.06) took 67 MiB of it at its first command queue, and the heap held three.
+  Metal's command buffers wait for no allocation. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
   unobserved: about 1 µs a submission for each such block held.** Where the device has unified memory and a heap that is not

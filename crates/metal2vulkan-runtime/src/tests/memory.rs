@@ -1,7 +1,7 @@
 use crate::memory::{
     candidates, dma_buf_candidates, fd_buffer_types, host_cached, host_cached_placement,
-    host_image_types, host_incoherent, kept_budget, overflow_candidates, MemoryClass, Pool,
-    KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
+    host_image_types, host_incoherent, kept_budget, overflow_candidates, pooled_block_bytes,
+    MemoryClass, Pool, BLOCK_BYTES, KEPT_EMPTY_BLOCKS, KEPT_EMPTY_BYTES, KEPT_EMPTY_FOR,
 };
 use ash::vk;
 use std::time::Instant;
@@ -782,6 +782,45 @@ fn unified_memory_keeps_one_budget_for_its_heaps() {
     // One heap of 4 GiB, unified or not: an eighth.
     assert_eq!(kept_budget(&[4 << 30], 0, true), 512 * MIB);
     assert_eq!(kept_budget(&[4 << 30], 0, false), 512 * MIB);
+}
+
+/// A pooled block is `BLOCK_BYTES` in every heap of 1 GiB or more, and in a
+/// smaller heap the largest power of two within a sixteenth of it, so between a 32nd and a 16th of
+/// it, at least 1 MiB; never past the device's largest allocation. An RTX 2080's 246 MiB
+/// device-local host-visible heap (no Resizable BAR) takes blocks of 8 MiB, a 256 MiB one 16 MiB.
+#[test]
+fn a_pooled_block_is_at_most_a_sixteenth_of_a_small_heap() {
+    const MIB: u64 = 1 << 20;
+    const GIB: u64 = 1 << 30;
+    let largest = 4 * GIB;
+    // Heaps of 1 GiB or more: an RTX 2080's 8 GiB of VRAM and 21.87 GiB of system memory, a
+    // Radeon 780M's (RADV) 11.05 and 5.53 GiB.
+    let large = [GIB, 8 * GIB, 23_483_563_008, 11_319 * MIB, 5_660 * MIB];
+    for heap in large {
+        assert_eq!(
+            pooled_block_bytes(heap, largest),
+            BLOCK_BYTES,
+            "a heap of {heap} bytes"
+        );
+    }
+    assert_eq!(pooled_block_bytes(257_949_696, largest), 8 * MIB);
+    assert_eq!(pooled_block_bytes(256 * MIB, largest), 16 * MIB);
+    assert_eq!(pooled_block_bytes(GIB - 1, largest), 32 * MIB);
+    // The least block, of a heap below 16 MiB.
+    assert_eq!(pooled_block_bytes(16 * MIB - 1, largest), MIB);
+    assert_eq!(pooled_block_bytes(0, largest), MIB);
+    // Never past the largest allocation.
+    assert_eq!(pooled_block_bytes(8 * GIB, 32 * MIB), 32 * MIB);
+    // The bound over the small heaps from 16 MiB.
+    for heap in (16 * MIB..GIB).step_by((3 * MIB + 4096) as usize) {
+        let block = pooled_block_bytes(heap, largest);
+        assert!(block.is_power_of_two(), "a heap of {heap} bytes: {block}");
+        assert!(
+            block * 16 <= heap && block * 32 > heap,
+            "a heap of {heap} bytes: {block}"
+        );
+        assert!(block < BLOCK_BYTES, "a heap of {heap} bytes: {block}");
+    }
 }
 
 /// A dedicated block that empties is kept where its bytes fit in the heap's spare and its memory

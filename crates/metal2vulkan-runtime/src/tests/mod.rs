@@ -505,6 +505,8 @@ mod shared_draw_locks;
 mod shared_pointers;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod short_row_kinds;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod small_heap;
 mod snapshot_area;
 mod sorted_chunks;
 mod spares;
