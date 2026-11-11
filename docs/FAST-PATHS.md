@@ -700,6 +700,16 @@ driver's. Each is open work.
   exact form exists once the pages are gone, and `Device::host_range_remapped` does not release such
   an import. An import of dma-bufs (`HostMemory::with_dma_buf`) keeps its pages on every driver, but
   is taken only where the device refuses the pointer.
+- **On Asahi Linux, the kernel can keep a freed dma-buf import, and its pages, past the process's
+  exit**: the asahi DRM driver (its source at tag `asahi-6.19.14-2`; Honeykrisp in Mesa 25.3.6)
+  makes an imported object without the driver's close callback, so a freed import stays mapped in
+  the GPU's address space until a later bind maps over its range, and whatever is still mapped
+  when the device's GPU VM is torn down is queued for a cleanup that never runs. Those objects,
+  their dma-bufs and the pages under them stay allocated. Honeykrisp imports each dma-buf twice
+  (`vkGetMemoryFdPropertiesKHR` binds one too). The runtime frees every import it made
+  (`tests::dma_buf_leak_probe`); no documented Vulkan call makes the driver unbind one, so the
+  gap stays until the kernel changes. `scripts/dma-buf-leak/` holds a C reproducer and the
+  bpftrace scripts that show which layer keeps them.
 - **A no-copy buffer's pointer import that stays live costs RADV's every kernel submission per
   page**: amdgpu gets every page of each live pointer import again in each command submission
   (the RX 7900 XTX under Linux 7.0.0: the scheduler thread's CPU per command buffer of a
