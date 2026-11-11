@@ -591,9 +591,11 @@ driver's. Each is open work.
   key shifted by four words) under a key drawn at random once per process: a changed block keeps its
   tag with a chance of at most 2^-64 per block per comparison, whatever its bytes. A CPU write so
   missed is not copied in at that commit, a GPU write not merged back at that completion (nor
-  dropped, for a copy that drops them). A copy no command buffer may write compares bytes. No switch
-  compares the bytes instead: that needs the agreed bytes on the host again, the copy's length
-  (`copied_base_host_bytes`, `copied_base_device_bytes`).
+  dropped, for a copy that drops them), and a CPU write to a block the GPU changed, so missed at
+  that completion, is undone where the GPU did not change its byte (the agreed byte stored over it).
+  A copy no command buffer may write compares bytes. No switch compares the bytes instead: that
+  needs the agreed bytes on the host again, the copy's length (`copied_base_host_bytes`,
+  `copied_base_device_bytes`).
 - **A written copied host buffer's base costs its length again, in the device's memory where a
   resizable BAR has room, else in the host's** (`copied.rs`, `Device::copied_base`): a copy holds
   nothing beyond itself until a command buffer that may write it is committed; then a 64th of its
@@ -623,9 +625,10 @@ driver's. Each is open work.
   Metal keeps the later. Buffers over exactly the bytes a live copy covers lie in that copy and are
   one memory (`copied_host_buffers_shared`).
 - **A copied host buffer's merge keeps the CPU's byte where the CPU and the GPU both wrote it**
-  between a commit and the completion: bytes are merged one at a time, so a GPU write never
-  rewrites a byte beside it, but a byte both wrote keeps the CPU's, where on Metal the later write
-  wins.
+  between a commit and the completion: a merge writes only the bytes one side changed, so a GPU
+  write never rewrites a byte beside it, but a byte both wrote keeps the CPU's where on Metal the
+  later write wins; one the CPU writes while the completion's merge runs keeps the CPU's or the
+  GPU's (the merge stores it where it read it unchanged).
 - **On MoltenVK a kernel's out-of-bounds write through a buffer reaches other bytes of the
   buffer's memory allocation**, where Metal's GPU faults past the pages of the resource: on the
   M3 Max (MoltenVK 1.4.2) a dispatch writing three pages through a one-page buffer of the
