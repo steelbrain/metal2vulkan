@@ -4039,7 +4039,11 @@ bound.
   the pixel interlock, whose result the storage image's store converts to its code, or into an
   `ARGB8Unorm` attachment over its input attachment where no Vulkan blend state on its rotated
   image gives Metal's (a destination alpha in a color factor, say), whose result the attachment's
-  write converts. The recorded bound past one code, measured on
+  write converts; and a render pipeline's private logic operation that the fragment function
+  computes on a device without `logicOp` into an 8- or 16-bit unorm or snorm attachment, which
+  converts the output to the codes it operates on by the device's `float` product rounded to
+  nearest even where Metal rounds the exact product (the two differ only near a half-code tie).
+  The recorded bound past one code, measured on
   lavapipe against plain Metal on an Apple M3 Max: a blend into an 8-bit unorm attachment
   (`RGBA8Unorm`, `ARGB8Unorm`) within 2 codes of Metal's; a fragment function that fetches an 8-bit
   sRGB attachment and writes it again, within 2 codes once a later draw reads an earlier one's code

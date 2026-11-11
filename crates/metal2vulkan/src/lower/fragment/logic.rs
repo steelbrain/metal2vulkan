@@ -361,23 +361,25 @@ pub(crate) fn operated(
     texel: SValue,
 ) -> BResult<SValue> {
     let mut lanes = Vec::with_capacity(usize::from(form.lanes));
-    for lane in 0..u32::from(form.lanes) {
+    for (lane, bits) in (0..u32::from(form.lanes)).zip(channels.bits) {
         let x = match form.lanes {
             1 => part,
             _ => fb.composite_extract(part, &[lane])?,
         };
-        let Some(bits) = channels.bits[lane as usize] else {
+        let Some(bits) = bits else {
             lanes.push(x);
             continue;
         };
         let stored = fb.composite_extract(texel, &[lane])?;
         lanes.push(channel(fb, op, (channels.numeric, bits), x, stored)?);
     }
-    if form.lanes == 1 {
-        return Ok(lanes[0]);
+    match lanes.as_slice() {
+        [one] => Ok(*one),
+        _ => {
+            let ty = ops::ty(fb, form)?;
+            fb.composite_construct(ty, &lanes)
+        }
     }
-    let ty = ops::ty(fb, form)?;
-    fb.composite_construct(ty, &lanes)
 }
 
 /// Whether the operation takes an output of `form` to an attachment of `channels`: a `float` or

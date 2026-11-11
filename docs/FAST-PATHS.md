@@ -1341,11 +1341,18 @@ driver's. Each is open work.
   write resolved. No note announces it. The exact form needs the GPU's write to carry its
   resolution: a word of the record the translated setter fills from a per-dispatch stamp of the
   device's IDs, which the host step, the getter and the GPU-alone preprocess resolve.
-- **A private logic operation other than copy and no-op without Vulkan's form.** On a device
-  without `logicOp` (MoltenVK), and on any device where an attachment is sRGB, a float attachment
-  blends, a format's operation was not measured or the function writes an attachment itself, the
-  pipeline is refused (`PrivateRenderField::LogicOperation`), where the function could apply
-  Metal's operation to the codes it reads and writes in the pixel interlock.
+- **A private logic operation other than copy and no-op outside the forms built.** On a device
+  without `logicOp`, the fragment function computes the operation through framebuffer fetch
+  (MoltenVK's pixel interlock, or rasterization-order input attachments), but a pipeline is
+  refused (`PrivateRenderField::LogicOperation`) where an attachment is `RGB10A2Unorm`,
+  `BGR10A2Unorm`, `RGB10A2Uint` or a packed 16-bit format (whose Metal operation is not the
+  per-channel rule), color 0 is operated under alpha to coverage, an integer output is narrower
+  than 32 bits, or, through an input attachment, the attachment holds its channels rotated or
+  Metal's alpha in red; on a device that orders fetch in neither form, every such pipeline. On
+  any device it is refused where an attachment is sRGB, a float attachment blends under Vulkan's
+  operation, a format's operation was not measured, or the function writes an attachment itself
+  beside Vulkan's operation (a storage attachment, a shadow stencil, an imageblock or a merged
+  word) or the function's (a shadow stencil, an imageblock or a merged word).
 
 - **A reset compute pipeline descriptor keeps its thread shape on Metal and not here.**
   `MTLComputePipelineDescriptor.reset` restores the label, the buffer mutability,
