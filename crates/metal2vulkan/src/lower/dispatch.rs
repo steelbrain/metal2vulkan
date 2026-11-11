@@ -1433,8 +1433,15 @@ impl KernelDecl {
     /// A flat grid's thread position in the grid (a `uvec3`) and whether the invocation is inside
     /// the grid: its index `((wz · ny + wy) · nx + wx) · N + LocalInvocationIndex` over the
     /// dispatch, with `N = sx·sy·sz`, counted over `threads_per_grid` (`region[1].xyz`) `x`
-    /// fastest, all in 64 bits. Inside the grid each axis's position is below its size, so it fits
-    /// its `u32`; past it the position is unused.
+    /// fastest. Inside the grid each axis's position is below its size, so it fits its `u32`;
+    /// past it the position is unused.
+    ///
+    /// The count is exact in 32 bits when the dispatch has at most 2^32 invocations
+    /// (`nx · ny · nz · N <= 2^32`, so every index is below 2^32): then the index and its
+    /// divisions are 32-bit; otherwise 64-bit. The test reads only dispatch-uniform values, so
+    /// every invocation takes the same arm. Devices without a 64-bit divider (Intel's) lower each
+    /// 64-bit division to a long software sequence: on Arrow Lake the Simulator's 1206 x 2622
+    /// masked blit ran 4.85 ms with the 64-bit form and 1.13 ms with the 32-bit one.
     fn flat(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -1444,42 +1451,87 @@ impl KernelDecl {
             width: 64,
             signed: false,
         })?;
-        let wide = |fb: &mut FunctionBuilder<'_>, v: SValue, axis: u32| -> BResult<SValue> {
-            let x = fb.composite_extract(v, &[axis])?;
-            fb.convert(ConvOp::UConvert, x, u64_)
-        };
-        let wg = self.load(fb, self.workgroup_id)?;
-        let groups = self.load(fb, self.num_workgroups)?;
-        let lin = self.load(fb, self.local_index)?;
-        let lin = fb.convert(ConvOp::UConvert, lin, u64_)?;
-        let s = self.size3(fb)?;
-        let n = Self::volume(fb, s)?;
-        let n = fb.convert(ConvOp::UConvert, n, u64_)?;
-        let [wx, wy, wz] = [wide(fb, wg, 0)?, wide(fb, wg, 1)?, wide(fb, wg, 2)?];
-        let [nx, ny] = [wide(fb, groups, 0)?, wide(fb, groups, 1)?];
-        let group = fb.binary(BinOp::IMul, wz, ny)?;
-        let group = fb.binary(BinOp::IAdd, group, wy)?;
-        let group = fb.binary(BinOp::IMul, group, nx)?;
-        let group = fb.binary(BinOp::IAdd, group, wx)?;
-        let first = fb.binary(BinOp::IMul, group, n)?;
-        let index = fb.binary(BinOp::IAdd, first, lin)?;
-        let r = region(fb)?;
-        let grid = fb.composite_extract(r, &[1])?;
-        let [gx, gy, gz] = [wide(fb, grid, 0)?, wide(fb, grid, 1)?, wide(fb, grid, 2)?];
-        let x = fb.binary(BinOp::UMod, index, gx)?;
-        let row = fb.binary(BinOp::UDiv, index, gx)?;
-        let y = fb.binary(BinOp::UMod, row, gy)?;
-        let z = fb.binary(BinOp::UDiv, row, gy)?;
-        let inside = fb.binary(BinOp::ULessThan, z, gz)?;
         let u32_ = fb.module().ty(Type::Int {
             width: 32,
             signed: false,
         })?;
-        let mut axes = [x, y, z];
-        for a in &mut axes {
-            *a = fb.convert(ConvOp::UConvert, *a, u32_)?;
-        }
-        let pos = fb.composite_construct(self.uvec3, &axes)?;
+        let wg = self.load(fb, self.workgroup_id)?;
+        let groups = self.load(fb, self.num_workgroups)?;
+        let lin = self.load(fb, self.local_index)?;
+        let s = self.size3(fb)?;
+        let n = Self::volume(fb, s)?;
+        let r = region(fb)?;
+        let grid = fb.composite_extract(r, &[1])?;
+        let part = |fb: &mut FunctionBuilder<'_>, v: SValue| -> BResult<[SValue; 3]> {
+            Ok([
+                fb.composite_extract(v, &[0])?,
+                fb.composite_extract(v, &[1])?,
+                fb.composite_extract(v, &[2])?,
+            ])
+        };
+        let [wx, wy, wz] = part(fb, wg)?;
+        let [nx, ny, nz] = part(fb, groups)?;
+        let [gx, gy, gz] = part(fb, grid)?;
+        // Whether every invocation's index fits in 32 bits: `a = nx·ny`, `b = a·nz`, `c = b·N`
+        // in 64 bits, each at most 2^32. While `a` and `b` are, the next product cannot wrap
+        // (`nz`, `N` < 2^32); a product past a failed test is not read.
+        let w = |fb: &mut FunctionBuilder<'_>, v: SValue| fb.convert(ConvOp::UConvert, v, u64_);
+        let limit = fb.module().constant(Constant::Scalar {
+            ty: u64_,
+            bits: ConstBits(1 << 32),
+        })?;
+        let limit = fb.module().const_value(limit)?;
+        let (nx64, ny64, nz64, n64) = (w(fb, nx)?, w(fb, ny)?, w(fb, nz)?, w(fb, n)?);
+        let a = fb.binary(BinOp::IMul, nx64, ny64)?;
+        let b = fb.binary(BinOp::IMul, a, nz64)?;
+        let c = fb.binary(BinOp::IMul, b, n64)?;
+        let fa = fb.binary(BinOp::ULessThanEqual, a, limit)?;
+        let fbb = fb.binary(BinOp::ULessThanEqual, b, limit)?;
+        let fc = fb.binary(BinOp::ULessThanEqual, c, limit)?;
+        let fits = fb.binary(BinOp::LogicalAnd, fa, fbb)?;
+        let fits = fb.binary(BinOp::LogicalAnd, fits, fc)?;
+        let narrow: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let group = fb.binary(BinOp::IMul, wz, ny)?;
+            let group = fb.binary(BinOp::IAdd, group, wy)?;
+            let group = fb.binary(BinOp::IMul, group, nx)?;
+            let group = fb.binary(BinOp::IAdd, group, wx)?;
+            let first = fb.binary(BinOp::IMul, group, n)?;
+            let index = fb.binary(BinOp::IAdd, first, lin)?;
+            let x = fb.binary(BinOp::UMod, index, gx)?;
+            let row = fb.binary(BinOp::UDiv, index, gx)?;
+            let y = fb.binary(BinOp::UMod, row, gy)?;
+            let z = fb.binary(BinOp::UDiv, row, gy)?;
+            let inside = fb.binary(BinOp::ULessThan, z, gz)?;
+            Ok(ArmEnd::FallThrough(vec![x, y, z, inside]))
+        });
+        let wide: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let w = |fb: &mut FunctionBuilder<'_>, v: SValue| fb.convert(ConvOp::UConvert, v, u64_);
+            let (wx, wy, wz) = (w(fb, wx)?, w(fb, wy)?, w(fb, wz)?);
+            let (nx, ny, n, lin) = (w(fb, nx)?, w(fb, ny)?, w(fb, n)?, w(fb, lin)?);
+            let (gx, gy, gz) = (w(fb, gx)?, w(fb, gy)?, w(fb, gz)?);
+            let group = fb.binary(BinOp::IMul, wz, ny)?;
+            let group = fb.binary(BinOp::IAdd, group, wy)?;
+            let group = fb.binary(BinOp::IMul, group, nx)?;
+            let group = fb.binary(BinOp::IAdd, group, wx)?;
+            let first = fb.binary(BinOp::IMul, group, n)?;
+            let index = fb.binary(BinOp::IAdd, first, lin)?;
+            let x = fb.binary(BinOp::UMod, index, gx)?;
+            let row = fb.binary(BinOp::UDiv, index, gx)?;
+            let y = fb.binary(BinOp::UMod, row, gy)?;
+            let z = fb.binary(BinOp::UDiv, row, gy)?;
+            let inside = fb.binary(BinOp::ULessThan, z, gz)?;
+            let x = fb.convert(ConvOp::UConvert, x, u32_)?;
+            let y = fb.convert(ConvOp::UConvert, y, u32_)?;
+            let z = fb.convert(ConvOp::UConvert, z, u32_)?;
+            Ok(ArmEnd::FallThrough(vec![x, y, z, inside]))
+        });
+        let merged = fb.if_(&mut (), fits, narrow, Some(wide))?.0;
+        let [x, y, z, inside] = merged[..] else {
+            return Err(crate::spirv::error::BuildError::Dangling(
+                crate::spirv::error::Dangling::Value(SValue::new(u32::MAX)),
+            ));
+        };
+        let pos = fb.composite_construct(self.uvec3, &[x, y, z])?;
         Ok((pos, inside))
     }
 

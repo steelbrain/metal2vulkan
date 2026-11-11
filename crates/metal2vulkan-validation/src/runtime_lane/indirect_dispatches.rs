@@ -37,7 +37,9 @@
 //! same encoder wrote are read; a zero group count writes nothing.
 
 use super::degrade_notices::on_device_with;
-use super::degrade_notices::{assert_made_once, counts, forced, shared_in_system_memory};
+use super::degrade_notices::{
+    assert_made_once, counts, forced, on_device, shared_in_system_memory,
+};
 use super::indirect_host_steps::state;
 use super::{at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
@@ -704,5 +706,63 @@ fn an_indirect_threadgroup_dispatch_runs_on_the_gpu() {
             !announced.contains_key(&Degradation::HostReadDispatchArguments),
             "the host read was announced: {announced:?}"
         );
+    });
+}
+
+/// A direct `dispatchThreads:` of a ragged grid runs on the flat variant (one dispatch, no split)
+/// and each of Metal's threads runs once, at its own position: the Simulator's 1206 x 2622 screen
+/// in 32 x 32 threadgroups (its masked blit's dispatch, 3.16 M threads, the flat count's 32-bit
+/// form), and ragged 3-D grids. The expectation is computed here, not by another dispatch.
+#[test]
+fn a_ragged_direct_dispatch_runs_each_thread_once_on_the_flat_variant() {
+    on_device(|device, messages| {
+        let kernel = flat_state(device);
+        for (grid, group) in [
+            ([1206u32, 2622, 1], [32u32, 32, 1]),
+            ([1206, 2622, 1], [32, 8, 1]),
+            ([37, 19, 5], [4, 4, 2]),
+            ([1000, 3, 2], [64, 1, 1]),
+        ] {
+            let slots = u64::from(grid[0] * grid[1] * grid[2]);
+            let params = buffer_with(device, &bytes(&[1000])).unwrap();
+            let out = buffer_with(device, &vec![0; slots as usize * 4]).unwrap();
+            let queue = device.new_command_queue().unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder.set_compute_pipeline_state(&kernel).unwrap();
+            encoder.set_buffer(Some(&params), 0, 0).unwrap();
+            encoder.set_buffer(Some(&out), 0, 1).unwrap();
+            encoder.dispatch_threads(size(grid), size(group)).unwrap();
+            encoder.end_encoding().unwrap();
+            complete(&command_buffer, &format!("ragged {grid:?} {group:?}"));
+            let flat = command_buffer
+                .executions()
+                .iter()
+                .any(|execution| match execution.pipeline() {
+                    ExecutedPipeline::Compute(pipeline) => pipeline
+                        .dependencies
+                        .iter()
+                        .any(|dependency| dependency.fact == RuntimeFact::FlatGrid),
+                    ExecutedPipeline::Render(_) => false,
+                });
+            assert!(flat, "{grid:?} {group:?}: not on the flat variant");
+            let words = read_buffer(&out, 0, slots * 4).unwrap();
+            let [gx, gy, gz] = grid;
+            let common = 1000 + 11 * gx + 13 * gy + 17 * gz;
+            let mut wrong = 0u64;
+            let mut first = None;
+            for (i, w) in words.as_chunks::<4>().0.iter().enumerate() {
+                let i = i as u32;
+                let (x, y, z) = (i % gx, (i / gx) % gy, i / (gx * gy));
+                let want = common + 3 * x + 5 * y + 7 * z;
+                let got = u32::from_le_bytes(*w);
+                if got != want {
+                    wrong += 1;
+                    first.get_or_insert((x, y, z, got, want));
+                }
+            }
+            assert_eq!(wrong, 0, "{grid:?} {group:?}: first wrong {first:?}");
+        }
+        let _ = messages.take_notices();
     });
 }
