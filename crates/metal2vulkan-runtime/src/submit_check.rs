@@ -1,9 +1,8 @@
 //! The device's checks of its submissions, on a thread of its own, once per driver, release,
 //! kernel and runtime: whether `VkSubmitInfo`s that signal nothing merge into one submission of
-//! the driver's ([`Check::Merge`]), whether a host-pointer import the device holds adds to the cost
-//! of every submission ([`Check::ImportTax`]), and whether a pointer import reads the pages mapped
-//! at its pointer at each submission ([`Check::Follows`]). Each answers a question the runtime
-//! once read from the driver's identity, its `driverID`, vendor and `deviceID`, so that a GPU no
+//! the driver's ([`Check::Merge`]), and whether a host-pointer import the device holds adds to the
+//! cost of every submission ([`Check::ImportTax`]). Each answers a question the runtime once read
+//! from the driver's identity, its `driverID`, vendor and `deviceID`, so that a GPU no
 //! row named took every slow route: the check measures the device itself, and nothing of a
 //! decision reads its identity.
 //!
@@ -38,27 +37,18 @@
 //!   with 256 of 1 MiB, 8.3 with none), below the floor for one import and past it for
 //!   [`TAX_IMPORTS`]. Where it does, the runtime keeps its own long buffers out of
 //!   fresh pages (`fresh_pages.rs`): each would add that cost, and more for its length, to every
-//!   submission for its whole life, where its fresh pages save one clear of its bytes. RADV lists
-//!   every memory it imported in each kernel submission, and amdgpu gets every page of a pointer
-//!   import again in each (`amdgpu_cs_parser_bos`): the probe measured 10.3 us more a submission
+//!   submission for its whole life, where its fresh pages save one clear of its bytes. And it
+//!   releases a no-copy buffer's idle pointer import and imports it again at its next blit
+//!   (`host_residency.rs`): under `HostMemory::new`'s contract the pages at the pointer stay the
+//!   same while the buffer lives, so the new import reads what the kept one would on any driver,
+//!   and every submission meanwhile is spared the import's cost. Where a held import costs
+//!   nothing (NVIDIA's on the RTX 5080 Laptop GPU, below), a release would save nothing and cost
+//!   the import again, so every pointer import stays imported. RADV lists every memory it
+//!   imported in each kernel submission, and amdgpu gets every page of a pointer import again in
+//!   each (`amdgpu_cs_parser_bos`): the probe measured 10.3 us more a submission
 //!   for one import of 16 MiB on the Radeon 780M (24.1 for 64 MiB), 6.8 on the RX 7900 XTX
 //!   (35.7), 45.8 on the RX 550 (191.3), against 0.2 on the Iris Xe for one import (its cost is
 //!   per import, above) and none on the M3 Max.
-//! - **Follows** (Linux alone). Two pages the check maps, the first written with a pattern, are
-//!   imported by their pointer and bound to a buffer; a copy of the first page into the second is
-//!   submitted, then new anonymous pages are mapped over the first (`mmap` with `MAP_FIXED`) and
-//!   written with another pattern, and the same copy submitted again; and a second pair, its first
-//!   page replaced before any submission, copied once. Where every copy read the pages mapped at
-//!   the first page's address as it was submitted, the driver's pointer imports follow their
-//!   address (`Holds`), and an idle no-copy buffer's import may be released and made again at its
-//!   pointer at its next use (`host_residency.rs`), which reads the pages the kept import would.
-//!   Where a copy read the pages the import was made over, the driver keeps them (`Fails`), as
-//!   NVIDIA's pins them, and as Metal wires a no-copy buffer's pages when it is made: such an
-//!   import stays live. Not run on another system: on macOS every Vulkan driver imports a pointer
-//!   through Metal, which wires the pages as it makes the buffer, so the import keeps them, and a
-//!   remap of pages the kernel wired is not made. Anonymous pages replace anonymous pages, mapped
-//!   throughout, so no submission meets a range without pages; only the first page of each pair
-//!   is replaced, and the GPU writes only the second.
 //! - **Load beside it.** Other work on the device or the host's CPU adds to a submission's time
 //!   and never takes from it, so each timed check reads floors, a form's least time in each half of
 //!   its rounds or phases, and answers only where the two halves agree. Each half holds several
@@ -110,7 +100,7 @@
 //! - **Its cost**: [`ROUNDS`] rounds of each merge form and [`TAX_PHASES`] phases of
 //!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the
 //!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed once a try, over pages
-//!   written once; and on Linux three copies of 256 bytes; each timed check again, at most
+//!   written once, none bound to a buffer or read by a command; each timed check again, at most
 //!   [`TRIES`] times in all, where its halves disagree, and the import tax's [`TAX_REPEATS`]
 //!   tries more where it answers `Holds` past its margin, and the merge's [`MERGE_REPEATS`] where
 //!   its answer is clear of the load beside it. The probe's rounds took 3 to 12 ms on those
@@ -127,8 +117,8 @@
 //!   check holds from its making, the merge's floors only reported, and its other checks answer
 //!   for its life.
 //! - **Out of the device's way.** Before each step that allocates, frees, maps or unmaps pages,
-//!   or submits (each round, each import and its release, each submission of a phase, each copy
-//!   and remap), the thread steps aside for the device's allocations and frees on other threads
+//!   or submits (each round, each import and its release, each submission of a phase), the
+//!   thread steps aside for the device's allocations and frees on other threads
 //!   (`step_aside.rs`): it goes on once none is in progress and none ended for
 //!   `step_aside::QUIET`, at once while a call waits for its verdicts (`ANSWER_WAIT`,
 //!   `Device::settle_submit_checks`). Beside a program's burst of makings its verdicts so come
@@ -136,7 +126,7 @@
 //! - **Its thread** holds nothing of the device, as the queue-switch check's does
 //!   (`queue_switch_check.rs`): only the parts of it the checks work with ([`Parts`]), never a
 //!   handle, so the device's last handle never goes on it. It reads the stop between its steps
-//!   (each round, each phase, each copy): the device's teardown stops it there and waits for the
+//!   (each round, each phase): the device's teardown stops it there and waits for the
 //!   step in progress, the release of its objects and of its parts, and the checks end
 //!   unrecorded, what had not answered `Unchecked`. So does the device's loss, at the call that
 //!   answers it (`VK_ERROR_DEVICE_LOST`, from a submission or a wait): nothing is submitted again,
@@ -147,8 +137,8 @@
 //!   with the relay's mark after each of its uses of the queue where the device relays its queues'
 //!   failures (`device/relay.rs`, `By::Checks`); the commands it records go through the driver's
 //!   own entry points, counted among none of the device's (`WorkCounts::commands_recorded`,
-//!   `recorder::unrouted`); its allocations, buffers, bindings and releases are counted as the
-//!   checks' (`WorkCounts::device_checks`), not among the process's (`object_churn`). Its
+//!   `recorder::unrouted`); its allocations and releases are counted as the checks'
+//!   (`WorkCounts::device_checks`), not among the process's (`object_churn`). Its
 //!   submission calls hold the device's loader word (`loader_word.rs`).
 
 use crate::allocations::Allocations;
@@ -165,7 +155,6 @@ use crate::loader_word::{DeviceWord, Held};
 use crate::recorder::{self, Command};
 use crate::release;
 use crate::shader_cache::store::{hex, Lookup, Store};
-use crate::sharing::Sharing;
 use crate::work_counts::Counters;
 use ash::vk;
 use sha2::{Digest, Sha256};
@@ -253,10 +242,6 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 /// with a source of dma-bufs, `host_ram.rs`): their run takes milliseconds.
 pub(crate) const ANSWER_WAIT: Duration = Duration::from_secs(10);
 
-/// The bytes the follows check copies.
-#[cfg(target_os = "linux")]
-const COPIED: u64 = 256;
-
 /// A check, in the order they run and the record holds their verdicts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Check {
@@ -264,13 +249,14 @@ pub(crate) enum Check {
     Merge,
     /// A held host-pointer import adds to every submission's cost.
     ImportTax,
-    /// A pointer import reads the pages mapped at its pointer at each submission.
-    Follows,
 }
 
 impl Check {
+    /// How many checks there are.
+    pub(crate) const COUNT: usize = 2;
+
     /// Every check, in order.
-    pub(crate) const ALL: [Check; 3] = [Check::Merge, Check::ImportTax, Check::Follows];
+    pub(crate) const ALL: [Check; Check::COUNT] = [Check::Merge, Check::ImportTax];
 
     fn index(self) -> usize {
         self as usize
@@ -323,7 +309,7 @@ pub(crate) struct Measured {
 
 /// A device's verdicts of its submission checks, and their state (the module docs).
 pub(crate) struct SubmitChecks {
-    verdicts: [AtomicU8; 3],
+    verdicts: [AtomicU8; Check::COUNT],
     measured: [AtomicI64; 4],
     started: AtomicBool,
     settled: Mutex<bool>,
@@ -621,8 +607,8 @@ fn floor(times: &[i64]) -> i64 {
 /// The version of what the checks measure, of what earns a record and of how it is named and
 /// framed: a change to any bumps it, and a record of another version is never read (one of 3 may
 /// hold an import tax `Holds` short of [`TAX_MARGIN`], one of 5 a merge verdict of one loaded
-/// try).
-pub(crate) const CHECK_VERSION: u32 = 6;
+/// try, one of 6 three verdicts).
+pub(crate) const CHECK_VERSION: u32 = 7;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -631,7 +617,7 @@ const MAGIC: [u8; 8] = *b"M2VSUBC\0";
 const NAME_TAG: &[u8] = b"metal2vulkan submission checks record\0";
 
 /// A record's length: magic, version, runtime, identity, verdicts, measured, checksum.
-const RECORD_BYTES: usize = 8 + 4 + 4 + 32 + 3 + 4 * 8 + 32;
+const RECORD_BYTES: usize = 8 + 4 + 4 + 32 + Check::COUNT + 4 * 8 + 32;
 
 /// The kernel's release (`uname -r`), which the import tax's cost is the work of on RADV: empty
 /// where the system answers none.
@@ -672,7 +658,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// version        u32       CHECK_VERSION
 /// runtime        u32       RUNTIME_VERSION
 /// identity       32 bytes  the identity's and the kernel's digest for these checks
-/// verdicts       3 bytes   one per check, in Check::ALL's order: Holds 1, Fails 2, Unchecked 3
+/// verdicts       2 bytes   one per check, in Check::ALL's order: Holds 1, Fails 2, Unchecked 3
 /// measured       4 x i64   merged, apart, held, bare, in nanoseconds
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
@@ -680,7 +666,7 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// Integers are little-endian.
 pub(crate) fn encode(
     identity: &DriverIdentity,
-    verdicts: [Verdict; 3],
+    verdicts: [Verdict; Check::COUNT],
     measured: Measured,
 ) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(RECORD_BYTES);
@@ -705,7 +691,10 @@ pub(crate) fn encode(
 /// The verdicts and measurements `bytes` record for `identity`: `None` for anything but a whole
 /// record of this version and runtime, for this identity and kernel, whose checksum holds and
 /// whose every verdict is an answer.
-pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<([Verdict; 3], Measured)> {
+pub(crate) fn decode(
+    identity: &DriverIdentity,
+    bytes: &[u8],
+) -> Option<([Verdict; Check::COUNT], Measured)> {
     if bytes.len() != RECORD_BYTES {
         return None;
     }
@@ -718,7 +707,7 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<([Verdic
     let (version, rest) = rest.split_at(4);
     let (runtime, rest) = rest.split_at(4);
     let (identity_digest, rest) = rest.split_at(32);
-    let (verdicts, rest) = rest.split_at(3);
+    let (verdicts, rest) = rest.split_at(Check::COUNT);
     let word = |bytes: &[u8]| u32::from_le_bytes(bytes.try_into().unwrap_or([0xff; 4]));
     if magic != MAGIC
         || word(version) != CHECK_VERSION
@@ -727,7 +716,7 @@ pub(crate) fn decode(identity: &DriverIdentity, bytes: &[u8]) -> Option<([Verdic
     {
         return None;
     }
-    let verdicts = [0, 1, 2].map(|i| Verdict::of_byte(verdicts[i]));
+    let verdicts: [Verdict; Check::COUNT] = std::array::from_fn(|i| Verdict::of_byte(verdicts[i]));
     if verdicts.contains(&Verdict::Pending) {
         return None;
     }
@@ -834,27 +823,20 @@ impl Device {
 
     /// Whether a host-pointer import the device holds adds to the cost of every submission, as
     /// its check found (`submit_check.rs`): where it does, a guest RAM with a source of dma-bufs
-    /// imports its chunks as dma-bufs first (`host_ram.rs`). `false` until it answers.
+    /// imports its chunks as dma-bufs first (`host_ram.rs`), and a no-copy buffer's idle pointer
+    /// import is released and imported again at its next blit (`host_residency.rs`). `false` until
+    /// it answers.
     pub(crate) fn pointer_imports_tax_submissions(&self) -> bool {
         self.shared().submit_checks.holds(Check::ImportTax)
     }
 
-    /// No Metal counterpart: whether the device's imports of host memory by its pointer read the
-    /// pages mapped at the pointer at each submission, as its check found: `true` where they do,
-    /// and an idle no-copy buffer's import is released and made again at its next use; `false`
-    /// where they keep the pages they were made over (as Metal's no-copy buffer does), where the
-    /// check could not run or did not run (macOS), and until it answers
-    /// ([`settle_submit_checks`](Device::settle_submit_checks) waits for it). A runtime extension:
-    /// where it is `true`, pages mapped over a live no-copy buffer's addresses are what its later
-    /// command buffers read and write.
-    pub fn pointer_imports_follow_their_address(&self) -> bool {
-        self.current().pointer_imports_follow_their_address_now()
-    }
-
-    /// [`Device::pointer_imports_follow_their_address`] on the generation that serves
-    /// (`device/line.rs`).
-    pub(crate) fn pointer_imports_follow_their_address_now(&self) -> bool {
-        self.shared().submit_checks.holds(Check::Follows)
+    /// Whether the device releases a no-copy buffer's idle import of its pointer and imports it
+    /// again at its next blit (`host_residency.rs`): its check found a held import adds to every
+    /// submission's cost (`submit_check.rs`); `false` until it answers, and for a buffer made
+    /// before then. A runtime extension for the lanes that hold a device to the path it chooses.
+    #[doc(hidden)]
+    pub fn releases_idle_pointer_imports(&self) -> bool {
+        self.current().pointer_imports_tax_submissions()
     }
 
     /// Wait until the device's submission checks answered, or `timeout` passed: whether they did.
@@ -913,7 +895,6 @@ impl Device {
         format!(
             "merge {:?}{assumed} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
              {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
-             follows {:?}, \
              {took}{split}{merge_unearned}{unearned}{short}{tax_tries} (floors)",
             checks.verdict(Check::Merge),
             us(m.merged),
@@ -923,7 +904,6 @@ impl Device {
             TAX_IMPORTS,
             TAX_BYTES >> 20,
             us(m.bare),
-            checks.verdict(Check::Follows),
         )
     }
 }
@@ -946,8 +926,6 @@ struct Parts {
     store: Arc<Store>,
     /// The device's import of host pointers, where it imports them.
     pointers: Option<PointerImport>,
-    /// The queue families its buffers are shared among.
-    families: Vec<u32>,
     /// Its memory types' properties, by index.
     type_flags: Vec<vk::MemoryPropertyFlags>,
     identity: DriverIdentity,
@@ -956,16 +934,12 @@ struct Parts {
 }
 
 /// The commands the checks record their own command buffers with, as the device's driver gave
-/// them (`recorder::unrouted`): counted among none of the device's (`WorkCounts::commands_recorded`,
-/// `copy_sites`), as their submissions are among none of its submissions.
+/// them (`recorder::unrouted`): counted among none of the device's
+/// (`WorkCounts::commands_recorded`), as their submissions are among none of its submissions.
 #[derive(Clone, Copy)]
 struct Recording {
     begin: vk::PFN_vkBeginCommandBuffer,
     end: vk::PFN_vkEndCommandBuffer,
-    #[cfg(target_os = "linux")]
-    copy: vk::PFN_vkCmdCopyBuffer,
-    #[cfg(target_os = "linux")]
-    barrier: vk::PFN_vkCmdPipelineBarrier,
 }
 
 impl Recording {
@@ -985,14 +959,6 @@ impl Recording {
                     slot,
                     Command::EndCommandBuffer,
                     commands.end_command_buffer,
-                ),
-                #[cfg(target_os = "linux")]
-                copy: recorder::unrouted(slot, Command::CmdCopyBuffer, commands.cmd_copy_buffer),
-                #[cfg(target_os = "linux")]
-                barrier: recorder::unrouted(
-                    slot,
-                    Command::CmdPipelineBarrier,
-                    commands.cmd_pipeline_barrier,
                 ),
             }
         }
@@ -1022,7 +988,6 @@ impl Parts {
             pointers: (shared.host_import.as_ref().ok())
                 .and_then(Importer::pointers)
                 .cloned(),
-            families: shared.queue_families.clone(),
             type_flags,
             identity: device.driver_identity(),
             recording: Recording::of(shared),
@@ -1136,7 +1101,6 @@ fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
         tax(parts, objects)
     })?;
     checks.set(Check::ImportTax, taxed);
-    checks.set(Check::Follows, follows(parts, objects)?);
     let measured = Measured {
         merged,
         apart,
@@ -1291,7 +1255,7 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         if tax_holds(phase) && imports.is_empty() {
             for pages in &pieces {
                 parts.step();
-                match Import::make(parts, pages, false) {
+                match Import::make(parts, pages) {
                     Some(Some(import)) => imports.push(import),
                     made => return release_all(parts, imports.drain(..)).and(made.map(|_| None)),
                 }
@@ -1332,113 +1296,6 @@ fn release_all<'p>(parts: &Parts, imports: impl IntoIterator<Item = Import<'p>>)
         import.release(parts)?;
     }
     Some(())
-}
-
-/// The follows check's verdict (the module docs); `None` where the check stops.
-#[cfg(target_os = "linux")]
-fn follows(parts: &Parts, objects: &Objects) -> Option<Verdict> {
-    let Some(page) = crate::host_memory::host_page() else {
-        return Some(Verdict::Unchecked);
-    };
-    // The kept import, its first page replaced between two submissions.
-    let Some(kept) = follows_pair(parts, objects, page, false)? else {
-        return Some(Verdict::Unchecked);
-    };
-    if !parts.goes_on() {
-        return None;
-    }
-    // An import whose first page is replaced before its first submission.
-    let Some(fresh) = follows_pair(parts, objects, page, true)? else {
-        return Some(Verdict::Unchecked);
-    };
-    Some(match (kept, fresh) {
-        (Read::New, Read::New) => Verdict::Holds,
-        (Read::Old, Read::Old) => Verdict::Fails,
-        _ => Verdict::Unchecked,
-    })
-}
-
-/// Not run off Linux (the module docs).
-#[cfg(not(target_os = "linux"))]
-fn follows(_parts: &Parts, _objects: &Objects) -> Option<Verdict> {
-    Some(Verdict::Unchecked)
-}
-
-/// What a copy of the replaced page read.
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Read {
-    /// The pages the import was made over.
-    Old,
-    /// The pages mapped over them.
-    New,
-    /// Neither.
-    Other,
-}
-
-/// Patterns the follows check writes: the pages an import was made over, and those mapped over
-/// them.
-#[cfg(target_os = "linux")]
-const OLD: u8 = 0xa1;
-#[cfg(target_os = "linux")]
-const NEW: u8 = 0xb2;
-
-/// One pair of pages imported and copied (the module docs): what the copy after the remap read
-/// (`before_first` replaces the first page before any submission). `Some(None)` where the device
-/// takes no such import or a copy failed; `None` where the check stops.
-#[cfg(target_os = "linux")]
-fn follows_pair(
-    parts: &Parts,
-    objects: &Objects,
-    page: u64,
-    before_first: bool,
-) -> Option<Option<Read>> {
-    parts.step();
-    let Some(pages) = Pages::map(2 * page) else {
-        return Some(None);
-    };
-    pages.fill(OLD);
-    parts.step();
-    let Some(import) = Import::make(parts, &pages, true)? else {
-        return Some(None);
-    };
-    let read = |pages: &Pages| {
-        // SAFETY: the second page is the check's, mapped, and no copy into it is pending.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(pages.start.as_ptr().add(page as usize), COPIED as usize)
-        };
-        match bytes {
-            _ if bytes.iter().all(|&b| b == OLD) => Read::Old,
-            _ if bytes.iter().all(|&b| b == NEW) => Read::New,
-            _ => Read::Other,
-        }
-    };
-    let answer = (|| {
-        if !before_first {
-            pages.clear_second(page);
-            parts.step();
-            if !objects.copy(parts, &import, page)? {
-                return Some(None);
-            }
-            if read(&pages) != Read::Old {
-                return Some(None);
-            }
-        }
-        parts.step();
-        if !pages.replace_first(page) {
-            return Some(None);
-        }
-        pages.clear_second(page);
-        parts.step();
-        if !objects.copy(parts, &import, page)? {
-            return Some(None);
-        }
-        Some(Some(read(&pages)))
-    })();
-    // The import's free, then the pages' unmapping as they go.
-    parts.step();
-    import.release(parts)?;
-    answer
 }
 
 /// Anonymous private pages the check maps, read-write, unmapped as this goes where every import
@@ -1488,39 +1345,6 @@ impl Pages {
         // SAFETY: the pages are the check's, mapped read-write, and nothing reads them meanwhile.
         unsafe { std::ptr::write_bytes(self.start.as_ptr(), byte, self.length as usize) };
     }
-
-    /// Zero the second page's bytes the copy writes.
-    #[cfg(target_os = "linux")]
-    fn clear_second(&self, page: u64) {
-        // SAFETY: as `fill`; no copy into the page is pending.
-        unsafe {
-            std::ptr::write_bytes(self.start.as_ptr().add(page as usize), 0, COPIED as usize)
-        };
-    }
-
-    /// Map new anonymous pages over the first page (`MAP_FIXED`), written with [`NEW`]: whether
-    /// the system did.
-    #[cfg(target_os = "linux")]
-    fn replace_first(&self, page: u64) -> bool {
-        // SAFETY: the first page is the check's own mapping, replaced in one call, so the range
-        // is mapped throughout; no copy of it is pending.
-        let pointer = unsafe {
-            libc::mmap(
-                self.start.as_ptr().cast(),
-                page as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANON | libc::MAP_PRIVATE | libc::MAP_FIXED,
-                -1,
-                0,
-            )
-        };
-        if pointer != self.start.as_ptr().cast() {
-            return false;
-        }
-        // SAFETY: the new page is mapped read-write, the check's.
-        unsafe { std::ptr::write_bytes(self.start.as_ptr(), NEW, page as usize) };
-        true
-    }
 }
 
 impl Drop for Pages {
@@ -1536,19 +1360,18 @@ impl Drop for Pages {
     }
 }
 
-/// An import of a [`Pages`]' bytes by their pointer, in its own `VkDeviceMemory`, and, for the
-/// follows check, a buffer bound to it.
+/// An import of a [`Pages`]' bytes by their pointer, in its own `VkDeviceMemory`, bound to
+/// nothing.
 struct Import<'p> {
     memory: vk::DeviceMemory,
-    buffer: vk::Buffer,
     pages: &'p Pages,
 }
 
 impl<'p> Import<'p> {
-    /// The import of `pages`, with a buffer bound where `bound`, in a host-coherent type the
-    /// pointer takes. `Some(None)` where the device imports no host pointer, the pages take no
-    /// such type, or a call was refused; `None` where the process is exiting.
-    fn make(parts: &Parts, pages: &'p Pages, bound: bool) -> Option<Option<Import<'p>>> {
+    /// The import of `pages`, in a host-coherent type the pointer takes. `Some(None)` where the
+    /// device imports no host pointer, the pages take no such type, or a call was refused; `None`
+    /// where the process is exiting.
+    fn make(parts: &Parts, pages: &'p Pages) -> Option<Option<Import<'p>>> {
         let Some(pointers) = &parts.pointers else {
             return Some(None);
         };
@@ -1565,41 +1388,12 @@ impl<'p> Import<'p> {
         {
             return Some(None);
         }
-        let mut buffer = vk::Buffer::null();
-        let mut allowed = types;
-        if bound {
-            let mut external = vk::ExternalMemoryBufferCreateInfo::default()
-                .handle_types(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT);
-            let info = Sharing::new(&parts.families).buffer(
-                vk::BufferCreateInfo::default()
-                    .size(pages.length)
-                    .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
-                    .push_next(&mut external),
-            );
-            // SAFETY: the device is live and `info` and its chain valid, inside a section.
-            buffer = match unsafe { crate::creation::buffer(raw, &info) } {
-                Ok(buffer) => buffer,
-                Err(_) => return Some(None),
-            };
-            exit_guard::called(Call::CreateBuffer);
-            // SAFETY: `buffer` is a live buffer of this device.
-            let requirements = unsafe { raw.get_buffer_memory_requirements(buffer) };
-            exit_guard::called(Call::GetBufferMemoryRequirements);
-            allowed &= requirements.memory_type_bits;
-        }
         let coherent =
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let type_index = (parts.type_flags.iter().zip(0u32..))
-            .find(|&(flags, index)| allowed & (1 << index) != 0 && flags.contains(coherent))
+            .find(|&(flags, index)| types & (1 << index) != 0 && flags.contains(coherent))
             .map(|(_, index)| index);
-        let discard = |buffer: vk::Buffer| {
-            if buffer != vk::Buffer::null() {
-                // SAFETY: the buffer is unused.
-                unsafe { release::object(raw, buffer) };
-            }
-        };
         let Some(type_index) = type_index else {
-            discard(buffer);
             return Some(None);
         };
         let mut import = vk::ImportMemoryHostPointerInfoEXT::default()
@@ -1616,29 +1410,12 @@ impl<'p> Import<'p> {
             Ok(memory) => memory,
             Err(_) => {
                 exit_guard::called(Call::AllocateMemory);
-                discard(buffer);
                 return Some(None);
             }
         };
         exit_guard::called(Call::AllocateMemory);
-        if bound {
-            // SAFETY: the memory is the pages', of a type the buffer takes and its whole length;
-            // the buffer is unbound.
-            if unsafe { crate::creation::bind_buffer(raw, buffer, memory, 0) }.is_err() {
-                exit_guard::called(Call::BindBufferMemory);
-                discard(buffer);
-                // SAFETY: the memory is unused.
-                unsafe { release::object(raw, memory) };
-                return Some(None);
-            }
-            exit_guard::called(Call::BindBufferMemory);
-        }
         pages.imports.set(pages.imports.get() + 1);
-        Some(Some(Import {
-            memory,
-            buffer,
-            pages,
-        }))
+        Some(Some(Import { memory, pages }))
     }
 
     /// Free it, inside a section: `None` where the process is exiting, the import then left to
@@ -1647,24 +1424,19 @@ impl<'p> Import<'p> {
         let _held = parts.step_held();
         let _busy = exit_guard::enter()?;
         let raw = parts.vk();
-        // SAFETY: no submission that names them is pending (each was waited for).
-        unsafe {
-            if self.buffer != vk::Buffer::null() {
-                release::object(raw, self.buffer);
-            }
-            release::object(raw, self.memory);
-        }
+        // SAFETY: no submission names it (none binds it).
+        unsafe { release::object(raw, self.memory) };
         self.pages.imports.set(self.pages.imports.get() - 1);
         Some(())
     }
 }
 
-/// The checks' command pool, of the first `VkQueue`'s family, and its command buffers
-/// ([`MERGED`] empty ones and, on Linux, one for the follows check's copy), made as the checks
-/// start, as the device is made, before the program holds it: their `vkAllocateCommandBuffers`
-/// is the one call of the checks' that the loader serves, which reads the device's loader word
-/// (`loader_word.rs`), so none of theirs reads it beside the program's work, whose messages
-/// MoltenVK writes it with. The checks' thread records them ([`Objects::make`]).
+/// The checks' command pool, of the first `VkQueue`'s family, and its [`MERGED`] empty command
+/// buffers, made as the checks start, as the device is made, before the program holds it: their
+/// `vkAllocateCommandBuffers` is the one call of the checks' that the loader serves, which reads
+/// the device's loader word (`loader_word.rs`), so none of theirs reads it beside the program's
+/// work, whose messages MoltenVK writes it with. The checks' thread records them, once
+/// ([`Objects::make`]).
 struct Made {
     pool: vk::CommandPool,
     buffers: Vec<vk::CommandBuffer>,
@@ -1676,16 +1448,14 @@ impl Made {
     fn make(device: &Device) -> Option<Made> {
         let shared = device.shared();
         let raw = shared.vk();
-        let info = vk::CommandPoolCreateInfo::default()
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(shared.queues[0].family);
+        let info = vk::CommandPoolCreateInfo::default().queue_family_index(shared.queues[0].family);
         // SAFETY: the device is live.
         let pool = unsafe { raw.create_command_pool(&info, None) }.ok()?;
         exit_guard::called(Call::CreateCommandPool);
         let allocate = vk::CommandBufferAllocateInfo::default()
             .command_pool(pool)
             .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(MERGED as u32 + u32::from(cfg!(target_os = "linux")));
+            .command_buffer_count(MERGED as u32);
         // The loader serves it; the device's loader word is put back first.
         match device.allocate_command_buffers(&allocate) {
             Ok(buffers) => Some(Made { pool, buffers }),
@@ -1703,8 +1473,6 @@ impl Made {
 struct Objects {
     pool: vk::CommandPool,
     empty: Vec<vk::CommandBuffer>,
-    #[cfg(target_os = "linux")]
-    copy: vk::CommandBuffer,
     fence: vk::Fence,
 }
 
@@ -1717,8 +1485,6 @@ impl Objects {
         let mut objects = Objects {
             pool: made.pool,
             empty: made.buffers,
-            #[cfg(target_os = "linux")]
-            copy: vk::CommandBuffer::null(),
             fence: vk::Fence::null(),
         };
         if objects.fill(parts).is_none() {
@@ -1732,10 +1498,6 @@ impl Objects {
     /// Record the command buffers and make the fence, inside the caller's section.
     fn fill(&mut self, parts: &Parts) -> Option<()> {
         let raw = parts.vk();
-        #[cfg(target_os = "linux")]
-        {
-            self.copy = self.empty.pop()?;
-        }
         let begin = vk::CommandBufferBeginInfo::default();
         let recording = parts.recording;
         for &buffer in &self.empty {
@@ -1852,52 +1614,6 @@ impl Objects {
     /// One submission of one empty command buffer with the fence.
     fn submit_one(&self, parts: &Parts) -> Option<Option<i64>> {
         self.submit(parts, &self.empty[..1], true)
-    }
-
-    /// Record and submit a copy of [`COPIED`] bytes from the start of `import`'s buffer to
-    /// `page` bytes in, then a barrier to the host's reads, and wait for it: whether it ran.
-    /// `None` where the process is exiting or the device was lost.
-    #[cfg(target_os = "linux")]
-    fn copy(&self, parts: &Parts, import: &Import, page: u64) -> Option<bool> {
-        {
-            let _busy = exit_guard::enter()?;
-            let region = vk::BufferCopy::default().dst_offset(page).size(COPIED);
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::HOST_READ);
-            let begin = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            let recording = parts.recording;
-            // SAFETY: the copy command buffer is the check's, in no pending submission (each is
-            // waited for), its pool made to reset its buffers; the buffer is live, and its two
-            // ranges do not overlap; each array lives for its call.
-            unsafe {
-                if (recording.begin)(self.copy, &begin) != vk::Result::SUCCESS {
-                    return Some(false);
-                }
-                exit_guard::called(Call::BeginCommandBuffer);
-                (recording.copy)(self.copy, import.buffer, import.buffer, 1, &region);
-                exit_guard::called(Call::CmdCopyBuffer);
-                (recording.barrier)(
-                    self.copy,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::HOST,
-                    vk::DependencyFlags::empty(),
-                    1,
-                    &barrier,
-                    0,
-                    std::ptr::null(),
-                    0,
-                    std::ptr::null(),
-                );
-                exit_guard::called(Call::CmdPipelineBarrier);
-                if (recording.end)(self.copy) != vk::Result::SUCCESS {
-                    return Some(false);
-                }
-                exit_guard::called(Call::EndCommandBuffer);
-            }
-        }
-        Some(self.submit(parts, &[self.copy], true)?.is_some())
     }
 
     /// Wait for the fence, a slice at a time, each a section, then reset it: whether it was

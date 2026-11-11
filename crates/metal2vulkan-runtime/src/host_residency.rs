@@ -21,14 +21,14 @@
 //!     pointer), where the device kept a descriptor of each dma-buf within the descriptors the
 //!     process's devices keep at most ([`kept_fds_limit`]); an import past them is made as any
 //!     other and stays imported;
-//!   - of its pages' pointer, on a device whose check found its pointer imports follow their
-//!     address (`submit_check.rs`, `Device::pointer_imports_follow_their_address`; ANV on i915,
-//!     RADV and lavapipe answered so): there the kept import reads, at each submission, the pages
-//!     mapped at its pointer then, as an import again at the same pointer does, so releasing it
-//!     changes nothing a command reads. Elsewhere, and in a buffer made before the check
-//!     answered, a pointer import stays imported: the driver may keep the pages it was made
-//!     over, as Metal's buffer does, and an import again would read those a remap put there
-//!     since;
+//!   - of its pages' pointer, on a device whose check found a held pointer import adds to every
+//!     submission's cost (`submit_check.rs`, the import tax: RADV and ANV on i915 pay one, NVIDIA's
+//!     driver and MoltenVK none measured): the caller's pages stay mapped at the pointer, with the
+//!     same backing, while the buffer lives (`HostMemory::new`), so an import again at the same
+//!     pointer reads the pages the kept import read, on every driver, and releasing it changes
+//!     nothing a command reads. Elsewhere, and in a buffer made before the check answered, a
+//!     pointer import stays imported: a release would spare no submission any cost, and the
+//!     import again would cost the next blit;
 //!   - of a run of a guest RAM alone (`host_ram.rs`), which a buffer over one run inside a chunk
 //!     not imported yet was bound in while the device's thread imports the chunk: made again in
 //!     the chunk's import where that is made by then (and lays the bytes as the run's did), else
@@ -70,12 +70,14 @@
 //!   buffer lies over the pages it was made over even where `host_range_remapped` told the device
 //!   they were replaced since, as a buffer made before that call keeps its pages; a dma-buf holds
 //!   its pages for as long as it is open, and adds nothing to a submission's list until it is
-//!   imported. A pointer import at its pointer, over the pages mapped there now, which the kept
-//!   import would read too. A guest RAM run's in its chunk's import, or the run's alone. The new `VkBuffer` lies at the same offsets in the same memory type;
-//!   its device address may differ, which no shader saw. Bytes the CPU wrote through `contents`
-//!   meanwhile are in those pages, and so read. Counted (`WorkCounts::host_imports_reimported`);
-//!   refused where the device cannot import them again (a dma-buf's: out of memory; a pointer's:
-//!   as its first import may be, typed as the import answers), which the blit's call returns.
+//!   imported. A pointer import at its pointer, over the pages the kept import read, which
+//!   `HostMemory::new`'s contract keeps mapped there while the buffer lives. A guest RAM run's in
+//!   its chunk's import, or the run's alone. The new `VkBuffer` lies at the same offsets in the
+//!   same memory type; its device address may differ, which no shader saw. Bytes the CPU wrote
+//!   through `contents` meanwhile are in those pages, and so read. Counted
+//!   (`WorkCounts::host_imports_reimported`); refused where the device cannot import them again (a
+//!   dma-buf's: out of memory; a pointer's: as its first import may be, typed as the import
+//!   answers), which the blit's call returns.
 //! - **Exact.** What the buffer holds is its host pages, which a release never touches; its
 //!   commands order by its key, as before; Metal's reach of it unnamed needs its Metal address,
 //!   which a releasable buffer never handed out (`live_buffers.rs` holds its range only where
@@ -172,8 +174,8 @@ pub(super) enum AgainFrom {
         source: DmaBufSource,
         request: DmaBufRequest,
     },
-    /// The pointer its pages were imported at, on a driver whose pointer imports follow their
-    /// address.
+    /// The pointer its pages were imported at, on a device whose held pointer imports cost every
+    /// submission.
     Pointer(ImportedAt),
     /// The run of a guest RAM it was an import of alone, made while the run's chunk was not
     /// imported (`host_ram.rs`): bound again in the chunk's import where it is made by then,
@@ -222,17 +224,17 @@ impl Again {
         })
     }
 
-    /// The pages imported at `pointer`, made again there: `None` where the device's pointer
-    /// imports may keep the pages they were made over (its check found they do, could not run,
-    /// or has not answered: `Device::pointer_imports_follow_their_address`), so that the import
-    /// stays imported.
+    /// The pages imported at `pointer`, made again there: `None` where a held pointer import
+    /// costs the device's submissions nothing, so that a release would buy nothing (its check
+    /// found so, could not run, or has not answered: `Device::pointer_imports_tax_submissions`),
+    /// and the import stays imported.
     pub(super) fn pointer(
         device: &Device,
         pointer: NonNull<u8>,
         (length, window, class): (u64, ImportWindow, MemoryClass),
     ) -> Option<Again> {
-        let follows = device.pointer_imports_follow_their_address_now();
-        follows.then(|| Again {
+        let taxed = device.pointer_imports_tax_submissions();
+        taxed.then(|| Again {
             device: device.clone(),
             from: AgainFrom::Pointer(ImportedAt(pointer)),
             length,

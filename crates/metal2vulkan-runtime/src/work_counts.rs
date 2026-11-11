@@ -5952,7 +5952,7 @@ pub struct WorkCounts {
     pub queue_switch_checks_recalled: u64,
     /// Runs in this process of the device's submission checks (`submit_check.rs`: whether
     /// `VkSubmitInfo`s that signal nothing merge, whether a held host-pointer import adds to every
-    /// submission's cost, whether a pointer import follows its address), whatever they answered.
+    /// submission's cost), whatever they answered.
     pub submit_checks_run: u64,
     /// Devices whose submission checks' verdicts were read from the record of an earlier run of
     /// the same driver, device, kernel and runtime: no check ran for them.
@@ -7240,9 +7240,9 @@ pub struct WorkCounts {
     /// buffer): an import alive then held each of their pages.
     pub host_rebind_imports_covered: u64,
     /// The live no-copy buffers' imports of host pages by their pointer, never released while
-    /// idle as the device's submission checks did not find its pointer imports to read the pages
-    /// mapped at the pointer at each submission
-    /// (`Device::pointer_imports_follow_their_address`), or off Unix.
+    /// idle as the device's submission checks did not find a held pointer import to cost every
+    /// submission (`Device::releases_idle_pointer_imports`), or had not answered as the buffer
+    /// was made, or off Unix.
     pub host_imports_kept_pointer: u64,
     /// The live no-copy buffers' imports the device would release while idle, but keeps, as it
     /// could make no stand-in buffer for a read of a released one.

@@ -8,7 +8,8 @@
 //! - the queue's thread that sees a command buffer holding the buffer complete, for one released
 //!   while that command buffer waits for an event;
 //! - that thread again, for one whose import the device released while idle and its next blit
-//!   imported again (`host_residency.rs`), on a device whose pointer imports follow their address.
+//!   imported again (`host_residency.rs`), the device held to releasing idle pointer imports
+//!   whatever its check found (`tests/pointer_residency.rs`).
 //!
 //! Each signal reads the device's live host imports (`WorkCounts::host_imports_live`, a census of
 //! its imported blocks under the memory's lock, under which each import's `vkFreeMemory` runs) and
@@ -21,7 +22,7 @@
 //! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects.
 
 use super::host_residency::{device, host_page, release, Scratch};
-use super::pointer_residency::follows;
+use super::pointer_residency::release_pointer_imports;
 use crate::{
     Buffer, BufferContents, BufferDescriptor, CommandQueue, Device, EventRef, HostMemory,
     ResourceOptions, SharedEvent,
@@ -204,7 +205,7 @@ fn a_no_copy_buffer_s_signal_comes_after_every_free_of_its_pages() {
         device.settle_in_place_checks(crate::tests::SETTLE),
         "{TEST}: the in-place checks never settled"
     );
-    let reimports = follows(&device);
+    release_pointer_imports(&device);
     let len = PAGES * host_page();
     let queue = device.new_command_queue().unwrap();
     let into = device
@@ -226,9 +227,6 @@ fn a_no_copy_buffer_s_signal_comes_after_every_free_of_its_pages() {
     let mut ran = Vec::new();
     for round in 0..ROUNDS {
         for case in cases {
-            if case == Case::Reimported && !reimports {
-                continue;
-            }
             for signal in [Signal::KeepAlive, Signal::Deallocator] {
                 let what = format!("{TEST}: round {round}, {case:?}, {signal:?}");
                 let buffer = no_copy(&device, len, signal, &seen);
@@ -276,21 +274,14 @@ fn a_no_copy_buffer_s_signal_comes_after_every_free_of_its_pages() {
     );
     let reimported = counts.host_imports_reimported - base.host_imports_reimported;
     let released = counts.host_imports_released - base.host_imports_released;
-    if reimports {
-        let expected = (ROUNDS * 2) as u64;
-        assert_eq!(released, expected, "{TEST}: imports released while idle");
-        assert_eq!(reimported, expected, "{TEST}: imports made again");
-    }
+    let expected = (ROUNDS * 2) as u64;
+    assert_eq!(released, expected, "{TEST}: imports released while idle");
+    assert_eq!(reimported, expected, "{TEST}: imports made again");
     eprintln!(
         "UNMAP-ORDER {TEST}: on {}: {} buffers unmapped at their signals ({} rounds; released and \
-         imported again while idle: {}), {submitted} command buffers of the other thread",
+         imported again while idle: {released}), {submitted} command buffers of the other thread",
         device.name(),
         ran.len(),
         ROUNDS,
-        if reimports {
-            format!("{released}")
-        } else {
-            "none, the device keeps its pointer imports".to_owned()
-        },
     );
 }

@@ -688,18 +688,19 @@ driver's. Each is open work.
   the runtime it waits, for good behind a loop without bound. A fault or hang on another queue
   ends the loop as Metal's does.
 
-- **A no-copy buffer imported by its pointer follows a remap of its pages** on a driver whose
-  pointer imports follow their address (`Device::pointer_imports_follow_their_address`, the device's
-  own check: ANV on i915, RADV, lavapipe): pages mapped over the buffer's addresses after it was
-  made (`mmap` with `MAP_FIXED`) are what its later command buffers read and write, where Metal's
-  buffer keeps the pages it was made over. `HostMemory::new`'s contract forbids such a remap under a
-  live buffer, and no notice tells of it. On RADV (Mesa 26.2.4, the Radeon 780M and the RX 7900 XTX)
-  a file's pages mapped so over a live pointer import of anonymous pages lose the device: its next
-  submission is rejected whatever it uses ("The CS has been rejected"): amdgpu's userptr takes only
-  pages with no file behind them, and each submission lists every memory the device imported. No
-  exact form exists once the pages are gone, and `Device::host_range_remapped` does not release such
-  an import. An import of dma-bufs (`HostMemory::with_dma_buf`) keeps its pages on every driver, but
-  is taken only where the device refuses the pointer.
+- **What a no-copy buffer reads after a remap of its pages under it is unspecified**, where Metal's
+  buffer keeps the pages it was made over. `HostMemory::new`'s contract forbids replacing the pages
+  under a live buffer (`mmap` with `MAP_FIXED`), and no notice tells of it. Under a live import of
+  the pointer, `VK_EXT_external_memory_host` leaves undefined whether the import holds a reference
+  to its pages, so what later command buffers read and write is the driver's, and differs between
+  drivers. Under a released one (`host_residency.rs`), the next blit imports the new pages. On RADV
+  (Mesa 26.2.4, the Radeon 780M and the RX 7900 XTX) a file's pages mapped so over a live pointer
+  import of anonymous pages lose the device: its next submission is rejected whatever it uses ("The
+  CS has been rejected"): amdgpu's userptr takes only pages with no file behind them, and each
+  submission lists every memory the device imported. No exact form exists once the pages are gone,
+  and `Device::host_range_remapped` does not release such an import. An import of dma-bufs
+  (`HostMemory::with_dma_buf`) keeps its pages on every driver, but is taken only where the device
+  refuses the pointer.
 - **On a device with one graphics queue, a compositor's command buffers wait behind another
   queue's long one**: RADV, ANV and lavapipe expose a single graphics `VkQueue`, so every command
   queue, `Device::new_command_queue_unshared`'s included, submits to it, in order. A command buffer committed behind another queue's 200 ms one starts
@@ -727,9 +728,9 @@ driver's. Each is open work.
   page**: amdgpu gets every page of each live pointer import again in each command submission
   (the RX 7900 XTX under Linux 7.0.0: the scheduler thread's CPU per command buffer of a
   guest-shaped frame 18 us with none, 328 us with 275 imports of 512 KiB, 1144 us with 275 of
-  2 MiB). An idle one is released where the device's check finds its pointer imports follow their
-  address (`Device::pointer_imports_follow_their_address`), but one whose Metal address was handed
-  out, or one made before the check answered, stays live. 275 kept dma-buf imports of 512 KiB each
+  2 MiB). An idle one is released where the device's check finds a held pointer import costs every
+  submission (`submit_check.rs`, the import tax), but one whose Metal address was handed out, or one
+  made before the check answered, stays live. 275 kept dma-buf imports of 512 KiB each
   cost 54-56 us per command buffer there (no other size measured).
 - **A detach or rebind between a command buffer's submissions.** A command buffer's later
   submission, behind an event wait, reaches a no-copy buffer detached or rebound after its first

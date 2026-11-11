@@ -8257,7 +8257,6 @@ method	metal2vulkan-runtime::Device::new_tile_render_pipeline_state	pub fn new_t
 method	metal2vulkan-runtime::Device::new_tile_render_pipeline_state_with_reflection	pub fn new_tile_render_pipeline_state_with_reflection(&self, descriptor: &TileRenderPipelineDescriptor, options: &PipelineOptions) -> Result<(RenderPipelineState, Option<RenderPipelineReflection>), Error>
 method	metal2vulkan-runtime::Device::pixel_format_capabilities	pub fn pixel_format_capabilities(&self, format: PixelFormat) -> FormatCapabilities
 method	metal2vulkan-runtime::Device::pixel_format_info	pub fn pixel_format_info(&self, raw: u64) -> PixelFormatInfo
-method	metal2vulkan-runtime::Device::pointer_imports_follow_their_address	pub fn pointer_imports_follow_their_address(&self) -> bool
 method	metal2vulkan-runtime::Device::private_properties	pub fn private_properties(&self) -> PrivateProperties
 method	metal2vulkan-runtime::Device::properties	pub fn properties(&self) -> &DeviceProperties
 method	metal2vulkan-runtime::Device::queue_switch_check_report	pub fn queue_switch_check_report(&self) -> String
@@ -8265,6 +8264,7 @@ method	metal2vulkan-runtime::Device::raw	pub unsafe fn raw(&self) -> DeviceHandl
 method	metal2vulkan-runtime::Device::recover_for_test	pub fn recover_for_test(&self) -> Result<(), Error>
 method	metal2vulkan-runtime::Device::registry_id	pub fn registry_id(&self) -> u64
 method	metal2vulkan-runtime::Device::registry_ids_with	pub fn registry_ids_with(options: &DeviceOptions) -> Result<Vec<u64>, Error>
+method	metal2vulkan-runtime::Device::releases_idle_pointer_imports	pub fn releases_idle_pointer_imports(&self) -> bool
 method	metal2vulkan-runtime::Device::reserve_address_pool	pub fn reserve_address_pool(&self, placement: AddressPlacement, length: u64) -> Result<AddressPool, Error>
 method	metal2vulkan-runtime::Device::reserve_resource_ids	pub fn reserve_resource_ids(&self, kind: ResourceIdKind, ids: &[ResourceId]) -> Result<(), Error>
 method	metal2vulkan-runtime::Device::sampler_id_pool_size	pub fn sampler_id_pool_size(&self) -> u64

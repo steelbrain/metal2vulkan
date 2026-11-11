@@ -221,8 +221,8 @@ pub(super) fn device_with(cache: &Path, messages: Option<MessageSink>) -> Device
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
-    // A no-copy buffer's pointer import is releasable only where the device's check found its
-    // pointer imports follow their address as the buffer was made (`submit_check.rs`).
+    // A no-copy buffer's pointer import is releasable only where the device's check found a held
+    // pointer import costs every submission as the buffer was made (`submit_check.rs`).
     assert!(
         device.settle_submit_checks(crate::tests::SETTLE),
         "the submission checks never answered"
@@ -519,8 +519,8 @@ pub(super) fn residency(counts: &WorkCounts) -> (u64, u64, u64, u64) {
 /// - released again, its Metal address handed out imports it again at once and for good,
 ///   closing the descriptors kept, and the hook releases it no more.
 ///
-/// Where the device imports the pointer, the hook releases nothing and the counts stay 0 unless the
-/// driver's pointer imports follow their address (`tests/pointer_residency.rs`).
+/// Where the device imports the pointer, the hook releases nothing and the counts stay 0 unless a
+/// held pointer import costs the device's every submission (`tests/pointer_residency.rs`).
 #[test]
 fn an_idle_dma_buf_import_is_released_and_imported_again_at_its_next_blit() {
     const TEST: &str = "dma-buf residency";
@@ -535,7 +535,7 @@ fn an_idle_dma_buf_import_is_released_and_imported_again_at_its_next_blit() {
         let (buffer, chunks) = no_copy(TEST, device, &ram, (0, len), &calls);
         assert!(read(&queue, &buffer, len) == first, "{TEST}");
         if chunks == 0 {
-            if !super::pointer_residency::follows(device) {
+            if !device.releases_idle_pointer_imports() {
                 assert_eq!(device.release_idle_host_imports(), 0, "{TEST}");
                 assert_eq!(residency(&device.work_counts()), (0, 0, 0, 0), "{TEST}");
             }

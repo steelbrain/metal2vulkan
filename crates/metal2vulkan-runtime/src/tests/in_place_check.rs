@@ -41,18 +41,18 @@ const PINNED: u64 = 16 << 10;
 
 /// The submission checks' answers each device the placement test compares recalls
 /// ([`answering`]), in `Check::ALL`'s order: a held import adds nothing to a submission, so the
-/// device's long buffers take fresh pages where it makes them; the merge and the follows check
-/// answer as a driver without either property does.
-const ANSWERS: [Verdict; 3] = [Verdict::Fails, Verdict::Fails, Verdict::Fails];
+/// device's long buffers take fresh pages where it makes them; the merge answers as a driver that
+/// does not merge does.
+const ANSWERS: [Verdict; Check::COUNT] = [Verdict::Fails, Verdict::Fails];
 
 /// [`ANSWERS`] but that a held import adds to every submission's cost, as on RADV: the device's
 /// long buffers take no fresh pages (`fresh_pages.rs`).
-const TAXED: [Verdict; 3] = [Verdict::Fails, Verdict::Holds, Verdict::Fails];
+const TAXED: [Verdict; Check::COUNT] = [Verdict::Fails, Verdict::Holds];
 
 /// A record of submission-check answers for the driver of the device the cfg selects, and its
 /// path under a shader cache's directory.
 struct AnswersRecord {
-    answers: [Verdict; 3],
+    answers: [Verdict; Check::COUNT],
     bytes: Vec<u8>,
     under: PathBuf,
 }
@@ -60,7 +60,7 @@ struct AnswersRecord {
 impl AnswersRecord {
     /// The record of `answers`, its identity and path read from a device made over a cache of its
     /// own and dropped before any device that recalls the record is made.
-    fn new(answers: [Verdict; 3]) -> AnswersRecord {
+    fn new(answers: [Verdict; Check::COUNT]) -> AnswersRecord {
         let scratch = Scratch::new("in-place-check-identity");
         let probe = device(&scratch.0);
         let identity = probe.driver_identity();

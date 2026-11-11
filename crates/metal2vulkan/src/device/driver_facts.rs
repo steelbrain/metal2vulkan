@@ -11,14 +11,13 @@
 //! A GPU that reports more than one `deviceID` is one device class under each: every table here
 //! names it by the ID it was measured under, and a description is read by its
 //! [`DeviceDescription::canonical_device_id`]. MoltenVK's `deviceID` on Apple's GPUs is the macOS
-//! release and the GPU family, so a row of one names every GPU of the family under that macOS.
-//! A driver or GPU no row names takes no fact: the reader takes the route each fact's docs name
-//! for a driver without it. A question a device answers about itself in a few milliseconds is no
-//! row: the runtime's device checks measure it on each device, once per driver and release
-//! (whether its submissions that signal nothing merge, whether a held host-pointer import adds to
-//! each submission's cost, whether a pointer import follows its address: the runtime's
-//! `submit_check.rs`; textures in place over host pages, `in_place_check.rs`; the GPU's idling
-//! between `VkQueue`s, `queue_switch_check.rs`).
+//! release and the GPU family, so a row of one names every GPU of the family under that macOS. A
+//! driver or GPU no row names takes no fact: the reader takes the route each fact's docs name for a
+//! driver without it. A question a device answers about itself in a few milliseconds is no row: the
+//! runtime's device checks measure it on each device, once per driver and release (whether its
+//! submissions that signal nothing merge, whether a held host-pointer import adds to each
+//! submission's cost: the runtime's `submit_check.rs`; textures in place over host pages,
+//! `in_place_check.rs`; the GPU's idling between `VkQueue`s, `queue_switch_check.rs`).
 
 use crate::device::description::APPLE_VENDOR_ID;
 use crate::device::profile::DriverWorkaround;

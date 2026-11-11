@@ -424,7 +424,7 @@ fn identity(device_id: u32) -> DriverIdentity {
 #[test]
 fn a_record_holds_its_identity_s_verdicts() {
     let (one, other) = (identity(0x15bf), identity(0x1114));
-    let verdicts = [Verdict::Holds, Verdict::Holds, Verdict::Fails];
+    let verdicts = [Verdict::Holds, Verdict::Fails];
     let measured = Measured {
         merged: 13_200,
         apart: 37_300,
@@ -439,10 +439,6 @@ fn a_record_holds_its_identity_s_verdicts() {
     let mut changed = bytes.clone();
     changed[60] ^= 1;
     assert_eq!(decode(&one, &changed), None);
-    let pending = encode(
-        &one,
-        [Verdict::Holds, Verdict::Pending, Verdict::Fails],
-        measured,
-    );
+    let pending = encode(&one, [Verdict::Holds, Verdict::Pending], measured);
     assert_eq!(decode(&one, &pending), None);
 }

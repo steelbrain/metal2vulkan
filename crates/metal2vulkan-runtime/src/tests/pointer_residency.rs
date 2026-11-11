@@ -5,11 +5,14 @@
 //! mapped shared, imported by its pointer (`HostMemory::new`), as ANV, NVIDIA and lavapipe import
 //! it; on a device that refuses that pointer (RADV, which imports the `memfd`'s dma-bufs,
 //! `tests/host_residency.rs`, and makes a no-copy buffer over it with no source a copy of its
-//! pages), private anonymous pages, which RADV imports by their pointer. Where
-//! the device's check found its pointer imports follow their address (`submit_check.rs`,
-//! `Device::pointer_imports_follow_their_address`: ANV on i915, RADV and lavapipe answer so), the
-//! device releases such an import while idle and imports it again at the same pointer at its next
-//! blit.
+//! pages), private anonymous pages, which RADV imports by their pointer. Where the device's check
+//! found a held pointer import adds to every submission's cost (`submit_check.rs`, the import tax:
+//! `Device::releases_idle_pointer_imports`), the device releases such an import while idle and
+//! imports it again at the same pointer at its next blit; elsewhere it keeps it
+//! ([`an_idle_pointer_import_is_released_where_held_imports_cost_submissions`]). The other tests
+//! hold the device to the release whatever its check found (`SubmitChecks::force`): the pages stay
+//! mapped at the pointer while the buffer lives (`HostMemory::new`), so an import again reads what
+//! the kept one read on every driver, and the path is the same on each.
 //! The tests release imports at once through the crate's hook (`Device::release_idle_host_imports`)
 //! and check:
 //! - the counts that show the release and the import again ran (`WorkCounts::host_imports_released`,
@@ -21,9 +24,8 @@
 //!   no import of them lived;
 //! - that a buffer whose Metal address was handed out stays imported.
 //!
-//! A device whose check found otherwise keeps every pointer import: the hook
-//! releases none, and each test says so and passes. Where the device refuses the pointers of both
-//! kinds of pages each test says so and passes without running.
+//! Where the device refuses the pointers of both kinds of pages each test says so and passes
+//! without running.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on Linux, on the kind of device the cfg selects. No test maps pages over a live
@@ -34,18 +36,20 @@
 use super::host_residency::{
     counting, device, gpu_fill, gpu_read, host_page, read, release, residency, Ram, Scratch,
 };
+use crate::submit_check::{Check, Verdict};
 use crate::{Buffer, Device, Error, HostBacking, HostMemory, ResourceOptions};
 use metal2vulkan::error::Feature;
 use std::ptr::NonNull;
 
-/// Whether `device`'s check found its pointer imports follow their address, so that the device
-/// releases them while idle: once its checks answered.
-pub(super) fn follows(device: &Device) -> bool {
+/// Hold `device` to releasing the idle pointer imports of the no-copy buffers made from now on,
+/// whatever its check found (the module docs): once its checks answered, their import tax holds.
+pub(super) fn release_pointer_imports(device: &Device) {
     assert!(
         device.settle_submit_checks(crate::tests::SETTLE),
         "the submission checks never answered"
     );
-    device.pointer_imports_follow_their_address()
+    (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
+    assert!(device.releases_idle_pointer_imports());
 }
 
 /// Run `test` on the device the cfg selects.
@@ -180,8 +184,7 @@ impl Drop for Pages {
 /// A no-copy buffer over `bytes.len()` bytes of new pages holding `bytes`, imported by its
 /// pointer: guest RAM's view, or, where the device refuses its pointer (the call refused, or the
 /// buffer a copy of the pages, `HostBacking::Copied`), private anonymous pages (the module docs).
-/// `None`, printed, where the device refuses both, which a device with the fact never does. The
-/// buffer drops before the pages.
+/// `None`, printed, where the device refuses both. The buffer drops before the pages.
 fn no_copy(test: &str, device: &Device, bytes: &[u8]) -> Option<(Pages, Buffer)> {
     let mut refused = Vec::new();
     for pages in [Pages::shared(bytes.len()), Pages::private(bytes.len())] {
@@ -212,10 +215,6 @@ fn no_copy(test: &str, device: &Device, bytes: &[u8]) -> Option<(Pages, Buffer)>
             Err(error) => panic!("{test}: new_buffer_with_bytes_no_copy: {error:?}"),
         }
     }
-    assert!(
-        !follows(device),
-        "{test}: the pointers refused: {refused:?}"
-    );
     eprintln!(
         "{test}: on {}: the device refuses the pointers: {refused:?}",
         device.name()
@@ -223,8 +222,8 @@ fn no_copy(test: &str, device: &Device, bytes: &[u8]) -> Option<(Pages, Buffer)>
     None
 }
 
-/// A no-copy buffer over 4 pages, imported by its pointer, on a device whose driver's pointer
-/// imports follow their address:
+/// A no-copy buffer over 4 pages, imported by its pointer, on a device held to releasing it (the
+/// module docs):
 /// - read by a blit, its import released: the device's live host imports fall by one, no
 ///   descriptor is kept, and the hook releases it no further while released;
 /// - the CPU's writes made while it is released, through `contents` and through guest RAM's file
@@ -232,12 +231,11 @@ fn no_copy(test: &str, device: &Device, bytes: &[u8]) -> Option<(Pages, Buffer)>
 /// - released again, a GPU fill lands in the pages;
 /// - released again, its Metal address handed out imports it again at once and for good, and the
 ///   hook releases it no more.
-///
-/// Elsewhere the hook releases nothing and the counts stay 0.
 #[test]
 fn an_idle_pointer_import_is_released_and_imported_again_at_its_next_blit() {
     const TEST: &str = "pointer residency";
     on_device(|device| {
+        release_pointer_imports(device);
         let page = host_page();
         let len = 4 * page;
         let queue = device.new_command_queue().unwrap();
@@ -246,12 +244,6 @@ fn an_idle_pointer_import_is_released_and_imported_again_at_its_next_blit() {
             return;
         };
         assert!(read(&queue, &buffer, len) == first, "{TEST}");
-        if !follows(device) {
-            assert_eq!(device.release_idle_host_imports(), 0, "{TEST}");
-            assert_eq!(residency(&device.work_counts()), (0, 0, 0, 0), "{TEST}");
-            eprintln!("{TEST}: on {}: the pointer import kept", device.name());
-            return;
-        }
         let imported = device.work_counts();
         assert_eq!(residency(&imported), (0, 0, 1, 0), "{TEST}");
         let live = imported.host_imports_live;
@@ -308,18 +300,80 @@ fn an_idle_pointer_import_is_released_and_imported_again_at_its_next_blit() {
     });
 }
 
-/// A no-copy buffer over 2 pages, imported by its pointer on a device whose driver's pointer
-/// imports follow their address, read by a blit and its import released; then, with no import of
-/// them live, other pages mapped over its addresses and the device told. The next blit imports it
-/// again at its pointer and reads the new pages.
+/// A no-copy buffer over 2 pages, imported by its pointer and read by a blit, on the device as its
+/// check found it: the hook releases its import where a held pointer import adds to every
+/// submission's cost (`Device::releases_idle_pointer_imports`, the import tax), and the next blit
+/// imports it again; elsewhere the import stays, counted as kept for its pointer
+/// (`WorkCounts::host_imports_kept_pointer`), and the hook releases nothing. Printed with the
+/// check's report (`POINTER-RESIDENCY-GATE`): the evidence of the path the device took. A device
+/// that releases pointer imports took the check's own, so it refuses no pointer of both kinds.
+#[test]
+fn an_idle_pointer_import_is_released_where_held_imports_cost_submissions() {
+    const TEST: &str = "pointer residency gate";
+    on_device(|device| {
+        assert!(
+            device.settle_submit_checks(crate::tests::SETTLE),
+            "{TEST}: the submission checks never answered"
+        );
+        let releases = device.releases_idle_pointer_imports();
+        let len = 2 * host_page();
+        let queue = device.new_command_queue().unwrap();
+        let bytes = counting(len, 23);
+        let before = device.work_counts();
+        let Some((_pages, buffer)) = no_copy(TEST, device, &bytes) else {
+            assert!(
+                !releases,
+                "{TEST}: a device that releases pointer imports refused both pointers"
+            );
+            return;
+        };
+        assert!(read(&queue, &buffer, len) == bytes, "{TEST}");
+        let made = device.work_counts();
+        let kept = made.host_imports_kept_pointer - before.host_imports_kept_pointer;
+        let resident = made.host_imports_resident - before.host_imports_resident;
+        assert_eq!(
+            (kept, resident),
+            (u64::from(!releases), u64::from(releases)),
+            "{TEST}: kept for its pointer, or releasable"
+        );
+        match releases {
+            true => release(TEST, device, 1),
+            false => assert_eq!(device.release_idle_host_imports(), 0, "{TEST}: released"),
+        }
+        assert!(
+            read(&queue, &buffer, len) == bytes,
+            "{TEST}: after the hook"
+        );
+        let after = device.work_counts();
+        let moved = (
+            after.host_imports_released - before.host_imports_released,
+            after.host_imports_reimported - before.host_imports_reimported,
+        );
+        assert_eq!(
+            moved,
+            (u64::from(releases), u64::from(releases)),
+            "{TEST}: released and imported again"
+        );
+        drop(buffer);
+        eprintln!(
+            "POINTER-RESIDENCY-GATE {TEST}: on {}: idle pointer imports released {releases}; {}",
+            device.name(),
+            device.submit_check_report()
+        );
+    });
+}
+
+/// A no-copy buffer over 2 pages, imported by its pointer on a device held to releasing it (the
+/// module docs), read by a blit and its import released; then, with no import of them live, other
+/// pages mapped over its addresses and the device told: a remap under a live buffer, which
+/// `HostMemory::new`'s contract forbids, but under no live import. The next blit imports it again
+/// at its pointer and reads the new pages, the runtime's own answer where such a remap leaves the
+/// buffer's bytes unspecified (`docs/FAST-PATHS.md`, known gaps).
 #[test]
 fn a_released_pointer_import_is_made_again_over_the_pages_mapped_at_its_pointer() {
     const TEST: &str = "pointer residency remap";
     on_device(|device| {
-        if !follows(device) {
-            eprintln!("{TEST}: on {}: pointer imports kept", device.name());
-            return;
-        }
+        release_pointer_imports(device);
         let page = host_page();
         let len = 2 * page;
         let queue = device.new_command_queue().unwrap();
@@ -458,10 +512,10 @@ fn a_file_s_pages_mapped_under_a_kept_pointer_import() {
         let lost = device.is_lost();
         let recoveries = device.work_counts().device_recoveries;
         eprintln!(
-            "FILE-REMAP {TEST}: on {} (the fact {}): another buffer's fill {}; the copy {read_of}; \
-             the device lost: {lost}; its recoveries: {recoveries}",
+            "FILE-REMAP {TEST}: on {} (idle pointer imports released: {}): another buffer's fill \
+             {}; the copy {read_of}; the device lost: {lost}; its recoveries: {recoveries}",
             device.name(),
-            follows(device),
+            device.releases_idle_pointer_imports(),
             filled.as_deref().unwrap_or("completed"),
         );
         match device.properties().description.driver_id {

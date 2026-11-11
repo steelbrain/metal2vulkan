@@ -569,17 +569,14 @@ impl Device {
     /// made. Without the call, a no-copy buffer made over exactly the bytes a live one was made
     /// over, of its memory class, lies in that one's import (`host_aliases.rs`), and so over the
     /// pages that were there when that one was made. Buffers made before the call keep their own
-    /// imports, and stay ordered with each other as before. Their pages are those their imports
-    /// read: an import of dma-bufs keeps the pages it was made over, as Metal's buffer does, and so
-    /// does an import of the pointer on a driver that keeps them; on a driver whose pointer imports
-    /// follow their address (as the device's submission checks find, `submit_check.rs`: ANV on
-    /// i915, RADV, lavapipe), an import of the pointer reads the pages mapped there at each
-    /// submission, the new ones from the remap on (`docs/FAST-PATHS.md`, known gaps). Such a
-    /// remap under a live buffer breaks [`HostMemory::new`]'s contract, and under a live import of
-    /// the pointer `VK_EXT_external_memory_host`'s too, which this call does not mend: the pages
+    /// imports, and stay ordered with each other as before. A remap under a live buffer breaks
+    /// [`HostMemory::new`]'s contract, and under a live import of the pointer
+    /// `VK_EXT_external_memory_host`'s too, which leaves undefined whether the import holds a
+    /// reference to its pages: what such a buffer's later commands read and write is then
+    /// unspecified (`docs/FAST-PATHS.md`, known gaps), and this call does not mend it. The pages
     /// are replaced or unmapped once every buffer over them signalled that its import went (its
-    /// keep-alive dropped, or its deallocator ran; docs/HOWTO.md, "Unmapping host memory"). Not
-    /// a Metal call: Metal needs none. A `length` of 0 tells nothing.
+    /// keep-alive dropped, or its deallocator ran; docs/HOWTO.md, "Unmapping host memory"). Not a
+    /// Metal call: Metal needs none. A `length` of 0 tells nothing.
     ///
     /// The call may come at the unmap or after the new map, but before a buffer is made over the
     /// new pages: a buffer made over those bytes while it runs may lie in either pages. The bytes
@@ -923,7 +920,7 @@ impl Device {
                 // (`HostMemory::with_dma_buf`). No lock of the runtime's is held. A no-copy
                 // buffer's own import of dma-bufs keeps them, so the device may release it while
                 // idle and import them again (`host_residency.rs`), as it may its own import of the
-                // pointer where the driver's pointer imports follow their address; a heap's import
+                // pointer where a held pointer import costs every submission; a heap's import
                 // stays, as does an import of a read-only view.
                 // Whether the device was asked the pointer, or imports none, whose refusal a
                 // failed source leaves standing (the window takes it, and the memory is no
@@ -1681,11 +1678,11 @@ impl Device {
     }
 
     /// The pages of a released import of the window's pages at `pointer`, made again there as
-    /// `again` made it (`host_residency.rs`), on a driver whose pointer imports follow their
-    /// address (`Device::pointer_imports_follow_their_address`): a new `VkBuffer` made and bound
-    /// as the first was, over an import of the pages mapped at the pointer now, which the kept
-    /// import would read too. Refused as the first import may be, typed as the import answers
-    /// (out of memory among them), or with the device lost.
+    /// `again` made it (`host_residency.rs`), on a device whose held pointer imports cost every
+    /// submission (`Device::pointer_imports_tax_submissions`): a new `VkBuffer` made and bound as
+    /// the first was, over an import of the pages mapped at the pointer, the kept import's under
+    /// `HostMemory::new`'s contract. Refused as the first import may be, typed as the import
+    /// answers (out of memory among them), or with the device lost.
     #[cfg(unix)]
     pub(super) fn import_pointer_again(
         &self,

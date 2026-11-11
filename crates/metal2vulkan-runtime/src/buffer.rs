@@ -1416,8 +1416,9 @@ pub(crate) enum KeptBecause {
     Heap,
     /// A rebind's import (`rebind.rs`).
     Rebind,
-    /// An import by pointer on a device whose pointer imports its submission checks did not
-    /// find to follow their address (`submit_check.rs`), or off Unix.
+    /// An import by pointer on a device whose submission checks did not find a held pointer
+    /// import to cost every submission (`submit_check.rs`), or made before they answered, or off
+    /// Unix.
     Pointer,
     /// No stand-in buffer for a read of a released one.
     NoStandIn,

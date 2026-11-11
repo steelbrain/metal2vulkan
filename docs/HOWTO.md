@@ -289,13 +289,16 @@ released:
   buffers stand at once, raise the soft limit toward the hard one at startup (`setrlimit`), as QEMU
   does.
   A blit whose released buffer the device cannot import again (out of memory) is refused.
-- An import of the pointer, on a driver whose pointer imports follow their address, as the device
-  checks once per driver, release and kernel by remapping pages of its own under a live import
-  (`Device::pointer_imports_follow_their_address`, Linux only; ANV, RADV and lavapipe answer yes,
-  NVIDIA no). There a live import reads, at each submission, the pages mapped at its pointer then,
-  so the new import at the same pointer reads what the kept one would. Buffers made before the check
-  answered keep their imports. A blit whose released buffer the device cannot import again is
-  refused, typed as the first import would be. Elsewhere a pointer import stays imported.
+- An import of the pointer, on a device whose held pointer imports add to every submission's cost,
+  as the device checks once per driver, release and kernel (its import tax check, which holds 32
+  imports of its own pages through timed submissions; RADV and ANV on i915 pay it). The new import
+  at the same pointer reads the pages the kept one did: `HostMemory::new`'s contract keeps the
+  caller's pages mapped there, with the same backing, while the buffer lives. Buffers made before
+  the check answered keep their imports. A blit whose released buffer the device cannot import
+  again is refused, typed as the first import would be. Where a held import costs nothing (NVIDIA's
+  driver on an RTX 5080 Laptop GPU, 615.71.09: 2.1 to 2.2 us a submission with and without;
+  MoltenVK 1.4.2 on an M3 Max), a pointer import stays imported: releasing it would save nothing
+  and cost the next blit an import.
 
 A buffer stays imported for good once its Metal address is handed out (`gpu_address`, a binding, an
 argument buffer or table, an indirect command buffer, `use_resource`), its `VkBuffer` is read, a
@@ -305,8 +308,9 @@ rebind's imports. `WorkCounts::host_imports_released`, `host_imports_reimported`
 `host_imports_read_apart` counts the live ones that a read other than a blit's keeps for good (the
 `host_imports_read_apart_*` gauges by reason: the Metal address, the `VkBuffer`, a binding, a
 texture, a second buffer, no releasing thread), the `host_imports_kept_*` gauges the live ones kept
-whatever reads them, by cause (a heap's, a rebind's, a pointer import on an unmeasured driver, no
-stand-in, and `host_imports_kept_for_fds`), and `host_imports_used` the imports each committed
+whatever reads them, by cause (a heap's, a rebind's, a pointer import on a device whose held
+imports cost no submission or made before its check answered, no stand-in, and
+`host_imports_kept_for_fds`), and `host_imports_used` the imports each committed
 command buffer's commands use, summed over command buffers; against `host_imports_live` they show
 how many of the listed imports a workload's commands name. Of a rebind's imports,
 `host_imports_rebound_unlisted` counts the live ones no command buffer committed since the rebind
@@ -457,14 +461,14 @@ An import is freed by the thread that drops the last reference to it; by a queue
 last command buffer holding it completed (one that used the buffer, a blit's hold on an import the
 device releases while idle, or a texture's image over the pages); by a handler thread where a
 keep-alive alone waits for the free; and, while the buffer lives, by the device's residency thread
-(`metal2vulkan-residency`), which every half second frees the idle pointer imports past their
-window on a driver whose pointer imports follow their address (above), the next blit importing
-them again on the thread that encodes it. On RADV and ANV every submission of the device, from any
-thread, lists every live import. So pages unmapped before their objects go meet those threads at
-any moment, also where the objects are dropped right after on another thread: on ANV a submission
-that lists an import of pages gone fails and the device is lost, and on a Radeon 780M (Linux 7.3.3)
-an unmap of pages under a live pointer import oopsed the kernel in amdgpu's notifier
-(`amdgpu_hmm_invalidate_gfx`), the GPU's work hanging until the machine was rebooted.
+(`metal2vulkan-residency`), which every half second frees the idle imports past their window that
+the device releases (above), the next blit importing them again on the thread that encodes it. On
+RADV and ANV every submission of the device, from any thread, lists every live import. So pages
+unmapped before their objects go meet those threads at any moment, also where the objects are
+dropped right after on another thread: on ANV a submission that lists an import of pages gone fails
+and the device is lost, and on a Radeon 780M (Linux 7.3.3) an unmap of pages under a live pointer
+import oopsed the kernel in amdgpu's notifier (`amdgpu_hmm_invalidate_gfx`), the GPU's work hanging
+until the machine was rebooted.
 
 ### Copied host buffers
 

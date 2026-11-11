@@ -31,9 +31,9 @@
 //! A second measurement holds a guest's shape (`submit_per_import_guest_shape`): [`GUEST_IMPORTS`]
 //! pointer imports, of which each frame's blits read [`GUEST_USED`], in frames of
 //! [`GUEST_PER_FRAME`] command buffers. It measures frames at once, every import resident, then,
-//! where the device's check found its pointer imports follow their address (the runtime's
-//! `submit_check.rs`), again once the device's residency thread
-//! released the idle ones while paced frames kept the read ones in use. Printed as
+//! where the device's check found a held pointer import adds to every submission's cost (the
+//! runtime's `submit_check.rs`, `Device::releases_idle_pointer_imports`), again once the device's
+//! residency thread released the idle ones while paced frames kept the read ones in use. Printed as
 //! `SUBMIT-GUEST-SHAPE` lines: the imports (`WorkCounts::host_imports_live`,
 //! `host_imports_resident`, `host_imports_released`, `host_imports_reimported`), a frame's wall
 //! time, the scheduler thread's CPU time a frame and, where the kernel-submission counter is
@@ -436,10 +436,10 @@ fn submit_per_import_guest_shape() {
         .collect();
     let used = &buffers[..GUEST_USED];
     guest_measure(&device, &queue, &target, used, "at once");
-    if !device.pointer_imports_follow_their_address() {
+    if !device.releases_idle_pointer_imports() {
         eprintln!(
-            "SUBMIT-GUEST-SHAPE {}: pointer imports kept (the device's check did not find them \
-             follow their address)",
+            "SUBMIT-GUEST-SHAPE {}: pointer imports kept (the device's check did not find a held \
+             one to cost its submissions)",
             device.name()
         );
         return;

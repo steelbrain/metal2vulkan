@@ -3,20 +3,22 @@
 //! follow their verdicts alone.
 //!
 //! - **They answer.** A device made over a fresh shader cache runs its checks once
-//!   (`WorkCounts::submit_checks_run`), each verdict an answer (never pending once settled; the
-//!   follows check answered on Linux where the device imports host pointers), their calls counted
-//!   apart (`WorkCounts::submit_check_calls`), their allocations too (`device_checks`), and their
-//!   commands among none of the device's
-//!   (`commands_recorded`: a device that ran them recorded the copies one that recalled them did,
-//!   the follows check's three among neither); a later device over the same cache recalls them
+//!   (`WorkCounts::submit_checks_run`), each verdict an answer (never pending once settled), their
+//!   calls counted apart (`WorkCounts::submit_check_calls`), their allocations too
+//!   (`device_checks`), and their commands among none of the device's (`commands_recorded`: a
+//!   device that ran them recorded the copies one that recalled them did); a later device over the
+//!   same cache recalls them
 //!   (`submit_checks_recalled`), runs none, and holds the verdicts of the last device that ran
 //!   them: the first's, or, where load split its tries or its import tax answered `Holds` short
 //!   of a record and nothing was recorded, those of the next device that ran them.
+//! - **No remap under an import.** The checks map no page over a live import of it: they make and
+//!   bind no buffer, and every import of theirs is freed by the time they answer
+//!   ([`a_device_s_checks_map_no_pages_over_a_live_import`]).
 //! - **The paths follow them.** Grouped batches where the merge holds
 //!   (`WorkCounts::grouped_submissions`), a long `Shared` buffer in fresh pages where a held
-//!   import adds nothing to a submission (`fresh_page_buffers_made`), a no-copy buffer's pointer
-//!   import released while idle where pointer imports follow their address
-//!   (`host_imports_released`, `tests/pointer_residency.rs` for the release itself). Each
+//!   import adds nothing to a submission (`fresh_page_buffers_made`), and a no-copy buffer's
+//!   pointer import released while idle where one does (`host_imports_released`: on Linux,
+//!   `tests/pointer_residency.rs`). Each
 //!   verdict is printed, with what the checks measured: the evidence of which path the device
 //!   took.
 //!
@@ -74,7 +76,7 @@ fn files_named(directory: &Path, name: &str) -> Vec<std::path::PathBuf> {
 }
 
 /// Each check's verdict on `device`.
-fn verdicts(device: &Device) -> [Verdict; 3] {
+fn verdicts(device: &Device) -> [Verdict; Check::COUNT] {
     Check::ALL.map(|check| device.shared().submit_checks.verdict(check))
 }
 
@@ -90,13 +92,6 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     println!("{}: {}", first.name(), first.submit_check_report());
     assert!(!answered.contains(&Verdict::Pending), "{answered:?}");
     let imports = first.shared().host_import.is_ok();
-    if imports && cfg!(target_os = "linux") {
-        assert_ne!(
-            answered[2],
-            Verdict::Unchecked,
-            "the follows check did not run"
-        );
-    }
     let counts = first.work_counts();
     let mut copies = counts.commands_recorded.cmd_copy_buffer;
     assert_eq!(counts.submit_checks_run, 1);
@@ -109,8 +104,7 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         counts.device_checks.vk_memory_allocations > 0,
         "the checks' allocations were not counted apart"
     );
-    // Each import tax try makes its imports once and releases them once (`tax_holds`); the
-    // follows check imports one page pair a pass, two passes, on Linux.
+    // Each import tax try makes its imports once and releases them once (`tax_holds`).
     let tries = (first.shared().submit_checks.tax_tries).load(std::sync::atomic::Ordering::Relaxed);
     let checks = &counts.device_checks;
     println!(
@@ -118,9 +112,8 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         checks.vk_memory_allocations, checks.vk_memory_freed,
     );
     if imports {
-        let follows = if cfg!(target_os = "linux") { 2 } else { 0 };
         assert!(
-            checks.vk_memory_allocations <= tries * TAX_IMPORTS + follows,
+            checks.vk_memory_allocations <= tries * TAX_IMPORTS,
             "{} allocations over {tries} tries of {TAX_IMPORTS} imports",
             checks.vk_memory_allocations,
         );
@@ -173,6 +166,55 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         }
         drop(second);
         std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A device's making maps no page over a live import of it, on its own thread or the checks':
+/// the submission checks' imports are the import tax's (`submit_check.rs`), over pages the checks
+/// map where the kernel places them, never map over, and unmap only once every import of them was
+/// freed; they make and bind no buffer, so none of their commands reads imported pages. A device
+/// made over a fresh shader cache runs them (`WorkCounts::submit_checks_run`), counted apart
+/// (`WorkCounts::device_checks`, the queue-switch check's work among it, which makes no buffer or
+/// memory): no `vkCreateBuffer` or `vkBindBufferMemory`, at most [`TAX_IMPORTS`] memories a try,
+/// and, where the import tax answered, every one freed by then. Printed (`NO-REMAP`).
+#[test]
+fn a_device_s_checks_map_no_pages_over_a_live_import() {
+    let scratch = Scratch::new("submit-checks-no-remap");
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the checks never answered"
+    );
+    let counts = device.work_counts();
+    assert_eq!(counts.submit_checks_run, 1, "the checks did not run");
+    let checks = &counts.device_checks;
+    let tries = (device.shared().submit_checks.tax_tries).load(Ordering::Relaxed);
+    let taxed = device.shared().submit_checks.verdict(Check::ImportTax);
+    println!(
+        "NO-REMAP {}: the checks' memories {} allocated, {} freed over {tries} import tax tries \
+         (import tax {taxed:?}); buffers {} made, {} bound: {}",
+        device.name(),
+        checks.vk_memory_allocations,
+        checks.vk_memory_freed,
+        checks.vk_buffers_made,
+        checks.vk_buffer_bindings,
+        device.submit_check_report(),
+    );
+    assert_eq!(
+        (checks.vk_buffers_made, checks.vk_buffer_bindings),
+        (0, 0),
+        "the checks made or bound a buffer"
+    );
+    assert!(
+        checks.vk_memory_allocations <= tries * TAX_IMPORTS,
+        "{} memories over {tries} tries of {TAX_IMPORTS} imports",
+        checks.vk_memory_allocations,
+    );
+    if taxed != Verdict::Unchecked {
+        assert_eq!(
+            checks.vk_memory_freed, checks.vk_memory_allocations,
+            "an import of the checks outlived their answer"
+        );
     }
 }
 

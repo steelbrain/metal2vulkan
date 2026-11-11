@@ -711,8 +711,8 @@ fn nvidia_s_every_1024th_signalling_submit_stall_holds_on_the_gpu_measured() {
 /// submissions), at another release too. Under
 /// the RX 7900 XTX's (0x744c) it takes the one answer measured there too, BC1 to BC3's block
 /// decode, and none of the 780M's others; under the RX 550's (0x699f) the one answer measured
-/// there, a cleared depth at the standard positions. Whether its submissions merge and whether
-/// its pointer imports follow their address are no facts of the table: the runtime's device
+/// there, a cleared depth at the standard positions. Whether its submissions merge and whether a
+/// held pointer import costs its submissions are no facts of the table: the runtime's device
 /// checks answer them on each device (`submit_check.rs` in the runtime), so a GPU no row names
 /// takes those paths too.
 #[test]
