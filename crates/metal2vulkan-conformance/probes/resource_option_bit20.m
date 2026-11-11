@@ -7,6 +7,23 @@
 //   BIT20 <what> <options asked, hex> made=<0|1> options=<resourceOptions, hex> storage=<n>
 //     cache=<n> hazard=<n>
 //
+// WHAT IT MEASURED, plain and under API validation, an Apple M3 Max under macOS 27.0.1 and an AMD
+// Radeon Pro 5300M under macOS 26.7.1 alike where both ran:
+//
+//   - newBufferWithLength: (0x100000, 0x100010, 0x100020), newBufferWithBytes: and
+//     newBufferWithBytesNoCopy: (0x100000, 0x100010) are made, and report their options WITHOUT
+//     bit 20: 0x200, 0x210 and 0x220 (the hazard tracking mode resolved to tracked);
+//   - a heap with it (the M3 Max: `Shared` and `Private`; the 5300M refuses a `Shared` heap
+//     whatever the bit) is made and reports its options without it; a heap's newBufferWithLength:
+//     with it is made plainly, reporting without it, and stopped by API validation ("unknown bits
+//     0x100000");
+//   - a texture descriptor keeps it (`resourceOptions` reads 0x100000), and newTextureWithDescriptor:
+//     with it ends the process plainly (IOGPUMetalSuballocator: "Different MTLResourceOptions used
+//     for the same heap index").
+//
+// So `ResourceOptions::from_raw` takes it, a buffer and a heap are made as without it, and a
+// texture descriptor with it is refused (`ResourceOptions::BIT_20`).
+//
 // Run it twice, plain and under API validation (a refusal there ends the process, so the line
 // before it says how far it got):
 //

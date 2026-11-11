@@ -1060,8 +1060,9 @@ impl Heap {
     pub fn new_buffer(&self, length: u64, options: ResourceOptions) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer";
         // Metal makes a placed buffer with the private bit as without it (the heap's own options
-        // decide where its writes go).
-        let options = options.without_private_bit().0;
+        // decide where its writes go), and with bit 20 as without it
+        // (`ResourceOptions::BIT_20`).
+        let options = options.without_bit_20().without_private_bit().0;
         let options = self.placed_options(CALL, options)?;
         let bytes = self.check_type(CALL, HeapType::Automatic)?;
         if length == 0 {
@@ -1097,8 +1098,8 @@ impl Heap {
         offset: u64,
     ) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer_at_offset";
-        // As `new_buffer`: the private bit is the heap's to take.
-        let options = options.without_private_bit().0;
+        // As `new_buffer`: the private bit is the heap's to take, and bit 20 is dropped.
+        let options = options.without_bit_20().without_private_bit().0;
         let options = self.placed_options(CALL, options)?;
         let bytes = self.check_type(CALL, HeapType::Placement)?;
         self.check_length(CALL, length)?;

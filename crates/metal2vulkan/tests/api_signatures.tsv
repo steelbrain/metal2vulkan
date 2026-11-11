@@ -55,6 +55,7 @@ assoc-const	metal2vulkan-runtime::PixelFormatInfo::INVALID	pub const INVALID: Pi
 assoc-const	metal2vulkan-runtime::PrivateCount::ALL	pub const ALL: [PrivateCount; 28]
 assoc-const	metal2vulkan-runtime::PrivateFlag::ALL	pub const ALL: [PrivateFlag; 23]
 assoc-const	metal2vulkan-runtime::Query::ALL	pub const ALL: [Query; 9]
+assoc-const	metal2vulkan-runtime::ResourceOptions::BIT_20	pub const BIT_20: u64
 assoc-const	metal2vulkan-runtime::ResourceOptions::PRIVATE_BIT	pub const PRIVATE_BIT: u64
 assoc-const	metal2vulkan-runtime::StoreActionOptions::CUSTOM_SAMPLE_POSITIONS	pub const CUSTOM_SAMPLE_POSITIONS: StoreActionOptions
 assoc-const	metal2vulkan-runtime::StoreActionOptions::NONE	pub const NONE: StoreActionOptions
@@ -536,6 +537,7 @@ assoc-const-value	metal2vulkan-runtime::PixelFormatInfo::INVALID	PixelFormatInfo
 assoc-const-value	metal2vulkan-runtime::PrivateCount::ALL	
 assoc-const-value	metal2vulkan-runtime::PrivateFlag::ALL	
 assoc-const-value	metal2vulkan-runtime::Query::ALL	[Query::RasterOrderGroups, Query::Depth24Stencil8, Query::ProgrammableSamplePositions, Query::TextureSampleCount, Query::VertexAmplificationCount, Query::RasterizationRateMapLayerCount, Query::MinimumLinearTextureAlignment, Query::SamplerReductionMode, Query::PullModelInterpolation]
+assoc-const-value	metal2vulkan-runtime::ResourceOptions::BIT_20	1 <<20
 assoc-const-value	metal2vulkan-runtime::ResourceOptions::PRIVATE_BIT	1 <<24
 assoc-const-value	metal2vulkan-runtime::StoreActionOptions::CUSTOM_SAMPLE_POSITIONS	StoreActionOptions(1)
 assoc-const-value	metal2vulkan-runtime::StoreActionOptions::NONE	StoreActionOptions(0)

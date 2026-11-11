@@ -2424,12 +2424,12 @@ fn unwritable_pages(host: &HostWindow, vouched: bool, counts: &Counters) -> Resu
 }
 
 /// `options` of a no-copy buffer or heap over the caller's bytes without
-/// [`ResourceOptions::PRIVATE_BIT`], and whether its memory drops the GPU's writes, as Metal's does
+/// [`ResourceOptions::PRIVATE_BIT`] and [`ResourceOptions::BIT_20`], and whether its memory drops the GPU's writes, as Metal's does
 /// where the options set the bit: on macOS the runtime imports the pages through a read-only view
 /// of them (`read_only_view.rs`); elsewhere it makes the object over a copy of them whose GPU
 /// writes it never writes back (`copied.rs`, announced as `copied-host-pages`).
 pub(super) fn no_copy_options(options: ResourceOptions) -> (ResourceOptions, bool) {
-    options.without_private_bit()
+    options.without_bit_20().without_private_bit()
 }
 
 /// Why a no-copy buffer or heap is made over a copy of the caller's pages (`Device::copied_buffer`).

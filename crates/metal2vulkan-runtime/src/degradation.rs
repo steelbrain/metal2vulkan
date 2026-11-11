@@ -3405,9 +3405,15 @@ pub(crate) fn announcement_breach(each: bool) -> Option<NoticePlace> {
     }
 }
 
-/// `Invalid` (`Problem::UndefinedValue`) where `options` set [`ResourceOptions::PRIVATE_BIT`].
-fn refuse_private_bit(call: &'static str, options: ResourceOptions) -> Result<(), Error> {
-    match options.without_private_bit().1 {
+/// `Invalid` (`Problem::UndefinedValue`) where `options` set [`ResourceOptions::PRIVATE_BIT`],
+/// or, where `bit_20`, [`ResourceOptions::BIT_20`].
+fn refuse_private_bit(
+    call: &'static str,
+    options: ResourceOptions,
+    bit_20: bool,
+) -> Result<(), Error> {
+    let with_bit_20 = bit_20 && options.without_bit_20() != options;
+    match options.without_private_bit().1 || with_bit_20 {
         true => Err(crate::error::invalid(
             call,
             crate::error::Problem::UndefinedValue {
@@ -3898,7 +3904,8 @@ impl Device {
         call: &'static str,
         options: ResourceOptions,
     ) -> ResourceOptions {
-        let (taken, private) = options.without_private_bit();
+        // Bit 20 is dropped unannounced, as Metal makes a heap with it and reports it without.
+        let (taken, private) = options.without_bit_20().without_private_bit();
         if private {
             self.degrade(Degradation::PrivateResourceOption, || {
                 (
@@ -3917,27 +3924,29 @@ impl Device {
     /// [`ResourceOptions::PRIVATE_BIT`] (`Invalid`, `Problem::UndefinedValue`), as Metal ends the
     /// process there (the M3 Max under macOS 27.0.1: `newBufferWithLength:options:` and
     /// `newBufferWithBytes:length:options:`, `Shared` or `Private`, assert in the buffer's
-    /// suballocator, "Different MTLResourceOptions used for the same heap index").
+    /// suballocator, "Different MTLResourceOptions used for the same heap index"); without
+    /// [`ResourceOptions::BIT_20`], as Metal makes such a buffer with it and reports it without.
     pub(super) fn own_memory_options(
         &self,
         call: &'static str,
         options: ResourceOptions,
     ) -> Result<ResourceOptions, Error> {
-        refuse_private_bit(call, options)?;
-        Ok(options)
+        refuse_private_bit(call, options, false)?;
+        Ok(options.without_bit_20())
     }
 
     /// `descriptor`, refused where its options set [`ResourceOptions::PRIVATE_BIT`] (`Invalid`,
     /// `Problem::UndefinedValue`), as Metal's texture descriptor validation ends the process there
     /// for every texture (the M3 Max under macOS 27.0.1: "MTLResourceOptions (0x1000000) contains
     /// unknown bits", a device's texture, `Shared` or `Private`, a heap's, a buffer's and a
-    /// shareable one alike).
+    /// shareable one alike), or [`ResourceOptions::BIT_20`], with which Metal's suballocator ends
+    /// the process for a device's texture (the M3 Max under macOS 27.0.1, `Shared`).
     pub(super) fn texture_options(
         &self,
         call: &'static str,
         descriptor: &TextureDescriptor,
     ) -> Result<TextureDescriptor, Error> {
-        refuse_private_bit(call, descriptor.resource_options)?;
+        refuse_private_bit(call, descriptor.resource_options, true)?;
         Ok(*descriptor)
     }
 

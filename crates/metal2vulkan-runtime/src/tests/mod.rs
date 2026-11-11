@@ -368,6 +368,8 @@ mod opencl_swizzles;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod opengl_mode;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod option_bit_20;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod optional_extensions;
 mod options;
 mod own;

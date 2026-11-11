@@ -112,8 +112,8 @@ impl HazardTrackingMode {
 }
 
 /// `MTLResourceOptions`: the CPU cache mode in bits 0-3, the storage mode in bits 4-7, and the
-/// hazard tracking mode in bits 8-9, as Metal packs them, and Metal's private bit 24
-/// ([`ResourceOptions::PRIVATE_BIT`]).
+/// hazard tracking mode in bits 8-9, as Metal packs them, Metal's private bit 24
+/// ([`ResourceOptions::PRIVATE_BIT`]) and bit 20 ([`ResourceOptions::BIT_20`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ResourceOptions(u64);
 
@@ -149,6 +149,20 @@ impl ResourceOptions {
     ///   (`Device::new_buffer_with_vk_buffer`).
     pub const PRIVATE_BIT: u64 = 1 << 24;
 
+    /// Bit 20 (0x10_0000), an option no Metal header names, whose meaning Metal does not state
+    /// (programs pass it with a buffer's options: 0x100010 for a `Managed` no-copy buffer).
+    /// [`from_raw`](Self::from_raw) takes it. What Metal does with it (an M3 Max under macOS
+    /// 27.0.1 and an AMD Radeon Pro 5300M under macOS 26.7.1, plain and under API validation;
+    /// `crates/metal2vulkan-conformance/probes/resource_option_bit20.m`), and the runtime alike:
+    /// - a buffer of a length, of bytes or over the caller's pages (`newBufferWithBytesNoCopy:`),
+    ///   of every storage mode, is made with it and reports its options without it; so are a
+    ///   heap and a heap's buffer (the M3 Max; Metal's API validation stops the heap's buffer, "unknown
+    ///   bits 0x100000"). The runtime makes each as without it, and nothing reads it;
+    /// - a texture descriptor with it ends Metal's process (its suballocator asserts, "Different
+    ///   MTLResourceOptions used for the same heap index"): refused `Invalid`
+    ///   (`Problem::UndefinedValue`), as with [`PRIVATE_BIT`](Self::PRIVATE_BIT).
+    pub const BIT_20: u64 = 1 << 20;
+
     /// The options of these three modes.
     pub fn new(
         storage: StorageMode,
@@ -177,10 +191,10 @@ impl ResourceOptions {
     }
 
     /// The options of Metal's raw value `raw`: refused when it sets a bit outside the three
-    /// fields and [`PRIVATE_BIT`](Self::PRIVATE_BIT), or a field to a value its type does not
-    /// define.
+    /// fields, [`PRIVATE_BIT`](Self::PRIVATE_BIT) and [`BIT_20`](Self::BIT_20), or a field to a
+    /// value its type does not define.
     pub fn from_raw(raw: u64) -> Result<ResourceOptions, Error> {
-        if raw & !(Self::DEFINED | Self::PRIVATE_BIT) != 0 {
+        if raw & !(Self::DEFINED | Self::PRIVATE_BIT | Self::BIT_20) != 0 {
             return Err(undefined("MTLResourceOptions", raw));
         }
         let options = ResourceOptions(raw);
@@ -235,6 +249,12 @@ impl ResourceOptions {
             ResourceOptions(self.0 & !Self::PRIVATE_BIT),
             self.0 & Self::PRIVATE_BIT != 0,
         )
+    }
+
+    /// The options without [`BIT_20`](Self::BIT_20), as Metal makes and reports a buffer or a
+    /// heap of them.
+    pub(crate) fn without_bit_20(self) -> ResourceOptions {
+        ResourceOptions(self.0 & !Self::BIT_20)
     }
 }
 

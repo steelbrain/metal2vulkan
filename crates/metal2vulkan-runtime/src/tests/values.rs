@@ -85,6 +85,21 @@ fn the_private_bit_is_taken_and_dropped_apart() {
     assert!(ResourceOptions::from_raw(0x200_0000).is_err());
 }
 
+/// Bit 20 is taken beside the modes, as Metal takes it, and making a buffer or a heap drops it;
+/// bits 21 to 23 stay undefined.
+#[test]
+fn bit_20_is_taken_and_dropped_apart() {
+    let raw = 0x10_0000 | 0x10;
+    let options = ResourceOptions::from_raw(raw).unwrap();
+    assert_eq!(options.raw(), raw);
+    assert_eq!(options.storage_mode(), Ok(StorageMode::Managed));
+    assert_eq!(options.without_bit_20().raw(), 0x10);
+    assert_eq!(options.without_private_bit(), (options, false));
+    for bit in 21..24 {
+        assert!(ResourceOptions::from_raw(1 << bit).is_err(), "bit {bit}");
+    }
+}
+
 #[test]
 fn undefined_raw_values_are_refused() {
     let undefined = |ty, raw| {

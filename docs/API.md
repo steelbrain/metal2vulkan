@@ -497,6 +497,20 @@ first submission acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; a linear image ove
 runtime's own memory starts `VK_IMAGE_LAYOUT_PREINITIALIZED`, and its move from there keeps its
 bytes. FAST-PATHS.md's costs and known gaps state what this costs and differs from Metal in.
 
+`MTLResourceOptions` bit 20 (0x100000, `ResourceOptions::BIT_20`) is an option no Metal header
+names, whose meaning Metal does not state; programs pass it with a buffer's options (0x100010 for
+a `Managed` no-copy buffer). `ResourceOptions::from_raw` takes it, and nothing in the runtime
+reads it. Measured on an M3 Max under macOS 27.0.1 and an AMD Radeon Pro 5300M under macOS 26.7.1,
+plain and under API validation (`crates/metal2vulkan-conformance/probes/resource_option_bit20.m`),
+the runtime following both halves:
+- a buffer of a length, of bytes or over the caller's pages (`newBufferWithBytesNoCopy:`), of
+  every storage mode, is made with it and reports its options without it; so are a heap and a
+  heap's buffer (the M3 Max; Metal's API validation stops the heap's buffer, "unknown bits
+  0x100000"). The runtime makes each as without it;
+- a texture descriptor with it ends Metal's process (its suballocator asserts, "Different
+  MTLResourceOptions used for the same heap index"): the runtime refuses it (`Invalid`,
+  `Problem::UndefinedValue`), as it refuses bit 24 there.
+
 ## 2. A library
 
 `Library::parse` takes a metallib, a bitcode wrapper or a raw AIR module; `Library::from_air`
