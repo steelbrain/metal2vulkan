@@ -968,3 +968,16 @@ A host note: on a laptop whose NVIDIA GPU powers down when idle (the driver's ru
 1 second while the GPU wakes (970 to 980 ms on an RTX 5080 Laptop GPU, driver 615.71.09). A host
 that wants no wake can keep the GPU powered (`on` in its PCI device's `power/control`); the runtime
 never needs it.
+
+A host note: on NVIDIA's proprietary driver, drop the runtime's devices before the process exits.
+A device kept to the exit (in a static, as Metal's device lives for the process) can end the exit
+with `SIGSEGV` inside the driver's own exit handler, which tears the driver's SPIR-V compiler down
+while a worker thread of the driver's still runs in it: a null dereference at `0x18` in
+`libnvidia-glvkspirv.so`, on a thread the driver started from the thread that made the device (so
+it carries that thread's name, a test's under a test harness). No call of the runtime's is in the
+driver then, and Vulkan has no call that waits for that worker. On an RTX 3090 (620.70.06), 8
+processes at once, each making a device whose in-place check had no record yet
+(`Device::settle_in_place_checks`, run once per driver) and keeping it: 6 of 80 exits right after
+the check ended faulted, 0 of 80 three seconds after it, and 0 of 80 with the device dropped first;
+with no check, 0 of 160. Which other work leaves the worker running is unaudited
+([FAST-PATHS](FAST-PATHS.md), known gaps).

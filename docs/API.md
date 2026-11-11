@@ -5169,6 +5169,12 @@ each item named states the rule in full.
   thread left running, ended a consumer's process with `SIGSEGV` inside NVIDIA's SPIR-V compiler
   (`libnvidia-glvkspirv.so`, RTX 5080). A program that ends its making threads before it exits
   leaves only the 2 ms window.
+- **On NVIDIA's proprietary driver, an exit with a device live can fault in the driver's own exit
+  handler** with no making in progress, where Metal's exit is clean: the handler tears the driver's
+  SPIR-V compiler down while a worker thread of the driver's still runs in it (a null dereference
+  at `0x18` in `libnvidia-glvkspirv.so`, the fault above), on an RTX 3090 (620.70.06) in 6 of 80
+  exits right after the device's check of textures over host pages ended, and none three seconds
+  after it. A device dropped before the exit leaves none ([FAST-PATHS](FAST-PATHS.md), known gaps).
 
 **Two-plane YCbCr textures**
 

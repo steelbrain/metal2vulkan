@@ -114,7 +114,12 @@
 //!   process ended
 //!   with `SIGSEGV` at `0x18` inside `libnvidia-glvkspirv.so`, the driver's SPIR-V compiler, on a
 //!   thread the test's had started, during its exit after its test passed: one test of a whole
-//!   run under load, which passed alone. A load is where the first call counts
+//!   run under load, which passed alone. The same fault ends an exit with no making in progress
+//!   too, which no hook orders: on an RTX 3090 (620.70.06), the exit handler of `libEGL_nvidia.so`
+//!   tore the compiler down while a worker thread of the driver's (started from the thread that
+//!   made the device, whose name it carries) still ran in it, in 6 of 80 exits right after the
+//!   device's in-place check ended, and none with the device dropped first (docs/FAST-PATHS.md,
+//!   known gaps). A load is where the first call counts
 //!   from: the Vulkan loader unloads the layers with the last instance and loads them again with
 //!   the next, which make their statics again at each entry point's first call after the device
 //!   that registered at the load; so that device forgets the entry points called before

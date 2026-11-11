@@ -849,8 +849,9 @@ fn a_pipeline_making_that_returned_registers_the_hook_again() {
 /// first and waits for the making, and the destructor runs once it ended. The destructor ends the
 /// child with 42 when the making had ended, 43 when it ran beside it. That is an exit mid-compile:
 /// on an RTX 5080 a consumer's test process ended with `SIGSEGV` at `0x18` inside
-/// `libnvidia-glvkspirv.so`, the driver's SPIR-V compiler, on a thread of the runtime's during its
-/// exit after its test passed (one test of a whole run under load; it passed alone).
+/// `libnvidia-glvkspirv.so`, the driver's SPIR-V compiler, on a thread the test's had started,
+/// during its exit after its test passed (one test of a whole run under load; it passed alone). The
+/// same fault also comes with no making in progress (`exit_guard.rs`).
 #[cfg(unix)]
 #[test]
 fn an_exit_mid_making_waits_for_it_before_an_earlier_making_s_destructor() {

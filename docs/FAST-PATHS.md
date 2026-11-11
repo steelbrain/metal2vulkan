@@ -1425,8 +1425,18 @@ driver's. Each is open work.
   **unaudited** past the shapes measured there.
 
 - **On NVIDIA's proprietary driver, a process that exits with a device live can fault in the
-  driver's own worker thread during its exit handler**: about 1 in 100 test processes beside other
-  GPU work. The cause is not found.
+  driver's own worker thread during its exit handler**: the exit handler of `libEGL_nvidia.so`
+  tears the driver's SPIR-V compiler down while a worker thread of the driver's still runs in it, a
+  null dereference at `0x18` in `libnvidia-glvkspirv.so` (`SIGSEGV`, `SEGV_MAPERR`) on a thread the
+  driver started from the thread that made the device, so it carries that thread's name. No thread
+  or call of the runtime's is in the driver then, and Vulkan has no call that waits for the
+  driver's worker. Measured on an RTX 3090 (620.70.06), 8 processes at once, each making a device
+  with no record of its in-place check (`Device::settle_in_place_checks`) and keeping it to the
+  exit: 6 of 80 exits right after the check ended faulted, 0 of 80 three seconds after it, 0 of 80
+  where the device was dropped before the exit, and 0 of 160 with no check (exits right after the
+  device's creation and 6 s after it). What other work leaves the worker running is unaudited.
+  Drop the runtime's devices before the process exits on that driver
+  ([HOWTO](HOWTO.md#8-check-the-integration)).
 
 - **Reflection after a compute descriptor reset on RADV**: `max_total_threads_per_threadgroup`
   answers 0 where Metal answers 96, `required_threads_per_threadgroup` `0x0x0` where Metal answers

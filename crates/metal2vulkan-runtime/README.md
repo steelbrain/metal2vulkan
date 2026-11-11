@@ -233,6 +233,14 @@ program's, returns once that is done: it stops the runtime's own background work
 check of textures over host pages, its warm pass) and waits for it, at most a round of the check or
 the record the pass is making.
 
+**At the process's exit.** On NVIDIA's proprietary driver, drop the runtime's devices before the
+process exits. A device kept to the exit can end it with `SIGSEGV` inside the driver's own exit
+handler, which tears the driver's SPIR-V compiler down while a worker thread of the driver's still
+runs in it, where the device's check of textures over host pages ended a few seconds or less before
+the exit: on an RTX 3090 (620.70.06), 6 of 80 exits right after the check, 0 of 80 three seconds
+after it, and 0 of 80 with the device dropped first
+([HOWTO](../../docs/HOWTO.md#8-check-the-integration)).
+
 **The Vulkan objects underneath** (no Metal counterpart; each call is `unsafe`):
 
 - `Device::raw()` gives the entry, instance, physical device, `ash::Device`, queue families, and
