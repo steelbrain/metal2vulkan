@@ -33,14 +33,17 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 /// The grey written into the bytes after the making.
-const GREY: [u8; 4] = [128, 128, 128, 255];
+pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
 
 /// The guest's compositor's first shape: every level fits in one host page.
-const SHAPE: Shape = SHAPES[0];
+pub(super) const SHAPE: Shape = SHAPES[0];
 
 /// A command buffer of `rig`'s queue whose work waits for the host's signal of 1 (returned with
 /// it), `encode`'s encoders after the wait, committed.
-fn behind_a_wait(rig: &Rig, encode: impl FnOnce(&CommandBuffer)) -> (CommandBuffer, SharedEvent) {
+pub(super) fn behind_a_wait(
+    rig: &Rig,
+    encode: impl FnOnce(&CommandBuffer),
+) -> (CommandBuffer, SharedEvent) {
     let gate = rig.device.new_shared_event().unwrap();
     let command_buffer = rig.queue.command_buffer().unwrap();
     (command_buffer.encode_wait_for_event(EventRef::Shared(&gate), 1)).unwrap();
@@ -75,7 +78,12 @@ fn rebind_then_run(
 
 /// A blit of every level of `texture`, of `shape`, into `out`, each level's packed texels after
 /// the one before's.
-fn blit_levels(command_buffer: &CommandBuffer, texture: &Texture, out: &Buffer, shape: Shape) {
+pub(super) fn blit_levels(
+    command_buffer: &CommandBuffer,
+    texture: &Texture,
+    out: &Buffer,
+    shape: Shape,
+) {
     let ((width, height), levels) = shape;
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     let mut at = 0;
@@ -102,7 +110,7 @@ fn blit_levels(command_buffer: &CommandBuffer, texture: &Texture, out: &Buffer, 
 }
 
 /// Each level of `shape` in `bytes`, as [`blit_levels`] lays them out.
-fn levels_in(bytes: &[u8], shape: Shape) -> Vec<Vec<u8>> {
+pub(super) fn levels_in(bytes: &[u8], shape: Shape) -> Vec<Vec<u8>> {
     let ((width, height), levels) = shape;
     let mut at = 0;
     (0..levels)

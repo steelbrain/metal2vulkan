@@ -561,6 +561,8 @@ mod tile_rebind_making_wait;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tiled_texture_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod tiled_texture_failed;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod tiled_texture_reencode;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod told_once;
