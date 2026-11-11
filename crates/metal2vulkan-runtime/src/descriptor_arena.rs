@@ -77,6 +77,14 @@ impl SetNeeds {
     fn descriptors(&self) -> u64 {
         self.counts.iter().map(|&(_, count)| u64::from(count)).sum()
     }
+
+    /// The descriptors a pool of `sets` such sets holds, of every type: [`Room::of`]'s
+    /// [`Room::descriptors`], counted without the room's list.
+    fn pool_descriptors(&self, sets: u32) -> u64 {
+        (self.counts.iter())
+            .map(|&(_, count)| u64::from(count.saturating_mul(sets)))
+            .sum()
+    }
 }
 
 /// What a pool has left: its sets and descriptors by type, and its flags (`Book`'s pure part).
@@ -225,7 +233,7 @@ impl DescriptorArena {
             Ok(at) => at,
             Err(sets) => {
                 let shared = device.shared();
-                let most = self.fitted.then(|| Room::of(needs, sets).descriptors());
+                let most = self.fitted.then(|| needs.pool_descriptors(sets));
                 let pool = match shared.spares.descriptor_pool(shared, needs, most)? {
                     Some(spare) => spare,
                     None => {

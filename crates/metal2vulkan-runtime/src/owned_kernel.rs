@@ -1073,22 +1073,72 @@ impl OwnedKernel {
 }
 
 impl OwnedSets {
+    /// No set yet, for `count` sets, from a fitted arena of their own, counted
+    /// (`WorkCounts::owned_descriptor_pools`): refused (internal) for none, and for a kernel whose
+    /// set 0 is pushed, which no set is allocated from (the module docs).
+    fn opened(device: &Device, count: usize, pushed: bool) -> Result<OwnedSets, Error> {
+        if count == 0 || u32::try_from(count).is_err() {
+            return Err(internal("owned sets that do not match their kernel"));
+        }
+        if pushed {
+            return Err(internal("owned sets of a kernel whose set 0 is pushed"));
+        }
+        device.shared().counts.owned_descriptor_pool();
+        Ok(OwnedSets {
+            arena: DescriptorArena::fitted(),
+            sets: Vec::with_capacity(count),
+        })
+    }
+
     /// One set of `kernel` (of storage buffers only) per entry of `ranges`, each binding `i`
-    /// written with the `i`-th `(buffer, offset, range)`.
-    pub(super) fn write(
+    /// written with the `i`-th `(buffer, offset, range)`: the sets' buffer infos and their writes
+    /// each in one list, and the kernel's needs taken once.
+    pub(super) fn write<R: AsRef<[(vk::Buffer, u64, u64)]>>(
         device: &Device,
         kernel: &OwnedKernel,
-        ranges: &[Vec<(vk::Buffer, u64, u64)>],
+        ranges: &[R],
     ) -> Result<OwnedSets, Error> {
-        let sets: Vec<OwnedSet> = ranges
-            .iter()
-            .map(|buffers| OwnedSet {
-                images: Vec::new(),
-                storage_images: Vec::new(),
-                buffers: buffers.clone(),
-            })
-            .collect();
-        OwnedSets::write_each(device, &vec![*kernel; ranges.len()], &sets)
+        let each = kernel.buffers as usize;
+        if kernel.images > 0
+            || kernel.storage_images > 0
+            || ranges.iter().any(|set| set.as_ref().len() != each)
+        {
+            return Err(internal("owned sets that do not match their kernel"));
+        }
+        let mut owned = OwnedSets::opened(device, ranges.len(), kernel.pushed)?;
+        let needs = kernel.set_needs();
+        for _ in ranges {
+            let set = (owned.arena).allocate(device, kernel.set_layout, &needs)?;
+            owned.sets.push(set);
+        }
+        let mut infos = Vec::with_capacity(ranges.len() * each);
+        infos.extend(
+            ranges
+                .iter()
+                .flat_map(|set| set.as_ref())
+                .map(|&(buffer, offset, range)| {
+                    vk::DescriptorBufferInfo::default()
+                        .buffer(buffer)
+                        .offset(offset)
+                        .range(range)
+                }),
+        );
+        let mut writes = Vec::with_capacity(infos.len());
+        for (set, infos) in owned.sets.iter().zip(infos.chunks(each.max(1))) {
+            for (binding, info) in (0u32..).zip(infos) {
+                writes.push(
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(*set)
+                        .dst_binding(binding)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(std::slice::from_ref(info)),
+                );
+            }
+        }
+        // SAFETY: the sets were just allocated and no command uses them; every buffer written is
+        // live (the caller's command retains them).
+        unsafe { device.shared().vk().update_descriptor_sets(&writes, &[]) };
+        Ok(owned)
     }
 
     /// One set per entry of `sets`, of the kernel at its index in `kernels`, each written with
@@ -1101,25 +1151,17 @@ impl OwnedSets {
         sets: &[OwnedSet],
     ) -> Result<OwnedSets, Error> {
         let raw = device.shared().vk();
-        let count = u32::try_from(sets.len()).map_err(|_| internal("too many owned sets"))?;
         if kernels.len() != sets.len()
             || sets.iter().zip(kernels).any(|(set, kernel)| {
                 set.images.len() != kernel.images as usize
                     || set.storage_images.len() != kernel.storage_images as usize
                     || set.buffers.len() != kernel.buffers as usize
             })
-            || count == 0
         {
             return Err(internal("owned sets that do not match their kernel"));
         }
-        if kernels.iter().any(|kernel| kernel.pushed) {
-            return Err(internal("owned sets of a kernel whose set 0 is pushed"));
-        }
-        device.shared().counts.owned_descriptor_pool();
-        let mut owned = OwnedSets {
-            arena: DescriptorArena::fitted(),
-            sets: Vec::with_capacity(count as usize),
-        };
+        let pushed = kernels.iter().any(|kernel| kernel.pushed);
+        let mut owned = OwnedSets::opened(device, sets.len(), pushed)?;
         for kernel in kernels {
             let set = (owned.arena).allocate(device, kernel.set_layout, &kernel.set_needs())?;
             owned.sets.push(set);
