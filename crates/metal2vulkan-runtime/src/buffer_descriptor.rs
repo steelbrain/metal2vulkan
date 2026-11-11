@@ -574,8 +574,12 @@ impl Device {
     /// does an import of the pointer on a driver that keeps them; on a driver whose pointer imports
     /// follow their address (as the device's submission checks find, `submit_check.rs`: ANV on
     /// i915, RADV, lavapipe), an import of the pointer reads the pages mapped there at each
-    /// submission, the new ones from the remap on (`docs/FAST-PATHS.md`, known gaps). Not a Metal
-    /// call: Metal needs none. A `length` of 0 tells nothing.
+    /// submission, the new ones from the remap on (`docs/FAST-PATHS.md`, known gaps). Such a
+    /// remap under a live buffer breaks [`HostMemory::new`]'s contract, and under a live import of
+    /// the pointer `VK_EXT_external_memory_host`'s too, which this call does not mend: the pages
+    /// are replaced or unmapped once every buffer over them signalled that its import went (its
+    /// keep-alive dropped, or its deallocator ran; docs/HOWTO.md, "Unmapping host memory"). Not
+    /// a Metal call: Metal needs none. A `length` of 0 tells nothing.
     ///
     /// The call may come at the unmap or after the new map, but before a buffer is made over the
     /// new pages: a buffer made over those bytes while it runs may lie in either pages. The bytes

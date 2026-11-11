@@ -427,6 +427,43 @@ records it (`WorkCounts::copy_regions_split`): among them a two-plane YCbCr text
 into its staging buffer where it converts whole (`WorkCounts::ycbcr_whole_conversions`), and a
 staged texture's bytes and rows.
 
+### Unmapping host memory
+
+`VK_EXT_external_memory_host` leaves undefined whether an import of host memory holds its pages,
+and so leaves them in the caller's care: "the application must ensure that the imported memory
+range remains valid and accessible for the lifetime of the imported memory object"
+(`VkImportMemoryHostPointerInfoEXT`), and a buffer bound to the memory may hold its payload until
+the buffer is destroyed too (`vkFreeMemory`). So the pages under a no-copy buffer, heap or rebind
+are unmapped, remapped or freed only once the runtime's imports of them are freed: the objects go
+first, the pages after. The runtime tells when, for each object:
+
+- With a keep-alive (`KeepAlive`, a runtime extension), its drop: after the `vkFreeMemory` of the
+  object's import of the pages returned, on every `VkDevice` a recovery made the object on. The
+  simplest form is a keep-alive that owns the mapping and unmaps it as it drops. A deallocator
+  given with it runs at the release, as Metal's does, possibly while the import lives: that is not
+  the moment to unmap.
+- With a deallocator alone, its run: after that free.
+- With neither, the drop of the last reference frees the import before it returns. A committed
+  command buffer that used the object holds a reference until its completed handlers ran, after
+  its status reads `Completed` and before its `wait_until_completed` returns.
+- A buffer made over exactly the bytes of another live buffer lies in that one's import: its
+  keep-alive or deallocator goes at its release, and the other buffer's comes after the free. Pages
+  under several objects go once each of them has signalled.
+- A guest RAM (`HostRam`): its keep-alive's drop, once every chunk's import was freed.
+
+An import is freed by the thread that drops the last reference to it; by a queue's thread once the
+last command buffer holding it completed (one that used the buffer, a blit's hold on an import the
+device releases while idle, or a texture's image over the pages); by a handler thread where a
+keep-alive alone waits for the free; and, while the buffer lives, by the device's residency thread
+(`metal2vulkan-residency`), which every half second frees the idle pointer imports past their
+window on a driver whose pointer imports follow their address (above), the next blit importing
+them again on the thread that encodes it. On RADV and ANV every submission of the device, from any
+thread, lists every live import. So pages unmapped before their objects go meet those threads at
+any moment, also where the objects are dropped right after on another thread: a submission that
+lists an import of pages gone fails (on ANV the device is lost), and on a Radeon 780M (Linux 7.3.3)
+an unmap of pages under a live pointer import oopsed the kernel in amdgpu's notifier
+(`amdgpu_hmm_invalidate_gfx`), the GPU's work hanging until the machine was rebooted.
+
 ### Copied host buffers
 
 A no-copy buffer whose import the runtime does not make is made over a copy of its bytes instead,

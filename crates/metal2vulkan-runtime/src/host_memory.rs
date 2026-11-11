@@ -257,9 +257,22 @@ impl HostMemory {
     /// - stay mapped, at this address and with the same backing: with a keep-alive
     ///   ([`KeepAlive`]), until it is dropped; else until the buffer's deallocator runs; with
     ///   neither, until the buffer's last reference is dropped (a command buffer that uses the
-    ///   buffer holds a reference until it completed) and every command buffer submitted before
-    ///   a texture over the buffer was released completed;
+    ///   buffer holds a reference until its completed handlers ran, after its status reads
+    ///   `Completed` and before its `wait_until_completed` returns) and every command buffer
+    ///   submitted before a texture over the buffer was released completed;
     /// - are not freed, unmapped or remapped by anyone meanwhile.
+    ///
+    /// This is `VK_EXT_external_memory_host`'s rule: "the application must ensure that the
+    /// imported memory range remains valid and accessible for the lifetime of the imported memory
+    /// object" (`VkImportMemoryHostPointerInfoEXT`). Each of those moments comes only once every
+    /// `vkFreeMemory` of the buffer's import of the pages has returned, whichever thread made it:
+    /// the releasing thread, a queue's thread once the last command buffer holding the buffer
+    /// completed, or the device's thread that releases idle imports. The one exception is a buffer
+    /// that lies in the import of another live buffer made over the same bytes: its moment comes
+    /// at its release, and the other buffer's contract keeps the pages mapped. So the buffers go
+    /// first and the pages after; unmapping them first and releasing the buffer after, even at
+    /// once on another thread, unmaps them under a live import (docs/HOWTO.md, "Unmapping host
+    /// memory").
     ///
     /// Reading or writing them through the pointer while the GPU writes them is a data race, as
     /// Metal's `contents` is.
@@ -529,7 +542,10 @@ unsafe impl Sync for HostParts {}
 /// command buffer's queue's handler thread, where that command buffer's release lets go of the
 /// buffer, or, where the release frees the import, the releasing thread before the release
 /// returns, as Metal's; never a thread that submits command buffers or sees them complete. A panic
-/// inside it is caught.
+/// inside it is caught. Given with no keep-alive, it runs once the buffer's import of the pages
+/// was freed (but for a buffer lying in another live buffer's import, [`HostMemory::new`]), so the
+/// pages may be unmapped from inside it on; given with one, it runs at the release, possibly while
+/// the import lives, and the pages wait for the keep-alive's drop.
 pub type Deallocator = Box<dyn FnOnce(NonNull<u8>, u64) + Send + 'static>;
 
 /// What keeps the caller's host memory mapped (a runtime extension: Metal has none): given with a
@@ -543,6 +559,8 @@ pub type Deallocator = Box<dyn FnOnce(NonNull<u8>, u64) + Send + 'static>;
 /// pages was released may still hold the import; with none, the deallocator waits for the import
 /// (the module docs). Dropped on a runtime thread, possibly; a panic inside its drop is caught.
 /// Never dropped while the process exits: the pages stay imported to its end (`exit_guard`).
+/// Its drop is the moment the pages may be unmapped (docs/HOWTO.md, "Unmapping host memory"): a
+/// keep-alive that owns the mapping and unmaps it as it drops keeps the order Vulkan requires.
 pub type KeepAlive = Box<dyn Send + 'static>;
 
 /// What the caller gives back with its host memory: the deallocator, and the keep-alive, each

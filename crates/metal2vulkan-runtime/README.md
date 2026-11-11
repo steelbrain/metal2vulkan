@@ -414,7 +414,11 @@ the record the pass is making.
   rebind's textures follow it onto the copy. A buffer over exactly the bytes a live copy covers
   lies in that copy, as one over a live import's bytes lies in that import.
   `CommandBuffer::used_resources` lists what a command buffer uses until it completes, so a
-  program knows when it may take memory away.
+  program knows when it may take memory away. The pages under a no-copy object are unmapped only
+  after the object goes and its keep-alive is dropped (or, given none, its deallocator ran), never
+  before: Vulkan requires imported pages to stay mapped while their import lives, and the
+  runtime's threads free imports and submit work over them at any moment
+  ([HOWTO](../../docs/HOWTO.md#unmapping-host-memory)).
 - **Hazards** are tracked as Metal tracks them. A heap's resources are untracked by default, so
   encoders that share them order themselves with fences. Commands that reach a resource through an
   address or ID in memory need it resident (`use_resource`, `use_heap`), as on Metal. The runtime
