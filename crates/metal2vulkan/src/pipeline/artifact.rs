@@ -2272,7 +2272,8 @@ pub enum PrecisionNote {
     /// before that one. Exact for a draw whose primitives do not overlap at a pixel (one
     /// fullscreen triangle, a rectangle of two triangles, disjoint quads); otherwise each such
     /// pixel holds the result of some order of the draw's fragments there, not necessarily
-    /// Metal's.
+    /// Metal's. A raster order group on the color input, or on a color output of an attachment
+    /// the function reads, takes the same form there, without an interlock.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch for review.
     UnorderedFetchWithinDraw,

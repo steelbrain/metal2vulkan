@@ -848,7 +848,10 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   attachments after an earlier draw of the subpass wrote a color, and before each draw that writes
   a color after an earlier one read them: a fetch reads what every earlier draw stored, Metal's
   answer, but the overlapping fragments of one draw are not ordered, which the fragment stage
-  records (`PrecisionNote::UnorderedFetchWithinDraw`; the runtime does all of this itself).
+  records (`PrecisionNote::UnorderedFetchWithinDraw`; the runtime does all of this itself). A
+  raster order group on such a color input, or on a color output of an attachment the function
+  reads, orders that read alone there and takes no interlock; a group on anything else still
+  needs the pixel interlock (`Unsupported{RasterOrderGroups}`).
   The ordered forms are rasterization-order attachment access, or the interlocked
   storage form, which binds the attachment as a storage image viewed in
   `StorageAttachmentUse::view_format()`: its own format, an 8-bit sRGB format's unsigned-integer
@@ -3667,8 +3670,9 @@ bound.
   fragments of one draw there, where Metal orders them in primitive order: a fragment that covers
   a pixel an earlier fragment of its own draw covered may read the texel from before that
   fragment's write. Exact for a draw whose primitives do not overlap at a pixel; otherwise each
-  such pixel holds the result of some order of the draw's fragments there. Announced at the first
-  draw that binds such a pipeline.
+  such pixel holds the result of some order of the draw's fragments there. A raster order group
+  on the color input, or on a color output of an attachment the function reads, takes the same
+  form. Announced at the first draw that binds such a pipeline.
 - `metal2vulkan-degrade-fp8-value` (precision). `PrecisionNote::Fp8Value`: An 8-bit float converts
   to an integer from the format's documented value with Metal's saturating float-to-integer rule,
   where Metal's device here answers otherwise: Metal on Apple M3 compiles these reads but extends

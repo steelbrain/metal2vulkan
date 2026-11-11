@@ -224,18 +224,26 @@ impl Case for SrgbFetch {
         // announced as `dont-care-store`. Measured on both rows of this module and on neither row
         // of `super::fetch_ordered`, so it is named here and not there. It says nothing about the
         // texels either -- every byte still compares exactly.
-        [Degradation::FetchThroughScratch, Degradation::DontCareStore]
-            .iter()
-            .map(|notice| crate::replay::notice_allowance(notice.code()))
-            .chain([
-                // The buffer each pass reads its target back through is `Shared`
-                // ([`crate::replay::shared_memory_notice`]).
-                crate::replay::shared_memory_notice(),
-                // Each draw after the first fetches in the pixel interlock what the one before
-                // wrote there ([`crate::replay::interlocked_split_notice`]).
-                crate::replay::interlocked_split_notice(),
-            ])
-            .collect()
+        //
+        // A venue with neither ordered fetch form reads the input attachment ordered between draws
+        // alone, announced `unordered-fetch-within-draw`; each draw is one fullscreen triangle,
+        // which overlaps itself nowhere, so every byte still compares exactly.
+        [
+            Degradation::FetchThroughScratch,
+            Degradation::DontCareStore,
+            Degradation::UnorderedFetchWithinDraw,
+        ]
+        .iter()
+        .map(|notice| crate::replay::notice_allowance(notice.code()))
+        .chain([
+            // The buffer each pass reads its target back through is `Shared`
+            // ([`crate::replay::shared_memory_notice`]).
+            crate::replay::shared_memory_notice(),
+            // Each draw after the first fetches in the pixel interlock what the one before
+            // wrote there ([`crate::replay::interlocked_split_notice`]).
+            crate::replay::interlocked_split_notice(),
+        ])
+        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

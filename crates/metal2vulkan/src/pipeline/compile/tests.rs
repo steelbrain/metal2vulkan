@@ -1501,7 +1501,9 @@ fn a_vertex_pipeline_makes_its_input_assembly_dynamic_exactly_with_both_extended
 /// that form (alpha to coverage), the pipeline is refused with the blocker. With neither form it
 /// reads the input attachment without rasterization-order access, which the consumer's barriers
 /// order between draws alone, and its fragment stage records
-/// `PrecisionNote::UnorderedFetchWithinDraw`, which neither ordered form records.
+/// `PrecisionNote::UnorderedFetchWithinDraw`, which neither ordered form records. A raster order
+/// group on the color input (`fetch_ordered`) takes the interlock where the device has it, and
+/// with neither form orders that read alone: no interlock, noted.
 #[test]
 fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() {
     use crate::device::requirements::{FormatUsage, VkExtension, VkFeature};
@@ -1635,6 +1637,22 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     assert_eq!(pipe.graphics.input_attachments.len(), 1);
     assert!(pipe.graphics.storage_attachments.is_empty());
     assert!(!pipe.graphics.rasterization_order_attachment_access);
+    for f in [ORDERED, INTERLOCK] {
+        assert!(!pipe.requirements.features.contains(&f), "{f:?}");
+    }
+    let mut grouped = d.clone();
+    grouped.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+        Library::from_air(&fetch)
+            .expect("library")
+            .function("fetch_ordered")
+            .expect("fragment"),
+    )));
+    let pipe = compile(&interlocked, DevicePolicy::default(), &grouped).expect("grouped");
+    assert!(!unordered(&pipe));
+    assert!(pipe.requirements.features.contains(&INTERLOCK));
+    let pipe = compile(&without, DevicePolicy::default(), &grouped).expect("grouped, neither");
+    assert!(unordered(&pipe));
+    assert_eq!(pipe.graphics.input_attachments.len(), 1);
     for f in [ORDERED, INTERLOCK] {
         assert!(!pipe.requirements.features.contains(&f), "{f:?}");
     }

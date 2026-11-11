@@ -402,9 +402,9 @@ fn specialized(
 /// (`dfk_dead_group`: `dfg_branch`, the read of color 4 in the arm of a branch on constant 0, and
 /// `dfg_gated`, whose color 4 input the constant gates). Five colors on a device of four draw in two
 /// groups, color 4 in the second; on `lavapipe` of four (input attachments), `moltenvk-m3` of four
-/// (the pixel interlock) and `vk12-floor` (no fetch form), specialized with the read dead, each
-/// group's variant compiles as a pipeline of its group's attachments that reads none (no input or
-/// storage attachment, every color a color attachment), passing L3. Specialized live, group 0's
+/// (the pixel interlock) and `vk12-floor` (no ordered fetch form), specialized with the read dead,
+/// each group's variant compiles as a pipeline of its group's attachments that reads none (no input
+/// or storage attachment, every color a color attachment), passing L3. Specialized live, group 0's
 /// variant, which would read color 4 of group 1, is the pipeline's limit refusal. The misses are
 /// counted by kind before the test fails.
 #[test]

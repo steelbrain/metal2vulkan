@@ -27,6 +27,14 @@
 //! output alone does not interlock the function, so a function whose groups hold nothing else
 //! compiles on every device, the ones without an interlock included.
 //!
+//! **Color inputs without an ordered fetch form**. On a device with neither rasterization-order
+//! color attachment access nor the pixel interlock (`fetch::fetch_unordered`), a color input reads
+//! its input attachment ordered between draws alone, by the consumer's barriers. A group on such
+//! an input, or on a color output of an attachment the function reads, asks for the order of that
+//! read, which is the read's own there: it does not interlock the function, and the read's
+//! fragments of one draw stay unordered (`PrecisionNote::UnorderedFetchWithinDraw`, which the read
+//! records). A group on anything else still needs the interlock.
+//!
 //! **Unused inputs**. A group on a parameter the body never uses, such as an input whose reads the
 //! function's constants fold away, orders no access, and neither does a member of a layout only
 //! such a parameter reaches, nor a color output whose attachment only such a color input reads. None
@@ -84,7 +92,9 @@ fn role_layouts(role: &ParamRole) -> [Option<StructRef>; 2] {
 /// attachment), or an argument-buffer or imageblock member of a layout its used parameters and its
 /// outputs reach. `e.structs` holds every layout of the module, so a layout only another function
 /// names does not count. A group's color output the function does not read needs none, and neither
-/// does a group on a parameter the body never uses ([module docs](self)).
+/// does a group on a parameter the body never uses, nor, on a device with neither ordered fetch
+/// form, a group on a color input or on a color output of an attachment the function reads
+/// ([module docs](self)).
 pub(super) fn declared(cx: &SelectCx<'_>) -> bool {
     let e = cx.entry;
     let used = &crate::lower::users::params_used(cx.body);
@@ -93,15 +103,21 @@ pub(super) fn declared(cx: &SelectCx<'_>) -> bool {
         params()
             .any(|b| matches!(b.role, ParamRole::ColorInput { index, .. } if index == attachment))
     };
-    let named = params().any(|b| role_group(&b.role).is_some());
-    let outputs = e.ep.outputs.iter().any(|o| match o.role {
-        OutputRole::RenderTarget {
-            attachment,
-            raster_order_group: Some(_),
-            ..
-        } => read(attachment),
-        _ => false,
+    // Whether a group on a color read interlocks: not where the read is ordered between draws
+    // alone.
+    let colors = !super::fetch::fetch_unordered(cx.profile);
+    let named = params().any(|b| {
+        role_group(&b.role).is_some() && (colors || !matches!(b.role, ParamRole::ColorInput { .. }))
     });
+    let outputs = colors
+        && e.ep.outputs.iter().any(|o| match o.role {
+            OutputRole::RenderTarget {
+                attachment,
+                raster_order_group: Some(_),
+                ..
+            } => read(attachment),
+            _ => false,
+        });
     if named || outputs {
         return true;
     }
