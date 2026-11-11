@@ -2268,6 +2268,7 @@ field	metal2vulkan-runtime::MisplacedNotice.kind	pub kind: Degradation
 field	metal2vulkan-runtime::MisplacedNotice.place	pub place: NoticePlace
 field	metal2vulkan-runtime::Nil.call	pub call: &'static str
 field	metal2vulkan-runtime::Nil.problem	pub problem: Problem
+field	metal2vulkan-runtime::NotInPlace.why	pub why: String
 field	metal2vulkan-runtime::ObjectChurn.buffers_evicted	pub buffers_evicted: u64
 field	metal2vulkan-runtime::ObjectChurn.buffers_parked	pub buffers_parked: u64
 field	metal2vulkan-runtime::ObjectChurn.buffers_recycled	pub buffers_recycled: u64
@@ -9922,6 +9923,7 @@ struct	metal2vulkan-runtime::MessageSink	#[derive(Clone)] pub struct MessageSink
 struct	metal2vulkan-runtime::MetalError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct MetalError
 struct	metal2vulkan-runtime::MisplacedNotice	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MisplacedNotice
 struct	metal2vulkan-runtime::Nil	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct Nil
+struct	metal2vulkan-runtime::NotInPlace	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct NotInPlace
 struct	metal2vulkan-runtime::ObjectChurn	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct ObjectChurn
 struct	metal2vulkan-runtime::ObjectId	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ObjectId(u64)
 struct	metal2vulkan-runtime::Origin	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Origin
@@ -11837,6 +11839,7 @@ variant	metal2vulkan-runtime::Error::MetalError	MetalError(MetalError)
 variant	metal2vulkan-runtime::Error::Nil	Nil(Nil)
 variant	metal2vulkan-runtime::Error::NoDevice	NoDevice
 variant	metal2vulkan-runtime::Error::NotImplemented	NotImplemented(RuntimeGap)
+variant	metal2vulkan-runtime::Error::NotInPlace	NotInPlace(NotInPlace)
 variant	metal2vulkan-runtime::Error::OutOfMemory	OutOfMemory(MemoryKind)
 variant	metal2vulkan-runtime::Error::PlacementConflict	PlacementConflict(PlacementConflict)
 variant	metal2vulkan-runtime::Error::RateMap	RateMap(UnpinnedCompile)

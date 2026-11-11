@@ -393,7 +393,7 @@ fn the_in_place_checks_notes_say_in_words_why_it_made_no_image() {
             InPlaceVerdict::Unchecked,
             "the dma-buf class's reads of rows inside lines: {notes:#?}"
         );
-        let pitch = "no image the device makes lays the rows at their pitch";
+        let pitch = crate::InPlaceRefusal::Pitch.words();
         let named = (unmade.iter()).any(|note| {
             note.starts_with("DmaBuf reads: no ")
                 && note.contains(pitch)

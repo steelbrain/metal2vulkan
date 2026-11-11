@@ -1101,10 +1101,11 @@ fn check_round(
 }
 
 /// Why the check's texture of `shape` over `pages`, made with `descriptor`, was not made, its
-/// making's `error` given: on the check's thread a making whose route takes no image in place
-/// refuses the texture with an internal error (`texture.rs`), which says nothing of the cause, so
-/// the placement's answer decides where it names a cause that lasts ([`unplaced`]); the error
-/// does where it does not.
+/// making's `error` given: the placement's answer ([`unplaced`]) first, in words. On the check's
+/// thread a making whose route takes no image in place refuses the texture with the cause
+/// ([`Error::NotInPlace`](crate::Error::NotInPlace)), which follows it: the answer decides
+/// whether that cause lasts. Any other error follows it too, and lasts where the answer's cause
+/// does or the error does ([`Unmade::of_error`]).
 fn unmade(
     pages: &ClassPages,
     descriptor: &TextureDescriptor,
@@ -1112,30 +1113,36 @@ fn unmade(
     error: &crate::Error,
 ) -> Unmade {
     let placed = unplaced(pages, descriptor, shape);
-    match placed.lasting {
-        true => Unmade::lasting(format!("its making failed: {error}; {}", placed.why)),
-        false => Unmade::of_error(&format!("{}; its making failed", placed.why), error),
+    match error {
+        crate::Error::NotInPlace(refused) => Unmade {
+            why: format!("{}: {}", placed.why, refused.why),
+            lasting: placed.lasting,
+        },
+        error => {
+            let made = Unmade::of_error(&format!("{}; its making failed", placed.why), error);
+            Unmade {
+                lasting: placed.lasting || made.lasting,
+                ..made
+            }
+        }
     }
 }
 
 /// Why the check's texture of `shape` over `pages`, made with `descriptor`, took no image in
-/// place: its placement's answer (`Buffer::texture_placement`), asked on the check's thread, as
-/// its making asked the route. A cause that lasts where the answer is one the image's making
-/// decides of the device and the shape before it binds memory: the device makes no such image,
-/// lays none at the pitch, or none whose memory takes the pages' place
-/// ([`InPlaceRefusal`]), or the route takes none of the shape. One that may pass where the
-/// making answers in place, which only the bind then refused (the pages' dma-buf, or the
-/// driver's import of it), or the pages were detached, the source made no dma-buf of them, or
-/// another verdict was not known.
+/// place: its placement's answer (`Buffer::texture_placement`) in words
+/// (`TexturePlacement::words`), asked on the check's thread, as its making asked the route. A
+/// cause that lasts where the answer is one the image's making decides of the device and the
+/// shape before it binds memory: the device makes no such image, lays none at the pitch, or none
+/// whose memory takes the pages' place ([`InPlaceRefusal`]), or the route takes none of the
+/// shape. One that may pass where the making answers in place, which only the bind then refused
+/// (the pages' dma-buf, or the driver's import of it), or the pages were detached, the source
+/// made no dma-buf of them, or another verdict was not known.
 fn unplaced(pages: &ClassPages, descriptor: &TextureDescriptor, shape: Shape) -> Unmade {
     let placement = match (pages.buffer).texture_placement(descriptor, 0, shape.bytes_per_row) {
         Ok(placement) => placement,
-        Err(error) => {
-            let what = "it took no image in place, its placement refused";
-            return Unmade::of_error(what, &error);
-        }
+        Err(error) => return Unmade::of_error("its placement was refused", &error),
     };
-    let why = format!("it took no image in place: {placement:?}");
+    let why = placement.words();
     let lasting = match placement {
         TexturePlacement::InPlace | TexturePlacement::Pending | TexturePlacement::NotHostPages => {
             false

@@ -296,6 +296,7 @@ pub use error::FailureOrigin;
 pub use error::InstanceExtensionRequired;
 pub use error::MetalError;
 pub use error::Nil;
+pub use error::NotInPlace;
 pub use error::Unproven;
 pub use error::{
     ArchivedPipeline, BinaryArchiveError, BinaryArchiveMiss, CommandBufferError, DeadlockCause,

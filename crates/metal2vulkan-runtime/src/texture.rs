@@ -72,7 +72,9 @@ use super::degradation::Degradation;
 use super::depth_clamp;
 use super::device::lock;
 use super::dma_buf::ModifierMemory;
-use super::error::{internal, invalid, nil, vulkan, Error, MemoryKind, Problem, RuntimeGap};
+use super::error::{
+    internal, invalid, nil, vulkan, Error, MemoryKind, NotInPlace, Problem, RuntimeGap,
+};
 use super::exit_guard;
 use super::families::FormatAnswers;
 use super::framebuffer_fetch::UsageAnswers;
@@ -2513,12 +2515,9 @@ impl Device {
                         return Ok(Storage::Alias { image, texels });
                     }
                     // The device's check of its pooled or exported memory makes no shadow:
-                    // its round is not made.
+                    // its round is not made, refused with why.
                     Err((why, _)) if in_place::checking() => {
-                        return Err(internal(&format!(
-                            "the in-place check's texture takes no image over the runtime's \
-                                 memory: {why}"
-                        )))
+                        return Err(Error::NotInPlace(NotInPlace { why }))
                     }
                     // Made before its class's verdict (the pooled memory's, for an image at
                     // Metal's pitch; the exported memory's, for any image there): the shadow
@@ -2683,8 +2682,8 @@ impl Device {
     /// plan `plan` (`texture`), made with `descriptor`, is a shadow
     /// for `cause`: counted by why, and where made before its class's verdict for its access,
     /// `pending` set to what it needs to move in place once the verdict passes. The shadow's
-    /// notice's reason. Refused (internal) on the device's check's own thread, whose textures take
-    /// the image in place.
+    /// notice's reason. Refused on the device's check's own thread, whose textures take the image
+    /// in place alone, with the cause's words (`Error::NotInPlace`).
     fn host_shadowed(
         &self,
         ((class, copied), (rows, padding), cause): (
@@ -2697,9 +2696,7 @@ impl Device {
         pending: &mut Option<in_place::PendingMove>,
     ) -> Result<String, Error> {
         if in_place::checking() {
-            return Err(internal(
-                "the in-place check's texture takes no image in place",
-            ));
+            return Err(Error::NotInPlace(NotInPlace { why: cause.words() }));
         }
         if let ShadowCause::CheckPending(..) = cause {
             *pending = Some(in_place::PendingMove {

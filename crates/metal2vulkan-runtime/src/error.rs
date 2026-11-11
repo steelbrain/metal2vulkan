@@ -155,6 +155,12 @@ pub enum Error {
     /// not announced. The call fails its command buffer (`CommandBufferError::CallRefused`), and
     /// this is its refusal (`CommandBuffer::refusal`). No Metal counterpart.
     Degraded(Box<crate::degradation::DegradeNotice>),
+    /// A texture of the device's own check of images in place
+    /// ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks)) that takes no
+    /// image in place: the check measures such images alone, so it makes no shadow where a
+    /// program's texture would take one, and is refused with the cause ([`NotInPlace`]). Only the
+    /// check's own textures meet it; no call of a program's returns it. No Metal counterpart.
+    NotInPlace(NotInPlace),
 }
 
 impl fmt::Display for Error {
@@ -232,8 +238,21 @@ impl fmt::Display for Error {
                 notice.reason,
                 notice.degradation.code()
             ),
+            Error::NotInPlace(refused) => {
+                write!(f, "the texture takes no image in place: {}", refused.why)
+            }
         }
     }
+}
+
+/// Why a texture of the device's check of images in place takes no image in place
+/// ([`Error::NotInPlace`]).
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotInPlace {
+    /// The cause in words, as the `shadowed-texture` notice of a program's texture shadowed for
+    /// it names the cause.
+    pub why: String,
 }
 
 /// A listed device extension's feature the device lacks ([`Error::ExtensionFeature`]).

@@ -211,6 +211,75 @@ pub enum InPlaceRefusal {
     DmaBuf,
 }
 
+impl TexturePlacement {
+    /// The answer in words, for the device's check's notes (`in_place_check.rs`).
+    pub(crate) fn words(self) -> String {
+        match self {
+            TexturePlacement::InPlace => {
+                "the device makes the image in place up to its bind".to_owned()
+            }
+            TexturePlacement::Pending => {
+                "the device's check has not answered for the pages' kind and the texture's \
+                 accesses"
+                    .to_owned()
+            }
+            TexturePlacement::Shadow(reason) => reason.words(),
+            TexturePlacement::NotHostPages => {
+                "the device makes an image aliasing the buffer's memory, its own, up to its bind"
+                    .to_owned()
+            }
+            TexturePlacement::OtherShape => {
+                "no image in place takes a texture of its shape".to_owned()
+            }
+        }
+    }
+}
+
+impl TextureShadowReason {
+    /// The reason in words.
+    fn words(self) -> String {
+        match self {
+            TextureShadowReason::Policy => "the device's policy asks a shadow of every texture \
+                                            over host pages (HostPageTexturePolicy::Shadow)"
+                .to_owned(),
+            TextureShadowReason::StoreWidth { texel_bytes } => format!(
+                "a shader writes it, and the device's check stores no texels of {texel_bytes} \
+                 bytes"
+            ),
+            TextureShadowReason::CheckFailed { access, row_ends } => format!(
+                "the device's check found {} changing a byte the CPU wrote beside the texels, \
+                 for {}",
+                access.words(),
+                row_ends.words()
+            ),
+            TextureShadowReason::Unchecked { access, row_ends } => format!(
+                "the device's check made no image for {}, for {}",
+                access.words(),
+                row_ends.words()
+            ),
+            TextureShadowReason::Refused(refusal) => refusal.words().to_owned(),
+            TextureShadowReason::Mipmapped { levels } => format!(
+                "it has {levels} levels, and no image over the buffer's memory holds levels past \
+                 the first"
+            ),
+            TextureShadowReason::PastLength => "its texels run past the buffer's length, which no \
+                                                image over the buffer's memory reaches"
+                .to_owned(),
+            TextureShadowReason::BytesBetweenRows => "its rows lie with bytes of the buffer \
+                                                      between them, which the buffer does not \
+                                                      declare unobserved"
+                .to_owned(),
+            TextureShadowReason::DeviceCopy => "it is a copy in the device's memory of bytes \
+                                                whose memory carries a log of its writes"
+                .to_owned(),
+            TextureShadowReason::LinearCost { bytes } => format!(
+                "its rows take {bytes} bytes to their pitch, past the bound up to which it takes \
+                 a DRM_FORMAT_MOD_LINEAR image at Metal's pitch"
+            ),
+        }
+    }
+}
+
 impl InPlaceAccess {
     /// The access `access` is.
     fn of(access: in_place::Access) -> InPlaceAccess {
@@ -225,6 +294,15 @@ impl InPlaceAccess {
             | in_place::Access::NarrowBufferWrites => InPlaceAccess::Writes,
         }
     }
+
+    /// The access in words.
+    fn words(self) -> &'static str {
+        match self {
+            InPlaceAccess::Reads => "an image's first move",
+            InPlaceAccess::Renders => "an image's renders",
+            InPlaceAccess::Writes => "a shader's writes of an image",
+        }
+    }
 }
 
 impl InPlaceRowEnds {
@@ -233,6 +311,14 @@ impl InPlaceRowEnds {
         match rows {
             in_place::RowEnds::InLines => InPlaceRowEnds::InLines,
             in_place::RowEnds::OnLines => InPlaceRowEnds::OnLines,
+        }
+    }
+
+    /// How the texels lie, in words.
+    fn words(self) -> &'static str {
+        match self {
+            InPlaceRowEnds::InLines => "texels that share a line of memory with bytes beside them",
+            InPlaceRowEnds::OnLines => "texels that share no line of memory with bytes beside them",
         }
     }
 }
@@ -248,6 +334,29 @@ impl InPlaceRefusal {
             Refusal::Placement => InPlaceRefusal::Placement,
             Refusal::Source => InPlaceRefusal::Source,
             Refusal::DmaBuf => InPlaceRefusal::DmaBuf,
+        }
+    }
+
+    /// The refusal in words.
+    pub(crate) fn words(self) -> &'static str {
+        match self {
+            InPlaceRefusal::Rows => "its rows share bytes, and no image holds a texel twice",
+            InPlaceRefusal::Detached => "the buffer's bytes were detached from their pages",
+            InPlaceRefusal::Image => {
+                "the device makes no such image of the texture's plan (its format, features, \
+                 usage or limits)"
+            }
+            InPlaceRefusal::Pitch => "no image the device makes lays the rows at their pitch",
+            InPlaceRefusal::Placement => {
+                "the image's alignment, size or memory type misses the bytes' place"
+            }
+            InPlaceRefusal::Source => {
+                "the pages' source made no one dma-buf of the texture's own pages"
+            }
+            InPlaceRefusal::DmaBuf => {
+                "no DRM_FORMAT_MOD_LINEAR image over one dma-buf of the texture's own pages was \
+                 made"
+            }
         }
     }
 }
