@@ -22,7 +22,7 @@ validation uses them for per-profile checks.
 | `gate-lavapipe` | `vulkaninfo --json` capture in `scripts/linux-gate --icd lavapipe` (arm64 image), plus its supplement | llvmpipe (LLVM 21.1.8, 128 bits): the gate's own CPU device, so a run restricted to it under `VK_LAYER_KHRONOS_profiles` reports the device itself | Mesa 26.0.8 | 1.4.335 |
 | `gate-lavapipe-x86_64` | `vulkaninfo --json` capture in `scripts/linux-gate --icd lavapipe` (amd64 image), plus its supplement | llvmpipe (LLVM 21.1.8, 256 bits) | Mesa 26.0.8 | 1.4.335 |
 | `amd-780m-radv` | local `vulkaninfo --json`, plus its supplement | AMD Radeon 780M Graphics (RADV PHOENIX), CachyOS | Mesa 26.2.6 | 1.4.354 |
-| `amd-780m-hawkpoint-radv` | local `vulkaninfo --json`, plus its supplement | AMD Radeon 780M Graphics (RADV PHOENIX) of a Hawk Point Ryzen 7 8845HS (`deviceID` 0x1900), CachyOS | Mesa 26.2.4 | 1.4.354 |
+| `amd-780m-hawkpoint-radv` | local `vulkaninfo --json`, plus its supplement | AMD Radeon 780M Graphics (RADV PHOENIX) of a Hawk Point Ryzen 7 8845HS (`deviceID` 0x1900), CachyOS | Mesa 26.2.6 | 1.4.354 |
 | `intel-irisxe-rplp-anv` | local `vulkaninfo --json`, plus its supplement | Intel(R) Iris(R) Xe Graphics (RPL-P), ANV, CachyOS | Mesa 26.2.6 | 1.4.354 |
 | `intel-uhd770-rpls-anv` | local `vulkaninfo --json`, plus its supplement | Intel(R) Graphics (RPL-S), the UHD Graphics 770 of an i9-13900, ANV, CachyOS | Mesa 26.2.4 | 1.4.354 |
 | `nvidia-rtx5080-laptop` | local `vulkaninfo --json`, plus its supplement | NVIDIA GeForce RTX 5080 Laptop GPU, CachyOS | 615.71.09 | 1.4.351 |

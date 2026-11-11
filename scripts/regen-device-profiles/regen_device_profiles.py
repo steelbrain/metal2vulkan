@@ -441,14 +441,14 @@ SOURCES = [
         # the same RADV build, differs from `amd-780m-radv`'s only in the deviceID.
         "name": "amd-780m-hawkpoint-radv",
         "kind": "vulkaninfo",
-        "sha256": "2a79388cb4ef4f6dbe99fd31217b6eb6b200c1d92c3e12304e99efb15c46cd3c",
-        "profile": "VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_4",
+        "sha256": "bafbfbfad3ee3d4cdac62485d73e45291cd7dcf4e0a145534ebe6d0bacc4deb5",
+        "profile": "VP_VULKANINFO_AMD_Radeon_780M_Graphics_(RADV_PHOENIX)_26_2_6",
         "command": "vulkaninfo --json",
         "host": ("AMD Radeon 780M (Hawk Point, Ryzen 7 8845HS), CachyOS: mesa and vulkan-radeon "
-                 "26.2.4, vulkan-icd-loader and vulkan-tools 1.4.363.0"),
+                 "26.2.6, vulkan-icd-loader and vulkan-tools 1.4.363.0"),
         "formats": {
             "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-            "sha256": "d999da3206596ae9b15e9c523b098bdda379b4c2a8a214076e7fc8804e095321",
+            "sha256": "8bc7553ce483f8d294d1e4dcf336086f56f338791958f99f3b68c240a4daa5e6",
         },
     },
     {
