@@ -1917,7 +1917,7 @@ impl Device {
     ) {
         self.degrade(Degradation::CopiedHostPages, || {
             let failure;
-            let why = match cause {
+            let why: &str = match cause {
                 CopiedBecause::Refused => {
                     "the caller's import gate (HostMemory::with_import_gate) refused their \
                           import"
@@ -1932,7 +1932,7 @@ impl Device {
                 CopiedBecause::Failed => match failed {
                     Some(failed) => {
                         failure = failed.cause();
-                        &failure
+                        failure.as_str()
                     }
                     None => "their import failed",
                 },
