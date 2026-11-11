@@ -8,13 +8,13 @@ profile	amd-780m-hawkpoint-radv	881295bf66be02c8
 profile	amd-780m-radv	881295bf66be02c8
 profile	amd-rdna2-apu-radv	c23384041377e863
 profile	amd-rdna3-radv	1c71c870a4fa2ccd
-profile	gate-lavapipe	b2c1dd092f06716a
-profile	gate-lavapipe-x86_64	9dae007e20647682
+profile	gate-lavapipe	0af36b308746384f
+profile	gate-lavapipe-x86_64	fd583da10a777946
 profile	intel-arl-anv	a92ca93d062cc085
 profile	intel-irisxe-anv	75a55ff3f883e797
 profile	intel-irisxe-rplp-anv	3b9c598f66476318
 profile	intel-uhd770-rpls-anv	3b9c598f66476318
-profile	lavapipe	e38e60fec9864682
+profile	lavapipe	dcf424aa215e49f4
 profile	lunarg-desktop-baseline-2023	3cb56319a7459b3a
 profile	moltenvk-m3	a6fc9f1682f2c86d
 profile	nvidia-pascal-linux	9a85c95e82c9f29e
