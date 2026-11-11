@@ -8,9 +8,10 @@
 //!   over the rows. The first and the last line up; the other two recover their indices from the
 //!   offset, and every enclosing array level is recovered with them.
 //! - An out-of-range dynamic index, from a buffer (past the end, and -1), on a load and a store of
-//!   a threadgroup object, a typed alloca, and a load of a constant object, reaches its level's last
-//!   element: a load reads it and a store writes it, and the neighbouring object is untouched. An
-//!   in-range index on each kind reads every element as stored.
+//!   a threadgroup object and a load of a constant object, reaches its level's last element: a load
+//!   reads it and a store writes it. On a typed alloca the access is checked: the load reads zero
+//!   and the store is dropped. The neighbouring object is untouched, and an in-range index on each
+//!   kind reads every element as stored.
 //! - The tiled matrix product of a kernel's two `float[16][16]` threadgroup tiles, every access
 //!   lined up, answers the CPU's fused multiply-adds in the kernel's order bit for bit.
 //!
@@ -334,8 +335,9 @@ const FIRST: u32 = 0x4100_0000;
 const SECOND: u32 = 0x4200_0000;
 const STORED: u32 = 0x4300_0000;
 
-/// An out-of-range dynamic index reaches its level's last element and never leaves its object:
-/// a threadgroup object's and a typed alloca's load and store, and a constant object's load. The
+/// An out-of-range dynamic index never leaves its object. A threadgroup object's load and store,
+/// and a constant object's load, reach the level's last element; a typed alloca's are checked, the
+/// load reading zero and the store dropped, so the alloca's last element keeps its value. The
 /// neighbouring object keeps its elements, and every in-range element reads back as stored.
 #[test]
 fn an_out_of_range_index_stays_inside_its_object() {
@@ -434,23 +436,79 @@ entry:
         md = kernel_md("co")
     );
     for stem in PROFILES {
-        for (name, text, objects, writes) in [
-            ("tg", &threadgroup, 2, true),
-            ("al", &alloca, 2, true),
-            ("co", &constant, 2, false),
+        for (name, text, objects, writes, checked) in [
+            ("tg", &threadgroup, 2, true, false),
+            ("al", &alloca, 2, true, true),
+            ("co", &constant, 2, false, false),
         ] {
             let got = contained_answers(stem, name, text, objects, writes);
             if got.is_empty() {
                 return;
             }
-            // The out-of-range store wrote the first object's last element, which the
-            // out-of-range load reads; the second object is untouched.
-            let last = if writes { STORED } else { FIRST + 7 };
-            let mut want: Vec<u32> = (0..64).map(|_| last).collect();
+            // A clamped out-of-range store wrote the first object's last element, which the
+            // clamped out-of-range load reads; a checked store was dropped and a checked load read
+            // zero. The second object is untouched.
+            let last = if writes && !checked {
+                STORED
+            } else {
+                FIRST + 7
+            };
+            let loaded = if checked { 0 } else { last };
+            let mut want: Vec<u32> = (0..64).map(|_| loaded).collect();
             want.extend((0..64u32).map(|t| if t % 8 == 7 { last } else { FIRST + t % 8 }));
             want.extend((0..64u32).map(|t| SECOND + t % 8));
             assert_eq!(got, want, "{name} on {stem}");
         }
+    }
+}
+
+/// The authored case of the public fixture `ob2_sized_array` ("loads and stores past a
+/// thread-local array"): eight threads, each with its own `Frame { before[4], array[4], after[8] }`,
+/// store `0xC0000000 | t` to `array[s]` and then load `array[l]`, `l` and `s` the case's signed
+/// indices (`idx[t]` and `idx[8 + t]`), several past the array on either side. The array's words
+/// after the store are Metal's: a store inside the array writes its element, and one past it
+/// changes none of the array's words (Metal's lands past them). A load inside the array reads its
+/// element; one past it reads zero, the value the case's checker allows there. No word before or
+/// past the array changes, and each thread's last word is `0xF0000000 | t`.
+#[test]
+fn a_store_past_a_thread_local_array_changes_none_of_its_words() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/fixtures/public/engine/ob2_sized_array.ll");
+    let bc = match llvm_assemble(&path) {
+        Ok(b) => b,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected ob2_sized_array: {why}"),
+    };
+    let loads: [i32; 8] = [0, 1, 2, 3, 4, 11, -1, -4];
+    let stores: [i32; 8] = [2, 3, 4, 11, -1, -4, 7, 0];
+    let idx: Vec<u32> = loads.iter().chain(&stores).map(|&i| i as u32).collect();
+    let inside = |i: i32| usize::try_from(i).ok().filter(|&i| i < 4);
+    let mut want = Vec::new();
+    for t in 0..8u32 {
+        let mut array: Vec<u32> = (0..4).map(|k| 0xA000_0000 | k).collect();
+        if let Some(s) = inside(stores[t as usize]) {
+            array[s] = 0xC000_0000 | t;
+        }
+        let loaded = inside(loads[t as usize]).map_or(0, |l| array[l]);
+        want.push(loaded);
+        want.extend(&array);
+        want.extend([0, 0, 0xF000_0000 | t]);
+    }
+    for stem in ["amd-780m-radv", "lavapipe", "moltenvk-m3", "vk12-floor"] {
+        let prof = p(stem);
+        l3(&bc, "ob2_sized_array", &prof, stem);
+        let (plan, m) = typed_module(&bc, "ob2_sized_array", &prof).expect("module");
+        assert!(
+            typed_accesses(&plan)
+                .iter()
+                .any(|(op, a)| *op == "store" && a.checked()),
+            "{stem}: the store into the array is checked"
+        );
+        let res = resources(&plan, (8, 1), &[idx.clone(), vec![0xABAB_ABAB; 64]]);
+        assert_eq!(run_both(&m, &res, 1), want, "{stem}");
     }
 }
 

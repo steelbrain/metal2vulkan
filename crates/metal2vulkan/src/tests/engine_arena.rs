@@ -15,8 +15,9 @@
 //!   byte-exact.
 //! - Out-of-bounds threadgroup indices are contained; with containment off no check is emitted.
 //! - Typed allocas and closed constant globals are `Private` arrays indexed by access chains; their
-//!   dynamic indices are clamped under `GuestIsolation::On` (an out-of-range load is 0, an
-//!   out-of-range store is dropped) and unclamped without it.
+//!   dynamic indices are contained under `GuestIsolation::On` (a typed alloca's out-of-range load
+//!   is 0 and its out-of-range store is dropped; a constant global's out-of-range load reads the
+//!   level's last element) and unclamped without it.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -695,10 +696,9 @@ fn typed_alloca_body() -> String {
     s
 }
 
-/// A typed alloca is a `Private` array indexed by access chains; its dynamic indices are clamped
-/// under isolation (an out-of-range index reaches the level's last element, on a load and a
-/// store) and exact in range, including a 12-byte (non-power-of-two) stride. Without isolation no
-/// clamp is emitted.
+/// A typed alloca is a `Private` array indexed by access chains; its dynamic indices are checked
+/// under isolation (an out-of-range load is 0, an out-of-range store is dropped) and exact in
+/// range, including a 12-byte (non-power-of-two) stride. Without isolation no check is emitted.
 #[test]
 fn typed_alloca_indices_are_clamped_under_isolation() {
     let Some(bc) = assemble("typed", &two_word_kernel("typed", "", &typed_alloca_body())) else {
@@ -723,10 +723,12 @@ fn typed_alloca_indices_are_clamped_under_isolation() {
         let want: Vec<u32> = (0..32u32)
             .flat_map(|t| {
                 let mut a: Vec<u32> = (10..18).collect();
-                a[(t + 4).min(7) as usize] = 999;
+                if t + 4 < 8 {
+                    a[(t + 4) as usize] = 999;
+                }
                 a[(t & 7) as usize] = t * 100;
                 let v0 = a[((t & 7) ^ 5) as usize];
-                let x = a[t.min(7) as usize];
+                let x = if t < 8 { a[t as usize] } else { 0 };
                 [v0, x + 3 * (t & 3) + 2]
             })
             .collect();
@@ -820,9 +822,9 @@ fn nested_levels_body() -> String {
 
 /// An alloca indexed dynamically at several nested array levels (non-power-of-two strides, a struct
 /// member between the levels, vector leaves) is typed: an access chain whose indices are the
-/// accesses' own GEP indices, exact in range, and clamped at every level under isolation (an
-/// out-of-range index reaches its level's last element, on a load and a store). Without isolation
-/// no clamp is emitted.
+/// accesses' own GEP indices, exact in range, and checked at every level under isolation (an
+/// out-of-range load is 0, an out-of-range store is dropped). Without isolation no check is
+/// emitted.
 #[test]
 fn typed_allocas_index_nested_levels_dynamically() {
     let Some(bc) = assemble(
@@ -849,9 +851,11 @@ fn typed_allocas_index_nested_levels_dynamically() {
                     .map(|i| (0..5).map(|j| 100 + 5 * i + j).collect())
                     .collect();
                 c[(t % 3) as usize][((7 * t) % 5) as usize] = 900 + t;
-                c[t.min(2) as usize][0] = 777;
+                if t < 3 {
+                    c[t as usize][0] = 777;
+                }
                 let x = c[((t + 1) % 3) as usize][((3 * t) % 5) as usize];
-                let z = c[t.min(2) as usize][t.min(4) as usize];
+                let z = if t < 3 { c[t as usize][t as usize] } else { 0 };
                 let (di, dj, ej) = (t & 1, t % 3, (t >> 1) & 1);
                 [x + z, 60 + 3 * di + dj + 10 + 2 * di + ej]
             })

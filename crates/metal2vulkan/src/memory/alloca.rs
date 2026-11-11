@@ -23,18 +23,25 @@
 //! object) and `rem` the offset inside that element; a negative or wrapped index is a huge unsigned
 //! one.
 //!
-//! **Clamps** (`GuestIsolation::On`): a load or store reaches each dynamic level's element
-//! `min(idx, len - 1)`, so it never leaves its object. By construction, not a pass. An index within
-//! its level is used as is, so an in-range access is the access Metal makes; an index past its
-//! level's length (a negative or wrapped one is a huge unsigned one), which Metal leaves
-//! undefined, reaches the level's last element: a load reads that element and a store writes it.
-//! Metal's own answer there is whatever its memory holds at the address. Without isolation the
-//! indices are used as is.
+//! **Clamps** (`GuestIsolation::On`): an access never leaves its object. By construction, not a
+//! pass. An index within its level is used as is, so an in-range access is the access Metal makes.
+//! An index past its level's length (a negative or wrapped one is a huge unsigned one) is
+//! undefined in Metal, whose own answer is whatever its memory holds at the address:
+//!
+//! - in a thread's own object (an alloca) the access is checked, every dynamic level's `idx < len`:
+//!   a load past a level reads zero, and a store past one is dropped, so it changes no element of
+//!   the object, as Metal's store past an array changes none of the array's elements (it lands
+//!   past them);
+//! - in a threadgroup or constant object each dynamic level's index is `min(idx, len - 1)`: an
+//!   index past it reaches the level's last element, a load reading that element and a store
+//!   writing it.
+//!
+//! Without isolation the indices are used as is.
 //!
 //! Where the access's `getelementptr` indexes the levels itself, its own index operands are the
 //! levels' indices (`lower::access::local::lined_up`): within their levels they are the indices
-//! the offset recovers, and a loop-invariant one stays loop-invariant, so its clamp hoists out of
-//! the loop.
+//! the offset recovers, and a loop-invariant one stays loop-invariant, so its clamp or check
+//! hoists out of the loop.
 
 use std::collections::BTreeMap;
 
