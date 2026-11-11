@@ -1609,3 +1609,15 @@ compares with Metal's.
   in an earlier part, where a failure of a later batch fails only a later one, is taken again at
   the next use: that use reads the bytes as they are then, where Metal's levels keep the copy that
   ran.
+
+- **A tiled texture's take in the work apart of a predicated loop's run again**
+  (`Buffer::new_tiled_texture`, more than one level, `shadow.rs`'s **Copies taken at use**,
+  `command_buffer/rerun.rs`): each run again records the laying's work apart again (an indirect
+  dispatch, or an execution of indirect commands) as a new recording, which decides its first use
+  of the texture by the texture's mark, as a use encoded then would. Where `Texture::did_modify_data`
+  or a `replace_region` of the first level is called while the loop still runs again, the next run
+  again takes the copy: it copies the bytes into the levels mid-loop, over what the earlier runs
+  wrote into them, and clears the mark, so the first use encoded after the call takes no copy and
+  reads the levels as the loop left them, where Metal's takes the copy of the bytes as they are
+  then. A recording of a run again carries no take, so a failure of the loop's command buffer gives
+  none back.

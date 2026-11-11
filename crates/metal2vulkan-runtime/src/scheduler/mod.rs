@@ -1707,6 +1707,7 @@ fn submit_ready(
         };
         let Held {
             buffer,
+            index,
             last,
             waits: events,
             binary_needs,
@@ -1742,6 +1743,7 @@ fn submit_ready(
                     state.binary.dropped(&held.binary_needs);
                 }
                 spent.extend(rest.into_iter().map(|held| held.buffer));
+                buffer.never_runs_from(index);
                 buffer.failed(error, &state.values);
                 if buffer.settle_storage_forms() {
                     settled.push(buffer.hold());
@@ -1960,6 +1962,7 @@ fn submit_plain_ready(
                 drop(busy);
                 let Held {
                     buffer,
+                    index,
                     binary_needs,
                     waits: events,
                     ..
@@ -1973,6 +1976,7 @@ fn submit_plain_ready(
                     state.binary.dropped(&held.binary_needs);
                 }
                 spent.extend(rest.into_iter().map(|held| held.buffer));
+                buffer.never_runs_from(index);
                 buffer.failed(error, &state.values);
                 spent.push(buffer);
                 return submitted;
@@ -2195,6 +2199,7 @@ fn settle_group(
             for (queue, held) in grouped.drain(..) {
                 let Held {
                     buffer,
+                    index,
                     waits: events,
                     binary_needs,
                     ..
@@ -2202,6 +2207,7 @@ fn settle_group(
                 drop(events);
                 binary.dropped(&binary_needs);
                 buffer.left_group();
+                buffer.never_runs_from(index);
                 if !failed.iter().any(|done| done.same(&buffer)) {
                     // The rest of the command buffer never runs (dropped here, before it can
                     // finish).

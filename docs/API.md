@@ -467,12 +467,13 @@ the device's blit chain or the compute filter (`device-filtered-mipmaps`), or an
 texel picks. The copy is taken as that command is encoded and runs in its command buffer's order on
 the GPU, so it reads the bytes as they are when the command buffer runs. A rebind that encodes the
 encoder again before its command buffer's first submission (`Buffer::rebind_bytes_no_copy`) takes
-the copy in the encoding again where the first encoding took it, and a `did_modify_data` made since
-is left to the next use encoded. A take whose encoder runs nothing, its command buffer having failed
-before it ran (committed as failed, or a submission that fails) or dropped without a commit, is
-given back: the next use takes the copy. Work a host step records again after the commit (an
-execution of indirect commands the CPU wrote since) takes the copy where the commit's recording
-took it. Between takes no write of
+the copy in the encoding again where the first encoding took it, its work recorded on the GPU alone
+(a render pass that executes indirect commands the GPU writes) among it, and a `did_modify_data`
+made since is left to the next use encoded. A take whose encoder runs nothing, its command buffer
+having failed before it ran (committed as failed, a submission that fails, a host step that fails
+or a `vkQueueSubmit` the driver refuses) or dropped without a commit, is given back: the next use
+takes the copy. Work a host step records again after the commit (an execution of indirect commands
+the CPU wrote since) takes the copy where the commit's recording took it. Between takes no write of
 the bytes reaches a level, and nothing the GPU writes into a level reaches the bytes or the other
 levels. `get_bytes` and `replace_region` of the first level read and write the buffer's bytes, as
 the Macs' do, and of a later level the image (an accepted difference, section 10). While the
