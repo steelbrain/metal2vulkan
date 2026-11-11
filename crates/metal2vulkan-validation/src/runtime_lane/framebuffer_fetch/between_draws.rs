@@ -174,8 +174,8 @@ fn fetches_between_draws_read_every_earlier_draw_and_note_the_draw_itself() {
     .unwrap();
     let read = lane.read(&target, (0, 0), 4, BlitOption::None);
     let (mut metals, mut other) = (0usize, 0usize);
-    for texel in read.chunks_exact(4) {
-        let bits = u32::from_le_bytes([texel[0], texel[1], texel[2], texel[3]]);
+    for texel in read.as_chunks::<4>().0 {
+        let bits = u32::from_le_bytes(*texel);
         if bits == 0.1875f32.to_bits() {
             metals += 1;
         } else if bits == 0.375f32.to_bits() {
