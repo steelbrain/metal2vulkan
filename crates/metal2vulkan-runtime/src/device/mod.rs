@@ -442,8 +442,9 @@ pub(super) struct DeviceShared {
     /// The mesh draw commands, where the device enabled `meshShader` (`render/mesh.rs`).
     pub(super) mesh_draws: Option<MeshDraws>,
     /// `vkCmdPushDescriptorSet`, from Vulkan 1.4 or `VK_KHR_push_descriptor`
-    /// (`binding::push_set`); none where the driver has
-    /// `RuntimeDriverDefect::PushedBufferSizesUnset`.
+    /// (`binding::push_set`). Where the driver has `RuntimeDriverDefect::PushedBufferSizesUnset`
+    /// only the variants `pipeline::objects::pushes_set_zero` names push with it there, and no
+    /// runtime kernel (`OwnedKernel::pushed`).
     pub(super) push_descriptor: Option<vk::PFN_vkCmdPushDescriptorSetKHR>,
     /// A draw after a pipeline bind pushes at least one of set 0's descriptors, the first where
     /// none changed (`render/bound.rs`), where the driver has
@@ -2056,11 +2057,6 @@ impl Device {
         } else {
             None
         };
-        // None where the driver's pushed sets lose their buffers' sizes
-        // (`RuntimeDriverDefect::PushedBufferSizesUnset`): every draw and dispatch binds set 0
-        // there, as on a device without the command.
-        let pushes_whole_sets = !crate::driver_defects::of(&description)
-            .contains(&metal2vulkan::error::RuntimeDriverDefect::PushedBufferSizesUnset);
         // At least one write of set 0 pushed after each pipeline bind where the driver's pushed
         // descriptors go stale across one
         // (`RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds`).
@@ -2078,7 +2074,6 @@ impl Device {
                 )
             })
         }
-        .filter(|_| pushes_whole_sets)
         .map(|push| {
             // SAFETY: the device's own command of that name.
             unsafe {

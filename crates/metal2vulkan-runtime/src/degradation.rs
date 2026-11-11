@@ -59,7 +59,9 @@ use super::color_resolve;
 use super::device::{DebugMessage, Device, DeviceShared, MessageKind, MessageSeverity};
 use super::error::Error;
 use super::fragment_imageblock::PassImageblock;
-use super::pipeline::objects::{may_pass_support, set_layout_support, SetSupport};
+use super::pipeline::objects::{
+    may_pass_support, set_layout_support, unordered_bind, SetSupport, UnorderedBind,
+};
 use super::render_pass::{ColorTarget, PassLayout, Target};
 use super::render_target::{self, depth_stencil_steps, HandedDontCare, PassShape};
 use super::render_values::{LoadAction, StoreAction};
@@ -1480,6 +1482,20 @@ degradations! {
             "the device runs the set as Metal runs the argument buffer it is encoded in, but its \
              driver's vkGetDescriptorSetLayoutSupport refuses the layout, so Vulkan's validation \
              layer reports each such layout (VUID-vkCreateDescriptorSetLayout-support-09582)";
+        /// A render pipeline state whose fragment function writes a storage buffer of set 0
+        /// inside its interlock (a buffer in a raster order group, or one a function that reads
+        /// its color attachment writes), on a driver that orders such a buffer between
+        /// overlapping fragments only where set 0 is pushed
+        /// ([`metal2vulkan::error::RuntimeDriverDefect::InterlockedBoundBuffersUnordered`]:
+        /// MoltenVK), where its set 0 is bound: the device has no push command, its set 0 is no
+        /// push descriptor set layout's, or a stage reads a buffer's length, which that driver's
+        /// pushed sets do not hold (`RuntimeDriverDefect::PushedBufferSizesUnset`;
+        /// `pipeline/objects.rs`'s `unordered_bind`). Every other such state pushes set 0 there,
+        /// and its fragments read each other's writes in order.
+        InterlockedBufferOrder = "interlocked-buffer-order", Precision,
+            "a fragment may read such a buffer as it was before an earlier overlapping fragment \
+             of the draw wrote it, where Metal orders a raster order group's buffer after every \
+             earlier fragment of the pixel";
         /// An indirect command naming the ID of a pipeline state the program released is
         /// executed where the runtime cannot run what Metal runs (`indirect_command_buffer.rs`,
         /// `released_programs.rs`). A command holds the program of the state the CPU set on it,
@@ -3188,14 +3204,16 @@ impl Kinds {
     /// made (`Device::degrade_stages`, `Device::degrade_specialized`), and those of the variant's
     /// `pipeline` (`Device::degrade_pipeline`): every note's, a specialized one's under any
     /// specialization (a filter note's two-plane YCbCr kind among them), each other kind a
-    /// stage's or the pipeline's records state, and [`Degradation::SetPastLayoutSupport`] where a
+    /// stage's or the pipeline's records state, [`Degradation::SetPastLayoutSupport`] where a
     /// set of the pipeline's layout is one its driver may refuse though it runs it
-    /// (`may_pass_support`, on a driver that `understated` its support), whatever else the variant
-    /// records: a bind announces only kinds held here.
+    /// (`may_pass_support`, on a driver that `understated` its support), and
+    /// [`Degradation::InterlockedBufferOrder`] where the variant binds a set 0 whose interlocked
+    /// buffers its driver orders only pushed (`unordered`, `objects::unordered_bind`), whatever
+    /// else the variant records: a bind announces only kinds held here.
     pub(crate) fn of(
         stages: &[StageModule],
         pipeline: CompiledPipeline<'_>,
-        understated: bool,
+        (understated, unordered): (bool, bool),
     ) -> Kinds {
         let mut kinds = Kinds::default();
         for stage in stages {
@@ -3219,6 +3237,9 @@ impl Kinds {
             may_pass_support(total, understated)
         }) {
             kinds.add(Degradation::SetPastLayoutSupport);
+        }
+        if unordered {
+            kinds.add(Degradation::InterlockedBufferOrder);
         }
         if let CompiledPipeline::Render(render) = pipeline {
             if render
@@ -3932,8 +3953,9 @@ impl Device {
     /// the vertex stage ([`Degradation::UnadvertisedVertexSimdgroups`]), and, for any, a set
     /// layout its driver refuses though it runs it ([`Degradation::SetPastLayoutSupport`], before
     /// any layout of the variant is made), naming the pipeline state's kind (render, mesh render,
-    /// tile render or compute); for the base variant and every other alike, each pipeline by its
-    /// own records.
+    /// tile render or compute), and for a render variant a bound set 0 whose interlocked buffers
+    /// its driver orders only pushed ([`Degradation::InterlockedBufferOrder`]); for the base
+    /// variant and every other alike, each pipeline by its own records.
     pub(super) fn degrade_pipeline(&self, pipeline: CompiledPipeline<'_>, at: Occurrence<'_>) {
         if self
             .shared()
@@ -3960,10 +3982,37 @@ impl Device {
                 });
             }
         }
-        let CompiledPipeline::Render(pipeline) = pipeline else {
+        let CompiledPipeline::Render(render) = pipeline else {
             return;
         };
-        if pipeline
+        let kind = Degradation::InterlockedBufferOrder;
+        let unordered = match self.shared().announced.pending(kind) {
+            true => unordered_bind(self, &render.layout, &render.stages, pipeline),
+            false => None,
+        };
+        if let Some(why) = unordered {
+            self.degrade_at(at, kind, || {
+                let why = match why {
+                    UnorderedBind::NoPushCommand => "the device has no push command",
+                    UnorderedBind::SetZero => "its set 0 is no push descriptor set layout's",
+                    UnorderedBind::Lengths => {
+                        "a stage reads a buffer's length, which its driver's pushed sets do not \
+                         hold (`RuntimeDriverDefect::PushedBufferSizesUnset`)"
+                    }
+                };
+                (
+                    stage_object(ShaderStage::FRAGMENT).to_owned(),
+                    format!(
+                        "it writes a storage buffer of set 0 inside its interlock, which {} \
+                         orders between overlapping fragments only where set 0 is pushed \
+                         (`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`), and its set 0 \
+                         is bound: {why}",
+                        self.name()
+                    ),
+                )
+            });
+        }
+        if render
             .requirements
             .properties
             .contains(&VkProperty::MetalVertexSimdgroups)

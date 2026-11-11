@@ -215,9 +215,10 @@ impl OwnedModule {
 
     /// Whether the module's set 0 is pushed on `device` ([`OwnedKernel::pushed`]): the rows
     /// copy's, a guest RAM's pages copy's and a shadowed texture's copies' and merges', on a
-    /// device with `VK_KHR_push_descriptor`, so their commands make no pool on the encoding
-    /// thread (`row_copies.rs`, `host_ram/copy.rs`, `shadow_copy_back.rs`, `shadow_copy_in.rs`,
-    /// `shadow_merge.rs`).
+    /// device with `VK_KHR_push_descriptor` whose pushed sets hold their buffers' sizes (not
+    /// MoltenVK's, `RuntimeDriverDefect::PushedBufferSizesUnset`), so their commands make no pool
+    /// on the encoding thread (`row_copies.rs`, `host_ram/copy.rs`, `shadow_copy_back.rs`,
+    /// `shadow_copy_in.rs`, `shadow_merge.rs`).
     fn pushed(self, device: &Device) -> bool {
         matches!(
             self,
@@ -229,6 +230,7 @@ impl OwnedModule {
                 | OwnedModule::ShadowMergeImage(..)
                 | OwnedModule::ShadowMergeKeptImage(..)
         ) && device.shared().vk().push_descriptor().is_some()
+            && crate::pipeline::objects::pushed_sets_hold_lengths(device)
     }
 
     /// The module's storage-image bindings, which come after its sampled images.

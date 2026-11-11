@@ -16,7 +16,8 @@ use metal2vulkan::bind::ShadowMergeStores;
 fn a_pushed_kernel_s_sets_are_pushed_and_never_allocated() {
     let scratch = Scratch::new("owned-pushes");
     let device = device(&scratch.0);
-    let pushes = device.shared().vk().push_descriptor().is_some();
+    let pushes = device.shared().vk().push_descriptor().is_some()
+        && crate::pipeline::objects::pushed_sets_hold_lengths(&device);
     let buffer = device.new_buffer(4096, ResourceOptions::private()).unwrap();
     let (raw, at) = buffer.at(0);
     for module in [

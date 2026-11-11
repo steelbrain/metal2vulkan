@@ -14,6 +14,7 @@
 
 use super::content_keyed::{program_call, ContentKeyed, Owned};
 use super::graphics::Notices;
+use super::interlocked_writes;
 use super::kept::{Compiled, Instance, KeptObjects, KeptPipeline, Place};
 use super::libraries::Linked;
 use super::shared_layouts::{settle_layouts, shared_layout, SharedLayout};
@@ -714,7 +715,14 @@ impl VariantObjects {
             heap: Mutex::new(None),
             heap_tables: OnceLock::new(),
             sampler_binder: OnceLock::new(),
-            kinds: Kinds::of(stages, pipeline, understates_support(device)),
+            kinds: Kinds::of(
+                stages,
+                pipeline,
+                (
+                    understates_support(device),
+                    unordered_bind(device, layout, stages, pipeline).is_some(),
+                ),
+            ),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
             quiet_formats: Mutex::new(None),
@@ -798,7 +806,14 @@ impl VariantObjects {
             heap: Mutex::new(None),
             heap_tables: OnceLock::new(),
             sampler_binder: OnceLock::new(),
-            kinds: Kinds::of(stages, pipeline, understates_support(device)),
+            kinds: Kinds::of(
+                stages,
+                pipeline,
+                (
+                    understates_support(device),
+                    unordered_bind(device, layout, stages, pipeline).is_some(),
+                ),
+            ),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
             quiet_formats: Mutex::new(None),
@@ -1610,7 +1625,26 @@ const PUSHED_TYPES: [vk::DescriptorType; 9] = [
 
 /// Whether a variant of `layout` and `stages` pushes its set 0 (`vkCmdPushDescriptorSet`) at
 /// each draw or dispatch, rather than allocating a set from its command buffer's pools, writing it
-/// and binding it: the same descriptors, at the same bindings. Where the device has the push
+/// and binding it: the same descriptors, at the same bindings. Where it can ([`takes_push`]), on
+/// a device whose pushed sets hold their buffers' sizes ([`pushed_sets_hold_lengths`]); on one
+/// whose pushed sets do not (`RuntimeDriverDefect::PushedBufferSizesUnset`), only a render variant
+/// whose fragment stage writes a storage buffer of set 0 inside its interlock, on a driver that
+/// orders those only in a pushed set (`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`),
+/// and whose stages read no buffer's length ([`reads_lengths`]).
+fn pushes_set_zero(
+    device: &Device,
+    layout: &PipelineLayout,
+    stages: &[StageModule],
+    pipeline: CompiledPipeline<'_>,
+) -> bool {
+    takes_push(device, layout, stages, pipeline)
+        && (pushed_sets_hold_lengths(device)
+            || (orders_interlocked_buffers_pushed_alone(device)
+                && writes_interlocked_buffers(pipeline, stages)
+                && !reads_lengths(layout, stages)))
+}
+
+/// Whether a variant of `layout` and `stages` can push its set 0: where the device has the push
 /// command (Vulkan 1.4, or `VK_KHR_push_descriptor`, `binding::push_descriptor_command`), the
 /// compiled layout's set 0 fits `maxPushDescriptors` (`push_descriptor_eligible`), takes no set or
 /// binding flag and only descriptor types a push descriptor set layout takes (`PUSHED_TYPES`),
@@ -1619,7 +1653,7 @@ const PUSHED_TYPES: [vk::DescriptorType; 9] = [
 /// tessellation stage dispatches with set 0 too; a kernel's variant, of compute stages alone
 /// (a `CompiledPipeline::Kernel`), at the compute bind point, its dispatches' and tile
 /// dispatches' (`pending_dispatch::Recording`, `render::tile_dispatch`).
-fn pushes_set_zero(
+fn takes_push(
     device: &Device,
     layout: &PipelineLayout,
     stages: &[StageModule],
@@ -1645,6 +1679,105 @@ fn pushes_set_zero(
                     flags.is_empty() && PUSHED_TYPES.contains(&binding.ty.into())
                 })
         })
+}
+
+/// Whether `device`'s pushed sets hold the sizes of their buffers that a stage reads back
+/// (`OpArrayLength`): not where its driver has `RuntimeDriverDefect::PushedBufferSizesUnset`.
+pub(crate) fn pushed_sets_hold_lengths(device: &Device) -> bool {
+    !(device.properties().driver_defects).contains(&RuntimeDriverDefect::PushedBufferSizesUnset)
+}
+
+/// Whether `device`'s driver orders the storage buffers a fragment shader writes inside its
+/// interlock only in a pushed set 0 (`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`).
+fn orders_interlocked_buffers_pushed_alone(device: &Device) -> bool {
+    (device.properties().driver_defects)
+        .contains(&RuntimeDriverDefect::InterlockedBoundBuffersUnordered)
+}
+
+/// Whether a render variant of `stages` writes a storage buffer of set 0 inside its fragment
+/// stage's interlock: that stage's module interlocks and declares such a buffer it may write
+/// (`interlocked_writes`).
+fn writes_interlocked_buffers(pipeline: CompiledPipeline<'_>, stages: &[StageModule]) -> bool {
+    matches!(pipeline, CompiledPipeline::Render(_))
+        && stages.iter().any(|stage| {
+            let flags: vk::ShaderStageFlags = stage.stage.into();
+            let facts = interlocked_writes::facts(&stage.spirv);
+            flags == vk::ShaderStageFlags::FRAGMENT
+                && facts.interlocks
+                && facts.writable_set_zero_buffer
+        })
+}
+
+/// Whether a variant of `layout` and `stages` may read the length of a buffer of its set 0: a
+/// stage's module reads one (`interlocked_writes`), or a binding of set 0 lists a stage the
+/// pipeline adds at its creation, whose module is not among `stages` (a tessellation control or
+/// synthesized geometry stage, as [`dynamic_numbers`] leaves out).
+fn reads_lengths(layout: &PipelineLayout, stages: &[StageModule]) -> bool {
+    let seen = stages
+        .iter()
+        .fold(vk::ShaderStageFlags::empty(), |seen, stage| {
+            let flags: vk::ShaderStageFlags = stage.stage.into();
+            seen | flags
+        });
+    let unseen = layout.sets.first().is_some_and(|set| {
+        set.bindings.iter().any(|binding| {
+            let stages: vk::ShaderStageFlags = binding.stages.into();
+            !seen.contains(stages)
+        })
+    });
+    unseen
+        || stages
+            .iter()
+            .any(|stage| interlocked_writes::facts(&stage.spirv).reads_lengths)
+}
+
+/// Why a render variant of `layout` and `stages` binds the set 0 whose storage buffers its
+/// fragment stage writes inside its interlock on a driver that orders those only in a pushed set
+/// (`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`), announced as
+/// `Degradation::InterlockedBufferOrder`; none where the variant pushes set 0, writes no such
+/// buffer, or its driver orders them bound.
+pub(crate) fn unordered_bind(
+    device: &Device,
+    layout: &PipelineLayout,
+    stages: &[StageModule],
+    pipeline: CompiledPipeline<'_>,
+) -> Option<UnorderedBind> {
+    if !orders_interlocked_buffers_pushed_alone(device)
+        || !writes_interlocked_buffers(pipeline, stages)
+    {
+        return None;
+    }
+    if device.shared().push_descriptor.is_none() {
+        return Some(UnorderedBind::NoPushCommand);
+    }
+    if !takes_push(device, layout, stages, pipeline) {
+        return Some(UnorderedBind::SetZero);
+    }
+    (!pushed_sets_hold_lengths(device) && reads_lengths(layout, stages))
+        .then_some(UnorderedBind::Lengths)
+}
+
+/// Why a variant binds a set 0 whose interlocked buffers its driver orders only pushed
+/// ([`unordered_bind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnorderedBind {
+    /// The device has no push command.
+    NoPushCommand,
+    /// Its set 0 is no push descriptor set's ([`takes_push`]).
+    SetZero,
+    /// A stage may read a buffer's length, which the driver's pushed sets do not hold
+    /// (`RuntimeDriverDefect::PushedBufferSizesUnset`, [`reads_lengths`]).
+    Lengths,
+}
+
+/// Whether a render pipeline state of `pipeline` made on `device` binds a set 0 whose storage
+/// buffers its fragment stage writes inside its interlock where its driver orders those only in
+/// a pushed set: its making announces `interlocked-buffer-order` ([`unordered_bind`]). The lanes
+/// predict their notices by it.
+#[doc(hidden)]
+pub fn binds_unordered_interlocked_buffers(device: &Device, pipeline: &RenderPipeline) -> bool {
+    let compiled = CompiledPipeline::Render(pipeline);
+    unordered_bind(device, &pipeline.layout, &pipeline.stages, compiled).is_some()
 }
 
 /// A write of each element of each sampler binding of `layout`'s set 0 that bakes its sampler, of

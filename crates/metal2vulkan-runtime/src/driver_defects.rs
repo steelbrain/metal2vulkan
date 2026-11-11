@@ -328,9 +328,11 @@ pub(super) struct Affected {
 ///   normalized storage write (`runtime_lane::norm_storage_writes`), and wrote nothing through a
 ///   device without robustness's in-shader bounds (`runtime_lane::executions`), where binding set
 ///   0 passes each. Read in 1.4.1's source and measured on 1.4.1 (driverVersion 10401): known
-///   broken through 1.4.1. Nothing is refused: the device takes no push command there
-///   (`device/mod.rs`), and every draw and dispatch binds set 0 from its command buffer's pools,
-///   as on a device without the command.
+///   broken through 1.4.1. Nothing is refused: there a variant pushes set 0 only where its stages
+///   read no buffer's length and its fragment stage writes a storage buffer of set 0 inside its
+///   interlock (`InterlockedBoundBuffersUnordered`, `pipeline/objects.rs`'s `pushes_set_zero`),
+///   and no runtime kernel pushes (`owned_kernel.rs`): every other draw and dispatch binds set 0
+///   from its command buffer's pools, as on a device without the command.
 ///
 /// `PushedDescriptorsStaleAfterPipelineBinds`:
 /// - Mesa's ANV (`INTEL_OPEN_SOURCE_MESA`): draws of one layout that push set 0 alike, a
@@ -345,6 +347,31 @@ pub(super) struct Affected {
 ///   no push after the bind, 3 of 3 right with the one write): known broken through 26.2.4.
 ///   Nothing is refused: the first draw after each pipeline bind pushes at least one write, those
 ///   that changed or else set 0's first (`render/bound.rs`).
+///
+/// `InterlockedBoundBuffersUnordered`:
+/// - MoltenVK (`MOLTENVK`): binding through Metal argument buffers, the state
+///   `device/argument_buffers.rs` reads from the device's limits (on: a device without them is
+///   refused at device open), it makes each pooled descriptor set one Metal argument buffer: the
+///   Metal it writes for a fragment stage of the runtime's (`MVK_CONFIG_SHADER_DUMP_DIR`) takes
+///   set 0 as `spvDescriptorSetBuffer0` at `[[buffer(0)]]`, and each storage buffer the stage
+///   reaches inside its interlock as a member of it in `raster_order_group(0)`. Metal leaves such
+///   a member unordered where the function also reads another buffer member of the argument
+///   buffer: on an M3 Max with macOS 27.0.1, of 96 passes of 64 overlapping primitives each
+///   applying a map that does not commute to a pixel's word, a Metal function reading and
+///   writing such a member beside a member it reads the width from lost earlier fragments' writes
+///   in 96, in 8x4 groups, where one reading the width from a buffer of its own lost none, a
+///   texture member in the group beside the width's member none, and the member alone in its
+///   argument buffer none; the stage's own Metal from the dump lost writes in 48 of 48 passes,
+///   and the same with the buffer as a discrete `[[buffer(4), raster_order_group(0)]]` none of
+///   48. A push descriptor set layout is discrete (`pickArgumentBufferMode` takes no argument
+///   buffer for it): through the runtime on 1.4.2 (driverVersion 10402) on the same machine,
+///   `runtime_lane::interlocked_primitive_order`'s raster order group buffer lost writes in 96 of
+///   96 passes with set 0 bound, and none of 96 with it pushed. Known broken through 1.4.2.
+///   Nothing is refused: a render variant whose fragment stage writes a storage buffer of set 0
+///   inside its interlock pushes set 0 there (`pipeline/objects.rs`'s `pushes_set_zero`, where
+///   the variant's stages read no buffer's length, `PushedBufferSizesUnset`), and binds it,
+///   announced, where it cannot. Keyed on the driver: a pushed set is discrete in either of
+///   MoltenVK's modes, so the push holds however the device binds.
 ///
 /// `ImmutableSamplersLostAfterCopies`:
 /// - Mesa's lavapipe (`MESA_LLVMPIPE`): a compute dispatch recorded after a copy in the same
@@ -690,6 +717,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::InterlockedBoundBuffersUnordered,
+        driver: DriverId::MOLTENVK,
         clean: &[],
     },
     Affected {

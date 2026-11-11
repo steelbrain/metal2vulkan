@@ -343,7 +343,7 @@ pub use mipmap_plan::MipmapProblem;
 #[doc(hidden)]
 pub use pipeline::budget::{set_making_budget_for_measurement, MakingBudgetStarted};
 #[doc(hidden)]
-pub use pipeline::objects::makes_layouts_past_support;
+pub use pipeline::objects::{binds_unordered_interlocked_buffers, makes_layouts_past_support};
 pub use pipeline::{
     BinaryFunctionProblem, BinaryFunctionStage, RenderPipelineFunctionsDescriptor,
     RequiredThreadsProblem,

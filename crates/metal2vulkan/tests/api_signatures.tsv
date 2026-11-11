@@ -5490,6 +5490,7 @@ macro-member	metal2vulkan-runtime::Degradation::ImplementationDefinedReconvergen
 macro-member	metal2vulkan-runtime::Degradation::InPlaceVertexReads	InPlaceVertexReads = "in-place-vertex-reads", Precision,
 macro-member	metal2vulkan-runtime::Degradation::IndirectIndexBoundsPass	IndirectIndexBoundsPass = "indirect-index-bounds-pass", Performance,
 macro-member	metal2vulkan-runtime::Degradation::IndirectNilBufferOffset	IndirectNilBufferOffset = "indirect-nil-buffer-offset", Precision,
+macro-member	metal2vulkan-runtime::Degradation::InterlockedBufferOrder	InterlockedBufferOrder = "interlocked-buffer-order", Precision,
 macro-member	metal2vulkan-runtime::Degradation::IsolatedIndexBytes	IsolatedIndexBytes = "isolated-index-bytes", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LandedVisibilityResults	LandedVisibilityResults = "landed-visibility-results", Performance,
 macro-member	metal2vulkan-runtime::Degradation::LinearAttachmentClearCopies	LinearAttachmentClearCopies = "linear-attachment-clear-copies", Performance,
@@ -14032,6 +14033,7 @@ variant	metal2vulkan::error::RuntimeDriverDefect::HostTransferImagesCopiedAtBind
 variant	metal2vulkan::error::RuntimeDriverDefect::ImageSizeShortOfCompressionData	ImageSizeShortOfCompressionData
 variant	metal2vulkan::error::RuntimeDriverDefect::ImmutableSamplersLostAfterCopies	ImmutableSamplersLostAfterCopies
 variant	metal2vulkan::error::RuntimeDriverDefect::ImplicitPreprocessAfterExecutionSet	ImplicitPreprocessAfterExecutionSet
+variant	metal2vulkan::error::RuntimeDriverDefect::InterlockedBoundBuffersUnordered	InterlockedBoundBuffersUnordered
 variant	metal2vulkan::error::RuntimeDriverDefect::LazilyAllocatedSubresourceViews	LazilyAllocatedSubresourceViews
 variant	metal2vulkan::error::RuntimeDriverDefect::LazilyAllocatedVolumePlaneViews	LazilyAllocatedVolumePlaneViews
 variant	metal2vulkan::error::RuntimeDriverDefect::MultisampledCopiesConvertFloatNans	MultisampledCopiesConvertFloatNans

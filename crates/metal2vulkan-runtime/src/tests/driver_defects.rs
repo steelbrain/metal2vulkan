@@ -24,6 +24,7 @@ const DESTROYS: RuntimeDriverDefect = RuntimeDriverDefect::DestroyedAddressBuffe
 const PUSHES: RuntimeDriverDefect = RuntimeDriverDefect::PushedBufferSizesUnset;
 const STALE_PUSHES: RuntimeDriverDefect =
     RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds;
+const BOUND_INTERLOCKS: RuntimeDriverDefect = RuntimeDriverDefect::InterlockedBoundBuffersUnordered;
 const BAKED_SAMPLERS: RuntimeDriverDefect = RuntimeDriverDefect::ImmutableSamplersLostAfterCopies;
 const SET_SUPPORT: RuntimeDriverDefect = RuntimeDriverDefect::SetLayoutSupportUnderstated;
 const PART_VIEWS: RuntimeDriverDefect = RuntimeDriverDefect::LazilyAllocatedSubresourceViews;
@@ -42,7 +43,8 @@ const TRIMS: RuntimeDriverDefect = RuntimeDriverDefect::TrimmedCommandBufferFail
 /// `[0, 1]`, the crashing 2D views of a 3D image in lazily allocated memory, the pipeline cache
 /// compiled at load, the copies of compressed images that rewrite texels, the reads of command
 /// buffers after their signal, the frees that fail pending work, the destroys that fail a
-/// submission encoding meanwhile, the pushed sets' unset buffer sizes, the set layouts its support
+/// submission encoding meanwhile, the pushed sets' unset buffer sizes, the interlocked storage
+/// buffers of a bound set it does not order, the set layouts its support
 /// query refuses though it runs them, the textureless views of some of a lazily allocated image's
 /// levels or layers, the block-compressed image it copies out of host memory at bind time with a
 /// one-block row pitch, the signal its wait for any of several objects loses, the misplaced
@@ -90,6 +92,7 @@ fn the_committed_profiles_drivers_have_their_defects() {
                     FREES,
                     DESTROYS,
                     PUSHES,
+                    BOUND_INTERLOCKS,
                     SET_SUPPORT,
                     PART_VIEWS,
                     BIND_COPIES,
@@ -365,7 +368,11 @@ fn a_set_past_the_drivers_support_is_among_its_variants_kinds() {
     );
     let stages = [pipeline.stage.clone()];
     for understated in [true, false] {
-        let kinds = Kinds::of(&stages, CompiledPipeline::Kernel(&pipeline), understated);
+        let kinds = Kinds::of(
+            &stages,
+            CompiledPipeline::Kernel(&pipeline),
+            (understated, false),
+        );
         assert_eq!(
             kinds.holds(Degradation::SetPastLayoutSupport),
             understated,

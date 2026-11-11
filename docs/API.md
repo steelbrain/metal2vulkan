@@ -1108,6 +1108,16 @@ for dependency in &pipeline.dependencies {
   where it does not push set 0; the rest stay of their own types. Keep a binding of several
   variables static on MoltenVK 1.4.1: its SPIRV-Cross writes Metal that does not compile for a
   dynamic buffer an entry point uses through more than one variable.
+- On MoltenVK, push set 0 (a push descriptor set layout) for a pipeline whose fragment stage writes
+  a storage buffer of set 0 inside its interlock (an interlock execution mode, and a `StorageBuffer`
+  variable of set 0 not decorated `NonWritable`): binding through Metal argument buffers, MoltenVK
+  packs a bound set 0 into one argument buffer, and Metal leaves such a buffer out of its raster
+  order group where the function also reads another buffer of that argument buffer, so overlapping
+  fragments of a draw read it unordered (measured on an M3 Max with 1.4.2). A pushed set's buffers
+  are discrete arguments, which Metal orders. MoltenVK's pushed sets do not hold their buffers'
+  sizes, so bind set 0 there for a pipeline a stage of which reads a buffer's length
+  (`OpArrayLength`); the runtime does both, and announces such a bound set 0
+  (`metal2vulkan-degrade-interlocked-buffer-order`).
 - `dependencies` lists the bind-time state the pipeline depends on (`RuntimeFact`: threadgroup
   sizes, sampler coordinate modes, buffer ranges, ...) and how this profile honors each
   (`Mechanism`: a specialization constant, a push field, a plan-time check, a variant). The plan
@@ -2750,6 +2760,17 @@ bound.
   buffer it is encoded in, but its driver's vkGetDescriptorSetLayoutSupport refuses the layout, so
   Vulkan's validation layer reports each such layout
   (VUID-vkCreateDescriptorSetLayout-support-09582).
+- `metal2vulkan-degrade-interlocked-buffer-order` (precision). `InterlockedBufferOrder`: A render
+  pipeline state whose fragment function writes a storage buffer of set 0 inside its interlock (a
+  buffer in a raster order group, or one a function that reads its color attachment writes), on a
+  driver that orders such a buffer between overlapping fragments only where set 0 is pushed
+  (`metal2vulkan::error::RuntimeDriverDefect::InterlockedBoundBuffersUnordered`, MoltenVK), where
+  its set 0 is bound: the device has no push command, its set 0 is no push descriptor set layout's,
+  or a stage reads a buffer's length, which that driver's pushed sets do not hold
+  (`RuntimeDriverDefect::PushedBufferSizesUnset`). Every other such state pushes set 0 there, and
+  its fragments read each other's writes in order. Cost: a fragment may read such a buffer as it was
+  before an earlier overlapping fragment of the draw wrote it, where Metal orders a raster order
+  group's buffer after every earlier fragment of the pixel.
 - `metal2vulkan-degrade-released-command-state` (precision). `ReleasedCommandState`: An indirect
   command naming the ID of a pipeline state the program released is executed where the runtime
   cannot run what Metal runs. A record the GPU wrote runs the state that held the ID as the GPU

@@ -123,7 +123,9 @@
 //! holding a minimum code, or an `RGB9E5Float` one holding an unnormalized word, in
 //! `snorm_tile_store` ([`SNORM_MINIMUM`], [`SHARED_EXPONENT`]), condition words of command
 //! predication past their buffer that read memory unrelated to it in `predication`
-//! ([`WORD_PAST_BUFFER`]),
+//! ([`WORD_PAST_BUFFER`]), render pipeline states whose fragment function writes a buffer in a
+//! raster order group, bound on a driver that orders it only in a pushed set 0, in
+//! `interlocked_primitive_order` ([`BOUND_INTERLOCKS`]),
 //! and
 //! pipeline states, whose stages' precision notes and reconvergence are announced where the
 //! runtime makes their objects (one site, which maps every note to its kind; a fragment function's
@@ -192,6 +194,7 @@ use super::indirect_command_buffers::UNMEASURED_IDENTIFIERS;
 use super::indirect_dispatches::INDIRECT_DISPATCHES;
 use super::indirect_executions::{NIL_OFFSETS, RELEASED_STATES};
 use super::indirect_host_steps::HOST_STEPS;
+use super::interlocked_primitive_order::BOUND_INTERLOCKS;
 use super::kept_buffer_bytes::KEPT_BYTES;
 use super::line_widths::{LINE_TIES, SUBPIXEL_SNAP, WIDE_LINES};
 use super::linear_attachments::{CHOSEN_COPIES, LINEAR_COPIES};
@@ -251,6 +254,7 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::MeshPipelineDescriptor;
 use metal2vulkan::pipeline::PipelineLayout;
+use metal2vulkan::pipeline::RenderPipeline;
 use metal2vulkan::pipeline::StageModule;
 use metal2vulkan::pipeline::TileRenderPipelineDescriptor;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, Reconvergence};
@@ -599,6 +603,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &EMULATED_TESSELLATION,
         &GROUPED,
         &WORD_PAST_BUFFER,
+        &BOUND_INTERLOCKS,
         &WORD_RESOLVE,
         &XR_RESOLVE,
         &YCBCR_PASSES,
@@ -2077,8 +2082,8 @@ fn making_kinds<'a>(stages: impl IntoIterator<Item = &'a StageModule>) -> BTreeS
 
 /// [`making_kinds`] of a render pipeline state of `descriptor` on `device`, as the device's
 /// compile layer compiles it, apart from the runtime (`compile_render_pipeline`, as
-/// `color_writes::pipeline_states_announce_the_shader_conversion_once` holds the runtime to), and
-/// its layout's ([`layout_kinds`]).
+/// `color_writes::pipeline_states_announce_the_shader_conversion_once` holds the runtime to), its
+/// layout's ([`layout_kinds`]) and its set 0's ([`set_zero_kinds`]).
 pub(super) fn made_render_kinds(
     device: &Device,
     descriptor: &RenderPipelineDescriptor,
@@ -2089,7 +2094,20 @@ pub(super) fn made_render_kinds(
         .unwrap();
     let mut kinds = making_kinds(&compiled.stages);
     kinds.extend(layout_kinds(device, &compiled.layout));
+    kinds.extend(set_zero_kinds(device, &compiled));
     kinds
+}
+
+/// The kinds the making of a render pipeline state of `compiled` announces on `device` by how it
+/// binds set 0: `interlocked-buffer-order` where it binds a set 0 whose storage buffers its
+/// fragment stage writes inside its interlock and its driver orders those only in a pushed set
+/// (`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`: MoltenVK), as the runtime decides it
+/// (`metal2vulkan_runtime::binds_unordered_interlocked_buffers`).
+pub(super) fn set_zero_kinds(device: &Device, compiled: &RenderPipeline) -> BTreeSet<Degradation> {
+    forced(&[(
+        Degradation::InterlockedBufferOrder,
+        metal2vulkan_runtime::binds_unordered_interlocked_buffers(device, compiled),
+    )])
 }
 
 /// The kinds a draw of points of a render pipeline state of `descriptor` on `device` announces
@@ -2117,7 +2135,8 @@ pub(super) fn point_draw_kinds(
 }
 
 /// [`making_kinds`] of a mesh render pipeline state of `descriptor` on `device`, as its compile
-/// layer compiles it (`compile_mesh_pipeline`), and its layout's ([`layout_kinds`]).
+/// layer compiles it (`compile_mesh_pipeline`), its layout's ([`layout_kinds`]) and its set 0's
+/// ([`set_zero_kinds`]).
 pub(super) fn made_mesh_kinds(
     device: &Device,
     descriptor: &MeshPipelineDescriptor,
@@ -2128,6 +2147,7 @@ pub(super) fn made_mesh_kinds(
         .unwrap();
     let mut kinds = making_kinds(&compiled.stages);
     kinds.extend(layout_kinds(device, &compiled.layout));
+    kinds.extend(set_zero_kinds(device, &compiled));
     kinds
 }
 

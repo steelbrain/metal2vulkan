@@ -268,6 +268,7 @@ mod indirect_command_buffer_device;
 mod inline_continues;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod inline_splits;
+mod interlocked_writes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod internal_texture_ids;
 mod interop;

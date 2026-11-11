@@ -993,7 +993,8 @@ pub enum RuntimeDriverDefect {
     /// `OpArrayLength`), which the driver takes from `vkCmdBindDescriptorSets` alone: a pushed
     /// buffer's length reads 0, so the accesses a shader bounds by it read and write nothing.
     /// Nothing is refused: the runtime binds set 0 there, as on a device without the push
-    /// command.
+    /// command, but for a variant whose stages read no buffer's length and whose set 0 a driver
+    /// with [`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`] orders only pushed.
     PushedBufferSizesUnset,
     /// Descriptors of set 0 pushed (`vkCmdPushDescriptorSet`) before a bind of another pipeline
     /// of the same layout, which Vulkan keeps for it (Pipeline Layout Compatibility), are not
@@ -1002,6 +1003,18 @@ pub enum RuntimeDriverDefect {
     /// constants at fixed offsets. Nothing is refused: the first draw after each pipeline bind
     /// there pushes at least one of set 0's descriptors, those that changed or else the first.
     PushedDescriptorsStaleAfterPipelineBinds,
+    /// A storage buffer of a bound set 0 (`vkCmdBindDescriptorSets`) that a fragment shader
+    /// writes inside its ordered interlock is not ordered between the overlapping fragments of a
+    /// draw: a fragment reads the buffer as it was before an earlier overlapping fragment's
+    /// write. The driver encodes such a set as one argument buffer of the shading language it
+    /// translates to, which leaves such a buffer out of its raster order group where the function
+    /// also reads another buffer of that argument buffer; a pushed set's buffers are discrete
+    /// arguments, which it orders. Nothing is refused: a render variant whose fragment stage
+    /// writes a storage buffer of set 0 inside its interlock pushes set 0 there, and one that
+    /// cannot (no push command, a set 0 no push descriptor set layout takes, or a stage that reads
+    /// a buffer's length on a driver with [`RuntimeDriverDefect::PushedBufferSizesUnset`]) binds
+    /// it, announced (`interlocked-buffer-order`).
+    InterlockedBoundBuffersUnordered,
     /// A compute dispatch recorded after a copy in the same `VkCommandBuffer` samples a binding
     /// its pipeline layout bakes an immutable sampler into (a constexpr sampler's) as Repeat, not
     /// with the baked sampler's modes. Nothing is refused: an encoder's dispatch of a variant

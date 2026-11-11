@@ -47,6 +47,7 @@ mod dispatch_making;
 pub(super) mod flight;
 mod graphics;
 mod indirect_arguments;
+pub(super) mod interlocked_writes;
 pub(super) mod kept;
 pub(super) mod libraries;
 mod linked_fragment;

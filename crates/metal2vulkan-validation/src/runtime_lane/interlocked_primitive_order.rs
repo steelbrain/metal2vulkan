@@ -30,7 +30,18 @@
 //! count: its fetching passes left the target out of their subpass and read and wrote it in the
 //! interlock. A device without the pixel interlock must refuse the raster order groups, typed
 //! (`Unsupported` of `Feature::RasterOrderGroups`), printed as a `ROG-SKIP` line.
+//!
+//! A buffer in a raster order group is ordered only where set 0 is pushed on a driver that packs a
+//! bound set 0 into one Metal argument buffer
+//! (`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`: MoltenVK, whose pushed sets also lose
+//! their buffers' sizes, so it pushes no other draw's set 0). So each pass counts its draws that
+//! pushed set 0 (`WorkCounts::draws_pushing_set_zero`): a
+//! [`Access::RogBuffer`] draw must push where the device has the push command and either pushes
+//! every set 0 or has that defect, and on a driver whose pushed sets lose their sizes no other
+//! draw may push. [`a_bound_set_of_interlocked_buffers_is_announced_once`] takes the bound form:
+//! the same draw on a device without the push command.
 
+use super::degrade_notices::{assert_once, made_render_kinds, on_device_with};
 use super::framebuffer_fetch::fetches;
 use super::{
     at_plan, buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with,
@@ -38,14 +49,15 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::error::Feature;
+use metal2vulkan::device::VkExtension;
+use metal2vulkan::error::{Feature, RuntimeDriverDefect};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, CommandBuffer, Device, Error, Library, LoadAction, Origin,
-    PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size, StoreAction,
-    Texture, TextureDescriptor,
+    BlitOption, Buffer, ClearColor, CommandBuffer, Degradation, Device, Error, Library, LoadAction,
+    Origin, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions, Size,
+    StoreAction, Texture, TextureDescriptor,
 };
 use std::collections::BTreeMap;
 
@@ -184,6 +196,23 @@ fn orders_groups(device: &Device, library: &Library) -> bool {
             panic!("{name}: a raster order group's pipeline was refused otherwise: {error}")
         }
     }
+}
+
+/// Whether `device` pushes set 0 for an [`Access::RogBuffer`] draw, and whether it pushes no
+/// other draw's: it has the push command (Vulkan 1.4 or `VK_KHR_push_descriptor`, whose
+/// `maxPushDescriptors` these draws' set 0 fits), and its pushed sets hold their buffers' sizes or
+/// its driver orders such a buffer only pushed; no other draw pushes where they do not
+/// (`RuntimeDriverDefect::PushedBufferSizesUnset`).
+fn pushes(device: &Device) -> (bool, bool) {
+    let defects = &device.properties().driver_defects;
+    let unset = defects.contains(&RuntimeDriverDefect::PushedBufferSizesUnset);
+    let ordered = defects.contains(&RuntimeDriverDefect::InterlockedBoundBuffersUnordered);
+    let push = device
+        .compile_device()
+        .profile()
+        .descriptors()
+        .push_descriptor;
+    (push && (!unset || ordered), unset)
 }
 
 /// A private `R32Uint` texture of `sides` and `usage`.
@@ -358,6 +387,7 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
         true => vec![Access::Fetch, Access::RogTexture, Access::RogBuffer],
         false => vec![Access::Fetch],
     };
+    let (buffer_pushes, others_bound) = pushes(&device);
     let mut wrong_passes = Vec::new();
     for sides in [(1920u64, 1080u64), (64, 36), (61, 37)] {
         let targets = Targets {
@@ -396,6 +426,19 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
                     let counts = device.work_counts();
                     placeholders += counts.storage_placeholder_attachments
                         - counted.storage_placeholder_attachments;
+                    let pushed = counts.draws_pushing_set_zero - counted.draws_pushing_set_zero;
+                    let buffer = access == Access::RogBuffer;
+                    assert!(
+                        !(buffer && buffer_pushes) || pushed > 0,
+                        "{}: a raster order group buffer's draw bound set 0",
+                        device.name()
+                    );
+                    assert!(
+                        !(!buffer && others_bound) || pushed == 0,
+                        "{}: a {access:?} draw pushed set 0 where pushed sets lose their \
+                         buffers' sizes",
+                        device.name()
+                    );
                     assert_eq!(
                         counts.instance_splits_interlocked_writes,
                         counted.instance_splits_interlocked_writes,
@@ -410,7 +453,7 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
                     eprintln!(
                         "PRIMITIVE-ORDER on {}: {}x{} {access:?} {shape:?}, pass {run}: {count} \
                          of {} texels wrong, in {} 8x4 groups ({whole} wrong whole), first \
-                         {named:?}; GPU {gpu:.2} ms",
+                         {named:?}; set 0 pushed by {pushed} draw(s); GPU {gpu:.2} ms",
                         device.name(),
                         sides.0,
                         sides.1,
@@ -446,4 +489,90 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
     );
     drop(device);
     layer_reported_nothing_at_all(&messages);
+}
+
+/// The kind [`a_bound_set_of_interlocked_buffers_is_announced_once`] takes where the device's
+/// driver orders a buffer in a raster order group only in a pushed set 0
+/// (`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`), and expects absent elsewhere.
+pub(super) const BOUND_INTERLOCKS: [Degradation; 1] = [Degradation::InterlockedBufferOrder];
+
+/// On a device without the push command (`VK_KHR_push_descriptor` withheld, on a device of the
+/// instance's Vulkan 1.2), a render pipeline state whose fragment function writes a buffer in
+/// raster order group 0 (`ipo_rog_buffer`) binds its set 0. Where its driver orders such a buffer
+/// only pushed, its making announces that once ([`BOUND_INTERLOCKS`]) and a second state of the
+/// same descriptor announces nothing again; elsewhere neither announces it. Its draw runs either
+/// way: one pass of the fan, its words read back (in order or not, the device's answer).
+#[test]
+fn a_bound_set_of_interlocked_buffers_is_announced_once() {
+    let withheld = |options: &mut metal2vulkan_runtime::DeviceOptions| {
+        options
+            .withheld_extensions
+            .insert(VkExtension::KhrPushDescriptor);
+    };
+    on_device_with(withheld, |device, messages| {
+        let ll = engine_dir().join("ipo_primitive_order.ll");
+        let library = device
+            .new_library_with_air(&llvm_assemble(&ll).unwrap())
+            .unwrap();
+        if !orders_groups(device, &library) {
+            return;
+        }
+        assert!(!pushes(device).0, "withheld, the device pushes");
+        let defects = &device.properties().driver_defects;
+        let unordered = defects.contains(&RuntimeDriverDefect::InterlockedBoundBuffersUnordered);
+        let shape = SHAPES[0];
+        let descriptor = descriptor(&library, shape, Access::RogBuffer);
+        let kinds = made_render_kinds(device, &descriptor);
+        assert_eq!(
+            kinds.contains(&Degradation::InterlockedBufferOrder),
+            unordered,
+            "{}: the predicted kinds {kinds:?}",
+            device.name()
+        );
+        messages.take_notices();
+        let pipeline = device
+            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+            .unwrap();
+        let kinds: Vec<Degradation> = kinds.into_iter().collect();
+        assert_once(&messages.take_notices(), &kinds);
+        drop(
+            device
+                .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+                .unwrap(),
+        );
+        assert_once(&messages.take_notices(), &[]);
+        let groups = texture(
+            device,
+            (64, 36),
+            TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+        );
+        let targets = Targets {
+            target: texture(
+                device,
+                (64, 36),
+                TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+            ),
+            groups,
+        };
+        let counted = device.work_counts();
+        let (_, values) = pass(
+            device,
+            &targets,
+            &pipeline,
+            (shape, Access::RogBuffer),
+            (64, 36),
+        );
+        let counts = device.work_counts();
+        assert_eq!(
+            counts.draws_pushing_set_zero,
+            counted.draws_pushing_set_zero
+        );
+        let want = expected(shape, (0, 0));
+        let wrong = values.iter().filter(|&&v| v != want).count();
+        println!(
+            "BOUND-INTERLOCKS on {}: announced {unordered}; {wrong} of {} words wrong",
+            device.name(),
+            values.len()
+        );
+    });
 }
