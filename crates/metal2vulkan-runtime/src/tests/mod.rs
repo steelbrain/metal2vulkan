@@ -333,6 +333,8 @@ mod narrow_writes_device;
 mod neutral_zeros_shared;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod no_copy_lies;
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+mod no_pointer_import;
 mod noted_apart;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod notice_command_buffers;

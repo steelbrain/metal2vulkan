@@ -82,7 +82,7 @@ pub(super) fn host_page() -> usize {
 }
 
 /// Whether this process may open `/dev/udmabuf`; where not, `test` says so.
-fn udmabuf_openable(test: &str) -> bool {
+pub(super) fn udmabuf_openable(test: &str) -> bool {
     let opened = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -351,7 +351,7 @@ impl Ram {
 
     /// A source of one dma-buf of the file pages behind each request's pages, at the file offset
     /// the view maps when it is called, counting its calls in `calls`.
-    fn source(&self, calls: &Arc<AtomicUsize>) -> DmaBufSource {
+    pub(super) fn source(&self, calls: &Arc<AtomicUsize>) -> DmaBufSource {
         let fd = Arc::new(self.fd.try_clone().unwrap());
         let base = self.at.as_ptr() as usize;
         let file_at = Arc::clone(&self.file_at);

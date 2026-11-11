@@ -911,6 +911,78 @@ fn without_a_source_a_refused_pointer_copies_the_object() {
     drop(used);
 }
 
+/// On a device that imports no host pointer (made without `VK_EXT_external_memory_host`, as a
+/// device whose driver lists none is), a RAM with no source is refused, naming the extension, and
+/// one with a source is taken where the device lists the dma-buf route: its chunk is imported as
+/// the source's dma-buf, its pointer never tried (`WorkCounts::host_ram_pointer_imports_failed`),
+/// the object over it lies in the RAM, the GPU reads its bytes and its fill lands in the file's
+/// pages. Where the device lists no dma-buf route, the sourced RAM is refused so too.
+#[test]
+fn without_pointer_imports_a_ram_s_chunks_are_its_dma_bufs() {
+    use super::no_pointer_import::{lists_dma_buf_route, refusal};
+    if !udmabuf_openable() {
+        return;
+    }
+    let scratch = Scratch::new();
+    let device = super::no_pointer_import::device(&scratch.0, None);
+    device.hold_host_ram_imports();
+    let (unsourced, ..) = ram(false);
+    assert_eq!(
+        device.use_host_ram(&unsourced).err(),
+        Some(refusal()),
+        "a RAM with no source"
+    );
+    let (ram, start, view, asked, _dropped) = ram(true);
+    fill_pattern(view, AT + LENGTH);
+    let unused = device.work_counts();
+    let route = lists_dma_buf_route(&device);
+    let used = match (route, device.use_host_ram(&ram)) {
+        (true, used) => used.unwrap(),
+        (false, used) => {
+            assert_eq!(
+                used.err(),
+                Some(refusal()),
+                "a sourced RAM, no dma-buf route"
+            );
+            assert!(asked.lock().unwrap().requests.is_empty());
+            return;
+        }
+    };
+    let [(listed, _)] = device.host_ram_chunks()[..] else {
+        panic!("one RAM");
+    };
+    let before = device.work_counts();
+    let buffer = buffer(&device, view, start, AT, LENGTH);
+    let after = device.work_counts();
+    let dma_bufs = after.host_ram_dma_buf_imports - before.host_ram_dma_buf_imports;
+    let failed = after.host_ram_pointer_imports_failed - unused.host_ram_pointer_imports_failed;
+    let requests = asked.lock().unwrap().requests.clone();
+    println!(
+        "HOST-RAM-DMA-BUF {}: no pointer import: the RAM listed: {listed}; {dma_bufs} dma-buf          import(s) of the chunk, {failed} pointer import(s) tried, the source asked {requests:?}",
+        device.name(),
+    );
+    assert_eq!(buffer.host_backing(), Some(HostBacking::InHostRam));
+    assert_eq!(dma_bufs, 1, "the chunk's dma-buf");
+    assert_eq!(failed, 0, "a pointer import tried");
+    assert_eq!(
+        after.host_ram_chunks_imported - before.host_ram_chunks_imported,
+        1
+    );
+    let read = read_back(&device, LENGTH, |encoder, own| {
+        (encoder.copy_from_buffer_to_buffer(&buffer, 0, own, 0, LENGTH)).unwrap();
+    });
+    let expected: Vec<u8> = (AT..AT + LENGTH).map(pattern).collect();
+    assert!(read == expected, "the GPU's read");
+    blit(&device, |encoder| {
+        encoder.fill_buffer(&buffer, 0..LENGTH, 0x5a).unwrap()
+    });
+    assert!(
+        bytes(start, AT..AT + LENGTH).iter().all(|&b| b == 0x5a),
+        "the GPU's fill"
+    );
+    drop((buffer, used));
+}
+
 /// The most bytes one udmabuf of this host holds: its `size_limit_mb` (64 MiB, the default, where
 /// unread).
 fn udmabuf_size_limit() -> u64 {
