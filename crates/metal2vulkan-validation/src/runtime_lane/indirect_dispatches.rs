@@ -735,16 +735,17 @@ fn a_ragged_direct_dispatch_runs_each_thread_once_on_the_flat_variant() {
             encoder.dispatch_threads(size(grid), size(group)).unwrap();
             encoder.end_encoding().unwrap();
             complete(&command_buffer, &format!("ragged {grid:?} {group:?}"));
-            let flat = command_buffer
-                .executions()
-                .iter()
-                .any(|execution| match execution.pipeline() {
-                    ExecutedPipeline::Compute(pipeline) => pipeline
-                        .dependencies
-                        .iter()
-                        .any(|dependency| dependency.fact == RuntimeFact::FlatGrid),
-                    ExecutedPipeline::Render(_) => false,
-                });
+            let flat =
+                command_buffer
+                    .executions()
+                    .iter()
+                    .any(|execution| match execution.pipeline() {
+                        ExecutedPipeline::Compute(pipeline) => pipeline
+                            .dependencies
+                            .iter()
+                            .any(|dependency| dependency.fact == RuntimeFact::FlatGrid),
+                        ExecutedPipeline::Render(_) => false,
+                    });
             assert!(flat, "{grid:?} {group:?}: not on the flat variant");
             let words = read_buffer(&out, 0, slots * 4).unwrap();
             let [gx, gy, gz] = grid;
@@ -818,6 +819,22 @@ done:
 /// dispatch fits it.
 #[test]
 fn a_direct_dispatch_past_2_32_threads_keeps_the_flat_variant_s_64_bit_count() {
+    edges_counted_once([65_536, 65_601, 1], [32, 32, 1]);
+}
+
+/// The flat variant chooses its arm per workgroup: a workgroup whose last index `wx·N + N - 1`
+/// is below 2^32 counts in 32 bits, a later one of the same dispatch in 64 bits. With a
+/// threadgroup of 105 threads (7 x 5 x 3, not a power of two) the first 64-bit workgroup starts
+/// inside a row, so the last column and the last row are each counted once only where both arms
+/// meet exactly there.
+#[test]
+fn a_flat_dispatch_switches_to_its_64_bit_count_at_the_workgroup_that_passes_2_32() {
+    edges_counted_once([65_536, 65_601, 1], [7, 5, 3]);
+}
+
+/// Dispatch [`FLAT_EDGES`] over `grid` (more than 2^32 threads) in threadgroups of `group`: it
+/// runs on the flat variant and marks every thread of the last column and the last row once.
+fn edges_counted_once(grid: [u32; 3], group: [u32; 3]) {
     on_device(|device, messages| {
         let library = device
             .new_library_with_air(&llvm_assemble_text(FLAT_EDGES).unwrap())
@@ -831,7 +848,6 @@ fn a_direct_dispatch_past_2_32_threads_keeps_the_flat_variant_s_64_bit_count() {
                 &PipelineOptions::default(),
             )
             .unwrap();
-        let (grid, group) = ([65_536u32, 65_601, 1], [32u32, 32, 1]);
         assert!(u64::from(grid[0]) * u64::from(grid[1]) > 1 << 32);
         let [gx, gy, _] = grid;
         let slots = u64::from(gy + gx);
@@ -869,7 +885,10 @@ fn a_direct_dispatch_past_2_32_threads_keeps_the_flat_variant_s_64_bit_count() {
             .map(|(i, &c)| (i, c))
             .take(8)
             .collect();
-        assert!(wrong.is_empty(), "slots not counted once (first 8, rows then columns at {gy}): {wrong:?}");
+        assert!(
+            wrong.is_empty(),
+            "slots not counted once (first 8, rows then columns at {gy}): {wrong:?}"
+        );
         let _ = messages.take_notices();
     });
 }

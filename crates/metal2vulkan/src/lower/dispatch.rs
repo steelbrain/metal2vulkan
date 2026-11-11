@@ -616,13 +616,19 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
     let Some(plan) = cx.plan.dispatch.as_ref() else {
         return Ok(());
     };
-    // A flat grid's invocation past the grid's last thread returns before the body.
+    // A flat grid's invocation past the grid's last thread returns before the body. Its position
+    // is derived here once, with the test, and is the `thread_position_in_grid` every parameter
+    // reads: a second derivation would repeat the divisions in a construct of its own, which the
+    // driver does not merge with this one.
+    let mut flat_position = None;
     if plan.flat_grid {
         let decl: &crate::lower::emit::Declared = cx.decl;
         let Some(decl) = decl.families.dispatch.kernel.as_ref() else {
             return Err(cx.fail("a flat grid without its kernel's declarations"));
         };
-        let (_, inside) = decl.flat(fb, &mut |fb| cx.push_field(fb, PushField::DispatchRegion))?;
+        let (pos, inside) =
+            decl.flat(fb, &mut |fb| cx.push_field(fb, PushField::DispatchRegion))?;
+        flat_position = Some(pos);
         let past = fb.unary(UnOp::LogicalNot, inside)?;
         let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
             fb.ret(None)?;
@@ -680,7 +686,7 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         else {
             return Err(cx.fail(format!("dispatch parameter {} is out of range", p.param)));
         };
-        let x = param_value(cx, fb, b)?;
+        let x = param_value(cx, fb, b, flat_position)?;
         cx.hold(v, x);
     }
     Ok(())
@@ -692,6 +698,7 @@ fn param_value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     b: &ParamBinding,
+    flat_position: Option<SValue>,
 ) -> BResult<SValue> {
     let (plan, decl): (&Plan, &crate::lower::emit::Declared) = (cx.plan, cx.decl);
     let planned = plan
@@ -712,9 +719,12 @@ fn param_value(
     {
         return Err(cx.fail(format!("parameter {} is not a flat grid's", b.param)));
     }
-    let raw = decl.value(fb, p.builtin, &mut |fb| {
-        cx.push_field(fb, PushField::DispatchRegion)
-    })?;
+    let raw = match (p.builtin, flat_position) {
+        (KernelBuiltin::ThreadPositionInGrid, Some(pos)) if decl.flat_grid => pos,
+        _ => decl.value(fb, p.builtin, &mut |fb| {
+            cx.push_field(fb, PushField::DispatchRegion)
+        })?,
+    };
     match project(fb, raw, p.projection)? {
         Some(x) => Ok(x),
         None => Err(cx.fail(format!("parameter {} has no projection", b.param))),
@@ -1436,12 +1446,21 @@ impl KernelDecl {
     /// fastest. Inside the grid each axis's position is below its size, so it fits its `u32`;
     /// past it the position is unused.
     ///
-    /// The count is exact in 32 bits when the dispatch has at most 2^32 invocations
-    /// (`nx · ny · nz · N <= 2^32`, so every index is below 2^32): then the index and its
-    /// divisions are 32-bit; otherwise 64-bit. The test reads only dispatch-uniform values, so
-    /// every invocation takes the same arm. Devices without a 64-bit divider (Intel's) lower each
-    /// 64-bit division to a long software sequence: on Arrow Lake the Simulator's 1206 x 2622
-    /// masked blit ran 4.85 ms with the 64-bit form and 1.13 ms with the 32-bit one.
+    /// Three arms, each chosen by values uniform over the workgroup, so a workgroup takes one:
+    ///
+    /// - a workgroup with `wy = wz = 0` (group `wx`) whose last index `wx·N + N - 1` is below
+    ///   2^32 counts in 32 bits from `wx·N`, its test and start read from the workgroup's id and
+    ///   `N` alone (every workgroup of a dispatch whose groups fit along `x`, as the Simulator's);
+    /// - any other, of a dispatch of at most 2^32 invocations (`nx · ny · nz · N <= 2^32`, so
+    ///   every index is below 2^32), counts in 32 bits from `((wz · ny + wy) · nx + wx) · N`;
+    /// - past that the index is 64-bit and divided by [`Self::divmod_64_by_32`].
+    ///
+    /// Devices without a 64-bit divider (Intel's) lower each 64-bit division to a long software
+    /// sequence: on Arrow Lake the Simulator's 1206 x 2622 masked blit ran 4.85 ms with the
+    /// 64-bit form and 1.13 ms with the 32-bit one. Mesa 26.2 also compiled the whole kernel at
+    /// SIMD8 while 64-bit `OpUDiv`/`OpUMod` sat in its last arm, and per invocation tested and
+    /// counted with `NumWorkgroups`, which ANV merges from two sources per invocation: the first
+    /// arm reads neither.
     fn flat(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -1472,24 +1491,36 @@ impl KernelDecl {
         let [wx, wy, wz] = part(fb, wg)?;
         let [nx, ny, nz] = part(fb, groups)?;
         let [gx, gy, gz] = part(fb, grid)?;
-        // Whether every invocation's index fits in 32 bits: `a = nx·ny`, `b = a·nz`, `c = b·N`
-        // in 64 bits, each at most 2^32. While `a` and `b` are, the next product cannot wrap
-        // (`nz`, `N` < 2^32); a product past a failed test is not read.
         let w = |fb: &mut FunctionBuilder<'_>, v: SValue| fb.convert(ConvOp::UConvert, v, u64_);
         let limit = fb.module().constant(Constant::Scalar {
             ty: u64_,
             bits: ConstBits(1 << 32),
         })?;
         let limit = fb.module().const_value(limit)?;
-        let (nx64, ny64, nz64, n64) = (w(fb, nx)?, w(fb, ny)?, w(fb, nz)?, w(fb, n)?);
-        let a = fb.binary(BinOp::IMul, nx64, ny64)?;
-        let b = fb.binary(BinOp::IMul, a, nz64)?;
-        let c = fb.binary(BinOp::IMul, b, n64)?;
-        let fa = fb.binary(BinOp::ULessThanEqual, a, limit)?;
-        let fbb = fb.binary(BinOp::ULessThanEqual, b, limit)?;
-        let fc = fb.binary(BinOp::ULessThanEqual, c, limit)?;
-        let fits = fb.binary(BinOp::LogicalAnd, fa, fbb)?;
-        let fits = fb.binary(BinOp::LogicalAnd, fits, fc)?;
+        // A workgroup of the first row and layer (`wy = wz = 0`, every workgroup of a dispatch
+        // whose groups fit along `x`) is group `wx`, whatever the counts: when its last index
+        // `wx·N + N - 1` is below 2^32 its indices are counted in 32 bits from `wx·N`. The test
+        // and `wx·N` read only the workgroup's id and the threadgroup size, values the driver
+        // holds once per hardware thread, not per invocation; the counts (`NumWorkgroups`) a
+        // driver may merge per invocation are read only past it.
+        let (wx64, n64) = (w(fb, wx)?, w(fb, n)?);
+        let row = fb.binary(BinOp::BitwiseOr, wy, wz)?;
+        let zero = Self::k(fb, 0)?;
+        let first_row = fb.binary(BinOp::IEqual, row, zero)?;
+        let start = fb.binary(BinOp::IMul, wx64, n64)?;
+        let end = fb.binary(BinOp::IAdd, start, n64)?;
+        let below = fb.binary(BinOp::ULessThanEqual, end, limit)?;
+        let row_fits = fb.binary(BinOp::LogicalAnd, first_row, below)?;
+        let first: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let first = fb.convert(ConvOp::UConvert, start, u32_)?;
+            let index = fb.binary(BinOp::IAdd, first, lin)?;
+            let x = fb.binary(BinOp::UMod, index, gx)?;
+            let row = fb.binary(BinOp::UDiv, index, gx)?;
+            let y = fb.binary(BinOp::UMod, row, gy)?;
+            let z = fb.binary(BinOp::UDiv, row, gy)?;
+            let inside = fb.binary(BinOp::ULessThan, z, gz)?;
+            Ok(ArmEnd::FallThrough(vec![x, y, z, inside]))
+        });
         let narrow: ArmFn<'_, ()> = Box::new(move |fb, _| {
             let group = fb.binary(BinOp::IMul, wz, ny)?;
             let group = fb.binary(BinOp::IAdd, group, wy)?;
@@ -1508,24 +1539,43 @@ impl KernelDecl {
             let w = |fb: &mut FunctionBuilder<'_>, v: SValue| fb.convert(ConvOp::UConvert, v, u64_);
             let (wx, wy, wz) = (w(fb, wx)?, w(fb, wy)?, w(fb, wz)?);
             let (nx, ny, n, lin) = (w(fb, nx)?, w(fb, ny)?, w(fb, n)?, w(fb, lin)?);
-            let (gx, gy, gz) = (w(fb, gx)?, w(fb, gy)?, w(fb, gz)?);
             let group = fb.binary(BinOp::IMul, wz, ny)?;
             let group = fb.binary(BinOp::IAdd, group, wy)?;
             let group = fb.binary(BinOp::IMul, group, nx)?;
             let group = fb.binary(BinOp::IAdd, group, wx)?;
             let first = fb.binary(BinOp::IMul, group, n)?;
             let index = fb.binary(BinOp::IAdd, first, lin)?;
-            let x = fb.binary(BinOp::UMod, index, gx)?;
-            let row = fb.binary(BinOp::UDiv, index, gx)?;
-            let y = fb.binary(BinOp::UMod, row, gy)?;
-            let z = fb.binary(BinOp::UDiv, row, gy)?;
-            let inside = fb.binary(BinOp::ULessThan, z, gz)?;
-            let x = fb.convert(ConvOp::UConvert, x, u32_)?;
-            let y = fb.convert(ConvOp::UConvert, y, u32_)?;
-            let z = fb.convert(ConvOp::UConvert, z, u32_)?;
-            Ok(ArmEnd::FallThrough(vec![x, y, z, inside]))
+            let lo = fb.convert(ConvOp::UConvert, index, u32_)?;
+            let thirty_two = Self::k(fb, 32)?;
+            let hi = fb.binary(BinOp::ShiftRightLogical, index, thirty_two)?;
+            let hi = fb.convert(ConvOp::UConvert, hi, u32_)?;
+            let (row_lo, row_hi, x) = Self::divmod_64_by_32(fb, [lo, hi], gx)?;
+            let (z_lo, z_hi, y) = Self::divmod_64_by_32(fb, [row_lo, row_hi], gy)?;
+            // `z < gz` in 64 bits; the position's `z` is its low word, as the conversion was.
+            let zero = Self::k(fb, 0)?;
+            let small = fb.binary(BinOp::IEqual, z_hi, zero)?;
+            let below = fb.binary(BinOp::ULessThan, z_lo, gz)?;
+            let inside = fb.binary(BinOp::LogicalAnd, small, below)?;
+            Ok(ArmEnd::FallThrough(vec![x, y, z_lo, inside]))
         });
-        let merged = fb.if_(&mut (), fits, narrow, Some(wide))?.0;
+        // Any other workgroup: whether every invocation's index fits in 32 bits, `a = nx·ny`,
+        // `b = a·nz`, `c = b·N` in 64 bits, each at most 2^32. While `a` and `b` are, the next
+        // product cannot wrap (`nz`, `N` < 2^32); a product past a failed test is not read.
+        let rest: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            let w = |fb: &mut FunctionBuilder<'_>, v: SValue| fb.convert(ConvOp::UConvert, v, u64_);
+            let (nx64, ny64, nz64) = (w(fb, nx)?, w(fb, ny)?, w(fb, nz)?);
+            let a = fb.binary(BinOp::IMul, nx64, ny64)?;
+            let b = fb.binary(BinOp::IMul, a, nz64)?;
+            let c = fb.binary(BinOp::IMul, b, n64)?;
+            let fa = fb.binary(BinOp::ULessThanEqual, a, limit)?;
+            let fbb = fb.binary(BinOp::ULessThanEqual, b, limit)?;
+            let fc = fb.binary(BinOp::ULessThanEqual, c, limit)?;
+            let fits = fb.binary(BinOp::LogicalAnd, fa, fbb)?;
+            let fits = fb.binary(BinOp::LogicalAnd, fits, fc)?;
+            let merged = fb.if_(&mut (), fits, narrow, Some(wide))?.0;
+            Ok(ArmEnd::FallThrough(merged))
+        });
+        let merged = fb.if_(&mut (), row_fits, first, Some(rest))?.0;
         let [x, y, z, inside] = merged[..] else {
             return Err(crate::spirv::error::BuildError::Dangling(
                 crate::spirv::error::Dangling::Value(SValue::new(u32::MAX)),
@@ -1533,6 +1583,81 @@ impl KernelDecl {
         };
         let pos = fb.composite_construct(self.uvec3, &[x, y, z])?;
         Ok((pos, inside))
+    }
+
+    /// The quotient (low word, high word) and remainder of the `u64` `n` (`[low, high]`) by the
+    /// `u32` `d` (not 0), in 32-bit operations: `hi / d` and `r = hi % d` (so `r < d`), then 32
+    /// restoring steps over the low word's bits, highest first, each `r = 2r + bit` and, when
+    /// that is at least `d`, `r -= d` and the step's quotient bit set. `2r + bit < 2d < 2^33`: its
+    /// bit 32 (`r`'s top bit before the shift) is the carry, and with it set the value is past `d`
+    /// and `2r + bit - d < d` is exact modulo 2^32. The loop asks the driver not to unroll it.
+    ///
+    /// The flat variant's 64-bit arm divides by it rather than by a 64-bit `OpUDiv`/`OpUMod`:
+    /// lowered on a device without a 64-bit divider (Intel's), four of those made the arm so large
+    /// that the whole kernel compiled at a narrower SIMD width (SIMD8 for the Simulator's masked
+    /// blit on Arrow Lake, Mesa 26.2), though the arm runs only past 2^32 invocations.
+    fn divmod_64_by_32(
+        fb: &mut FunctionBuilder<'_>,
+        [lo, hi]: [SValue; 2],
+        d: SValue,
+    ) -> BResult<(SValue, SValue, SValue)> {
+        use crate::spirv::builder::constructs::{LoopFn, LoopSpec};
+        let u32_ = fb.module().ty(Type::Int {
+            width: 32,
+            signed: false,
+        })?;
+        let q_hi = fb.binary(BinOp::UDiv, hi, d)?;
+        let r0 = fb.binary(BinOp::UMod, hi, d)?;
+        let [r, q, i] = [
+            fb.local_var(u32_, None)?,
+            fb.local_var(u32_, None)?,
+            fb.local_var(u32_, None)?,
+        ];
+        let [r, q, i] = [fb.var_ptr(r)?, fb.var_ptr(q)?, fb.var_ptr(i)?];
+        let zero = Self::k(fb, 0)?;
+        let steps = Self::k(fb, 32)?;
+        fb.store(r, r0, MemAccess::default())?;
+        fb.store(q, zero, MemAccess::default())?;
+        fb.store(i, steps, MemAccess::default())?;
+        let body: LoopFn<'_, ()> = Box::new(move |fb, cx, lc| {
+            let k = fb.load(i, MemAccess::default())?;
+            let zero = Self::k(fb, 0)?;
+            let done = fb.binary(BinOp::IEqual, k, zero)?;
+            let exit: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                lc.break_(fb)?;
+                Ok(ArmEnd::Exits)
+            });
+            fb.if_(cx, done, exit, None)?;
+            let one = Self::k(fb, 1)?;
+            let k = fb.binary(BinOp::ISub, k, one)?;
+            let rv = fb.load(r, MemAccess::default())?;
+            let qv = fb.load(q, MemAccess::default())?;
+            let bit = fb.binary(BinOp::ShiftRightLogical, lo, k)?;
+            let bit = fb.binary(BinOp::BitwiseAnd, bit, one)?;
+            let top = Self::k(fb, 31)?;
+            let carry = fb.binary(BinOp::ShiftRightLogical, rv, top)?;
+            let carry = fb.binary(BinOp::INotEqual, carry, zero)?;
+            let twice = fb.binary(BinOp::ShiftLeftLogical, rv, one)?;
+            let twice = fb.binary(BinOp::BitwiseOr, twice, bit)?;
+            let reaches = fb.binary(BinOp::UGreaterThanEqual, twice, d)?;
+            let take = fb.binary(BinOp::LogicalOr, carry, reaches)?;
+            let less = fb.binary(BinOp::ISub, twice, d)?;
+            let rv = fb.select(take, less, twice)?;
+            let place = fb.binary(BinOp::ShiftLeftLogical, one, k)?;
+            let place = fb.select(take, place, zero)?;
+            let qv = fb.binary(BinOp::BitwiseOr, qv, place)?;
+            fb.store(r, rv, MemAccess::default())?;
+            fb.store(q, qv, MemAccess::default())?;
+            fb.store(i, k, MemAccess::default())
+        });
+        let spec = LoopSpec {
+            exit_sel: None,
+            dont_unroll: true,
+        };
+        fb.loop_(&mut (), spec, body)?;
+        let q_lo = fb.load(q, MemAccess::default())?;
+        let rem = fb.load(r, MemAccess::default())?;
+        Ok((q_lo, q_hi, rem))
     }
 
     /// A folded variant's threadgroup position in the Metal grid (a `uvec3`) and whether its
