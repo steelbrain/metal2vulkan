@@ -609,6 +609,25 @@ fn the_runtime_s_queue_sharing_choice_keys_no_profile() {
     }
 }
 
+/// The runtime's choice of how much of other queues' work goes ahead of an unshared queue's
+/// (`unshared_isolation`) moves no committed profile's fingerprint: no profile carries it, so no
+/// translation follows it.
+#[test]
+fn the_runtime_s_unshared_isolation_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let bounded = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let off = committed_profiles_with(DevicePolicy {
+        unshared_isolation: UnsharedIsolationPolicy::Off,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(bounded.len(), off.len());
+    for ((stem, b), (other, o)) in bounded.iter().zip(&off) {
+        assert_eq!(stem, other);
+        assert_eq!(b.fingerprint(), o.fingerprint(), "{stem}");
+    }
+}
+
 /// `DevicePolicy::exact_answers()` keeps every command queue on the `VkQueue` it took at its
 /// creation, and the default shares them where the device's GPU idles between `VkQueue`s.
 #[test]

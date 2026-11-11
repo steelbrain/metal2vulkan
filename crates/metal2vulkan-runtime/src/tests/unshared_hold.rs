@@ -36,7 +36,11 @@ fn a_longer_run_is_taken_at_once_and_a_shorter_one_halves_the_way() {
     expected.observed(10 * MS);
     assert_eq!(expected.nanos(), 20 * MS, "halfway to a shorter one");
     expected.observed(0);
-    assert_eq!(expected.nanos(), 10 * MS, "a run of nothing counts as 1 ns");
+    assert_eq!(
+        expected.nanos(),
+        10 * MS + 1,
+        "a run of nothing counts as 1 ns, the half rounded toward the longer"
+    );
 }
 
 /// A queue whose batches ran 30 ms, then 1 ms: within five of the short ones, its next batch may
