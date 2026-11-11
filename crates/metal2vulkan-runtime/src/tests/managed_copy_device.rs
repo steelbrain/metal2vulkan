@@ -2,7 +2,9 @@
 //! the caller's pages and the GPU's own in device-local memory, as Metal keeps a managed resource
 //! on a Mac with a discrete GPU. Each leg runs over both host copies: an import of the pages
 //! ([`Route::Import`]) and the pages alone, where the caller's gate refuses the import
-//! ([`Route::Pages`]).
+//! ([`Route::Pages`]); the copies leg and the leg over a copy's bytes also over pages the caller
+//! vouched writable whose import the gate refuses ([`Route::Vouched`]), where no completion takes
+//! the pages again (`WorkCounts::managed_writes_undone`).
 //!
 //! - **Copies.** The pages' bytes reach the first command buffer; a CPU write reaches the GPU where
 //!   `did_modify_range` names it, and not where nothing does; the GPU's writes reach the pages at
@@ -63,6 +65,9 @@ enum Route {
     Import,
     /// The pages alone: the caller's gate refuses the import.
     Pages,
+    /// The pages alone, the caller's gate refusing the import of pages whose write permission
+    /// the caller vouched for (`HostMemory::assume_writable`).
+    Vouched,
 }
 
 /// Anonymous private pages of the test's own, zeroed, unmapped when dropped: declared before the
@@ -140,12 +145,16 @@ impl Pages {
     unsafe fn memory(&self, route: Route) -> HostMemory {
         // SAFETY: the caller's contract.
         let memory = unsafe { HostMemory::new(self.at) };
+        let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
         match route {
             Route::Import => memory,
-            Route::Pages => {
-                let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
-                memory.with_import_gate(gate(&asked, false))
-            }
+            Route::Pages => memory.with_import_gate(gate(&asked, false)),
+            // SAFETY: the test's mapping is writable until `read_only`, which no such leg calls.
+            Route::Vouched => unsafe {
+                memory
+                    .with_import_gate(gate(&asked, false))
+                    .assume_writable()
+            },
         }
     }
 }
@@ -345,6 +354,12 @@ fn copies(route: Route) {
     assert!(device.work_counts().managed_bytes_copied_out - out >= BYTES);
     assert_eq!(buffer.gpu_address(), address);
     assert_eq!(buffer.contents(), Some(pages.at));
+    // No completion took the pages again: the GPU's writes stay.
+    assert_eq!(
+        device.work_counts().managed_writes_undone,
+        before.managed_writes_undone,
+        "{route:?}"
+    );
 
     // The release: the deallocator runs once, and nothing of the buffer's stays held.
     drop(buffer);
@@ -362,6 +377,11 @@ fn copies(route: Route) {
 #[test]
 fn copies_through_an_import() {
     copies(Route::Import);
+}
+
+#[test]
+fn copies_through_vouched_pages_no_import_maps() {
+    copies(Route::Vouched);
 }
 
 #[test]
@@ -683,6 +703,15 @@ fn over_a_copy(route: Route) {
     );
     assert_eq!(made.managed_device_copies_in_place, 0);
     assert_eq!(read(&device, &queue, &buffer, 0..BYTES), pattern(BYTES));
+    // The GPU's write stays, and reaches the pages at a synchronize.
+    gpu_write(&queue, &buffer, 0x5a);
+    synchronize(&queue, &buffer);
+    assert_eq!(pages.bytes(), vec![0x5a; BYTES as usize], "{route:?}");
+    assert_eq!(
+        device.work_counts().managed_writes_undone,
+        before.managed_writes_undone,
+        "{route:?}"
+    );
     drop((buffer, copy));
     assert!(ran_to(&ran, 1) && ran_to(&copy_ran, 1), "{route:?}");
 }
@@ -695,6 +724,11 @@ fn a_managed_no_copy_buffer_over_a_copy_s_bytes_through_an_import_is_two_copies(
 #[test]
 fn a_managed_no_copy_buffer_over_a_copy_s_bytes_no_import_maps_is_two_copies() {
     over_a_copy(Route::Pages);
+}
+
+#[test]
+fn a_managed_no_copy_buffer_over_a_copy_s_vouched_bytes_no_import_maps_is_two_copies() {
+    over_a_copy(Route::Vouched);
 }
 
 /// A recovery carries a two-copy buffer: its host copy made again over the same pages and its
