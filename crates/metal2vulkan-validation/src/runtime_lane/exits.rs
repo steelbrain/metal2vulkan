@@ -59,7 +59,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -218,6 +218,11 @@ struct Gate {
 /// The CPU work case's [`Gate`], set once both command buffers are committed.
 static GATE: OnceLock<Gate> = OnceLock::new();
 
+/// The hook's registrations in the process (`metal2vulkan_runtime::exit_registrations`) right
+/// after the CPU work case registered [`release_the_gate`]: one more by the exit means the hook
+/// was registered again after the gate's handler, so it ran first.
+static AT_THE_GATE: AtomicU64 = AtomicU64::new(0);
+
 /// The last device of the case `instance_after_handler_exit`, which [`drop_the_held_device`]
 /// drops.
 static HELD: Mutex<Option<Device>> = Mutex::new(None);
@@ -282,19 +287,27 @@ const SUBMISSION_WAIT: Duration = Duration::from_secs(10);
 /// An exit handler the CPU work case registers last, right before it exits, so that it runs first
 /// in the exit, before the device's hook: note whether the marker's command buffer was still held
 /// (`held`: `Committed`, its work behind the closed gate, so neither had run when the exit began),
-/// and whether the hook had run (`hook_ran`, which would leave the gate's work pending); then open
+/// and whether the hook had run (`hook_ran`, which would leave the gate's work pending), with the
+/// hook's registrations since this handler's own (`since`: any one runs the hook first) and the
+/// process's by kind (`registrations`); then open
 /// the gate, wait at most [`SUBMISSION_WAIT`] until the marker's command buffer is submitted, the
 /// work's before it (`scheduled`), and note whether it still runs as the hook comes next
-/// (`running`).
+/// (`running`). Where the hook ran, nothing is submitted after it (it closed the device's guard),
+/// so the handler does not wait.
 extern "C" fn release_the_gate() {
     let Some(gate) = GATE.get() else {
         return;
     };
     let held = gate.marking.status() == CommandBufferStatus::Committed;
     let hook_ran = metal2vulkan_runtime::process_exiting();
+    let now = metal2vulkan_runtime::exit_registrations();
+    let since = now.total.saturating_sub(AT_THE_GATE.load(Ordering::SeqCst));
     gate.event.set_signaled_value(1);
     let deadline = Instant::now() + SUBMISSION_WAIT;
-    while gate.marking.status() == CommandBufferStatus::Committed && Instant::now() < deadline {
+    while !hook_ran
+        && gate.marking.status() == CommandBufferStatus::Committed
+        && Instant::now() < deadline
+    {
         std::thread::sleep(Duration::from_millis(1));
     }
     let status = gate.marking.status();
@@ -304,7 +317,8 @@ extern "C" fn release_the_gate() {
     );
     let running = status == CommandBufferStatus::Scheduled;
     let line = format!(
-        "{REPORT}-RELEASE held={} hook_ran={} scheduled={} running={}\n",
+        "{REPORT}-RELEASE held={} hook_ran={} scheduled={} running={} since={since} \
+         registrations={now:?}\n",
         u8::from(held),
         u8::from(hook_ran),
         u8::from(scheduled),
@@ -616,6 +630,11 @@ fn child() {
                 watch_the_marker(at);
             }
             println!("{REPORT}-WORK {case} cpu={}", u8::from(cpu));
+            println!(
+                "{REPORT}-SWITCH {} at {:?}",
+                device.queue_switch_check_report(),
+                metal2vulkan_runtime::exit_registrations()
+            );
             assert!(
                 GATE.set(Gate { event, marking }).is_ok(),
                 "one gate a process"
@@ -623,6 +642,10 @@ fn child() {
             // Registered after every runtime call of the case, so after the device's hook.
             // SAFETY: a handler with no arguments that never unwinds.
             unsafe { libc::atexit(release_the_gate) };
+            AT_THE_GATE.store(
+                metal2vulkan_runtime::exit_registrations().total,
+                Ordering::SeqCst,
+            );
             exit_now(case, &messages);
         }
         "instance_after_handler_exit" => {
@@ -1359,6 +1382,12 @@ fn an_exit_runs_no_handler_beside_a_cpu_device_s_work() {
     let what = || format!("stdout:\n{}\nstderr:\n{}", exited.stdout, exited.stderr);
     let release = format!("{REPORT}-RELEASE ");
     let marker = format!("{REPORT}-MARKER ");
+    assert_eq!(
+        field(&release, "since"),
+        Some(0),
+        "the hook was registered again after the gate's handler, so it ran first: {}",
+        what()
+    );
     assert_eq!(
         field(&release, "held"),
         Some(1),
