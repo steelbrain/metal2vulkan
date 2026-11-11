@@ -1,6 +1,7 @@
 //! Not a consumer's example: the GPU's bandwidth through two 256 MiB buffers, made as a program
 //! makes them (`new_buffer`, `new_buffer_with_descriptor` at an address it picks or at a pinned
-//! one, or `new_buffer_with_bytes_no_copy` over pages of the example's own), each pair after the
+//! one, or `new_buffer_with_bytes_no_copy` over pages of the example's own, or over the bytes of a
+//! `Shared` no-copy buffer that is a copy of them), each pair after the
 //! pairs before it in the same device went, so that a pair may take the memory an earlier one
 //! left. A kernel reads one buffer and writes the other, one dispatch a command buffer, committed
 //! and waited for, with no CPU access.
@@ -23,8 +24,9 @@
 //! commit time since the Unix epoch and its two times, in milliseconds (`at:wall/gpu`), and
 //! `COUNTS` lines every `WorkCounts` field the first timed pass and the last one moved. The memory
 //! counts are those the two buffers' making moved: `vkAllocateMemory` and `vkBindBufferMemory`
-//! calls, live dedicated blocks, live empty blocks, overflows into system memory. With `METAL2VULKAN_LOG_MEMORY=1` the memory log names
-//! the block and memory type each buffer took.
+//! calls, live dedicated blocks, live empty blocks, overflows into system memory; then the first
+//! buffer's `host_backing`. With `METAL2VULKAN_LOG_MEMORY=1` the memory log names the block and
+//! memory type each buffer took.
 //!
 //! The kernel is `scale_and_offset` of the owned fixture (`common::library`), with a scale of 1:
 //! 4 bytes read and 4 written a thread.
@@ -37,6 +39,7 @@ use metal2vulkan_runtime::{
     WorkCounts,
 };
 use std::ptr::NonNull;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The bytes of each buffer.
@@ -71,6 +74,12 @@ enum Made {
     /// own beside each, which the kernel never uses and which goes with it: as a guest's `Managed`
     /// buffer is made with its CPU copy over the guest's pages.
     Beside,
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:` over exactly the bytes of a `Shared`
+    /// no-copy buffer beside it, which the kernel never uses, whose pages' import the caller's
+    /// gate refused, so that it is a copy of them (`HostMemory::with_import_gate`, which refuses
+    /// the pair's buffer's import too): as a host that refuses a second import of pages makes a
+    /// guest's buffers.
+    OverCopy,
 }
 
 /// The storage mode's bits of a resource's options.
@@ -128,7 +137,7 @@ impl Drop for Pages {
 
 /// The sequences, each on a device of its own: a pair first in a device, and after pairs of each
 /// storage mode went.
-const SEQUENCES: [(&str, &[Pair]); 6] = [
+const SEQUENCES: [(&str, &[Pair]); 7] = [
     (
         "first",
         &[
@@ -182,6 +191,16 @@ const SEQUENCES: [(&str, &[Pair]); 6] = [
             Pair(StorageMode::Private, Made::Pinned, 0),
         ],
     ),
+    // No-copy buffers over the bytes of `Shared` ones that are copies of them, and over pages no
+    // other buffer is made over.
+    (
+        "over-copy",
+        &[
+            Pair(StorageMode::Managed, Made::OverCopy, 0),
+            Pair(StorageMode::Managed, Made::NoCopy, 0),
+            Pair(StorageMode::Shared, Made::OverCopy, 0),
+        ],
+    ),
 ];
 
 /// A `Shared` no-copy buffer of `options`' other modes over new pages of the example's own, which
@@ -199,6 +218,22 @@ fn no_copy(
     }?;
     pages.push(host);
     Ok(buffer)
+}
+
+/// A no-copy buffer of `options` over the bytes of `host`, whose import a gate refuses.
+///
+/// # Safety
+///
+/// The pages outlive the buffer.
+unsafe fn refused(
+    device: &Device,
+    options: ResourceOptions,
+    host: &Pages,
+) -> common::Result<Buffer> {
+    // SAFETY: the caller's contract, and only the example's commands use the pages.
+    let memory = unsafe { HostMemory::new(host.0) }.with_import_gate(Arc::new(|_| false));
+    // SAFETY: as above.
+    Ok(unsafe { device.new_buffer_with_bytes_no_copy(memory, BYTES, options, None) }?)
 }
 
 /// One buffer of `pair`, the `index`th of its two, over pages it pushes to `pages` where it is a
@@ -219,6 +254,16 @@ fn make(
                 (options.raw() & !STORAGE_MASK) | ResourceOptions::shared().raw(),
             )?;
             beside.push(no_copy(device, shared, pages)?);
+            buffer
+        }
+        Made::OverCopy => {
+            let host = Pages::new()?;
+            // SAFETY: the pages outlive both buffers (`run_pair` drops them after them).
+            let copy = unsafe { refused(device, ResourceOptions::shared(), &host) }?;
+            // SAFETY: as above.
+            let buffer = unsafe { refused(device, options, &host) }?;
+            beside.push(copy);
+            pages.push(host);
             buffer
         }
         Made::Descriptor => device.new_buffer_with_descriptor(BufferDescriptor::new(
@@ -341,6 +386,7 @@ fn run_pair(
     let input = make(device, pair, 0, (&mut pages, &mut beside))?;
     let output = make(device, pair, 1, (&mut pages, &mut beside))?;
     let made = moved(&before, &device.work_counts());
+    let made = format!("{made} backing {:?}", input.host_backing());
     let command_buffer = queue.command_buffer()?;
     let mut blit = command_buffer.blit_command_encoder()?;
     blit.fill_buffer(&input, 0..BYTES, 0)?;

@@ -640,6 +640,63 @@ fn a_shared_no_copy_buffer_has_no_device_copy() {
     assert_eq!(counts.managed_bytes_copied_in, 0);
 }
 
+/// A `Managed` no-copy buffer by `route` made over exactly the bytes of a live `Shared` no-copy
+/// buffer that is a copy of them (the caller's gate refused their import, `copied.rs`) is two
+/// copies all the same: its device copy in device-local memory, its host copy the pages or their
+/// import, and never the `Shared` buffer's copy, which the GPU reaches over the bus
+/// (`host_aliases.rs`).
+fn over_a_copy(route: Route) {
+    let pages = Pages::new(BYTES);
+    pages.write_pattern();
+    let scratch = Scratch::new("managed-over-copy");
+    let Some(device) = two_copy_device(&scratch, "over-copy", route) else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    let (copy_ran, ran) = (Ran::default(), Ran::default());
+    let shared = ResourceOptions::shared();
+    let copy = no_copy(&device, &pages, Route::Pages, shared, &copy_ran);
+    assert_eq!(copy.host_backing(), Some(HostBacking::Copied));
+    let before = device.work_counts();
+    let buffer = no_copy(&device, &pages, route, managed(), &ran);
+    let made = device.work_counts();
+    eprintln!(
+        "MANAGED-COPY over-copy {route:?} {}: {:?}, {} device copies, {} buffers in a copy",
+        device.name(),
+        buffer.host_backing(),
+        made.managed_device_copies - before.managed_device_copies,
+        made.copied_host_buffers_shared - before.copied_host_buffers_shared,
+    );
+    assert_eq!(
+        buffer.host_backing(),
+        Some(HostBacking::DeviceCopy),
+        "{route:?}"
+    );
+    assert_eq!(made.managed_device_copies - before.managed_device_copies, 1);
+    assert_eq!(
+        made.copied_host_buffers_shared, before.copied_host_buffers_shared,
+        "{route:?}: the buffer lies in no copy"
+    );
+    assert_eq!(
+        made.copied_host_buffers_made,
+        before.copied_host_buffers_made
+    );
+    assert_eq!(made.managed_device_copies_in_place, 0);
+    assert_eq!(read(&device, &queue, &buffer, 0..BYTES), pattern(BYTES));
+    drop((buffer, copy));
+    assert!(ran_to(&ran, 1) && ran_to(&copy_ran, 1), "{route:?}");
+}
+
+#[test]
+fn a_managed_no_copy_buffer_over_a_copy_s_bytes_through_an_import_is_two_copies() {
+    over_a_copy(Route::Import);
+}
+
+#[test]
+fn a_managed_no_copy_buffer_over_a_copy_s_bytes_no_import_maps_is_two_copies() {
+    over_a_copy(Route::Pages);
+}
+
 /// A recovery carries a two-copy buffer: its host copy made again over the same pages and its
 /// device copy on the new generation, the pages copied in; its pointer, Metal address and copies
 /// work on as before, and its deallocator runs once, at its release.
