@@ -384,7 +384,7 @@ fn dma_buf_cycles_one_import() {
 /// Wait until the device is idle: each queue the runtime submits to (`vkQueueWaitIdle` under the
 /// queue's lock, as the device's teardown waits, `DeviceShared::queues_idle`), and its staging
 /// queue's last submission.
-fn device_idle(device: &Device) {
+pub(super) fn device_idle(device: &Device) {
     let shared = device.shared();
     let raw = shared.vk();
     for slot in shared.queues.iter() {
