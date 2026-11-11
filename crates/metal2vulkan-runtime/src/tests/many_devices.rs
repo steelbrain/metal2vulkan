@@ -5,6 +5,11 @@
 //! its own, so a device of its own (`create.rs` groups the devices it makes by their options and
 //! sink), as each process of a host's guests makes one. Printed as `MANY-DEVICES` lines.
 //!
+//! The driver refuses devices of one process past a count of its own (seven on an RTX 2080 and an
+//! RTX 3090, NVIDIA 620.70.06), so a second test makes one device, with a command queue, in a
+//! process of its own and holds it for [`HELD`]: a run starts it in several processes at once, as
+//! a host's guests are, each printing what it took as `ONE-DEVICE` lines.
+//!
 //! A GPU hazard: it makes devices up to the driver's limit (docs/VALIDATION.md), so on a GPU it
 //! compiles only under `m2v_gpu_hazards`; a CPU ICD has no BAR, and it does not compile there.
 
@@ -13,7 +18,10 @@ use crate::device::lock;
 use crate::{Device, DeviceKind, DeviceOptions, Error, MessageSink, ShaderCacheOptions};
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long [`a_device_is_held_beside_other_processes_devices`] holds its device.
+const HELD: Duration = Duration::from_secs(60);
 
 /// The most devices the run keeps live: past the 16 of the plan's queues an RTX 3090 made
 /// beside the BAR it shares with them.
@@ -118,4 +126,33 @@ fn devices_are_made_until_the_driver_refuses_one() {
         bar1_used_mib()
     );
     assert!(!live.is_empty(), "no device was made");
+}
+
+#[test]
+fn a_device_is_held_beside_other_processes_devices() {
+    let scratch = Scratch::new("one-device");
+    let before = bar1_used_mib();
+    let started = Instant::now();
+    let made = match own_device(&scratch.0, 0) {
+        Ok(made) => made,
+        Err(error) => {
+            println!(
+                "ONE-DEVICE refused after {:.1} ms: {error} ({error:?}) bar1_used_mib={before:?}",
+                started.elapsed().as_secs_f64() * 1e3
+            );
+            return;
+        }
+    };
+    let opened = started.elapsed();
+    let queue = made.new_command_queue();
+    println!(
+        "ONE-DEVICE made_ms={:.1} vk_queues={} queue_made={} bar1_used_mib(before,after)=({before:?},{:?}) {}",
+        opened.as_secs_f64() * 1e3,
+        made.shared().queues.len(),
+        queue.is_ok(),
+        bar1_used_mib(),
+        holdings(&made)
+    );
+    std::thread::sleep(HELD);
+    drop(queue);
 }
