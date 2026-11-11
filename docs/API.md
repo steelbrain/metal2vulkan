@@ -483,15 +483,33 @@ refused meanwhile (`NotImplemented(DetachedTexelAccess)`), as a one-level textur
 `generate_mipmaps` leaves as it is or refuses has its first level copied and its later levels left
 as they are (docs/FAST-PATHS.md, known gaps).
 A texture of one level is `new_texture`'s, in place where that is.
-On a discrete GPU, a `Managed` texture over a no-copy buffer's bytes (not an IOSurface plane's)
-that only samples or reads, whose policy takes the image in place, over memory that carries a log
-of its writes (`HostMemory::with_dirty_pages`), tracked, one slice laid out as one copy, is instead
-a device copy (`WorkCounts::device_copy_textures`, whatever the check answered): the GPU's copy of
-the two a `Managed` resource is on a Mac with a discrete GPU, a shadow whose copies in take only
-the bands of rows the log reports changed (`dirty_copies_in_gated` and kin). Its notice is not
-announced: it holds the bytes wherever a command reads it. A `Shared` texture and an IOSurface's
-are the pages' alone there too, in place where the check passed, which the GPU reads across the
-bus as a discrete Mac's GPU reads them.
+On a discrete GPU (no unified memory), a `Managed` no-copy buffer is two copies, as Metal keeps a
+`Managed` resource on a Mac with a discrete GPU (`HostBacking::DeviceCopy`): the GPU's own in
+device-local memory, which every command reads and writes, at the buffer's `gpu_address`, and the
+caller's pages, which `contents` answers. The pages reach the GPU's copy as the buffer is made,
+at `did_modify_range` (its range) and at a rebind (whole), each before any command of a command
+buffer committed after the call; a CPU write that no `did_modify_range` names is not seen by the
+GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
+command buffer's order, which the CPU sees once the command buffer completed. The copies run
+from an import of the pages where the device makes one (never a copy of them), else through
+staging buffers the runtime frees once their work completed, at most 256 MiB staged ahead
+(`WorkCounts::managed_*`). A texture over the buffer's bytes is over the GPU's copy and follows
+it, its `replace_region` copying in and its `synchronize_resource` copying out. Over pages the
+process maps read-only, the GPU's writes are dropped: nothing is copied out, and the pages are
+copied in again at the completion of each command buffer that used the buffer. A detach keeps
+the GPU's copy. Where device-local memory has no room for the GPU's copy, the buffer lies in its
+pages as a `Shared` one does (`device-memory-overflow`). A `Shared` no-copy buffer, and every
+no-copy buffer on a device with unified memory, lies in the caller's pages, which the GPU of a
+discrete device reads across the bus, as a discrete Mac's GPU reads them.
+A `Managed` texture over a no-copy buffer's bytes that lie in its pages there (not an IOSurface
+plane's) that only samples or reads, whose policy takes the image in place, over memory that
+carries a log of its writes (`HostMemory::with_dirty_pages`), tracked, one slice laid out as one
+copy, is instead a device copy (`WorkCounts::device_copy_textures`, whatever the check answered):
+the GPU's copy of the two a `Managed` resource is on a Mac with a discrete GPU, a shadow whose
+copies in take only the bands of rows the log reports changed (`dirty_copies_in_gated` and kin).
+Its notice is not announced: it holds the bytes wherever a command reads it. A `Shared` texture
+and an IOSurface's are the pages' alone there too, in place where the check passed, which the GPU
+reads across the bus as a discrete Mac's GPU reads them.
 A texture placed in a heap over dma-buf pages is an image over a dma-buf of its own pages, which its
 first submission acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; a linear image over a buffer of the
 runtime's own memory starts `VK_IMAGE_LAYOUT_PREINITIALIZED`, and its move from there keeps its
@@ -2468,7 +2486,9 @@ bound.
   unified memory, or a texture's image, of any storage mode, lies in system memory: no
   device-local memory type the resource takes had room for it, so it takes one that is not
   device-local, as Metal makes such a resource past a discrete GPU's memory rather than refuse it.
-  `WorkCounts::device_memory_overflows` counts each such placement. A driver that pages
+  `WorkCounts::device_memory_overflows` counts each such placement. A `Managed` no-copy buffer
+  there whose GPU copy found no room lies in the caller's pages, as a `Shared` one does
+  (`WorkCounts::managed_device_copies_in_place`). A driver that pages
   device-local memory (`VK_EXT_pageable_device_local_memory`, which the runtime enables where
   listed with its feature) may page memory out to make room instead, and then nothing overflows.
   Cost: the GPU reads and writes it across the bus, at the bus's speed, for as long as it lives;

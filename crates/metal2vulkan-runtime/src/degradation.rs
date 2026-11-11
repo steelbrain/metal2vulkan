@@ -965,7 +965,9 @@ degradations! {
         /// device-local memory type the resource takes had room for it, and it takes a type that
         /// is not device-local (`memory.rs`'s `overflow_candidates`), as Metal makes such a
         /// resource past a discrete GPU's memory rather than refuse it. Each such placement is
-        /// counted (`WorkCounts::device_memory_overflows`). A driver may instead page device-local
+        /// counted (`WorkCounts::device_memory_overflows`). A `Managed` no-copy buffer there,
+        /// whose GPU copy found no room in device-local memory, lies in the caller's pages as a
+        /// `Shared` one does (`managed_copy.rs`, `WorkCounts::managed_device_copies_in_place`). A driver may instead page device-local
         /// memory out to make room rather than fail the allocation
         /// (`VK_EXT_pageable_device_local_memory`, enabled where the device lists it with its
         /// feature); what it pages, it places, and nothing overflows.

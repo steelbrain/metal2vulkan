@@ -19,6 +19,10 @@
 //! - **Read-only pages** (a rebind over pages the process maps read-only): the GPU's writes are
 //!   dropped. A synchronize writes nothing to the pages, and the next command buffer reads the
 //!   pages' bytes, not the GPU's writes.
+//! - **Textures** over the buffer's bytes follow the device copy: their GPU reads take what was
+//!   copied in, and a `synchronize_resource` of one copies the GPU's writes out to the pages.
+//! - **Recovery** carries the buffer: its host copy made again over the same pages, its device
+//!   copy made on the new `VkDevice` and the pages copied in.
 //! - **Elsewhere, one copy.** A `Shared` no-copy buffer, and a `Managed` one on a device with
 //!   unified memory, lie in their pages.
 //!
@@ -29,10 +33,11 @@
 use super::blit_holds::{device, Scratch, WAIT};
 use super::host_ram_device::gate;
 use crate::{
-    BlitCommandEncoder, Buffer, CommandBufferStatus, CommandQueue, CpuCacheMode, Deallocator,
-    Device, HazardTrackingMode, HostBacking, HostMemory, ImportRequest, ResourceOptions,
-    ResourceRef, StorageMode, WorkCounts,
+    BlitCommandEncoder, BlitOption, Buffer, CommandBufferStatus, CommandQueue, CpuCacheMode,
+    Deallocator, Device, HazardTrackingMode, HostBacking, HostMemory, ImportRequest, Origin,
+    Region, ResourceOptions, ResourceRef, Size, StorageMode, TextureDescriptor, WorkCounts,
 };
+use metal2vulkan::metal::PixelFormat;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -648,4 +653,93 @@ fn a_recovery_carries_a_two_copy_buffer_with_an_import() {
 #[test]
 fn a_recovery_carries_a_two_copy_buffer_over_pages_no_import_maps() {
     recovery(Route::Pages);
+}
+
+/// The side of the texture leg's `RGBA8Unorm` texture: its rows tight, 256 bytes each.
+const SIDE: u64 = 64;
+
+/// A texture over a two-copy buffer's bytes follows the device copy: its GPU reads take the bytes
+/// copied in (at the making, by `did_modify_range`, by its own `replace_region`), and a
+/// `synchronize_resource` of it copies the GPU's writes out to the pages.
+fn texture(route: Route) {
+    let texels = SIDE * SIDE * 4;
+    let pages = Pages::new(BYTES);
+    pages.write_pattern();
+    let scratch = Scratch::new("managed-texture");
+    let Some(device) = two_copy_device(&scratch, "texture", route) else {
+        return;
+    };
+    let queue = device.new_command_queue().unwrap();
+    let ran = Ran::default();
+    let buffer = no_copy(&device, &pages, route, managed(), &ran);
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.resource_options = managed();
+    let texture = buffer.new_texture(&descriptor, 0, SIDE * 4).unwrap();
+    // The texture's texels as the GPU reads them.
+    let gpu_texels = || {
+        let target = device
+            .new_buffer(texels, ResourceOptions::shared())
+            .unwrap();
+        blit(&queue, |blit| {
+            blit.copy_from_texture_to_buffer(
+                &texture,
+                0,
+                0,
+                Origin::new(0, 0, 0),
+                Size::new(SIDE, SIDE, 1),
+                &target,
+                0,
+                SIDE * 4,
+                texels,
+                BlitOption::None,
+            )
+            .unwrap()
+        });
+        let contents = target.contents().unwrap();
+        // SAFETY: the target's bytes, which no command writes now.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), texels as usize) }.to_vec()
+    };
+    assert_eq!(gpu_texels(), pattern(BYTES)[..texels as usize]);
+    pages.write(0..texels, 0x33);
+    buffer.did_modify_range(0..texels).unwrap();
+    assert_eq!(gpu_texels(), vec![0x33; texels as usize], "{route:?}");
+    let row = vec![0x44; (SIDE * 4) as usize];
+    texture
+        .replace_region(Region::new_2d(0, 0, SIDE, 1), 0, 0, &row, SIDE * 4, 0)
+        .unwrap();
+    let seen = gpu_texels();
+    assert_eq!(seen[..row.len()], row, "{route:?}");
+    assert!(seen[row.len()..].iter().all(|&byte| byte == 0x33));
+    // The GPU's write reaches the pages at the texture's synchronize.
+    blit(&queue, |blit| {
+        blit.fill_buffer(&buffer, 0..texels, 0x55).unwrap();
+        blit.synchronize_resource(ResourceRef::Texture(&texture))
+            .unwrap();
+    });
+    assert_eq!(
+        pages.bytes()[..texels as usize],
+        vec![0x55; texels as usize]
+    );
+    let mut read_back = vec![0; texels as usize];
+    texture
+        .get_bytes(
+            &mut read_back,
+            SIDE * 4,
+            0,
+            Region::new_2d(0, 0, SIDE, SIDE),
+            0,
+            0,
+        )
+        .unwrap();
+    assert_eq!(read_back, vec![0x55; texels as usize]);
+}
+
+#[test]
+fn a_texture_over_a_two_copy_buffer_through_an_import_follows_its_device_copy() {
+    texture(Route::Import);
+}
+
+#[test]
+fn a_texture_over_a_two_copy_buffer_over_pages_no_import_maps_follows_its_device_copy() {
+    texture(Route::Pages);
 }

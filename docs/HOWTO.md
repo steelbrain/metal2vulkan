@@ -585,6 +585,22 @@ over the copy (its driver lays the linear image out at other pitches and makes n
 `DRM_FORMAT_MOD_LINEAR` image at the texture's pitch that the pooled memory's check passed, or
 either lies in memory of another type or alignment), or where the buffer's GPU writes are dropped and its bytes moved in their page.
 
+A `Managed` no-copy buffer on a device without unified memory is never such a copy: it is two
+copies, as on a Mac with a discrete GPU, the GPU's in device-local memory and the caller's pages
+(`HostBacking::DeviceCopy`; the runtime's guide, **Host memory without a copy**), and it holds
+the buffer's bytes of device-local memory for its life (`WorkCounts::managed_device_copy_bytes`).
+Its pages are imported as above, the gate asked, as the transfers' source and target; where the
+gate refuses, the device refuses the pointer or the import fails, they are reached through staging
+buffers instead (`managed_staging_bytes`, at most 256 MiB staged ahead, none once their work
+completed), no copy of them made and nothing compared at commit or completion. The GPU sees only
+the CPU writes `did_modify_range` names, and the CPU sees the GPU's only through a blit's
+`synchronize_resource`, as Metal's contract for `Managed` storage on such a Mac says, so a
+consumer that wrote the pages without calling `did_modify_range` (relying on a log of their
+writes) must call it. Pages the process maps read-only keep the GPU's writes out of them the same
+way: the pages are copied in again at the completion of each command buffer that used the
+buffer. A rebind whose import is not made, of a buffer whose first pages were imported, makes such
+a copy of the new pages for the import (FAST-PATHS.md, known gaps).
+
 ### Guest RAM imported whole
 
 A VMM whose device refuses views of guest pages made through dma-bufs (each import of scattered

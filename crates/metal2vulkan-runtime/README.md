@@ -358,13 +358,16 @@ after it, and 0 of 80 with the device dropped first
 - **Storage modes** keep Metal's meaning. `DeviceProperties::has_unified_memory` answers from the
   device type: yes for an integrated GPU or a CPU implementation, no for a discrete GPU. Without
   unified memory a `Managed` buffer has two copies, as on a Mac with a discrete GPU
-  (`did_modify_range` and a blit's `synchronize_resource` move the bytes), and a `Shared` resource
-  lies in host-cached system memory (announced once, `shared-in-system-memory`).
+  (`did_modify_range` and a blit's `synchronize_resource` move the bytes), a `Managed` no-copy
+  buffer's included (its CPU copy the caller's pages; **Host memory without a copy**, below), and
+  a `Shared` resource lies in host-cached system memory (announced once,
+  `shared-in-system-memory`).
 - **Past device-local memory.** Where no device-local memory type a `Private` buffer or heap, a
   texture's image or (without unified memory) a `Managed` buffer's own bytes takes has room, it
   lies in system memory, as Metal makes such resources past a discrete GPU's memory rather than refusing
   them (announced once, `device-memory-overflow`; counted in
-  `WorkCounts::device_memory_overflows`). Where the device lists
+  `WorkCounts::device_memory_overflows`); a `Managed` no-copy buffer then lies in the caller's
+  pages, as a `Shared` one does (`WorkCounts::managed_device_copies_in_place`). Where the device lists
   `VK_EXT_pageable_device_local_memory`, the runtime enables it and the driver may page memory out
   to make room instead. A resource Metal itself refuses (longer than `max_buffer_length`, past a
   texture's limits) is refused as before.
@@ -421,6 +424,21 @@ after it, and 0 of 80 with the device dropped first
   readable (a dma-buf's mapping among them); over pages not mapped readable it is refused. A
   rebind's textures follow it onto the copy. A buffer over exactly the bytes a live copy covers
   lies in that copy, as one over a live import's bytes lies in that import.
+  Without unified memory a `Managed` no-copy buffer is two copies instead
+  (`HostBacking::DeviceCopy`): the GPU's in device-local memory of the runtime's own, which every
+  command reads and writes, and the caller's pages, which `contents` answers. The pages are
+  copied in as the buffer is made, by `did_modify_range` (its range) and by a rebind (whole),
+  before any command of a command buffer committed after the call; a CPU write no
+  `did_modify_range` names is not seen by the GPU, as on a Mac with a discrete GPU. A blit's
+  `synchronize_resource` copies the GPU's copy out to the pages in its command buffer's order.
+  The copies run from an import of the pages where the device makes one, else (the gate refused
+  it, the device refused the pointer) through staging buffers held until their work completed,
+  at most 256 MiB staged ahead (`WorkCounts::managed_staging_bytes`): never through a copy of the
+  pages as well. Over pages the process maps read-only the GPU's writes are dropped: nothing is
+  copied out, and the pages are copied in again at the completion of each command buffer that
+  used the buffer (`managed_writes_undone`). A detach keeps the GPU's copy, which commands go on
+  reading and writing; `contents` answers `None` until a rebind. The device-local memory it holds
+  is counted in `managed_device_copy_bytes`.
   `CommandBuffer::used_resources` lists what a command buffer uses until it completes, so a
   program knows when it may take memory away. The pages under a no-copy object are unmapped only
   after the object goes and its keep-alive is dropped (or, given none, its deallocator ran), never
@@ -451,8 +469,10 @@ after it, and 0 of 80 with the device dropped first
   whose check did not
   pass), where the device's linear images cannot hold Metal's layout, and where the rows lie with
   bytes between them (but over a buffer whose maker declared them unobserved,
-  `BufferDescriptor::padding_unobserved`, below). On a discrete GPU, a `Managed` texture
-  over a no-copy buffer's bytes (not an IOSurface plane's) that only samples or reads, whose
+  `BufferDescriptor::padding_unobserved`, below). A texture over a two-copy `Managed` no-copy
+  buffer's bytes is over the GPU's copy, as over a `Managed` buffer of the runtime's own. On a
+  discrete GPU, a `Managed` texture over the bytes of a no-copy buffer that lies in its pages
+  (not an IOSurface plane's) that only samples or reads, whose
   policy takes the image in place, over memory that carries a log of its writes
   (`HostMemory::with_dirty_pages`), tracked and laid out as one copy, is instead such a copy in
   the device's memory, announced nowhere, whatever the check answered: the GPU's copy of the two
@@ -594,7 +614,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   them.
 - `Buffer::host_backing` (with `HostBacking`): what the GPU uses for a no-copy buffer's bytes now,
   or a no-copy heap's buffer's: the caller's pages, imported by their pointer, as dma-bufs or in a
-  guest RAM's chunk, or a copy of them (`copied-host-pages`), which Metal never makes; a rebind
+  guest RAM's chunk, a copy of them (`copied-host-pages`), which Metal never makes, or, for a
+  `Managed` one without unified memory, a copy in device-local memory (`DeviceCopy`); a rebind
   may change it ([HOWTO](../../docs/HOWTO.md#copied-host-buffers)).
 - `BufferDescriptor::padding_unobserved` (`with_padding_unobserved`): the maker of a buffer of
   the runtime's own memory declares that nothing reads the bytes between a texture's rows over it
@@ -772,7 +793,9 @@ meanwhile wait for it.
   of host pages costs its submissions nothing and that textures over such pages take in place
   what they take over the device's own memory, the blocks of pages the `Shared` and `Managed`
   (unified memory) buffers lie in, imported again on the new `VkDevice`. A no-copy buffer is
-  made again over the same pages, so it keeps its bytes and its pointer; its import gate, run
+  made again over the same pages, so it keeps its bytes and its pointer (a two-copy `Managed` one
+  makes its GPU copy again and copies the pages in: what the GPU wrote and no synchronize copied
+  out is lost, as a `Private` buffer's contents are); its import gate, run
   resolver and dma-buf source are asked again, on the thread that recovers, and must not call
   into the device. Its deallocator runs at its release once no `VkDevice` imports its pages. A
   `Private` buffer's contents are lost: it reads zero.

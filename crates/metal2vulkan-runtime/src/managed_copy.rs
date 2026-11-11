@@ -48,8 +48,9 @@
 //!   `Shared` one does (`read_only_view.rs`, `copied.rs`).
 //! - **Rebind and detach** (`rebind.rs`, `detach.rs`) are the host copy's: a detach lets go of
 //!   it, as a no-copy buffer's lets go of its pages, and keeps the device copy, which the GPU
-//!   reads and writes on; a rebind gives it the new pages, imported or not as at the making, and
-//!   copies them in whole. The import's own rebind and detach serve an import's.
+//!   reads and writes on; a rebind makes a new host copy of the new pages, as at the making (so
+//!   never a copy of them either), and copies them in whole. An import's detach is its own, as a
+//!   no-copy buffer's.
 //! - **Memory.** The device copy holds the buffer's bytes in device-local memory for its life
 //!   (`WorkCounts::managed_device_copy_bytes`); staging buffers live only until the submission
 //!   or command buffer that uses them completed (`WorkCounts::managed_staging_bytes`). Where no
@@ -421,9 +422,10 @@ impl CallerCopy {
         }
     }
 
-    /// `rebind_bytes_no_copy` of `buffer`: the host copy's pages replaced by `memory`, an
-    /// import's by its own rebind, pages no import maps by new ones made as the buffer's first
-    /// were; then the new pages copied in whole.
+    /// `rebind_bytes_no_copy` of `buffer`: a new host copy of `memory`, made as the buffer's
+    /// first was (an import, never a copy of the pages, or the pages alone), in place of the old,
+    /// which goes once no copy or command holds it, its deallocator then; then the new pages
+    /// copied in whole.
     ///
     /// # Safety
     ///
@@ -436,25 +438,17 @@ impl CallerCopy {
         keep_alive: Option<super::host_memory::KeepAlive>,
     ) -> Result<(), Error> {
         const CALL: &str = "rebind_bytes_no_copy";
-        match self.side() {
-            // SAFETY: the caller's contract.
-            Side::Import(import) => unsafe {
-                import.rebind_bytes_no_copy(memory, deallocator, keep_alive)?
-            },
-            Side::Pages(..) => {
-                let device = buffer.device();
-                let release = super::host_memory::HostRelease::new(deallocator, keep_alive);
-                let parts = memory.into_parts();
-                let release = release.of(parts.pointer, buffer.length());
-                let made = (CALL, buffer.length(), buffer.resource_options());
-                // SAFETY: the caller's contract.
-                let side = unsafe { device.caller_side(made, parts, release)? };
-                // The old pages go once no copy holds them: their deallocator in the call, where
-                // none does, as Metal runs it at the replace.
-                let old = std::mem::replace(&mut *lock(&self.side), side);
-                drop(old);
-            }
-        }
+        let device = buffer.device();
+        let release = super::host_memory::HostRelease::new(deallocator, keep_alive);
+        let parts = memory.into_parts();
+        let release = release.of(parts.pointer, buffer.length());
+        let made = (CALL, buffer.length(), buffer.resource_options());
+        // SAFETY: the caller's contract.
+        let side = unsafe { device.caller_side(made, parts, release)? };
+        // The old host copy goes once nothing holds it, after the lock: its deallocator in the
+        // call where nothing does, as Metal runs it at the replace.
+        let old = std::mem::replace(&mut *lock(&self.side), side);
+        drop(old);
         self.copy_in(buffer, 0..self.reach, true)
     }
 }
