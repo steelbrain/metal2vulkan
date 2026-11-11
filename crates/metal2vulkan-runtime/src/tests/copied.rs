@@ -8,8 +8,8 @@
 //! kernel's read refuses, is copied (where `/dev/udmabuf` opens).
 
 use crate::copied::{
-    merge_block, read_caller, tag, BaseBytes, Copied, CopiedBuffers, CopiesReached, FirstRead,
-    Held, NotCopied, READ_BACK_FROM, TAG_BLOCK,
+    merge_block, read_caller, runs_of, tag, BaseBytes, Copied, CopiedBuffers, CopiesReached,
+    FirstRead, Held, NotCopied, JOIN_GAP, READ_BACK_FROM, TAG_BLOCK,
 };
 use crate::dirty_pages::DirtyTally;
 use crate::resource::ResourceKey;
@@ -379,6 +379,21 @@ fn a_device_base_s_block_both_sides_changed_is_kept_on_the_host() {
     drop(copied);
     assert_eq!(buffers.base_bytes(), (0, 0));
     assert_eq!(buffers.base_host_blocks(), 0);
+}
+
+/// A read back copies runs of blocks, each joined with the next where at most [`JOIN_GAP`] blocks
+/// lie between them, and finds each block at its bytes' place among the runs copied one after
+/// another; a copy's last block is as long as it is.
+#[test]
+fn a_read_back_joins_runs_a_few_blocks_apart() {
+    let far = 4 + JOIN_GAP;
+    let last = far + 1 + JOIN_GAP + 1;
+    let length = last * TAG_BLOCK + 5;
+    let (runs, at) = runs_of(&[0, 1, 3, far, last], length);
+    assert_eq!(runs, [0..(far + 1) * TAG_BLOCK, last * TAG_BLOCK..length]);
+    let starts = [0, 1, 3, far].map(|block| block * TAG_BLOCK);
+    assert_eq!(at[..4], starts);
+    assert_eq!(at[4], (far + 1) * TAG_BLOCK);
 }
 
 /// A comparison that would read [`READ_BACK_FROM`] blocks or more of a base in the device's

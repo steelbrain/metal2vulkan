@@ -1711,10 +1711,9 @@ impl Sides<'_> {
             Fetch::Defer => return None,
             // SAFETY: the caller's.
             Fetch::Read(_) => unsafe { self.bytes.read(at, into) },
-            Fetch::ReadBack(deferred, bytes) => match deferred.binary_search(&index) {
-                // At its place among the blocks read back, each `TAG_BLOCK` bytes but the copy's
-                // last, which is last among them.
-                Ok(place) => into.copy_from_slice(&bytes[place * TAG_BLOCK..][..into.len()]),
+            Fetch::ReadBack(deferred, read) => match deferred.binary_search(&index) {
+                // At its place among the blocks read back ([`ReadBack`]).
+                Ok(place) => into.copy_from_slice(&read.bytes[read.at[place]..][..into.len()]),
                 // SAFETY: the caller's.
                 Err(_) => unsafe { self.bytes.read(at, into) },
             },
@@ -1816,8 +1815,8 @@ enum Fetch<'a> {
     /// The second pass of the blocks listed, in order: each read there by the host.
     Read(&'a [usize]),
     /// The second pass of the blocks listed, in order: each taken from the bytes the GPU copied
-    /// them into, at its place in the list times [`TAG_BLOCK`].
-    ReadBack(&'a [usize], &'a [u8]),
+    /// them into.
+    ReadBack(&'a [usize], ReadBack<'a>),
 }
 
 impl<'a> Fetch<'a> {
@@ -1830,6 +1829,20 @@ impl<'a> Fetch<'a> {
         }
     }
 }
+
+/// The bytes the GPU copied a second pass's blocks into ([`Fetch::ReadBack`]): each block's
+/// bytes at `bytes[at[place]..]`, its place that in the blocks' list.
+#[derive(Clone, Copy)]
+struct ReadBack<'a> {
+    bytes: &'a [u8],
+    at: &'a [usize],
+}
+
+/// The most blocks between two runs of blocks a second pass reads back that are copied with
+/// them, the two copied as one ([`runs_of`]): a region of a copy costs more than that many bytes
+/// of it (on the RX 7900 XTX's staging queue about 6.6 us a region of 1 KiB, on the RTX 5080
+/// Laptop GPU's about 2.5 us, where 16 KiB at their links' rates takes about 1.6 and 0.7 us).
+pub(crate) const JOIN_GAP: usize = 16;
 
 /// The fewest blocks of a base in the device's memory one comparison reads that it copies into
 /// host memory on the GPU, in one submission on the device's staging queue it waits for, rather
@@ -1853,19 +1866,28 @@ fn read_back_blocks() -> usize {
     READ_BACK_BLOCKS
 }
 
-/// The byte runs of the blocks `blocks` (in order) of a copy of `length` bytes, adjacent ones
-/// joined.
-fn runs_of(blocks: &[usize], length: usize) -> Vec<Range<usize>> {
+/// The byte runs a read back of the blocks `blocks` (in order) of a copy of `length` bytes copies,
+/// each run joined with the next where at most [`JOIN_GAP`] blocks lie between them (copied
+/// too, unread), and where each block's bytes land among the runs copied one after another.
+pub(crate) fn runs_of(blocks: &[usize], length: usize) -> (Vec<Range<usize>>, Vec<usize>) {
     let mut runs: Vec<Range<usize>> = Vec::new();
+    let mut at = Vec::with_capacity(blocks.len());
+    let mut before = 0;
     for &index in blocks {
-        let at = index * TAG_BLOCK;
-        let end = (at + TAG_BLOCK).min(length);
+        let start = index * TAG_BLOCK;
+        let end = (start + TAG_BLOCK).min(length);
         match runs.last_mut() {
-            Some(last) if last.end == at => last.end = end,
-            _ => runs.push(at..end),
+            Some(last) if last.end + JOIN_GAP * TAG_BLOCK >= start => last.end = end,
+            Some(last) => {
+                before += last.end - last.start;
+                runs.push(start..end);
+            }
+            None => runs.push(start..end),
         }
+        let first = runs.last().map_or(start, |run| run.start);
+        at.push(before + start - first);
     }
-    runs
+    (runs, at)
 }
 
 /// A comparison of `sides` in two passes, each `pass` with how it takes the base's bytes
@@ -1880,7 +1902,7 @@ fn two_passes(sides: Sides<'_>, mut pass: impl FnMut(Fetch<'_>) -> Tally) -> Tal
         return first;
     }
     let deferred = &first.deferred[..];
-    let runs = runs_of(deferred, sides.length);
+    let (runs, at) = runs_of(deferred, sides.length);
     let bytes: usize = runs.iter().map(|run| run.end - run.start).sum();
     let back = match deferred.len() >= read_back_blocks() {
         true => sides.bytes.read_back(&runs),
@@ -1888,7 +1910,13 @@ fn two_passes(sides: Sides<'_>, mut pass: impl FnMut(Fetch<'_>) -> Tally) -> Tal
     };
     let back = back.filter(|back| back.len() == bytes);
     let mut second = match &back {
-        Some(back) => pass(Fetch::ReadBack(deferred, back)),
+        Some(back) => pass(Fetch::ReadBack(
+            deferred,
+            ReadBack {
+                bytes: back,
+                at: &at,
+            },
+        )),
         None => pass(Fetch::Read(deferred)),
     };
     if back.is_some() {

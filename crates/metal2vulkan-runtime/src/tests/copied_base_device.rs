@@ -384,14 +384,15 @@ fn a_whole_written_device_base_is_read_back_by_the_gpu() {
 
 /// The cost of a comparison's reads of `n` blocks of a base in the device's memory that both
 /// sides changed, each read by the host against all read back through one copy on the staging
-/// queue, for `n` from 8 to 4096, each the median of three first merges back of fresh blocks of
-/// a 128 MiB copy, every other block (`COPIED-READ-BACK`); and 16, 64 and 651 after three seconds
-/// of the device idle, once each: what sets `copied.rs`'s `READ_BACK_BLOCKS`. Ignored: run it in
-/// release with `--ignored --nocapture`.
+/// queue, each the median of three first merges back of fresh blocks of a 256 MiB copy
+/// (`COPIED-READ-BACK`): every other block (whose runs a read back copies as one, `JOIN_GAP`),
+/// `n` from 8 to 4096; every 32nd (a region of the copy each), `n` from 8 to 256; and every other
+/// block, 16, 64 and 651 after three seconds of the device idle, once each: what sets
+/// `copied.rs`'s `READ_BACK_BLOCKS`. Ignored: run it in release with `--ignored --nocapture`.
 #[test]
 #[ignore = "a release-mode benchmark"]
 fn copied_read_back_bench() {
-    const BYTES: usize = 128 << 20;
+    const BYTES: usize = 256 << 20;
     let Some(device) = device() else {
         return;
     };
@@ -414,13 +415,17 @@ fn copied_read_back_bench() {
         device.copied_base(length)
     });
     assert_eq!(made, Ok(()));
-    // Fresh blocks, every other one, so no two read back are adjacent.
-    let mut next = 0usize;
-    let mut merge = |n: usize, read_back: bool, pages: &mut Vec<u8>, copy: &mut Vec<u8>| {
+    // Fresh blocks each merge: every other one from the first half's start, every 32nd from the
+    // second half's.
+    let half = BYTES / TAG_BLOCK / 2;
+    let mut next = [0usize, half];
+    let mut merge = |n: usize, stride: usize, read_back: bool, sides: (&mut [u8], &mut [u8])| {
+        let (pages, copy) = sides;
         READ_BACK_FROM.store(if read_back { 1 } else { usize::MAX }, Ordering::Relaxed);
+        let cursor = &mut next[usize::from(stride > 2)];
         for _ in 0..n {
-            let at = next * 2 * TAG_BLOCK;
-            next += 1;
+            let at = *cursor * TAG_BLOCK;
+            *cursor += stride;
             copy[at] = copy[at].wrapping_add(1);
             pages[at + 1] = pages[at + 1].wrapping_add(1);
         }
@@ -432,24 +437,28 @@ fn copied_read_back_bench() {
         assert_eq!(back, if read_back { n as u64 } else { 0 });
         took
     };
-    for n in [8, 16, 32, 64, 128, 256, 1024, 4096] {
-        let (mut host, mut back) = (Vec::new(), Vec::new());
-        for _ in 0..3 {
-            host.push(merge(n, false, &mut pages, &mut copy));
-            back.push(merge(n, true, &mut pages, &mut copy));
+    let sizes = [8, 16, 32, 64, 128, 256, 1024, 4096];
+    for (stride, sizes) in [(2, &sizes[..]), (32, &sizes[..6])] {
+        for &n in sizes {
+            let (mut host, mut back) = (Vec::new(), Vec::new());
+            for _ in 0..3 {
+                host.push(merge(n, stride, false, (&mut pages[..], &mut copy[..])));
+                back.push(merge(n, stride, true, (&mut pages[..], &mut copy[..])));
+            }
+            host.sort_by(f64::total_cmp);
+            back.sort_by(f64::total_cmp);
+            eprintln!(
+                "COPIED-READ-BACK {named}, {n} blocks, every {stride}: host reads {:.2} ms, read \
+                 back {:.2} ms",
+                host[1], back[1],
+            );
         }
-        host.sort_by(f64::total_cmp);
-        back.sort_by(f64::total_cmp);
-        eprintln!(
-            "COPIED-READ-BACK {named}, {n} blocks: host reads {:.2} ms, read back {:.2} ms",
-            host[1], back[1],
-        );
     }
     for n in [16, 64, 651] {
         std::thread::sleep(Duration::from_secs(3));
-        let host = merge(n, false, &mut pages, &mut copy);
+        let host = merge(n, 2, false, (&mut pages[..], &mut copy[..]));
         std::thread::sleep(Duration::from_secs(3));
-        let back = merge(n, true, &mut pages, &mut copy);
+        let back = merge(n, 2, true, (&mut pages[..], &mut copy[..]));
         eprintln!(
             "COPIED-READ-BACK {named}, {n} blocks after 3 s idle: host reads {host:.2} ms, read \
              back {back:.2} ms",
