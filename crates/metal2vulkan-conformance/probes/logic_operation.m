@@ -106,7 +106,8 @@ static void set_private(id o, const char *name, unsigned long long v) {
   }
 }
 
-typedef enum { UN, SN, UI, SI, HU } Kind;
+// UN unorm, SN snorm, UI uint, SI sint, HU packed 16-bit unorm, W16 unorm operated on 16-bit codes.
+typedef enum { UN, SN, UI, SI, HU, W16 } Kind;
 typedef struct {
   int shift, bits;  // bits 0: the format lacks the channel
 } Field;
@@ -125,8 +126,8 @@ static const Fmt kFormats[] = {
     {"A8Unorm", MTLPixelFormatA8Unorm, 1, UN, {{0, 0}, {0, 0}, {0, 0}, {0, 8}}},
     {"R16Unorm", MTLPixelFormatR16Unorm, 2, UN, {{0, 16}, {0, 0}, {0, 0}, {0, 0}}},
     {"RGBA16Unorm", MTLPixelFormatRGBA16Unorm, 8, UN, {{0, 16}, {16, 16}, {32, 16}, {48, 16}}},
-    {"RGB10A2Unorm", MTLPixelFormatRGB10A2Unorm, 4, UN, {{0, 10}, {10, 10}, {20, 10}, {30, 2}}},
-    {"BGR10A2Unorm", MTLPixelFormatBGR10A2Unorm, 4, UN, {{20, 10}, {10, 10}, {0, 10}, {30, 2}}},
+    {"RGB10A2Unorm", MTLPixelFormatRGB10A2Unorm, 4, W16, {{0, 10}, {10, 10}, {20, 10}, {30, 2}}},
+    {"BGR10A2Unorm", MTLPixelFormatBGR10A2Unorm, 4, W16, {{20, 10}, {10, 10}, {0, 10}, {30, 2}}},
     {"RGBA8Snorm", MTLPixelFormatRGBA8Snorm, 4, SN, {{0, 8}, {8, 8}, {16, 8}, {24, 8}}},
     {"RG8Snorm", MTLPixelFormatRG8Snorm, 2, SN, {{0, 8}, {8, 8}, {0, 0}, {0, 0}}},
     {"RG16Snorm", MTLPixelFormatRG16Snorm, 4, SN, {{0, 16}, {16, 16}, {0, 0}, {0, 0}}},
@@ -206,7 +207,8 @@ static uint32_t src_code(Kind kind, int bits, uint32_t x) {
     case HU:
       v = (double)(_Float16)f;
       // fall through
-    case UN: {
+    case UN:
+    case W16: {
       if (isnan(v)) v = 0;
       v = v < 0 ? 0 : v > 1 ? 1 : v;
       if (gNative) return (uint32_t)rintf((float)v * (float)mask_of(bits));
@@ -274,6 +276,16 @@ static uint64_t expected(const Fmt *f, int raw, const uint32_t *src[], int prims
     if (!fd.bits || !(wmask & kMaskBit[c])) continue;
     uint32_t d = field(stored, fd);
     for (int p = 0; p < prims; p++) {
+      if (f->kind == W16) {
+        // The stored code widened to 16 bits, the source's 16-bit code, their operation, and the
+        // result narrowed back to the channel's code, each rounded to nearest (no ties: 65535
+        // and the channel's largest code are odd).
+        double max = (double)mask_of(fd.bits);
+        uint32_t d16 = (uint32_t)rint((double)d * 65535.0 / max);
+        uint32_t r16 = operate(raw, src_code(W16, 16, src[p][c]), d16, 16);
+        d = (uint32_t)rint((double)r16 * max / 65535.0);
+        continue;
+      }
       d = snorm_lowest(f->kind, fd.bits, d);
       d = operate(raw, src_code(f->kind, fd.bits, src[p][c]), d, fd.bits);
       d = snorm_lowest(f->kind, fd.bits, d);
