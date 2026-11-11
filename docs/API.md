@@ -1824,8 +1824,9 @@ bound.
   multisample texture whose image lies in memory of its own. Cost: its texels are copied into an
   image before each use and back after each write (over a buffer's bytes but a tracked private
   buffer's, kept before a write and merged back after it; over a tracked private buffer of the
-  runtime's own, copied in again only once another command buffer wrote it). That buffer is a
-  tracked `Private` or `Memoryless` one the runtime made, of no heap and over none of the caller's
+  runtime's own, copied in again only once another command buffer wrote it; a tiled texture of
+  more than one level, copied in only at its first use and the first after each did_modify_data,
+  and never back). That buffer is a tracked `Private` or `Memoryless` one the runtime made, of no heap and over none of the caller's
   memory, whose `VkBuffer` was never handed out; a command buffer whose commands may reach memory
   no use names (a function that reaches buffers through their addresses, work resolved from
   records) also lets go of every such image, and `WorkCounts::shadow_copies_in_skipped_by_standing`

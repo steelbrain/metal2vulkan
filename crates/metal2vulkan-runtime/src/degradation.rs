@@ -293,7 +293,9 @@ degradations! {
             "its texels are copied into an image before each use and back after each write \
              (over a buffer's bytes but a tracked private buffer's, kept before a write and merged \
              back after it; over a tracked private buffer of the runtime's own, copied in again \
-             only once another command buffer wrote it)";
+             only once another command buffer wrote it; a tiled texture of more than one level, \
+             copied in only at its first use and the first after each did_modify_data, and never \
+             back)";
         /// A texture buffer is viewed through a staging buffer: its texels start where the
         /// device views none (`minTexelBufferOffsetAlignment`), or run past its buffer's length,
         /// where its staging buffer is its tail.
