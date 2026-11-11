@@ -1185,15 +1185,22 @@ pub(super) fn tiling_lack(
 /// format (a texture of `pixelFormatView` usage: `MUTABLE_FORMAT` without a list), each format
 /// the runtime views a texture of a pixel format as for the plan's usages (`view_formats`) that
 /// is compatible with the image's, of every pixel format: the device's own table of those
-/// (`ImageFacts::any_views`), in `Format` order.
-pub(super) fn viewed_formats(plan: &ImagePlan, facts: &ImageFacts) -> Vec<Format> {
-    if !plan.flags.contains(ImageCreateFlags::MUTABLE_FORMAT) || !plan.view_formats.is_empty() {
-        return plan.view_formats.clone();
-    }
-    (facts.any_views.of(plan.usage, facts.profile).iter())
-        .copied()
-        .filter(|&format| format != plan.format && compatible(plan.format, format, true))
-        .collect()
+/// (`ImageFacts::any_views`), in `Format` order. Read in place, with no list made: a heap
+/// texture's plan asks them at each texture whose image is linear (`texture/heap.rs`).
+pub(super) fn viewed_formats<'a>(
+    plan: &'a ImagePlan,
+    facts: &ImageFacts<'a>,
+) -> impl Iterator<Item = Format> + 'a {
+    let listed =
+        !plan.flags.contains(ImageCreateFlags::MUTABLE_FORMAT) || !plan.view_formats.is_empty();
+    let (list, any): (&[Format], &[Format]) = match listed {
+        true => (&plan.view_formats, &[]),
+        false => (&[], facts.any_views.of(plan.usage, facts.profile)),
+    };
+    let any = any.iter().copied();
+    (list.iter().copied()).chain(
+        any.filter(move |&format| format != plan.format && compatible(plan.format, format, true)),
+    )
 }
 
 /// Whether a linear image of `plan` fits `limits`, the device's image limits for it
