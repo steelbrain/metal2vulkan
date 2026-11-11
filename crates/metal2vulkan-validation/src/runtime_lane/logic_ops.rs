@@ -309,17 +309,7 @@ impl Lane {
     /// color its own way, `PrecisionNote::NativeLogicOperation` where Vulkan's `logicOp` operates
     /// on a 10-bit format's own codes.
     fn records(&self, pf: PixelFormat, blended: bool, raw: u64, note: PrecisionNote) -> bool {
-        let compiled = self
-            .device
-            .compile_device()
-            .compile_render_pipeline(
-                &self.descriptor(pf, blended, Some(raw)),
-                &Budget::standard(),
-            )
-            .unwrap();
-        compiled.stages.iter().any(|stage| {
-            stage.stage == vk::ShaderStage::FRAGMENT && stage.precision_notes.contains(&note)
-        })
+        self.descriptor_records(&self.descriptor(pf, blended, Some(raw)), note)
     }
 
     /// [`Lane::pipeline`]'s descriptor.
@@ -417,6 +407,78 @@ impl Lane {
             )
             .unwrap();
         out
+    }
+
+    /// One pass into a `pf` target whose every texel holds the bytes `stored`, loaded, drawing
+    /// through `pipeline` with buffer 0 holding `color`'s bytes: the first texel's bytes.
+    fn draw_loaded(
+        &self,
+        pf: PixelFormat,
+        pipeline: &RenderPipelineState,
+        color: &[u8],
+        stored: &[u8],
+    ) -> Vec<u8> {
+        let texel = stored.len();
+        let mut d = TextureDescriptor::texture_2d(pf, SIDE, SIDE, false);
+        d.usage = TextureUsage::RENDER_TARGET;
+        d.resource_options = ResourceOptions::shared();
+        let target = self.device.new_texture(&d).unwrap();
+        let texels = stored.repeat((SIDE * SIDE) as usize);
+        target
+            .replace_region(
+                Region::new_2d(0, 0, SIDE, SIDE),
+                0,
+                0,
+                &texels,
+                SIDE * texel as u64,
+                0,
+            )
+            .unwrap();
+        let color = buffer_with(&self.device, color).unwrap();
+        let mut pass = RenderPassDescriptor::new();
+        let a = &mut pass.color_attachments[0];
+        a.texture = Some(target.clone());
+        a.load_action = LoadAction::Load;
+        a.store_action = StoreAction::Store;
+        let command_buffer = self.queue.command_buffer().unwrap();
+        let mut e = command_buffer.render_command_encoder(&pass).unwrap();
+        e.set_render_pipeline_state(pipeline).unwrap();
+        e.set_fragment_buffer(Some(&color), 0, 0).unwrap();
+        e.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)
+            .unwrap();
+        e.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        let mut out = vec![0u8; texel];
+        target
+            .get_bytes(
+                &mut out,
+                SIDE * texel as u64,
+                0,
+                Region::new_2d(0, 0, 1, 1),
+                0,
+                0,
+            )
+            .unwrap();
+        out
+    }
+
+    /// Whether `descriptor`'s fragment stage records `note`, as the device's compile layer
+    /// compiles it.
+    fn descriptor_records(
+        &self,
+        descriptor: &RenderPipelineDescriptor,
+        note: PrecisionNote,
+    ) -> bool {
+        let compiled = self
+            .device
+            .compile_device()
+            .compile_render_pipeline(descriptor, &Budget::standard())
+            .unwrap();
+        compiled.stages.iter().any(|stage| {
+            stage.stage == vk::ShaderStage::FRAGMENT && stage.precision_notes.contains(&note)
+        })
     }
 }
 
@@ -644,5 +706,269 @@ fn the_logic_operation_beside_a_depth_and_stencil_attachment_is_metal_s() {
         drop(lane);
     }
     eprintln!("the consumer's xor stores Metal's texel on {seen:?} (name, logicOp)");
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// How a draw's channel compares with Metal's in the signed and the integer tests below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Answer {
+    /// Metal's code.
+    Metal,
+    /// A signed channel the draw does not write keeps its lowest code, where Metal stores the
+    /// code above it (the same -1).
+    KeptLowest,
+    /// Vulkan's operation on the stored lowest code itself, where Metal reads it as the code
+    /// above.
+    RawLowest,
+    /// The operation of the output's low bits, where Metal saturates the output first.
+    LowBits,
+    /// None of these.
+    Other,
+}
+
+/// Run `each` on the lane's device, and where it has `logicOp`, then on the device with the
+/// feature withheld, one device at a time.
+fn each_lane(messages: &Messages, cache: &ScratchCache, mut each: impl FnMut(&Lane)) {
+    let lane = Lane::new(messages, cache, false);
+    let has = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+    each(&lane);
+    drop(lane);
+    if has {
+        let withheld = Lane::new(messages, cache, true);
+        each(&withheld);
+        drop(withheld);
+    }
+}
+
+/// The form `lane` draws an operation other than copy and no-op in.
+fn form(lane: &Lane) -> &'static str {
+    let has = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+    match (has, orders_fetch(&lane.device)) {
+        (true, _) => "Vulkan's logicOp",
+        (false, true) => "the fragment function's operation",
+        (false, false) => "no operation but copy and no-op",
+    }
+}
+
+/// `RGBA8Snorm` texels holding the lowest code, 0x80, in every channel, drawn [`DRAWN_SIGNED`]
+/// under xor (raw 10), equivalence (raw 11) and no-op (raw 4), every channel written and red and
+/// blue alone. Metal reads the lowest code as the code above it, 0x81, stores an operation's
+/// result of the lowest code as 0x81, and stores a channel the draw does not write (outside the
+/// write mask, and every channel under no-op) as 0x81 too (probe `logic_operation`'s `snorm` and
+/// `masks` on an Apple M3 Max under macOS 27.0.1). Each channel is counted as Metal's code, the
+/// lowest code kept at a channel the draw does not write, or Vulkan's operation on the lowest code
+/// itself, which only a pipeline of Vulkan's `logicOp` may store, and which records
+/// `PrecisionNote::NativeLogicOperation`; any other code fails.
+#[test]
+fn the_logic_operation_over_a_signed_channel_s_lowest_code() {
+    use metal2vulkan::metal::ColorWriteMask;
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let color: Vec<u8> = DRAWN_SIGNED.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let lowest = 0x80u32;
+    let mut summaries = Vec::new();
+    let mut wrong = Vec::new();
+    each_lane(&messages, &cache, |lane| {
+        let name = lane.device.name().to_owned();
+        let form = form(lane);
+        let vulkan = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+        let mut counts = std::collections::BTreeMap::<(u64, bool, Answer), usize>::new();
+        let mut refused = 0usize;
+        for raw in [10u64, 11, 4] {
+            for masked in [false, true] {
+                let mut d = lane.descriptor(PixelFormat::RGBA8Snorm, false, Some(raw));
+                if masked {
+                    if let Some(a) = d.color_attachments[0].as_mut() {
+                        a.write_mask = ColorWriteMask::RED.union(ColorWriteMask::BLUE);
+                    }
+                }
+                let pipeline = match lane
+                    .device
+                    .new_render_pipeline_state(&d, &PipelineOptions::default())
+                {
+                    Ok(p) => p,
+                    Err(Error::Unsupported(u)) => {
+                        eprintln!("{name} ({form}): raw {raw} masked {masked} refused: {u:?}");
+                        refused += 1;
+                        continue;
+                    }
+                    Err(e) => panic!("{name}: raw {raw} masked {masked}: {e}"),
+                };
+                let noted = lane.descriptor_records(&d, PrecisionNote::NativeLogicOperation);
+                let got = lane.draw_loaded(PixelFormat::RGBA8Snorm, &pipeline, &color, &[0x80; 4]);
+                for (c, &byte) in got.iter().enumerate() {
+                    let written = raw != 4 && (!masked || c == 0 || c == 2);
+                    let s = code(f64::from(DRAWN_SIGNED[c]), 8, true);
+                    let up = |r: u32| if r == lowest { lowest + 1 } else { r };
+                    let metal = match written {
+                        true => up(operate(raw, s, lowest + 1, 8)),
+                        false => lowest + 1,
+                    };
+                    let held = u32::from(byte);
+                    let answer = if held == metal {
+                        Answer::Metal
+                    } else if !written && held == lowest {
+                        Answer::KeptLowest
+                    } else if written && vulkan && noted && held == operate(raw, s, lowest, 8) {
+                        Answer::RawLowest
+                    } else {
+                        Answer::Other
+                    };
+                    if answer == Answer::Other {
+                        wrong.push(format!(
+                            "{name} ({form}): raw {raw} masked {masked} channel {c}: {held:#04x}, \
+                             Metal {metal:#04x}, noted {noted}"
+                        ));
+                    }
+                    *counts.entry((raw, masked, answer)).or_insert(0) += 1;
+                }
+            }
+        }
+        summaries.push(format!(
+            "{name} ({form}): channels by (operation, masked, answer): {counts:?}; {refused} refused"
+        ));
+    });
+    eprintln!("SNORM-LOWEST\n{}", summaries.join("\n"));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// The descriptor of the integer fixture's (`library`'s) fill of `pf`, signed where `signed`,
+/// under operation `raw`.
+fn integer_descriptor(
+    library: &Library,
+    pf: PixelFormat,
+    signed: bool,
+    raw: u64,
+) -> RenderPipelineDescriptor {
+    let function = |name: &str| {
+        StageSource::Function(
+            library
+                .new_function_with_name(name)
+                .unwrap()
+                .function_descriptor(),
+        )
+    };
+    let mut d = RenderPipelineDescriptor::new(function("lit_vertex"));
+    d.fragment = Some(function(if signed { "lit_fill_i" } else { "lit_fill_u" }));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(pf));
+    d.private.logic_operation_enabled = true;
+    d.private.logic_operation = raw;
+    d
+}
+
+/// Integer attachments under xor (raw 10) and and (raw 6) of outputs past their channels' range
+/// (`RGBA8Uint`, `RGBA8Sint`, `R16Uint`, `RG16Sint`), over texels of 0x5a bytes. Metal saturates
+/// each output to the channel's range before the operation (probe `logic_operation` on an Apple M3
+/// Max under macOS 27.0.1), which the fragment function's operation does. Vulkan converts an
+/// integer output to the attachment's bit depth and leaves a value the format cannot represent
+/// undefined (the Fragment Output Interface: "Any value that cannot be represented in the
+/// attachment's format is undefined"), so Vulkan's `logicOp` operates on whatever its device makes
+/// of it: each channel is counted as Metal's code, the operation of the output's low bits, or
+/// another code, and only a pipeline of Vulkan's `logicOp` may store either of those two.
+#[test]
+fn the_logic_operation_of_an_integer_output_past_the_channel_s_range() {
+    let messages = Messages::default();
+    let cache = ScratchCache::new().unwrap();
+    let cases: [(PixelFormat, bool, [i64; 4], [u32; 4]); 4] = [
+        (
+            PixelFormat::RGBA8Uint,
+            false,
+            [300, 65543, 0xffff_ffff, 200],
+            [8; 4],
+        ),
+        (
+            PixelFormat::RGBA8Sint,
+            true,
+            [-200, 300, -100_000, 100],
+            [8; 4],
+        ),
+        (
+            PixelFormat::R16Uint,
+            false,
+            [70_000, 0, 0, 0],
+            [16, 0, 0, 0],
+        ),
+        (
+            PixelFormat::RG16Sint,
+            true,
+            [-40_000, 40_000, 0, 0],
+            [16, 16, 0, 0],
+        ),
+    ];
+    let bitcode = llvm_assemble(&engine_dir().join("logic_integer_targets.ll")).unwrap();
+    let mut summaries = Vec::new();
+    let mut wrong = Vec::new();
+    each_lane(&messages, &cache, |lane| {
+        let name = lane.device.name().to_owned();
+        let form = form(lane);
+        let vulkan = lane.device.enabled().features.contains(&VkFeature::LogicOp);
+        let library = lane.device.new_library_with_air(&bitcode).unwrap();
+        let mut counts = std::collections::BTreeMap::<(String, Answer), usize>::new();
+        let mut refused = 0usize;
+        for (pf, signed, values, bits) in cases {
+            for raw in [10u64, 6] {
+                let d = integer_descriptor(&library, pf, signed, raw);
+                let pipeline = match lane
+                    .device
+                    .new_render_pipeline_state(&d, &PipelineOptions::default())
+                {
+                    Ok(p) => p,
+                    Err(Error::Unsupported(u)) => {
+                        eprintln!("{name} ({form}): {pf:?} raw {raw} refused: {u:?}");
+                        refused += 1;
+                        continue;
+                    }
+                    Err(e) => panic!("{name}: {pf:?} raw {raw}: {e}"),
+                };
+                let color: Vec<u8> = values
+                    .iter()
+                    .flat_map(|&v| (v as u32).to_le_bytes())
+                    .collect();
+                let texel = bits.iter().map(|&b| b as usize / 8).sum::<usize>();
+                let got = lane.draw_loaded(pf, &pipeline, &color, &vec![0x5a; texel]);
+                let mut shift = 0usize;
+                for (c, &b) in bits.iter().enumerate().filter(|&(_, &b)| b > 0) {
+                    let mask = (1u64 << b) as u32 - 1;
+                    let mut held = 0u32;
+                    for i in 0..(b as usize / 8) {
+                        held |= u32::from(got[shift + i]) << (8 * i);
+                    }
+                    shift += b as usize / 8;
+                    let stored = 0x5a5a_5a5a & mask;
+                    let saturated = match signed {
+                        true => {
+                            let half = 1i64 << (b - 1);
+                            values[c].clamp(-half, half - 1) as u32 & mask
+                        }
+                        false => (values[c] as u64).min(u64::from(mask)) as u32,
+                    };
+                    let metal = operate(raw, saturated, stored, b);
+                    let low = operate(raw, values[c] as u32 & mask, stored, b);
+                    let answer = if held == metal {
+                        Answer::Metal
+                    } else if vulkan && held == low {
+                        Answer::LowBits
+                    } else if vulkan {
+                        Answer::Other
+                    } else {
+                        wrong.push(format!(
+                            "{name} ({form}): {pf:?} raw {raw} channel {c}: {held:#x}, Metal \
+                             {metal:#x}"
+                        ));
+                        Answer::Other
+                    };
+                    *counts
+                        .entry((format!("{pf:?} raw {raw}"), answer))
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+        summaries.push(format!(
+            "{name} ({form}): channels by (draw, answer): {counts:?}; {refused} refused"
+        ));
+    });
+    eprintln!("INTEGER-RANGE\n{}", summaries.join("\n"));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     layer_reported_nothing_at_all(&messages);
 }
