@@ -207,7 +207,6 @@ fn imported_memory_is_host_visible_and_coherent_of_the_storage_mode_s_class() {
     assert!(candidates(&types, 0b10000, MemoryClass::Shared, false).is_empty());
 }
 
-#[cfg(unix)]
 /// A no-copy object made a copy of its pages as their import failed names the failure in its
 /// announcement (`copied-host-pages`): pages the runtime kept from the driver as the kernel cannot
 /// pin them (`RuntimeDriverDefect::UnpinnablePagesBreakHostMemory`), and whether a source of their
@@ -244,6 +243,7 @@ fn a_copy_after_a_failed_import_names_the_failure() {
     assert!(!of_dma_bufs.contains(defect), "{of_dma_bufs}");
 }
 
+#[cfg(unix)]
 #[test]
 fn the_host_page_is_known_on_unix() {
     let page = host_page().unwrap();
