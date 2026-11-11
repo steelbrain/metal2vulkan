@@ -8,12 +8,13 @@
 //! prefers it (`prefersDedicatedAllocation`).
 //!
 //! For each handle type, the device's answers are asked apart from the runtime and printed
-//! (`EXPORT-DEDICATION`): of a buffer of the runtime's usage, whether the handle type is
-//! exportable, only so, and preferred or required dedicated; of a linear [`SIDE`] squared
-//! `R8_UNORM` image of a sampled texture's usage made for the handle type, the same. Then an
-//! exportable `Shared` buffer of [`SIDE`] squared bytes is made and exported: dedicated exactly
-//! where the buffer's answers require it. A texture over it, `R8Unorm` rows [`SIDE`] bytes apart,
-//! is asked for once the device's in-place check answered: where the buffer's memory is shared and
+//! (`EXPORT-DEDICATION`): of a buffer of the runtime's usage and [`LENGTH`] bytes, whether the
+//! handle type is exportable, only so, and preferred or required dedicated; of a linear [`SIDE`]
+//! squared `R8_UNORM` image of a sampled texture's usage made for the handle type, the same. Then
+//! an exportable `Shared` buffer of [`LENGTH`] bytes is made and exported: dedicated exactly where
+//! the buffer's answers require it. A texture over its first bytes, `R8Unorm` rows [`SIDE`] bytes
+//! apart, is asked for once the device's in-place check answered: where the buffer's memory is
+//! shared and
 //! the image's answers neither require a dedicated allocation nor export only so, an image in place
 //! (`TexturePlacement::NotHostPages`), no shadow counted, that reads what the buffer holds. Every
 //! placement, the shadows counted and the check's notes of the class are printed.
@@ -31,6 +32,11 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 
 /// The side of the texture, and the bytes of each of its rows.
 const SIDE: u64 = 1024;
+
+/// The exportable buffer's bytes: a 3840 x 2160 NV12 picture's, the consumer's decoded frame. The
+/// driver's preference follows the size: an RTX 3090 (NVIDIA 620.70.06) prefers no dedicated
+/// allocation for an exportable buffer of 1 MiB, and prefers one for the in-place check's of 40 MiB.
+const LENGTH: u64 = 3840 * 2160 * 3 / 2;
 
 /// What a device answers of exporting memory of one handle type from a resource.
 struct Dedication {
@@ -70,7 +76,7 @@ fn handle(export: MemoryExport) -> vk::ExternalMemoryHandleTypeFlags {
     }
 }
 
-/// What `device` answers of a buffer of the runtime's usage, `SIDE` squared bytes, whose memory
+/// What `device` answers of a buffer of the runtime's usage, [`LENGTH`] bytes, whose memory
 /// it exports as `handle`: asked, and the buffer made for its requirements and destroyed.
 fn buffer_dedication(device: &Device, handle: vk::ExternalMemoryHandleTypeFlags) -> Dedication {
     let shared = device.shared();
@@ -97,7 +103,7 @@ fn buffer_dedication(device: &Device, handle: vk::ExternalMemoryHandleTypeFlags)
     let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
     let info = shared.sharing().buffer(
         vk::BufferCreateInfo::default()
-            .size(SIDE * SIDE)
+            .size(LENGTH)
             .usage(usage)
             .push_next(&mut external),
     );
@@ -241,7 +247,7 @@ fn an_exportable_buffer_is_dedicated_only_where_required_and_its_texture_lies_in
     let name = device.name().to_owned();
     for export in [MemoryExport::OpaqueFd, MemoryExport::DmaBuf] {
         let descriptor =
-            BufferDescriptor::new(SIDE * SIDE, ResourceOptions::shared(), BufferContents::Zero)
+            BufferDescriptor::new(LENGTH, ResourceOptions::shared(), BufferContents::Zero)
                 .with_exported_as(export);
         let buffer = match device.new_buffer_with_descriptor(descriptor) {
             Ok(buffer) => buffer,
