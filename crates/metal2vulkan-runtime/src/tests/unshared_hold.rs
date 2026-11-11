@@ -8,7 +8,7 @@
 //!   the oldest one's run so far counts against its own expected run alone; a batch may go while
 //!   less than the budget is left, else it waits for the next completion, or for the time the
 //!   oldest one's expected run brings the work left under the budget; a run several batches
-//!   complete in is shared among them.
+//!   complete in is shared among the other queues' batches, an unshared queue's taking none.
 
 use crate::unshared_hold::{Expected, Flies, Flight, Room, BUDGET};
 use std::sync::Arc;
@@ -115,7 +115,7 @@ fn a_batch_goes_while_less_than_the_budget_is_left_ahead() {
 }
 
 #[test]
-fn a_run_several_batches_complete_in_is_shared_among_them() {
+fn a_run_several_batches_complete_in_is_shared_among_the_other_queues_batches() {
     let first = queue(MS);
     let second = queue(MS);
     let mut flight = Flight::default();
@@ -124,12 +124,42 @@ fn a_run_several_batches_complete_in_is_shared_among_them() {
     flight.taken(3, Flies::Other(&second));
     flight.taken(4, Flies::Other(&second));
     flight.completed(3, 9 * MS);
-    assert_eq!(first.nanos(), 3 * MS);
-    assert_eq!(second.nanos(), 3 * MS);
+    assert_eq!(
+        first.nanos(),
+        4 * MS + MS / 2,
+        "the unshared batch took no share"
+    );
+    assert_eq!(second.nanos(), 4 * MS + MS / 2);
     assert_eq!(flight.len(), 1, "the fourth is still in flight");
     // Its own expected run was taken at its submission: 1 ms, under the budget.
     assert_eq!(flight.ahead(0), Room::Go);
     flight.completed(4, MS);
     assert_eq!(flight.len(), 0);
     assert_eq!(flight.ahead(0), Room::Go);
+}
+
+/// An application's 30 ms batch and the compositor's light one behind it, seen complete together:
+/// the application's queue keeps its 30 ms, so its next batch goes only near the end of the one
+/// ahead, and a compositor's command buffer waits behind about one of them, not two.
+#[test]
+fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run() {
+    let app = queue(30 * MS);
+    let mut flight = Flight::default();
+    flight.taken(1, Flies::Other(&app));
+    flight.taken(2, Flies::Unshared);
+    flight.completed(2, 30 * MS);
+    assert_eq!(app.nanos(), 30 * MS);
+    flight.taken(3, Flies::Other(&app));
+    assert_eq!(
+        flight.ahead(14 * MS),
+        Room::Hold {
+            after: Some(14 * MS + 1)
+        },
+        "half way through the next one, no other goes"
+    );
+    // An unshared batch seen complete alone updates nothing.
+    flight.taken(4, Flies::Unshared);
+    flight.completed(3, 30 * MS);
+    flight.completed(4, MS / 10);
+    assert_eq!(app.nanos(), 30 * MS);
 }

@@ -28,7 +28,7 @@
 //!   once by a longer one and halved toward a shorter one, so a queue whose batches got shorter
 //!   takes its new length within a few batches, while one long batch counts at once. A queue with
 //!   none seen yet is expected to run [`BUDGET`]. A run several batches complete in shares among
-//!   them.
+//!   the other queues' batches among them; an unshared queue's takes no share.
 //! - **When it goes.** A pass that holds a batch so leaves the scheduler's thread waiting for its
 //!   `VkQueue`'s next completion (a gate, `scheduler/mod.rs`'s `Awaits`), and, where the oldest
 //!   batch's expected run still covers it, for the time the work left ahead falls under the
@@ -136,18 +136,20 @@ impl Flight {
     }
 
     /// The host saw the timeline reach `value`, `run` nanoseconds after the oldest batch in flight
-    /// became so: each batch at or below `value` leaves, its queue's expected run updated with its
-    /// share of `run`.
+    /// became so: each batch at or below `value` leaves, and each other queue's among them updates
+    /// its queue's expected run with an equal share of `run`. An unshared queue's batch takes no
+    /// share: a compositor's light batch is seen complete with the application's batch ahead of
+    /// it, and a share of that batch's run would halve the application's expected one.
     pub(crate) fn completed(&mut self, value: u64, run: u64) {
         let done = self
             .batches
             .iter()
             .take_while(|batch| batch.value <= value)
             .count();
-        if done == 0 {
-            return;
-        }
-        let share = run / done as u64;
+        let others = (self.batches.iter().take(done))
+            .filter(|batch| batch.of.is_some())
+            .count();
+        let share = run / others.max(1) as u64;
         for batch in self.batches.drain(..done) {
             self.expected -= batch.expected;
             if let Some(of) = batch.of {
