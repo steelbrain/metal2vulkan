@@ -708,6 +708,10 @@ pub(super) struct State {
     /// of the making's own (a device test's injection, `tests::deferred_calls`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     making_failure_injected: Option<Error>,
+    /// The error its next host step's recording answers, in place of the recording it made (a
+    /// device test's injection, `tests::tiled_texture_step`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    step_failure_injected: Option<Error>,
     /// `commit` returned with its own work left to run once a render encoder's end is lowered
     /// (`render/queued_commits.rs`), which has not run: to the program, the command buffer is
     /// committed. How the work, once run, hands its batches to the scheduler: as the call that
@@ -2198,6 +2202,8 @@ impl CommandBuffer {
                 failures_injected: 0,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 making_failure_injected: None,
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                step_failure_injected: None,
                 queued_commit: None,
                 called_over_mutable_map: false,
                 committing: false,
@@ -2454,6 +2460,13 @@ impl CommandBuffer {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn fail_draw_making(&self, error: Error) {
         self.state().making_failure_injected = Some(error);
+    }
+
+    /// Answer its next host step's recording with `error`, as a failure of that recording's: a
+    /// device test's injection (`tests::tiled_texture_step`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn fail_host_step(&self, error: Error) {
+        self.state().step_failure_injected = Some(error);
     }
 
     /// Relay the device's loss to it, as the relay does to every batch in flight where it cannot
@@ -4596,6 +4609,16 @@ impl CommandBufferShared {
                 state.step_takes = replaced.unwrap_or_default();
             }
             let recorded = work.step(&buffer, &inputs);
+            // A device test's failure of the recording (`CommandBuffer::fail_host_step`), the
+            // recording it made dropped without the lock.
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            let recorded = {
+                let injected = lock(&self.state).step_failure_injected.take();
+                match injected {
+                    Some(error) => recorded.and(Err(error)),
+                    None => recorded,
+                }
+            };
             let mut state = lock(&self.state);
             state.step_takes.clear();
             match recorded {

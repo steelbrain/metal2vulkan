@@ -565,6 +565,11 @@ pub(super) struct DeviceShared {
     /// device memory: for the tests of `copied.rs` (`Device::fail_next_host_imports`).
     #[cfg(test)]
     pub(crate) failing_host_imports: std::sync::atomic::AtomicU64,
+    /// How many of the next `vkQueueSubmit`s of its command buffers' work fail as the driver's
+    /// out of device memory, never made: for the device tests of a failed submission
+    /// (`Device::fail_next_submissions`).
+    #[cfg(test)]
+    pub(crate) failing_submissions: std::sync::atomic::AtomicU64,
     /// Every linear image of a render target renders as a color attachment only under
     /// `VK_NV_linear_color_attachment`'s rule, whatever the device's facts: for the tests of
     /// `merge_scratch.rs` on a device that renders one beside any other
@@ -1384,6 +1389,13 @@ impl Device {
     /// (`copied.rs`).
     pub(crate) fn fail_next_host_imports(&self, count: u64) {
         (self.shared().failing_host_imports).store(count, Ordering::Relaxed);
+    }
+
+    /// Fail the next `count` `vkQueueSubmit`s of its command buffers' work as the driver's out of
+    /// device memory, none of them made: the tests' stand-in for a submission the driver refuses
+    /// (`DeviceShared::submit_logged`).
+    pub(crate) fn fail_next_submissions(&self, count: u64) {
+        (self.shared().failing_submissions).store(count, Ordering::Relaxed);
     }
 }
 
@@ -2759,6 +2771,8 @@ impl Device {
             copied: Default::default(),
             #[cfg(test)]
             failing_host_imports: Default::default(),
+            #[cfg(test)]
+            failing_submissions: Default::default(),
             #[cfg(test)]
             linear_rule_forced: Default::default(),
             #[cfg(test)]

@@ -482,6 +482,17 @@ impl super::DeviceShared {
             crate::command_buffer::completion::trace::submitting("submit called");
             let cpu = period.cpu_now();
             let entered = crate::gpu_time::host_nanos();
+            // A device test's failure of the call, which is never made
+            // (`Device::fail_next_submissions`).
+            #[cfg(test)]
+            let f = |vk_queue| {
+                let failing = &self.failing_submissions;
+                match failing.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+                {
+                    Ok(_) => Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY),
+                    Err(_) => f(vk_queue),
+                }
+            };
             let submitted = f(vk_queue);
             let end = crate::gpu_time::host_nanos();
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

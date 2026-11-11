@@ -14,6 +14,10 @@
 //!   submission runs nothing (`DetachedBacking`); the next use takes the copy.
 //! - **Never committed**: the command buffer whose encoder takes the copy is dropped without a
 //!   commit, so nothing of it runs (`CommandBufferShared`'s drop); the next use takes the copy.
+//! - **Its `vkQueueSubmit` failed** (`Device::fail_next_submissions`): the batch of the encoder
+//!   that takes the copy, behind an event wait, is refused by the driver, so it runs nothing and
+//!   the command buffer fails out of memory (`CommandBufferShared::failed`); the next use takes
+//!   the copy. A failed host step's batch is `tiled_texture_step.rs`'s.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TILED-FAILED`): each leg's
@@ -25,11 +29,11 @@ use super::tiled_texture_device::{
 };
 use super::tiled_texture_reencode::{behind_a_wait, blit_levels, GREY, SHAPE};
 use crate::{
-    Buffer, CommandBuffer, CommandBufferStatus, CommitFailure, FailedEncoders, ResourceOptions,
-    Texture,
+    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommitFailure, FailedEncoders,
+    ResourceOptions, Texture,
 };
 use std::collections::BTreeSet;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// A tiled texture of the guest's first shape over a new zeroed buffer, the grey written into
@@ -59,7 +63,7 @@ fn fail(command_buffer: &CommandBuffer, failure: CommitFailure) {
 
 /// The next command buffer's use of `texture`, its first since the failed one: it takes the
 /// copy, and every level holds the grey.
-fn next_use_takes(rig: &Rig, texture: &Texture, leg: &str) {
+pub(super) fn next_use_takes(rig: &Rig, texture: &Texture, leg: &str) {
     let ((width, height), _) = SHAPE;
     let (levels, copies) = rig.levels(texture, SHAPE);
     eprintln!("TILED-FAILED {leg}: the next use {copies:?}");
@@ -167,4 +171,24 @@ fn a_take_in_a_submission_that_runs_nothing_is_taken_at_the_next_use() {
     next_use_takes(&rig, &texture, "failed at its submission");
     drop((texture, out));
     drop(rig);
+}
+
+#[test]
+fn a_take_in_a_batch_whose_queue_submit_fails_is_taken_at_the_next_use() {
+    let scratch = Scratch::new("tiled-failed-queue-submit");
+    let rig = rig(&scratch);
+    let (_target, texture) = grey_texture(&rig);
+    let out = levels_out(&rig);
+    let (command_buffer, gate) = behind_a_wait(&rig, |cb| blit_levels(cb, &texture, &out, SHAPE));
+    // The batch's `vkQueueSubmit`, made once the host signals, fails.
+    rig.device.fail_next_submissions(1);
+    gate.set_signaled_value(1);
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    let (status, error) = (command_buffer.status(), command_buffer.error());
+    let failing = (rig.device.shared().failing_submissions).load(Ordering::Relaxed);
+    eprintln!("TILED-FAILED queue submit: {status:?} {error:?}, {failing} failures left");
+    assert_eq!(failing, 0, "the batch's submission failed");
+    assert_eq!(status, CommandBufferStatus::Error, "{error:?}");
+    assert_eq!(error, Some(CommandBufferError::OutOfMemory));
+    next_use_takes(&rig, &texture, "its vkQueueSubmit failed");
 }

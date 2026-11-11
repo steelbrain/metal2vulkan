@@ -15,20 +15,32 @@
 //! - **Two rebinds** encode the encoder again twice, and each encoding takes the copy.
 //! - **A `did_modify_data` after the commit** is left to the next use: the encoding again does not
 //!   take that call's mark, so the next command buffer takes the copy again.
+//! - **A pass recorded on the GPU alone** (it executes indirect commands the GPU writes,
+//!   `render/executions/gpu.rs`), whose indexed draw reads the texture and takes its indices from
+//!   the buffer: the commit records the pass in a segment, and the encoding again records it again
+//!   in a segment of its own, which takes the copy where the commit's took it
+//!   (`EncoderCore::finish_replay`), so the draw reads the bytes.
 //!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Printed (`TILED-REENCODE`): each leg's
 //! counts.
 
 use super::blit_holds::{over_host, Host, Scratch, WAIT};
+use super::encoder_holds::{library, pass, render_state};
 use super::tiled_texture_device::{
     checker, copies_of, descriptor, level_extent, near_each, one_take, read, rig, texel_of, write,
     write_rows, zeroed, Copies, Rig, Shape, LENGTH, NONE, PITCH, SHAPES,
 };
+use super::tiled_texture_failed::grey_texture;
 use crate::{
-    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, EventRef, Origin, SharedEvent, Size,
-    Texture,
+    BlitOption, Buffer, CommandBuffer, CommandBufferStatus, Device, EventRef,
+    IndirectCommandBufferDescriptor, Origin, PipelineOptions, RenderPipelineState, ResourceOptions,
+    SharedEvent, Size, Texture, TextureDescriptor,
 };
+use metal2vulkan::metal::{
+    IndexType, IndirectCommandType, PixelFormat, PrimitiveType, TextureUsage,
+};
+use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -256,5 +268,120 @@ fn did_modify_data_after_the_commit_is_left_to_the_next_use() {
         assert!(near_each(bytes, [0x20; 4]), "level {level} at the next use");
     }
     drop((texture, out));
+    drop(rig);
+}
+
+/// The fixture of [`a_pass_on_the_gpu_alone_encoded_again_takes_the_copy_where_its_commit_took_it`]'s
+/// functions, under `validation/fixtures/public/`.
+const DIRECT_ARGUMENTS: &str = "examples/icb_direct_arguments.ll";
+
+/// The side of its target, in pixels.
+const PASS_SIDE: u64 = 4;
+
+/// A state of the fixture's `plain_vertex` and `plain_fragment` into `RGBA8Unorm` that indirect
+/// command buffers' commands may inherit.
+fn inherited_state(device: &Device) -> RenderPipelineState {
+    let library = library(device, DIRECT_ARGUMENTS);
+    let function = |name: &str| {
+        let function = library.new_function_with_name(name).unwrap();
+        StageSource::Function(function.function_descriptor())
+    };
+    let mut descriptor = RenderPipelineDescriptor::new(function("plain_vertex"));
+    descriptor.fragment = Some(function("plain_fragment"));
+    descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    descriptor.support_indirect_command_buffers = true;
+    (device.new_render_pipeline_state(&descriptor, &PipelineOptions::default())).unwrap()
+}
+
+#[test]
+fn a_pass_on_the_gpu_alone_encoded_again_takes_the_copy_where_its_commit_took_it() {
+    let (first, second) = (Host::new(), Host::new());
+    let scratch = Scratch::new("tiled-reencode-gpu-pass");
+    let rig = rig(&scratch);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let Some(indices) = over_host(&rig.device, &first, &runs) else {
+        return;
+    };
+    // The draw's indices, in the pages the buffer lies in at each encoding.
+    for host in [&first, &second] {
+        host.set(0, &[0, 1, 2]);
+    }
+    let (_bytes, texture) = grey_texture(&rig);
+    let sampled = render_state(
+        &rig.device,
+        DIRECT_ARGUMENTS,
+        "plain_vertex",
+        "texture_fragment",
+    );
+    let inherited = inherited_state(&rig.device);
+    let mut commands = IndirectCommandBufferDescriptor::new();
+    commands.command_types = IndirectCommandType::DRAW;
+    commands.inherit_pipeline_state = true;
+    let icb = (rig.device)
+        .new_indirect_command_buffer(&commands, 1, ResourceOptions::shared())
+        .unwrap();
+    let mut target =
+        TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, PASS_SIDE, PASS_SIDE, false);
+    target.usage = TextureUsage::RENDER_TARGET;
+    target.resource_options = ResourceOptions::private();
+    let target = rig.device.new_texture(&target).unwrap();
+    let row = PASS_SIDE * 4;
+    let back = (rig.device)
+        .new_buffer(PASS_SIDE * row, ResourceOptions::shared())
+        .unwrap();
+    let forms = rig.device.work_counts().gpu_form_commands;
+    let waiting = behind_a_wait(&rig, |command_buffer| {
+        // The GPU writes the buffer's records: a pass that executes them is recorded on the GPU
+        // alone at the commit.
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.reset_commands_in_buffer(&icb, 0..1).unwrap();
+        blit.end_encoding().unwrap();
+        let mut encoder = (command_buffer.render_command_encoder(&pass(&target))).unwrap();
+        encoder.set_render_pipeline_state(&sampled).unwrap();
+        // The texture's first use, by the draw whose indices the buffer the rebind moves holds.
+        (encoder.set_fragment_texture(Some(&texture), 0)).unwrap();
+        (encoder.draw_indexed_primitives(
+            PrimitiveType::Triangle,
+            3,
+            IndexType::UInt32,
+            &indices,
+            0,
+            1,
+            0,
+            0,
+        ))
+        .unwrap();
+        encoder.set_render_pipeline_state(&inherited).unwrap();
+        encoder.execute_commands_in_buffer(&icb, 0..1).unwrap();
+        encoder.end_encoding().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        (blit.copy_from_texture_to_buffer(
+            &target,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(PASS_SIDE, PASS_SIDE, 1),
+            &back,
+            0,
+            row,
+            PASS_SIDE * row,
+            BlitOption::None,
+        ))
+        .unwrap();
+        blit.end_encoding().unwrap();
+    });
+    let reencoded = rebind_then_run(&rig, &indices, &[&second], waiting);
+    let forms = rig.device.work_counts().gpu_form_commands - forms;
+    let texels = read(&back);
+    let first_texel = texels.get(..4);
+    eprintln!(
+        "TILED-REENCODE gpu pass: {reencoded} encoded again, {forms} GPU-form commands, \
+         drew {first_texel:?}"
+    );
+    assert_eq!(reencoded, 1, "the render encoder encoded again");
+    // The commit's recording and the encoding again's, each of the one command.
+    assert_eq!(forms, 2, "the pass on the GPU alone, recorded twice");
+    assert!(near_each(&texels, GREY), "the draw read {first_texel:?}");
+    drop((texture, indices, icb));
     drop(rig);
 }
