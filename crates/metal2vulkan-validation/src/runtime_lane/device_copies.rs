@@ -65,8 +65,6 @@ struct LogState {
     now: u64,
     /// Each write's pages and stamp.
     writes: Vec<(Range<u64>, u64)>,
-    /// Whether the next wait cannot say.
-    cannot_say: bool,
 }
 
 impl Log {
@@ -76,11 +74,6 @@ impl Log {
         let pages = range.start / PAGE * PAGE..range.end.div_ceil(PAGE) * PAGE;
         let now = state.now;
         state.writes.push((pages, now));
-    }
-
-    /// Make the next wait answer `false`.
-    fn cannot_say(&self) {
-        self.state.lock().unwrap().cannot_say = true;
     }
 }
 
@@ -97,8 +90,7 @@ impl DirtyPages for Log {
     }
 
     fn wait(&self, _: DirtyStamp) -> bool {
-        let mut state = self.state.lock().unwrap();
-        !std::mem::take(&mut state.cannot_say)
+        true
     }
 
     fn changed(&self, since: DirtyStamp, out: &mut Vec<Range<u64>>) {
