@@ -225,10 +225,11 @@ fn a_loss_stops_the_checks_with_nothing_submitted_again_or_recorded() {
         !checks.lost_at_wait.load(Ordering::Acquire),
         "the checks waited for no fence after the hold"
     );
-    // One submission's calls, the one whose wait met the loss: a merge round's apart form
-    // makes [`MERGED`].
+    // One use of the queue, the one whose wait met the loss: its calls (a merge round's apart
+    // form makes [`MERGED`]) and, where the device relays its queues' failures, the relay's mark
+    // after them, counted with them (`device/relay.rs`, `By::Checks`).
     assert!(
-        (1..=MERGED as u64).contains(&calls),
+        (1..=MERGED as u64 + 1).contains(&calls),
         "{calls} calls from the hold: the checks submitted again after the loss"
     );
     assert_eq!(counts.submit_checks_run, 0, "the checks ran to their end");
