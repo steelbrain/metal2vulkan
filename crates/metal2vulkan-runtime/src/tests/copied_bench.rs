@@ -488,10 +488,7 @@ fn copied_tag_bench() {
                 gb / best
             );
         };
-        let blocks = || {
-            one.chunks_exact(TAG_BLOCK)
-                .map(|b| <&[u8; TAG_BLOCK]>::try_from(b).unwrap())
-        };
+        let blocks = || one.as_chunks::<TAG_BLOCK>().0.iter();
         rate("portable tag", &|| {
             blocks()
                 .map(|b| tag_portable(b)[0])
@@ -501,7 +498,7 @@ fn copied_tag_bench() {
             blocks().map(|b| tag(b)[0]).fold(0, u64::wrapping_add)
         });
         rate("two-stream compare", &|| {
-            let pairs = one.chunks_exact(4096).zip(two.chunks_exact(4096));
+            let pairs = (one.as_chunks::<4096>().0.iter()).zip(two.as_chunks::<4096>().0);
             pairs
                 .filter(|(a, b)| std::hint::black_box(a) != std::hint::black_box(b))
                 .count() as u64

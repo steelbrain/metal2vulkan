@@ -395,7 +395,7 @@ unsafe fn tag_in_place(from: *const u8, span: usize, scratch: &mut [u8; TAG_BLOC
 pub(crate) fn tag_portable(block: &[u8; TAG_BLOCK]) -> Tag {
     let key = key();
     let (mut first, mut second) = ([0u64; 4], [0u64; 4]);
-    for (stretch, bytes) in block.chunks_exact(32).enumerate() {
+    for (stretch, bytes) in block.as_chunks::<32>().0.iter().enumerate() {
         let word = |at: usize| {
             u32::from_le_bytes([
                 bytes[4 * at],
