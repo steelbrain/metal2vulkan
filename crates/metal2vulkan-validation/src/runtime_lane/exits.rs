@@ -1382,6 +1382,10 @@ fn an_exit_runs_no_handler_beside_a_cpu_device_s_work() {
     let what = || format!("stdout:\n{}\nstderr:\n{}", exited.stdout, exited.stderr);
     let release = format!("{REPORT}-RELEASE ");
     let marker = format!("{REPORT}-MARKER ");
+    let switch = format!("{REPORT}-SWITCH ");
+    for line in [&switch, &release] {
+        eprintln!("{}", stdout_line(&exited, line).unwrap_or_default());
+    }
     assert_eq!(
         field(&release, "since"),
         Some(0),
