@@ -332,7 +332,7 @@ def do_tally(args):
     out = [
         "",
         "shard results",
-        f"  {'shard':<42}  {'status':<12}{'ran':>5}{'want':>6}{'build':>8}{'wrapped':>9}",
+        f"  {'shard':<42}  {'status':<12}{'ran':>5}{'want':>6}{'build':>8}{'run':>9}",
     ]
     ran_total, unaccounted, short, failed = 0, [], [], []
     tested = 0.0
@@ -376,11 +376,9 @@ def do_tally(args):
         faults.append(f"{ran_total} tests ran in all, but the selection holds {runnable} runnable")
     out += [
         "",
-        f"  the wrapped half took {sum(run[2] for run in runs.values())}s in all, over"
-        f" {len(runs)} turn(s): its turn in the host's queue and the run together, which this"
-        " script cannot tell apart",
+        f"  the runs took {sum(run[2] for run in runs.values())}s in all, over {len(runs)} shard(s)",
         f"  nextest's own clock says {tested:.1f}s of tests; building took"
-        f" {sum(run[1] for run in runs.values())}s outside the wrap",
+        f" {sum(run[1] for run in runs.values())}s",
         "",
         "coverage of the run",
         f"  selected, runnable        {runnable}",

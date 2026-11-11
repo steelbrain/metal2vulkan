@@ -112,12 +112,10 @@ scripts/device-lane/device-lane --profile release \
 - `--list-only` opens no device. `--filter EXPR` intersects a nextest filterset with the lane, and
   the report then says the coverage is of that slice alone, never of the lane. An expression that
   leaves the whole lane selected narrowed nothing, and stops the run.
-- `--wrap 'CMD ARG...'` prefixes each shard run. On a host whose GPU is shared, give it that
-  host's GPU lock and a resident-memory cap: macOS does not enforce `ulimit -v`, and a device test
-  has no worker boundary of its own. Every build and every listing stays outside it. Each shard is
-  compiled by its own `cargo nextest run --no-run` pass first, so the wrapped half has nothing to
-  compile: a lock held across a compile is the form that has wedged this one before, and a sibling
-  cargo on the same target directory can invalidate it between two shards.
+- Each shard is compiled by its own `cargo nextest run --no-run` pass first, so its run has nothing
+  to compile and its time is the tests' alone; a sibling cargo on the same target directory can
+  invalidate a build between two shards. The lane assumes the GPU is its own for the run: on a
+  shared host, run it under the host's exclusive GPU hold.
 - The cfg and plain legs keep separate target directories (`--cfg-target`, `--plain-target`),
   since `RUSTFLAGS` is part of a build's fingerprint. `--help` lists every option.
 

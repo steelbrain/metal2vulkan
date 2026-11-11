@@ -69,7 +69,7 @@ const WATCHED_COMPLETION: Duration = Duration::from_millis(500);
 
 /// The safety net: the pool's hold goes after this whatever the leg is doing, so a regression that
 /// makes the rebind block again ends the leg on its assertions instead of wedging it while it holds
-/// the Mac's GPU lock. The leg's own release comes long before.
+/// the GPU. The leg's own release comes long before.
 const NET: Duration = Duration::from_secs(20);
 
 /// The pass's tile and render area: one whole 16x16 tile, so the fixture's slot
@@ -324,7 +324,7 @@ fn leg(memo: Memo) {
 
     // From now on the pool starts no piece: a making handed to it stays in flight. The one hold is
     // a thread's, which drops it when the leg says so or after `NET`, whichever comes first: a leg
-    // that blocks in the rebind cannot keep it and wedge the Mac's GPU lock.
+    // that blocks in the rebind cannot keep it and hold the GPU wedged.
     let hold = held::hold();
     let (release, released_at) = std::sync::mpsc::channel::<()>();
     let watchdog = std::thread::spawn(move || {

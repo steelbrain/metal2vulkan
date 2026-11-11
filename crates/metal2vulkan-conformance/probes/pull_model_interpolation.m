@@ -35,11 +35,11 @@
 //   - `interpolate_at_offset(0.5, 0.5)` differs from `interpolate_at_center` in the last bits;
 //   - only `pm_sample_id` runs once per sample at 4 samples.
 //
-// Run it WITHOUT MTL_DEBUG_LAYER, each case on the Mac's GPU lock:
+// Run it WITHOUT MTL_DEBUG_LAYER, each case with the Mac's GPU to itself:
 //
 //   clang -fobjc-arc -framework Metal -framework Foundation -o pull_model_interpolation \
 //     pull_model_interpolation.m
-//   maclock /usr/bin/env -u MTL_DEBUG_LAYER ./pull_model_interpolation lane \
+//   /usr/bin/env -u MTL_DEBUG_LAYER ./pull_model_interpolation lane \
 //     ../../metal2vulkan-validation/fixtures/public/engine/pull_model_interpolants.metal
 
 #import <Foundation/Foundation.h>

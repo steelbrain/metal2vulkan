@@ -23,7 +23,7 @@
 // So Metal's coverage is not floor(alpha * n): the conformance family `alpha_coverage_pairs` reads
 // one pixel at alphas whose alpha * n is an integer, and 0.5 at one sample, where the two agree.
 //
-// Run it WITHOUT MTL_DEBUG_LAYER, on the Mac's GPU lock:
+// Run it WITHOUT MTL_DEBUG_LAYER, with the Mac's GPU to itself:
 //
 //   clang -fobjc-arc -framework Metal -framework Foundation -o alpha_coverage_sweep alpha_coverage_sweep.m
 

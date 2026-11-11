@@ -22,10 +22,8 @@
 //!   outlived the per-run timeout, writing the tripwire for that last itself (its submission may
 //!   still be running; the executor's own protocol writes it for the other two, and the batch
 //!   writes it too when it is absent). A human follows the suspected-hang protocol in
-//!   `docs/VALIDATION.md` before the next run. GPU batches running at once on one host take turns:
-//!   each run holds the host's GPU run lock (`run_lock`) until it is recorded, so one run is on the
-//!   GPU at a time, a hang names that run's case alone, and a batch waiting for the lock starts
-//!   nothing while a tripwire exists.
+//!   `docs/VALIDATION.md` before the next run. A GPU batch takes the GPU as its own: whatever
+//!   schedules it holds the GPU for the batch, so a hang names that run's case alone.
 //! - **Bounded.** At most `jobs` executors run at once (the bin defaults to the available
 //!   parallelism on a CPU device, which in a container is its CPU share, and to one on a GPU), each
 //!   under a per-run timeout; at most `limit` cases run per invocation. A run's executor starts its
@@ -69,7 +67,6 @@ use crate::source::shard_name_for_hash;
 use crate::store::{refusal_directory, CorpusStore};
 use crate::ScratchDir;
 use base64::Engine as _;
-use run_lock::RunLock;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -863,17 +860,6 @@ pub fn run_batch(
                         }
                         let Some(run) = runs.get(next.fetch_add(1, Ordering::Relaxed)) else {
                             break;
-                        };
-                        // On a GPU the run holds the host's run lock until it is recorded, a
-                        // hang's tripwire included, and the tripwire is read again under the lock:
-                        // a hang of another batch's run stops this one before it starts.
-                        let _gpu = match &config.device {
-                            BatchDevice::Gpu(tripwire) => {
-                                let lock = RunLock::acquire(tripwire, run, config.timeout)?;
-                                tripwire.refuse_if_tripped()?;
-                                Some(lock)
-                            }
-                            BatchDevice::Cpu => None,
                         };
                         let executed = execute_run(config, &store, run)?;
                         let mut outputs = outputs
@@ -1907,7 +1893,6 @@ mod session {
 }
 
 pub mod metal;
-mod run_lock;
 
 #[cfg(test)]
 mod tests;

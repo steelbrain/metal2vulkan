@@ -210,7 +210,7 @@ fn a_rebind_waits_for_nothing_where_its_encoding_again_finds_the_pipeline_made()
 const WATCHED_COMPLETION: Duration = Duration::from_millis(500);
 
 /// The safety net: a second hold dropped after this, so a regression that makes the rebind block
-/// again ends this test instead of wedging it while it holds the Mac's GPU lock.
+/// again ends this test instead of wedging it while it holds the GPU.
 const NET: Duration = Duration::from_secs(30);
 
 /// The segment the encoding again leaves is a pending dispatch's, awaited where the first

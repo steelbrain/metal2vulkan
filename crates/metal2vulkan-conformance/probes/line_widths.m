@@ -67,10 +67,10 @@
 //     exponent: that horizontal edge is biased by the triangle's slope, and an edge at z = 0.3 of a
 //     triangle whose third vertex is at 0.9 by 2^-4 for a constant of 2^20.
 //
-// Run it WITHOUT MTL_DEBUG_LAYER, each case on the Mac's GPU lock:
+// Run it WITHOUT MTL_DEBUG_LAYER, each case with the Mac's GPU to itself:
 //
 //   clang -fobjc-arc -framework Metal -framework Foundation -o line_widths line_widths.m
-//   maclock /usr/bin/env -u MTL_DEBUG_LAYER ./line_widths lane
+//   /usr/bin/env -u MTL_DEBUG_LAYER ./line_widths lane
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

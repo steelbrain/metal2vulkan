@@ -23,11 +23,11 @@
 // WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1: see the module docs of the translator's
 // `bind::astc_decode` and the runtime's `astc.rs`, which state Metal's answers.
 //
-// Build outside the Mac's GPU lock, then run each case WITHOUT MTL_DEBUG_LAYER on it:
+// Build it, then run each case WITHOUT MTL_DEBUG_LAYER, with the Mac's GPU to itself:
 //
 //   clang -fobjc-arc -framework Metal -framework Foundation -o astc_hdr_textures \
 //     astc_hdr_textures.m
-//   maclock /usr/bin/env -u MTL_DEBUG_LAYER ./astc_hdr_textures create
+//   /usr/bin/env -u MTL_DEBUG_LAYER ./astc_hdr_textures create
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

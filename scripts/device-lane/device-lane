@@ -18,12 +18,6 @@
 #                            it is proved against the lane like a derived one
 #   --max-shard N            the most tests a derived shard holds (default 150)
 #   --jobs N                 nextest's test threads per shard (default 4)
-#   --wrap 'CMD ARG...'      a prefix for each shard run, for a host that shares its GPU: its
-#                            GPU lock, and a resident-memory cap, since macOS does not enforce
-#                            `ulimit -v` and a device test has no worker boundary of its own.
-#                            Every build and every listing runs outside it: each shard is compiled
-#                            by its own `--no-run` pass first, so the wrapped half has nothing to
-#                            compile and the lock never covers a compile
 #   --cfg-target DIR         the cfg build's target directory (default target/device-lane-gpu)
 #   --plain-target DIR       the plain build's   (default target/device-lane-plain).
 #                            `RUSTFLAGS` is part of a build's fingerprint, so the two legs cannot
@@ -52,7 +46,6 @@ max_shard=150
 jobs=4
 cfg_target=
 plain_target=
-wrap_words=
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -63,7 +56,6 @@ while [ $# -gt 0 ]; do
   --shards) shards_given=${2:-}; shift 2 ;;
   --max-shard) max_shard=${2:-}; shift 2 ;;
   --jobs) jobs=${2:-}; shift 2 ;;
-  --wrap) wrap_words=${2:-}; shift 2 ;;
   --cfg-target) cfg_target=${2:-}; shift 2 ;;
   --plain-target) plain_target=${2:-}; shift 2 ;;
   -h | --help) sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//; $d'; exit 0 ;;
@@ -103,14 +95,12 @@ say "  profile         $profile"
 say "  nextest         $(cargo nextest --version | head -1)"
 say "  cfg target      $cfg_target"
 say "  plain target    $plain_target"
-say "  wrap            ${wrap_words:-<none>}"
 say "  test threads    $jobs"
 say "  selection       ${filter:-the whole device lane}"
 say "  output          $out"
 say ""
 
-# One listing of the workspace. Builds and listings run unwrapped: a build must never hold a
-# shared GPU lock.
+# One listing of the workspace.
 nextest_list() {
   target=$1
   flags=$2
@@ -170,7 +160,7 @@ if [ -n "$list_only" ]; then
 fi
 
 say ""
-say "running the shards: a build, then one GPU-lock turn, each ..."
+say "running the shards: a build, then the run, each ..."
 : > "$out/runs.tsv"
 while IFS="$(printf '\t')" read -r name binary terms; do
   [ -n "$name" ] || continue
@@ -183,11 +173,10 @@ while IFS="$(printf '\t')" read -r name binary terms; do
   # it builds are not the ones the listing above built, and the first shard would rebuild the
   # dependency graph. One scope for the listing and both halves is what keeps the target warm.
   #
-  # Build first and unwrapped. `--no-run` compiles exactly what the run below executes, so the
-  # wrapped half starts with nothing to compile and a shared host's GPU lock never covers a
-  # compile -- the form that has wedged this lock before. Each shard builds again because a
+  # Build first. `--no-run` compiles exactly what the run below executes, so the run starts with
+  # nothing to compile and its wall time is the tests' alone. Each shard builds again because a
   # sibling cargo on the same target directory can invalidate it between two shards, and that
-  # rebuild belongs out here.
+  # rebuild is counted as build time.
   built=$(date +%s)
   status=0
   ( cd "$repo" \
@@ -205,13 +194,12 @@ while IFS="$(printf '\t')" read -r name binary terms; do
   ( cd "$repo" \
     && CARGO_TARGET_DIR="$cfg_target" \
        RUSTFLAGS="--cfg m2v_gpu" \
-       ${wrap_words:+$wrap_words} \
        cargo nextest run --workspace --all-features $profile_args \
          --no-fail-fast --hide-progress-bar --failure-output immediate-final \
          --success-output never -j "$jobs" -E "$expression" ) >> "$log" 2>&1 || status=$?
   wall=$(( $(date +%s) - started ))
   printf '%s\t%s\t%s\t%s\n' "$name" "$status" "$build_wall" "$wall" >> "$out/runs.tsv"
-  say "  $name  exit=$status  build ${build_wall}s  locked ${wall}s"
+  say "  $name  exit=$status  build ${build_wall}s  run ${wall}s"
 done < "$out/shards.tsv"
 printf 'DONE\n' > "$out/current-shard"
 

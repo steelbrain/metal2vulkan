@@ -52,7 +52,7 @@
 //! is the same statement from the other side.
 //!
 //! So the call's cost is **ours**, and the cells split it (Apple M3 Max, macOS 27.0.1, MoltenVK
-//! 1.4.2, release, under the GPU lock, the median of the 28 calls after the first; two runs at
+//! 1.4.2, release, with the GPU to itself, the median of the 28 calls after the first; two runs at
 //! one-minute loads of 6.65 and 6.21, whose absolutes move 1.3x and whose share does not):
 //!
 //! | part | us a call | share |

@@ -545,7 +545,7 @@ fn temp_beside(path: &std::path::Path) -> std::path::PathBuf {
 ///
 /// A plain `std::fs::write` truncates the target and then fills it, so a process killed in that
 /// window leaves a recording half-written and unparseable -- and a whole-set write does this 722
-/// times in a row, with a `maclock` ticket that another stream may need back. Building the text
+/// times in a row, while holding the Mac's GPU that other work may be waiting for. Building the text
 /// in a sibling file and renaming it over the target closes the window: `rename` replaces the
 /// directory entry in one step, so a reader sees one file or the other and never a partial one.
 /// An interrupt can still leave a *stray temporary*, which is harmless by name, and the next
