@@ -963,10 +963,10 @@ impl CopiedBuffers {
                 None => None,
             };
             let (pages, copy, length) = (entry.pages, entry.copy, entry.length);
-            let whole = [0..length as u64];
+            let whole = 0..length as u64;
             let ranges = match plan.and_then(|plan| plan.bytes.as_ref()) {
                 Some(bytes) => &bytes[..],
-                None => &whole[..],
+                None => std::slice::from_ref(&whole),
             };
             let mut compared = 0u64;
             for range in ranges {
