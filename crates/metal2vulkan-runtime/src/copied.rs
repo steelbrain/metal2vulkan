@@ -1533,7 +1533,12 @@ fn split(
     let runs = Mutex::new(tags.chunks_mut(each).enumerate());
     let tallies = Mutex::new(Vec::with_capacity(threads));
     let pull = || {
-        while let Some((index, run)) = lock(&runs).next() {
+        loop {
+            // The lock is let go before the run's work: a `while let` would hold it throughout.
+            let next = lock(&runs).next();
+            let Some((index, run)) = next else {
+                return;
+            };
             let tally = work(first + index * each, run);
             lock(&tallies).push((index, tally));
         }

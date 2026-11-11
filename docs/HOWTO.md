@@ -537,7 +537,9 @@ without resizable BAR, whose 256 MiB window no base takes, and every device with
 blocks and a completion the copy's, each compared with its block's tag, and the base's bytes are
 read only for a block both sides changed since they agreed (`copied_base_blocks_read`; uncached,
 across the bus, where they lie in the device's memory). A block whose tag agrees is taken as
-unchanged: a changed block is missed with a chance of at most 2^-64 at each comparison. A commit
+unchanged: a changed block is missed with a chance of at most 2^-64 at each comparison. A
+comparison of a copy with a base of 16 MiB or more splits its blocks across up to four threads,
+the calling one among them, which end before it returns (`copied_compare_threads`). A commit
 that finds no host memory for a base fails with `Error::OutOfMemory` and runs nothing
 (`copied_bases_refused`); the copy keeps none, and a later commit makes it. An event signal
 submitted while a copy is live is seen at its batch's completion, after that write-back: no read
