@@ -210,6 +210,59 @@ fn copied_merge_back_keeps_a_byte_the_cpu_changed_since() {
     drop(copied);
 }
 
+/// A GPU that rewrote every byte of a block: where the CPU did not change it since the commit,
+/// the merge back stores the copy's block whole and counts every byte; where the CPU wrote bytes
+/// of it before the completion (one alone, one inside a run of 16 and a run of 16 whole), the
+/// merge keeps each of them and writes every other, the count leaving them out; the next commit
+/// carries them into the copy.
+#[test]
+fn a_cpu_write_made_before_the_completion_survives_a_block_the_gpu_rewrote() {
+    let length = 3 * TAG_BLOCK + 5;
+    let mut pages: Vec<u8> = (0..length as u32).map(|i| (i * 7 + 3) as u8).collect();
+    let mut copy = vec![0_u8; length];
+    let buffers = Arc::new(CopiedBuffers::default());
+    let counts = Counters::default();
+    // SAFETY: the copy and the pages are the test's, of `length` bytes, live past the answer.
+    let copied = unsafe {
+        add_reading(
+            &buffers,
+            at(&mut pages),
+            at(&mut copy),
+            length,
+            plain,
+            false,
+        )
+    };
+    let copied = copied.unwrap();
+    commit_writing(&buffers, &counts);
+    for byte in copy.iter_mut() {
+        *byte = !*byte;
+    }
+    let gpu = copy.clone();
+    // The CPU writes block 1 alone: byte 1030, byte 1060 and bytes 1088 to 1103.
+    let mut cpu = vec![];
+    for at in [1030, 1060].into_iter().chain(1088..1104) {
+        pages[at] = gpu[at].wrapping_add(1);
+        cpu.push((at, pages[at]));
+    }
+    buffers.merge_back(&counts, &CopiesReached::all());
+    for &(at, byte) in &cpu {
+        assert_eq!(pages[at], byte, "the CPU's byte {at} kept");
+    }
+    for at in (0..length).filter(|at| cpu.iter().all(|(cpu, _)| cpu != at)) {
+        assert_eq!(pages[at], gpu[at], "the GPU's byte {at} merged");
+    }
+    let counted = counts.copied_tallies();
+    assert_eq!(counted.merge_back_bytes, (length - cpu.len()) as u64);
+    assert_eq!(
+        counted.base_blocks_read, 1,
+        "block 1 alone merged byte by byte"
+    );
+    commit_reading(&buffers, &counts);
+    assert_eq!(copy, pages, "the CPU's bytes copied in");
+    drop(copied);
+}
+
 /// A copy whose GPU writes are dropped takes the GPU's bytes out of the copy alone, where the CPU
 /// changed a byte of the same block (its base's bytes read), and the CPU's byte reaches the copy
 /// at the next commit.
