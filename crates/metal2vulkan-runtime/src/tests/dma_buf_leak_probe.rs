@@ -844,7 +844,7 @@ fn probe(way: &str, plan: Plan) {
     };
     let queue = |index: usize| &queues[index % queues.len()];
     let start = Counts::of(&device.work_counts());
-    let mut kept_total = 0;
+    let mut kept_total = Some(0);
     for round in 1..=probe.knobs.rounds {
         let before = Counts::of(&device.work_counts());
         let listed_before = probe.listed();
@@ -906,7 +906,7 @@ fn probe(way: &str, plan: Plan) {
         let kernel = match probe.listed_settled(floor_now) {
             Some((listed, took)) => {
                 let kept = listed.count.saturating_sub(floor_now);
-                kept_total += kept;
+                kept_total = kept_total.map(|total| total + kept);
                 format!(
                     "kernel: the probe's dma-bufs listed {} ({} attached to a device, {} bytes), \
                      kept this round {kept} of {imports} ({:.1}%), settled in {} ms",
@@ -917,7 +917,10 @@ fn probe(way: &str, plan: Plan) {
                     took.as_millis()
                 )
             }
-            None => "kernel: unread".to_owned(),
+            None => {
+                kept_total = None;
+                "kernel: unread".to_owned()
+            }
         };
         println!(
             "{TEST} on {}: {way}: round {round}/{}: buffers {made} (unused {unused}, freed \
@@ -960,11 +963,14 @@ fn probe(way: &str, plan: Plan) {
         None => "kernel: unread".to_owned(),
     };
     drop(ram);
-    println!(
-        "{TEST} on {name}: {way}: all rounds: imports {imports}, the kernel kept {kept_total} \
-         ({:.1}%); {gone}",
-        kept_total as f64 * 100.0 / imports.max(1) as f64
-    );
+    let kept = match kept_total {
+        Some(kept) => format!(
+            "the kernel kept {kept} ({:.1}%)",
+            kept as f64 * 100.0 / imports.max(1) as f64
+        ),
+        None => "the kernel's list unread".to_owned(),
+    };
+    println!("{TEST} on {name}: {way}: all rounds: imports {imports}, {kept}; {gone}");
 }
 
 /// Four workers on one command queue.
