@@ -1346,7 +1346,7 @@ impl Image {
         if !base.is_multiple_of(align) || !shapes_base.is_multiple_of(align) {
             return Err(internal("a block decode's scratch off its alignment"));
         }
-        let contents = (shapes.contents())
+        let contents = (shapes.mapped_contents())
             .ok_or_else(|| internal("a Shared block decode shapes' buffer without contents"))?;
         for (at, plan) in plans.iter().enumerate() {
             // SAFETY: the shapes' buffer holds `steps.len()` slots of `slot` bytes, each at least

@@ -2249,7 +2249,7 @@ impl Device {
         let length = bytes.len() as u64;
         let staging = self.own_buffer(length, ResourceOptions::shared())?;
         let contents = staging
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| internal("a Shared staging buffer without host bytes"))?;
         // SAFETY: the staging buffer holds `length` host-coherent bytes at `contents`, which no
         // command uses yet.
@@ -6712,7 +6712,7 @@ impl Texture {
         let device = self.device();
         if truth.defers_copies() {
             let staging = device.own_buffer(host.packed_len(), ResourceOptions::shared())?;
-            let contents = (staging.contents())
+            let contents = (staging.mapped_contents())
                 .ok_or_else(|| internal("a Shared staging buffer without contents"))?;
             // SAFETY: the staging buffer's bytes, at least `packed_len` from `contents`, in
             // host-coherent memory that nothing else uses yet.
@@ -7063,7 +7063,7 @@ impl Texture {
             Storage::Image(_) => false,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
-            | Storage::Shadow { texels, .. } => texels.buffer.contents().is_some(),
+            | Storage::Shadow { texels, .. } => texels.buffer.mapped_contents().is_some(),
         };
         if self.storage_mode() == StorageMode::Private && !reached {
             return Err(invalid(call, Problem::Copy(CopyProblem::CpuAccessPrivate)));

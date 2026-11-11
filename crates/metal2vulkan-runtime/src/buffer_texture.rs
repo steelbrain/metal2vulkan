@@ -1655,7 +1655,7 @@ impl Texels {
         if !self.buffer.copied() {
             return None;
         }
-        let start = self.buffer.contents()?.as_ptr().addr() as u64;
+        let start = self.buffer.mapped_contents()?.as_ptr().addr() as u64;
         let padding = Padding::of(start, &self.layout, line, self.padding_owned());
         Some((
             RowEnds::of(start, &self.layout, line),
@@ -1681,7 +1681,7 @@ impl Texels {
         if self.buffer.copied() {
             return Some(self.buffer.memory().1);
         }
-        match self.buffer.contents() {
+        match self.buffer.mapped_contents() {
             Some(at) => Some(at.as_ptr().addr() as u64),
             None if self.buffer.caller_memory().is_none() => Some(self.buffer.memory().1),
             None => None,
@@ -2280,7 +2280,7 @@ impl Texels {
     ) -> Result<(*mut u8, u64), Error> {
         let contents = self
             .buffer
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::CpuAccessPrivate)))?;
         // The texture lies in the buffer, and so do the rows of a region checked in its level.
         let end = len.and_then(|len| start.checked_add(len));
@@ -2336,14 +2336,14 @@ impl Texels {
         let end = start + len;
         let mut runs = Vec::with_capacity(2);
         if start < past.length {
-            let contents = self.buffer.contents().ok_or_else(private)?;
+            let contents = self.buffer.mapped_contents().ok_or_else(private)?;
             // SAFETY: `start..past.length` lies in the buffer's mapped bytes.
             let first = unsafe { contents.as_ptr().add(start as usize) };
             runs.push((0, first, (end.min(past.length) - start) as usize));
         }
         if end > past.length {
             let from = start.max(past.length);
-            let contents = past.tail.contents().ok_or_else(private)?;
+            let contents = past.tail.mapped_contents().ok_or_else(private)?;
             let at = from - past.rebase;
             if at + (end - from) > past.tail.length() {
                 return Err(internal("a texture's rows past its tail"));
@@ -2382,7 +2382,7 @@ impl Texels {
         if start < end {
             let contents = self
                 .buffer
-                .contents()
+                .mapped_contents()
                 .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::CpuAccessPrivate)))?;
             let at = contents.as_ptr() as u64 + start;
             self.buffer.wrote_host(at..at + (end - start));

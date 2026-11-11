@@ -248,7 +248,7 @@ impl Uploads {
             }
         };
         let chunk = &mut self.chunks[index];
-        let Some(mapped) = chunk.buffer.contents() else {
+        let Some(mapped) = chunk.buffer.mapped_contents() else {
             unreachable!("upload chunks are Shared buffers")
         };
         // SAFETY: `[offset, offset + bytes.len())` is inside the chunk's mapping (`fits`, or a
@@ -323,7 +323,7 @@ impl Upload {
     /// submitted: as the command buffer commits (a function-table snapshot). A write longer than
     /// the region is cut to it.
     pub(super) fn write(&self, bytes: &[u8]) {
-        let Some(mapped) = self.buffer.contents() else {
+        let Some(mapped) = self.buffer.mapped_contents() else {
             unreachable!("upload chunks are Shared buffers")
         };
         let len = bytes.len().min(self.len as usize);
@@ -342,7 +342,7 @@ impl Upload {
     /// [`write`](Self::write) at byte `at` of the region: a root table's resident-set fields as
     /// the command buffer commits, or as a host step uploads it. A write past the region is cut.
     pub(super) fn write_at(&self, at: u64, bytes: &[u8]) {
-        let Some(mapped) = self.buffer.contents() else {
+        let Some(mapped) = self.buffer.mapped_contents() else {
             unreachable!("upload chunks are Shared buffers")
         };
         let len = (bytes.len() as u64).min(self.len.saturating_sub(at)) as usize;
@@ -366,7 +366,7 @@ impl Upload {
     /// The `len` bytes at `from` stay mapped and readable while the call runs, and lie outside
     /// the region.
     pub(super) unsafe fn copy_in(&self, at: u64, from: *const u8, len: u64) {
-        let Some(mapped) = self.buffer.contents() else {
+        let Some(mapped) = self.buffer.mapped_contents() else {
             unreachable!("upload chunks are Shared buffers")
         };
         let len = len.min(self.len.saturating_sub(at)) as usize;
@@ -392,7 +392,7 @@ impl Upload {
     /// region; every command that writes those bytes of the region completed, and their writes
     /// are visible to the host (its batch's end, `tracker::Barrier::to_host`).
     pub(super) unsafe fn copy_out(&self, at: u64, to: *mut u8, len: u64) {
-        let Some(mapped) = self.buffer.contents() else {
+        let Some(mapped) = self.buffer.mapped_contents() else {
             unreachable!("upload chunks are Shared buffers")
         };
         let len = len.min(self.len.saturating_sub(at)) as usize;
@@ -419,7 +419,7 @@ impl Upload {
     /// The region's first `N` bytes as the device left them. The caller has waited for every
     /// command that writes them, and made their writes visible to the host.
     pub(super) fn read<const N: usize>(&self) -> [u8; N] {
-        let Some(mapped) = self.buffer.contents() else {
+        let Some(mapped) = self.buffer.mapped_contents() else {
             unreachable!("upload chunks are Shared buffers")
         };
         assert!(N as u64 <= self.len, "a read past the region");

@@ -581,7 +581,7 @@ impl BlitCommandEncoder {
             return Ok(pattern.clone());
         }
         let pattern = self.core.device().write_combined_buffer(PATTERN_LENGTH)?;
-        let Some(contents) = pattern.contents() else {
+        let Some(contents) = pattern.mapped_contents() else {
             return Err(Error::Vulkan(super::error::VkResultCode(
                 vk::Result::ERROR_MEMORY_MAP_FAILED.as_raw(),
             )));

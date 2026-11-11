@@ -615,7 +615,7 @@ impl RasterizationRateMap {
         if !buffer.device().same(&self.0.device) {
             return Err(buffer.device().foreign(CALL, &self.0.device));
         }
-        let Some(contents) = buffer.contents() else {
+        let Some(contents) = buffer.mapped_contents() else {
             return Err(invalid(CALL, Problem::StorageMode));
         };
         let state = self.state();

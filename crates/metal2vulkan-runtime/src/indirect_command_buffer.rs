@@ -632,7 +632,7 @@ impl Device {
             _ => None,
         };
         let mapped = storage
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| internal("an indirect command buffer's records are not mapped"))?
             .as_ptr()
             .expose_provenance();
@@ -2073,7 +2073,7 @@ impl IndirectCommandBuffer {
             .0
             .overflow
             .as_ref()
-            .and_then(|overflow| overflow.storage.contents())
+            .and_then(|overflow| overflow.storage.mapped_contents())
             .ok_or_else(|| internal("an indirect command buffer's overflow is not mapped"))?;
         // SAFETY: the overflow is host-visible and mapped for its life, and `at` and `bytes` lie
         // inside it (the caller's); writes are one at a time (`pipelines`). A GPU write meanwhile
@@ -2095,7 +2095,7 @@ impl IndirectCommandBuffer {
             .0
             .overflow
             .as_ref()
-            .and_then(|overflow| overflow.storage.contents())
+            .and_then(|overflow| overflow.storage.mapped_contents())
         else {
             return false;
         };
@@ -2153,7 +2153,7 @@ impl IndirectCommandBuffer {
         };
         let contents = overflow
             .storage
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| internal("an indirect command buffer's overflow is not mapped"))?;
         for index in range.clone() {
             let bytes = overflow.cpu_reset_bytes(index);

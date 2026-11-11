@@ -119,6 +119,8 @@ mod descriptor_key_once;
 // A GPU hazard: its kernel spins up to 2^25 loads on a word the GPU may never see raised.
 #[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
 mod detach_lost;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod detached_contents;
 mod device;
 #[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
 mod device_memory_overflow;

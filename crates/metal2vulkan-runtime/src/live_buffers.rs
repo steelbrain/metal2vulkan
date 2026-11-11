@@ -439,7 +439,7 @@ fn upload(
         .device_address()
         .ok_or_else(|| internal("a resident set on a device without device addresses"))?;
     let skip = start.next_multiple_of(alignment) - start;
-    let Some(mapped) = buffer.contents() else {
+    let Some(mapped) = buffer.mapped_contents() else {
         return Err(internal("a resident set's buffer without host bytes"));
     };
     // SAFETY: the buffer is `Shared`, mapped, and `skip + bytes.len()` bytes long at least; no

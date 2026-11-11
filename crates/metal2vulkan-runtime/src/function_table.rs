@@ -680,7 +680,7 @@ impl Eq for VisibleFunctionTable {}
 impl VisibleFunctionTable {
     /// Write the word `value` at byte `offset` of the table's buffer.
     fn write(&self, offset: u64, value: u32) {
-        let contents = self.0.words.contents();
+        let contents = self.0.words.mapped_contents();
         let _writing = lock(&self.0.writes);
         if let Some(contents) = contents {
             // SAFETY: the table's buffer is `Shared` and mapped for its life, and holds
@@ -722,7 +722,7 @@ impl VisibleFunctionTable {
         let len = self.words_len() as usize;
         let mut bytes = vec![0; len];
         let _writing = lock(&self.0.writes);
-        if let Some(contents) = self.0.words.contents() {
+        if let Some(contents) = self.0.words.mapped_contents() {
             // SAFETY: the table's buffer is `Shared` and mapped for its life, and holds `len`
             // bytes; the CPU writes no word meanwhile (`writes`), and no command writes them.
             unsafe {

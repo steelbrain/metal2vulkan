@@ -177,7 +177,7 @@ impl Staging {
     /// Its bytes on the CPU.
     fn contents(&self) -> Result<NonNull<u8>, Error> {
         self.buffer
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| internal("a staging buffer without contents"))
     }
 }
@@ -329,12 +329,22 @@ impl CallerCopy {
         self.reach
     }
 
-    /// The caller's pointer, `contents`; `None` while the pages are detached.
+    /// The caller's pointer where the pages are mapped now; `None` while they are detached
+    /// (`Buffer::mapped_contents`).
+    pub(super) fn mapped_contents(&self) -> Option<NonNull<u8>> {
+        match self.side() {
+            Side::Import(import) => import.mapped_contents(),
+            Side::Pages(pages, false) => Some(pages.pointer),
+            Side::Pages(_, true) => None,
+        }
+    }
+
+    /// The caller's pointer of the pages the buffer lies in, or lay in last while they are
+    /// detached: `contents`.
     pub(super) fn contents(&self) -> Option<NonNull<u8>> {
         match self.side() {
             Side::Import(import) => import.contents(),
-            Side::Pages(pages, false) => Some(pages.pointer),
-            Side::Pages(_, true) => None,
+            Side::Pages(pages, _) => Some(pages.pointer),
         }
     }
 
@@ -388,7 +398,7 @@ impl CallerCopy {
                 // themselves are staged.
                 if import.copied() {
                     let pointer = import
-                        .contents()
+                        .mapped_contents()
                         .ok_or_else(|| internal("a copied host buffer without contents"))?;
                     return stage_in(buffer, pointer, range, bounded);
                 }

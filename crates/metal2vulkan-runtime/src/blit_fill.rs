@@ -1722,7 +1722,7 @@ impl BlitCommandEncoder {
             .core()
             .device()
             .write_combined_buffer(bytes.len() as u64)?;
-        let Some(contents) = buffer.contents() else {
+        let Some(contents) = buffer.mapped_contents() else {
             return Err(Error::Vulkan(super::error::VkResultCode(
                 vk::Result::ERROR_MEMORY_MAP_FAILED.as_raw(),
             )));

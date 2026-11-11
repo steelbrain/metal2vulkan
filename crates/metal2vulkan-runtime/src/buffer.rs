@@ -456,6 +456,10 @@ pub(super) struct Detached {
     /// The stand-in, a small buffer of the runtime's own, kept while a buffer is detached.
     _stand_in: Buffer,
     pages: Pages,
+    /// The host address of the first page of the pages it was detached from, the caller's,
+    /// whose pointer `contents` answers meanwhile (at `pages.offset`); nothing of the runtime's
+    /// reads or writes through it.
+    last: Option<Mapped>,
     /// The index of the memory type of the pages it was detached from: a texture made over the
     /// bytes meanwhile takes the route it would over them (`texture/heap.rs`).
     type_index: u32,
@@ -466,7 +470,8 @@ pub(super) struct Detached {
 impl Detached {
     /// What a buffer detached from `from` takes: `stand_in`'s `VkBuffer` and memory, at the
     /// place its bytes had in `from`. No memory is placed for it: the placement names the
-    /// stand-in's, unmapped and freed by none, so `contents` answers `None` while it is detached.
+    /// stand-in's, unmapped and freed by none, so the runtime maps nothing of it while it is
+    /// detached (`Buffer::mapped_contents`); `contents` answers `from`'s pointer.
     /// Refused (an internal error) for a stand-in placed in a heap.
     pub(super) fn new(stand_in: Buffer, from: &HostPages) -> Result<Detached, Error> {
         let Bytes::Own(own) = &stand_in.0.bytes else {
@@ -495,6 +500,7 @@ impl Detached {
         Ok(Detached {
             _stand_in: stand_in,
             pages,
+            last: old.mapped,
             type_index: from.type_index(),
             over_dma_buf: from.over_dma_buf(),
         })
@@ -550,6 +556,16 @@ impl HostCell {
                 Some(start..start.checked_add(shape.reach as usize)?)
             }
             Lying::Detached(_) | Lying::Gone(_) => None,
+        }
+    }
+
+    /// The caller's pointer of the pages the buffer was detached from, while it is detached.
+    fn detached_pointer(&self) -> Option<NonNull<u8>> {
+        match &*lock(&self.pages) {
+            Lying::Detached(detached) => (detached.last).and_then(|mapped| {
+                NonNull::new(mapped.as_ptr().wrapping_add(detached.pages.offset as usize))
+            }),
+            Lying::In(_) | Lying::Gone(_) => None,
         }
     }
 
@@ -3739,7 +3755,7 @@ impl Buffer {
     pub(super) fn clear(&self) -> Result<(), Error> {
         let s = self.s();
         let size = self.padded_length();
-        if let Some(contents) = self.contents() {
+        if let Some(contents) = self.mapped_contents() {
             // SAFETY: the buffer's bytes, its padded length from `contents`, are host-coherent
             // memory (`MemoryClass::Shared` and `Managed`, or imported host memory), so the
             // device sees the writes at the next submission.
@@ -3792,7 +3808,7 @@ impl Buffer {
     pub(super) fn clear_first(&self) -> Result<(), Error> {
         let s = self.s();
         let size = self.padded_length();
-        if let Some(contents) = self.contents() {
+        if let Some(contents) = self.mapped_contents() {
             // SAFETY: as in `clear`: the buffer's host-coherent bytes, which nothing else uses
             // yet.
             unsafe { std::ptr::write_bytes(contents.as_ptr(), 0, size as usize) };
@@ -4097,7 +4113,7 @@ impl Buffer {
     pub(super) fn device_contents(&self) -> Option<NonNull<u8>> {
         match self.mirror() {
             Some(_) => None,
-            None => self.contents(),
+            None => self.mapped_contents(),
         }
     }
 
@@ -4326,7 +4342,7 @@ impl Buffer {
             ) => Some((
                 self.exposed_address(ReadApart::SecondBuffer),
                 own.reserved,
-                self.contents()?,
+                self.mapped_contents()?,
             )),
             Bytes::Own(_) | Bytes::Heap(_) => None,
         }
@@ -4610,7 +4626,18 @@ impl Buffer {
     /// `contents`: the CPU address of the buffer's bytes, or `None` for `Private` storage. A
     /// no-copy buffer's is the caller's pointer. Reading or writing through it while the GPU
     /// writes those bytes is a data race, as in Metal.
+    ///
+    /// While a no-copy buffer is detached ([`detach_backing`](Buffer::detach_backing); for a
+    /// heap's buffer, its heap), it answers the caller's pointer of the pages it lay in last (its
+    /// making's or its last rebind's), as Metal's does: the pages are the caller's, which the
+    /// runtime reads and writes nothing of until a rebind gives the buffer pages again.
     pub fn contents(&self) -> Option<NonNull<u8>> {
+        self.mapped_contents().or_else(|| self.detached_contents())
+    }
+
+    /// [`contents`](Buffer::contents) where the bytes are mapped now, which the runtime reads and
+    /// writes through: `None` while a no-copy buffer is detached.
+    pub(crate) fn mapped_contents(&self) -> Option<NonNull<u8>> {
         if self.storage_mode() == StorageMode::Private {
             return None;
         }
@@ -4627,7 +4654,7 @@ impl Buffer {
             Bytes::Own(OwnBytes {
                 mirror: Some(HostCopy::Caller(caller)),
                 ..
-            }) => caller.contents(),
+            }) => caller.mapped_contents(),
             // The offset is inside the placement, which the mapping covers.
             Bytes::Own(own) => {
                 let shape = own.shape();
@@ -4635,7 +4662,33 @@ impl Buffer {
                 NonNull::new(mapped.as_ptr().wrapping_add(shape.offset as usize))
             }
             // The heap's storage mode is the buffer's, and the offset lies inside the heap.
-            Bytes::Heap(bytes) => bytes.bytes.contents().and_then(|contents| {
+            Bytes::Heap(bytes) => bytes.bytes.mapped_contents().and_then(|contents| {
+                NonNull::new(contents.as_ptr().wrapping_add(bytes.offset as usize))
+            }),
+        }
+    }
+
+    /// The caller's pointer of the pages a detached no-copy buffer lay in last, or for a heap's
+    /// buffer its offset from its detached heap's: what [`contents`](Buffer::contents) answers
+    /// while it is detached. `None` for any other buffer.
+    fn detached_contents(&self) -> Option<NonNull<u8>> {
+        if self.storage_mode() == StorageMode::Private {
+            return None;
+        }
+        match &self.s().bytes {
+            Bytes::Own(OwnBytes {
+                mirror: Some(HostCopy::Caller(caller)),
+                ..
+            }) => caller.contents(),
+            Bytes::Own(OwnBytes {
+                mirror: Some(HostCopy::Own(_)),
+                ..
+            }) => None,
+            Bytes::Own(own) => match &own.lie {
+                Lie::Host(cell) => cell.detached_pointer(),
+                Lie::Fixed(_) => None,
+            },
+            Bytes::Heap(bytes) => bytes.bytes.detached_contents().and_then(|contents| {
                 NonNull::new(contents.as_ptr().wrapping_add(bytes.offset as usize))
             }),
         }

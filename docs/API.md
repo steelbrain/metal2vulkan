@@ -497,7 +497,9 @@ staging buffers the runtime frees once their work completed, at most 256 MiB sta
 it, its `replace_region` copying in and its `synchronize_resource` copying out. Over pages the
 process maps read-only, the GPU's writes are dropped: nothing is copied out, and the pages are
 copied in again at the completion of each command buffer that used the buffer. A detach keeps
-the GPU's copy. Where device-local memory has no room for the GPU's copy, the buffer lies in its
+the GPU's copy. A detached no-copy buffer's `contents`, of either kind (and a detached no-copy
+heap's buffers'), answers the caller's pointer of the pages it lay in last, as Metal's does, until
+a rebind gives it new ones; the runtime reads and writes nothing through it meanwhile. Where device-local memory has no room for the GPU's copy, the buffer lies in its
 pages as a `Shared` one does (`device-memory-overflow`). A `Shared` no-copy buffer, and every
 no-copy buffer on a device with unified memory, lies in the caller's pages, which the GPU of a
 discrete device reads across the bus, as a discrete Mac's GPU reads them.

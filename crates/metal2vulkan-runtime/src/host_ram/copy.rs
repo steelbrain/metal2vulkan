@@ -1436,7 +1436,7 @@ impl BlitCommandEncoder {
             })
             .collect();
         if call.buffer.caller_memory() == Some(CallerMemory::HostPages) {
-            if let Some(contents) = call.buffer.contents() {
+            if let Some(contents) = call.buffer.mapped_contents() {
                 let start = contents.as_ptr().addr() as u64 + span.start;
                 let own = start..start + (span.end - span.start);
                 if (host.iter()).any(|range| range.start < own.end && own.start < range.end) {

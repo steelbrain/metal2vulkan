@@ -1804,7 +1804,7 @@ impl ShadowCopy {
         let buffer = buffer.upgrade()?;
         let pages = buffer.host_pages()?;
         let source = pages.dirty()?;
-        let contents = buffer.contents()?.as_ptr() as u64;
+        let contents = buffer.mapped_contents()?.as_ptr() as u64;
         let (raw, at) = buffer.attached_at(0)?;
         // The `VkBuffer`'s byte `v` lies at the host address `v + base`.
         let base = contents.wrapping_sub(at);

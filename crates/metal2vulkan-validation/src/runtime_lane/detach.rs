@@ -63,7 +63,7 @@ use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue,
     ComputePipelineState, Degradation, Device, Error, EventRef, Heap, HeapDescriptor, HeapType,
-    HostMemory, Invalid, LoadAction, PipelineOptions, Problem, RebindProblem, Region,
+    HostBacking, HostMemory, Invalid, LoadAction, PipelineOptions, Problem, RebindProblem, Region,
     RenderPassDescriptor, ResourceOptions, SharedEvent, Size, StoreAction, TextureDescriptor,
 };
 use std::sync::atomic::Ordering;
@@ -224,7 +224,8 @@ fn table_1_a_pending_command_buffer_reaching_a_detached_buffer_unnamed_reads_zer
 /// A command that names a detached buffer records nothing, nor does any after it in its
 /// encoder or its command buffer's later encoders: a blit's copy (the fills around it unrun) and
 /// a dispatch, each failing `DetachedBacking`; the old pages' deallocator ran in the detach,
-/// which nothing held, and `contents` answers `None`. Encoded while detached and given pages
+/// which nothing held, and `contents` answers the old pages' pointer, as Metal's does. Encoded
+/// while detached and given pages
 /// again before its first submission, a blit encoder is encoded again by the rebind (It failed
 /// `EncodedUseRebound` before) and its copy reads the new pages, with no notice. A command buffer
 /// encoded after the rebind reads the new pages. A buffer of the runtime's memory, or a heap's
@@ -238,10 +239,11 @@ fn a_command_naming_a_detached_buffer_records_nothing_and_its_command_buffer_run
             return;
         };
         gpu_read(&queue, &member, 0..16);
-        assert!(member.contents().is_some());
+        let pointer = member.contents();
+        assert!(pointer.is_some());
         detach(&member);
         assert_eq!(old.runs.load(Ordering::SeqCst), 0, "ran at the detach");
-        assert_eq!(member.contents(), None, "a detached buffer's contents");
+        assert_eq!(member.contents(), pointer, "a detached buffer's contents");
         detach(&member);
 
         let before = buffer_with(device, &[0; 16]).unwrap();
@@ -788,7 +790,11 @@ fn table_3_a_detach_waits_for_running_work_then_refuses() {
         detach(&unrelated);
         waits_then_refuses(&named, || member.detach_backing());
         named.finish();
-        assert!(member.contents().is_some(), "detached though refused");
+        assert_ne!(
+            member.host_backing(),
+            Some(HostBacking::Detached),
+            "detached though refused"
+        );
         // Once its command buffer completed and the wait returned, it detaches.
         detach(&member);
         rebind_to(&member, A);

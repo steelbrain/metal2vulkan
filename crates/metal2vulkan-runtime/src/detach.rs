@@ -53,7 +53,8 @@
 //!   runtime's own shared by every detached buffer (`buffer::Detached`), never memory of its
 //!   size. No command that takes the stand-in runs: an encoder whose command names a detached
 //!   buffer records nothing from that command on (`EncoderCore::skips`), and its submission
-//!   fails as above; `contents` answers `None` while the buffer is detached.
+//!   fails as above. `contents` answers the caller's pointer of the pages it was detached from,
+//!   as Metal's does, through which the runtime reads and writes nothing until a rebind.
 //! - **Textures**. A texture over the bytes (over the buffer, or over one of a heap's buffers, or
 //!   in the heap) stays, and presents a stand-in of its image's plan while they are detached
 //!   (`texture/stand_in.rs`): its size and level queries answer its own, an unnamed read reads zero
@@ -101,8 +102,9 @@ impl Buffer {
     /// handler, and this one is the side of it Metal settles on (the module docs). The old
     /// memory's import goes once nothing holds it; its deallocator runs at the buffer's next
     /// rebind, inside the call, or at its release, never at the detach, as Metal's. The buffer, its
-    /// `gpu_address` and its options stay; `contents` answers `None` while it is detached, where
-    /// Metal's answers the old pointer.
+    /// `gpu_address`, its options and its `contents` stay: `contents` answers the caller's pointer
+    /// of the pages it was detached from, as Metal's does (a heap's buffer, its offset from its
+    /// heap's), and the runtime reads and writes nothing through it until a rebind.
     ///
     /// A submission after the call, the command buffer's first or a later one behind an event
     /// wait, whose commands named the buffer or made it resident (a render pass whose attachment

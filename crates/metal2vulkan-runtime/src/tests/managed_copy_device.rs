@@ -525,7 +525,7 @@ fn detach(route: Route) {
     assert_eq!(read(&device, &queue, &buffer, 0..BYTES), pattern(BYTES));
     assert_eq!(buffer.detach_backing(), Ok(true));
     assert_eq!(buffer.host_backing(), Some(HostBacking::Detached));
-    assert_eq!(buffer.contents(), None);
+    assert_eq!(buffer.contents(), Some(first.at));
     assert_eq!(buffer.gpu_address(), address);
     // The GPU reads and writes the device copy.
     assert_eq!(read(&device, &queue, &buffer, 0..BYTES), pattern(BYTES));

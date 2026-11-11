@@ -403,7 +403,7 @@ impl ArgumentEncoder {
         if !buffer.device().same(&self.device) {
             return Err(buffer.device().foreign(call, &self.device));
         }
-        if buffer.storage_mode() == StorageMode::Private || buffer.contents().is_none() {
+        if buffer.storage_mode() == StorageMode::Private || buffer.mapped_contents().is_none() {
             return Err(invalid(call, Problem::StorageMode));
         }
         let offset = target_offset(&self.layout, buffer.length(), start_offset, element)
@@ -419,7 +419,7 @@ impl ArgumentEncoder {
             .as_ref()
             .ok_or_else(|| problem(call, ArgumentEncoderProblem::NoArgumentBuffer))?;
         let contents = buffer
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| internal("an argument buffer lost its mapping"))?;
         // `target` checked `offset + encoded_length` against the buffer's length.
         NonNull::new(contents.as_ptr().wrapping_add(*offset as usize))

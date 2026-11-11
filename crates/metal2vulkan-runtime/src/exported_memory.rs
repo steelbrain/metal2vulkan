@@ -578,7 +578,7 @@ impl Buffer {
         // the buffer held then: its next copy in moves the other API's writes
         // (`shadow_standing.rs`).
         device.shared().standings.written_apart(self.identity().key);
-        if self.contents().is_some() {
+        if self.mapped_contents().is_some() {
             self.settle_first_work(raw)?;
         }
         Ok(())

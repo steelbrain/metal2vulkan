@@ -343,7 +343,7 @@ impl ArgumentDispatch {
 /// The first `bytes` of `copy`, a copy of a dispatch's arguments, as words; zero past them.
 fn words(copy: &Buffer, bytes: u64) -> Result<[u32; 6], Error> {
     let contents = copy
-        .contents()
+        .mapped_contents()
         .ok_or_else(|| internal("an indirect dispatch's copy without host bytes"))?;
     let mut read = [0u8; 24];
     let length = bytes.min(24) as usize;

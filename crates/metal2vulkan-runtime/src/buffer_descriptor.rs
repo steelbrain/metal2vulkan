@@ -660,7 +660,7 @@ impl Device {
         // The bytes, read once, through their pointer, into the buffer's memory.
         let fill = |target: &Buffer| {
             let contents = target
-                .contents()
+                .mapped_contents()
                 .ok_or_else(|| internal("a host-visible buffer without contents"))?;
             // SAFETY: the buffer holds `length` bytes at `contents`, memory of the runtime's own
             // that no command uses yet and nothing else reaches.

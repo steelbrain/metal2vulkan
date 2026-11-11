@@ -73,7 +73,7 @@ impl Buffer {
     /// imported, unlike [`gpu_address`](Buffer::gpu_address).
     pub fn host_backing(&self) -> Option<HostBacking> {
         if let Some(caller) = self.caller_copy() {
-            return Some(match caller.contents() {
+            return Some(match caller.mapped_contents() {
                 Some(_) => HostBacking::DeviceCopy,
                 None => HostBacking::Detached,
             });

@@ -1272,7 +1272,7 @@ fn store_round(
             return Round::NotMade(Unmade::passing(why));
         }
     };
-    let Some(words) = source.contents() else {
+    let Some(words) = source.mapped_contents() else {
         return Round::NotMade(Unmade::passing("the kernel's buffer has no contents"));
     };
     for y in 0..shape.height {
@@ -1501,7 +1501,7 @@ fn exported_pages(
 
 /// Where `buffer`'s byte 0 lies for the CPU; why not, where it has no contents.
 fn contents(buffer: &Buffer) -> Result<NonNull<u8>, Unmade> {
-    (buffer.contents()).ok_or_else(|| Unmade::passing("its buffer has no contents"))
+    (buffer.mapped_contents()).ok_or_else(|| Unmade::passing("its buffer has no contents"))
 }
 
 /// Pages of `device`'s that its imports did not take as the class's, `why`: a cause that lasts

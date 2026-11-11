@@ -137,7 +137,7 @@ fn read_words(
             }
         })?;
         let contents = copy
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| internal("a Shared copy without host bytes"))?;
         // SAFETY: the copy holds `bytes` host-coherent bytes, which the waited-for copy wrote and
         // its barrier made visible to the host.

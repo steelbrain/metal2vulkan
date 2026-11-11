@@ -238,7 +238,7 @@ impl ExecutionRange {
             ExecutionRange::Indirect(copy) => copy,
         };
         let contents = copy
-            .contents()
+            .mapped_contents()
             .ok_or_else(|| internal("an execution range's copy without host bytes"))?;
         let mut bytes = [0u8; RANGE_BYTES as usize];
         // SAFETY: the copy is a `Shared` buffer of at least `RANGE_BYTES`, mapped; the GPU's
