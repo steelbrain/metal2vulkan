@@ -138,15 +138,18 @@
 //!   handle, so the device's last handle never goes on it. It reads the stop between its steps
 //!   (each round, each phase, each copy): the device's teardown stops it there and waits for the
 //!   step in progress, the release of its objects and of its parts, and the checks end
-//!   unrecorded, what had not answered `Unchecked`. Each step's Vulkan work runs inside a section
-//!   of the exit guard (`exit_guard.rs`). Its submissions are counted apart
-//!   (`WorkCounts::submit_check_calls`), not among the device's, with the relay's mark after each
-//!   of its uses of the queue where the device relays its queues' failures (`device/relay.rs`,
-//!   `By::Checks`); the commands it records go through the driver's own entry points, counted
-//!   among none of the device's (`WorkCounts::commands_recorded`, `recorder::unrouted`); its
-//!   allocations, buffers, bindings and releases are counted as the checks'
-//!   (`WorkCounts::device_checks`), not among the process's (`object_churn`). Its submission calls
-//!   hold the device's loader word (`loader_word.rs`).
+//!   unrecorded, what had not answered `Unchecked`. So does the device's loss, at the call that
+//!   answers it (`VK_ERROR_DEVICE_LOST`, from a submission or a wait): nothing is submitted again,
+//!   since a later submission of the same fence and command buffers would find them pending (as
+//!   the validation layer reads a loss), and nothing a lost device measured is recorded. Each
+//!   step's Vulkan work runs inside a section of the exit guard (`exit_guard.rs`). Its
+//!   submissions are counted apart (`WorkCounts::submit_check_calls`), not among the device's,
+//!   with the relay's mark after each of its uses of the queue where the device relays its queues'
+//!   failures (`device/relay.rs`, `By::Checks`); the commands it records go through the driver's
+//!   own entry points, counted among none of the device's (`WorkCounts::commands_recorded`,
+//!   `recorder::unrouted`); its allocations, buffers, bindings and releases are counted as the
+//!   checks' (`WorkCounts::device_checks`), not among the process's (`object_churn`). Its
+//!   submission calls hold the device's loader word (`loader_word.rs`).
 
 use crate::allocations::Allocations;
 use crate::command_buffer::fences::Fences;
@@ -355,6 +358,10 @@ pub(crate) struct SubmitChecks {
     /// (`tests/teardown_threads.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) held: crate::freed_memory::held::Held,
+    /// The next wait for the checks' fence answers as a lost device's (`VK_ERROR_DEVICE_LOST`),
+    /// whatever the driver answered: a device test's injection (`tests::submit_check_device`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) lost_at_wait: AtomicBool,
 }
 
 impl SubmitChecks {
@@ -380,6 +387,8 @@ impl SubmitChecks {
             ending: Condvar::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             held: Default::default(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            lost_at_wait: AtomicBool::new(false),
         };
         if merge_assumed {
             checks.set(Check::Merge, Verdict::Holds);
@@ -1112,8 +1121,8 @@ fn run(parts: &Parts, made: Made) {
 
 /// Each check in turn, its verdict set as it is known: what they measured, and whether their
 /// verdicts may be recorded (no timed check's tries all disagreed, an import tax `Holds` earned
-/// its record: [`tax_tried`]); `None` where the process is exiting or the device's teardown
-/// stopped the checks.
+/// its record: [`tax_tried`]); `None` where the process is exiting, or the device's teardown or
+/// its loss stopped the checks.
 fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
     let checks = &parts.checks;
     let (merges, (merged, apart), merge_kept) = merge_tried(checks, || merge(parts, objects))?;
@@ -1290,7 +1299,10 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         let mut refused = false;
         for submission in 0..=TAX_SUBMITS {
             parts.step();
-            match objects.submit_one(parts)? {
+            let Some(submitted) = objects.submit_one(parts) else {
+                return release_all(parts, imports.drain(..)).and(None);
+            };
+            match submitted {
                 Some(nanos) if submission > 0 => times.push(nanos),
                 Some(_) => {}
                 None => {
@@ -1742,7 +1754,7 @@ impl Objects {
     /// Submit `infos` to the device's first `VkQueue`, the last signalling the fence, in one call
     /// where `together`, else one call each, and wait for the fence: the nanoseconds inside the
     /// calls. `Some(None)` where a call was refused or the wait failed; `None` where the process
-    /// is exiting.
+    /// is exiting or the device was lost (the module docs, "Its thread").
     fn submit(
         &self,
         parts: &Parts,
@@ -1808,6 +1820,10 @@ impl Objects {
         };
         let nanos = match submitted {
             Ok(spent) => spent,
+            Err(vk::Result::ERROR_DEVICE_LOST) => {
+                parts.loader_word.end_step(step, mark);
+                return None;
+            }
             Err(_) => {
                 parts.loader_word.end_step(step, mark);
                 // A refused call among several: those before it, and so the fence, were not all
@@ -1818,9 +1834,9 @@ impl Objects {
                 };
             }
         };
-        let waited = self.wait(parts)?;
+        let waited = self.wait(parts);
         parts.loader_word.end_step(step, mark);
-        if !waited {
+        if !waited? {
             return Some(None);
         }
         Some(Some(i64::try_from(nanos.as_nanos()).unwrap_or(i64::MAX)))
@@ -1838,7 +1854,7 @@ impl Objects {
 
     /// Record and submit a copy of [`COPIED`] bytes from the start of `import`'s buffer to
     /// `page` bytes in, then a barrier to the host's reads, and wait for it: whether it ran.
-    /// `None` where the process is exiting.
+    /// `None` where the process is exiting or the device was lost.
     #[cfg(target_os = "linux")]
     fn copy(&self, parts: &Parts, import: &Import, page: u64) -> Option<bool> {
         {
@@ -1883,7 +1899,7 @@ impl Objects {
     }
 
     /// Wait for the fence, a slice at a time, each a section, then reset it: whether it was
-    /// signalled. `None` where the process is exiting.
+    /// signalled. `None` where the process is exiting or the device was lost.
     fn wait(&self, parts: &Parts) -> Option<bool> {
         loop {
             let _busy = exit_guard::enter()?;
@@ -1892,6 +1908,11 @@ impl Objects {
             let waited =
                 unsafe { raw.wait_for_fences(&[self.fence], true, WAIT_SLICE.as_nanos() as u64) };
             exit_guard::called(Call::WaitForFences);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            let waited = match parts.checks.lost_at_wait.swap(false, Ordering::AcqRel) {
+                true => Err(vk::Result::ERROR_DEVICE_LOST),
+                false => waited,
+            };
             match waited {
                 Ok(()) => {
                     // SAFETY: the fence is signalled, in no pending submission.
@@ -1900,6 +1921,7 @@ impl Objects {
                     return Some(reset.is_ok());
                 }
                 Err(vk::Result::TIMEOUT) => continue,
+                Err(vk::Result::ERROR_DEVICE_LOST) => return None,
                 Err(_) => return Some(false),
             }
         }
@@ -1935,7 +1957,7 @@ impl Objects {
 
     /// Let the objects go, inside a section: whether it ran (`false` once the process is
     /// exiting, the objects then left to its end). No submission naming them is pending: each
-    /// was waited for.
+    /// was waited for, or the device was lost, which Vulkan counts as their completion.
     fn release(&self, parts: &Parts) -> bool {
         let _held = parts.step_held();
         let Some(_busy) = exit_guard::enter() else {

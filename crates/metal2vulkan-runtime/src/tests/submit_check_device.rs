@@ -24,7 +24,7 @@
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::fresh_pages::FRESH_PAGES_PAST;
-use crate::submit_check::{record_name, Check, Verdict, TAX_IMPORTS};
+use crate::submit_check::{record_name, Check, Verdict, MERGED, TAX_IMPORTS};
 use crate::tests::SETTLE;
 use crate::{
     CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef, LayerSetting,
@@ -32,6 +32,9 @@ use crate::{
 };
 use metal2vulkan::vk::DriverId;
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The device the cfg selects, its shader cache in `cache`.
 fn device(cache: &Path) -> Device {
@@ -171,6 +174,76 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
         drop(second);
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+}
+
+/// A loss of the device the checks meet stops them at the call that answers it, here a wait for
+/// their fence answering `VK_ERROR_DEVICE_LOST` (injected, `SubmitChecks::lost_at_wait`): nothing
+/// is submitted after it, so no fence or command buffer of theirs goes to the lost device again,
+/// and they record nothing, each check that had not answered `Unchecked` for the device's life.
+/// On the M3 Max (MoltenVK 1.4.2), a real loss under the program's own
+/// `MVK_CONFIG_RESUME_LOST_DEVICE` off had them submit their fence and command buffer again, which
+/// the validation layer read as still pending (`VUID-vkQueueSubmit-fence-00064`,
+/// `VUID-vkQueueSubmit-pCommandBuffers-00071`).
+#[test]
+fn a_loss_stops_the_checks_with_nothing_submitted_again_or_recorded() {
+    let scratch = Scratch::new("submit-check-loss");
+    let device = device(&scratch.0);
+    let checks = Arc::clone(&device.shared().submit_checks);
+    checks.held.hold();
+    // The checks started as the device was made: they wait at their next step, or ended.
+    let deadline = Instant::now() + WAIT;
+    while checks.held.waiting() == 0 && !device.settle_submit_checks(Duration::ZERO) {
+        assert!(
+            Instant::now() < deadline,
+            "the checks neither held nor ended"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    if checks.held.waiting() == 0 {
+        checks.held.release();
+        println!(
+            "SKIPPED {}: the device's submission checks ended before the hold",
+            device.name()
+        );
+        return;
+    }
+    let before = device.work_counts().submit_check_calls;
+    checks.lost_at_wait.store(true, Ordering::Release);
+    checks.held.release();
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the checks never ended"
+    );
+    let counts = device.work_counts();
+    let calls = counts.submit_check_calls - before;
+    let answered = verdicts(&device);
+    println!(
+        "{}: {calls} calls from the hold, verdicts {answered:?}",
+        device.name()
+    );
+    assert!(
+        !checks.lost_at_wait.load(Ordering::Acquire),
+        "the checks waited for no fence after the hold"
+    );
+    // One submission's calls, the one whose wait met the loss: a merge round's apart form
+    // makes [`MERGED`].
+    assert!(
+        (1..=MERGED as u64).contains(&calls),
+        "{calls} calls from the hold: the checks submitted again after the loss"
+    );
+    assert_eq!(counts.submit_checks_run, 0, "the checks ran to their end");
+    assert!(
+        !answered.contains(&Verdict::Pending),
+        "the stopped checks left {answered:?}"
+    );
+    // The device goes, its cache thread writing what it queued as it goes: no record among it.
+    let name = record_name(&device.driver_identity());
+    drop(device);
+    let found = files_named(&scratch.0, &name);
+    assert!(
+        found.is_empty(),
+        "a lost device's checks recorded {found:?}"
+    );
 }
 
 /// The paths the verdicts choose: grouped batches, fresh pages, releasable pointer imports.
