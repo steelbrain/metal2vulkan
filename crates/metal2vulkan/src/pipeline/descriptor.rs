@@ -699,7 +699,11 @@ pub struct ComputePipelineDescriptor {
     /// samplers keep theirs. OpenCL C's work-item functions read the dispatch: `get_global_id`
     /// adds the offset to the thread's position in the grid, `get_global_offset` and
     /// `get_work_dim` read buffer 0, and a dimension past 2 answers OpenCL's 0 or 1 (where the M3
-    /// Max leaves a store of such a value unwritten). The pipeline's reflection lists the three
+    /// Max leaves a store of such a value unwritten). `get_image_channel_order` and
+    /// `get_image_channel_data_type` of the image at texture index `t` read words `2t + 1` and
+    /// `2t` of buffer 2. An `image1d_t` (`texture1d` in the AIR) and an `image1d_array_t`
+    /// (`texture1d_array`) take the 2D texture and the 2D array texture of height 1 that Apple's
+    /// OpenCL binds for them, read and written at row 0. The pipeline's reflection lists the three
     /// buffers after the kernel's arguments. The kernel compiles under it
     /// (`LoweringInputs::open_cl_mode`), so it is part of the key. Without it Metal refuses a
     /// pipeline of such a kernel ("Internal compiler error"); the crate compiles it as the AIR's
