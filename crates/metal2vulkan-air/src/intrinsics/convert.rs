@@ -1,5 +1,13 @@
 //! Conversions: `air.convert.<kind>.<type>.<kind>.<type>[.<rounding>[.sat]]` and
 //! `air.{pack,unpack}.<format>.<type>`.
+//!
+//! The rounding (`rte`, `rtz`, `rtp`, `rtn`) and `.sat` are the suffixes Apple's OpenCL compiler
+//! spells on every `convert_<type>[_sat][_<mode>]` it emits. Metal does not answer them alike:
+//! Apple's compilers for a Radeon Pro 5300M and a UHD Graphics 630 (macOS 26.7.1) answer every
+//! integer source as the conversion without the suffix (the 630 refuses most float sources), and
+//! the M3 Max's (macOS 27.0.1) rounds a float to an integer to even and narrows to `half` toward
+//! zero where named but creates no pipeline for most of the other forms. What no Mac guarantees
+//! is no part of the conversion, so a suffixed name is the conversion its types name.
 
 use super::sig::{Operand, Signature};
 use super::ty::{Elem, NumTy};
@@ -72,32 +80,6 @@ impl Fp8 {
     }
 }
 
-/// The rounding a conversion names after its types (OpenCL's `convert_<type>_<mode>`), which
-/// Apple's OpenCL compiler spells on every `convert_*` it emits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ConvertRounding {
-    /// `rte`: to nearest, ties to even.
-    Rte,
-    /// `rtz`: toward zero.
-    Rtz,
-    /// `rtp`: toward positive infinity.
-    Rtp,
-    /// `rtn`: toward negative infinity.
-    Rtn,
-}
-
-impl ConvertRounding {
-    fn parse(token: &str) -> Option<ConvertRounding> {
-        Some(match token {
-            "rte" => ConvertRounding::Rte,
-            "rtz" => ConvertRounding::Rtz,
-            "rtp" => ConvertRounding::Rtp,
-            "rtn" => ConvertRounding::Rtn,
-            _ => return None,
-        })
-    }
-}
-
 /// A numeric conversion between equal lane counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Convert {
@@ -113,13 +95,6 @@ pub struct Convert {
     /// or to an integer other than `i1`. An 8-bit float destination does not decode
     /// ([`super::UNDECODED`]).
     pub src_fp8: Option<Fp8>,
-    /// The rounding the name spells after the types (`.<rte|rtz|rtp|rtn>`), or `None` for the
-    /// plain conversion. Neither side is a `bool` or an 8-bit float when it is spelled.
-    pub rounding: Option<ConvertRounding>,
-    /// Whether the name ends in `.sat` after its rounding: a saturating conversion to an integer
-    /// (OpenCL's `convert_<type>_sat_<mode>`), out-of-range values clamped to the destination's
-    /// range and a NaN to zero.
-    pub saturate: bool,
 }
 
 impl Convert {
@@ -127,11 +102,12 @@ impl Convert {
     pub(super) fn parse(rest: &str) -> Option<Convert> {
         let mut t = rest.split('.');
         let (dk, dt, sk, st) = (t.next()?, t.next()?, t.next()?, t.next()?);
-        let rounding = match t.next() {
-            Some(token) => Some(ConvertRounding::parse(token)?),
-            None => None,
+        let rounded = match t.next() {
+            Some("rte" | "rtz" | "rtp" | "rtn") => true,
+            Some(_) => return None,
+            None => false,
         };
-        let saturate = match t.next() {
+        let saturated = match t.next() {
             Some("sat") => true,
             Some(_) => return None,
             None => false,
@@ -157,20 +133,19 @@ impl Convert {
             src_kind: NumKind::parse(sk)?,
             src,
             src_fp8,
-            rounding,
-            saturate,
         };
         let src_ok = match src_fp8 {
             Some(_) => c.dst.elem != Elem::I1,
             None => c.src_kind.admits(c.src.elem),
         };
         // A rounding is spelled between numbers (no `bool`, no 8-bit float), and `.sat` only after
-        // one, to an integer.
-        let plain = c.dst.elem != Elem::I1 && c.src.elem != Elem::I1 && src_fp8.is_none();
-        let suffix_ok = match (rounding, saturate) {
-            (None, _) => true,
-            (Some(_), false) => plain,
-            (Some(_), true) => plain && c.dst_kind != NumKind::Float,
+        // one, to an integer: the forms Apple's OpenCL runtime declares.
+        let numbers = c.dst.elem != Elem::I1 && c.src.elem != Elem::I1 && src_fp8.is_none();
+        let suffix_ok = match (rounded, saturated) {
+            (false, false) => true,
+            (true, false) => numbers,
+            (true, true) => numbers && c.dst_kind != NumKind::Float,
+            (false, true) => false,
         };
         let ok = c.dst_kind.admits(c.dst.elem) && src_ok && suffix_ok && c.dst.lanes == c.src.lanes;
         ok.then_some(c)

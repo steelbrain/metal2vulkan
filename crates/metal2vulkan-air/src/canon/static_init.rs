@@ -53,7 +53,7 @@ use std::collections::{BTreeMap, HashMap};
 use crate::budget::Meter;
 use crate::error::{CanonError, DiagName, InputError, InputErrorKind, Location};
 use crate::error::{Error, Feature, Unsupported};
-use crate::intrinsics::{AirIntrinsic, ConvertRounding, FunctionConstant, LlvmIntrinsic, NumKind};
+use crate::intrinsics::{AirIntrinsic, FunctionConstant, LlvmIntrinsic, NumKind};
 use crate::ir::layout::Endian;
 use crate::ir::{AddrSpace, Arena, BlockId, Body, Callee, CastOp, Const, ConstExpr, ConstId};
 use crate::ir::{Constant, FuncId, Function, Global, GlobalId, Idx, InstId, InstKind};
@@ -534,18 +534,14 @@ impl<'a> Eval<'a> {
                     _ => return Err(not_evaluable(at)),
                 },
                 // An integer or `bool` source, a scalar or each lane of a vector: to `bool` as
-                // `x != 0`, to another integer as C++ converts it (no saturation: a rounding is
-                // nothing to an integer); a scalar to a float rounded to nearest even (unless the
-                // name rounds another way).
+                // `x != 0`, to another integer as C++ converts it; a scalar to a float rounded to
+                // nearest even.
                 Callee::Air {
                     op: AirIntrinsic::Convert(c),
                     ..
                 } if c.src_kind != NumKind::Float
                     && c.src_fp8.is_none()
-                    && !c.saturate
-                    && (c.dst_kind != NumKind::Float
-                        || (!c.src.is_vector()
-                            && matches!(c.rounding, None | Some(ConvertRounding::Rte)))) =>
+                    && (c.dst_kind != NumKind::Float || !c.src.is_vector()) =>
                 {
                     let signed = c.src_kind == NumKind::Signed;
                     let x = match call.args.first() {

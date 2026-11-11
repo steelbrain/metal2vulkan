@@ -4,10 +4,11 @@
 // declares and never defines, and the directives below rename every call to the intrinsic in both
 // companions (scripts/regen-air-fixtures). Every operand is read from a buffer, so nothing folds.
 //
-// Apple's M3 Max (macOS 27.0.1) creates a pipeline only for the forms
-// `kernel_convert_rounding_apple_gpu` calls (its compiler service exits on the others); a Radeon
-// Pro 5300M under macOS 26.7.1 creates one for every kernel here. Compiled without fast math, so
-// a NaN, an infinity or a signed zero operand, and an infinite result, ask a defined question.
+// A Radeon Pro 5300M under macOS 26.7.1 creates a pipeline for every kernel here. Apple's M3 Max
+// (macOS 27.0.1) creates none for the first four (its compiler service exits on most of the
+// forms); `kernel_convert_rounding_apple_gpu` calls only forms it compiles and answers as the
+// conversion its types name, for a case qualified there. Compiled without fast math, so a NaN, an
+// infinity or a signed zero operand, and an infinite result, ask a defined question.
 // metal-fast-math: off
 #include <metal_stdlib>
 using namespace metal;
@@ -307,14 +308,12 @@ kernel void kernel_convert_rounding_float_to_float(device const uint *in [[buffe
 }
 
 // Thread i of n converts the integer word ints[i] and the `float` with bits floats[i] by the forms
-// the M3 Max's Metal compiles, writing 35 words from out[35 * i]: the `float` of the word as `int`
-// and `uint` and of a 64-bit value (high word ints[i], low word ints[(i + 5) % n]) by rte; the
-// `half` bits of it as `int` and of its low 16 bits by rte; `float4`s of its four bytes and of four
-// words around it by rte; the `float` as `int` by rte and rtz, each also saturating; as `uint` by
-// rtz, saturating rtz and saturating rte; as `uchar` saturating rte; the two words of a saturating
-// `long` (rtz); an `int4` of it and its neighbours by rte; its `half` bits by rte and rtz; that
-// `half` widened by rtz; the `ushort` of its default `half` by rte; the `half4` of it and its
-// neighbours by rtz, packed; and the two input words.
+// the M3 Max's Metal compiles and answers as the conversion their types name, writing 21 words from
+// out[21 * i]: the `float` of the word as `int` and `uint` and of a 64-bit value (high word ints[i],
+// low word ints[(i + 5) % n]) by rte; the `half` bits of it as `int` and of its low 16 bits by rte;
+// `float4`s of its four bytes and of four words around it by rte (the two forms a guest's OpenCL
+// kernels were refused on); the `float` as `int` and as `uint` by rtz, each also saturating; its
+// `half` bits by rte, and that `half` widened by rtz; and the two input words.
 kernel void kernel_convert_rounding_apple_gpu(device const uint *ints [[buffer(0)]],
                                               device const uint *floats [[buffer(1)]],
                                               device uint *out [[buffer(2)]],
@@ -324,7 +323,7 @@ kernel void kernel_convert_rounding_apple_gpu(device const uint *ints [[buffer(0
     int s = as_type<int>(u);
     long l = as_type<long>(uint2(ints[(i + 5) % n], u));
     float x = as_type<float>(floats[i]);
-    device uint *o = out + 35 * i;
+    device uint *o = out + 21 * i;
     o[0] = as_type<uint>(rc_f_si_rte(s));
     o[1] = as_type<uint>(rc_f_ui_rte(u));
     o[2] = as_type<uint>(rc_f_sl_rte(l));
@@ -341,35 +340,13 @@ kernel void kernel_convert_rounding_apple_gpu(device const uint *ints [[buffer(0
     o[10] = as_type<uint>(w.y);
     o[11] = as_type<uint>(w.z);
     o[12] = as_type<uint>(w.w);
-    o[13] = as_type<uint>(rc_si_f_rte(x));
-    o[14] = as_type<uint>(rc_si_f_rtz(x));
-    o[15] = as_type<uint>(rc_si_f_rte_sat(x));
-    o[16] = as_type<uint>(rc_si_f_rtz_sat(x));
-    o[17] = rc_ui_f_rtz(x);
-    o[18] = rc_ui_f_rtz_sat(x);
-    o[19] = rc_ui_f_rte_sat(x);
-    o[20] = uint(rc_uc_f_rte_sat(x));
-    uint2 q = as_type<uint2>(rc_sl_f_rtz_sat(x));
-    o[21] = q.x;
-    o[22] = q.y;
-    int4 v = rc_si4_f4_rte(float4(x, as_type<float>(floats[(i + 1) % n]),
-                                  as_type<float>(floats[(i + 2) % n]),
-                                  as_type<float>(floats[(i + 3) % n])));
-    o[23] = as_type<uint>(v.x);
-    o[24] = as_type<uint>(v.y);
-    o[25] = as_type<uint>(v.z);
-    o[26] = as_type<uint>(v.w);
+    o[13] = as_type<uint>(rc_si_f_rtz(x));
+    o[14] = as_type<uint>(rc_si_f_rtz_sat(x));
+    o[15] = rc_ui_f_rtz(x);
+    o[16] = rc_ui_f_rtz_sat(x);
     half e = rc_h_f_rte(x);
-    o[27] = hbits(e);
-    o[28] = hbits(rc_h_f_rtz(x));
-    o[29] = as_type<uint>(rc_f_h_rtz(e));
-    o[30] = uint(rc_us_h_rte(half(x)));
-    half4 h = rc_h4_f4_rtz(float4(x, as_type<float>(floats[(i + 1) % n]),
-                                  as_type<float>(floats[(i + 2) % n]),
-                                  as_type<float>(floats[(i + 3) % n])));
-    uint2 p = as_type<uint2>(h);
-    o[31] = p.x;
-    o[32] = p.y;
-    o[33] = u;
-    o[34] = floats[i];
+    o[17] = hbits(e);
+    o[18] = as_type<uint>(rc_f_h_rtz(e));
+    o[19] = u;
+    o[20] = floats[i];
 }

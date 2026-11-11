@@ -301,59 +301,33 @@ fn math_conversion_and_atomic_families_decode() {
 }
 
 /// The rounding Apple's OpenCL compiler spells after a conversion's types, and `.sat` after it to
-/// an integer: every `convert_*` it emits (`convert_float4_rte(uchar4)` is
+/// an integer, on every `convert_*` it emits (`convert_float4_rte(uchar4)` is
 /// `air.convert.f.v4f32.u.v4i8.rte`, `convert_int_sat(float)` is
-/// `air.convert.s.i32.f.f32.rtz.sat`).
+/// `air.convert.s.i32.f.f32.rtz.sat`): the conversion its types name, as Metal's compilers for
+/// the x86 Macs answer it.
 #[test]
-fn convert_parses_its_rounding_and_saturation() {
-    let parse = |name: &str| match air(name) {
-        AirIntrinsic::Convert(c) => c,
-        other => panic!("{name}: {other:?}"),
-    };
-    for (name, rounding, saturate) in [
+fn a_rounded_or_saturated_convert_is_the_conversion_its_types_name() {
+    for (suffixed, plain) in [
         (
             "air.convert.f.v4f32.u.v4i8.rte",
-            ConvertRounding::Rte,
-            false,
+            "air.convert.f.v4f32.u.v4i8",
         ),
         (
             "air.convert.f.v4f32.s.v4i32.rte",
-            ConvertRounding::Rte,
-            false,
+            "air.convert.f.v4f32.s.v4i32",
         ),
-        ("air.convert.f.f16.s.i32.rtz", ConvertRounding::Rtz, false),
-        ("air.convert.f.f16.f.f32.rtp", ConvertRounding::Rtp, false),
-        ("air.convert.s.i32.f.f32.rtn", ConvertRounding::Rtn, false),
-        (
-            "air.convert.s.i32.f.f32.rtz.sat",
-            ConvertRounding::Rtz,
-            true,
-        ),
+        ("air.convert.f.f16.s.i32.rtz", "air.convert.f.f16.s.i32"),
+        ("air.convert.f.f16.f.f32.rtp", "air.convert.f.f16.f.f32"),
+        ("air.convert.s.i32.f.f32.rtn", "air.convert.s.i32.f.f32"),
+        ("air.convert.s.i32.f.f32.rtz.sat", "air.convert.s.i32.f.f32"),
         (
             "air.convert.u.v2i16.s.v2i64.rte.sat",
-            ConvertRounding::Rte,
-            true,
+            "air.convert.u.v2i16.s.v2i64",
         ),
-        ("air.convert.u.i8.u.i32.rtz", ConvertRounding::Rtz, false),
+        ("air.convert.u.i8.u.i32.rtz", "air.convert.u.i8.u.i32"),
     ] {
-        let c: Convert = parse(name);
-        assert_eq!(
-            (c.rounding, c.saturate),
-            (Some(rounding), saturate),
-            "{name}"
-        );
+        assert_eq!(air(suffixed), air(plain), "{suffixed}");
     }
-    let plain = parse("air.convert.f.f32.s.i32");
-    assert_eq!((plain.rounding, plain.saturate), (None, false));
-    // The suffix changes nothing else: the types and kinds are the plain conversion's.
-    let rte = parse("air.convert.f.f32.s.i32.rte");
-    assert_eq!(
-        Convert {
-            rounding: None,
-            ..rte
-        },
-        plain
-    );
 }
 
 #[test]

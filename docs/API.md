@@ -4196,17 +4196,6 @@ bound.
   `OpQuantizeToF16` alone, on every device without `shaderFloat16`, its quantize measured or not: a
   value below the smallest normal `half` may round to a zero where Metal answers the half denormal
   (or `2^-14`, from just below it). An integer's `half` rounds exactly instead.
-- `metal2vulkan-degrade-native-conversion-rounding` (precision).
-  `PrecisionNote::NativeConversionRounding`: Native device maths (a conversion): an `air.convert`
-  whose name rounds to nearest even (`.rte`: OpenCL's `convert_float` of an `int`, as Apple's
-  OpenCL compiler spells it) and that can round (a 32- or 64-bit integer to `float`) is the
-  device's correctly rounded conversion where the entry cannot declare `RoundingModeRTE` for 32
-  bits with the widths the device's rounding-mode independence ties to it (MoltenVK, whose 64-bit
-  rounding mode it does not state):
-  either value around the exact one, the device's choice, where Metal answers the nearer one, ties
-  to even. Where the entry declares the mode the conversion is Metal's and records nothing. The
-  conversions that round toward zero or an infinity (`.rtz`, `.rtp`, `.rtn`) are exact on every
-  device and record nothing.
 - `metal2vulkan-degrade-native-nan-encoding` (precision). `PrecisionNote::NativeNanEncoding`: Native
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
   unselected, where Metal answers a NaN the device is not measured to answer (every NaN but
@@ -4891,6 +4880,28 @@ each item named states the rule in full.
   `Feature::Linking`), where Metal makes the pipeline: on the M3 Max each such read was undefined
   (the kernel stored nothing); on the 5300M a value for a pointer read the pointer's low 32 bits
   and a `constant` pointer for a `device` one read through it.
+
+**Conversions**
+
+- **`air.convert` with a rounding (`.rte`, `.rtz`, `.rtp`, `.rtn`) and `.sat` after its types is
+  the conversion its types name.** Apple's OpenCL compiler spells these on every
+  `convert_<type>[_sat][_<mode>]`, and Metal's compilers do not answer them alike. Measured over the
+  owned fixture `kernel_convert_rounding_modes`'s edge values, one kernel per form (probe jobs
+  m3-max-14380 on a Radeon Pro 5300M and m3-max-14381 on a UHD Graphics 630, both macOS 26.7.1;
+  m3-max-14382 on the M3 Max, macOS 27.0.1), the runtime differs from a Mac in three places:
+
+  | Form | M3 Max | Radeon Pro 5300M | UHD Graphics 630 | Runtime |
+  |---|---|---|---|---|
+  | float to integer, `.rte` | rounds to nearest even | truncates | no pipeline | truncates |
+  | float to `half`, `.rtz`, `.rtp`, `.rtn` | `.rtz` as named; no pipeline for the others | nearest even | as named | nearest even |
+  | float to integer, `.sat` | an unsigned destination keeps a negative's wrapped bits; a `long` of an infinity is 0, past its range wraps | an 8-bit destination is not clamped; a `long` is clamped to `int`'s range | no pipeline | clamps, as its conversion without the suffix |
+
+  Everywhere else every Mac that creates the pipeline answers the conversion without the suffix,
+  which is no difference: an integer to `float` or `half` by any rounding is rounded to nearest
+  even (the M3 Max creates no pipeline for a directed one), an integer to an integer with `.sat`
+  wraps (the M3 Max creates none), and a float to an integer by `.rtp` or `.rtn` truncates on the
+  5300M (the others create none). The M3 Max's compiler service exits on the forms it does not
+  compile, where the runtime compiles them all.
 
 **Inline assembly**
 

@@ -615,18 +615,7 @@ fn float_to_wide_truncates_and_saturates() {
                 &format!("convert saturating f32 -> wide i{bits} signed={signed}"),
                 &[float(32)],
                 to,
-                &|fb, x| {
-                    w::convert(
-                        fb,
-                        ConvertKind::ToInt {
-                            signed,
-                            integral: crate::lower::arith::rounding::Integral::Truncate,
-                        },
-                        float(32),
-                        to,
-                        x[0],
-                    )
-                },
+                &|fb, x| w::convert(fb, ConvertKind::ToInt { signed }, float(32), to, x[0]),
                 &cases,
                 &|c| {
                     let x = f64::from(f32v(arg(c, 0)));

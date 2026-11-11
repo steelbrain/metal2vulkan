@@ -329,7 +329,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceTexelConversion
         | N::DeviceVertexConversion
         | N::NativeHalfConversion
-        | N::NativeConversionRounding
         | N::NativeHalfQuantize
         | N::NativeNanEncoding
         | N::NativeMinMax

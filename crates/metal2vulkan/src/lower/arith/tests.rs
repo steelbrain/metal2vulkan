@@ -3642,10 +3642,7 @@ fn saturating_float_to_integer_convert_matches_metal() {
                     &|fb, x| {
                         math::convert(
                             fb,
-                            ConvertKind::ToInt {
-                                signed,
-                                integral: crate::lower::arith::rounding::Integral::Truncate,
-                            },
+                            ConvertKind::ToInt { signed },
                             ff,
                             tf,
                             x[0],
@@ -3749,10 +3746,7 @@ fn saturating_converts_saturate_at_every_bound() {
                     &|fb, x| {
                         math::convert(
                             fb,
-                            ConvertKind::ToInt {
-                                signed,
-                                integral: crate::lower::arith::rounding::Integral::Truncate,
-                            },
+                            ConvertKind::ToInt { signed },
                             ff,
                             int(ibits),
                             x[0],
@@ -3777,10 +3771,7 @@ fn saturating_converts_saturate_at_every_bound() {
                 &|fb, x| {
                     math::convert(
                         fb,
-                        ConvertKind::ToInt {
-                            signed,
-                            integral: crate::lower::arith::rounding::Integral::Truncate,
-                        },
+                        ConvertKind::ToInt { signed },
                         half,
                         int(ibits),
                         x[0],

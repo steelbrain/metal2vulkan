@@ -275,27 +275,6 @@ pub fn controlled_modes(p: &DeviceProfile) -> Option<Vec<ExecMode>> {
     Some(modes)
 }
 
-/// The widths whose `RoundingModeRTE` an entry declares on profile `p` so that a conversion with a
-/// `float` result rounds to nearest even, or `None` where the profile lacks one: 32, and 16 and 64
-/// with it where the device's rounding modes are not independent (RuntimeSpirv VUID 06292; with
-/// independence for 32 bits only, 32 is free of the others, VUID 06291). The Vulkan spec
-/// ("Precision and Operation of SPIR-V Instructions") rounds a correctly rounded operation
-/// "according to IEEE 754 roundTiesToEven" in an entry that declares it, and to either neighbour,
-/// the device's choice, elsewhere.
-pub fn rte_modes(p: &DeviceProfile) -> Option<Vec<u8>> {
-    let fc = p.fields().float_controls;
-    let has = |w: u8| match w {
-        16 => fc.f16.rounding_rte,
-        32 => fc.f32.rounding_rte,
-        _ => fc.f64.rounding_rte,
-    };
-    let widths = match fc.rounding_independence {
-        Independence::All | Independence::Only32Bit => vec![32],
-        Independence::None => vec![16, 32, 64],
-    };
-    widths.iter().all(|w| has(*w)).then_some(widths)
-}
-
 /// Whether module `m` rounds to `half` through [`converted`] or [`controlled`]: an `OpFConvert` of
 /// an `f32` to 16 bits whose result another widens back. The module then records
 /// `PrecisionNote::NativeHalfConversion` ([`QuantizeForm::Converted`]) or declares
