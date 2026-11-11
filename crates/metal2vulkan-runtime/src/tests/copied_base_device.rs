@@ -306,10 +306,12 @@ fn page_byte(n: usize) -> u8 {
 
 /// A first merge back of a 256 MiB copy every block of which both sides changed, its base in the
 /// device's memory, after the device sat idle three seconds (where the host's reads of that
-/// memory are slowest, about 0.2 ms a 1 KiB block on an RTX 5080 Laptop GPU's host): the
-/// comparison reads every block back through one copy on the staging queue
-/// (`WorkCounts::copied_base_blocks_read_back`), in under a second, and merges exactly, the
-/// CPU's byte of each block kept and every other byte the GPU's.
+/// memory are slowest, about 0.2 ms a 1 KiB block on an RTX 5080 Laptop GPU's host, 54 s for
+/// the whole): the comparison reads every block back through one copy on the staging queue
+/// (`WorkCounts::copied_base_blocks_read_back`), and merges exactly, the CPU's byte of each block
+/// kept and every other byte the GPU's. It took 187 to 267 ms on the 5080 and 176 to 292 ms on
+/// an RX 7900 XTX; it is held under 2 s, as a copy that finds the GPU powered down waits for it
+/// to wake (0.9 to 1.3 s on the 5080, `copied_read_back_bench`).
 #[test]
 fn a_whole_written_device_base_is_read_back_by_the_gpu() {
     let Some(device) = device() else {
@@ -371,7 +373,7 @@ fn a_whole_written_device_base_is_read_back_by_the_gpu() {
         counted.base_blocks_read_back, blocks,
         "every block read back"
     );
-    assert!(took < Duration::from_secs(1), "{took:?}");
+    assert!(took < Duration::from_secs(2), "{took:?}");
     for (n, (&got, &gpu)) in pages.iter().zip(&copy).enumerate() {
         let want = match n % TAG_BLOCK {
             1 => page_byte(n).wrapping_add(1),

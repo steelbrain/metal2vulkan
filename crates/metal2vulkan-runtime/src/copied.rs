@@ -1848,8 +1848,13 @@ pub(crate) const JOIN_GAP: usize = 16;
 /// host memory on the GPU, in one submission on the device's staging queue it waits for, rather
 /// than read each on the host ([`two_passes`]): the host reads that memory uncached, a block at
 /// a time across the bus, where the copy costs a submission and its wait, then the bytes at the
-/// bus's rate. A cost choice between two exact reads, the host's below it.
-const READ_BACK_BLOCKS: usize = 64;
+/// bus's rate. A cost choice between two exact reads, the host's below it, measured on the
+/// devices with a resizable BAR (`tests::copied_base_device::copied_read_back_bench`): at 32
+/// blocks the two cost the same within a millisecond on the RTX 5080 Laptop GPU and the RX 7900
+/// XTX, from 64 the copy costs less on the 5080 and no more on the XTX, and on the 5080's host,
+/// whose reads of that memory slow about tenfold while its GPU idles, the copy costs less from 16
+/// after three seconds idle.
+const READ_BACK_BLOCKS: usize = 32;
 
 /// A test's switch that sets [`read_back_blocks`] in place of [`READ_BACK_BLOCKS`] where not
 /// zero.
