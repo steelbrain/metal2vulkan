@@ -5642,11 +5642,12 @@ fn helper_guards(m: &TypedModule) -> usize {
         .count()
 }
 
-/// The identity shuffles of `m` that fence an `optnone` call (`spirv::helper_branches`'s
-/// `Fences`): each `OpGroupNonUniformShuffle` at the `SubgroupLocalInvocationId` the module loads
-/// of an `OpUMulExtended`'s member.
+/// The `optnone` calls of `m` an identity shuffle fences (`spirv::helper_branches`'s `Fences`):
+/// those whose result, or a member of it, an `OpGroupNonUniformShuffle` at the
+/// `SubgroupLocalInvocationId` the module loads reads.
 fn helper_fences(m: &TypedModule) -> usize {
-    use crate::spirv::ir::{BinOp, GlobalKind, GroupInst, ShuffleOp, ValueOrigin};
+    use crate::spirv::ir::ValueOrigin;
+    use crate::spirv::ir::{BinOp, Contraction, GlobalKind, GlslOp, GroupInst, ShuffleOp, UnOp};
     let defs: std::collections::HashMap<_, _> = m
         .blocks()
         .iter()
@@ -5668,30 +5669,50 @@ fn helper_fences(m: &TypedModule) -> usize {
         },
         _ => false,
     };
-    let product = |v| match defs.get(&v) {
-        Some(Inst::CompositeExtract { composite, .. }) => matches!(
-            defs.get(composite),
-            Some(Inst::Binary {
-                op: BinOp::UMulExtended,
-                ..
-            })
-        ),
-        _ => false,
+    let optnone = |v| {
+        matches!(
+            defs.get(&v),
+            Some(
+                Inst::Binary {
+                    op: BinOp::FAdd | BinOp::FSub | BinOp::FMul,
+                    contract: Contraction::Forbidden,
+                    ..
+                } | Inst::Binary {
+                    op: BinOp::UMulExtended | BinOp::SMulExtended,
+                    ..
+                } | Inst::Unary {
+                    op: UnOp::QuantizeToF16,
+                    ..
+                } | Inst::Glsl {
+                    op: GlslOp::Reflect,
+                    ..
+                }
+            )
+        )
     };
-    defs.values()
-        .filter(|inst| match inst {
-            Inst::Group {
-                op:
-                    GroupInst::Shuffle {
-                        op: ShuffleOp::Shuffle,
-                        value,
-                        x,
-                    },
-                ..
-            } => product(*value) && lane(*x),
-            _ => false,
-        })
-        .count()
+    let mut fenced = std::collections::BTreeSet::new();
+    for inst in defs.values() {
+        let Inst::Group {
+            op:
+                GroupInst::Shuffle {
+                    op: ShuffleOp::Shuffle,
+                    value,
+                    x,
+                },
+            ..
+        } = inst
+        else {
+            continue;
+        };
+        let call = match defs.get(value) {
+            Some(Inst::CompositeExtract { composite, .. }) => *composite,
+            _ => *value,
+        };
+        if lane(*x) && optnone(call) {
+            fenced.insert(call);
+        }
+    }
+    fenced.len()
 }
 
 /// On MoltenVK on an Apple GPU (`DriverWorkaround::DiscardDropsSimdgroupStores`), Apple's compiler
@@ -5706,7 +5727,7 @@ fn helper_fences(m: &TypedModule) -> usize {
 /// census `fragment.helper-guard`. `rch_helper_branch_gradient`, whose implicit-LOD sample reads
 /// a coordinate the branch computes, is neither guarded nor fenced: the sample reads the product
 /// after it. `rch_helper_branch_loop`, whose product is in a loop as long as the coverage, is
-/// fenced: an identity shuffle of each of its products' two members follows it, census
+/// fenced: an identity shuffle of what each `optnone` call there computes follows it, census
 /// `fragment.helper-fence`. None records `PrecisionNote::HelperBranchDropsSimdgroupStores`. One
 /// that samples nothing (`rch_helper_branch_unsampled`) is left as it is. A device without the
 /// defect (`intel-arl-anv`) guards and fences nothing. Every module passes L3.
@@ -5749,10 +5770,9 @@ fn helper_invocations_skip_an_optnone_branch_on_a_driver_that_drops_a_simdgroups
             );
             assert_eq!(guards > 0, guarded, "{what}: {guards} guards");
             assert_eq!(counted, guarded.then_some(guards), "{what}: the census");
-            // Each fenced product's two members are shuffled.
             assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
             assert_eq!(
-                fences_counted.map(|c| 2 * c as usize),
+                fences_counted.map(|c| c as usize),
                 fenced.then_some(fences),
                 "{what}: the fence census"
             );
@@ -5822,7 +5842,7 @@ fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
 /// implicit-LOD sample at them, `dfdx`, `quad_sum`, the LOD query; a sample after the branch's
 /// merge; a sample after a loop only helpers repeat), are not fenced; the `before` functions and
 /// `rch_tangle_unread`, whose tangled instruction reads none of them, are: an identity shuffle of
-/// each of the products' two members follows the call, census `fragment.helper-fence`. None
+/// the products' members follows the call, census `fragment.helper-fence`. None
 /// records `HelperBranchDropsSimdgroupStores`. Every module passes L3.
 #[test]
 fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
@@ -5861,10 +5881,9 @@ fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
             helper_guards(&m)
         );
         assert_eq!(helper_guards(&m), 0, "{what}: guards");
-        // Each fenced product's two members are shuffled.
         assert_eq!(fences > 0, fenced, "{what}: {fences} fences");
         assert_eq!(
-            counted.map(|c| 2 * c as usize),
+            counted.map(|c| c as usize),
             fenced.then_some(fences),
             "{what}: the fence census"
         );
