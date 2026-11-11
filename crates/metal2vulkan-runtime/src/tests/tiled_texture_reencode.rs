@@ -320,6 +320,10 @@ fn a_pass_on_the_gpu_alone_encoded_again_takes_the_copy_where_its_commit_took_it
     let icb = (rig.device)
         .new_indirect_command_buffer(&commands, 1, ResourceOptions::shared())
         .unwrap();
+    // The CPU writes a draw, which the blit resets on the GPU before the pass runs: the records
+    // may hold draws of triangles alone, as the GPU form asks.
+    let command = icb.indirect_render_command_at(0).unwrap();
+    (command.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0)).unwrap();
     let mut target =
         TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, PASS_SIDE, PASS_SIDE, false);
     target.usage = TextureUsage::RENDER_TARGET;
