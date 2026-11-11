@@ -642,7 +642,7 @@ pub(crate) fn compute(
         .map(|e| {
             let at = e.offset as usize;
             let mut word = [0u8; 8];
-            if let Some(bytes) = specialization.data.get(at..at + e.size.min(8)) {
+            if let Some(bytes) = specialization.data.get(at..at + (e.size as usize).min(8)) {
                 word[..bytes.len()].copy_from_slice(bytes);
             }
             let meaning = meanings
