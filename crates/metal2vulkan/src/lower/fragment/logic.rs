@@ -502,3 +502,6 @@ pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
     let planned = cx.families.fragment.logic_inputs.len() as u64;
     planned.saturating_mul(32u64.saturating_add(WRITE_WORDS.saturating_mul(rets.max(1))))
 }
+
+#[cfg(test)]
+mod tests;
