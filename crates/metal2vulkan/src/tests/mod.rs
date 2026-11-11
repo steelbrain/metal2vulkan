@@ -121,6 +121,7 @@ mod engine_quad_ops;
 mod engine_qualified_signature;
 mod engine_rate_map;
 mod engine_ray_tracing;
+mod engine_read_through_constant;
 mod engine_recursion;
 mod engine_refused_families;
 mod engine_render_target_slice;

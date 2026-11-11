@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 
 use super::md::{abi_error, Site};
 use super::{
-    AirAbi, CoreImageKernel, CoreImageParam, CoreImageRole, EntryPoint, ParamBinding, ParamRole,
-    PatchInput, Predicate, Stage, StructRef, VisibleFunction,
+    Access, AirAbi, CoreImageKernel, CoreImageParam, CoreImageRole, EntryPoint, ParamBinding,
+    ParamRole, PatchInput, Predicate, Stage, StructRef, VisibleFunction,
 };
 use crate::bitcode::PointeeTable;
 use crate::budget::Meter;
@@ -387,12 +387,15 @@ fn predicate(m: &Module, p: Option<&Predicate>, site: &Site) -> Result<(), Error
 
 /// A parameter's role against its IR type: resource and buffer roles are pointers in the space
 /// the role implies, value roles are not pointers. A buffer, texture, or sampler table passed
-/// as an `array_ref` is a thread-space pointer to its elements.
+/// as an `array_ref` is a thread-space pointer to its elements. A read-only `device` buffer may
+/// also be a `constant`-space pointer ([`read_through_constant`]).
 fn role_type(m: &Module, p: &ParamBinding, ty: TypeId, site: &Site) -> Result<(), Error> {
     let space = m.types().ptr_space(ty);
     let ok = match &p.role {
         ParamRole::Buffer(b) | ParamRole::ArgumentBuffer(b) | ParamRole::Threadgroup(b) => {
-            space == Some(b.space) || space == Some(AddrSpace::Thread)
+            space == Some(b.space)
+                || space == Some(AddrSpace::Thread)
+                || read_through_constant(&p.role, space)
         }
         ParamRole::Texture(_) => {
             space == Some(AddrSpace::Device) || space == Some(AddrSpace::Thread)
@@ -430,6 +433,18 @@ fn role_type(m: &Module, p: &ParamBinding, ty: TypeId, site: &Site) -> Result<()
     } else {
         Err(site.err(AbiError::RoleTypeMismatch, None))
     }
+}
+
+/// A buffer parameter (`air.buffer`) declared `air.read` in `device` space whose IR type is a
+/// `constant`-space pointer. Apple's compiler writes such a node for a by-value argument it
+/// passes as a constant pointer (a Core Image kernel in macOS 13.7's frameworks, AIR 2.5, declares
+/// one as a one-byte `char`), and Metal takes it: on an Apple M3 Max (macOS 27.0.1), a kernel whose
+/// `constant` buffer's node was rewritten so, with and without its type described as that `char`,
+/// made a compute pipeline and read the buffer as the unrewritten kernel did. The buffer keeps its
+/// declared space; the entry's loads are through its pointer. A writable one stays a mismatch.
+fn read_through_constant(role: &ParamRole, space: Option<AddrSpace>) -> bool {
+    matches!(role, ParamRole::Buffer(b) if b.space == AddrSpace::Device && b.access == Access::Read)
+        && space == Some(AddrSpace::Constant)
 }
 
 /// `air.arg_type_size`, `air.arg_type_align_size`, `air.buffer_size`, and `air.struct_type_info` of

@@ -541,6 +541,57 @@ fn role_must_match_parameter_type() {
     expect_abi(k.decode(), AbiError::RoleTypeMismatch);
 }
 
+/// A `device` buffer declared `air.read` on a `constant`-space pointer, as Apple's compiler
+/// declares a by-value argument (a one-byte `char`), is the buffer it declares; written or read and
+/// written, it is still a mismatch, as is a `constant` buffer on a `device` pointer.
+#[test]
+fn a_read_only_device_buffer_may_be_a_constant_pointer() {
+    // Parameter 2, the standard kernel's constant pointer, as `[[buffer(1)]]`.
+    let declared = |access: &'static str| -> Vec<O<'static>> {
+        vec![
+            I(2),
+            S("air.buffer"),
+            S("air.location_index"),
+            I(1),
+            I(1),
+            S(access),
+            S("air.address_space"),
+            I(1),
+            S("air.arg_type_size"),
+            I(1),
+            S("air.arg_type_align_size"),
+            I(1),
+            S("air.arg_type_name"),
+            S("char"),
+            S("air.arg_name"),
+            S("transform"),
+        ]
+    };
+    let with = |buffer: Vec<O<'static>>, third: Vec<O<'static>>| {
+        Kernel::with(&[buffer, texture_arg(1), third, gid_arg(3)]).decode()
+    };
+    let abi = with(buffer_arg(0), declared("air.read"))
+        .expect("a read-only device buffer on a constant pointer decodes");
+    let p = &abi.entries[0].params[2];
+    let ParamRole::Buffer(b) = &p.role else {
+        panic!("{:?}", p.role);
+    };
+    assert_eq!((b.space, b.access), (AddrSpace::Device, Access::Read));
+    for access in ["air.write", "air.read_write"] {
+        expect_abi(
+            with(buffer_arg(0), declared(access)),
+            AbiError::RoleTypeMismatch,
+        );
+    }
+    let mut constant_on_device = buffer_arg(0);
+    constant_on_device[5] = S("air.read");
+    constant_on_device[7] = I(2);
+    expect_abi(
+        with(constant_on_device, declared("air.read")),
+        AbiError::RoleTypeMismatch,
+    );
+}
+
 #[test]
 fn every_parameter_needs_exactly_one_binding() {
     let k = Kernel::with(&[buffer_arg(0), texture_arg(1), sampler_arg(2)]);

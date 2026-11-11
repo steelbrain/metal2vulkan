@@ -18,7 +18,8 @@
 //!
 //! Decoding also cross-checks the metadata against the IR: every entry parameter has exactly one
 //! binding, each role agrees with its parameter's type and address space (a buffer, texture, or
-//! sampler table passed as an `array_ref` is a thread-space pointer), and the outputs agree with
+//! sampler table passed as an `array_ref` is a thread-space pointer, and a read-only `device`
+//! buffer may be a constant-space pointer), and the outputs agree with
 //! the return type; likewise each `!air.visible` function binds every parameter once and has an
 //! output exactly when it returns a value, and each `!air.ci` Core Image kernel also binds every
 //! parameter once, with a role that agrees with the parameter's type, and has a scalar or vector

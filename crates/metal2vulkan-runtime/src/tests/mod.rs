@@ -393,6 +393,8 @@ mod queue_share_device;
 mod queue_sharing;
 mod range;
 mod rate_map;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod read_through_constant;
 mod reader_sizes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod rebind_behind_a_wait;
