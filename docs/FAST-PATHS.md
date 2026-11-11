@@ -1441,7 +1441,8 @@ driver's. Each is open work.
   (`snorm-minimum-kept`). An integer output past the channel's range, which Metal saturates
   before the operation, is a value Vulkan leaves undefined ("Any value that cannot be represented
   in the attachment's format is undefined", the Fragment Output Interface); the lane's
-  out-of-range draws on lavapipe store Metal's saturated codes, so no note is recorded for it.
+  out-of-range draws on lavapipe and on an RTX 3090 store Metal's saturated codes, so no note is
+  recorded for it.
 
 - **A reset compute pipeline descriptor keeps its thread shape on Metal and not here.**
   `MTLComputePipelineDescriptor.reset` restores the label, the buffer mutability,

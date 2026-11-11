@@ -62,7 +62,7 @@
 //!   code above it: Vulkan's operation is the device's native form there, recorded
 //!   (`PrecisionNote::NativeLogicOperation`, [`note_vulkan_codes`]). An integer output past the
 //!   channel's range, which Metal saturates first, Vulkan's conversion leaves undefined
-//!   (lavapipe saturates it, as Metal does). A device without it that
+//!   (lavapipe and an RTX 3090 saturate it, as Metal does). A device without it that
 //!   orders framebuffer fetch (the
 //!   pixel interlock, or rasterization-order input attachments) has the fragment function compute
 //!   the operation itself, over the texel its first output's write reads (`lower::fragment`'s
