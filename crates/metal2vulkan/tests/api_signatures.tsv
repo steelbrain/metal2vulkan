@@ -3038,6 +3038,8 @@ field	metal2vulkan-runtime::WorkCounts.pipelines_pooled	pub pipelines_pooled: u6
 field	metal2vulkan-runtime::WorkCounts.pitched_host_images	pub pitched_host_images: u64
 field	metal2vulkan-runtime::WorkCounts.plain_buffer_blocks_made	pub plain_buffer_blocks_made: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_backings_made	pub pooled_backings_made: u64
+field	metal2vulkan-runtime::WorkCounts.pooled_backings_taken	pub pooled_backings_taken: u64
+field	metal2vulkan-runtime::WorkCounts.pooled_backings_taken_in_flight	pub pooled_backings_taken_in_flight: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_memory_blocks_freed	pub pooled_memory_blocks_freed: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_memory_blocks_made	pub pooled_memory_blocks_made: u64
 field	metal2vulkan-runtime::WorkCounts.pooled_pitched_images	pub pooled_pitched_images: u64

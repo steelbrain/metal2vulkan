@@ -218,6 +218,11 @@ impl WeakCommandBuffer {
     pub(crate) fn upgrade(&self) -> Option<CommandBuffer> {
         self.0.upgrade().map(CommandBuffer)
     }
+
+    /// Whether it is `buffer`.
+    pub(crate) fn is(&self, buffer: &CommandBuffer) -> bool {
+        std::sync::Weak::as_ptr(&self.0) == Arc::as_ptr(&buffer.0)
+    }
 }
 
 pub(super) struct CommandBufferShared {

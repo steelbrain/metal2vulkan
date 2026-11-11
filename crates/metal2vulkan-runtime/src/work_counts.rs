@@ -125,6 +125,8 @@ pub(crate) struct Counters {
     ahead_framebuffers_made: AtomicU64,
     kept_backings_made: AtomicU64,
     pooled_backings_made: AtomicU64,
+    pooled_backings_taken: AtomicU64,
+    pooled_backings_taken_in_flight: AtomicU64,
     storage_placeholders_made: AtomicU64,
     storage_placeholder_attachments: AtomicU64,
     color_resolve_passes_made: AtomicU64,
@@ -2340,6 +2342,16 @@ impl Counters {
     /// (`attachment_stand_in::pooled_backing`).
     pub(crate) fn pooled_backing_made(&self) {
         self.pooled_backings_made.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A pass took a backing its queue kept, `in_flight` where another command buffer that took
+    /// it had not completed (`attachment_stand_in::pooled_backing`).
+    pub(crate) fn pooled_backing_taken(&self, in_flight: bool) {
+        self.pooled_backings_taken.fetch_add(1, Ordering::Relaxed);
+        if in_flight {
+            self.pooled_backings_taken_in_flight
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// The device made a placeholder image for the colors render pass instances leave out of
@@ -5032,6 +5044,13 @@ pub struct WorkCounts {
     /// texture (`attachment_stand_in::pooled_backing`): one per shape a queue renders so (and per
     /// attachment of a pass that renders several of one shape so), not one per pass.
     pub pooled_backings_made: u64,
+    /// Takes of such a backing its queue kept, one per attachment of each pass after the one that
+    /// made it: with `pooled_backings_made`, every backing passes were handed.
+    pub pooled_backings_taken: u64,
+    /// Of those takes, the ones made while another command buffer that took the backing before
+    /// had not completed: passes whose uses of one image the hazard tracker orders, as any
+    /// texture's (`tracker.rs`), where nothing else orders them.
+    pub pooled_backings_taken_in_flight: u64,
     /// Placeholder images the device made for the color attachments render pass instances leave
     /// out of their subpass for the pixel interlock, which their framebuffers hold in place of
     /// the images the draws read and write as storage images (`storage_placeholder.rs`): one per
@@ -8265,6 +8284,10 @@ impl Device {
             ahead_framebuffers_made: counters.ahead_framebuffers_made.load(Ordering::Relaxed),
             kept_backings_made: counters.kept_backings_made.load(Ordering::Relaxed),
             pooled_backings_made: counters.pooled_backings_made.load(Ordering::Relaxed),
+            pooled_backings_taken: counters.pooled_backings_taken.load(Ordering::Relaxed),
+            pooled_backings_taken_in_flight: counters
+                .pooled_backings_taken_in_flight
+                .load(Ordering::Relaxed),
             storage_placeholders_made: counters.storage_placeholders_made.load(Ordering::Relaxed),
             storage_placeholder_attachments: counters
                 .storage_placeholder_attachments

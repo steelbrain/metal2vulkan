@@ -88,7 +88,7 @@
 
 use super::blit::TRANSFER;
 use super::color_resolve;
-use super::command_buffer::CommandBuffer;
+use super::command_buffer::{CommandBuffer, WeakCommandBuffer};
 use super::device::lock;
 use super::encoder::EncoderCore;
 use super::error::{internal, Error, RuntimeGap};
@@ -101,7 +101,7 @@ use super::sample_positions;
 use super::texture::Texture;
 use super::texture_descriptor::TextureDescriptor;
 use super::tracker::{Access, Barrier, Use};
-use super::values::ResourceOptions;
+use super::values::{CommandBufferStatus, ResourceOptions};
 use super::Device;
 use crate::device::functions::Vk;
 use ash::vk;
@@ -277,6 +277,8 @@ struct PooledBacking {
     copies: bool,
     bytes: u64,
     taken: u64,
+    /// The command buffer that took it last.
+    taker: WeakCommandBuffer,
     backing: Target,
 }
 
@@ -339,7 +341,8 @@ impl BackingPool {
 /// loads it, and nothing reads what its pass leaves in it. A fresh image's texels were undefined
 /// there as well. So no pass reads what another left in the backing, and the passes of one queue
 /// that take it are ordered by their uses of it, as by any texture's: one image serves every pass
-/// of the shape, across command buffers and frames (`WorkCounts::pooled_backings_made`).
+/// of the shape, across command buffers and frames (`WorkCounts::pooled_backings_made`,
+/// `pooled_backings_taken`, `pooled_backings_taken_in_flight`).
 pub(super) fn pooled_backing(
     maker: &CommandBuffer,
     own: &Target,
@@ -355,7 +358,24 @@ pub(super) fn pooled_backing(
         if let Some(found) = pool.kept.iter_mut().find(|k| free(k)) {
             found.taken = takes;
             let backing = found.backing.clone();
+            let last = (!found.taker.is(maker))
+                .then(|| found.taker.upgrade())
+                .flatten();
+            found.taker = maker.downgrade();
             drop(pool);
+            // Taken while another command buffer that took it has not completed: the hazard
+            // tracker orders their uses of it (counted).
+            let in_flight = last.is_some_and(|last| {
+                !matches!(
+                    last.status(),
+                    CommandBufferStatus::Completed | CommandBufferStatus::Error
+                )
+            });
+            maker
+                .device()
+                .shared()
+                .counts
+                .pooled_backing_taken(in_flight);
             // Held as one `maker` made: its first batch moves it to `GENERAL` where the command
             // buffer that made it has not yet submitted a batch.
             maker.hold_own_texture(backing.texture.clone());
@@ -377,6 +397,7 @@ pub(super) fn pooled_backing(
         copies,
         bytes: made.texture.placed_bytes().unwrap_or(0),
         taken: takes,
+        taker: maker.downgrade(),
         backing: made.clone(),
     });
     pool.bound();

@@ -22,6 +22,11 @@
 //! forms, storage placeholders and memoryless backings it counted (`WorkCounts`), the path that
 //! ran. A device whose fetch takes the storage form (the pixel interlock without
 //! rasterization-order color access) must split every pass.
+//!
+//! Those passes run one at a time. [`split_passes_in_flight_together_read_only_what_their_own_draws_left`]
+//! runs them in flight together, each over textures of its own, so that nothing orders one after
+//! another but the backing a queue's passes share for their second color, and counts that
+//! backing's takes while another command buffer that took it had not completed.
 
 use super::framebuffer_fetch::fetches;
 use super::memoryless::memoryless_options;
@@ -38,8 +43,8 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, CommandBuffer, DepthStencilState, Device, Library, LoadAction, Origin,
-    PipelineOptions, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
+    BlitOption, Buffer, ClearColor, CommandBuffer, DepthStencilState, Device, Library, LoadAction,
+    Origin, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, Size, StoreAction, Texture, TextureDescriptor,
 };
 use std::collections::BTreeSet;
@@ -196,16 +201,14 @@ fn texture(
     device.new_texture(&d).unwrap()
 }
 
-/// One pass over `target` of `sides`, with the second color and stencil `attachments`, cleared to
-/// code 0 first in its command buffer; every pixel's code after it.
-fn pass(
-    device: &Device,
+/// Encode one pass over `target` of `sides` into `command_buffer`, with the second color and
+/// stencil `attachments`: the target cleared to code 0 first, then the draws.
+fn encode_pass(
+    command_buffer: &CommandBuffer,
     draws: &Draws,
     (target, attachments): (&Texture, &(Texture, Texture)),
     sides: (u64, u64),
-) -> Vec<u8> {
-    let queue = device.new_command_queue().unwrap();
-    let command_buffer = queue.command_buffer().unwrap();
+) {
     let mut clear = RenderPassDescriptor::new();
     let color = &mut clear.color_attachments[0];
     color.texture = Some(target.clone());
@@ -239,24 +242,19 @@ fn pass(
     draws.draw(&mut encoder, 2, (2, FILTER_BASE, FILTERS));
     draws.draw(&mut encoder, 3, (1, 0, 1));
     encoder.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    completed(&command_buffer);
-    codes(device, target, sides)
 }
 
-/// `command_buffer` completed without error.
-fn completed(command_buffer: &CommandBuffer) {
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(command_buffer.error(), None);
-}
-
-/// Every pixel's code of `target` of `sides`: its red, green and blue bytes, which must agree, and
-/// alpha 255.
-fn codes(device: &Device, target: &Texture, (width, height): (u64, u64)) -> Vec<u8> {
+/// Encode a copy of `target` of `sides` into `command_buffer`, to a shared buffer made for it.
+fn encode_readback(
+    command_buffer: &CommandBuffer,
+    target: &Texture,
+    (width, height): (u64, u64),
+) -> Buffer {
     let bytes = width * height * 4;
-    let buffer = device.new_buffer(bytes, ResourceOptions::shared()).unwrap();
-    let queue = device.new_command_queue().unwrap();
-    let command_buffer = queue.command_buffer().unwrap();
+    let buffer = target
+        .device()
+        .new_buffer(bytes, ResourceOptions::shared())
+        .unwrap();
     let mut blit = command_buffer.blit_command_encoder().unwrap();
     blit.copy_from_texture_to_buffer(
         target,
@@ -272,9 +270,36 @@ fn codes(device: &Device, target: &Texture, (width, height): (u64, u64)) -> Vec<
     )
     .unwrap();
     blit.end_encoding().unwrap();
+    buffer
+}
+
+/// One pass over `target` of `sides` in a command buffer of a queue of its own, waited for; every
+/// pixel's code after it.
+fn pass(
+    device: &Device,
+    draws: &Draws,
+    (target, attachments): (&Texture, &(Texture, Texture)),
+    sides: (u64, u64),
+) -> Vec<u8> {
+    let queue = device.new_command_queue().unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    encode_pass(&command_buffer, draws, (target, attachments), sides);
+    let buffer = encode_readback(&command_buffer, target, sides);
     command_buffer.commit().unwrap();
     completed(&command_buffer);
-    let texels = read_buffer(&buffer, 0, bytes).unwrap();
+    codes(&buffer, sides)
+}
+
+/// `command_buffer` completed without error.
+fn completed(command_buffer: &CommandBuffer) {
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+}
+
+/// Every pixel's code a readback of a target of `sides` holds: its red, green and blue bytes, which
+/// must agree, and alpha 255.
+fn codes(buffer: &Buffer, (width, height): (u64, u64)) -> Vec<u8> {
+    let texels = read_buffer(buffer, 0, width * height * 4).unwrap();
     texels
         .as_chunks::<4>()
         .0
@@ -405,6 +430,209 @@ fn a_split_pass_s_draws_read_the_stencil_and_colors_the_draws_before_left() {
         wrong_passes.is_empty(),
         "{}: passes whose draws did not read what the draws before them left (sides, storage, \
          fresh, pass, pixels, groups): {wrong_passes:?}",
+        device.name()
+    );
+    drop(draws);
+    drop(device);
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// Where an in-flight round commits its passes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Queues {
+    /// Every pass on one queue.
+    One,
+    /// The passes on two queues in turn, nothing ordering one queue's after the other's.
+    Two,
+}
+
+/// How an in-flight round's targets are fetched.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Route {
+    /// New targets, each fetched through a scratch image of its pass (`fetch-through-scratch`).
+    Scratch,
+    /// Targets that took their storage form in a pass before the rounds, fetched in place.
+    InPlace,
+}
+
+/// When an in-flight round commits its passes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Commit {
+    /// Each as soon as it is encoded.
+    Each,
+    /// All of them once every one is encoded, back to back.
+    All,
+}
+
+/// The passes of an in-flight round, each over textures of its own.
+const IN_FLIGHT: usize = 16;
+
+/// The in-flight rounds of each size, storage, route, queues and commit.
+const ROUNDS: usize = 2;
+
+/// Passes in flight together: every pass of a round over a target, a second color and a stencil
+/// of its own, its readback in its command buffer, committed with no wait between them ([`Commit`])
+/// on one queue or two ([`Queues`]), the targets new ([`Route::Scratch`]) or fetched in place
+/// ([`Route::InPlace`]). Nothing orders one pass after another but the backing the passes of a
+/// queue share for their second color (its private form stored `DontCare`, `kept_bytes.rs`, or its
+/// memoryless form, `attachment_stand_in::pooled_backing`), which the hazard tracker orders as any
+/// texture. Each pass counts the backings it was handed (`WorkCounts::pooled_backings_made`,
+/// `pooled_backings_taken`) and those taken while another command buffer that took them had not
+/// completed (`pooled_backings_taken_in_flight`), its counts read once it was encoded (a read of
+/// the counts lowers what its encoders left); a round prints them beside each pass's wrong pixels
+/// and 8x4 groups. Every pixel of every pass must hold its code, and the queues' passes must have
+/// taken kept backings.
+#[test]
+fn split_passes_in_flight_together_read_only_what_their_own_draws_left() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
+    if !fetches(&device) {
+        return;
+    }
+    let ll = engine_dir().join("sfo_split_fetch.ll");
+    let library = device
+        .new_library_with_air(&llvm_assemble(&ll).unwrap())
+        .unwrap();
+    let draws = Draws::new(&device, &library);
+    let fragment = device.compile_device().profile().fragment();
+    let interlocked = fragment.pixel_interlock && !fragment.rasterization_order_color_access;
+    let queues = [
+        device.new_command_queue().unwrap(),
+        device.new_command_queue().unwrap(),
+    ];
+    let target = |sides| {
+        let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        texture(
+            &device,
+            PixelFormat::BGRA8Unorm,
+            sides,
+            (usage, ResourceOptions::private()),
+        )
+    };
+    let mut wrong_passes = Vec::new();
+    let mut taken = 0;
+    for sides in [(224u64, 128u64), (61, 37)] {
+        let want: Vec<u8> = (0..sides.1)
+            .flat_map(|y| (0..sides.0).map(move |x| expected((x, y))))
+            .collect();
+        for storage in [Storage::Private, Storage::Memoryless] {
+            let options = match storage {
+                Storage::Private => ResourceOptions::private(),
+                Storage::Memoryless => memoryless_options(),
+            };
+            let attachments: Vec<(Texture, Texture)> = (0..IN_FLIGHT)
+                .map(|_| {
+                    let usage = (TextureUsage::RENDER_TARGET, options);
+                    (
+                        texture(&device, PixelFormat::RG16Float, sides, usage),
+                        texture(&device, PixelFormat::Stencil8, sides, usage),
+                    )
+                })
+                .collect();
+            // Each in-place target's storage form taken by a pass of its own, waited for.
+            let in_place: Vec<Texture> = (0..IN_FLIGHT).map(|_| target(sides)).collect();
+            for (kept, attachments) in in_place.iter().zip(&attachments) {
+                pass(&device, &draws, (kept, attachments), sides);
+            }
+            for route in [Route::Scratch, Route::InPlace] {
+                for (on, commit) in [Queues::One, Queues::Two]
+                    .into_iter()
+                    .flat_map(|on| [(on, Commit::Each), (on, Commit::All)])
+                {
+                    for round in 0..ROUNDS {
+                        let targets: Vec<Texture> = match route {
+                            Route::Scratch => (0..IN_FLIGHT).map(|_| target(sides)).collect(),
+                            Route::InPlace => in_place.clone(),
+                        };
+                        let mut encoded = Vec::with_capacity(IN_FLIGHT);
+                        for (k, (target, attachments)) in
+                            targets.iter().zip(&attachments).enumerate()
+                        {
+                            let queue = match on {
+                                Queues::One => &queues[0],
+                                Queues::Two => &queues[k % 2],
+                            };
+                            let command_buffer = queue.command_buffer().unwrap();
+                            let counted = device.work_counts();
+                            encode_pass(&command_buffer, &draws, (target, attachments), sides);
+                            let buffer = encode_readback(&command_buffer, target, sides);
+                            let counts = device.work_counts();
+                            let splits =
+                                counts.instance_splits_shape - counted.instance_splits_shape;
+                            assert!(
+                                !interlocked || splits > 0,
+                                "{}: a pass fetching through the interlock did not split",
+                                device.name()
+                            );
+                            let backings = [
+                                counts.pooled_backings_made - counted.pooled_backings_made,
+                                counts.pooled_backings_taken - counted.pooled_backings_taken,
+                                counts.pooled_backings_taken_in_flight
+                                    - counted.pooled_backings_taken_in_flight,
+                            ];
+                            if commit == Commit::Each {
+                                command_buffer.commit().unwrap();
+                            }
+                            encoded.push((command_buffer, buffer, backings));
+                        }
+                        if commit == Commit::All {
+                            for (command_buffer, ..) in &encoded {
+                                command_buffer.commit().unwrap();
+                            }
+                        }
+                        let mut wrong_counts = Vec::with_capacity(IN_FLIGHT);
+                        let mut round_backings = [0u64; 3];
+                        for (k, (command_buffer, buffer, backings)) in encoded.iter().enumerate() {
+                            completed(command_buffer);
+                            let codes = codes(buffer, sides);
+                            let wrong: Vec<bool> =
+                                codes.iter().zip(&want).map(|(c, w)| c != w).collect();
+                            let count = wrong.iter().filter(|&&w| w).count();
+                            for (sum, add) in round_backings.iter_mut().zip(backings) {
+                                *sum += add;
+                            }
+                            wrong_counts.push(count);
+                            if count > 0 {
+                                let groups = wrong_groups(&wrong, sides);
+                                let first: Vec<_> = groups.iter().take(6).collect();
+                                eprintln!(
+                                    "IN-FLIGHT on {}: {}x{} {storage:?} {route:?} {on:?} \
+                                     {commit:?}, round {round}, pass {k}: {count} of {} pixels \
+                                     wrong, in {} 8x4 groups, first {first:?}; backings made, \
+                                     taken, taken in flight {backings:?}",
+                                    device.name(),
+                                    sides.0,
+                                    sides.1,
+                                    codes.len(),
+                                    groups.len(),
+                                );
+                                wrong_passes.push((sides, storage, route, on, commit, round, k));
+                            }
+                        }
+                        taken += round_backings[1];
+                        eprintln!(
+                            "IN-FLIGHT on {}: {}x{} {storage:?} {route:?} {on:?} {commit:?}, \
+                             round {round}: wrong pixels per pass {wrong_counts:?}; backings \
+                             made, taken, taken in flight {round_backings:?}",
+                            device.name(),
+                            sides.0,
+                            sides.1,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        taken > 0,
+        "{}: no pass took a backing its queue kept",
+        device.name()
+    );
+    assert!(
+        wrong_passes.is_empty(),
+        "{}: passes in flight together that did not read what their own draws left (sides, \
+         storage, route, queues, commit, round, pass): {wrong_passes:?}",
         device.name()
     );
     drop(draws);
