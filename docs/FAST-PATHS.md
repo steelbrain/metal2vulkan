@@ -701,9 +701,8 @@ driver's. Each is open work.
   an import. An import of dma-bufs (`HostMemory::with_dma_buf`) keeps its pages on every driver, but
   is taken only where the device refuses the pointer.
 - **On a device with one graphics queue, a compositor's command buffers wait behind another
-  queue's long one**: RADV, ANV and lavapipe expose a single graphics `VkQueue` (MoltenVK four
-  families of one), so every command queue, `Device::new_command_queue_unshared`'s included,
-  submits to it, in order. A command buffer committed behind another queue's 200 ms one starts
+  queue's long one**: RADV, ANV and lavapipe expose a single graphics `VkQueue`, so every command
+  queue, `Device::new_command_queue_unshared`'s included, submits to it, in order. A command buffer committed behind another queue's 200 ms one starts
   after it, where Metal runs the compositor's beside it. On the Iris Xe (ANV, Mesa 26.2.6, i915)
   work of another `VkDevice` (its own kernel context) ran only between submissions, never inside
   one, whatever its global priority (`HIGH` is refused without privilege; `MEDIUM` against `LOW`
