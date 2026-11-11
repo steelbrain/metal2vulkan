@@ -364,10 +364,10 @@ fn types(memory: &vk::PhysicalDeviceMemoryProperties, bits: u32) -> String {
             let t = memory.memory_types[i as usize];
             let heap = memory.memory_heaps[t.heap_index as usize];
             format!(
-                "{i} {:?} heap {} ({:?}, {} MiB)",
-                t.property_flags,
+                "{i} properties {:#x} heap {} (flags {:#x}, {} MiB)",
+                t.property_flags.as_raw(),
                 t.heap_index,
-                heap.flags,
+                heap.flags.as_raw(),
                 heap.size >> 20
             )
         })
@@ -486,7 +486,10 @@ fn a_sparse_buffer_over_imported_host_pages() {
     };
     say(
         &name,
-        format!("family {family} ({:?})", families[family].queue_flags),
+        format!(
+            "family {family} (queue flags {:#x})",
+            families[family].queue_flags.as_raw()
+        ),
     );
     // The host pointer's types: a page of a memfd mapped shared, a page of anonymous memory.
     let unit = lcm(page(), alignment) as usize;
@@ -573,8 +576,10 @@ fn a_sparse_buffer_over_imported_host_pages() {
             say(
                 &name,
                 format!(
-                    "{variant} {use_name}: host import features {:?} compatible {:?}; {with}",
-                    props.external_memory_features, props.compatible_handle_types
+                    "{variant} {use_name}: host import features {:#x} compatible {:#x} \
+                     (importable {importable}); {with}",
+                    props.external_memory_features.as_raw(),
+                    props.compatible_handle_types.as_raw()
                 ),
             );
         }
