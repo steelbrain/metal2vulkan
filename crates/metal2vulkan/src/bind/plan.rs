@@ -897,7 +897,9 @@ pub struct ImageViewDesc {
     /// `VariantKey::swizzled_storage`, which a Vulkan storage view could not swizzle, and
     /// for the sampled view of a swizzled extended-range texture at a slot of it, whose raw codes
     /// the view's swizzle would move before the function decodes them, and of a swizzled packed
-    /// normalized texture, whose codes the function converts by each channel's own scale. `false`
+    /// normalized texture, whose codes the function converts by each channel's own scale. Set too,
+    /// under no variant, for the storage view of a swizzled texture at a slot the function only
+    /// queries: it reads and writes no texel, and no swizzle reaches what a query answers. `false`
     /// for every other view, on which the consumer composes the texture's swizzle with
     /// `components` (and a swizzled storage view is the consumer's refusal).
     #[cfg_attr(feature = "serde", serde(default))]

@@ -50,7 +50,8 @@
 //!   of a texture with `ShaderWrite`; plain Metal reads it swizzled and writes through it with the
 //!   swizzle undone (Metal probe cases `rw.view.read` and `rw.view.write`, the M3 Max and the M4).
 //!   A Vulkan storage view takes no swizzle, so at a storage slot the function applies it to its
-//!   reads and undoes it on its writes, and the view takes none (`binding_view`); a texture made
+//!   reads and undoes it on its writes, and the view takes none (`binding_view`), as it takes none
+//!   at a storage slot the function only queries, whose answers no swizzle reaches; a texture made
 //!   resident for a function reading handles stays the runtime's gap
 //!   (`NotImplemented(TextureSwizzle)`). A texture's usage keeps the bits Metal's texture drops
 //!   (`TextureUsage::DROPPED`), and so do its views; Metal asserts on a swizzled view of a texture

@@ -1220,6 +1220,12 @@ impl ResourcePlanner<'_> {
                 if shader_swizzle {
                     self.variant.swizzled_storage.insert(slot);
                 }
+                // A storage slot its function only queries reads and writes no texel, and what a
+                // query answers (the view's size, levels and layers, an OpenCL image's format
+                // words, which the third hidden buffer holds) no swizzle reaches: plain Metal's and
+                // OpenCL mode's queries of a swizzled view answer so (our probe
+                // `opencl_swizzled_images`, on an M3 Max). Its view takes none, under no variant.
+                let queried = storage && !t.access.read && !t.access.write && !swizzle.is_default();
                 let view = if storage {
                     let format = match choice {
                         _ if ulong_atomic => vk::Format::R64_UINT,
@@ -1244,7 +1250,7 @@ impl ResourcePlanner<'_> {
                         layout: vk::ImageLayout::GENERAL,
                         components: vk::ComponentMapping::IDENTITY,
                         level: None,
-                        shader_swizzle,
+                        shader_swizzle: shader_swizzle || queried,
                     }
                 } else {
                     match self.texel_view(pixel_format, &class)? {

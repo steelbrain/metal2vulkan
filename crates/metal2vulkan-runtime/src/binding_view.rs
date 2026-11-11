@@ -115,9 +115,10 @@ impl VkView {
 /// (`NotImplemented(TextureView)`); a swizzle on a storage image, whose view Vulkan cannot swizzle
 /// (`NotImplemented(TextureSwizzle)`), but where the binding plan's function applies it
 /// (`ImageViewDesc::shader_swizzle`: a swizzled texture or view at a storage slot, whose reads the
-/// function swizzles and whose writes it unswizzles; and the sampled view of a swizzled
-/// extended-range texture, whose decoded texels the function swizzles), which leaves a texture made
-/// resident for a function reading handles, or a `ulong` atomic's slot.
+/// function swizzles and whose writes it unswizzles, or one the function only queries, which no
+/// swizzle reaches; and the sampled view of a swizzled extended-range texture, whose decoded texels
+/// the function swizzles), which leaves a texture made resident for a function reading handles, or
+/// a `ulong` atomic's slot.
 pub(super) fn binding_view(
     image: &ImagePlan,
     record: &ViewRecord,
