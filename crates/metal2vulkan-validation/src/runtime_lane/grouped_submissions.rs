@@ -1140,8 +1140,11 @@ fn the_exact_completion_keeps_no_group_behind_running_work() {
 struct HandlerWait {
     /// The device's name.
     device: String,
-    /// Whether the driver merges, and whether the two queues submit to one `VkQueue`.
+    /// Whether the driver merges (assumed, so held), whether the device groups its batches
+    /// ([`groups`]: and its queues are not relayed), and whether the two queues submit to one
+    /// `VkQueue`.
     merging: bool,
+    grouping: bool,
     shared: bool,
     /// The groups kept while `X` was taken in (behind `A` and `B`).
     kept: u64,
@@ -1226,14 +1229,14 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
     let seen = {
         // The default completion, which the lane's options leave for Metal's exact one: the held
         // group is its. The device's merge check holds without its timing, so every run holds
-        // the group, on every device.
+        // the group on every device that groups ([`groups`]: its queues not relayed).
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Grouped;
             options.assume_submissions_merge = true;
             at_plan(options)
         })
         .unwrap();
-        let merging = merges(&device);
+        let (merging, grouping) = (merges(&device), groups(&device));
         let (first, second) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -1331,6 +1334,7 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
         HandlerWait {
             device: device.name().to_owned(),
             merging,
+            grouping,
             shared,
             kept,
             a_ran,
@@ -1371,7 +1375,9 @@ fn behind_another_queue_s_handler(stretch: usize) -> HandlerWait {
 /// under the default completion with its merge check held (`DeviceOptions::assume_submissions_merge`),
 /// so the group is held on every run, not only where the check's timing read a merge; on a device
 /// whose queues take two `VkQueue`s (`shared` false) no group can hold the two, and the handler's
-/// wait alone is checked.
+/// wait alone is checked. A device whose queues' failures are relayed (MoltenVK's,
+/// `device/relay.rs`) holds no batch in a group, merge or not ([`groups`]): there nothing is kept
+/// or grouped, and the handler's wait is checked.
 #[test]
 fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
     let mut stretch = 1;
@@ -1381,7 +1387,8 @@ fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
             seen.merging,
             "the merge check did not hold as assumed: {seen:?}"
         );
-        if !seen.shared || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
+        let held = seen.shared && seen.grouping;
+        if !held || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
             break seen;
         }
         stretch *= 2;
@@ -1393,7 +1400,13 @@ fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
         seen.reached,
         "X's completed handler never reached Y's: {seen:?}"
     );
-    if seen.shared {
+    if !seen.grouping {
+        assert_eq!(
+            (seen.kept, seen.grouped),
+            (0, 0),
+            "a group on a device that groups none: {seen:?}"
+        );
+    } else if seen.shared {
         assert!(
             seen.a_ran,
             "A ended before Y's handler began, at every run: {seen:?}"
@@ -1412,7 +1425,10 @@ fn a_held_group_goes_before_another_queue_s_submission_handler_runs() {
 struct KeptSignalWait {
     /// The device's name.
     device: String,
+    /// Whether the driver merges (assumed, so held), and whether the device groups its batches
+    /// ([`groups`]: and its queues are not relayed).
     merging: bool,
+    grouping: bool,
     /// Whether the two queues submit to one `VkQueue`.
     shared: bool,
     /// The groups kept from `X`'s commit to its scheduling.
@@ -1438,8 +1454,8 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let seen = {
-        // The default completion, its merge check held, so every run holds the group, as in
-        // [`behind_another_queue_s_handler`].
+        // The default completion, its merge check held, so every run of a device that groups
+        // holds the group, as in [`behind_another_queue_s_handler`].
         // Its two queues take the device's queue plan (`at_plan`): one `VkQueue` where the device
         // has one.
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
@@ -1448,7 +1464,7 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
             at_plan(options)
         })
         .unwrap();
-        let merging = merges(&device);
+        let (merging, grouping) = (merges(&device), groups(&device));
         let (first, second) = (
             device.new_command_queue().unwrap(),
             device.new_command_queue().unwrap(),
@@ -1555,6 +1571,7 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
         KeptSignalWait {
             device: device.name().to_owned(),
             merging,
+            grouping,
             shared,
             kept,
             a_ran,
@@ -1577,7 +1594,9 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
 /// past it would still be held when `B` completed. `A` and `B` are made longer until `A` outlasts
 /// `Y`'s take-in, as [`behind_while_a_runs`] does. The queues take the device's queue plan: on a
 /// device whose queues take two `VkQueue`s no group holds `X` behind work of `Y`'s `VkQueue`, and
-/// only the completions are checked.
+/// only the completions are checked. A device whose queues' failures are relayed (MoltenVK's,
+/// `device/relay.rs`) holds no batch in a group, merge or not ([`groups`]): there no group is
+/// kept or sent, and the completions are checked.
 #[test]
 fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_turn() {
     let mut stretch = 1;
@@ -1587,7 +1606,8 @@ fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_tur
             seen.merging,
             "the merge check did not hold as assumed: {seen:?}"
         );
-        if !seen.shared || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
+        let held = seen.shared && seen.grouping;
+        if !held || seen.a_ran || stretch >= 1 << (BEHIND_RUNS - 1) {
             break seen;
         }
         stretch *= 2;
@@ -1597,7 +1617,13 @@ fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_tur
         seen.y_after_x.is_some(),
         "Y completed before X, whose signal it waits for: {seen:?}"
     );
-    if seen.shared {
+    if !seen.grouping {
+        assert_eq!(
+            (seen.kept, seen.ends),
+            (0, [0; 7]),
+            "a group on a device that groups none: {seen:?}"
+        );
+    } else if seen.shared {
         assert!(
             seen.a_ran,
             "A ended before Y was taken in, at every run: {seen:?}"
