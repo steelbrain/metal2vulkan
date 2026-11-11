@@ -31,6 +31,23 @@
 //   read   lane l is the channel the swizzle's l names (a format's missing green and blue 0, its
 //          missing alpha 1), Zero 0 and One 1;
 //   write  channel c takes the first lane whose source is c, and lane c where no lane names it.
+//
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (potluck job m3-max-16336, MTL_DEBUG_LAYER unset):
+//   views  every line `rule=ok`: over each of the nine views, plain Metal's mw, mrww, mrwr, mr and
+//          ms and OpenCL mode's cw and cr (both forms) answer the rules; mq answers 4, 2 and cq
+//          4, 2, 0x11234, 0x1234 (the third hidden buffer's words 1 and 0, whatever the swizzle).
+//          A swizzled view's usage is 0x11 (ShaderRead | PixelFormatView; the identity's 0x13).
+//          The OpenCL C 2.0 library is refused ("Undefined symbol(s) ...
+//          _Z11read_imagef14ocl_image2d_rwDv2_i"): Apple's compiler takes no __read_write image.
+//   trace  CL_UNORM_INT8 orders R, RG, A, RA, RGBA, BGRA, ARGB, INTENSITY, RGBx, RGB (no
+//          LUMINANCE read-write); each kernel binds one view of the image's own texture:
+//            R          R8Unorm (R, 0, 0, 1) of R8Uint       RG     RG8Unorm (R, G, 0, 1) of RG8Uint
+//            A          R8Unorm (0, 0, 0, R) of R8Uint       RA     RG8Unorm (R, 0, 0, G) of RG8Uint
+//            INTENSITY  R8Unorm (R, R, R, R) of R8Uint       RGBA   RGBA8Unorm (identity) of RGBA8Uint
+//            BGRA       RGBA8Unorm (B, G, R, A) of BGRA8Unorm
+//            ARGB       RGBA8Unorm (G, B, A, R) of format 84
+//            RGB        RGBA8Unorm (R, G, B, 1) of RGBA8Uint RGBx   RGBA8Unorm, no parent
+//          with usage 0x13 or 0x17, and the API's answers are OpenCL's for the order.
 #define CL_SILENCE_DEPRECATION
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
