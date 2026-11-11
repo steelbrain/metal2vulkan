@@ -28,12 +28,15 @@
 //! The wall times are a median over the windows, and the rest the group's totals over its
 //! calls, because the thread and process CPU clocks answer in microseconds.
 //!
-//! The counts are also the table's **gate**: [`HELD`] holds named calls to what they were
-//! measured making, and the run fails where one makes more. A count is deterministic, so it holds
-//! in CI under any load, where none of the times above can.
+//! The counts are also the table's **gate**: [`HELD`] and [`HELD_ON_PATH`] hold named calls to
+//! what they were measured making, and the run fails where one makes more: after its last group,
+//! naming every call that did, so a call over its bound leaves none of the groups after it
+//! unmeasured. A count is deterministic, so it holds in CI under any load, where none of the times
+//! above can.
 
 use crate::gpu::{Format, Gpu};
 use crate::workloads::{emit, host_pages, process_cpu, thread_cpu, Scene, Sizes, TARGET_SIDE};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// The windows a group runs before the measured ones.
@@ -395,8 +398,10 @@ pub fn group<G: Gpu, S>(
 /// texture's image, for one, is made at the call where the device copies its texels on the host
 /// (`texture/host_copy.rs`: the M3 Max), and taken from the parked images the textures of an
 /// earlier window left where it copies them on the staging queue (`texture/staging_copy.rs`:
-/// NVIDIA's copy engine), which makes no image, binds none and starts none on the host.
-const HELD: [(&str, &str, f64); 47] = [
+/// NVIDIA's copy engine), which makes no image, binds none and starts none on the host. A count
+/// every path makes, but each its own number of, such as a call's allocations, is held per path
+/// ([`HELD_ON_PATH`]).
+const HELD: [(&str, &str, f64); 46] = [
     // A draw records exactly one draw command, at the call, and makes no driver object: the cost
     // it pays there is planning and recording, which is settled work and nothing a driver
     // charges for.
@@ -431,7 +436,6 @@ const HELD: [(&str, &str, f64); 47] = [
     ("heap_texture_256", "rt_vk_images_made_at_call", 1.0),
     ("heap_texture_256", "rt_vk_image_bindings_at_call", 1.0),
     ("heap_texture_256", "rt_vk_memory_allocations_at_call", 0.0),
-    ("heap_texture_256", "allocs", 17.25),
     // A Shared texture likewise, and it starts its image on the host once; or it takes one parked
     // image, made and bound before, where the device stages its copies.
     ("texture_256_shared", "rt_vk_images_made_at_call", 1.0),
@@ -493,51 +497,115 @@ const HELD: [(&str, &str, f64); 47] = [
     ("commit_no_copy_dispatch", "allocs", 9.0),
 ];
 
-/// Fail where a group's call made more work than [`HELD`] allows it, naming the call, the count,
-/// what it made and what it is held to. A count the group never moved reads zero: the call made
-/// none of it on this device, where it may take another path than on the M3 Max ([`HELD`]).
+/// What a call may make on each path it takes on one device or another, per call, where the
+/// paths' counts differ: the group, the count whose moving marks the path (as [`HELD`] names its
+/// counts), the count held, and the most a call of that path may make. A row holds the calls that
+/// moved its mark, whatever the device, and a group with rows here must move one of their marks:
+/// a call that took none of the paths has no bound measured for it, and fails until it has one.
+///
+/// A heap texture is made tiled as Metal lays it out where its image cannot lie in the heap's
+/// bytes as Metal's does (`texture/heap_tiled.rs`; measured on the M3 Max), and else as the
+/// driver's own image bound in the heap's memory, counted as laid out otherwise than Metal's
+/// (`texture/heap.rs`; measured on an NVIDIA GeForce RTX 5080).
+const HELD_ON_PATH: [(&str, &str, &str, f64); 2] = [
+    (
+        "heap_texture_256",
+        "rt_heap_textures_tiled_at_call",
+        "allocs",
+        17.25,
+    ),
+    (
+        "heap_texture_256",
+        "rt_heap_texture_untiled_layouts_at_call",
+        "allocs",
+        19.25,
+    ),
+];
+
+/// The calls the groups run so far made more work than [`HELD`] or [`HELD_ON_PATH`] allows them,
+/// as [`hold`] words each; [`percall`] fails on them all after its last group.
+static BREACHED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Note, for [`percall`] to fail on, where a group's call made more work than [`HELD`] or
+/// [`HELD_ON_PATH`] allows it, naming the call, the count, what it made and what it is held to;
+/// and where it took none of the paths [`HELD_ON_PATH`] holds it on. A count the group never moved
+/// reads zero: the call made none of it on this device, where it may take another path than on
+/// the M3 Max ([`HELD`]).
 fn hold(name: &str, measured: &[(String, f64)]) {
-    for (group, what, most) in HELD {
-        if group != name {
-            continue;
-        }
+    let made = |what: &str| {
         let made = measured.iter().find(|(counted, _)| counted == what);
-        let made = made.map_or(0.0, |(_, value)| *value);
-        assert!(
-            made <= most,
-            "{name}: {what} is {made} a call, where it is held to at most {most}"
-        );
+        made.map_or(0.0, |(_, value)| *value)
+    };
+    let mut breached = vec![];
+    for (group, what, most) in HELD {
+        if group == name && made(what) > most {
+            breached.push(format!(
+                "{name}: {what} is {} a call, where it is held to at most {most}",
+                made(what)
+            ));
+        }
     }
+    let paths = HELD_ON_PATH.iter().filter(|(group, ..)| *group == name);
+    let mut marks = vec![];
+    for (_, mark, what, most) in paths {
+        marks.push(*mark);
+        if made(mark) > 0.0 && made(what) > *most {
+            breached.push(format!(
+                "{name}: {what} is {} a call on the path {mark} marks, where it is held to at \
+                 most {most}",
+                made(what)
+            ));
+        }
+    }
+    if !marks.is_empty() && marks.iter().all(|mark| made(mark) == 0.0) {
+        breached.push(format!(
+            "{name}: its call moved none of {marks:?}, the paths HELD_ON_PATH holds it on, so no \
+             bound measured holds it"
+        ));
+    }
+    let mut noted = BREACHED.lock().unwrap_or_else(PoisonError::into_inner);
+    noted.extend(breached);
 }
 
-/// Fail where a row of [`HELD`] could hold nothing on any device: its group has no entry in
-/// [`TIMED`], or its count is none the table prints, `allocs` or one of the side's own counts
-/// `kept` ([`Gpu::work_counts`], every one whatever its value) under `rt_`, with `_at_call` or
-/// `_at_commit` after it or nothing. A count that moved nowhere is not printed and reads zero
-/// ([`hold`]), so a misspelled one would pass whatever the call made: checked by name, before any
-/// group runs, on every device, whichever path its calls take.
+/// Fail where a row of [`HELD`] or [`HELD_ON_PATH`] could hold nothing on any device: its group
+/// has no entry in [`TIMED`], or a count it names is none the table prints, `allocs` or one of the
+/// side's own counts `kept` ([`Gpu::work_counts`], every one whatever its value) under `rt_`, with
+/// `_at_call` or `_at_commit` after it or nothing. A count that moved nowhere is not printed and
+/// reads zero ([`hold`]), so a misspelled one would pass whatever the call made, and a misspelled
+/// mark would hold no call to its path: checked by name, before any group runs, on every device,
+/// whichever path its calls take.
 fn check_held(kept: &[(&'static str, f64)]) {
     let keeps = |count: &str| counted(count) && kept.iter().any(|(name, _)| *name == count);
-    for (group, what, _) in HELD {
+    let printed = |what: &str| {
+        what == "allocs"
+            || what.strip_prefix("rt_").is_some_and(|rest| {
+                keeps(rest)
+                    || [
+                        rest.strip_suffix("_at_call"),
+                        rest.strip_suffix("_at_commit"),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(keeps)
+            })
+    };
+    let check = |group: &str, what: &str| {
         assert!(
             TIMED.iter().any(|(timed, _)| *timed == group),
             "HELD holds {group}, a group TIMED does not name"
         );
-        let own = what.strip_prefix("rt_").is_some_and(|rest| {
-            keeps(rest)
-                || [
-                    rest.strip_suffix("_at_call"),
-                    rest.strip_suffix("_at_commit"),
-                ]
-                .into_iter()
-                .flatten()
-                .any(keeps)
-        });
         assert!(
-            what == "allocs" || own,
-            "{group}: HELD holds {what}, which names no count the side keeps, so the row holds \
+            printed(what),
+            "{group}: HELD names {what}, which names no count the side keeps, so the row holds \
              nothing"
         );
+    };
+    for (group, what, _) in HELD {
+        check(group, what);
+    }
+    for (group, mark, what, _) in HELD_ON_PATH {
+        check(group, mark);
+        check(group, what);
     }
 }
 
@@ -1308,4 +1376,12 @@ pub fn percall<G: Gpu>(g: &G, s: &Scene<G>, library: &G::Library, sizes: &Sizes)
             &mut [now - before],
         );
     }
+    // Every group ran, measured whatever an earlier one made: the gate's verdict on them all.
+    let breached = BREACHED.lock().unwrap_or_else(PoisonError::into_inner);
+    assert!(
+        breached.is_empty(),
+        "{} of the gate's checks failed:\n{}",
+        breached.len(),
+        breached.join("\n")
+    );
 }
