@@ -684,10 +684,10 @@ pub(super) fn host_image_types(
 }
 
 /// The memory types of `class` among `types` (the bits of `allowed`), as bits ([`candidates`]):
-/// none it overflows into.
+/// none it overflows into. Read from [`ranked`] in place, as a texture's making asks it
+/// (`host_image_types`): no list of them is made.
 fn class_types(types: &[vk::MemoryType], allowed: u32, class: MemoryClass, unified: bool) -> u32 {
-    (candidates(types, allowed, class, unified).into_iter())
-        .fold(0, |bits, index| bits | 1 << index)
+    ranked(types, allowed, class, unified).fold(0, |bits, (_, index)| bits | 1 << index)
 }
 
 /// The memory types `class` may use among `types` (the bits of `allowed`), best first, on a
@@ -723,41 +723,42 @@ pub(super) fn candidates(
     class: MemoryClass,
     unified: bool,
 ) -> Vec<u32> {
+    let mut ranked: Vec<(Rank, u32)> = ranked(types, allowed, class, unified).collect();
+    // Vulkan lists memory types best first within equal properties; the sort is stable.
+    ranked.sort_by_key(|&(rank, _)| rank);
+    ranked.into_iter().map(|(_, index)| index).collect()
+}
+
+/// How a memory type ranks among a class's [`candidates`]: lower first.
+type Rank = (u8, u8, u8, u8);
+
+/// The memory types `class` may use among `types` (the bits of `allowed`) on a device with
+/// unified memory (`unified`) or without, each with its [`Rank`], in Vulkan's order: what
+/// [`candidates`] sorts.
+fn ranked(
+    types: &[vk::MemoryType],
+    allowed: u32,
+    class: MemoryClass,
+    unified: bool,
+) -> impl Iterator<Item = (Rank, u32)> + '_ {
     use vk::MemoryPropertyFlags as P;
-    let usable = |index: usize| allowed & (1 << index) != 0;
-    if unified && matches!(class, MemoryClass::Private | MemoryClass::Memoryless) {
-        let fits = |index: usize, flags: P| {
-            usable(index)
-                && allocatable(flags)
-                && !flags.contains(P::PROTECTED)
-                && (class == MemoryClass::Memoryless || !flags.contains(P::LAZILY_ALLOCATED))
-        };
-        let system = (types.iter().enumerate()).any(|(index, ty)| {
+    let usable = move |index: usize| allowed & (1 << index) != 0;
+    let fits = move |index: usize, flags: P| {
+        usable(index)
+            && allocatable(flags)
+            && !flags.contains(P::PROTECTED)
+            && (class == MemoryClass::Memoryless || !flags.contains(P::LAZILY_ALLOCATED))
+    };
+    // With unified memory, `Private` and `Memoryless` memory takes the types that are neither
+    // device-local nor lazily allocated first, where the resource may take one.
+    let system = unified
+        && matches!(class, MemoryClass::Private | MemoryClass::Memoryless)
+        && (types.iter().enumerate()).any(|(index, ty)| {
             fits(index, ty.property_flags)
                 && !ty
                     .property_flags
                     .intersects(P::DEVICE_LOCAL | P::LAZILY_ALLOCATED)
         });
-        if system {
-            let has = |flags: P, bit: P| u8::from(flags.contains(bit));
-            let mut ranked: Vec<((u8, u8, u8, u8), u32)> = (types.iter().enumerate())
-                .filter(|&(index, ty)| fits(index, ty.property_flags))
-                .map(|(index, ty)| {
-                    let flags = ty.property_flags;
-                    let rank = (
-                        1 - has(flags, P::LAZILY_ALLOCATED),
-                        has(flags, P::DEVICE_LOCAL),
-                        has(flags, P::HOST_CACHED),
-                        has(flags, P::HOST_VISIBLE),
-                    );
-                    (rank, index as u32)
-                })
-                .collect();
-            // Vulkan lists memory types best first within equal properties; the sort is stable.
-            ranked.sort_by_key(|&(rank, _)| rank);
-            return ranked.into_iter().map(|(_, index)| index).collect();
-        }
-    }
     // The flags required; those preferred, the first outweighing the second; those avoided,
     // weighed as the first preference.
     let (required, preferred, avoided) = match class {
@@ -783,27 +784,31 @@ pub(super) fn candidates(
             P::empty(),
         ),
     };
+    let has = |flags: P, bit: P| u8::from(flags.contains(bit));
     let lacks = |flags: P, wanted: P| u8::from(!wanted.is_empty() && !flags.contains(wanted));
-    let mut ranked: Vec<((u8, u8), u32)> = types
-        .iter()
-        .enumerate()
-        .filter(|&(index, ty)| {
-            usable(index)
-                && allocatable(ty.property_flags)
-                && ty.property_flags.contains(required)
-                && (class == MemoryClass::Memoryless
-                    || !ty.property_flags.contains(P::LAZILY_ALLOCATED))
-        })
-        .map(|(index, ty)| {
-            let flags = ty.property_flags;
-            let first = lacks(flags, preferred[0])
-                + u8::from(!avoided.is_empty() && flags.intersects(avoided));
-            ((first, lacks(flags, preferred[1])), index as u32)
-        })
-        .collect();
-    // Vulkan lists memory types best first within equal properties; the sort is stable.
-    ranked.sort_by_key(|&(rank, _)| rank);
-    ranked.into_iter().map(|(_, index)| index).collect()
+    (types.iter().enumerate()).filter_map(move |(index, ty)| {
+        let flags = ty.property_flags;
+        let rank = match system {
+            true => fits(index, flags).then(|| {
+                (
+                    1 - has(flags, P::LAZILY_ALLOCATED),
+                    has(flags, P::DEVICE_LOCAL),
+                    has(flags, P::HOST_CACHED),
+                    has(flags, P::HOST_VISIBLE),
+                )
+            }),
+            false => (usable(index)
+                && allocatable(flags)
+                && flags.contains(required)
+                && (class == MemoryClass::Memoryless || !flags.contains(P::LAZILY_ALLOCATED)))
+            .then(|| {
+                let first = lacks(flags, preferred[0])
+                    + u8::from(!avoided.is_empty() && flags.intersects(avoided));
+                (first, lacks(flags, preferred[1]), 0, 0)
+            }),
+        };
+        rank.map(|rank| (rank, index as u32))
+    })
 }
 
 /// The memory types a resource of `class` overflows into among `types` (the bits of `allowed`)

@@ -401,9 +401,9 @@ pub fn group<G: Gpu, S>(
 /// earlier window left where it copies them on the staging queue (`texture/staging_copy.rs`:
 /// NVIDIA's copy engine), which makes no image, binds none and starts none on the host. A call's
 /// allocations are the runtime's own on the calling thread, a few more or fewer where its path
-/// differs: a heap texture made 16.25 a call on the M3 Max (two of them the first locks of its
-/// mutexes, which std allocates on macOS), 14.25 under lavapipe, and 15.25 where its image is
-/// linear because the device's optimal image takes none of the heap's memory types (an RTX 5080).
+/// differs: a heap texture made 12.25 a call under lavapipe, and as many on an RTX 5080, where
+/// its image is linear because the device's optimal image takes none of the heap's memory types;
+/// on macOS the first lock of each of its mutexes allocates too (std's).
 const HELD: [(&str, &str, f64); 47] = [
     // A draw records exactly one draw command, at the call, and makes no driver object: the cost
     // it pays there is planning and recording, which is settled work and nothing a driver
