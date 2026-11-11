@@ -45,217 +45,417 @@ define <{ <4 x float>, <2 x float>, <2 x float>, <4 x half> }> @hnq_layer_vertex
 
 ; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(argmem: read)
 define <4 x half> @hnq_half_layer_composite(<4 x float> %0, <2 x float> %1, <2 x float> %2, <4 x half> %3, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(288) "air-buffer-no-alias" %4, ptr addrspace(1) readonly captures(none) %5, ptr addrspace(1) readonly captures(none) %6, ptr addrspace(1) readonly captures(none) %7, ptr addrspace(1) readonly captures(none) %8, ptr addrspace(1) readonly captures(none) %9, ptr addrspace(1) readonly captures(none) %10, ptr addrspace(2) readonly captures(none) %11) local_unnamed_addr #1 {
-  %13 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 0, i64 0
-  %14 = load <2 x float>, ptr addrspace(2) %13, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  br label %15
+  %13 = alloca [16 x <4 x half>], align 8
+  %14 = alloca [16 x <4 x half>], align 8
+  %15 = alloca [16 x <4 x half>], align 8
+  %16 = alloca [16 x <4 x half>], align 8
+  %17 = alloca [16 x <4 x half>], align 8
+  %18 = alloca [16 x <4 x half>], align 8
+  %19 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 0, i64 0
+  %20 = load <2 x float>, ptr addrspace(2) %19, align 8, !tbaa !41, !alias.scope !44, !noalias !47
+  %21 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 4
+  %22 = load <4 x half>, ptr addrspace(2) %21, align 8, !alias.scope !44, !noalias !47
+  %23 = bitcast ptr %18 to ptr
+  call void @llvm.lifetime.start.p0(i64 128, ptr nonnull %23) #7
+  br label %27
 
-15:                                               ; preds = %15, %12
-  %16 = phi <4 x half> [ zeroinitializer, %12 ], [ %36, %15 ]
-  %17 = phi i32 [ 0, %12 ], [ %37, %15 ]
-  %18 = and i32 %17, 3
-  %19 = tail call fast float @air.convert.f.f32.s.i32(i32 %18) #8
-  %20 = fadd fast float %19, -1.500000e+00
-  %21 = insertelement <2 x float> undef, float %20, i64 0
-  %22 = lshr i32 %17, 2
-  %23 = tail call fast float @air.convert.f.f32.s.i32(i32 %22) #8
-  %24 = fadd fast float %23, -1.500000e+00
-  %25 = insertelement <2 x float> %21, float %24, i64 1
-  %26 = fmul fast <2 x float> %25, %14
-  %27 = fadd fast <2 x float> %26, %1
-  %28 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %5, ptr addrspace(2) readonly captures(none) %11, <2 x float> %27, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
-  %29 = extractvalue { <4 x half>, i8 } %28, 0
-  %30 = zext i32 %17 to i64
-  %31 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 5, i64 0, i64 %30
-  %32 = load half, ptr addrspace(2) %31, align 2, !tbaa !50, !alias.scope !44, !noalias !47
-  %33 = insertelement <4 x half> poison, half %32, i64 0
-  %34 = shufflevector <4 x half> %33, <4 x half> poison, <4 x i32> zeroinitializer
-  %35 = fmul fast <4 x half> %34, %29
-  %36 = fadd fast <4 x half> %35, %16
-  %37 = add nuw nsw i32 %17, 1
-  %38 = icmp eq i32 %37, 16
-  br i1 %38, label %39, label %15, !llvm.loop !52
+24:                                               ; preds = %27
+  %25 = extractelement <4 x half> %22, i64 2
+  %26 = fmul fast <4 x half> %44, splat (half 0xH2C00)
+  br label %47
 
-39:                                               ; preds = %15
-  %40 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 0, i64 1
-  %41 = load <2 x float>, ptr addrspace(2) %40, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  br label %42
+27:                                               ; preds = %27, %12
+  %28 = phi <4 x half> [ zeroinitializer, %12 ], [ %44, %27 ]
+  %29 = phi i32 [ 0, %12 ], [ %45, %27 ]
+  %30 = and i32 %29, 3
+  %31 = tail call fast float @air.convert.f.f32.s.i32(i32 %30) #8
+  %32 = fadd fast float %31, -1.500000e+00
+  %33 = insertelement <2 x float> undef, float %32, i64 0
+  %34 = lshr i32 %29, 2
+  %35 = tail call fast float @air.convert.f.f32.s.i32(i32 %34) #8
+  %36 = fadd fast float %35, -1.500000e+00
+  %37 = insertelement <2 x float> %33, float %36, i64 1
+  %38 = fmul fast <2 x float> %37, %20
+  %39 = fadd fast <2 x float> %38, %1
+  %40 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %5, ptr addrspace(2) readonly captures(none) %11, <2 x float> %39, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
+  %41 = extractvalue { <4 x half>, i8 } %40, 0
+  %42 = zext i32 %29 to i64
+  %43 = getelementptr inbounds [16 x <4 x half>], ptr %18, i64 0, i64 %42
+  store <4 x half> %41, ptr %43, align 8, !tbaa !41
+  %44 = fadd fast <4 x half> %41, %28
+  %45 = add nuw nsw i32 %29, 1
+  %46 = icmp eq i32 %45, 16
+  br i1 %46, label %24, label %27, !llvm.loop !50
 
-42:                                               ; preds = %42, %39
-  %43 = phi <4 x half> [ zeroinitializer, %39 ], [ %63, %42 ]
-  %44 = phi i32 [ 0, %39 ], [ %64, %42 ]
-  %45 = and i32 %44, 3
-  %46 = tail call fast float @air.convert.f.f32.s.i32(i32 %45) #8
-  %47 = fadd fast float %46, -1.500000e+00
-  %48 = insertelement <2 x float> undef, float %47, i64 0
-  %49 = lshr i32 %44, 2
-  %50 = tail call fast float @air.convert.f.f32.s.i32(i32 %49) #8
-  %51 = fadd fast float %50, -1.500000e+00
-  %52 = insertelement <2 x float> %48, float %51, i64 1
-  %53 = fmul fast <2 x float> %52, %41
-  %54 = fadd fast <2 x float> %53, %1
-  %55 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %6, ptr addrspace(2) readonly captures(none) %11, <2 x float> %54, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
-  %56 = extractvalue { <4 x half>, i8 } %55, 0
-  %57 = zext i32 %44 to i64
-  %58 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 5, i64 1, i64 %57
-  %59 = load half, ptr addrspace(2) %58, align 2, !tbaa !50, !alias.scope !44, !noalias !47
-  %60 = insertelement <4 x half> poison, half %59, i64 0
-  %61 = shufflevector <4 x half> %60, <4 x half> poison, <4 x i32> zeroinitializer
-  %62 = fmul fast <4 x half> %61, %56
-  %63 = fadd fast <4 x half> %62, %43
-  %64 = add nuw nsw i32 %44, 1
-  %65 = icmp eq i32 %64, 16
-  br i1 %65, label %66, label %42, !llvm.loop !52
+47:                                               ; preds = %47, %24
+  %48 = phi i32 [ 0, %24 ], [ %67, %47 ]
+  %49 = phi half [ 0xH0000, %24 ], [ %66, %47 ]
+  %50 = phi <4 x half> [ zeroinitializer, %24 ], [ %65, %47 ]
+  %51 = zext i32 %48 to i64
+  %52 = getelementptr inbounds [16 x <4 x half>], ptr %18, i64 0, i64 %51
+  %53 = load <4 x half>, ptr %52, align 8, !tbaa !41
+  %54 = fsub fast <4 x half> %53, %26
+  %55 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 5, i64 0, i64 %51
+  %56 = load half, ptr addrspace(2) %55, align 2, !tbaa !53, !alias.scope !44, !noalias !47
+  %57 = tail call fast half @air.dot.v4f16(<4 x half> %54, <4 x half> %54) #8
+  %58 = fmul fast half %57, %25
+  %59 = fsub fast half 0xH3C00, %58
+  %60 = tail call fast half @air.fmax.f16(half %59, half 0xH0000) #8
+  %61 = fmul fast half %60, %56
+  %62 = insertelement <4 x half> poison, half %61, i64 0
+  %63 = shufflevector <4 x half> %62, <4 x half> poison, <4 x i32> zeroinitializer
+  %64 = fmul fast <4 x half> %63, %53
+  %65 = fadd fast <4 x half> %64, %50
+  %66 = fadd fast half %61, %49
+  %67 = add nuw nsw i32 %48, 1
+  %68 = icmp eq i32 %67, 16
+  br i1 %68, label %69, label %47, !llvm.loop !55
 
-66:                                               ; preds = %42
-  %67 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 0, i64 2
-  %68 = load <2 x float>, ptr addrspace(2) %67, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  br label %69
+69:                                               ; preds = %47
+  call void @llvm.lifetime.end.p0(i64 128, ptr nonnull %23) #7
+  %70 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 0, i64 1
+  %71 = load <2 x float>, ptr addrspace(2) %70, align 8, !tbaa !41, !alias.scope !44, !noalias !47
+  %72 = bitcast ptr %17 to ptr
+  call void @llvm.lifetime.start.p0(i64 128, ptr nonnull %72) #7
+  br label %75
 
-69:                                               ; preds = %69, %66
-  %70 = phi <4 x half> [ zeroinitializer, %66 ], [ %90, %69 ]
-  %71 = phi i32 [ 0, %66 ], [ %91, %69 ]
-  %72 = and i32 %71, 3
-  %73 = tail call fast float @air.convert.f.f32.s.i32(i32 %72) #8
-  %74 = fadd fast float %73, -1.500000e+00
-  %75 = insertelement <2 x float> undef, float %74, i64 0
-  %76 = lshr i32 %71, 2
-  %77 = tail call fast float @air.convert.f.f32.s.i32(i32 %76) #8
-  %78 = fadd fast float %77, -1.500000e+00
-  %79 = insertelement <2 x float> %75, float %78, i64 1
-  %80 = fmul fast <2 x float> %79, %68
-  %81 = fadd fast <2 x float> %80, %1
-  %82 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %7, ptr addrspace(2) readonly captures(none) %11, <2 x float> %81, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
-  %83 = extractvalue { <4 x half>, i8 } %82, 0
-  %84 = zext i32 %71 to i64
-  %85 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 5, i64 2, i64 %84
-  %86 = load half, ptr addrspace(2) %85, align 2, !tbaa !50, !alias.scope !44, !noalias !47
-  %87 = insertelement <4 x half> poison, half %86, i64 0
-  %88 = shufflevector <4 x half> %87, <4 x half> poison, <4 x i32> zeroinitializer
-  %89 = fmul fast <4 x half> %88, %83
-  %90 = fadd fast <4 x half> %89, %70
-  %91 = add nuw nsw i32 %71, 1
-  %92 = icmp eq i32 %91, 16
-  br i1 %92, label %93, label %69, !llvm.loop !52
+73:                                               ; preds = %75
+  %74 = fmul fast <4 x half> %92, splat (half 0xH2C00)
+  br label %95
 
-93:                                               ; preds = %69
-  %94 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 1, i64 0
-  %95 = load i32, ptr addrspace(2) %94, align 8, !tbaa !54, !alias.scope !44, !noalias !47
-  %96 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 4
-  %97 = load <4 x half>, ptr addrspace(2) %96, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  %98 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 1, i64 1
-  %99 = load i32, ptr addrspace(2) %98, align 4, !tbaa !54, !alias.scope !44, !noalias !47
-  %100 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 2
-  %101 = load i32, ptr addrspace(2) %100, align 8, !tbaa !56, !alias.scope !44, !noalias !47
-  %102 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 0, i64 0
-  %103 = load <2 x float>, ptr addrspace(2) %102, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  br label %104
+75:                                               ; preds = %75, %69
+  %76 = phi <4 x half> [ zeroinitializer, %69 ], [ %92, %75 ]
+  %77 = phi i32 [ 0, %69 ], [ %93, %75 ]
+  %78 = and i32 %77, 3
+  %79 = tail call fast float @air.convert.f.f32.s.i32(i32 %78) #8
+  %80 = fadd fast float %79, -1.500000e+00
+  %81 = insertelement <2 x float> undef, float %80, i64 0
+  %82 = lshr i32 %77, 2
+  %83 = tail call fast float @air.convert.f.f32.s.i32(i32 %82) #8
+  %84 = fadd fast float %83, -1.500000e+00
+  %85 = insertelement <2 x float> %81, float %84, i64 1
+  %86 = fmul fast <2 x float> %85, %71
+  %87 = fadd fast <2 x float> %86, %1
+  %88 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %6, ptr addrspace(2) readonly captures(none) %11, <2 x float> %87, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
+  %89 = extractvalue { <4 x half>, i8 } %88, 0
+  %90 = zext i32 %77 to i64
+  %91 = getelementptr inbounds [16 x <4 x half>], ptr %17, i64 0, i64 %90
+  store <4 x half> %89, ptr %91, align 8, !tbaa !41
+  %92 = fadd fast <4 x half> %89, %76
+  %93 = add nuw nsw i32 %77, 1
+  %94 = icmp eq i32 %93, 16
+  br i1 %94, label %73, label %75, !llvm.loop !50
 
-104:                                              ; preds = %104, %93
-  %105 = phi <4 x half> [ zeroinitializer, %93 ], [ %125, %104 ]
-  %106 = phi i32 [ 0, %93 ], [ %126, %104 ]
-  %107 = and i32 %106, 3
-  %108 = tail call fast float @air.convert.f.f32.s.i32(i32 %107) #8
-  %109 = fadd fast float %108, -1.500000e+00
-  %110 = insertelement <2 x float> undef, float %109, i64 0
-  %111 = lshr i32 %106, 2
-  %112 = tail call fast float @air.convert.f.f32.s.i32(i32 %111) #8
-  %113 = fadd fast float %112, -1.500000e+00
-  %114 = insertelement <2 x float> %110, float %113, i64 1
-  %115 = fmul fast <2 x float> %114, %103
-  %116 = fadd fast <2 x float> %115, %2
-  %117 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %8, ptr addrspace(2) readonly captures(none) %11, <2 x float> %116, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
-  %118 = extractvalue { <4 x half>, i8 } %117, 0
-  %119 = zext i32 %106 to i64
-  %120 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 5, i64 0, i64 %119
-  %121 = load half, ptr addrspace(2) %120, align 2, !tbaa !50, !alias.scope !44, !noalias !47
-  %122 = insertelement <4 x half> poison, half %121, i64 0
-  %123 = shufflevector <4 x half> %122, <4 x half> poison, <4 x i32> zeroinitializer
-  %124 = fmul fast <4 x half> %123, %118
-  %125 = fadd fast <4 x half> %124, %105
-  %126 = add nuw nsw i32 %106, 1
-  %127 = icmp eq i32 %126, 16
-  br i1 %127, label %128, label %104, !llvm.loop !52
+95:                                               ; preds = %95, %73
+  %96 = phi i32 [ 0, %73 ], [ %115, %95 ]
+  %97 = phi half [ 0xH0000, %73 ], [ %114, %95 ]
+  %98 = phi <4 x half> [ zeroinitializer, %73 ], [ %113, %95 ]
+  %99 = zext i32 %96 to i64
+  %100 = getelementptr inbounds [16 x <4 x half>], ptr %17, i64 0, i64 %99
+  %101 = load <4 x half>, ptr %100, align 8, !tbaa !41
+  %102 = fsub fast <4 x half> %101, %74
+  %103 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 5, i64 1, i64 %99
+  %104 = load half, ptr addrspace(2) %103, align 2, !tbaa !53, !alias.scope !44, !noalias !47
+  %105 = tail call fast half @air.dot.v4f16(<4 x half> %102, <4 x half> %102) #8
+  %106 = fmul fast half %105, %25
+  %107 = fsub fast half 0xH3C00, %106
+  %108 = tail call fast half @air.fmax.f16(half %107, half 0xH0000) #8
+  %109 = fmul fast half %108, %104
+  %110 = insertelement <4 x half> poison, half %109, i64 0
+  %111 = shufflevector <4 x half> %110, <4 x half> poison, <4 x i32> zeroinitializer
+  %112 = fmul fast <4 x half> %111, %101
+  %113 = fadd fast <4 x half> %112, %98
+  %114 = fadd fast half %109, %97
+  %115 = add nuw nsw i32 %96, 1
+  %116 = icmp eq i32 %115, 16
+  br i1 %116, label %117, label %95, !llvm.loop !55
 
-128:                                              ; preds = %104
-  %129 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 0, i64 1
-  %130 = load <2 x float>, ptr addrspace(2) %129, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  br label %131
+117:                                              ; preds = %95
+  call void @llvm.lifetime.end.p0(i64 128, ptr nonnull %72) #7
+  %118 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 0, i64 2
+  %119 = load <2 x float>, ptr addrspace(2) %118, align 8, !tbaa !41, !alias.scope !44, !noalias !47
+  %120 = bitcast ptr %16 to ptr
+  call void @llvm.lifetime.start.p0(i64 128, ptr nonnull %120) #7
+  br label %123
 
-131:                                              ; preds = %131, %128
-  %132 = phi <4 x half> [ zeroinitializer, %128 ], [ %152, %131 ]
-  %133 = phi i32 [ 0, %128 ], [ %153, %131 ]
-  %134 = and i32 %133, 3
-  %135 = tail call fast float @air.convert.f.f32.s.i32(i32 %134) #8
-  %136 = fadd fast float %135, -1.500000e+00
-  %137 = insertelement <2 x float> undef, float %136, i64 0
-  %138 = lshr i32 %133, 2
-  %139 = tail call fast float @air.convert.f.f32.s.i32(i32 %138) #8
-  %140 = fadd fast float %139, -1.500000e+00
-  %141 = insertelement <2 x float> %137, float %140, i64 1
-  %142 = fmul fast <2 x float> %141, %130
-  %143 = fadd fast <2 x float> %142, %2
-  %144 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %9, ptr addrspace(2) readonly captures(none) %11, <2 x float> %143, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
-  %145 = extractvalue { <4 x half>, i8 } %144, 0
-  %146 = zext i32 %133 to i64
-  %147 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 5, i64 1, i64 %146
-  %148 = load half, ptr addrspace(2) %147, align 2, !tbaa !50, !alias.scope !44, !noalias !47
-  %149 = insertelement <4 x half> poison, half %148, i64 0
-  %150 = shufflevector <4 x half> %149, <4 x half> poison, <4 x i32> zeroinitializer
-  %151 = fmul fast <4 x half> %150, %145
-  %152 = fadd fast <4 x half> %151, %132
-  %153 = add nuw nsw i32 %133, 1
-  %154 = icmp eq i32 %153, 16
-  br i1 %154, label %155, label %131, !llvm.loop !52
+121:                                              ; preds = %123
+  %122 = fmul fast <4 x half> %140, splat (half 0xH2C00)
+  br label %143
 
-155:                                              ; preds = %131
-  %156 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 0, i64 2
-  %157 = load <2 x float>, ptr addrspace(2) %156, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  br label %158
+123:                                              ; preds = %123, %117
+  %124 = phi <4 x half> [ zeroinitializer, %117 ], [ %140, %123 ]
+  %125 = phi i32 [ 0, %117 ], [ %141, %123 ]
+  %126 = and i32 %125, 3
+  %127 = tail call fast float @air.convert.f.f32.s.i32(i32 %126) #8
+  %128 = fadd fast float %127, -1.500000e+00
+  %129 = insertelement <2 x float> undef, float %128, i64 0
+  %130 = lshr i32 %125, 2
+  %131 = tail call fast float @air.convert.f.f32.s.i32(i32 %130) #8
+  %132 = fadd fast float %131, -1.500000e+00
+  %133 = insertelement <2 x float> %129, float %132, i64 1
+  %134 = fmul fast <2 x float> %133, %119
+  %135 = fadd fast <2 x float> %134, %1
+  %136 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %7, ptr addrspace(2) readonly captures(none) %11, <2 x float> %135, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
+  %137 = extractvalue { <4 x half>, i8 } %136, 0
+  %138 = zext i32 %125 to i64
+  %139 = getelementptr inbounds [16 x <4 x half>], ptr %16, i64 0, i64 %138
+  store <4 x half> %137, ptr %139, align 8, !tbaa !41
+  %140 = fadd fast <4 x half> %137, %124
+  %141 = add nuw nsw i32 %125, 1
+  %142 = icmp eq i32 %141, 16
+  br i1 %142, label %121, label %123, !llvm.loop !50
 
-158:                                              ; preds = %158, %155
-  %159 = phi <4 x half> [ zeroinitializer, %155 ], [ %179, %158 ]
-  %160 = phi i32 [ 0, %155 ], [ %180, %158 ]
-  %161 = and i32 %160, 3
-  %162 = tail call fast float @air.convert.f.f32.s.i32(i32 %161) #8
-  %163 = fadd fast float %162, -1.500000e+00
-  %164 = insertelement <2 x float> undef, float %163, i64 0
-  %165 = lshr i32 %160, 2
-  %166 = tail call fast float @air.convert.f.f32.s.i32(i32 %165) #8
-  %167 = fadd fast float %166, -1.500000e+00
-  %168 = insertelement <2 x float> %164, float %167, i64 1
-  %169 = fmul fast <2 x float> %168, %157
-  %170 = fadd fast <2 x float> %169, %2
-  %171 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %10, ptr addrspace(2) readonly captures(none) %11, <2 x float> %170, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
-  %172 = extractvalue { <4 x half>, i8 } %171, 0
-  %173 = zext i32 %160 to i64
-  %174 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 5, i64 2, i64 %173
-  %175 = load half, ptr addrspace(2) %174, align 2, !tbaa !50, !alias.scope !44, !noalias !47
-  %176 = insertelement <4 x half> poison, half %175, i64 0
-  %177 = shufflevector <4 x half> %176, <4 x half> poison, <4 x i32> zeroinitializer
-  %178 = fmul fast <4 x half> %177, %172
-  %179 = fadd fast <4 x half> %178, %159
-  %180 = add nuw nsw i32 %160, 1
-  %181 = icmp eq i32 %180, 16
-  br i1 %181, label %182, label %158, !llvm.loop !52
+143:                                              ; preds = %143, %121
+  %144 = phi i32 [ 0, %121 ], [ %163, %143 ]
+  %145 = phi half [ 0xH0000, %121 ], [ %162, %143 ]
+  %146 = phi <4 x half> [ zeroinitializer, %121 ], [ %161, %143 ]
+  %147 = zext i32 %144 to i64
+  %148 = getelementptr inbounds [16 x <4 x half>], ptr %16, i64 0, i64 %147
+  %149 = load <4 x half>, ptr %148, align 8, !tbaa !41
+  %150 = fsub fast <4 x half> %149, %122
+  %151 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 5, i64 2, i64 %147
+  %152 = load half, ptr addrspace(2) %151, align 2, !tbaa !53, !alias.scope !44, !noalias !47
+  %153 = tail call fast half @air.dot.v4f16(<4 x half> %150, <4 x half> %150) #8
+  %154 = fmul fast half %153, %25
+  %155 = fsub fast half 0xH3C00, %154
+  %156 = tail call fast half @air.fmax.f16(half %155, half 0xH0000) #8
+  %157 = fmul fast half %156, %152
+  %158 = insertelement <4 x half> poison, half %157, i64 0
+  %159 = shufflevector <4 x half> %158, <4 x half> poison, <4 x i32> zeroinitializer
+  %160 = fmul fast <4 x half> %159, %149
+  %161 = fadd fast <4 x half> %160, %146
+  %162 = fadd fast half %157, %145
+  %163 = add nuw nsw i32 %144, 1
+  %164 = icmp eq i32 %163, 16
+  br i1 %164, label %165, label %143, !llvm.loop !55
 
-182:                                              ; preds = %158
-  %183 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %95, <4 x half> noundef %36, <4 x half> noundef %63, <4 x half> noundef %90, <4 x half> noundef %97) #10
-  %184 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %99, <4 x half> noundef %183, <4 x half> noundef %90, <4 x half> noundef %36, <4 x half> noundef %97) #10
-  %185 = fmul fast <4 x half> %184, %3
-  %186 = tail call fast fastcc <4 x half> @_ZL9hnq_blendjDv4_DhS_(i32 noundef %101, <4 x half> noundef %185, <4 x half> noundef zeroinitializer) #10
-  %187 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 1, i64 0
-  %188 = load i32, ptr addrspace(2) %187, align 8, !tbaa !54, !alias.scope !44, !noalias !47
-  %189 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 4
-  %190 = load <4 x half>, ptr addrspace(2) %189, align 8, !tbaa !41, !alias.scope !44, !noalias !47
-  %191 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %188, <4 x half> noundef %125, <4 x half> noundef %152, <4 x half> noundef %179, <4 x half> noundef %190) #10
-  %192 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 1, i64 1
-  %193 = load i32, ptr addrspace(2) %192, align 4, !tbaa !54, !alias.scope !44, !noalias !47
-  %194 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %193, <4 x half> noundef %191, <4 x half> noundef %179, <4 x half> noundef %125, <4 x half> noundef %190) #10
-  %195 = fmul fast <4 x half> %194, %3
-  %196 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 2
-  %197 = load i32, ptr addrspace(2) %196, align 8, !tbaa !56, !alias.scope !44, !noalias !47
-  %198 = tail call fast fastcc <4 x half> @_ZL9hnq_blendjDv4_DhS_(i32 noundef %197, <4 x half> noundef %195, <4 x half> noundef %186) #10
-  ret <4 x half> %198
+165:                                              ; preds = %143
+  call void @llvm.lifetime.end.p0(i64 128, ptr nonnull %120) #7
+  %166 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 1, i64 0
+  %167 = load i32, ptr addrspace(2) %166, align 8, !tbaa !56, !alias.scope !44, !noalias !47
+  %168 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 1, i64 1
+  %169 = load i32, ptr addrspace(2) %168, align 4, !tbaa !56, !alias.scope !44, !noalias !47
+  %170 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 0, i32 2
+  %171 = load i32, ptr addrspace(2) %170, align 8, !tbaa !58, !alias.scope !44, !noalias !47
+  %172 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 0, i64 0
+  %173 = load <2 x float>, ptr addrspace(2) %172, align 8, !tbaa !41, !alias.scope !44, !noalias !47
+  %174 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 4
+  %175 = load <4 x half>, ptr addrspace(2) %174, align 8, !alias.scope !44, !noalias !47
+  %176 = bitcast ptr %15 to ptr
+  call void @llvm.lifetime.start.p0(i64 128, ptr nonnull %176) #7
+  br label %180
+
+177:                                              ; preds = %180
+  %178 = extractelement <4 x half> %175, i64 2
+  %179 = fmul fast <4 x half> %197, splat (half 0xH2C00)
+  br label %200
+
+180:                                              ; preds = %180, %165
+  %181 = phi <4 x half> [ zeroinitializer, %165 ], [ %197, %180 ]
+  %182 = phi i32 [ 0, %165 ], [ %198, %180 ]
+  %183 = and i32 %182, 3
+  %184 = tail call fast float @air.convert.f.f32.s.i32(i32 %183) #8
+  %185 = fadd fast float %184, -1.500000e+00
+  %186 = insertelement <2 x float> undef, float %185, i64 0
+  %187 = lshr i32 %182, 2
+  %188 = tail call fast float @air.convert.f.f32.s.i32(i32 %187) #8
+  %189 = fadd fast float %188, -1.500000e+00
+  %190 = insertelement <2 x float> %186, float %189, i64 1
+  %191 = fmul fast <2 x float> %190, %173
+  %192 = fadd fast <2 x float> %191, %2
+  %193 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %8, ptr addrspace(2) readonly captures(none) %11, <2 x float> %192, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
+  %194 = extractvalue { <4 x half>, i8 } %193, 0
+  %195 = zext i32 %182 to i64
+  %196 = getelementptr inbounds [16 x <4 x half>], ptr %15, i64 0, i64 %195
+  store <4 x half> %194, ptr %196, align 8, !tbaa !41
+  %197 = fadd fast <4 x half> %194, %181
+  %198 = add nuw nsw i32 %182, 1
+  %199 = icmp eq i32 %198, 16
+  br i1 %199, label %177, label %180, !llvm.loop !50
+
+200:                                              ; preds = %200, %177
+  %201 = phi i32 [ 0, %177 ], [ %220, %200 ]
+  %202 = phi half [ 0xH0000, %177 ], [ %219, %200 ]
+  %203 = phi <4 x half> [ zeroinitializer, %177 ], [ %218, %200 ]
+  %204 = zext i32 %201 to i64
+  %205 = getelementptr inbounds [16 x <4 x half>], ptr %15, i64 0, i64 %204
+  %206 = load <4 x half>, ptr %205, align 8, !tbaa !41
+  %207 = fsub fast <4 x half> %206, %179
+  %208 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 5, i64 0, i64 %204
+  %209 = load half, ptr addrspace(2) %208, align 2, !tbaa !53, !alias.scope !44, !noalias !47
+  %210 = tail call fast half @air.dot.v4f16(<4 x half> %207, <4 x half> %207) #8
+  %211 = fmul fast half %210, %178
+  %212 = fsub fast half 0xH3C00, %211
+  %213 = tail call fast half @air.fmax.f16(half %212, half 0xH0000) #8
+  %214 = fmul fast half %213, %209
+  %215 = insertelement <4 x half> poison, half %214, i64 0
+  %216 = shufflevector <4 x half> %215, <4 x half> poison, <4 x i32> zeroinitializer
+  %217 = fmul fast <4 x half> %216, %206
+  %218 = fadd fast <4 x half> %217, %203
+  %219 = fadd fast half %214, %202
+  %220 = add nuw nsw i32 %201, 1
+  %221 = icmp eq i32 %220, 16
+  br i1 %221, label %222, label %200, !llvm.loop !55
+
+222:                                              ; preds = %200
+  call void @llvm.lifetime.end.p0(i64 128, ptr nonnull %176) #7
+  %223 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 0, i64 1
+  %224 = load <2 x float>, ptr addrspace(2) %223, align 8, !tbaa !41, !alias.scope !44, !noalias !47
+  %225 = bitcast ptr %14 to ptr
+  call void @llvm.lifetime.start.p0(i64 128, ptr nonnull %225) #7
+  br label %228
+
+226:                                              ; preds = %228
+  %227 = fmul fast <4 x half> %245, splat (half 0xH2C00)
+  br label %248
+
+228:                                              ; preds = %228, %222
+  %229 = phi <4 x half> [ zeroinitializer, %222 ], [ %245, %228 ]
+  %230 = phi i32 [ 0, %222 ], [ %246, %228 ]
+  %231 = and i32 %230, 3
+  %232 = tail call fast float @air.convert.f.f32.s.i32(i32 %231) #8
+  %233 = fadd fast float %232, -1.500000e+00
+  %234 = insertelement <2 x float> undef, float %233, i64 0
+  %235 = lshr i32 %230, 2
+  %236 = tail call fast float @air.convert.f.f32.s.i32(i32 %235) #8
+  %237 = fadd fast float %236, -1.500000e+00
+  %238 = insertelement <2 x float> %234, float %237, i64 1
+  %239 = fmul fast <2 x float> %238, %224
+  %240 = fadd fast <2 x float> %239, %2
+  %241 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %9, ptr addrspace(2) readonly captures(none) %11, <2 x float> %240, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
+  %242 = extractvalue { <4 x half>, i8 } %241, 0
+  %243 = zext i32 %230 to i64
+  %244 = getelementptr inbounds [16 x <4 x half>], ptr %14, i64 0, i64 %243
+  store <4 x half> %242, ptr %244, align 8, !tbaa !41
+  %245 = fadd fast <4 x half> %242, %229
+  %246 = add nuw nsw i32 %230, 1
+  %247 = icmp eq i32 %246, 16
+  br i1 %247, label %226, label %228, !llvm.loop !50
+
+248:                                              ; preds = %248, %226
+  %249 = phi i32 [ 0, %226 ], [ %268, %248 ]
+  %250 = phi half [ 0xH0000, %226 ], [ %267, %248 ]
+  %251 = phi <4 x half> [ zeroinitializer, %226 ], [ %266, %248 ]
+  %252 = zext i32 %249 to i64
+  %253 = getelementptr inbounds [16 x <4 x half>], ptr %14, i64 0, i64 %252
+  %254 = load <4 x half>, ptr %253, align 8, !tbaa !41
+  %255 = fsub fast <4 x half> %254, %227
+  %256 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 5, i64 1, i64 %252
+  %257 = load half, ptr addrspace(2) %256, align 2, !tbaa !53, !alias.scope !44, !noalias !47
+  %258 = tail call fast half @air.dot.v4f16(<4 x half> %255, <4 x half> %255) #8
+  %259 = fmul fast half %258, %178
+  %260 = fsub fast half 0xH3C00, %259
+  %261 = tail call fast half @air.fmax.f16(half %260, half 0xH0000) #8
+  %262 = fmul fast half %261, %257
+  %263 = insertelement <4 x half> poison, half %262, i64 0
+  %264 = shufflevector <4 x half> %263, <4 x half> poison, <4 x i32> zeroinitializer
+  %265 = fmul fast <4 x half> %264, %254
+  %266 = fadd fast <4 x half> %265, %251
+  %267 = fadd fast half %262, %250
+  %268 = add nuw nsw i32 %249, 1
+  %269 = icmp eq i32 %268, 16
+  br i1 %269, label %270, label %248, !llvm.loop !55
+
+270:                                              ; preds = %248
+  call void @llvm.lifetime.end.p0(i64 128, ptr nonnull %225) #7
+  %271 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 0, i64 2
+  %272 = load <2 x float>, ptr addrspace(2) %271, align 8, !tbaa !41, !alias.scope !44, !noalias !47
+  %273 = bitcast ptr %13 to ptr
+  call void @llvm.lifetime.start.p0(i64 128, ptr nonnull %273) #7
+  br label %276
+
+274:                                              ; preds = %276
+  %275 = fmul fast <4 x half> %293, splat (half 0xH2C00)
+  br label %296
+
+276:                                              ; preds = %276, %270
+  %277 = phi <4 x half> [ zeroinitializer, %270 ], [ %293, %276 ]
+  %278 = phi i32 [ 0, %270 ], [ %294, %276 ]
+  %279 = and i32 %278, 3
+  %280 = tail call fast float @air.convert.f.f32.s.i32(i32 %279) #8
+  %281 = fadd fast float %280, -1.500000e+00
+  %282 = insertelement <2 x float> undef, float %281, i64 0
+  %283 = lshr i32 %278, 2
+  %284 = tail call fast float @air.convert.f.f32.s.i32(i32 %283) #8
+  %285 = fadd fast float %284, -1.500000e+00
+  %286 = insertelement <2 x float> %282, float %285, i64 1
+  %287 = fmul fast <2 x float> %286, %272
+  %288 = fadd fast <2 x float> %287, %2
+  %289 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %10, ptr addrspace(2) readonly captures(none) %11, <2 x float> %288, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #9, !alias.scope !47, !noalias !44
+  %290 = extractvalue { <4 x half>, i8 } %289, 0
+  %291 = zext i32 %278 to i64
+  %292 = getelementptr inbounds [16 x <4 x half>], ptr %13, i64 0, i64 %291
+  store <4 x half> %290, ptr %292, align 8, !tbaa !41
+  %293 = fadd fast <4 x half> %290, %277
+  %294 = add nuw nsw i32 %278, 1
+  %295 = icmp eq i32 %294, 16
+  br i1 %295, label %274, label %276, !llvm.loop !50
+
+296:                                              ; preds = %296, %274
+  %297 = phi i32 [ 0, %274 ], [ %316, %296 ]
+  %298 = phi half [ 0xH0000, %274 ], [ %315, %296 ]
+  %299 = phi <4 x half> [ zeroinitializer, %274 ], [ %314, %296 ]
+  %300 = zext i32 %297 to i64
+  %301 = getelementptr inbounds [16 x <4 x half>], ptr %13, i64 0, i64 %300
+  %302 = load <4 x half>, ptr %301, align 8, !tbaa !41
+  %303 = fsub fast <4 x half> %302, %275
+  %304 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 5, i64 2, i64 %300
+  %305 = load half, ptr addrspace(2) %304, align 2, !tbaa !53, !alias.scope !44, !noalias !47
+  %306 = tail call fast half @air.dot.v4f16(<4 x half> %303, <4 x half> %303) #8
+  %307 = fmul fast half %306, %178
+  %308 = fsub fast half 0xH3C00, %307
+  %309 = tail call fast half @air.fmax.f16(half %308, half 0xH0000) #8
+  %310 = fmul fast half %309, %305
+  %311 = insertelement <4 x half> poison, half %310, i64 0
+  %312 = shufflevector <4 x half> %311, <4 x half> poison, <4 x i32> zeroinitializer
+  %313 = fmul fast <4 x half> %312, %302
+  %314 = fadd fast <4 x half> %313, %299
+  %315 = fadd fast half %310, %298
+  %316 = add nuw nsw i32 %297, 1
+  %317 = icmp eq i32 %316, 16
+  br i1 %317, label %318, label %296, !llvm.loop !55
+
+318:                                              ; preds = %296
+  %319 = tail call fast half @air.fmax.f16(half %267, half 0xH1419) #8
+  %320 = insertelement <4 x half> poison, half %319, i64 0
+  %321 = shufflevector <4 x half> %320, <4 x half> poison, <4 x i32> zeroinitializer
+  %322 = fdiv fast <4 x half> %266, %321
+  %323 = tail call fast half @air.fmax.f16(half %219, half 0xH1419) #8
+  %324 = insertelement <4 x half> poison, half %323, i64 0
+  %325 = shufflevector <4 x half> %324, <4 x half> poison, <4 x i32> zeroinitializer
+  %326 = fdiv fast <4 x half> %218, %325
+  %327 = tail call fast half @air.fmax.f16(half %66, half 0xH1419) #8
+  %328 = insertelement <4 x half> poison, half %327, i64 0
+  %329 = shufflevector <4 x half> %328, <4 x half> poison, <4 x i32> zeroinitializer
+  %330 = fdiv fast <4 x half> %65, %329
+  %331 = tail call fast half @air.fmax.f16(half %114, half 0xH1419) #8
+  %332 = insertelement <4 x half> poison, half %331, i64 0
+  %333 = shufflevector <4 x half> %332, <4 x half> poison, <4 x i32> zeroinitializer
+  %334 = fdiv fast <4 x half> %113, %333
+  %335 = tail call fast half @air.fmax.f16(half %162, half 0xH1419) #8
+  %336 = insertelement <4 x half> poison, half %335, i64 0
+  %337 = shufflevector <4 x half> %336, <4 x half> poison, <4 x i32> zeroinitializer
+  %338 = fdiv fast <4 x half> %161, %337
+  %339 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %167, <4 x half> noundef %330, <4 x half> noundef %334, <4 x half> noundef %338, <4 x half> noundef %22) #10
+  %340 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %169, <4 x half> noundef %339, <4 x half> noundef %338, <4 x half> noundef %330, <4 x half> noundef %22) #10
+  %341 = fmul fast <4 x half> %340, %3
+  %342 = tail call fast fastcc <4 x half> @_ZL9hnq_blendjDv4_DhS_(i32 noundef %171, <4 x half> noundef %341, <4 x half> noundef zeroinitializer) #10
+  %343 = tail call fast half @air.fmax.f16(half %315, half 0xH1419) #8
+  %344 = insertelement <4 x half> poison, half %343, i64 0
+  %345 = shufflevector <4 x half> %344, <4 x half> poison, <4 x i32> zeroinitializer
+  %346 = fdiv fast <4 x half> %314, %345
+  call void @llvm.lifetime.end.p0(i64 128, ptr nonnull %273) #7
+  %347 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 1, i64 0
+  %348 = load i32, ptr addrspace(2) %347, align 8, !tbaa !56, !alias.scope !44, !noalias !47
+  %349 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %348, <4 x half> noundef %326, <4 x half> noundef %322, <4 x half> noundef %346, <4 x half> noundef %175) #10
+  %350 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 1, i64 1
+  %351 = load i32, ptr addrspace(2) %350, align 4, !tbaa !56, !alias.scope !44, !noalias !47
+  %352 = tail call fast fastcc <4 x half> @_ZL13hnq_colour_opjDv4_DhS_S_S_(i32 noundef %351, <4 x half> noundef %349, <4 x half> noundef %346, <4 x half> noundef %326, <4 x half> noundef %175) #10
+  %353 = fmul fast <4 x half> %352, %3
+  %354 = getelementptr inbounds %struct.hnq_params, ptr addrspace(2) %4, i64 0, i32 0, i64 1, i32 2
+  %355 = load i32, ptr addrspace(2) %354, align 8, !tbaa !58, !alias.scope !44, !noalias !47
+  %356 = tail call fast fastcc <4 x half> @_ZL9hnq_blendjDv4_DhS_(i32 noundef %355, <4 x half> noundef %353, <4 x half> noundef %342) #10
+  ret <4 x half> %356
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
@@ -766,6 +966,12 @@ declare float @air.convert.f.f32.s.i32(i32) local_unnamed_addr #3
 declare { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none), ptr addrspace(2) readonly captures(none), <2 x float>, i1, <2 x i32>, i1, float, float, i32) local_unnamed_addr #4
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare half @air.fmax.f16(half, half) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare half @air.dot.v4f16(<4 x half>, <4 x half>) local_unnamed_addr #3
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare <4 x half> @air.mix.v4f16(<4 x half>, <4 x half>, <4 x half>) local_unnamed_addr #3
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
@@ -886,11 +1092,13 @@ attributes #10 = { nobuiltin "no-builtins" }
 !47 = !{!48, !49}
 !48 = distinct !{!48, !46, !"air-alias-scope-textures"}
 !49 = distinct !{!49, !46, !"air-alias-scope-samplers"}
-!50 = !{!51, !51, i64 0}
-!51 = !{!"half", !42, i64 0}
-!52 = distinct !{!52, !53}
-!53 = !{!"llvm.loop.mustprogress"}
-!54 = !{!55, !55, i64 0}
-!55 = !{!"int", !42, i64 0}
-!56 = !{!57, !55, i64 32}
-!57 = !{!"_ZTS9hnq_layer", !42, i64 0, !42, i64 24, !55, i64 32, !55, i64 36, !42, i64 40, !42, i64 48}
+!50 = distinct !{!50, !51, !52}
+!51 = !{!"llvm.loop.mustprogress"}
+!52 = !{!"llvm.loop.unroll.enable"}
+!53 = !{!54, !54, i64 0}
+!54 = !{!"half", !42, i64 0}
+!55 = distinct !{!55, !51, !52}
+!56 = !{!57, !57, i64 0}
+!57 = !{!"int", !42, i64 0}
+!58 = !{!59, !57, i64 32}
+!59 = !{!"_ZTS9hnq_layer", !42, i64 0, !42, i64 24, !57, i64 32, !57, i64 36, !42, i64 40, !42, i64 48}

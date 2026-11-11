@@ -1,6 +1,8 @@
 // Owned fixture: the shape of a fixed-function compositing fragment function that holds its
-// colours in `half`. Two layers, each of three sources; a source is 16 taps of a `half` texture
-// around the fragment's point, weighed by 16 `half` weights from a buffer and summed. A colour-op
+// colours in `half`. Two layers, each of three sources; a source is an edge-aware filter of 16
+// unrolled taps of a `half` texture around the fragment's point: the taps' mean, then each tap
+// weighed by a buffer's `half` weight and its distance from the mean, and the weighted sum
+// normalized, so all 16 taps are live across the two passes. A colour-op
 // interpreter (a 17-case switch over a buffer's op code, run twice a layer) combines a layer's
 // sources, a `half` tint modulates the result, and a 40-case blend switch (Porter-Duff operators
 // and separable blend modes, each composed with alpha) puts the layer over the colour so far.
@@ -44,14 +46,27 @@ vertex hnq_in hnq_layer_vertex(uint vid [[vertex_id]])
 }
 
 static half4 hnq_filter(texture2d<half> t, sampler s, float2 uv, float2 step,
-                        constant half *w)
+                        constant half *w, half sharp)
 {
-    half4 sum = half4(0.0h);
+    half4 tap[16];
+    half4 mean = half4(0.0h);
+#pragma unroll
     for (int i = 0; i < 16; ++i) {
         float2 o = float2(float(i & 3) - 1.5, float(i >> 2) - 1.5) * step;
-        sum += t.sample(s, uv + o) * w[i];
+        tap[i] = t.sample(s, uv + o);
+        mean += tap[i];
     }
-    return sum;
+    mean *= 0.0625h;
+    half4 sum = half4(0.0h);
+    half total = 0.0h;
+#pragma unroll
+    for (int i = 0; i < 16; ++i) {
+        half4 d = tap[i] - mean;
+        half k = w[i] * max(1.0h - dot(d, d) * sharp, 0.0h);
+        sum += tap[i] * k;
+        total += k;
+    }
+    return sum / max(total, 0.001h);
 }
 
 static half4 hnq_colour_op(uint op, half4 a, half4 b, half4 c, half4 k)
@@ -151,18 +166,18 @@ fragment half4 hnq_half_layer_composite(hnq_in in [[stage_in]],
     half4 dst = half4(0.0h);
     {
         constant hnq_layer &l = p.layer[0];
-        half4 a = hnq_filter(t0, s, in.uv0, l.step[0], l.weights[0]);
-        half4 b = hnq_filter(t1, s, in.uv0, l.step[1], l.weights[1]);
-        half4 c = hnq_filter(t2, s, in.uv0, l.step[2], l.weights[2]);
+        half4 a = hnq_filter(t0, s, in.uv0, l.step[0], l.weights[0], l.k.z);
+        half4 b = hnq_filter(t1, s, in.uv0, l.step[1], l.weights[1], l.k.z);
+        half4 c = hnq_filter(t2, s, in.uv0, l.step[2], l.weights[2], l.k.z);
         half4 x = hnq_colour_op(l.op[0], a, b, c, l.k);
         x = hnq_colour_op(l.op[1], x, c, a, l.k) * in.tint;
         dst = hnq_blend(l.blend, x, dst);
     }
     {
         constant hnq_layer &l = p.layer[1];
-        half4 a = hnq_filter(t3, s, in.uv1, l.step[0], l.weights[0]);
-        half4 b = hnq_filter(t4, s, in.uv1, l.step[1], l.weights[1]);
-        half4 c = hnq_filter(t5, s, in.uv1, l.step[2], l.weights[2]);
+        half4 a = hnq_filter(t3, s, in.uv1, l.step[0], l.weights[0], l.k.z);
+        half4 b = hnq_filter(t4, s, in.uv1, l.step[1], l.weights[1], l.k.z);
+        half4 c = hnq_filter(t5, s, in.uv1, l.step[2], l.weights[2], l.k.z);
         half4 x = hnq_colour_op(l.op[0], a, b, c, l.k);
         x = hnq_colour_op(l.op[1], x, c, a, l.k) * in.tint;
         dst = hnq_blend(l.blend, x, dst);
