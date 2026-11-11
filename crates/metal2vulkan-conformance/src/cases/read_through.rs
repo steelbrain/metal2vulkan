@@ -783,10 +783,18 @@ impl Case for ReadThrough {
                 Through::Table(..) | Through::HeapTexture | Through::HeapTextureSlot(..)
             )
         });
-        match heap {
-            true => vec![crate::replay::set_past_layout_notice()],
-            false => Vec::new(),
+        // Every read binds its positions and its output in `Shared` buffers, so on a device
+        // without unified memory the runtime announces `shared-in-system-memory`
+        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
+        // site alone, so every word still compares against Metal's exactly. Measured on the
+        // RX 7900 XTX (RADV NAVI31, the round's replay at 6898863f3f): it fired for all 13 cases,
+        // each divergent at the notices site and nothing else; on MoltenVK and lavapipe, whose
+        // GPU shares the CPU's memory, it cannot fire.
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if heap {
+            named.push(crate::replay::set_past_layout_notice());
         }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

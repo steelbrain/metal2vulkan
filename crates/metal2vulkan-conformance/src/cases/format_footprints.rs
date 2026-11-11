@@ -320,8 +320,12 @@ pub struct FootprintCase {
     /// Whether the runtime makes a `Shared` texture buffer of one of the case's formats: the
     /// buffer under it is `Shared` memory, which a device without unified memory places in system
     /// memory and announces (`shared-in-system-memory`). Measured on the RTX 5080 Laptop
-    /// (615.71.09): the plain stragglers' case announced it in the whole-set replay, and no other
-    /// case of the family did, their formats' texture buffers being refused or nil.
+    /// (615.71.09): the plain stragglers' case announced it in the whole-set replay. Measured on
+    /// the RX 7900 XTX (RADV NAVI31, the round's replay at 6898863f3f): the one-plane YCbCr and
+    /// padded wide-channel cases announced it too, the runtime now making their formats'
+    /// `Shared` texture buffers as Metal makes them, and no other case of the family did: the
+    /// ASTC formats take no texture buffer, the two-plane ones are refused and the packed ones
+    /// nil.
     shared_texture_buffers: bool,
 }
 
@@ -407,13 +411,19 @@ fn plain_stragglers() -> FootprintCase {
 /// Apple's nine one-plane YCbCr formats, whose cube and cube-array descriptors answer a size and
 /// **no texture**.
 fn one_plane_ycbcr() -> FootprintCase {
-    case_over(ONE_PLANE_YCBCR, &ONE_PLANE, &all_types(), true)
+    FootprintCase {
+        shared_texture_buffers: true,
+        ..case_over(ONE_PLANE_YCBCR, &ONE_PLANE, &all_types(), true)
+    }
 }
 
 /// The padded 10- and 12-bit display formats and the transfer-function twins of the two
 /// `*10A2Unorm` ones.
 fn padded_wide_channels() -> FootprintCase {
-    case_over(PADDED_WIDE_CHANNELS, &PADDED, &all_types(), true)
+    FootprintCase {
+        shared_texture_buffers: true,
+        ..case_over(PADDED_WIDE_CHANNELS, &PADDED, &all_types(), true)
+    }
 }
 
 /// The two-plane 10-bit-plus-alpha family, whose plane 0 is 16 KiB-aligned.

@@ -1349,10 +1349,10 @@ driver's. Each is open work.
 These were found by replaying the conformance suite on a driver that is not Metal: RADV first, then
 the whole 1,099-case set on an RTX 5080 Laptop GPU (615.71.09) and on llvmpipe (Mesa 26.2.4).
 **ANV is unaudited** for every one
-of them, and on a card without unified memory the comparison is not yet readable at all: the runtime
-announces `shared-in-system-memory` for every `Shared` buffer and no recording taken on Metal could
-declare it, which counts 699 of the 5080's cases divergent with 655 of them differing in nothing
-else.
+of them. On a card without unified memory the runtime announces `shared-in-system-memory` for a
+`Shared` buffer, which no recording taken on Metal holds: each case that makes one declares it
+(`replay::shared_memory_notice`), which loosens the notices site alone, so every value still
+compares with Metal's.
 
 - **A texture over an IOSurface plane whose GPU rows overlap is served only as a shadow.** A plain
   plane of more than one row of over 16 bytes whose `bytesPerRow` rounded down to 16 is below the
