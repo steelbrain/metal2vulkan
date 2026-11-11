@@ -3388,8 +3388,8 @@ bound.
   each completion every copy its batches may have written. Memory: the copy's length, and from the
   first commit whose command buffer may write it a base of the bytes the pages and the copy agree
   on: a 128-bit tag of each 1 KiB block in host memory (a 64th of the length), and the bytes in
-  device-local memory the host maps where a resizable BAR gives the device such memory with room,
-  else in host memory (`copied_base_host_bytes`, `copied_base_device_bytes`); a block whose tag
+  device-local memory the host maps where its heap is 1 GiB or more (a resizable BAR's) and has
+  room, else in host memory (`copied_base_host_bytes`, `copied_base_device_bytes`); a block whose tag
   agrees is taken as unchanged, a changed one missed with a chance of at most 2^-64 at each
   comparison, and a commit that finds no host memory for a base fails with `OutOfMemory`
   (`copied_bases_refused`). An event signal submitted while a copy is live is seen once its batch's

@@ -61,16 +61,17 @@
 //!   ([`Base`]): a 128-bit tag of each 1 KiB block ([`tag`]: two NH sums keyed by a random key of
 //!   the process's, `TAG_BLOCK`), kept in host memory (a 64th of the copy's length), and the
 //!   bytes themselves, kept in the device's memory where it has room for them, else in the
-//!   host's (`Device::copied_base`): device-local memory the host maps, in a heap the device's
-//!   resizable BAR makes as large as its own memory (not the 256 MiB window of a GPU without it,
-//!   nor any device with unified memory, where that memory is the host's), while the runtime's
-//!   blocks in that heap and the base stay within half of it. From then on each comparison reads
+//!   host's (`Device::copied_base`): device-local memory the host maps, coherent, in a heap of
+//!   1 GiB or more (a resizable BAR makes it the device's memory; without one it is a window of
+//!   about 256 MiB, which no base takes; nor does a device with unified memory, where that memory
+//!   is the host's), while the runtime's blocks in that heap and the base stay within half of
+//!   it. From then on each comparison reads
 //!   one side and its tags: a commit's copy in reads the pages' blocks, and only a block whose
 //!   tag changed reads the copy's block; a completion's merge back reads the copy's blocks, and
 //!   only a block whose tag changed reads the pages' block. The base's bytes are the other
 //!   side's block where its tag still agrees, and are read from the base only for a block both
-//!   sides changed since they agreed (a read across the bus the host does not cache, where they
-//!   are in the device's memory). The base then takes each block that changed. A block whose tag
+//!   sides changed since they agreed (where they are in the device's memory, a read across the
+//!   bus the host does not cache, with streaming loads on an x86-64 host with SSE4.1). The base then takes each block that changed. A block whose tag
 //!   agrees is taken as unchanged: for a block that changed, that happens with a chance of at
 //!   most 2^-64 at each comparison ([`tag`]), the only place the runtime takes a tag for the
 //!   bytes; a copy without a base compares bytes. Where the host has no memory for a base, the
