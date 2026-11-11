@@ -478,8 +478,9 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
 ///   attachment, whose raw codes no blend unit reads (`extended-range-blend-source`,
 ///   `extended-range-float-blend-source`: `S·Fs op D·Fd` in `float`, where Metal's compiler rounds
 ///   each step to `half`);
-/// - **logic operations**: the device's `logicOp` on a 10-bit format's own codes
-///   (`native-logic-operation`, where Metal operates on them widened to 16 bits);
+/// - **logic operations**: the device's `logicOp` on a 10-bit or signed normalized format's own
+///   codes (`native-logic-operation`, where Metal operates on 10-bit codes widened to 16 bits, and
+///   reads and stores a signed lowest code as the code above it);
 /// - **resolves**: `device-rounded-resolve`;
 /// - **coverage**: the device's own conversion of a fragment's alpha to its coverage under
 ///   alpha-to-coverage (`device-alpha-coverage`), its choice of the pixel a width-1 line covers

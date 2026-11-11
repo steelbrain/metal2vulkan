@@ -18,7 +18,11 @@
 //! `logic_operation` probe), as the fragment function does; Vulkan's `logicOp` operates on the
 //! 10-bit codes themselves, the device's native form, which the pipeline records
 //! (`PrecisionNote::NativeLogicOperation`) and the device announces: the lane counts those texels
-//! apart, each through a pipeline that records the note.
+//! apart, each through a pipeline that records the note. So with a signed normalized channel's
+//! lowest code, which Metal reads and stores as the code above it, where Vulkan's `logicOp` takes
+//! and stores the code itself, and a channel the draw leaves unwritten keeps it where the
+//! device's pass keeps what its draws do not write (`snorm-minimum-kept`); and with integer outputs
+//! past the channel's range, which Metal saturates, and Vulkan leaves undefined.
 //!
 //! Where the device converts a color its own way, the operation takes the device's code: a drawn
 //! channel's where the pipeline's fragment stage records `PrecisionNote::DeviceColorConversion`
@@ -307,7 +311,7 @@ impl Lane {
     /// Whether [`Lane::pipeline`]'s fragment stage records `note`, as the device's compile layer
     /// compiles it: `PrecisionNote::DeviceColorConversion` where the device converts the drawn
     /// color its own way, `PrecisionNote::NativeLogicOperation` where Vulkan's `logicOp` operates
-    /// on a 10-bit format's own codes.
+    /// on a 10-bit or signed normalized format's own codes.
     fn records(&self, pf: PixelFormat, blended: bool, raw: u64, note: PrecisionNote) -> bool {
         self.descriptor_records(&self.descriptor(pf, blended, Some(raw)), note)
     }
@@ -756,7 +760,9 @@ fn form(lane: &Lane) -> &'static str {
 /// result of the lowest code as 0x81, and stores a channel the draw does not write (outside the
 /// write mask, and every channel under no-op) as 0x81 too (probe `logic_operation`'s `snorm` and
 /// `masks` on an Apple M3 Max under macOS 27.0.1). Each channel is counted as Metal's code, the
-/// lowest code kept at a channel the draw does not write, or Vulkan's operation on the lowest code
+/// lowest code kept at a channel the draw does not write, which only a device that announces
+/// `snorm-minimum-kept` for the pass may keep (its pass keeps the texels its draws do not write,
+/// where Metal's stores them through their values), or Vulkan's operation on the lowest code
 /// itself, which only a pipeline of Vulkan's `logicOp` may store, and which records
 /// `PrecisionNote::NativeLogicOperation`; any other code fails.
 #[test]
@@ -773,7 +779,7 @@ fn the_logic_operation_over_a_signed_channel_s_lowest_code() {
         let form = form(lane);
         let vulkan = lane.device.enabled().features.contains(&VkFeature::LogicOp);
         let mut counts = std::collections::BTreeMap::<(u64, bool, Answer), usize>::new();
-        let mut refused = 0usize;
+        let (mut refused, mut kept) = (0usize, 0usize);
         for raw in [10u64, 11, 4] {
             for masked in [false, true] {
                 let mut d = lane.descriptor(PixelFormat::RGBA8Snorm, false, Some(raw));
@@ -808,6 +814,7 @@ fn the_logic_operation_over_a_signed_channel_s_lowest_code() {
                     let answer = if held == metal {
                         Answer::Metal
                     } else if !written && held == lowest {
+                        kept += 1;
                         Answer::KeptLowest
                     } else if written && vulkan && noted && held == operate(raw, s, lowest, 8) {
                         Answer::RawLowest
@@ -824,8 +831,19 @@ fn the_logic_operation_over_a_signed_channel_s_lowest_code() {
                 }
             }
         }
+        // A kept lowest code is the device's pass keeping what its draws do not write, which the
+        // device announces.
+        messages.take_notices();
+        let announced = (messages.taken_kinds()).contains(&Degradation::SnormMinimumKept);
+        if kept > 0 && !announced {
+            wrong.push(format!(
+                "{name} ({form}): {kept} unwritten channels kept the lowest code, and the device \
+                 announced no snorm-minimum-kept"
+            ));
+        }
         summaries.push(format!(
-            "{name} ({form}): channels by (operation, masked, answer): {counts:?}; {refused} refused"
+            "{name} ({form}): channels by (operation, masked, answer): {counts:?}; {refused} \
+             refused; snorm-minimum-kept announced {announced}"
         ));
     });
     eprintln!("SNORM-LOWEST\n{}", summaries.join("\n"));
@@ -865,7 +883,9 @@ fn integer_descriptor(
 /// undefined (the Fragment Output Interface: "Any value that cannot be represented in the
 /// attachment's format is undefined"), so Vulkan's `logicOp` operates on whatever its device makes
 /// of it: each channel is counted as Metal's code, the operation of the output's low bits, or
-/// another code, and only a pipeline of Vulkan's `logicOp` may store either of those two.
+/// another code, and either of those two fails but through a pipeline of Vulkan's `logicOp` that
+/// records `PrecisionNote::NativeLogicOperation` (a device that differs from Metal there with no
+/// note fails).
 #[test]
 fn the_logic_operation_of_an_integer_output_past_the_channel_s_range() {
     let messages = Messages::default();
@@ -921,6 +941,7 @@ fn the_logic_operation_of_an_integer_output_past_the_channel_s_range() {
                     }
                     Err(e) => panic!("{name}: {pf:?} raw {raw}: {e}"),
                 };
+                let noted = lane.descriptor_records(&d, PrecisionNote::NativeLogicOperation);
                 let color: Vec<u8> = values
                     .iter()
                     .flat_map(|&v| (v as u32).to_le_bytes())
@@ -949,15 +970,15 @@ fn the_logic_operation_of_an_integer_output_past_the_channel_s_range() {
                         Answer::Metal
                     } else if vulkan && held == low {
                         Answer::LowBits
-                    } else if vulkan {
-                        Answer::Other
                     } else {
-                        wrong.push(format!(
-                            "{name} ({form}): {pf:?} raw {raw} channel {c}: {held:#x}, Metal \
-                             {metal:#x}"
-                        ));
                         Answer::Other
                     };
+                    if answer != Answer::Metal && !(vulkan && noted) {
+                        wrong.push(format!(
+                            "{name} ({form}): {pf:?} raw {raw} channel {c}: {held:#x} \
+                             ({answer:?}), Metal {metal:#x}, noted {noted}"
+                        ));
+                    }
                     *counts
                         .entry((format!("{pf:?} raw {raw}"), answer))
                         .or_insert(0) += 1;

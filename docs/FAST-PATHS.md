@@ -1353,16 +1353,24 @@ driver's. Each is open work.
   operation, a format's operation was not measured, or the function writes an attachment itself
   beside Vulkan's operation (a storage attachment, a shadow stencil, an imageblock or a merged
   word) or the function's (a shadow stencil, an imageblock or a merged word).
-- **Vulkan's logic operation on a 10-bit format's own codes.** Metal operates on an
-  `RGB10A2Unorm` or `BGR10A2Unorm` channel's codes widened to 16 bits and narrows the result
-  back (probe `logic_operation` on an Apple M3 Max, macOS 27.0.1, every texel of every
-  operation), as the fragment function's operation does; Vulkan's `logicOp`, which a device that
-  has it draws with, operates on the 10-bit codes themselves, so such a draw can store another
-  code (the logic-operation lane on lavapipe: its xor and equivalence draws into `RGB10A2Unorm`
-  store the per-channel texel, xor's green 938 where Metal's rule gives 937). Vulkan's operation
-  is the device's native form there and stays: the pipeline's fragment stage records
+- **Vulkan's logic operation on a 10-bit or signed normalized format's own codes.** Metal
+  operates on an `RGB10A2Unorm` or `BGR10A2Unorm` channel's codes widened to 16 bits and narrows
+  the result back, and reads a signed normalized channel's lowest code (`0x80`, or `0x8000`) as
+  the code above it and stores a result of the lowest code as the code above (probe
+  `logic_operation` on an Apple M3 Max, macOS 27.0.1), as the fragment function's operation
+  does; Vulkan's `logicOp`, which a device that has it draws with, operates on the stored codes
+  themselves and stores its result as it is, so such a draw can store another code (the
+  logic-operation lane on lavapipe: its xor and equivalence draws into `RGB10A2Unorm` store the
+  per-channel texel, xor's green 938 where Metal's rule gives 937; its xor of `0xe0` over an
+  `RGBA8Snorm` channel's `0x80` stores `0x60` where Metal's gives `0x61`). Vulkan's operation is
+  the device's native form there and stays: the pipeline's fragment stage records
   `PrecisionNote::NativeLogicOperation` (`native-logic-operation`), which the runtime announces,
-  wherever Vulkan's `logicOp` operates on such an attachment the function writes.
+  wherever Vulkan's `logicOp` operates on such an attachment the function writes. A signed
+  channel the draw leaves unwritten keeps its lowest code in either form, as any draw's
+  (`snorm-minimum-kept`). An integer output past the channel's range, which Metal saturates
+  before the operation, is a value Vulkan leaves undefined ("Any value that cannot be represented
+  in the attachment's format is undefined", the Fragment Output Interface); the lane's
+  out-of-range draws on lavapipe store Metal's saturated codes, so no note is recorded for it.
 
 - **A reset compute pipeline descriptor keeps its thread shape on Metal and not here.**
   `MTLComputePipelineDescriptor.reset` restores the label, the buffer mutability,

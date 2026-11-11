@@ -4488,16 +4488,21 @@ bound.
   for a `float` one where the device's functions are Metal's own (MoltenVK).
 - `metal2vulkan-degrade-native-logic-operation` (precision).
   `PrecisionNote::NativeLogicOperation`: A render pipeline's private logic operation (other than
-  copy and no-op) is drawn by the device's `logicOp` into an `RGB10A2Unorm` or `BGR10A2Unorm`
-  attachment the fragment function writes, with a channel its write mask keeps. Vulkan's operation
-  takes the fragment's value converted to the channel's own 10-bit (or 2-bit) code and the stored
-  code as it is; Metal widens both to 16-bit codes, operates, and narrows the result to the
-  channel's code, rounded to nearest (probe `logic_operation` on an Apple M3 Max, macOS 27.0.1).
-  So a channel may store another code than Metal's (lavapipe's xor into `RGB10A2Unorm` stored
-  green 938 where Metal's rule gives 937), by a distance the note does not bound: the result
-  follows the codes' bits. The device's `logicOp` is its native form there, and no other form is
-  built for it; a device without `logicOp` computes Metal's rule in the fragment function and
-  records none.
+  copy and no-op) is drawn by the device's `logicOp` into an `RGB10A2Unorm`, `BGR10A2Unorm` or
+  signed normalized attachment the fragment function writes, with a channel its write mask keeps.
+  Vulkan's operation takes the fragment's value converted to the channel's own code and the stored
+  code as it is, and stores its result as it is; Metal widens a 10-bit (or 2-bit) code and the
+  fragment's to 16-bit codes, operates, and narrows the result to the channel's code, rounded to
+  nearest, and reads a signed channel's lowest code (`0x80`, or `0x8000`) as the code above it and
+  stores a result of the lowest code as the code above (probe `logic_operation` on an Apple M3 Max,
+  macOS 27.0.1). So a channel may store another code than Metal's (lavapipe's xor into
+  `RGB10A2Unorm` stored green 938 where Metal's rule gives 937, and its xor of `0xe0` over an
+  `RGBA8Snorm` channel's `0x80` stored `0x60` where Metal's gives `0x61`), by a distance the note
+  does not bound: the result follows the codes' bits. The device's `logicOp` is its native form
+  there, and no other form is built for it; a device without `logicOp` computes Metal's rule in
+  the fragment function and records none. A signed channel the draw does not write (outside the
+  write mask, or every channel under no-op) keeps its lowest code where any draw's unwritten
+  texel does (`snorm-minimum-kept`).
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,

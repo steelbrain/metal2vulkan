@@ -53,26 +53,37 @@ fn the_operation_serves_the_per_channel_formats() {
     }
 }
 
-/// Metal's operation widens the codes of the 10-bit unorm formats alone, where Vulkan's `logicOp`
-/// operates on a channel's own codes; every other format's codes are its channels' own.
+/// Vulkan's `logicOp`, which operates on a channel's stored codes and stores its result as it is,
+/// may store another code than Metal's operation into the 10-bit unorm formats, whose codes Metal
+/// widens, and the signed normalized ones, whose lowest code Metal reads and stores as the code
+/// above it; into every other format the two take the same codes.
 #[test]
-fn only_the_10_bit_formats_widen_their_codes() {
-    for pf in [PixelFormat::RGB10A2Unorm, PixelFormat::BGR10A2Unorm] {
-        assert!(widens(pf), "{pf:?}");
+fn vulkan_s_operation_differs_on_10_bit_and_signed_codes_alone() {
+    for pf in [
+        PixelFormat::RGB10A2Unorm,
+        PixelFormat::BGR10A2Unorm,
+        PixelFormat::R8Snorm,
+        PixelFormat::RG8Snorm,
+        PixelFormat::RGBA8Snorm,
+        PixelFormat::R16Snorm,
+        PixelFormat::RG16Snorm,
+        PixelFormat::RGBA16Snorm,
+    ] {
+        assert!(vulkan_differs(pf), "{pf:?}");
     }
     for pf in [
         PixelFormat::RGBA8Unorm,
         PixelFormat::R8Unorm,
         PixelFormat::RGBA16Unorm,
-        PixelFormat::RGBA8Snorm,
         PixelFormat::RGBA8Uint,
+        PixelFormat::RGBA8Sint,
         PixelFormat::R32Sint,
         PixelFormat::RGB10A2Uint,
         PixelFormat::B5G6R5Unorm,
         PixelFormat::RGBA8UnormSRGB,
         PixelFormat::RGBA16Float,
     ] {
-        assert!(!widens(pf), "{pf:?}");
+        assert!(!vulkan_differs(pf), "{pf:?}");
     }
 }
 

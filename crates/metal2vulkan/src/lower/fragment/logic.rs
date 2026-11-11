@@ -24,7 +24,11 @@
 //!
 //! A signed normalized channel reads its lowest code, `-2^(n-1)`, as -1, as it reads the code
 //! above it, and stores a result of the lowest code as -1, the code above: so does Metal's logic
-//! operation (probe `logic_operation`, an Apple M3 Max under macOS 27.0.1).
+//! operation (probe `logic_operation`, an Apple M3 Max under macOS 27.0.1). Vulkan's `logicOp`
+//! takes and stores the lowest code itself ([`vulkan_differs`]). A channel the write does not
+//! store (outside the write mask, and every channel under no-op, which draws unwritten) keeps
+//! its lowest code over an input attachment, where Metal's pass stores the code above: the
+//! runtime's `snorm-minimum-kept`, as for any draw into such an attachment.
 //!
 //! A 10-bit unorm format (`RGB10A2Unorm`, `BGR10A2Unorm`) operates on 16-bit codes: Metal widens
 //! each stored code to 16 bits (`round(d * 65535 / max)`), operates on it and the output's 16-bit
@@ -146,10 +150,19 @@ pub(crate) fn channels(pf: PixelFormat) -> Option<LogicChannels> {
     }
 }
 
+/// Whether Vulkan's `logicOp` into an attachment of `pf` may store another code than Metal's
+/// operation (see the module docs), as it operates on the channels' stored codes themselves: a
+/// 10-bit format's, whose codes Metal widens to 16 bits ([`widens`]), and a signed normalized
+/// one's, whose lowest code Metal reads as the code above it and whose result of the lowest code
+/// it stores as the code above, where Vulkan's operation takes and stores the lowest code itself
+/// (the Vulkan specification's logical operations take the attachment's component value).
+pub(crate) fn vulkan_differs(pf: PixelFormat) -> bool {
+    channels(pf).is_some_and(|c| c.numeric == LogicNumeric::Snorm) || widens(pf)
+}
+
 /// Whether Metal's operation into an attachment of `pf` takes codes wider than its channels' own
-/// (a 10-bit format's, widened to 16 bits: see the module docs), where Vulkan's `logicOp`
-/// operates on the channels' own codes and so may store another code.
-pub(crate) fn widens(pf: PixelFormat) -> bool {
+/// (a 10-bit format's, widened to 16 bits: see the module docs).
+fn widens(pf: PixelFormat) -> bool {
     let (Some(c), Some(WriteConversion::Rules(rules))) = (channels(pf), write_conversion(pf))
     else {
         return false;

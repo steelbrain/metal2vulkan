@@ -58,8 +58,11 @@
 //!   by the attachments' blends and masks, and the rest through Vulkan's `logicOp`
 //!   ([`GraphicsState::logic_op`]), which applies the same operation to the same codes of a
 //!   normalized or integer attachment, but for a 10-bit format's, which Metal widens to 16 bits
-//!   first: Vulkan's operation is the device's native form there, recorded
-//!   (`PrecisionNote::NativeLogicOperation`, [`note_vulkan_codes`]). A device without it that
+//!   first, and a signed normalized format's lowest code, which Metal reads and stores as the
+//!   code above it: Vulkan's operation is the device's native form there, recorded
+//!   (`PrecisionNote::NativeLogicOperation`, [`note_vulkan_codes`]). An integer output past the
+//!   channel's range, which Metal saturates first, Vulkan's conversion leaves undefined
+//!   (lavapipe saturates it, as Metal does). A device without it that
 //!   orders framebuffer fetch (the
 //!   pixel interlock, or rasterization-order input attachments) has the fragment function compute
 //!   the operation itself, over the texel its first output's write reads (`lower::fragment`'s
@@ -592,10 +595,12 @@ pub(crate) fn logic_operated(
 /// Note Vulkan's operation (`PrecisionNote::NativeLogicOperation`) on the fragment stage among
 /// `modules` of the linked pipeline `g`, of descriptor `d` as it draws its logic operation
 /// ([`logic_operation`]), where Vulkan's `logicOp` ([`GraphicsState::logic_op`]) operates on an
-/// attachment whose codes Metal's operation widens (`RGB10A2Unorm` and `BGR10A2Unorm`, on 16-bit
-/// codes: `lower::fragment`'s `logic`): one a first output writes (`GraphicsState::color_outputs`)
-/// with a channel its write mask keeps. Vulkan's operation on the 10-bit codes themselves is the
-/// device's native form, and may store another code than Metal's.
+/// attachment whose codes Metal's operation takes otherwise (`lower::fragment`'s `logic`):
+/// `RGB10A2Unorm` and `BGR10A2Unorm`, whose codes Metal widens to 16 bits, and a signed normalized
+/// format, whose lowest code Metal reads and stores as the code above it; one a first output
+/// writes (`GraphicsState::color_outputs`) with a channel its write mask keeps. Vulkan's
+/// operation on the stored codes themselves is the device's native form, and may store another
+/// code than Metal's.
 pub(crate) fn note_vulkan_codes(
     d: &RenderPipelineDescriptor,
     g: &GraphicsState,
@@ -604,7 +609,7 @@ pub(crate) fn note_vulkan_codes(
     if g.logic_op.is_none() {
         return;
     }
-    let widened = d.color_attachments.iter().enumerate().any(|(i, a)| {
+    let differs = d.color_attachments.iter().enumerate().any(|(i, a)| {
         let written = g.color_outputs & 1u32.checked_shl(i as u32).unwrap_or(0) != 0
             && g.color_attachments
                 .get(i)
@@ -612,9 +617,9 @@ pub(crate) fn note_vulkan_codes(
                 .is_some_and(|s| !s.write_mask.is_empty());
         written
             && a.as_ref()
-                .is_some_and(|a| crate::lower::fragment::logic_widens(a.pixel_format))
+                .is_some_and(|a| crate::lower::fragment::logic_vulkan_differs(a.pixel_format))
     });
-    if !widened {
+    if !differs {
         return;
     }
     let note = PrecisionNote::NativeLogicOperation;

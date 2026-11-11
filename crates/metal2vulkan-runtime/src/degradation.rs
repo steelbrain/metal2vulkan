@@ -2795,11 +2795,13 @@ degradations! {
         /// Exact for a draw whose primitives do not overlap at a pixel.
         UnorderedFetchWithinDraw = "unordered-fetch-within-draw";
         /// Class: native logic operation. A render pipeline's private logic operation is drawn
-        /// by the device's `logicOp` into an `RGB10A2Unorm` or `BGR10A2Unorm` attachment, which
-        /// operates on the channels' own 10-bit (and 2-bit) codes, where Metal operates on the
-        /// codes widened to 16 bits and narrows the result: a channel may store another code
-        /// (lavapipe's xor, green 938 where Metal's rule gives 937). Not bounded: the result
-        /// follows the codes' bits.
+        /// by the device's `logicOp` into an `RGB10A2Unorm`, `BGR10A2Unorm` or signed normalized
+        /// attachment, which operates on the channels' stored codes themselves, where Metal
+        /// operates on a 10-bit (and 2-bit) code widened to 16 bits and narrows the result, and
+        /// reads and stores a signed channel's lowest code as the code above it: a channel may
+        /// store another code (lavapipe's xor, green 938 where Metal's rule gives 937, and `0x60`
+        /// over a signed `0x80` where Metal's gives `0x61`). Not bounded: the result follows the
+        /// codes' bits.
         NativeLogicOperation = "native-logic-operation";
     }
 }

@@ -123,7 +123,8 @@ pub use input_shadow::InputShadow;
 pub(crate) use input_shadow::{shadows as input_shadow, store as input_shadow_store};
 pub use logic::LogicInput;
 pub(crate) use logic::{
-    channels as logic_channels, input_operated as logic_input_operated, widens as logic_widens,
+    channels as logic_channels, input_operated as logic_input_operated,
+    vulkan_differs as logic_vulkan_differs,
 };
 #[cfg(test)]
 pub(crate) use snapshot::{decode as snapshot_decode, encode as snapshot_encode};

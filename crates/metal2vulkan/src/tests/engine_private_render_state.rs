@@ -603,9 +603,11 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
                         let a = p.graphics.color_attachments[0].expect("attachment 0");
                         assert!(a.blend.is_none(), "{stem} {pf:?} blends");
                         assert!(p.requirements.features.contains(&VkFeature::LogicOp));
-                        // Vulkan's operation on a 10-bit format's own codes, alone, is noted.
-                        let widened = pf == PixelFormat::RGB10A2Unorm;
-                        assert_eq!(native_logic(&p), widened, "{stem} {pf:?} xor");
+                        // Vulkan's operation on a 10-bit or signed normalized format's own
+                        // codes, alone, is noted.
+                        let differs =
+                            matches!(pf, PixelFormat::RGB10A2Unorm | PixelFormat::RGBA8Snorm);
+                        assert_eq!(native_logic(&p), differs, "{stem} {pf:?} xor");
                     }
                     // MoltenVK lacks Vulkan's operation and orders fetch through the pixel
                     // interlock: the fragment function computes it.
@@ -661,9 +663,10 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
         assert!(off.graphics.logic_op.is_none() && unset.graphics.logic_op.is_none());
         assert_eq!(off.graphics, unset.graphics, "{stem}");
     }
-    // On lavapipe, Vulkan's operation is noted exactly where it operates on a 10-bit format's own
-    // codes: `BGR10A2Unorm` too; not under copy, which takes no operation, nor where the write
-    // mask keeps no channel, nor at an attachment no output writes.
+    // On lavapipe, Vulkan's operation is noted exactly where it operates on a 10-bit or signed
+    // normalized format's own codes: `BGR10A2Unorm` and `R16Snorm` too; not under copy, which
+    // takes no operation, nor where the write mask keeps no channel, nor at an attachment no
+    // output writes.
     let lavapipe = device("lavapipe");
     let noted = |d: &RenderPipelineDescriptor, what: &str| {
         let p = compile(&lavapipe, d, &format!("lavapipe {what}"));
@@ -672,6 +675,10 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
     assert!(noted(
         &with(PixelFormat::BGR10A2Unorm, false, Some(10)),
         "BGR10A2Unorm xor"
+    ));
+    assert!(noted(
+        &with(PixelFormat::R16Snorm, false, Some(10)),
+        "R16Snorm xor"
     ));
     assert!(!noted(
         &with(PixelFormat::RGB10A2Unorm, false, Some(2)),
@@ -791,8 +798,8 @@ fn shader_operated(p: &RenderPipeline, operated: bool, what: &str) {
     }
 }
 
-/// Whether pipeline `p`'s fragment stage records Vulkan's operation on a 10-bit format's own
-/// codes (`PrecisionNote::NativeLogicOperation`).
+/// Whether pipeline `p`'s fragment stage records Vulkan's operation on a 10-bit or signed
+/// normalized format's own codes (`PrecisionNote::NativeLogicOperation`).
 fn native_logic(p: &RenderPipeline) -> bool {
     use crate::pipeline::artifact::PrecisionNote;
     p.stages.iter().any(|s| {
