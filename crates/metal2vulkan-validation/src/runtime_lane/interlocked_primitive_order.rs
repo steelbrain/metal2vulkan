@@ -20,8 +20,10 @@
 //! and 61x37, each read back whole. Every texel of every pass must hold its composition; the
 //! wrong ones are counted and printed per pass, with the 8x4 groups (8 columns by 4 rows from the
 //! target's top left, the last ones cut by its edges) they fall in, how many of those are wrong
-//! in every texel, and the first of them; and per target, the storage forms it took
-//! (`WorkCounts::storage_forms_taken`), 1 where the fetch ran in the interlock's storage form.
+//! in every texel, and the first of them; and per target, the framebuffer attachments that took a
+//! storage placeholder (`WorkCounts::storage_placeholder_attachments`), which a device whose fetch
+//! takes the storage form (the pixel interlock without rasterization-order color access) must
+//! count: its passes left the target out of their subpass and read and wrote it in the interlock.
 
 use super::framebuffer_fetch::fetches;
 use super::{
@@ -236,6 +238,7 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
         .new_library_with_air(&llvm_assemble(&ll).unwrap())
         .unwrap();
     let fragment = device.compile_device().profile().fragment();
+    let interlocked = fragment.pixel_interlock && !fragment.rasterization_order_color_access;
     eprintln!(
         "PRIMITIVE-ORDER on {}: rasterization-order color access {}, pixel interlock {}",
         device.name(),
@@ -245,7 +248,7 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
     let mut wrong_passes = Vec::new();
     for sides in [(1920u64, 1080u64), (64, 36), (61, 37)] {
         let target = target(&device, sides);
-        let mut forms = 0;
+        let mut placeholders = 0;
         for shape in SHAPES {
             // Every corner lies within the first 61 columns and 23 rows, so a texel past them
             // holds what the last of them holds.
@@ -262,7 +265,8 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
                 let gpu = draw(&device, &target, &pipeline, shape);
                 let texels = texels(&device, &target, sides);
                 let counts = device.work_counts();
-                forms += counts.storage_forms_taken - counted.storage_forms_taken;
+                placeholders += counts.storage_placeholder_attachments
+                    - counted.storage_placeholder_attachments;
                 assert_eq!(
                     counts.instance_splits_interlocked_writes,
                     counted.instance_splits_interlocked_writes,
@@ -290,7 +294,15 @@ fn overlapping_primitives_of_a_fetching_draw_read_each_others_writes() {
             }
         }
         eprintln!(
-            "PRIMITIVE-ORDER on {}: {}x{} took {forms} storage form(s)",
+            "PRIMITIVE-ORDER on {}: {}x{}: {placeholders} framebuffer attachment(s) took a \
+             storage placeholder",
+            device.name(),
+            sides.0,
+            sides.1,
+        );
+        assert!(
+            !interlocked || placeholders > 0,
+            "{}: {}x{}: no pass left the target out for the interlock",
             device.name(),
             sides.0,
             sides.1,
