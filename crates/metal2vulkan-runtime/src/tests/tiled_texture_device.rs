@@ -64,14 +64,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// A texture's level 0 width and height, and its level count.
-type Shape = ((u64, u64), u64);
+pub(super) type Shape = ((u64, u64), u64);
 
 /// The guest's compositor's shapes.
-const SHAPES: [Shape; 2] = [((54, 54), 6), ((64, 60), 7)];
+pub(super) const SHAPES: [Shape; 2] = [((54, 54), 6), ((64, 60), 7)];
 
 /// The guest's buffer: its length and the texture's `bytesPerRow`.
-const LENGTH: u64 = 16384;
-const PITCH: u64 = 256;
+pub(super) const LENGTH: u64 = 16384;
+pub(super) const PITCH: u64 = 256;
 
 /// The Macs' probe's shape, rows packed.
 const SQUARE: Shape = ((256, 256), 9);
@@ -96,12 +96,12 @@ fn descriptor_of(format: PixelFormat, ((width, height), levels): Shape) -> Textu
 }
 
 /// The guest's descriptor of `shape`: `BGRA8Unorm`.
-fn descriptor(shape: Shape) -> TextureDescriptor {
+pub(super) fn descriptor(shape: Shape) -> TextureDescriptor {
     descriptor_of(PixelFormat::BGRA8Unorm, shape)
 }
 
 /// A new `Shared` buffer of `length` bytes, every byte zero.
-fn zeroed(device: &Device, length: u64) -> Buffer {
+pub(super) fn zeroed(device: &Device, length: u64) -> Buffer {
     let buffer = device
         .new_buffer(length, ResourceOptions::shared())
         .unwrap();
@@ -119,7 +119,7 @@ fn holding(device: &Device, length: u64, bytes: &[u8]) -> Buffer {
 }
 
 /// `edit` given `buffer`'s bytes, which no command uses meanwhile.
-fn write(buffer: &Buffer, edit: impl FnOnce(&mut [u8])) {
+pub(super) fn write(buffer: &Buffer, edit: impl FnOnce(&mut [u8])) {
     let contents = buffer.contents().unwrap();
     // SAFETY: a `Shared` buffer's contents span its length, and no command runs over them while
     // the test writes them (each test waits for its command buffers), nor does another borrow.
@@ -129,7 +129,7 @@ fn write(buffer: &Buffer, edit: impl FnOnce(&mut [u8])) {
 }
 
 /// A copy of `buffer`'s bytes, which no command writes meanwhile.
-fn read(buffer: &Buffer) -> Vec<u8> {
+pub(super) fn read(buffer: &Buffer) -> Vec<u8> {
     let contents = buffer.contents().unwrap();
     // SAFETY: as `write`'s; the bytes are copied out at once.
     unsafe { std::slice::from_raw_parts(contents.as_ptr(), buffer.length() as usize) }.to_vec()
@@ -152,7 +152,7 @@ fn gradient(x: u64, y: u64) -> [u8; 4] {
 }
 
 /// Write `of(x, y)` into the `width` x `height` texels at `pitch` bytes a row of `buffer`.
-fn write_rows(
+pub(super) fn write_rows(
     buffer: &Buffer,
     ((width, height), pitch): ((u64, u64), u64),
     of: impl Fn(u64, u64) -> [u8; 4],
@@ -178,19 +178,19 @@ fn packed((width, height): (u64, u64), of: impl Fn(u64, u64) -> [u8; 4]) -> Vec<
 /// The level-0 pattern whose level 1 the device's filter makes known: blue the checkerboard of 0
 /// and 255 a texel, which a 2x2 box averages to 127 or 128; green one value a 2x2 block, which it
 /// keeps; red 0x40 and alpha 255.
-fn checker(x: u64, y: u64) -> [u8; 4] {
+pub(super) fn checker(x: u64, y: u64) -> [u8; 4] {
     let blue = if (x + y).is_multiple_of(2) { 0 } else { 0xff };
     let green = ((x / 2) * 9 + (y / 2) * 5) as u8;
     [blue, green, 0x40, 0xff]
 }
 
 /// The width and height of `level` of a level 0 of `(width, height)`.
-fn level_extent((width, height): (u64, u64), level: u64) -> (u64, u64) {
+pub(super) fn level_extent((width, height): (u64, u64), level: u64) -> (u64, u64) {
     ((width >> level).max(1), (height >> level).max(1))
 }
 
 /// Whether every byte of `got` lies within one of `expected`'s byte at its place in a texel.
-fn near_each(got: &[u8], expected: [u8; 4]) -> bool {
+pub(super) fn near_each(got: &[u8], expected: [u8; 4]) -> bool {
     (got.chunks(4)).all(|t| t.iter().zip(expected).all(|(&g, e)| g.abs_diff(e) <= 1))
 }
 
@@ -240,11 +240,11 @@ fn picked(first: &[u8], (width, height): (u64, u64), level: u64) -> Vec<u8> {
 }
 
 /// The device's queue, the sampling kernels, and a sampler with a nearest mip filter.
-struct Rig {
-    device: Device,
-    queue: CommandQueue,
+pub(super) struct Rig {
+    pub(super) device: Device,
+    pub(super) queue: CommandQueue,
     /// `sample_level`: `t.sample(s, float2(gid) * 0.25, level(1.0))` into `out[gid]`.
-    level_one: ComputePipelineState,
+    pub(super) level_one: ComputePipelineState,
     sampler: SamplerState,
 }
 
@@ -275,7 +275,7 @@ impl Rig {
     }
 
     /// Encode `state` sampling `texture` at 4 points into `out`.
-    fn sample(
+    pub(super) fn sample(
         &self,
         command_buffer: &crate::CommandBuffer,
         state: &ComputePipelineState,
@@ -291,7 +291,7 @@ impl Rig {
     }
 
     /// `out`'s four `float4` samples.
-    fn samples(out: &Buffer) -> [[f32; 4]; 4] {
+    pub(super) fn samples(out: &Buffer) -> [[f32; 4]; 4] {
         let bytes = read(out);
         std::array::from_fn(|point| {
             std::array::from_fn(|channel| {
@@ -308,7 +308,7 @@ impl Rig {
 
     /// Every level of `texture`, of `shape`, read out by one command buffer's blits, and what
     /// that command buffer copied of the device's shadows.
-    fn levels(
+    pub(super) fn levels(
         &self,
         texture: &Texture,
         ((width, height), levels): Shape,
@@ -346,28 +346,28 @@ impl Rig {
 }
 
 /// The `BGRA8Unorm` texel a sample read, its channels red, green, blue, alpha over 255 each.
-fn texel_of([r, g, b, a]: [f32; 4]) -> [u8; 4] {
+pub(super) fn texel_of([r, g, b, a]: [f32; 4]) -> [u8; 4] {
     [b, g, r, a].map(|c| (c * 255.0).round() as u8)
 }
 
 /// The rig of the device the cfg selects, its shader cache in `scratch`.
-fn rig(scratch: &Scratch) -> Rig {
+pub(super) fn rig(scratch: &Scratch) -> Rig {
     Rig::new(device(&scratch.0))
 }
 
 /// What a run of commands copied of a shadow (`WorkCounts`, after less before).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Copies {
+pub(super) struct Copies {
     /// `shadow_copies`: every copy in, copy back, keep and merge.
-    copies: u64,
+    pub(super) copies: u64,
     /// `shadow_texels_copied_in`.
-    texels_in: u64,
+    pub(super) texels_in: u64,
     /// `shadow_texels_copied_back`.
-    texels_back: u64,
+    pub(super) texels_back: u64,
 }
 
 /// What `run` copied of the device's shadows.
-fn copies_of(device: &Device, run: impl FnOnce()) -> Copies {
+pub(super) fn copies_of(device: &Device, run: impl FnOnce()) -> Copies {
     let before = device.work_counts();
     run();
     let after = device.work_counts();
@@ -380,7 +380,7 @@ fn copies_of(device: &Device, run: impl FnOnce()) -> Copies {
 
 /// The copies of one take of a texture whose first level is `first` texels: its texels in once,
 /// nothing back.
-fn one_take(first: u64) -> Copies {
+pub(super) fn one_take(first: u64) -> Copies {
     Copies {
         copies: 1,
         texels_in: first,
@@ -389,7 +389,7 @@ fn one_take(first: u64) -> Copies {
 }
 
 /// No copy.
-const NONE: Copies = Copies {
+pub(super) const NONE: Copies = Copies {
     copies: 0,
     texels_in: 0,
     texels_back: 0,
