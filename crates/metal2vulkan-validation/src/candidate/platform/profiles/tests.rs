@@ -687,7 +687,7 @@ fn a_venue_run_stops_on_identity_or_key_and_reports_unread_members() {
 }
 
 /// One venue, two devices: `intel-irisxe-rplp-anv` allows the Iris Xe (RPL-P) it was first captured
-/// on and the UHD Graphics 770 (RPL-S), under the same ANV build. Their committed captures describe
+/// on (ANV 26.2.6) and the UHD Graphics 770 (RPL-S, ANV 26.2.4). Their committed captures describe
 /// the same capabilities but for `maxMemoryAllocationSize`, which the driver sizes from its host's
 /// memory and no translation reads (`DeviceDescription::allocation`): both derive the venue's
 /// translation key, so a run on either proceeds and only reports the size. A device the venue does

@@ -3,24 +3,24 @@
   "provenance": {
     "source": "vulkaninfo",
     "command": "vulkaninfo --json",
-    "sha256": "6d34a34db319ee2f6b45f0fadac382cb5d3b3e7a5f5816513a71cd4080d34c8d",
-    "source_profile": "VP_VULKANINFO_Intel(R)_Iris(R)_Xe_Graphics_(RPL-P)_26_2_4",
+    "sha256": "270ab1aa612b3430b1bf041fe6c41ec140921cc3c4b8b16f29f51d192163ad38",
+    "source_profile": "VP_VULKANINFO_Intel(R)_Iris(R)_Xe_Graphics_(RPL-P)_26_2_6",
     "device_name": "Intel(R) Iris(R) Xe Graphics (RPL-P)",
     "vendor_id": 32902,
     "device_id": 42912,
     "driver_name": "Intel open-source Mesa driver",
-    "driver_info": "Mesa 26.2.4-arch3.1",
-    "driver_version": "109060100",
+    "driver_info": "Mesa 26.2.6-arch3.1",
+    "driver_version": "109060102",
     "api_version": "1.4.354",
-    "host": "Intel Iris Xe Graphics (Raptor Lake-P), CachyOS: mesa and vulkan-intel 26.2.4, vulkan-icd-loader and vulkan-tools 1.4.357.0",
-    "captured": "2026-10-6",
+    "host": "Intel Iris Xe Graphics (Raptor Lake-P), CachyOS: mesa and vulkan-intel 26.2.6, vulkan-icd-loader and vulkan-tools 1.4.363.0",
+    "captured": "2026-11-11",
     "transforms": [],
     "unmapped": [
       "device.properties.VkPhysicalDeviceLayeredApiPropertiesListKHR.pLayeredApis (pointer member written as NULL)"
     ],
     "formats": {
       "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-      "sha256": "6e532de1596b32bb703505c7ca6670358f9200386dd2a2d72f4ad0229164e8ff",
+      "sha256": "81e40f063157bc2bb874574b38aeeeb7084505a08963d9158e34a1403020c1ec",
       "queried": 240,
       "stated": 189,
       "color_attachment_sample_counts": 60
@@ -735,7 +735,7 @@
           "deviceID": 42912,
           "deviceName": "Intel(R) Iris(R) Xe Graphics (RPL-P)",
           "deviceType": "VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU",
-          "driverVersion": 109060100,
+          "driverVersion": 109060102,
           "limits": {
             "maxImageDimension1D": 16384,
             "maxImageDimension2D": 16384,
@@ -1167,12 +1167,12 @@
           "maxMultiviewInstanceIndex": 268435455,
           "protectedNoFault": false,
           "maxPerSetDescriptors": 1024,
-          "maxMemoryAllocationSize": 24955668480
+          "maxMemoryAllocationSize": 24950464512
         },
         "VkPhysicalDeviceVulkan12Properties": {
           "driverID": "VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA",
           "driverName": "Intel open-source Mesa driver",
-          "driverInfo": "Mesa 26.2.4-arch3.1",
+          "driverInfo": "Mesa 26.2.6-arch3.1",
           "conformanceVersion": {
             "major": 1,
             "minor": 4,
@@ -9728,13 +9728,13 @@
     "VP_M2V_intel_irisxe_rplp_anv": {
       "version": 1,
       "api-version": "1.4.354",
-      "label": "Intel(R) Iris(R) Xe Graphics (RPL-P) driver 26.2.4",
-      "description": "Local capture of VP_VULKANINFO_Intel(R)_Iris(R)_Xe_Graphics_(RPL-P)_26_2_4; see provenance. Exported from vulkaninfo",
+      "label": "Intel(R) Iris(R) Xe Graphics (RPL-P) driver 26.2.6",
+      "description": "Local capture of VP_VULKANINFO_Intel(R)_Iris(R)_Xe_Graphics_(RPL-P)_26_2_6; see provenance. Exported from vulkaninfo",
       "contributors": {},
       "history": [
         {
           "revision": 1,
-          "date": "2026-10-6",
+          "date": "2026-11-11",
           "author": "Automated export from vulkaninfo",
           "comment": ""
         }

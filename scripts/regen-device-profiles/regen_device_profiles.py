@@ -454,20 +454,20 @@ SOURCES = [
     {
         "name": "intel-irisxe-rplp-anv",
         "kind": "vulkaninfo",
-        "sha256": "6d34a34db319ee2f6b45f0fadac382cb5d3b3e7a5f5816513a71cd4080d34c8d",
-        "profile": "VP_VULKANINFO_Intel(R)_Iris(R)_Xe_Graphics_(RPL-P)_26_2_4",
+        "sha256": "270ab1aa612b3430b1bf041fe6c41ec140921cc3c4b8b16f29f51d192163ad38",
+        "profile": "VP_VULKANINFO_Intel(R)_Iris(R)_Xe_Graphics_(RPL-P)_26_2_6",
         "command": "vulkaninfo --json",
         "host": ("Intel Iris Xe Graphics (Raptor Lake-P), CachyOS: mesa and vulkan-intel "
-                 "26.2.4, vulkan-icd-loader and vulkan-tools 1.4.357.0"),
+                 "26.2.6, vulkan-icd-loader and vulkan-tools 1.4.363.0"),
         "formats": {
             "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-            "sha256": "6e532de1596b32bb703505c7ca6670358f9200386dd2a2d72f4ad0229164e8ff",
+            "sha256": "81e40f063157bc2bb874574b38aeeeb7084505a08963d9158e34a1403020c1ec",
         },
     },
     {
         # The second device the intel-irisxe-rplp-anv venue allows: an i9-13900's UHD Graphics 770
-        # (Raptor Lake-S), under the same ANV build and loader as the venue's Iris Xe (RPL-P); its
-        # capture derives the venue's translation key.
+        # (Raptor Lake-S), captured under ANV 26.2.4 (the venue's Iris Xe (RPL-P) is captured
+        # under 26.2.6); its capture derives the venue's translation key.
         "name": "intel-uhd770-rpls-anv",
         "kind": "vulkaninfo",
         "sha256": "c4088e885bf46fc414e55a56fdb0f5b946ae6a34af61e2667891cab6089f8ca2",

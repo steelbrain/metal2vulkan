@@ -2744,10 +2744,10 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
     );
     // A driver update declared without recapturing the profile.
     let error = refusal("intel-irisxe-rplp-anv", &|venue| {
-        venue.devices[0].identity.driver_info = "Mesa 26.2.5-arch1.1".into();
+        venue.devices[0].identity.driver_info = "Mesa 26.2.7-arch1.1".into();
     });
     assert!(
-        error.contains("driver_info: Mesa 26.2.5-arch1.1 (Mesa 26.2.4-arch3.1)"),
+        error.contains("driver_info: Mesa 26.2.7-arch1.1 (Mesa 26.2.6-arch3.1)"),
         "{error}"
     );
 }
