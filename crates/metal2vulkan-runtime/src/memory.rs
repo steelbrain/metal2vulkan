@@ -196,10 +196,10 @@ fn small_block(bytes: u64) -> bool {
 /// 16th of it (but in one below 16 MiB, whose blocks are 1 MiB): 8 MiB in the 246 MiB
 /// device-local host-visible heap of an RTX 2080 without Resizable BAR (NVIDIA 620.70.06), its
 /// 256 MiB BAR, which every process's devices and the driver's own objects share. A block of
-/// [`BLOCK_BYTES`] there took 67 MiB of BAR1 a device, and the heap held three; the kernel
-/// refused the BAR mappings of later devices (`vkCreateDevice` failing with
-/// `VK_ERROR_INITIALIZATION_FAILED`). More blocks are made of a small heap than of a large one
-/// for the same placements, each a `vkAllocateMemory` (docs/FAST-PATHS.md).
+/// [`BLOCK_BYTES`] made for room there took 67 MiB of BAR1 a device, and the heap held three;
+/// with none made before a placement ([`Memory::small`]), a device and its first command queue
+/// take 2 to 3 MiB. More blocks are made of a small heap than of a large one for the same
+/// placements, each a `vkAllocateMemory` (docs/FAST-PATHS.md).
 pub(super) fn pooled_block_bytes(heap: u64, max_allocation: u64) -> u64 {
     let share = heap / BLOCK_HEAP_SHARE;
     let power = match share {

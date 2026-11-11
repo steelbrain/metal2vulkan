@@ -400,8 +400,9 @@ impl fmt::Display for DriverSetting {
 /// for the `VkQueue`s of the device's queue plan, and again for those of its least plan (a round
 /// robin of one `VkQueue` and none reserved for presenting, beside the plan's reserved, extra and
 /// staging queues), or the least plan takes no fewer and the device was asked for once. Other
-/// devices of the GPU, in this process or others, hold what the driver lacks: on NVIDIA's driver
-/// its channels, one or more a `VkQueue`, and its BAR. Its counterpart, Metal's
+/// devices of the GPU, in this process or others, hold what the driver lacks, on NVIDIA's driver
+/// such as its channels, one or more a `VkQueue` (on an RTX 2080, NVIDIA 620.70.06, the kernel
+/// logged that it could not allocate a channel's instance block). Its counterpart, Metal's
 /// `MTLCreateSystemDefaultDevice`, makes a device on its GPU however many processes use it; a
 /// device asked for again once fewer are live may be made.
 #[non_exhaustive]

@@ -196,13 +196,16 @@ Vulkan-side choices Metal has no counterpart for:
 **A driver short of resources.** Where the driver refuses a device with its queue plan's `VkQueue`s
 for want of its resources (`vkCreateDevice` answering `VK_ERROR_INITIALIZATION_FAILED` or
 `VK_ERROR_OUT_OF_DEVICE_MEMORY`: on NVIDIA's driver, other devices of the GPU, in this process or
-others, holding its channels or its BAR), the runtime asks once more with its least plan's: a round
-robin of one `VkQueue` and none reserved for presenting, the reserved, extra and staging queues
-kept (`queue_limits` of one and none, without that option's messages). A device made so announces
-`metal2vulkan-degrade-least-queue-plan` once, as it is made: its command queues share that one
-`VkQueue`. A device the driver refuses again, or whose least plan takes no fewer queues, is refused,
-`Error::DeviceRefused`. On an RTX 2080 and an RTX 3090 (NVIDIA 620.70.06) one process made seven
-devices of the plan's 17 `VkQueue`s and the driver refused the eighth.
+others, holding what it needs, such as its channels), the runtime asks once more with its least
+plan's: a round robin of one `VkQueue` and none reserved for presenting, the reserved, extra and
+staging queues kept (`queue_limits` of one and none, without that option's messages). A device made
+so announces `metal2vulkan-degrade-least-queue-plan` once, as it is made: its command queues share
+that one `VkQueue`. A device the driver refuses again, or whose least plan takes no fewer queues, is
+refused, `Error::DeviceRefused`. On an RTX 2080 with a 256 MiB BAR (NVIDIA 620.70.06), sixteen
+processes started 3 s apart, each making one device: seven devices were made with the plan's 17
+`VkQueue`s and two more with the least plan's 2. The driver refused the other seven with both plans,
+and the kernel logged that it could not allocate a channel's instance block. In one process, the
+driver refused the eighth device with either plan, on that RTX 2080 and on an RTX 3090.
 
 While a handle lives, equal options give the same device for a physical device, as Metal has one
 `MTLDevice` per GPU. Nothing is read from the environment but the platform's default cache

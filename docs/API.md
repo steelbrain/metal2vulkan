@@ -3376,15 +3376,15 @@ bound.
   beside the shader cache's records, with whatever it writes to disk and holds in memory for it; the
   pipelines made are the same.
 - `metal2vulkan-degrade-least-queue-plan` (performance). `LeastQueuePlan`: A device the driver
-  refused to make for want of its resources with the `VkQueue`s of its queue plan
-  (`vkCreateDevice` answering `VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`;
-  on NVIDIA's driver, other devices of the GPU holding its channels or its BAR), made with those of
-  its least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the
-  reserved, extra and staging queues. Announced once, as the device is made, naming the `VkQueue`s
-  of each plan and the driver's answer; a device the driver refuses with the least plan too is
-  refused, `Error::DeviceRefused`. Cost: its command queues, presenting ones included, share one
-  `VkQueue`, so one queue's command buffers wait behind another's whole command buffer where
-  Metal's run beside each other; what each command buffer does is the same.
+  refused to make for want of its resources with the `VkQueue`s of its queue plan (`vkCreateDevice`
+  answering `VK_ERROR_INITIALIZATION_FAILED` or `VK_ERROR_OUT_OF_DEVICE_MEMORY`; on NVIDIA's driver,
+  other devices of the GPU holding what it needs, such as its channels), made with those of its
+  least plan: a round robin of one `VkQueue` and none reserved for presenting, beside the reserved,
+  extra and staging queues. Announced once, as the device is made, naming the `VkQueue`s of each
+  plan and the driver's answer; a device the driver refuses with the least plan too is refused,
+  `Error::DeviceRefused`. Cost: its command queues, presenting ones included, share one `VkQueue`,
+  so one queue's command buffers wait behind another's whole command buffer where Metal's run beside
+  each other; what each command buffer does is the same.
 - `metal2vulkan-degrade-device-recovered` (performance). `DeviceRecovered`: A device whose
   `VkDevice` was lost made a new one behind it, as Metal's device survives its GPU's recovery: its
   command buffers in flight failed, the oldest incomplete one as the hang (`GpuHang`, counted

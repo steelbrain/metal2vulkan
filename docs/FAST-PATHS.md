@@ -1031,9 +1031,10 @@ driver's. Each is open work.
   (the texture and sampler tables of heap sets, at their first use, are the encodings' own
   placements there). So the same placements there make about eight times as many blocks, each a
   `vkAllocateMemory` that holds the device's submissions, and none is made ahead of its need.
-  Where every pooled block of 64 MiB was made for room, each device on an RTX 2080 of 256 MiB of
-  BAR1 (NVIDIA 620.70.06) took 67 MiB of it at its first command queue, and the heap held three.
-  Metal's command buffers wait for no allocation. Not announced.
+  On an RTX 2080 with 256 MiB of BAR1 (NVIDIA 620.70.06), a device and its first command queue
+  take 2 to 3 MiB of it (seven devices of one process took 18 MiB), where a block of 64 MiB
+  made for room took 67 MiB a device and the heap held three. Metal's command buffers wait for no
+  allocation. Not announced.
 - **With unified memory, `Private` memory lies in the system heap's types before the device-local
   ones, its buffers' blocks there allocated exportable but for buffers that declare their padding
   unobserved: about 1 µs a submission for each such block held.** Where the device has unified memory and a heap that is not

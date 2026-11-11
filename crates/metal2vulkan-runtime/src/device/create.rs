@@ -1348,8 +1348,8 @@ pub(crate) struct LeastPlanTaken {
 }
 
 /// Whether `result` is a driver's refusal of a device for want of its resources:
-/// `VK_ERROR_INITIALIZATION_FAILED` (NVIDIA's driver, its GPU's channels or BAR taken by other
-/// devices) or `VK_ERROR_OUT_OF_DEVICE_MEMORY`.
+/// `VK_ERROR_INITIALIZATION_FAILED` (NVIDIA's driver, what it needs, such as its GPU's channels,
+/// held by other devices) or `VK_ERROR_OUT_OF_DEVICE_MEMORY`.
 fn for_want_of_resources(result: vk::Result) -> bool {
     matches!(
         result,
@@ -1360,13 +1360,15 @@ fn for_want_of_resources(result: vk::Result) -> bool {
 /// The device `make` makes with the queues of `planned`, with them and `None`; where the driver
 /// refuses it for want of its resources ([`for_want_of_resources`]) and `least`, the least queue
 /// plan's queues ([`least_queue_plan`]), takes fewer `VkQueue`s ([`vk_queues`]), the device made
-/// once more with `least`'s, with them and what it took ([`LeastPlanTaken`]). On an RTX 2080
-/// (NVIDIA 620.70.06) one process made seven devices of the plan's 17 `VkQueue`s, and the driver
-/// refused the eighth (`VK_ERROR_INITIALIZATION_FAILED`). Refused, naming the device (`device`)
-/// and each attempt
-/// ([`Error::DeviceRefused`]), where the driver refuses the least plan's for want of resources
-/// too, or where the least plan takes no fewer; any other failure is the driver's
-/// ([`vulkan`]).
+/// once more with `least`'s, with them and what it took ([`LeastPlanTaken`]). Refused, naming the
+/// device (`device`) and each attempt ([`Error::DeviceRefused`]), where the driver refuses the
+/// least plan's for want of resources too, or where the least plan takes no fewer; any other
+/// failure is the driver's ([`vulkan`]). On an RTX 2080 (NVIDIA 620.70.06), of sixteen processes
+/// started 3 s apart each making one device, seven made it with the plan's 17 `VkQueue`s, two with
+/// the least plan's 2, and the driver refused the rest with both
+/// (`VK_ERROR_INITIALIZATION_FAILED`), the kernel logging that it could not allocate a channel's
+/// instance block; in one process it refused the eighth device with either plan, there and on an
+/// RTX 3090.
 pub(crate) fn made_within_resources<D>(
     device: &str,
     planned: PlacedQueues,
@@ -1416,7 +1418,7 @@ thread_local! {
 
 /// Refuse this thread's next `count` `vkCreateDevice` calls as the driver refuses one for want of
 /// its resources (`VK_ERROR_INITIALIZATION_FAILED`): a test's stand-in for a GPU whose other
-/// devices hold its channels ([`made_within_resources`]).
+/// devices hold what it needs, such as its channels ([`made_within_resources`]).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn refuse_next_devices(count: u32) {
     REFUSED.with(|refused| refused.set(count));
