@@ -10,7 +10,7 @@
 //! cargo run --release -p metal2vulkan-runtime --example managed_bandwidth
 //! ```
 //!
-//! Each row checks the kernel's answer (`output[i] = 2 * input[i]` for `input[i] = i`), reading a
+//! Each row checks the kernel's answer (`output[i] = input[i] + i` for `input[i] = i`), reading a
 //! `Managed` output after a blit's `synchronize_resource`; the `Managed` no-copy rows also write the
 //! input again on the CPU, tell the buffer (`did_modify_range`) and check the next command buffer
 //! reads it. It prints one line a row:
@@ -197,26 +197,24 @@ fn run(
     Ok(command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?)
 }
 
-/// Check `row`'s output holds `2 * (i + shift)` at a sample of its floats; nothing for a `Private`
-/// output, which the CPU cannot read.
+/// Check `row`'s output holds `(i + shift) + i` at a sample of its floats, for an input of
+/// `i + shift`; nothing for a `Private` output, which the CPU cannot read.
 fn check(row: &Row, shift: f32) -> common::Result<()> {
-    let Some(contents) = row.output.contents() else {
+    if row.output.contents().is_none() {
         return Ok(());
-    };
-    // SAFETY: the output's bytes, which no command buffer writes now.
-    let values = unsafe { floats(contents) };
+    }
+    let bytes = common::bytes(&row.output)?;
+    let values = bytes.as_chunks::<4>().0;
     for i in (0..COUNT as usize)
         .step_by(4099)
         .chain([COUNT as usize - 1])
     {
-        let want = 2.0 * (i as f32 + shift);
-        if values[i] != want {
-            return Err(format!(
-                "{}: output[{i}] is {}, not {want}",
-                row.made.name(),
-                values[i]
-            )
-            .into());
+        // The input's float, then the kernel's sum (a product by 1 is exact, so a fused
+        // multiply-add rounds as the sum does).
+        let want = (i as f32 + shift) + i as f32;
+        let value = f32::from_le_bytes(values[i]);
+        if value != want {
+            return Err(format!("{}: output[{i}] is {value}, not {want}", row.made.name()).into());
         }
     }
     Ok(())
