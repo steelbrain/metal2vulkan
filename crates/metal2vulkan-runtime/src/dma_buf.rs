@@ -26,11 +26,13 @@
 //!   (`device/submit.rs`): the call does not wait for it, which would wait behind that queue's
 //!   work in flight; every later submission on every queue waits for it until it completed, and
 //!   the buffer's release does where none did. The granule is the alignment of such a buffer
-//!   where the device has `sparseBinding`, its queue family binds sparse memory and it imports
-//!   dma-bufs for such a buffer (64 KiB on RADV of Mesa 26.2.4, 4 KiB on 26.0.8); elsewhere the
-//!   request's length, so that exactly one chunk is taken (NVIDIA's sparse buffers take no type
-//!   its dma-bufs import as; it imports the pointer anyway). The padding past the pages lies
-//!   inside the `VkBuffer` but past the bytes a copy or a binding reaches.
+//!   where the device has `sparseBinding`, its queue family binds sparse memory, it imports
+//!   dma-bufs for such a buffer, and such a buffer takes every memory type a plain one made for
+//!   dma-bufs takes (64 KiB on RADV of Mesa 26.2.4, 4 KiB on 26.0.8); elsewhere the request's
+//!   length, so that exactly one chunk is taken: a split never asks for chunks that import as no
+//!   type the buffer takes where one chunk would import (NVIDIA's sparse buffers take none of the
+//!   types its dma-bufs of host pages import as, `Device::sparse_granule`). The padding past the
+//!   pages lies inside the `VkBuffer` but past the bytes a copy or a binding reaches.
 //! - **The bytes.** The runtime never maps a dma-buf: `contents` stays the caller's pointer, and
 //!   the CPU's writes through it and the GPU's through the imports meet in the same pages with no
 //!   flush or invalidate (the types are host-coherent).
@@ -1012,10 +1014,18 @@ impl Device {
     }
 
     /// The granule a dma-buf source's chunks split at, where the device assembles a buffer of
-    /// several: it has `sparseBinding`, its queue family binds sparse memory, and it imports
-    /// dma-bufs for a sparse buffer without a dedicated allocation; then the alignment of such a
-    /// buffer (of the host page), rounded up to the host page. `None` elsewhere. Asked of the
-    /// device once ([`Importer::sparse_granule`]).
+    /// several: it has `sparseBinding`, its queue family binds sparse memory, it imports
+    /// dma-bufs for a sparse buffer without a dedicated allocation, and such a buffer takes every
+    /// memory type a plain buffer made for dma-bufs takes that an import may be of
+    /// (`Memory::dma_buf_importable`); then the alignment of such a buffer (of the host page),
+    /// rounded up to the host page. `None` elsewhere, so that a request is one chunk. A dma-buf's
+    /// own types are known only from its descriptor, once the source made it, so the split asks
+    /// for none it may not import whole: wherever one chunk of the pages imports as a type the
+    /// plain buffer takes, each of several chunks imports as that type, which the sparse buffer
+    /// takes too. NVIDIA's sparse buffers take none of the types its dma-bufs of host pages import
+    /// as (dma-buf imports otherwise work there): split, the chunks imported as no type the buffer
+    /// took, and the buffer was a copy of the pages where one chunk imports. Asked of the device
+    /// once ([`Importer::sparse_granule`]).
     fn sparse_granule(&self, importer: &Importer) -> Option<u64> {
         *importer.sparse_granule.get_or_init(|| {
             let shared = self.shared();
@@ -1023,27 +1033,47 @@ impl Device {
             if !shared.sparse.binds() || !self.imports_dma_buf_buffers(flags) {
                 return None;
             }
-            let raw_device = shared.vk();
-            let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(DMA_BUF);
-            let info = shared.sharing().buffer(
-                vk::BufferCreateInfo::default()
-                    .flags(flags)
-                    .size(importer.page)
-                    .usage(usage(shared.device_address))
-                    .push_next(&mut external),
-            );
-            // SAFETY: the device is live, has `sparseBinding`, and `info` and its chain are valid.
-            let raw = unsafe { crate::creation::buffer(raw_device, &info) }.ok()?;
-            shared.counts.buffer_made(info.usage);
-            // SAFETY: `raw` is a live buffer of this device.
-            let alignment = unsafe { raw_device.get_buffer_memory_requirements(raw) }.alignment;
-            // SAFETY: the buffer is unused.
-            unsafe { release::object(raw_device, raw) };
+            let sparse = self.dma_buf_buffer_requirements(importer.page, flags)?;
+            let plain =
+                self.dma_buf_buffer_requirements(importer.page, vk::BufferCreateFlags::empty())?;
+            let importable = lock(&shared.memory).dma_buf_importable();
+            if plain.memory_type_bits & importable & !sparse.memory_type_bits != 0 {
+                return None;
+            }
+            let alignment = sparse.alignment;
             alignment
                 .max(1)
                 .checked_next_multiple_of(importer.page)
                 .filter(|granule| granule.is_multiple_of(alignment.max(1)))
         })
+    }
+
+    /// The memory requirements of a buffer of `bytes` made for dma-bufs with `flags` (a sparse one
+    /// only where the device has `sparseBinding`); `None` where the driver refuses to make it.
+    fn dma_buf_buffer_requirements(
+        &self,
+        bytes: u64,
+        flags: vk::BufferCreateFlags,
+    ) -> Option<vk::MemoryRequirements> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(DMA_BUF);
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .flags(flags)
+                .size(bytes)
+                .usage(usage(shared.device_address))
+                .push_next(&mut external),
+        );
+        // SAFETY: the device is live, has `sparseBinding` where `flags` asks for a sparse
+        // buffer (the caller's), and `info` and its chain are valid.
+        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.ok()?;
+        shared.counts.buffer_made(info.usage);
+        // SAFETY: `raw` is a live buffer of this device.
+        let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
+        // SAFETY: the buffer is unused.
+        unsafe { release::object(raw_device, raw) };
+        Some(requirements)
     }
 
     /// Whether the device imports a dma-buf for a no-copy buffer's `VkBuffer` made with `flags`

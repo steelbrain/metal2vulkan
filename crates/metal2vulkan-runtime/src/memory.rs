@@ -906,21 +906,27 @@ pub(super) fn dma_buf_candidates(
     class: MemoryClass,
     unified: bool,
 ) -> Vec<u32> {
-    use vk::MemoryPropertyFlags as P;
     let mut ranked = candidates(types, allowed, class, unified);
-    let others: Vec<u32> = (types.iter().enumerate())
-        .filter(|&(index, ty)| {
-            allowed & (1 << index) != 0
-                && allocatable(ty.property_flags)
-                && !ty
-                    .property_flags
-                    .intersects(P::PROTECTED | P::LAZILY_ALLOCATED)
-                && !ranked.contains(&(index as u32))
-        })
-        .map(|(index, _)| index as u32)
+    let importable = importable_types(types);
+    let others: Vec<u32> = (0..types.len() as u32)
+        .filter(|&index| allowed & importable & (1 << index) != 0 && !ranked.contains(&index))
         .collect();
     ranked.extend(others);
     ranked
+}
+
+/// The memory types a dma-buf may be imported as, as bits ([`dma_buf_candidates`]): every
+/// allocatable type that is neither protected nor lazily allocated.
+fn importable_types(types: &[vk::MemoryType]) -> u32 {
+    use vk::MemoryPropertyFlags as P;
+    (types.iter().enumerate())
+        .filter(|(_, ty)| {
+            allocatable(ty.property_flags)
+                && !ty
+                    .property_flags
+                    .intersects(P::PROTECTED | P::LAZILY_ALLOCATED)
+        })
+        .fold(0, |bits, (index, _)| bits | 1 << index)
 }
 
 /// Where a device's memory may lie ([`Memory::type_view`]), for the crate's device tests.
@@ -2919,6 +2925,11 @@ impl Memory {
             self.host_copy_blocks.readied += 1;
         }
         true
+    }
+
+    /// The memory types a dma-buf may be imported as, as bits ([`dma_buf_candidates`]).
+    pub(super) fn dma_buf_importable(&self) -> u32 {
+        importable_types(&self.types)
     }
 
     /// The memory types of `class` among those `allowed` names, as bits.

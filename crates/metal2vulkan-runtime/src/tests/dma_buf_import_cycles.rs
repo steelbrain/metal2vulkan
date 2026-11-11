@@ -11,8 +11,10 @@
 //!   copy, waited for, released.
 //! - **several imports**: a no-copy buffer bound sparsely over several dma-buf imports, one per
 //!   granule of the device's sparse buffers (`dma_buf.rs`'s `chunks_buffer`), the same use. Where
-//!   the device binds no such buffer (no `sparseBinding`, or none of its dma-buf imports for a
-//!   sparse buffer) each request takes one chunk: the line says so.
+//!   the device asks for no split (no `sparseBinding`, no dma-buf import for a sparse buffer, or
+//!   a sparse buffer that takes fewer memory types than a plain one: `Device::sparse_granule`)
+//!   each request's granule is its length and takes one chunk, one plain buffer's import: the
+//!   line says so. Either way every chunk is imported, none left to a copy.
 //! - **an image's import**: a 64x64 `RGBA8Unorm` texture that only reads, over a no-copy buffer
 //!   made once for all the cycles, in place: its `DRM_FORMAT_MOD_LINEAR` image bound to a
 //!   dedicated import of a dma-buf of its own pages; read by one GPU copy, waited for, released.
@@ -501,17 +503,25 @@ fn dma_buf_cycles_several_imports() {
     let asked = asked.lock().unwrap();
     let (granule, chunks) = asked.first().copied().unwrap_or_default();
     let sparse = after.sparse - before.sparse;
-    let what = match sparse {
-        0 => format!(
-            "the device binds no sparse buffer over dma-bufs: each request's granule is its \
-             length ({granule} bytes), one chunk"
+    let what = match granule {
+        LENGTH => format!(
+            "the device asks for no split: each request's granule is its length ({granule} \
+             bytes), one chunk"
         ),
-        _ => format!("{chunks} chunks of {granule} bytes a buffer"),
+        _ => format!("each request's granule {granule} bytes: {chunks} chunks a buffer"),
     };
     report(&device, WAY, cycles, (before, after), &what);
     assert!(
-        sparse == 0 || (sparse == cycles as u64 && chunks > 1),
-        "{TEST}: {WAY}: a sparse buffer of several chunks a cycle"
+        asked.iter().all(|&ask| ask == (granule, chunks)),
+        "{TEST}: {WAY}: every request alike"
+    );
+    assert_eq!(
+        sparse,
+        match chunks {
+            1 => 0,
+            _ => cycles as u64,
+        },
+        "{TEST}: {WAY}: a sparse buffer a cycle where it split, else none"
     );
     assert_eq!(
         after.made - before.made,
