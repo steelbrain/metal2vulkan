@@ -289,11 +289,16 @@ fn binary_operations() {
 /// exactly the decorated results carry it; other opcodes refuse it. A multiply rounded on its own
 /// takes the module's [`ProductForm`]: an `OpFMul` decorated `NoContraction` by default, or
 /// `GLSL.std.450 Fma(a, b, -0.0)` decorated `NoContraction`, its addend the `-0.0` of its type,
-/// where the module's SPIR-V reaches Metal through SPIRV-Cross. An `Fma` built without the
-/// decoration stays undecorated, and no other `GLSL.std.450` instruction takes it.
+/// where the module's SPIR-V reaches Metal through SPIRV-Cross; a product of two values no
+/// constant gives is the `OpFMul` under [`ProductForm::PositiveZeroFactors`] too. An `Fma` built
+/// without the decoration stays undecorated, and no other `GLSL.std.450` instruction takes it.
 #[test]
 fn no_contraction_decorates_float_arithmetic() {
-    for form in [ProductForm::Multiply, ProductForm::NegativeZeroFma] {
+    for form in [
+        ProductForm::Multiply,
+        ProductForm::NegativeZeroFma,
+        ProductForm::PositiveZeroFactors,
+    ] {
         no_contraction_under(form);
     }
 }
@@ -385,11 +390,11 @@ fn no_contraction_under(form: ProductForm) {
     // Results are emitted in order, each operand's group holding its four decorated results,
     // its plain multiply, and (as an `OpFMul`) its multiply without contraction.
     let group = match form {
-        ProductForm::Multiply => 6,
+        ProductForm::Multiply | ProductForm::PositiveZeroFactors => 6,
         ProductForm::NegativeZeroFma => 5,
     };
     let products = match form {
-        ProductForm::Multiply => fused.len(),
+        ProductForm::Multiply | ProductForm::PositiveZeroFactors => fused.len(),
         ProductForm::NegativeZeroFma => 0,
     };
     assert_eq!(
@@ -417,7 +422,7 @@ fn no_contraction_under(form: ProductForm) {
         !targets.contains(&plain_fmas[0].0),
         "the plain Fma decorated"
     );
-    if form == ProductForm::Multiply {
+    if form != ProductForm::NegativeZeroFma {
         // No `-0.0` addend at all: each multiply is the `OpFMul` after its group's plain one.
         assert!(!constants
             .values()
