@@ -29,7 +29,11 @@
 //!   earlier texels (an M3 Max, macOS 27.0.1, lane `dont_care_unstored`: an `RG16Float` second
 //!   color a framebuffer fetch reads and a `Stencil8` a stencil test reads, over 224x128 and
 //!   128x128 targets, in a pass whose first draw reaches some tiles and a later one every tile, a
-//!   pass of the reading draw alone, and a pass of no fetch).
+//!   pass of the reading draw alone, and a pass of no fetch). Separate depth and stencil textures
+//!   read the same, each aspect apart (a `Depth32Float` and a `Stencil8` texture read by a depth
+//!   and a stencil test over the same targets, with and without API validation): an aspect loaded
+//!   `DontCare` and not stored reads the clear value whether the other aspect is so loaded or is
+//!   loaded and stored, which reads its texels.
 //! - A `Load` keeps the texels past the render area, and a `DontCare` store stores nothing.
 //!
 //! **The runtime** gives the `Clear` load's answer and the `DontCare` load's near-equivalent, as
@@ -50,14 +54,16 @@
 //!   pass's `tileWidth` and `tileHeight`, which set Metal's grid, as measured), a clear before the
 //!   pass, and loads: every other tile keeps its texels, Metal's answer (a draw writes no pixel
 //!   outside them), and a pass whose draws reach no pixel loads, as one whose draws draw nothing.
-//! - A `DontCare`-loaded attachment the pass does not store (but separate depth and stencil
-//!   textures, and memoryless ones), in a pass whose draws reach a tile, clears to zero (a color)
-//!   or its clear value (depth, stencil) over the render area under
-//!   `UnstoredDontCarePolicy::Cleared`, and under the default `Driver` on a driver measured to run
-//!   that clear no slower than its `DONT_CARE` load (`DriverFact::UnstoredClearNoSlower`)
-//!   ([`UnstoredLoads`]): by the load operation of the pass's first instance, or before the pass
-//!   where that instance leaves it out (as below). Metal's answer wherever a fragment reads it, so
-//!   no notice: no fragment reads a tile no draw touches. What the pass leaves in it is a
+//! - A `DontCare`-loaded attachment the pass does not store (but memoryless ones), in a pass whose
+//!   draws reach a tile, clears to zero (a color) or its clear value (depth, stencil) over the
+//!   render area under `UnstoredDontCarePolicy::Cleared`, and under the default `Driver` on a
+//!   driver measured to run that clear no slower than its `DONT_CARE` load
+//!   (`DriverFact::UnstoredClearNoSlower`) ([`UnstoredLoads`]): by the load operation of the
+//!   pass's first instance, or before the pass where that instance leaves it out (as below); an
+//!   aspect of separate depth and stencil textures by the load operation of the scratch image the
+//!   pass renders them through (`depth_stencil_scratch.rs`), which copies nothing into that
+//!   aspect, each aspect apart. Metal's answer wherever a fragment reads it, so no notice: no
+//!   fragment reads a tile no draw touches. What the pass leaves in it is a
 //!   `DontCare` store's (`kept_bytes.rs`, `dont-care-store`). On every other driver under the
 //!   default it stays `DontCare`, the driver's faster form, announced
 //!   (`Degradation::DontCareUnstoredLoad`). In a pass whose draws reach no tile it stays
@@ -347,11 +353,11 @@ pub(super) fn dont_care_loads(
                 .get_or_insert_with(|| format!("color attachment {index}"));
         }
     }
-    if let Some(ds) = layout
-        .depth_stencil
-        .as_mut()
-        .filter(|ds| ds.separate.is_none())
-    {
+    if let Some(ds) = layout.depth_stencil.as_mut() {
+        // Separate depth and stencil textures render through the pass's own scratch image
+        // (`depth_stencil_scratch.rs`), whose load operation is each aspect's: one the pass does
+        // not store takes the same answer there, per aspect; one it stores stays `DontCare`.
+        let separate = ds.separate.is_some();
         for (name, aspect, taken) in [
             ("depth", ds.depth.as_mut(), &mut loads.depth),
             ("stencil", ds.stencil.as_mut(), &mut loads.stencil),
@@ -371,6 +377,9 @@ pub(super) fn dont_care_loads(
                         loads.unstored.get_or_insert_with(name);
                     }
                 }
+                continue;
+            }
+            if separate {
                 continue;
             }
             aspect.load = load;

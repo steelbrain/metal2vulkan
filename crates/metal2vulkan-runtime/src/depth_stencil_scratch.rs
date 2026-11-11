@@ -8,7 +8,12 @@
 //! `D24_UNORM_S8_UINT` for 24-bit. Stencil is 8 bits in every format.
 //!
 //! - **Before the pass**, each aspect loaded with `Load` is copied from its texture into the
-//!   scratch image; `Clear` and `DontCare` load as the scratch's own operations.
+//!   scratch image; `Clear` and `DontCare` load as the scratch's own operations. An aspect loaded
+//!   `DontCare` that the pass does not store, in a pass whose draws reach a tile, takes the answer
+//!   of any attachment so loaded (`clear_reach.rs`, `UnstoredDontCarePolicy`), each aspect apart:
+//!   the scratch's `Clear` to the aspect's clear value, Metal's answer (an M3 Max under macOS
+//!   27.0.1, `runtime_lane::dont_care_unstored`), or its `DONT_CARE`, announced
+//!   `dont-care-unstored-load`. One the pass stores loads `DONT_CARE`.
 //! - **After it**, each aspect stored with `Store`, `StoreAndMultisampleResolve` or
 //!   `CustomSampleDepthStore` is copied back (a resolve of the scratch image into the separate
 //!   resolve textures is `resolve.rs`'s split resolve). An aspect stored `DontCare` is not: its

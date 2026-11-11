@@ -845,13 +845,14 @@ degradations! {
         DontCareLoadTiles = "dont-care-load-tiles", Precision,
             "the tiles no draw touches hold zero or the clear value where Metal keeps their \
              texels";
-        /// An attachment loaded with `DontCare` and not stored (not memoryless, not one of
-        /// separate depth and stencil textures), in a pass whose draws reach a tile, is left to the
-        /// driver's `DONT_CARE` load under `UnstoredDontCarePolicy::Driver`, the default, on a
-        /// driver not measured to clear it no slower (`DriverFact::UnstoredClearNoSlower`), where
-        /// Metal's draws read zero (a color) or the clear value (depth, stencil) wherever they read
-        /// it (`clear_reach.rs`). Cleared, Metal's answer, and not announced on a driver with the
-        /// fact and under `UnstoredDontCarePolicy::Cleared`.
+        /// An attachment loaded with `DontCare` and not stored (not memoryless; an aspect of
+        /// separate depth and stencil textures in the scratch image the pass renders them
+        /// through), in a pass whose draws reach a tile, is left to the driver's `DONT_CARE` load
+        /// under `UnstoredDontCarePolicy::Driver`, the default, on a driver not measured to clear
+        /// it no slower (`DriverFact::UnstoredClearNoSlower`), where Metal's draws read zero (a
+        /// color) or the clear value (depth, stencil) wherever they read it (`clear_reach.rs`).
+        /// Cleared, Metal's answer, and not announced on a driver with the fact and under
+        /// `UnstoredDontCarePolicy::Cleared`.
         DontCareUnstoredLoad = "dont-care-unstored-load", Precision,
             "the pass's draws read what the driver's `DONT_CARE` load leaves in the attachment \
              (on lavapipe its earlier texels) where Metal's read zero or the clear value";

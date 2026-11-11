@@ -263,8 +263,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   (`DriverFact::UnstoredClearNoSlower`: MoltenVK on the M3 Max, RADV on the Radeon 780M), and
   leaves it to the driver's `DONT_CARE` elsewhere, announced `dont-care-unstored-load`: lavapipe's
   draws then read its earlier texels. `unstored_dont_care_loads = UnstoredDontCarePolicy::Cleared`,
-  which `exact_answers()` selects, clears it on every device. A memoryless one, and one of separate
-  depth and stencil textures, are not covered.
+  which `exact_answers()` selects, clears it on every device. Separate depth and stencil textures
+  take the same answer, each aspect apart, in the scratch image the pass renders them through. A
+  memoryless one is not covered.
 
 Loops run as written: no execution bound is translated in.
 
@@ -2362,11 +2363,11 @@ bound.
   the tiles no draw touches hold zero or the clear value where Metal keeps their texels. Not an
   attachment the pass does not store (`dont-care-unstored-load`).
 - `metal2vulkan-degrade-dont-care-unstored-load` (precision). `DontCareUnstoredLoad`: An attachment
-  loaded with `DontCare` and not stored (not memoryless, not one of separate depth and stencil
-  textures), in a pass whose draws reach a tile, is left to the driver's `DONT_CARE` load under
-  `UnstoredDontCarePolicy::Driver`, the default, on a driver not measured to clear it no slower
-  (`DriverFact::UnstoredClearNoSlower`), where Metal's draws read zero (a color) or the clear value
-  (depth, stencil) wherever they read it. Cleared, and not announced, on a driver with the fact and
+  loaded with `DontCare` and not stored (not memoryless; an aspect of separate depth and stencil
+  textures in the scratch image the pass renders them through), in a pass whose draws reach a
+  tile, is left to the driver's `DONT_CARE` load under `UnstoredDontCarePolicy::Driver`, the
+  default, on a driver not measured to clear it no slower (`DriverFact::UnstoredClearNoSlower`),
+  where Metal's draws read zero (a color) or the clear value (depth, stencil) wherever they read it. Cleared, and not announced, on a driver with the fact and
   under `UnstoredDontCarePolicy::Cleared` (`exact_answers()`). Cost: the pass's draws read what the
   driver's `DONT_CARE` load leaves in the attachment (on lavapipe its earlier texels) where Metal's
   read zero or the clear value.

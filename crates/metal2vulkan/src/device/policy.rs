@@ -553,13 +553,15 @@ pub enum DontCareColorPolicy {
     Kept,
 }
 
-/// What a render pass's draws read of an attachment (not memoryless, not one of separate depth and
-/// stencil textures) the pass loads `MTLLoadActionDontCare` and does not store
-/// (`MTLStoreActionDontCare`), in a pass whose draws reach a tile. Metal's documentation leaves it
-/// open; what Apple's GPU reads is measured: zero for a colour and the pass's clear value for
-/// depth and stencil, wherever a draw reads it (an Apple M3 Max under macOS 27.0.1: a framebuffer
-/// fetch and a stencil test, in passes split and whole). Vulkan's `DONT_CARE` load leaves the
-/// contents undefined. The runtime's choice alone: no emitted code changes.
+/// What a render pass's draws read of an attachment (not memoryless) the pass loads
+/// `MTLLoadActionDontCare` and does not store (`MTLStoreActionDontCare`), in a pass whose draws
+/// reach a tile. Metal's documentation leaves it open; what Apple's GPU reads is measured: zero for
+/// a colour and the pass's clear value for depth and stencil, wherever a draw reads it (an Apple
+/// M3 Max under macOS 27.0.1: a framebuffer fetch and a stencil test, in passes split and whole;
+/// a depth and a stencil test of separate depth and stencil textures, each aspect apart). Vulkan's
+/// `DONT_CARE` load leaves the contents undefined. Separate depth and stencil textures render
+/// through a scratch image of the pass's own, whose load of each such aspect this decides. The
+/// runtime's choice alone: no emitted code changes.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
