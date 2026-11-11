@@ -22,6 +22,10 @@
 //! - **Shared memory the device refuses** (Linux: a `memfd` mapped shared, made with no source of
 //!   dma-bufs) is copied where the device refuses its pointer (RADV), announced and counted as the
 //!   device's refusal, with the same coherence; imported elsewhere.
+//! - **A device that imports no pointer** (Linux: made without `VK_EXT_external_memory_host`, as
+//!   a device whose driver lists none is, importing dma-bufs): a buffer over memory made with no
+//!   source of dma-bufs or with one that fails, and a heap over memory made with no source, are
+//!   copies, announced and counted as the device's refusal, with the same coherence.
 //! - **Read-only pages** (a read-only view of shared memory) are a copy whose GPU writes are
 //!   dropped, a buffer's and a rebind's: where the gate refuses their import, counted as a
 //!   refusal; on Linux where it admits it, counted as a copy of unwritable pages
@@ -30,7 +34,8 @@
 //!   admitted import fails, with the same coherence; the old pages stay as they were, and a later
 //!   rebind imports again.
 //! - **Heaps.** A no-copy heap's own buffer is a copy in the same two cases; a buffer placed in
-//!   it reads the caller's bytes at its offset, and a fill through it reaches those pages alone.
+//!   it reads the caller's bytes at its offset, a CPU write before a commit reaches the GPU, and a
+//!   fill through it reaches those pages alone.
 //! - **Rebinds with textures.** A rebind of a buffer with a texture in place over it whose gate
 //!   refuses the new pages, and one whose new bytes lie at another offset in their page, give it
 //!   a copy, the texture's image made again over it: the texture reads the new texels, its writes
@@ -229,11 +234,22 @@ fn pattern(seed: u8) -> Vec<u8> {
 /// The degrade notices a device announced.
 type Heard = Arc<Mutex<Vec<Degradation>>>;
 
+/// A device's message sink, its degrade notices into the answer's list.
+fn hearing() -> (Heard, MessageSink) {
+    let heard: Heard = Arc::default();
+    let hearing = Arc::clone(&heard);
+    let sink = MessageSink::new(move |message| {
+        if let Some(notice) = &message.degradation {
+            hearing.lock().unwrap().push(notice.degradation);
+        }
+    });
+    (heard, sink)
+}
+
 /// A device of the cfg's kind, its notices into the answer's list; `None` where it imports no
 /// host memory.
 fn device() -> Option<(Device, Heard)> {
-    let heard: Heard = Arc::default();
-    let hearing = Arc::clone(&heard);
+    let (heard, messages) = hearing();
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
@@ -243,11 +259,7 @@ fn device() -> Option<(Device, Heard)> {
                 DeviceKind::Virtual,
             ],
         },
-        messages: Some(MessageSink::new(move |message| {
-            if let Some(notice) = &message.degradation {
-                hearing.lock().unwrap().push(notice.degradation);
-            }
-        })),
+        messages: Some(messages),
         ..DeviceOptions::default()
     };
     let device = Device::system_default_with(&options).unwrap();
@@ -255,6 +267,11 @@ fn device() -> Option<(Device, Heard)> {
         eprintln!("COPIED: the device imports no host memory here; nothing to test");
         return None;
     }
+    Some((settled(device), heard))
+}
+
+/// `device`, its in-place check answered first where it may run one.
+fn settled(device: Device) -> Device {
     // Where the device may lay its buffers in exportable blocks, its first buffer starts its
     // in-place check (`in_place.rs`'s `Device::fd_blocks_checked`), whose own imports of host
     // pages would land in the counts these tests compare: settled first.
@@ -267,7 +284,7 @@ fn device() -> Option<(Device, Heard)> {
             "the device's in-place check answered"
         );
     }
-    Some((device, heard))
+    device
 }
 
 /// A gate answering `answer`, each request it is asked into `asked`.
@@ -494,6 +511,114 @@ fn copied_buffer_is_made_over_shared_memory_whose_pointer_the_device_refuses() {
         }
         drop(buffer);
     }
+}
+
+/// On a device that imports no host pointer (made without `VK_EXT_external_memory_host`, as a
+/// device whose driver lists none is: `tests/no_pointer_import.rs`'s device) but imports dma-bufs,
+/// a no-copy buffer over shared memory made with no source of dma-bufs of its pages, one made with
+/// a source that fails, and a no-copy heap over memory made with no source: each a copy of the
+/// pages, as where a device refuses their pointer
+/// ([`copied_buffer_is_made_over_shared_memory_whose_pointer_the_device_refuses`]): announced
+/// (once) and counted as the device's refusal, no pointer imported, the source called once, with
+/// every copy's coherence (a CPU write before a commit reaches the GPU, those bytes alone copied
+/// in; a fill reaches the pages at its completion, those bytes alone merged back). Where the device
+/// lists no dma-buf route either, it imports no host memory, and the buffer is refused, naming the
+/// extension.
+#[cfg(target_os = "linux")]
+#[test]
+fn copied_buffer_and_heap_are_made_on_a_device_that_imports_no_pointer() {
+    use super::no_pointer_import::{lists_dma_buf_route, refusal};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Pages of their own each, so that no object lies in another's copy.
+    let hosts = [Host::over_shared_memory(14), Host::over_shared_memory(15)];
+    let heap_host = Host::new(16);
+    let scratch = super::host_residency::Scratch::new();
+    let (heard, messages) = hearing();
+    let device = super::no_pointer_import::device(&scratch.0, Some(messages));
+    if !lists_dma_buf_route(&device) {
+        // SAFETY: as for `Host::buffer`; the call makes nothing over the bytes.
+        let refused = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(hosts[0].pointer),
+                LENGTH as u64,
+                ResourceOptions::default(),
+                None,
+            )
+        };
+        eprintln!(
+            "COPIED {}: no pointer import, no dma-buf route: the buffer {:?}",
+            device.name(),
+            refused.as_ref().map(Buffer::host_backing)
+        );
+        assert_eq!(refused.err(), Some(refusal()), "no route at all");
+        return;
+    }
+    let device = settled(device);
+    let calls = Arc::new(AtomicUsize::new(0));
+    for (host, failing) in hosts.iter().zip([false, true]) {
+        let memory = match failing {
+            // SAFETY: as for `Host::buffer`.
+            false => unsafe { HostMemory::new(host.pointer) },
+            true => {
+                let counted = Arc::clone(&calls);
+                let source: crate::DmaBufSource = Arc::new(move |_| {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    Err(std::io::Error::other("no dma-buf"))
+                });
+                // SAFETY: as for `Host::buffer`, and the source answers no chunk.
+                unsafe { HostMemory::with_dma_buf(host.pointer, source) }
+            }
+        };
+        let source = match failing {
+            true => "a source that fails",
+            false => "no source",
+        };
+        let before = device.work_counts();
+        let buffer = host.buffer_over(&device, memory);
+        let after = device.work_counts();
+        let device_refused =
+            after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused;
+        eprintln!(
+            "COPIED {}: no pointer import: the buffer with {source} is {:?}, {device_refused} \
+             copied for the device's refusal, the source called {} times",
+            device.name(),
+            buffer.host_backing(),
+            calls.load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            device_refused, 1,
+            "{source}: counted as the device's refusal"
+        );
+        assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0], "{source}: a copy");
+        assert_eq!(
+            after.dma_buf_imports, before.dma_buf_imports,
+            "{source}: a dma-buf imported"
+        );
+        assert_eq!(announced(&heard), 1, "{source}: announced once");
+        lies_in_a_copy(&device, &buffer, host);
+        assert_eq!(calls.load(Ordering::Relaxed), usize::from(failing));
+        drop(buffer);
+    }
+    let before = device.work_counts();
+    let copied = heap(&device, &heap_host, None);
+    let after = device.work_counts();
+    eprintln!(
+        "COPIED {}: no pointer import: the heap with no source is {} copied heap(s), {} for the \
+         device's refusal",
+        device.name(),
+        after.copied_heaps_made - before.copied_heaps_made,
+        after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused,
+    );
+    assert_eq!(moved(&before, &after), [0, 1, 0, 0, 0], "the heap: a copy");
+    assert_eq!(after.copied_heaps_made - before.copied_heaps_made, 1);
+    assert_eq!(
+        after.copied_host_buffers_device_refused - before.copied_host_buffers_device_refused,
+        1,
+        "the heap: counted as the device's refusal"
+    );
+    assert_eq!(announced(&heard), 1, "announced once");
+    placed_lies_in_a_copy(&device, &copied, &heap_host);
+    drop(copied);
 }
 
 /// Pages of a dma-buf's mapping (`VM_PFNMAP`, as a consumer maps guest RAM), which the kernel's
@@ -773,45 +898,92 @@ fn copied_heap_is_made_where_the_caller_s_gate_refuses_the_import() {
         copied.hazard_tracking_mode(),
         imported.hazard_tracking_mode()
     );
-    // A buffer placed at 16 KiB reads the caller's bytes there; a fill through it reaches those
-    // pages alone, merged back.
+    placed_lies_in_a_copy(&device, &copied, &host);
+    drop((copied, imported));
+}
+
+/// A buffer placed at 16 KiB in `heap`, which lies in a copy of `host`'s pages: the GPU reads the
+/// caller's bytes there; a CPU write before a commit reaches the GPU, those bytes alone copied in;
+/// a fill through it reaches those pages alone, those bytes alone merged back.
+fn placed_lies_in_a_copy(device: &Device, heap: &crate::Heap, host: &Host) {
     let at = 16 * 1024;
-    let buffer = copied
-        .new_buffer_at_offset(LENGTH as u64 - at, ResourceOptions::default(), at)
+    let length = LENGTH - at;
+    let buffer = heap
+        .new_buffer_at_offset(length as u64, ResourceOptions::default(), at as u64)
         .unwrap();
     let own = device
-        .new_buffer(LENGTH as u64 - at, ResourceOptions::shared())
+        .new_buffer(length as u64, ResourceOptions::shared())
         .unwrap();
-    blit(&device, |encoder| {
-        encoder
-            .copy_from_buffer_to_buffer(&buffer, 0, &own, 0, LENGTH as u64 - at)
-            .unwrap();
-    });
+    let read = || {
+        blit(device, |encoder| {
+            encoder
+                .copy_from_buffer_to_buffer(&buffer, 0, &own, 0, length as u64)
+                .unwrap();
+        });
+        let contents = own.contents().unwrap();
+        // SAFETY: the buffer's bytes, which no command writes now.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) }.to_vec()
+    };
     let pattern = host.pattern();
-    let contents = own.contents().unwrap();
-    // SAFETY: the buffer's bytes, which no command writes now.
-    let read = unsafe { std::slice::from_raw_parts(contents.as_ptr(), LENGTH - at as usize) };
-    assert_eq!(
-        read,
-        &pattern[at as usize..],
-        "the GPU reads the heap's bytes"
-    );
+    assert_eq!(read(), pattern[at..], "the GPU reads the heap's bytes");
+    // A CPU write before the commit reaches the GPU: only the bytes it changed are copied in.
+    let changed_in = pattern[at..at + 4096]
+        .iter()
+        .filter(|&&byte| byte != 0xC3)
+        .count() as u64;
     let before = device.work_counts();
-    blit(&device, |encoder| {
-        encoder.fill_buffer(&buffer, 0..4096, 0x5A).unwrap();
-    });
-    let after = device.work_counts();
-    let bytes = host.bytes();
-    let (start, end) = (at as usize, at as usize + 4096);
-    assert!(bytes[start..end].iter().all(|&byte| byte == 0x5A));
-    assert_eq!(bytes[..start], pattern[..start], "the bytes before it stay");
-    assert_eq!(bytes[end..], pattern[end..], "the bytes after it stay");
-    let changed = pattern[start..end].iter().filter(|&&b| b != 0x5A).count() as u64;
-    assert_eq!(
-        after.copied_merge_back_bytes - before.copied_merge_back_bytes,
-        changed
+    host.write(at, &[0xC3; 4096]);
+    let after_write = read();
+    let copied_in = device.work_counts();
+    assert!(
+        after_write[..4096].iter().all(|&byte| byte == 0xC3),
+        "the GPU reads the CPU's write"
     );
-    drop((buffer, copied, imported));
+    assert_eq!(
+        after_write[4096..],
+        pattern[at + 4096..],
+        "and the bytes after it"
+    );
+    assert_eq!(
+        copied_in.copied_copy_in_bytes - before.copied_copy_in_bytes,
+        changed_in,
+        "the commit copies in the bytes the CPU changed alone"
+    );
+    // A fill reaches the pages at its completion: only the bytes it changed are merged back.
+    blit(device, |encoder| {
+        encoder.fill_buffer(&buffer, 4096..8192, 0x5A).unwrap();
+    });
+    let filled = device.work_counts();
+    let bytes = host.bytes();
+    let (start, end) = (at + 4096, at + 8192);
+    assert!(
+        bytes[start..end].iter().all(|&byte| byte == 0x5A),
+        "the fill reached the pages"
+    );
+    assert_eq!(
+        bytes[..at],
+        pattern[..at],
+        "the bytes before the buffer stay"
+    );
+    assert!(
+        bytes[at..start].iter().all(|&byte| byte == 0xC3),
+        "the CPU's write stays"
+    );
+    assert_eq!(
+        bytes[end..],
+        pattern[end..],
+        "the bytes after the fill stay"
+    );
+    let changed_back = pattern[start..end]
+        .iter()
+        .filter(|&&byte| byte != 0x5A)
+        .count() as u64;
+    assert_eq!(
+        filled.copied_merge_back_bytes - copied_in.copied_merge_back_bytes,
+        changed_back,
+        "the fill's bytes alone were merged back"
+    );
+    drop(buffer);
 }
 
 #[test]

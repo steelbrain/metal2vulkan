@@ -8,9 +8,12 @@
 //!   `WorkCounts::dma_buf_imports`) with no pointer imported (`host_pointer_imports_made`); the GPU
 //!   reads the CPU's bytes, its writes land in the file's pages in place, and the CPU's later
 //!   writes reach its next read;
-//! - memory with no source is refused, naming the extension, with no copy made and nothing
-//!   imported; on a device that lists no dma-buf route, so is memory with one.
+//! - on a device that lists no dma-buf route, memory with a source is refused, naming the
+//!   extension.
 //!
+//! Memory with no source, or with one that fails, is a copy of the pages there
+//! (`tests/copied_device.rs`'s
+//! `copied_buffer_and_heap_are_made_on_a_device_that_imports_no_pointer`).
 //! The guest RAM's side is `tests/host_ram_dma_buf.rs`'s
 //! `without_pointer_imports_a_ram_s_chunks_are_its_dma_bufs`.
 //!
@@ -64,8 +67,9 @@ pub(super) fn device(cache: &Path, messages: Option<MessageSink>) -> Device {
     device
 }
 
-/// The refusal of host memory on a device that imports no host pointer, where no dma-buf of it
-/// serves: `Unsupported`, naming `VK_EXT_external_memory_host`.
+/// The refusal of host memory on a device that imports no host pointer and no dma-buf, and of a
+/// guest RAM with no source of dma-bufs on one that imports no host pointer: `Unsupported`, naming
+/// `VK_EXT_external_memory_host`.
 pub(super) fn refusal() -> Error {
     Error::Unsupported(Unsupported::needs(
         Feature::HostMemory,
@@ -194,58 +198,4 @@ fn without_pointer_imports_a_sourced_no_copy_buffer_lies_in_its_dma_bufs() {
         "{TEST}: the source called again"
     );
     drop(buffer);
-}
-
-/// A no-copy buffer and a no-copy heap over memory with no source of dma-bufs: refused, naming
-/// `VK_EXT_external_memory_host`, with no copy made and no pointer imported.
-#[test]
-fn without_pointer_imports_memory_with_no_source_is_refused_naming_the_extension() {
-    const TEST: &str =
-        "without_pointer_imports_memory_with_no_source_is_refused_naming_the_extension";
-    let scratch = Scratch::new();
-    let device = device(&scratch.0, None);
-    let page = host_page();
-    let ram = Ram::new(4 * page, 0, 4 * page);
-    let at = ram.pointer(0);
-    let before = device.work_counts();
-    // SAFETY: the view outlives the call, which makes nothing over it.
-    let buffer = unsafe {
-        device.new_buffer_with_bytes_no_copy(
-            HostMemory::new(at),
-            page as u64,
-            ResourceOptions::default(),
-            None,
-        )
-    };
-    let descriptor = crate::HeapDescriptor::new(
-        crate::HeapType::Placement,
-        2 * page as u64,
-        ResourceOptions::default(),
-    );
-    // SAFETY: as above.
-    let heap =
-        unsafe { device.new_heap_with_bytes_no_copy(HostMemory::new(at), &descriptor, None, None) };
-    let after = device.work_counts();
-    println!(
-        "{TEST}: on {}: the buffer {}, the heap {}",
-        device.name(),
-        match &buffer {
-            Ok(_) => "made".to_owned(),
-            Err(error) => format!("refused: {error}"),
-        },
-        match &heap {
-            Ok(_) => "made".to_owned(),
-            Err(error) => format!("refused: {error}"),
-        },
-    );
-    assert_eq!(buffer.err(), Some(refusal()), "{TEST}: the buffer");
-    assert_eq!(heap.err(), Some(refusal()), "{TEST}: the heap");
-    assert_eq!(
-        after.copied_host_buffers_made, before.copied_host_buffers_made,
-        "{TEST}: a copy made"
-    );
-    assert_eq!(
-        after.host_pointer_imports_made, before.host_pointer_imports_made,
-        "{TEST}: a pointer imported"
-    );
 }
