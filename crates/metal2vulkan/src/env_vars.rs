@@ -98,8 +98,9 @@ pub const REGISTRY: &[EnvVar] = &[
                  sink or on stderr: the pass's attachments (format, size, level, slice, object \
                  ID and label, load and store actions, stand-in, storage form), its Vulkan \
                  render pass instances and draws, its draws' pipeline states and the textures \
-                 bound to their fragment stage, and what it watched; a line the same as one \
-                 printed before is not printed again, and at most 256 are; empty or 0 is off",
+                 bound to their fragment stage, and what it watched; a pass the same as one \
+                 printed before but for its counts prints no line again, and at most 256 lines \
+                 are printed; empty or 0 is off",
     },
 ];
 

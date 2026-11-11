@@ -98,23 +98,25 @@ fn an_entry_watches_its_format_and_size() {
     assert!(!any_size.watches(PixelFormat::RGBA8Unorm, [1, 4096]));
 }
 
-/// A line the same as one printed before is not printed again, and no more than [`LINES`] are,
-/// the last saying so.
+/// A pass the same as one printed before prints no line again, whatever its counts, and no more
+/// than [`LINES`] lines are printed, the last saying so.
 #[test]
-fn the_log_prints_each_line_once_and_at_most_its_bound() {
+fn the_log_prints_each_pass_once_and_at_most_its_bound() {
     let printed = Mutex::new(BTreeSet::new());
-    let mut first = "a pass".to_owned();
-    assert!(fresh_in(&printed, &mut first));
-    assert_eq!(first, "a pass");
-    assert!(!fresh_in(&printed, &mut "a pass".to_owned()));
+    let mut first = "a pass; 3 draw call(s)".to_owned();
+    assert!(fresh_in(&printed, "a pass", &mut first));
+    assert_eq!(first, "a pass; 3 draw call(s)");
+    let mut again = "a pass; 4 draw call(s)".to_owned();
+    assert!(!fresh_in(&printed, "a pass", &mut again));
     for n in 1..LINES - 1 {
-        assert!(fresh_in(&printed, &mut format!("pass {n}")), "line {n}");
+        let pass = format!("pass {n}");
+        assert!(fresh_in(&printed, &pass, &mut pass.clone()), "line {n}");
     }
     let mut last = "the last pass".to_owned();
-    assert!(fresh_in(&printed, &mut last));
+    assert!(fresh_in(&printed, "the last pass", &mut last));
     assert_eq!(
         last,
         format!("the last pass; the pass log's last line (it prints at most {LINES})")
     );
-    assert!(!fresh_in(&printed, &mut "one more".to_owned()));
+    assert!(!fresh_in(&printed, "one more", &mut "one more".to_owned()));
 }

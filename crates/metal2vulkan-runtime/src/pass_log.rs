@@ -20,9 +20,9 @@
 //!   ID and label); the count of textures it made resident and the watched ones among them, with
 //!   their stages; and what it watched. A line lists at most [`KEPT`] states and fragment
 //!   textures, each once.
-//! - **Its volume.** A line the same as one the process printed before is not printed again, so
-//!   a pass a frame repeats prints once; and the process prints at most [`LINES`] lines, the last
-//!   saying so.
+//! - **Its volume.** A pass the same as one the process printed a line of before, but for its
+//!   counts of draw calls and resident textures, prints none, so a pass a frame repeats prints
+//!   once; and the process prints at most [`LINES`] lines, the last saying so.
 //! - **Off, it costs nothing.** The switch is read once; an encoder notes nothing and no line is
 //!   formatted. On, every render encoder notes its draws' states and fragment textures, and one
 //!   that names a watched texture formats its line.
@@ -270,18 +270,23 @@ pub(crate) fn ended(
     }
     let states: Vec<String> = notes.states.iter().map(state_named).collect();
     let [width, height] = layout.extent;
-    let mut text = format!(
-        "metal2vulkan: pass: {width}x{height} in {instances} Vulkan render pass instance(s), {} \
-         draw call(s); colors [{}]; depth/stencil {depth_stencil}; states [{}]; fragment \
-         textures [{}]; {resident} texture(s) resident, watched among them [{}]; it watched {}",
-        notes.draws,
+    // The pass as a line names it but for its counts, which a frame's repeat of it may change:
+    // what tells it from the lines printed before.
+    let pass = format!(
+        "{width}x{height} in {instances} Vulkan render pass instance(s); colors [{}]; \
+         depth/stencil {depth_stencil}; states [{}]; fragment textures [{}]; watched among its \
+         resident textures [{}]; it watched {}",
         colors.join("; "),
         states.join(", "),
         fragment.join("; "),
         resident_watched.join("; "),
         seen.join(", "),
     );
-    if fresh(&mut text) {
+    let mut text = format!(
+        "metal2vulkan: pass: {pass}; {} draw call(s), {resident} texture(s) resident",
+        notes.draws,
+    );
+    if fresh(&pass, &mut text) {
         inform_through(device.shared().instance.sink(), ID_NAME, text);
     }
 }
@@ -305,17 +310,17 @@ fn stages_named(stages: RenderStages) -> String {
     }
 }
 
-/// Whether to print `text`: the process printed no line the same and fewer than [`LINES`]; the
-/// last line it prints says so (the module docs).
-fn fresh(text: &mut String) -> bool {
+/// Whether to print `text`, the line of `pass`: the process printed no line of a pass the same
+/// and fewer than [`LINES`] lines; the last line it prints says so (the module docs).
+fn fresh(pass: &str, text: &mut String) -> bool {
     static PRINTED: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
-    fresh_in(&PRINTED, text)
+    fresh_in(&PRINTED, pass, text)
 }
 
-/// [`fresh`] against the lines `printed` holds, by hash.
-pub(crate) fn fresh_in(printed: &Mutex<BTreeSet<u64>>, text: &mut String) -> bool {
+/// [`fresh`] against the passes `printed` holds the lines of, by hash.
+pub(crate) fn fresh_in(printed: &Mutex<BTreeSet<u64>>, pass: &str, text: &mut String) -> bool {
     let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
+    pass.hash(&mut hasher);
     let mut printed = lock(printed);
     if printed.len() >= LINES || !printed.insert(hasher.finish()) {
         return false;

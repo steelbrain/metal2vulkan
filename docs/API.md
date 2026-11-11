@@ -1650,9 +1650,9 @@ calls; each attachment's format, size, object ID, label, level, slice, load and 
 whether its texture took its storage form, and the stand-in it renders through with its cause;
 the pipeline states its draws drew with (label and functions); the textures bound to the fragment
 stage at a draw; the watched textures among those it made resident, with their stages; and what
-it watched. A line the same as one printed before is not printed again, and a process prints at
-most 256. Empty or `0` is off; a value the runtime cannot read turns the log off and says why on
-stderr.
+it watched. A pass the same as one a line was printed of before, but for its counts of draw calls
+and resident textures, prints no line again, and a process prints at most 256. Empty or `0` is
+off; a value the runtime cannot read turns the log off and says why on stderr.
 With `METAL2VULKAN_PENDING_AUDIT` set (or `DeviceOptions::pending_audit`), a device checks, at each
 `vkBeginCommandBuffer`, each `vkResetCommandPool` of a spare command pool, each command pool given
 back to its spares and each submission of a command buffer submitted before (one not begun for
