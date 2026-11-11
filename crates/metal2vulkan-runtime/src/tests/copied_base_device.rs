@@ -205,3 +205,82 @@ fn copied_base_read_bench() {
         );
     }
 }
+
+/// A device base's block reads at scale, as the first merge back of a copy every block of which
+/// both sides changed makes them (`COPIED-BASE-SCALE`): 16 MiB of 1 KiB blocks read in order on
+/// one thread, twice; the same split across four threads, as a comparison splits its blocks, both
+/// over bytes one thread read and over bytes none did; one thread again after three seconds of
+/// the device idle; and the whole 256 MiB on one thread. Ignored: run it in release with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore = "a release-mode benchmark"]
+fn copied_base_read_scale_bench() {
+    const SPAN: usize = 16 << 20;
+    /// The base's bytes, read from the threads of one comparison, each its own blocks.
+    struct Reads<'a>(&'a crate::copied::BaseBytes);
+    // SAFETY: each thread reads its own blocks, and nothing writes them meanwhile.
+    unsafe impl Sync for Reads<'_> {}
+    let Some(device) = device() else {
+        return;
+    };
+    let Some(base) = device.copied_base(LENGTH) else {
+        eprintln!("COPIED-BASE-SCALE: no base in the device's memory here");
+        return;
+    };
+    let named = device.name().to_string();
+    let block = [0x5A_u8; 1024];
+    for at in (0..LENGTH).step_by(1024) {
+        // SAFETY: a block of the base's bytes.
+        unsafe { base.write(at, &block) };
+    }
+    let reads = Reads(&base);
+    let read = |from: usize, to: usize| {
+        let mut into = [0u8; 1024];
+        for at in (from..to).step_by(1024) {
+            // SAFETY: a block of the base's bytes, written above.
+            unsafe { reads.0.read(at, &mut into) };
+        }
+        assert_eq!(into, block);
+    };
+    let report = |what: &str, bytes: usize, started: Instant| {
+        let seconds = started.elapsed().as_secs_f64();
+        eprintln!(
+            "COPIED-BASE-SCALE {named}, {what}: {:.2} us a 1 KiB block ({:.1} MB/s)",
+            seconds * 1e6 / (bytes / 1024) as f64,
+            bytes as f64 / 1e6 / seconds,
+        );
+    };
+    let split = |from: usize| {
+        std::thread::scope(|scope| {
+            for quarter in 0..4 {
+                let read = &read;
+                let at = from + quarter * SPAN / 4;
+                scope.spawn(move || read(at, at + SPAN / 4));
+            }
+        });
+    };
+    for pass in 1..=2 {
+        let started = Instant::now();
+        read(0, SPAN);
+        report(&format!("16 MiB, one thread, pass {pass}"), SPAN, started);
+    }
+    let started = Instant::now();
+    split(0);
+    report("the same 16 MiB, four threads", SPAN, started);
+    for pass in 1..=2 {
+        let started = Instant::now();
+        split(SPAN);
+        report(
+            &format!("16 MiB more, four threads, pass {pass}"),
+            SPAN,
+            started,
+        );
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    let started = Instant::now();
+    read(2 * SPAN, 3 * SPAN);
+    report("16 MiB more, one thread, after 3 s idle", SPAN, started);
+    let started = Instant::now();
+    read(0, LENGTH);
+    report("256 MiB, one thread", LENGTH, started);
+}
