@@ -151,13 +151,15 @@ thread_local! {
 /// Whether this thread notes the split of a making's time now: its line is timed
 /// ([`Line::made`]). Each part's timing is taken only then.
 pub(crate) fn splitting() -> bool {
-    SPLIT.with(|split| split.borrow().is_some())
+    SPLIT
+        .try_with(|split| split.borrow().is_some())
+        .unwrap_or(false)
 }
 
 /// Note a part of the making this thread's line times, which took `took`; nothing where none is
 /// timed.
 pub(crate) fn note(part: impl FnOnce() -> String, took: Duration) {
-    SPLIT.with(|split| {
+    let _ = SPLIT.try_with(|split| {
         if let Some(parts) = split.borrow_mut().as_mut() {
             parts.push((part(), took));
         }
@@ -181,11 +183,18 @@ pub(crate) fn take_record() -> Option<bool> {
 
 /// Run `make`, noting the split of its time on this thread ([`note`]): what it made and the
 /// parts noted, the split of a making that encloses it (a line timed around this one) put back
-/// after it.
+/// after it. Past the thread's thread-locals' end (a program's exit handler, `this_thread.rs`),
+/// none is noted.
 fn split_of<T>(make: impl FnOnce() -> T) -> (T, Vec<(String, Duration)>) {
-    let enclosing = SPLIT.replace(Some(Vec::new()));
+    let Ok(enclosing) = SPLIT.try_with(|split| split.replace(Some(Vec::new()))) else {
+        return (make(), Vec::new());
+    };
     let made = make();
-    let parts = SPLIT.replace(enclosing).unwrap_or_default();
+    let parts = SPLIT
+        .try_with(|split| split.replace(enclosing))
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     (made, parts)
 }
 

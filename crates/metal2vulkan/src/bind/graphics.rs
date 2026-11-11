@@ -2918,9 +2918,11 @@ impl BindingPlan {
         commands: &mut DrawCommands,
     ) -> Result<bool, BindError> {
         // Made again in a scratch of the thread's, whose lists keep their room from check to
-        // check, so the check allocates nothing past its first.
+        // check, so the check allocates nothing past its first; none past the thread's
+        // thread-locals' end (a program's exit handler, which runs after them).
         #[cfg(debug_assertions)]
-        REBINDS_MADE_AGAIN.with_borrow_mut(|again| {
+        let _ = REBINDS_MADE_AGAIN.try_with(|again| {
+            let again = &mut *again.borrow_mut();
             let made = self.slot_rebinds_into(&rebinds.slots, again);
             assert!(made && again == rebinds, "slot rebinds another plan made");
         });

@@ -72,13 +72,15 @@ thread_local! {
 }
 
 /// Whether this thread works for a warm pass now: the pass's thread, or a pool's piece it handed.
+/// Past the thread's thread-locals' end (a program's exit handler, `this_thread.rs`), none.
 pub(crate) fn warming() -> bool {
-    PASS.with(|pass| pass.borrow().is_some())
+    PASS.try_with(|pass| pass.borrow().is_some())
+        .unwrap_or(false)
 }
 
 /// The pass this thread works for now, which a piece it hands the pool works for too.
 pub(crate) fn pass() -> Option<Arc<Pass>> {
-    PASS.with(|pass| pass.borrow().clone())
+    PASS.try_with(|pass| pass.borrow().clone()).ok().flatten()
 }
 
 /// Run `f` on this thread as part of `pass`, as it returns or unwinds restoring what the thread
@@ -88,10 +90,13 @@ pub(crate) fn within<T>(pass: &Arc<Pass>, f: impl FnOnce() -> T) -> T {
     struct Restore(Option<Arc<Pass>>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            PASS.with(|pass| *pass.borrow_mut() = self.0.clone());
+            let _ = PASS.try_with(|pass| *pass.borrow_mut() = self.0.clone());
         }
     }
-    let earlier = PASS.with(|current| current.replace(Some(Arc::clone(pass))));
+    let earlier = PASS
+        .try_with(|current| current.replace(Some(Arc::clone(pass))))
+        .ok()
+        .flatten();
     let _restore = Restore(earlier);
     f()
 }
@@ -99,7 +104,7 @@ pub(crate) fn within<T>(pass: &Arc<Pass>, f: impl FnOnce() -> T) -> T {
 /// Count `bytes` of driver data a making added toward this thread's pass, if it works for one
 /// (`shader_cache/driver.rs`).
 pub(crate) fn added_pipeline_bytes(bytes: u64) {
-    PASS.with(|pass| {
+    let _ = PASS.try_with(|pass| {
         if let Some(pass) = &*pass.borrow() {
             pass.bytes.fetch_add(bytes, Ordering::Relaxed);
         }
@@ -110,7 +115,7 @@ pub(crate) fn added_pipeline_bytes(bytes: u64) {
 /// pass makes none of (`pipeline/objects.rs`): its translations are kept, its objects and
 /// pipelines not made. The pass counts the record as translated, not failed.
 pub(crate) fn translation_only() -> crate::Error {
-    PASS.with(|pass| {
+    let _ = PASS.try_with(|pass| {
         if let Some(pass) = &*pass.borrow() {
             pass.translation_only.store(true, Ordering::Relaxed);
         }

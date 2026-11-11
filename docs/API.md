@@ -5313,6 +5313,12 @@ each item named states the rule in full.
   waits for those in progress, and leaves the rest of the runtime running, so the handler's other
   work is submitted and completes, as Metal's exit runs it. A making its work needs that had not
   begun answers the same.
+- **An exit handler's calls keep none of the runtime's state for their thread**: `exit` destroys
+  the exiting thread's thread-locals before it runs the handlers (macOS, the GNU C library). There
+  a pipeline's making takes no turn of the process's making budget, the driver's messages a making
+  is measured to report reach the device's message sink rather than being withheld, and a notice
+  of a kind the device's options refuse while lowering is announced, and refuses no call, where
+  the handler's own thread lowers it.
 - **On a CPU device (lavapipe, SwiftShader), an exit handler the program registered before a
   later pipeline making finds the process exiting**: its waits answer `WaitWouldDeadlock` of
   `DeadlockCause::Exiting` and the work it commits stays pending, where Metal's exit runs it. A

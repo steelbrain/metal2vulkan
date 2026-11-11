@@ -1019,16 +1019,26 @@ pub(crate) mod lowering {
         LOWERING.with(Cell::get)
     }
 
-    /// Refuse the call being lowered for `notice`, a kind the device refuses while lowering: the
-    /// first such notice of the call is kept.
+    /// Whether a call is being lowered on this thread and a refusal of it can be kept: past the
+    /// thread's thread-locals' end (a program's exit handler, `this_thread.rs`) none can, and a
+    /// notice is announced as anywhere else.
+    pub(crate) fn refusing() -> bool {
+        current().is_some() && REFUSED.try_with(|_| ()).is_ok()
+    }
+
+    /// Refuse the call being lowered for `notice`, a kind the device refuses while lowering, where
+    /// [`refusing`]: the first such notice of the call is kept.
     pub(crate) fn refuse(notice: DegradeNotice) {
-        REFUSED.with(|refused| {
+        let _ = REFUSED.try_with(|refused| {
             refused.borrow_mut().get_or_insert(notice);
         });
     }
 
     /// The notice that refused the call being lowered, if one did, let go of here.
     pub(crate) fn take_refusal() -> Option<DegradeNotice> {
-        REFUSED.with(|refused| refused.borrow_mut().take())
+        REFUSED
+            .try_with(|refused| refused.borrow_mut().take())
+            .ok()
+            .flatten()
     }
 }

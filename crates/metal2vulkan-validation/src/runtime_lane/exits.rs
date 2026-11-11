@@ -382,7 +382,7 @@ static CALLS_AT_EXIT: Mutex<Option<(Device, Vec<u8>)>> = Mutex::new(None);
 
 /// An exit handler the calls cases register once the program's own thread made its common calls
 /// ([`common_calls`]), as a program registers its own: the same calls again, on the exiting
-/// thread, whose thread-locals the exit destroyed before it ran the handlers (macOS), those the
+/// thread, whose thread-locals the exit destroyed before it ran the handlers (macOS, the GNU C library), those the
 /// runtime made for that thread's earlier calls among them. Its line says whether the device's
 /// hook ran before it (`hook_ran`) and what each call answered. Its pipeline's region (two threads
 /// a threadgroup) is not the earlier one's (one), so its creation makes it on this thread.
@@ -1776,7 +1776,7 @@ fn an_exit_handler_registered_after_the_device_runs_its_work_to_completion() {
 /// thread ([`common_calls`]: a buffer, a texture and a compute pipeline made, a copy through the
 /// texture and a dispatch encoded, committed and waited for, what they wrote read back), after the
 /// program's own thread made them before the exit, so the runtime's thread-locals for them were
-/// made there and the exit destroyed them before it ran the handlers (macOS). Each call answers
+/// made there and the exit destroyed them before it ran the handlers (macOS, the GNU C library). Each call answers
 /// as on any other thread, and the process exits cleanly. Where the program registered no handler
 /// after a later pipeline making, every call runs and its work completes, on every device. Where
 /// it made a pipeline after the handler, the handler's making answers that the process is exiting

@@ -3602,7 +3602,7 @@ impl Device {
         if refuses {
             met_each();
         }
-        if refuses && crate::render::lowering::current().is_some() {
+        if refuses && crate::render::lowering::refusing() {
             let (object, reason) = describe();
             crate::render::lowering::refuse(DegradeNotice::new(degradation, object, reason));
             return;

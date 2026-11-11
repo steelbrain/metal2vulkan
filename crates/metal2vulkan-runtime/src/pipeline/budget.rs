@@ -166,9 +166,11 @@ pub(crate) fn waited_in_pool(waited: Duration) {
 }
 
 /// Whether this thread holds a turn now: a making's waits for another making assert it does
-/// not (`making.rs`, the module docs' "no making waits on another while it holds a turn").
+/// not (`making.rs`, the module docs' "no making waits on another while it holds a turn"). None
+/// past its thread-locals' end ([`program_turn`]).
 pub(crate) fn holds_turn() -> bool {
-    HELD.with(|held| held.borrow().is_some())
+    HELD.try_with(|held| held.borrow().is_some())
+        .unwrap_or(false)
 }
 
 /// A new ticket: later than every ticket drawn before it.
@@ -365,7 +367,10 @@ impl Drop for Turn {
     fn drop(&mut self) {
         // A turn lent and taken again at a rank that rose meanwhile may be of the other kind
         // ([`Again`]): the thread's note says which it holds now.
-        let held = HELD.with(|held| held.borrow_mut().take());
+        let held = HELD
+            .try_with(|held| held.borrow_mut().take())
+            .ok()
+            .flatten();
         self.budget
             .give_back(held.map_or(self.ahead, |held| held.ahead));
     }
@@ -497,7 +502,8 @@ impl Budget {
                 }
                 drop(state);
                 let budget = Arc::clone(self);
-                HELD.with(|held| {
+                // Past the thread's thread-locals' end no program's making asks ([`program_turn`]).
+                let _ = HELD.try_with(|held| {
                     *held.borrow_mut() = Some(Held {
                         budget,
                         ahead,
@@ -528,10 +534,14 @@ impl Budget {
 }
 
 /// A turn for a making this thread waits for, asked for now (the module docs): first in a host
-/// step; `None` where this thread
-/// holds one already (a pool's piece, a helper's making).
+/// step; `None` where this thread holds one already (a pool's piece, a helper's making), or is
+/// past its thread-locals' end (a program's exit handler, `this_thread.rs`), where it could note
+/// none, and its making takes none.
 pub(crate) fn program_turn() -> Option<Turn> {
-    if holds_turn() {
+    if HELD
+        .try_with(|held| held.borrow().is_some())
+        .unwrap_or(true)
+    {
         return None;
     }
     thread_turn_in(process(), ticket())
@@ -586,7 +596,11 @@ pub(crate) fn helper_turn<M>(
 /// holder of the thread's [`Turn`] gives back the turn it holds then at its end. Its wait counts
 /// in the making's wait ([`take_waited`]).
 pub(crate) fn without_turn<T>(wait: impl FnOnce() -> T) -> T {
-    let Some(held) = HELD.with(|held| held.borrow_mut().take()) else {
+    let Some(held) = HELD
+        .try_with(|held| held.borrow_mut().take())
+        .ok()
+        .flatten()
+    else {
         return wait();
     };
     held.budget.give_back(held.ahead);
@@ -615,7 +629,7 @@ impl Drop for Again {
             .budget
             .take_held(Asker::Thread(urgency, ticket, asked));
         // The piece's asks stay its turn's, for a later lend.
-        HELD.with(|held| {
+        let _ = HELD.try_with(|held| {
             if let Some(held) = held.borrow_mut().as_mut() {
                 held.asked = self.0.asked.clone();
             }

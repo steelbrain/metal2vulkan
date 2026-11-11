@@ -2569,8 +2569,10 @@ pub(super) fn command_uses_into(
     let keeps = uses_into(call, kept, (index, indirect), into)?;
     if cfg!(debug_assertions) && keeps {
         // Made whole over the last check's storage: a draw's allocations are bounded in builds
-        // with debug assertions too (`runtime_lane::frame_costs`).
-        WHOLE_USES.with_borrow_mut(|whole| {
+        // with debug assertions too (`runtime_lane::frame_costs`). None past the thread's
+        // thread-locals' end (a program's exit handler, `this_thread.rs`).
+        let checked = WHOLE_USES.try_with(|whole| {
+            let whole = &mut *whole.borrow_mut();
             let made = (&**plan, None, command, tables);
             uses_into(call, made, (index, indirect), whole)?;
             let same = (into.uses == whole.uses && into.sources == whole.sources)
@@ -2580,8 +2582,11 @@ pub(super) fn command_uses_into(
                 "a command kept uses of what the encoder made resident not its own"
             );
             Ok::<_, Error>(())
-        })?;
-        KEPT_RESIDENT_CHECKS.with(|checks| checks.set(checks.get() + 1));
+        });
+        if let Ok(checked) = checked {
+            checked?;
+            KEPT_RESIDENT_CHECKS.with(|checks| checks.set(checks.get() + 1));
+        }
     }
     Ok(())
 }

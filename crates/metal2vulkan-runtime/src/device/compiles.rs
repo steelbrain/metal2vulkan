@@ -283,10 +283,17 @@ pub(crate) fn holding<R>(call: impl FnOnce() -> R) -> (R, Vec<(MessageSink, Debu
             let _ = HELD.try_with(|held| *held.borrow_mut() = outer);
         }
     }
-    let restore = Restore(HELD.with(|held| held.borrow_mut().replace(Vec::new())));
+    // Past this thread's thread-locals' end (a program's exit handler, `this_thread.rs`), `call`
+    // alone: its messages are delivered as they are raised.
+    let Ok(outer) = HELD.try_with(|held| held.borrow_mut().replace(Vec::new())) else {
+        return (call(), Vec::new());
+    };
+    let restore = Restore(outer);
     let made = call();
     let messages = HELD
-        .with(|held| held.borrow_mut().take())
+        .try_with(|held| held.borrow_mut().take())
+        .ok()
+        .flatten()
         .unwrap_or_default();
     drop(restore);
     (made, messages)
