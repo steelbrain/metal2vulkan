@@ -30,9 +30,10 @@
 //!   dma-bufs for such a buffer, and such a buffer takes every memory type a plain one made for
 //!   dma-bufs takes (64 KiB on RADV of Mesa 26.2.4, 4 KiB on 26.0.8); elsewhere the request's
 //!   length, so that exactly one chunk is taken: a split never asks for chunks that import as no
-//!   type the buffer takes where one chunk would import (NVIDIA's sparse buffers take none of the
-//!   types its dma-bufs of host pages import as, `Device::sparse_granule`). The padding past the
-//!   pages lies inside the `VkBuffer` but past the bytes a copy or a binding reaches.
+//!   type the buffer takes where one chunk would import (NVIDIA 615.71.09's sparse buffers take
+//!   none of the types its dma-bufs of host pages import as, `Device::sparse_granule`). The
+//!   padding past the pages lies inside the `VkBuffer` but past the bytes a copy or a binding
+//!   reaches.
 //! - **The bytes.** The runtime never maps a dma-buf: `contents` stays the caller's pointer, and
 //!   the CPU's writes through it and the GPU's through the imports meet in the same pages with no
 //!   flush or invalidate (the types are host-coherent).
@@ -1022,10 +1023,12 @@ impl Device {
     /// own types are known only from its descriptor, once the source made it, so the split asks
     /// for none it may not import whole: wherever one chunk of the pages imports as a type the
     /// plain buffer takes, each of several chunks imports as that type, which the sparse buffer
-    /// takes too. NVIDIA's sparse buffers take none of the types its dma-bufs of host pages import
-    /// as (dma-buf imports otherwise work there): split, the chunks imported as no type the buffer
-    /// took, and the buffer was a copy of the pages where one chunk imports. Asked of the device
-    /// once ([`Importer::sparse_granule`]).
+    /// takes too. NVIDIA 615.71.09's sparse buffers (an RTX 5080 Laptop GPU) take none of the
+    /// types its dma-bufs of host pages import as (dma-buf imports otherwise work there): split,
+    /// the chunks imported as no type the buffer took, and the buffer was a copy of the pages
+    /// where one chunk imports. On 620.70.06 (an RTX 2080, an RTX 3090) an earlier condition
+    /// fails, so its requests are one chunk before any type is compared. Asked of the device once
+    /// ([`Importer::sparse_granule`]).
     fn sparse_granule(&self, importer: &Importer) -> Option<u64> {
         *importer.sparse_granule.get_or_init(|| {
             let shared = self.shared();
