@@ -98,8 +98,8 @@ fn passes(device: &Device, state: &crate::ComputePipelineState, buffer: &Buffer,
         median(commits),
         median(waits),
         moved / (gpu / 1e3),
-        (after.copied_copy_in_bytes - before.copied_copy_in_bytes) / PASSES as u64 >> 10,
-        (after.copied_merge_back_bytes - before.copied_merge_back_bytes) / PASSES as u64 >> 10,
+        ((after.copied_copy_in_bytes - before.copied_copy_in_bytes) / PASSES as u64) >> 10,
+        ((after.copied_merge_back_bytes - before.copied_merge_back_bytes) / PASSES as u64) >> 10,
         (after.copied_compare_threads - before.copied_compare_threads) / PASSES as u64,
     );
 }
