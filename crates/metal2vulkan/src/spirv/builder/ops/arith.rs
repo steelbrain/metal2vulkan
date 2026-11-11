@@ -264,9 +264,11 @@ impl FunctionBuilder<'_> {
             if negative.iter().all(|n| *n) {
                 return Ok(Some(negated));
             }
+            // A vector's components, at most four: the negation's are numbered after them.
             let len = negative.len() as u32;
             let pick: Vec<u32> = (0..len)
-                .map(|i| if negative[i as usize] { len + i } else { i })
+                .zip(&negative)
+                .map(|(i, n)| if *n { len + i } else { i })
                 .collect();
             return self.vector_shuffle(product, negated, &pick).map(Some);
         }
