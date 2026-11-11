@@ -3,7 +3,7 @@
 //! of its own, and where that creation's time went.
 //!
 //! - **Compute pipelines.** One line per compute `VkPipeline` a device makes ([`compute`]): the
-//!   kernel's entry, its SPIR-V (a hash and its length), each specialization constant (its id, its
+//!   kernel's function name, its SPIR-V (a hash and its length), each specialization constant (its id, its
 //!   meaning and its value), the precision notes the stage holds under that specialization
 //!   (`notes`, as a render line names a stage's) and the creation's wall time. A compute state's
 //!   pipelines differ by their specialization alone (the threadgroup size, an edge region), so
@@ -612,24 +612,33 @@ fn elided(old: &str, new: &str) -> (String, String) {
     (cut(old), cut(new))
 }
 
-/// The kernel stage of a compute variant's `stages` (`compute`: the variant is a compute
-/// state's), kept for its pipelines' lines ([`compute`]) while the log is on; `None` while it is
-/// off, or for a render variant.
-pub(crate) fn compute_stage(stages: &[StageModule], compute: bool) -> Option<Box<StageModule>> {
-    match (enabled() && compute, stages) {
-        (true, [kernel]) => Some(Box::new(kernel.clone())),
-        _ => None,
-    }
+/// A compute variant's kernel, kept for its pipelines' lines ([`compute`]) while the log is on.
+pub(crate) struct LoggedKernel {
+    /// The kernel's library function's name.
+    name: String,
+    stage: StageModule,
 }
 
-/// Deliver the line of a compute `VkPipeline` `device` made of `stage` under `specialization`,
+/// The kernel `stage` of a compute variant of the function named `name`, kept for its pipelines'
+/// lines while the log is on; `None` while it is off.
+pub(crate) fn compute_kernel(name: &str, stage: &StageModule) -> Option<Box<LoggedKernel>> {
+    enabled().then(|| {
+        Box::new(LoggedKernel {
+            name: name.to_owned(),
+            stage: stage.clone(),
+        })
+    })
+}
+
+/// Deliver the line of a compute `VkPipeline` `device` made of `kernel` under `specialization`,
 /// its creation `took` long (the module's documentation, "Compute pipelines").
 pub(crate) fn compute(
     device: &Device,
-    stage: &StageModule,
+    kernel: &LoggedKernel,
     specialization: &SpecializationKey,
     took: Duration,
 ) {
+    let stage = &kernel.stage;
     let meanings: BTreeMap<u32, SpecKey> = stage
         .specialization
         .constants
@@ -655,8 +664,9 @@ pub(crate) fn compute(
     deliver(
         device,
         format!(
-            "compute pipeline {}: {:.3} ms, spirv {:016x} ({} words), specialization [{}], notes {notes:?}",
-            stage.entry_point,
+            "metal2vulkan: pipeline creation: compute pipeline `{}`: {:.3} ms, spirv {:016x} ({} \
+             words), specialization [{}], notes {notes:?}",
+            kernel.name,
             took.as_secs_f64() * 1000.0,
             spirv_hash(&stage.spirv),
             stage.spirv.len(),

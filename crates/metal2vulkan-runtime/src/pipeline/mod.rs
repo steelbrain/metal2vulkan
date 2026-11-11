@@ -852,7 +852,7 @@ impl ComputePipelineState {
             indirect_arguments::check_compute(call, uses)?;
         }
         let stand_in = !key.storage_images.is_empty();
-        let base = Variant::of(device, key, found)?;
+        let base = Variant::of(device, key, found, function.function.info().name)?;
         // The device's neutrals the base's plan for nothing bound may bind (an unbound texture,
         // sampler or texel slot's), made here, where the creation may wait, so that no dispatch's
         // encoding makes one (`neutral.rs`; `RenderPipelineState::make_neutrals`). One that fails
@@ -1762,7 +1762,7 @@ impl Variant {
         let _noted = NoteEntries(device);
         let (found, _) = Variant::compiled(&Sources::later(device), function, descriptor, &key)
             .map_err(|error| compile_error(device, error))?;
-        Variant::of(device, key, found)
+        Variant::of(device, key, found, function.function.info().name)
     }
 
     /// The pipeline of `descriptor` with `function` its kernel or tile function, under `key`:
@@ -1803,11 +1803,13 @@ impl Variant {
     }
 
     /// The variant of `key` of what the memo or a compile `found`: the live variant, or one made
-    /// of the pipeline, its objects made, which the memo then knows live.
+    /// of the pipeline, its objects made, which the memo then knows live. `name` is its function's,
+    /// which the pipeline creation log names its pipelines by.
     fn of(
         device: &Device,
         key: VariantKey,
         found: Remembered<ComputePipeline, Variant>,
+        name: &str,
     ) -> Result<Arc<Variant>, Error> {
         let pipeline = match found {
             Remembered::Live(variant) if variant.key == key => return Ok(variant),
@@ -1816,7 +1818,7 @@ impl Variant {
         };
         // Before the variant's shader modules, as a render variant's.
         device.degrade_pipeline(CompiledPipeline::Kernel(&pipeline), Occurrence::Made);
-        let (objects, kept) = VariantObjects::kept_or_create(
+        let (mut objects, kept) = VariantObjects::kept_or_create(
             device,
             kept::Compiled::Compute(pipeline.key),
             &pipeline.layout,
@@ -1824,6 +1826,7 @@ impl Variant {
             CompiledPipeline::Kernel(&pipeline),
             None,
         )?;
+        objects.log_kernel(name, &pipeline.stage);
         let variant = Arc::new(Variant {
             key,
             pipeline,

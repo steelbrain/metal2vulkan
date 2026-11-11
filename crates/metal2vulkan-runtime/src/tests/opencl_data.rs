@@ -438,7 +438,7 @@ fn opencl_mode_vstore_half_of_a_nan_announces_the_devices_nan_encoding() {
 }
 
 /// What a line of the pipeline creation log starts with.
-const LOG_LINE: &str = "metal2vulkan: pipeline creation: compute pipeline __entry_vsh_round: ";
+const LOG_LINE: &str = "metal2vulkan: pipeline creation: compute pipeline `__entry_vsh_round`: ";
 
 /// With `METAL2VULKAN_LOG_PIPELINES` set, the compute `VkPipeline` a dispatch of `vsh_round`
 /// makes has its line in the pipeline creation log (`pipeline/creation_log.rs`), naming the

@@ -509,9 +509,9 @@ pub(crate) struct VariantObjects {
     /// The digests its graphics pipeline libraries are named by (`graphics.rs`), from its first
     /// making linked from libraries.
     parts_content: OnceLock<PartsContent>,
-    /// A compute variant's kernel stage, kept for the pipeline creation log's lines while the log
-    /// is on (`creation_log::compute_stage`).
-    logged: Option<Box<StageModule>>,
+    /// A compute variant's kernel, kept for the pipeline creation log's lines while the log is on
+    /// ([`VariantObjects::log_kernel`]).
+    logged: Option<Box<creation_log::LoggedKernel>>,
 }
 
 /// The digests of a variant's layout and of each of its stages (its stage, entry point,
@@ -735,10 +735,7 @@ impl VariantObjects {
             content: variant_content(layout, stages, &words),
             words: Arc::clone(&words),
             parts_content: OnceLock::new(),
-            logged: creation_log::compute_stage(
-                stages,
-                matches!(pipeline, CompiledPipeline::Kernel(_)),
-            ),
+            logged: None,
         };
         for (stage, words) in stages.iter().zip(words.iter()) {
             let entry = CString::new(stage.entry_point.as_str())
@@ -830,10 +827,7 @@ impl VariantObjects {
             content: back.objects.content,
             words: back.objects.words,
             parts_content: OnceLock::new(),
-            logged: creation_log::compute_stage(
-                stages,
-                matches!(pipeline, CompiledPipeline::Kernel(_)),
-            ),
+            logged: None,
         };
         let pipelines = back
             .pipelines
@@ -845,6 +839,13 @@ impl VariantObjects {
             .collect();
         device.degrade_stages(stages, Occurrence::Made);
         Ok((objects, pipelines))
+    }
+
+    /// Keep the kernel `stage` of the function named `name` for the pipeline creation log's line
+    /// of each compute `VkPipeline` these objects make, while the log is on
+    /// (`creation_log::compute_kernel`).
+    pub(crate) fn log_kernel(&mut self, name: &str, stage: &StageModule) {
+        self.logged = creation_log::compute_kernel(name, stage);
     }
 
     /// The kinds its making may announce (`Kinds::of`), which a bind tests.
@@ -1171,8 +1172,8 @@ impl VariantObjects {
         // reads no data back (`shader_cache/driver.rs`).
         let raw = shared.make_compute_pipeline(making, info)?;
         let created_in = started.elapsed();
-        if let Some(stage) = &self.logged {
-            creation_log::compute(&self.device, stage, c.specialization, created_in);
+        if let Some(kernel) = &self.logged {
+            creation_log::compute(&self.device, kernel, c.specialization, created_in);
         }
         drop(leader);
         drop(turn);
