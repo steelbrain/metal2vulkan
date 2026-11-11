@@ -79,9 +79,7 @@ impl Reaper {
         lock(&self.shared.queue).stopping = true;
         self.shared.work.notify_all();
         let mut thread = lock(&self.thread);
-        let own = thread
-            .as_ref()
-            .is_some_and(|handle| handle.thread().id() == std::thread::current().id());
+        let own = thread.as_ref().is_some_and(crate::this_thread::runs);
         if !own {
             if let Some(handle) = thread.take() {
                 let _ = handle.join();

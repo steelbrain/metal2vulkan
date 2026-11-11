@@ -1239,7 +1239,7 @@ pub(crate) fn inside_passing_hold() -> bool {
 
 /// Whether `message`, for `sink`, waits for this thread's outermost passing hold to end, to be
 /// delivered then: where the thread is inside one (the module docs), and its thread-locals are
-/// not gone (an exiting thread's on macOS, [`PassingHold`]'s drop), where it is delivered now.
+/// not gone (an exiting thread's, [`PassingHold`]'s drop), where it is delivered now.
 pub(crate) fn held_past_passing_hold(sink: &MessageSink, message: &DebugMessage) -> bool {
     inside_passing_hold()
         && LEFT
@@ -1250,7 +1250,7 @@ pub(crate) fn held_past_passing_hold(sink: &MessageSink, message: &DebugMessage)
 /// Whether `release`, a release of the program's (`exit_guard::program_release`), waits for this
 /// thread's outermost passing hold to end, to run then (the module docs): given back to run now
 /// where the thread is inside none. Where the thread's thread-locals are gone (an exiting
-/// thread's on macOS, [`PassingHold`]'s drop) it is kept unrun, as the process's exit keeps the
+/// thread's, [`PassingHold`]'s drop) it is kept unrun, as the process's exit keeps the
 /// program's releases (`Releases`).
 pub(crate) fn released_past_passing_hold<F: FnOnce() + Send + 'static>(release: F) -> Option<F> {
     if !inside_passing_hold() {
@@ -1283,8 +1283,8 @@ impl Drop for PassingHold<'_> {
             return;
         }
         // The outermost ended: what the holds left runs, outside every one. Where the thread's
-        // thread-locals are gone (on macOS `exit` destroys the exiting thread's before it runs
-        // the exit handlers, which may commit work), none was left.
+        // thread-locals are gone (`exit` destroys the exiting thread's before it runs the exit
+        // handlers, which may commit work, `this_thread.rs`), none was left.
         let (releases, messages) = LEFT
             .try_with(|left| {
                 let mut left = left.borrow_mut();

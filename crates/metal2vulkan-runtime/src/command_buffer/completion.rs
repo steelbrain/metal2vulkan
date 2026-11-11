@@ -508,10 +508,9 @@ impl Completion {
     pub(crate) fn stop(&self) {
         lock(&self.watch.pending).stopping = true;
         self.watch.wake_all();
-        let current = std::thread::current().id();
         let threads: Vec<JoinHandle<()>> = lock(&self.threads).drain(..).collect();
         for handle in threads {
-            if handle.thread().id() != current {
+            if !crate::this_thread::runs(&handle) {
                 let _ = handle.join();
             }
         }

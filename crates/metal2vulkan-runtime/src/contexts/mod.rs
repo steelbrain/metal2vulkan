@@ -359,8 +359,8 @@ impl<I: Run> Contexts<I> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.release_pauses(u64::MAX);
         let census = &self.shared.census;
-        // A thread whose thread-locals are gone (an exiting thread's on macOS, whose `exit`
-        // destroys them before the exit handlers run) is no handler thread.
+        // A thread whose thread-locals are gone (an exiting thread's, whose `exit` destroys them
+        // before the exit handlers run, `this_thread.rs`) is no handler thread.
         let own = POOL
             .try_with(|pool| {
                 pool.borrow()
@@ -494,7 +494,8 @@ fn run<I: Run>(shared: &Shared<I>, first: bool) {
 }
 
 /// Whether this thread is one of a pool's handler threads: not where its thread-locals are gone
-/// (an exiting thread's on macOS, whose `exit` destroys them before the exit handlers run).
+/// (an exiting thread's, whose `exit` destroys them before the exit handlers run,
+/// `this_thread.rs`).
 pub(crate) fn on_handler_thread() -> bool {
     POOL.try_with(|pool| pool.borrow().is_some())
         .unwrap_or(false)

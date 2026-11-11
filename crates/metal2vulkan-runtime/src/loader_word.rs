@@ -55,7 +55,6 @@ use crate::device::relay::Mark;
 use ash::vk::{self, Handle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
-use std::thread::ThreadId;
 
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 thread_local! {
@@ -178,8 +177,9 @@ pub(super) struct DeviceWord {
     /// tests: none, as their threads make no call the loader serves (the module docs).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     check_thread_restores: std::sync::atomic::AtomicU64,
-    /// The thread that holds the lock and how many holds it has.
-    holder: Mutex<Option<(ThreadId, usize)>>,
+    /// The thread that holds the lock ([`this_thread::id`](crate::this_thread::id)) and how many
+    /// holds it has.
+    holder: Mutex<Option<(usize, usize)>>,
     /// Signalled as the last hold goes.
     free: Condvar,
 }
@@ -329,7 +329,7 @@ impl DeviceWord {
     /// with none held, never before taking one (a program's use of the queue may call
     /// [`DeviceWord::restored`] under it).
     pub(super) fn held(&self) -> Held<'_> {
-        let me = std::thread::current().id();
+        let me = crate::this_thread::id();
         let mut holder = lock(&self.holder);
         loop {
             match holder.as_mut() {

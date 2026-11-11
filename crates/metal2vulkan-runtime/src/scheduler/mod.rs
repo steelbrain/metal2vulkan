@@ -1065,7 +1065,7 @@ impl Scheduler {
     pub(crate) fn is_current(&self) -> bool {
         lock(&self.thread)
             .as_ref()
-            .is_some_and(|handle| handle.thread().id() == std::thread::current().id())
+            .is_some_and(crate::this_thread::runs)
     }
 
     /// `f`'s answer under the state's lock, which every submission holds from an event signal's
@@ -1175,9 +1175,7 @@ impl Scheduler {
         self.shared.wake.notify_all();
         self.shared.steps.stop();
         let mut thread = lock(&self.thread);
-        let own = thread
-            .as_ref()
-            .is_some_and(|handle| handle.thread().id() == std::thread::current().id());
+        let own = thread.as_ref().is_some_and(crate::this_thread::runs);
         if !own {
             if let Some(handle) = thread.take() {
                 let _ = handle.join();
