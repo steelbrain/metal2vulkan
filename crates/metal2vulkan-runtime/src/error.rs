@@ -157,9 +157,9 @@ pub enum Error {
     Degraded(Box<crate::degradation::DegradeNotice>),
     /// A texture of the device's own check of images in place
     /// ([`Device::settle_in_place_checks`](crate::Device::settle_in_place_checks)) that takes no
-    /// image in place: the check measures such images alone, so it makes no shadow where a
-    /// program's texture would take one, and is refused with the cause ([`NotInPlace`]). Only the
-    /// check's own textures meet it; no call of a program's returns it. No Metal counterpart.
+    /// image in place: the check measures such images alone, so where a program's texture would
+    /// take a shadow, the making of the check's is refused, with the cause ([`NotInPlace`]). Only
+    /// the check's own textures meet it; no call of a program's returns it. No Metal counterpart.
     NotInPlace(NotInPlace),
 }
 
