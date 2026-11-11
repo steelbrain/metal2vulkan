@@ -1719,7 +1719,8 @@ near-equivalent, it still answers, and says so. Each kind of degradation is a
 
 How a notice reaches you:
 
-- Each kind is announced **once per device**, the first time the device takes it. A kind listed in
+- Each kind is announced **once per device**, the first time the device takes it;
+  `copied-host-pages` once per device and cause (its entry below). A kind listed in
   `DeviceOptions::announce_each` (`RawDevice::announce_each` for an adopted device) is announced at
   every occurrence instead. The notes a pipeline's making records are announced at the first
   dispatch or draw that binds it.
@@ -3349,7 +3350,10 @@ bound.
   them: each batch's completion takes them back out of the copy and writes nothing to the pages
   (`copied_dropped_bytes`; the detail says so). The detail names which cause it was; for a failed
   import, the import's error, or that the runtime kept the pages from the driver as the kernel
-  cannot pin them, and whether a dma-buf source of them was asked. The copy reads the pages through the kernel, and
+  cannot pin them, and whether a dma-buf source of them was asked. Announced once per device for
+  each cause (the gate's refusal, the device's, a failed import, bytes moved in their page, bit-24
+  memory, pages mapped read-only, and a buffer lying in another's live copy), so a refusal and a
+  later failed import are both heard. The copy reads the pages through the kernel, and
   where the kernel cannot (on Linux it pins each page, which a dma-buf's mapping does not allow),
   with plain loads where the process maps every page readable. Pages not mapped, or mapped
   without read permission, are never copied: the buffer is refused, as their import is. A copy

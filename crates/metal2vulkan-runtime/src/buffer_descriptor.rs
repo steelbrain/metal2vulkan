@@ -16,7 +16,6 @@ use super::buffer::{
     usage, Buffer, BufferParts, HostCell, HostPages, Lying, Modes, Naming, Owner, ReadApart,
 };
 use super::copied::NotCopied;
-use super::degradation::Degradation;
 use super::device::lock;
 use super::dirty_pages::{DirtySource, PagesLog};
 use super::error::MemoryKind;
@@ -1954,9 +1953,9 @@ impl Device {
     }
 
     /// Announce that `call` made the `length` bytes at `pointer` a copy of the caller's pages
-    /// (`Degradation::CopiedHostPages`), for `cause`; one that `drops` the GPU's writes, as the
-    /// process cannot write the pages, says so; one made as their import `failed` names the
-    /// failure ([`FailedImport::cause`]).
+    /// (`Degradation::CopiedHostPages`), for `cause`, once per cause; one that `drops` the GPU's
+    /// writes, as the process cannot write the pages, says so; one made as their import `failed`
+    /// names the failure ([`FailedImport::cause`]).
     fn degrade_copied(
         &self,
         call: &'static str,
@@ -1964,7 +1963,7 @@ impl Device {
         length: u64,
         (cause, drops, failed): (CopiedBecause, bool, Option<&FailedImport>),
     ) {
-        self.degrade(Degradation::CopiedHostPages, || {
+        self.degrade_copied_pages(Some(cause), || {
             let failure;
             let why: &str = match cause {
                 CopiedBecause::Refused => {
@@ -2021,7 +2020,8 @@ impl Device {
     /// Announce `copied-host-pages` for `call` over the `length` bytes at `pointer`, a no-copy
     /// buffer or rebind that lies in the live copy of the same bytes another buffer was made over
     /// (`host_aliases.rs`), whose GPU writes are dropped where `drops`: it makes no copy of its
-    /// own, but the GPU uses that copy for it, as for the buffer it was made for.
+    /// own, but the GPU uses that copy for it, as for the buffer it was made for. Once, a reason
+    /// of its own beside each copy's cause.
     fn degrade_copied_shared(
         &self,
         call: &'static str,
@@ -2029,7 +2029,7 @@ impl Device {
         length: u64,
         drops: bool,
     ) {
-        self.degrade(Degradation::CopiedHostPages, || {
+        self.degrade_copied_pages(None, || {
             let dropped = match drops {
                 true => {
                     ", whose GPU writes are dropped, as Metal drops them, since the process maps \

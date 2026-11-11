@@ -10,6 +10,8 @@
 //!   tests' stand-in, `Device::fail_next_host_imports`, answers it as out of device memory): the
 //!   buffer is a copy all the same, announced and counted as degraded; the next buffer imports.
 //!   The same without a gate.
+//! - **Once per cause.** A refused copy and then a failed one on one device are each announced,
+//!   with their own reason; a second refused copy is not.
 //! - **Coherence.** In each, the GPU reads the caller's bytes; a CPU write before a commit reaches
 //!   the GPU, those bytes alone copied in; a fill reaches the caller's pages at its completion,
 //!   those bytes alone merged back. A completion compares no copy its batch only read, nor one a
@@ -702,6 +704,47 @@ fn copied_buffer_without_a_gate_whose_import_fails_is_made_announced() {
         reasons[0]
     );
     lies_in_a_copy(&device, &buffer, &host);
+}
+
+/// `copied-host-pages` is announced once per cause, not once per kind: on one device a buffer
+/// whose import the gate refuses, then one whose admitted import fails (the test hook's out of
+/// device memory), are each announced with their own reason, as a consumer acts on each apart; a
+/// third whose import the gate refuses is not announced again. Printed (`COPIED-CAUSES`): the
+/// reasons heard.
+#[test]
+fn copies_of_two_causes_on_one_device_are_each_announced() {
+    let (refused, failed, again) = (Host::new(48), Host::new(49), Host::new(50));
+    let Some((device, heard)) = device() else {
+        return;
+    };
+    let asked: Arc<Mutex<Vec<ImportRequest>>> = Arc::default();
+    let before = device.work_counts();
+    let first = refused.buffer(&device, Some(gate(&asked, false)));
+    device.fail_next_host_imports(1);
+    let second = failed.buffer(&device, Some(gate(&asked, true)));
+    let third = again.buffer(&device, Some(gate(&asked, false)));
+    let after = device.work_counts();
+    // Three copies: two refused by the gate, one degraded; no import made.
+    assert_eq!(moved(&before, &after), [2, 3, 2, 1, 0]);
+    let reasons = copies_reasons(&heard);
+    eprintln!("COPIED-CAUSES {}: {reasons:?}", device.name());
+    assert_eq!(reasons.len(), 2, "one notice per cause: {reasons:?}");
+    let gate_refused = "the caller's import gate (HostMemory::with_import_gate) refused";
+    assert!(
+        reasons[0].starts_with(gate_refused),
+        "the gate's refusal first: {}",
+        reasons[0]
+    );
+    let import_failed = "their pointer's import failed: out of";
+    assert!(
+        reasons[1].starts_with(import_failed),
+        "then the failed import: {}",
+        reasons[1]
+    );
+    for buffer in [&first, &second, &third] {
+        assert_eq!(buffer.host_backing(), Some(HostBacking::Copied));
+    }
+    drop((first, second, third));
 }
 
 /// Pages mapped without access are memory Metal makes no buffer over: a refusing gate makes no

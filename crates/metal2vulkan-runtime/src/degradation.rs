@@ -21,7 +21,10 @@
 //!   first announcement; a later occurrence costs one atomic load. A kind in
 //!   `DeviceOptions::announce_each` (or `RawDevice::announce_each`) is announced at every
 //!   occurrence instead, the same notice through the same sink, on the thread whose call announces
-//!   it: a bit per kind beside those, read first. For a kind a variant's making announces (a
+//!   it: a bit per kind beside those, read first. `copied-host-pages` alone is announced once per
+//!   reason rather than once per kind (a consumer acts on a refused import, a failed one and a
+//!   move apart): a bit per reason beside them ([`Device::degrade_copied_pages`]). For a kind a
+//!   variant's making announces (a
 //!   stage's precision notes, specialized or not, `ycbcr-filter-not-exact`, a shader's color
 //!   conversions, reconvergence that is not Metal's, unadvertised vertex simdgroups), an occurrence
 //!   is each dispatch or draw that binds the variant (an indirect command's too, where its
@@ -71,6 +74,7 @@ use super::texture::heap_tiled::Untiled;
 use super::texture_descriptor::TextureDescriptor;
 use super::tracker::Use;
 use super::values::ResourceOptions;
+use super::work_counts::CopiedBecause;
 use crate::error::EncoderCall;
 use metal2vulkan::bind::PlanDiagnostic;
 use metal2vulkan::cache::SpecializationKey;
@@ -2113,8 +2117,11 @@ degradations! {
         /// detail says so). The reason names which of these it was; for a failed import, the
         /// import's error, or the pages' unpinnable mapping and whether a dma-buf source was asked.
         /// A copy whose own allocation fails refuses the call (`OutOfMemory`).
-        /// Announced once per device, by the call that makes it, or at each such call where
-        /// `DeviceOptions::announce_each` asks. Counted: `WorkCounts::copied_host_buffers_made`.
+        /// Announced once per device for each reason the detail names (the gate's refusal, the
+        /// device's, a failed import, bytes moved in their page, bit-24 memory, pages mapped
+        /// read-only, and a buffer lying in another's live copy), by the call that makes it, or
+        /// at each such call where `DeviceOptions::announce_each` asks. Counted:
+        /// `WorkCounts::copied_host_buffers_made`.
         /// Each such buffer, and each buffer placed in such a heap, answers
         /// [`Buffer::host_backing`](crate::Buffer::host_backing) with `HostBacking::Copied` until
         /// its next rebind or detach.
@@ -2975,12 +2982,14 @@ impl DegradeNotice {
 const WORDS: usize = Degradation::ALL.len().div_ceil(64);
 
 /// The kinds a device announced, a bit each, and those it announces at every occurrence
-/// (`DeviceOptions::announce_each`), a bit each; and the kinds of the messages it says once
+/// (`DeviceOptions::announce_each`), a bit each; the reasons it announced `copied-host-pages`
+/// for, a bit each ([`Device::degrade_copied_pages`]); and the kinds of the messages it says once
 /// that are no degradation ([`Told`]) it said, a bit each.
 #[derive(Debug, Default)]
 pub(super) struct Announced {
     seen: [AtomicU64; WORDS],
     each: [u64; WORDS],
+    copied: AtomicU64,
     told: AtomicU64,
 }
 
@@ -2995,6 +3004,7 @@ impl Announced {
         Announced {
             seen: Default::default(),
             each: words,
+            copied: AtomicU64::new(0),
             told: AtomicU64::new(0),
         }
     }
@@ -3034,6 +3044,23 @@ impl Announced {
         }
         let (word, bit) = degradation.bit();
         let seen = &self.seen[word];
+        seen.load(Ordering::Relaxed) & bit == 0 && seen.fetch_or(bit, Ordering::Relaxed) & bit == 0
+    }
+
+    /// Whether `copied-host-pages` is announced now for the reason `reason`
+    /// ([`Device::degrade_copied_pages`]): as [`now`](Self::now) answers for a kind, or, where
+    /// `replaying`, as [`once`](Self::once) does, but for the first time per reason.
+    fn copied_now(&self, reason: Option<CopiedBecause>, replaying: bool) -> bool {
+        if crate::warm::warming() {
+            return false;
+        }
+        if !replaying && self.each(Degradation::CopiedHostPages) {
+            met_each();
+            return true;
+        }
+        // A buffer lying in another's live copy is a reason of its own, beside each cause.
+        let bit = 1u64 << reason.map_or(0, |cause| cause as u32 + 1);
+        let seen = &self.copied;
         seen.load(Ordering::Relaxed) & bit == 0 && seen.fetch_or(bit, Ordering::Relaxed) & bit == 0
     }
 
@@ -3593,6 +3620,34 @@ impl Device {
         degradation: Degradation,
         describe: impl FnOnce() -> (String, String),
     ) {
+        let first = |announced: &Announced, replaying: bool| match replaying {
+            true => announced.once(degradation),
+            false => announced.now(degradation),
+        };
+        self.degrade_where(degradation, first, describe);
+    }
+
+    /// Announce `copied-host-pages` for `reason` as [`degrade`](Self::degrade) announces a kind,
+    /// but once per reason rather than once per kind: the cause of a copy (`CopiedBecause`), or
+    /// `None` for a buffer lying in the live copy another buffer was made over. A consumer acts on
+    /// a refused import, a failed one and a move apart, so each is heard.
+    pub(super) fn degrade_copied_pages(
+        &self,
+        reason: Option<CopiedBecause>,
+        describe: impl FnOnce() -> (String, String),
+    ) {
+        let first = |announced: &Announced, replaying| announced.copied_now(reason, replaying);
+        self.degrade_where(Degradation::CopiedHostPages, first, describe);
+    }
+
+    /// Announce `degradation` where `first` answers it is announced now, given the device's
+    /// record and whether a call is encoded again at a rebind ([`degrade`](Self::degrade)).
+    fn degrade_where(
+        &self,
+        degradation: Degradation,
+        first: impl FnOnce(&Announced, bool) -> bool,
+        describe: impl FnOnce() -> (String, String),
+    ) {
         let shared = self.shared();
         // A kind the device refuses while lowering a call after it returned refuses the call,
         // at every occurrence, rather than being announced (`render/deferral.rs`): met at every
@@ -3609,11 +3664,7 @@ impl Device {
         }
         // A call encoded again at a rebind met what the program's call met, which announced it:
         // each kind at most once there (`replay.rs`).
-        let announce = match crate::replay::is_replaying() {
-            true => shared.announced.once(degradation),
-            false => shared.announced.now(degradation),
-        };
-        if !announce {
+        if !first(&shared.announced, crate::replay::is_replaying()) {
             return;
         }
         // No kind is announced inside a pipeline pool's piece, and a kind asked for at every
